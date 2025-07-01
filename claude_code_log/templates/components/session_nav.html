@@ -28,7 +28,7 @@
             </div>
             {% if session.first_user_message %}
             <pre class='session-preview' style='font-size: 0.75em; line-height: 1.3; padding-bottom: 0;'>
-                {{- session.first_user_message[:500]|e -}}{% if session.first_user_message|length > 500 %}...{% endif %}
+                {{- session.first_user_message|e -}}
             </pre>
             {% endif %}
         </a>
