@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Optional, List
 
 import click
+from git import Repo, InvalidGitRepositoryError
 
 from .converter import convert_jsonl_to_html, process_projects_hierarchy
 from .cache import CacheManager, get_library_version
@@ -77,54 +78,105 @@ def convert_project_path_to_claude_dir(input_path: Path) -> Path:
 def find_projects_by_cwd(
     projects_dir: Path, current_cwd: Optional[str] = None
 ) -> List[Path]:
-    """Find Claude projects that match the current working directory."""
+    """Find Claude projects that match the current working directory.
+
+    Uses three-tier priority matching:
+    1. Exact match to current working directory
+    2. Git repository root match
+    3. Relative path matching
+    """
     if current_cwd is None:
         current_cwd = os.getcwd()
 
     # Normalize the current working directory
     current_cwd_path = Path(current_cwd).resolve()
 
-    matching_projects: List[Path] = []
-
     # Check all project directories
     if not projects_dir.exists():
-        return matching_projects
+        return []
 
-    for project_dir in projects_dir.iterdir():
-        if not project_dir.is_dir() or not list(project_dir.glob("*.jsonl")):
-            continue
+    # Get all valid project directories
+    project_dirs = [
+        d for d in projects_dir.iterdir() if d.is_dir() and list(d.glob("*.jsonl"))
+    ]
 
+    # Tier 1: Check for exact match to current working directory
+    exact_matches = _find_exact_matches(project_dirs, current_cwd_path)
+    if exact_matches:
+        return exact_matches
+
+    # Tier 2: Check if we're inside a git repo and match to repo root
+    git_root_matches = _find_git_root_matches(project_dirs, current_cwd_path)
+    if git_root_matches:
+        return git_root_matches
+
+    # Tier 3: Fall back to relative path matching (existing behavior)
+    return _find_relative_matches(project_dirs, current_cwd_path)
+
+
+def _find_exact_matches(project_dirs: List[Path], current_cwd_path: Path) -> List[Path]:
+    """Find projects with exact working directory matches using path-based matching."""
+    # Convert current working directory to expected Claude project directory name
+    expected_project_dir = convert_project_path_to_claude_dir(current_cwd_path)
+
+    # Check if this expected project directory exists in our list
+    for project_dir in project_dirs:
+        if project_dir == expected_project_dir:
+            return [project_dir]
+
+    return []
+
+
+def _find_git_root_matches(
+    project_dirs: List[Path], current_cwd_path: Path
+) -> List[Path]:
+    """Find projects that match the git repository root using path-based matching."""
+    try:
+        # Check if we're inside a git repository
+        repo = Repo(current_cwd_path, search_parent_directories=True)
+        git_root_path = Path(repo.git_dir).parent.resolve()
+
+        # Find projects that match the git root
+        return _find_exact_matches(project_dirs, git_root_path)
+    except InvalidGitRepositoryError:
+        # Not in a git repository
+        return []
+    except Exception:
+        # Other git-related errors
+        return []
+
+
+def _find_relative_matches(
+    project_dirs: List[Path], current_cwd_path: Path
+) -> List[Path]:
+    """Find projects using relative path matching (original behavior)."""
+    relative_matches: List[Path] = []
+
+    for project_dir in project_dirs:
         try:
             # Load cache to check for working directories
             cache_manager = CacheManager(project_dir, get_library_version())
             project_cache = cache_manager.get_cached_project_data()
 
-            # Check if we need to build cache (empty cache or no working directories)
+            # Build cache if needed
             if not project_cache or not project_cache.working_directories:
-                # Check if we have any JSONL files to process
                 jsonl_files = list(project_dir.glob("*.jsonl"))
                 if jsonl_files:
-                    # Build cache by processing the project
                     try:
                         convert_jsonl_to_html(project_dir, silent=True)
-                        # Reload cache after building
                         project_cache = cache_manager.get_cached_project_data()
                     except Exception as e:
                         logging.warning(
                             f"Failed to build cache for project {project_dir.name}: {e}"
                         )
-                        # If cache building fails, fall back to path name matching
                         project_cache = None
 
             if project_cache and project_cache.working_directories:
-                # Check if current cwd matches any working directory in this project
+                # Check for relative matches (original logic)
                 for cwd in project_cache.working_directories:
                     cwd_path = Path(cwd).resolve()
-                    # Check for exact match or if current cwd is under this path
-                    if current_cwd_path == cwd_path or current_cwd_path.is_relative_to(
-                        cwd_path
-                    ):
-                        matching_projects.append(project_dir)
+                    if current_cwd_path.is_relative_to(cwd_path):
+                        relative_matches.append(project_dir)
                         break
             else:
                 # Fall back to path name matching if no cache data
@@ -139,12 +191,11 @@ def find_projects_by_cwd(
                             or current_cwd_path.is_relative_to(reconstructed_path)
                             or reconstructed_path.is_relative_to(current_cwd_path)
                         ):
-                            matching_projects.append(project_dir)
+                            relative_matches.append(project_dir)
         except Exception:
-            # Skip projects with cache issues
             continue
 
-    return matching_projects
+    return relative_matches
 
 
 def _clear_caches(input_path: Path, all_projects: bool) -> None:

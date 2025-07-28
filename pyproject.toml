@@ -25,6 +25,7 @@ dependencies = [
     "toml>=0.10.2",
     "textual>=4.0.0",
     "packaging>=25.0",
+    "gitpython>=3.1.45",
 ]
 
 [project.urls]
