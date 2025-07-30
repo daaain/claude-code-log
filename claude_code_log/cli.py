@@ -110,16 +110,14 @@ def find_projects_by_cwd(
     if git_root_matches:
         return git_root_matches
 
-    # Tier 3: Fall back to relative path matching (existing behavior)
+    # Tier 3: Fall back to relative path matching
     return _find_relative_matches(project_dirs, current_cwd_path)
 
 
 def _find_exact_matches(project_dirs: List[Path], current_cwd_path: Path) -> List[Path]:
     """Find projects with exact working directory matches using path-based matching."""
-    # Convert current working directory to expected Claude project directory name
     expected_project_dir = convert_project_path_to_claude_dir(current_cwd_path)
-
-    # Check if this expected project directory exists in our list
+    
     for project_dir in project_dirs:
         if project_dir == expected_project_dir:
             return [project_dir]
@@ -172,7 +170,7 @@ def _find_relative_matches(
                         project_cache = None
 
             if project_cache and project_cache.working_directories:
-                # Check for relative matches (original logic)
+                # Check for relative matches
                 for cwd in project_cache.working_directories:
                     cwd_path = Path(cwd).resolve()
                     if current_cwd_path.is_relative_to(cwd_path):
