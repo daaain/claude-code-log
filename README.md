@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/daaain-claude-code-log-badge.png)](https://mseep.ai/app/daaain-claude-code-log)
+
 # Claude Code Log
 
 A Python CLI tool that converts Claude Code transcript JSONL files into readable HTML format.
