@@ -2,6 +2,7 @@
 """Tests for template data structures and generation using existing test data."""
 
 import pytest
+import re
 from pathlib import Path
 from claude_code_log.parser import load_transcript, load_directory_transcripts
 from claude_code_log.renderer import (
@@ -70,7 +71,8 @@ class TestTemplateProject:
         assert project.jsonl_count == 3
         assert project.message_count == 15
         assert project.display_name == "test-project"
-        assert project.formatted_date == "2023-11-14 22:13:20"
+        # Check date format: "2023-11-1[45] HH:MM:SS" where day (14-15) and hour can vary by timezone
+        assert re.match(r"2023-11-1[45] \d{2}:\d{2}:20", project.formatted_date)
 
     def test_template_project_dash_formatting(self):
         """Test TemplateProject display name formatting for dashed names."""
@@ -86,7 +88,8 @@ class TestTemplateProject:
 
         assert project.name == "-user-workspace-my-app"
         assert project.display_name == "user/workspace/my/app"
-        assert project.formatted_date == "2023-11-14 22:15:00"
+        # Check date format: "2023-11-1[45] HH:15:00" where day (14-15) and hour can vary by timezone
+        assert re.match(r"2023-11-1[45] \d{2}:15:00", project.formatted_date)
 
     def test_template_project_no_leading_dash(self):
         """Test TemplateProject display name when no leading dash."""
