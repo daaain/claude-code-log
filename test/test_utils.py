@@ -30,7 +30,7 @@ class TestSystemMessageDetection:
 
     def test_is_system_message_stdout(self):
         """Test detection of local command stdout system messages."""
-        stdout_text = "Some text with <local-command-stdout> tags"
+        stdout_text = "<local-command-stdout> tags (always at the beginning)"
         assert is_system_message(stdout_text) is True
 
     def test_is_system_message_normal_text(self):
@@ -318,7 +318,7 @@ class TestEdgeCases:
     def test_functions_with_none_input(self):
         """Test that functions handle None input gracefully."""
         # Most functions should handle None by treating it as empty/false
-        with pytest.raises(TypeError):
+        with pytest.raises(AttributeError):
             is_system_message(None)  # type: ignore
         with pytest.raises(TypeError):
             is_command_message(None)  # type: ignore
@@ -332,7 +332,7 @@ class TestEdgeCases:
             is_command_message(123)  # type: ignore
         with pytest.raises(TypeError):
             is_local_command_output(123)  # type: ignore
-        with pytest.raises(TypeError):
+        with pytest.raises(AttributeError):
             is_system_message(123)  # type: ignore
 
     def test_should_skip_message_edge_cases(self):

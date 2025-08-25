@@ -15,7 +15,7 @@ def is_system_message(text_content: str) -> bool:
         "<local-command-stdout>",
     ]
 
-    return any(pattern in text_content for pattern in system_message_patterns)
+    return any(text_content.startswith(pattern) for pattern in system_message_patterns)
 
 
 def is_command_message(text_content: str) -> bool:
