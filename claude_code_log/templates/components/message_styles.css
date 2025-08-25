@@ -308,3 +308,50 @@ details summary {
 .message.filtered-hidden {
     display: none;
 }
+
+/* ANSI color classes */
+/* Standard colors */
+.ansi-black { color: #000000; }
+.ansi-red { color: #cd3131; }
+.ansi-green { color: #0dbc79; }
+.ansi-yellow { color: #e5e510; }
+.ansi-blue { color: #2472c8; }
+.ansi-magenta { color: #bc3fbc; }
+.ansi-cyan { color: #11a8cd; }
+.ansi-white { color: #e5e5e5; }
+
+/* Bright colors */
+.ansi-bright-black { color: #666666; }
+.ansi-bright-red { color: #f14c4c; }
+.ansi-bright-green { color: #23d18b; }
+.ansi-bright-yellow { color: #f5f543; }
+.ansi-bright-blue { color: #3b8eea; }
+.ansi-bright-magenta { color: #d670d6; }
+.ansi-bright-cyan { color: #29b8db; }
+.ansi-bright-white { color: #ffffff; }
+
+/* Background colors */
+.ansi-bg-black { background-color: #000000; }
+.ansi-bg-red { background-color: #cd3131; }
+.ansi-bg-green { background-color: #0dbc79; }
+.ansi-bg-yellow { background-color: #e5e510; }
+.ansi-bg-blue { background-color: #2472c8; }
+.ansi-bg-magenta { background-color: #bc3fbc; }
+.ansi-bg-cyan { background-color: #11a8cd; }
+.ansi-bg-white { background-color: #e5e5e5; }
+
+/* Bright background colors */
+.ansi-bg-bright-black { background-color: #666666; }
+.ansi-bg-bright-red { background-color: #f14c4c; }
+.ansi-bg-bright-green { background-color: #23d18b; }
+.ansi-bg-bright-yellow { background-color: #f5f543; }
+.ansi-bg-bright-blue { background-color: #3b8eea; }
+.ansi-bg-bright-magenta { background-color: #d670d6; }
+.ansi-bg-bright-cyan { background-color: #29b8db; }
+.ansi-bg-bright-white { background-color: #ffffff; }
+
+/* Text styles */
+.ansi-bold { font-weight: bold; }
+.ansi-dim { opacity: 0.7; }
+.ansi-italic { font-style: italic; }
+.ansi-underline { text-decoration: underline; }

@@ -642,6 +642,224 @@ class TemplateSummary:
             self.token_summary = " | ".join(token_parts)
 
 
+def _convert_ansi_to_html(text: str) -> str:
+    """Convert ANSI escape codes to HTML spans with CSS classes.
+
+    Supports:
+    - Colors (30-37, 90-97 for foreground; 40-47, 100-107 for background)
+    - RGB colors (38;2;r;g;b for foreground; 48;2;r;g;b for background)
+    - Bold (1), Dim (2), Italic (3), Underline (4)
+    - Reset (0, 39, 49, 22, 23, 24)
+    """
+    import re
+
+    result = []
+    segments = []
+
+    # First pass: split text into segments with their styles
+    last_end = 0
+    current_fg = None
+    current_bg = None
+    current_bold = False
+    current_dim = False
+    current_italic = False
+    current_underline = False
+    current_rgb_fg = None
+    current_rgb_bg = None
+
+    for match in re.finditer(r"\x1b\[([0-9;]+)m", text):
+        # Add text before this escape code
+        if match.start() > last_end:
+            segments.append(
+                {
+                    "text": text[last_end : match.start()],
+                    "fg": current_fg,
+                    "bg": current_bg,
+                    "bold": current_bold,
+                    "dim": current_dim,
+                    "italic": current_italic,
+                    "underline": current_underline,
+                    "rgb_fg": current_rgb_fg,
+                    "rgb_bg": current_rgb_bg,
+                }
+            )
+
+        # Process escape codes
+        codes = match.group(1).split(";")
+        i = 0
+        while i < len(codes):
+            code = codes[i]
+
+            # Reset codes
+            if code == "0":
+                current_fg = None
+                current_bg = None
+                current_bold = False
+                current_dim = False
+                current_italic = False
+                current_underline = False
+                current_rgb_fg = None
+                current_rgb_bg = None
+            elif code == "39":
+                current_fg = None
+                current_rgb_fg = None
+            elif code == "49":
+                current_bg = None
+                current_rgb_bg = None
+            elif code == "22":
+                current_bold = False
+                current_dim = False
+            elif code == "23":
+                current_italic = False
+            elif code == "24":
+                current_underline = False
+
+            # Style codes
+            elif code == "1":
+                current_bold = True
+            elif code == "2":
+                current_dim = True
+            elif code == "3":
+                current_italic = True
+            elif code == "4":
+                current_underline = True
+
+            # Standard foreground colors
+            elif code in ["30", "31", "32", "33", "34", "35", "36", "37"]:
+                color_map = {
+                    "30": "black",
+                    "31": "red",
+                    "32": "green",
+                    "33": "yellow",
+                    "34": "blue",
+                    "35": "magenta",
+                    "36": "cyan",
+                    "37": "white",
+                }
+                current_fg = f"ansi-{color_map[code]}"
+                current_rgb_fg = None
+
+            # Standard background colors
+            elif code in ["40", "41", "42", "43", "44", "45", "46", "47"]:
+                color_map = {
+                    "40": "black",
+                    "41": "red",
+                    "42": "green",
+                    "43": "yellow",
+                    "44": "blue",
+                    "45": "magenta",
+                    "46": "cyan",
+                    "47": "white",
+                }
+                current_bg = f"ansi-bg-{color_map[code]}"
+                current_rgb_bg = None
+
+            # Bright foreground colors
+            elif code in ["90", "91", "92", "93", "94", "95", "96", "97"]:
+                color_map = {
+                    "90": "bright-black",
+                    "91": "bright-red",
+                    "92": "bright-green",
+                    "93": "bright-yellow",
+                    "94": "bright-blue",
+                    "95": "bright-magenta",
+                    "96": "bright-cyan",
+                    "97": "bright-white",
+                }
+                current_fg = f"ansi-{color_map[code]}"
+                current_rgb_fg = None
+
+            # Bright background colors
+            elif code in ["100", "101", "102", "103", "104", "105", "106", "107"]:
+                color_map = {
+                    "100": "bright-black",
+                    "101": "bright-red",
+                    "102": "bright-green",
+                    "103": "bright-yellow",
+                    "104": "bright-blue",
+                    "105": "bright-magenta",
+                    "106": "bright-cyan",
+                    "107": "bright-white",
+                }
+                current_bg = f"ansi-bg-{color_map[code]}"
+                current_rgb_bg = None
+
+            # RGB foreground color
+            elif code == "38" and i + 1 < len(codes) and codes[i + 1] == "2":
+                if i + 4 < len(codes):
+                    r, g, b = codes[i + 2], codes[i + 3], codes[i + 4]
+                    current_rgb_fg = f"color: rgb({r}, {g}, {b})"
+                    current_fg = None
+                    i += 4
+
+            # RGB background color
+            elif code == "48" and i + 1 < len(codes) and codes[i + 1] == "2":
+                if i + 4 < len(codes):
+                    r, g, b = codes[i + 2], codes[i + 3], codes[i + 4]
+                    current_rgb_bg = f"background-color: rgb({r}, {g}, {b})"
+                    current_bg = None
+                    i += 4
+
+            i += 1
+
+        last_end = match.end()
+
+    # Add remaining text
+    if last_end < len(text):
+        segments.append(
+            {
+                "text": text[last_end:],
+                "fg": current_fg,
+                "bg": current_bg,
+                "bold": current_bold,
+                "dim": current_dim,
+                "italic": current_italic,
+                "underline": current_underline,
+                "rgb_fg": current_rgb_fg,
+                "rgb_bg": current_rgb_bg,
+            }
+        )
+
+    # Second pass: build HTML
+    for segment in segments:
+        if not segment["text"]:
+            continue
+
+        classes = []
+        styles = []
+
+        if segment["fg"]:
+            classes.append(segment["fg"])
+        if segment["bg"]:
+            classes.append(segment["bg"])
+        if segment["bold"]:
+            classes.append("ansi-bold")
+        if segment["dim"]:
+            classes.append("ansi-dim")
+        if segment["italic"]:
+            classes.append("ansi-italic")
+        if segment["underline"]:
+            classes.append("ansi-underline")
+        if segment["rgb_fg"]:
+            styles.append(segment["rgb_fg"])
+        if segment["rgb_bg"]:
+            styles.append(segment["rgb_bg"])
+
+        escaped_text = escape_html(segment["text"])
+
+        if classes or styles:
+            attrs = []
+            if classes:
+                attrs.append(f'class="{" ".join(classes)}"')
+            if styles:
+                attrs.append(f'style="{"; ".join(styles)}"')
+            result.append(f"<span {' '.join(attrs)}>{escaped_text}</span>")
+        else:
+            result.append(escaped_text)
+
+    return "".join(result)
+
+
 def _process_summary_message(message: SummaryTranscriptEntry) -> tuple[str, str, str]:
     """Process a summary message and return (css_class, content_html, message_type)."""
     css_class = "summary"
@@ -690,14 +908,12 @@ def _process_local_command_output(text_content: str) -> tuple[str, str, str]:
     )
     if stdout_match:
         stdout_content = stdout_match.group(1).strip()
-        # Remove ANSI escape codes for cleaner display
-        ansi_escape = re.compile(r"\x1b\[[0-9;]*m")
-        cleaned_content = ansi_escape.sub("", stdout_content)
-        escaped_stdout = escape_html(cleaned_content)
+        # Convert ANSI codes to HTML for colored display
+        html_content = _convert_ansi_to_html(stdout_content)
         # Use <pre> to preserve formatting and line breaks
         content_html = (
             f"<strong>Command Output:</strong><br>"
-            f"<pre class='command-output-content'>{escaped_stdout}</pre>"
+            f"<pre class='command-output-content'>{html_content}</pre>"
         )
     else:
         content_html = escape_html(text_content)
