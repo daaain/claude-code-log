@@ -642,6 +642,156 @@ class TemplateSummary:
             self.token_summary = " | ".join(token_parts)
 
 
+def _process_summary_message(message: SummaryTranscriptEntry) -> tuple[str, str, str]:
+    """Process a summary message and return (css_class, content_html, message_type)."""
+    css_class = "summary"
+    summary_text = (
+        message.summary if isinstance(message, SummaryTranscriptEntry) else "Summary"
+    )
+    content_html = f"<strong>Summary:</strong> {escape_html(str(summary_text))}"
+    message_type = "summary"
+    return css_class, content_html, message_type
+
+
+def _process_command_message(text_content: str) -> tuple[str, str, str]:
+    """Process a command message and return (css_class, content_html, message_type)."""
+    css_class = "system"
+    command_name, command_args, command_contents = extract_command_info(text_content)
+    escaped_command_name = escape_html(command_name)
+    escaped_command_args = escape_html(command_args)
+
+    # Format the command contents with proper line breaks
+    formatted_contents = command_contents.replace("\\n", "\n")
+    escaped_command_contents = escape_html(formatted_contents)
+
+    # Build the content HTML
+    content_parts: List[str] = [f"<strong>Command:</strong> {escaped_command_name}"]
+    if command_args:
+        content_parts.append(f"<strong>Args:</strong> {escaped_command_args}")
+    if command_contents:
+        details_html = create_collapsible_details("Content", escaped_command_contents)
+        content_parts.append(details_html)
+
+    content_html = "<br>".join(content_parts)
+    message_type = "system"
+    return css_class, content_html, message_type
+
+
+def _process_local_command_output(text_content: str) -> tuple[str, str, str]:
+    """Process local command output and return (css_class, content_html, message_type)."""
+    import re
+
+    css_class = "system command-output"
+
+    stdout_match = re.search(
+        r"<local-command-stdout>(.*?)</local-command-stdout>",
+        text_content,
+        re.DOTALL,
+    )
+    if stdout_match:
+        stdout_content = stdout_match.group(1).strip()
+        # Remove ANSI escape codes for cleaner display
+        ansi_escape = re.compile(r"\x1b\[[0-9;]*m")
+        cleaned_content = ansi_escape.sub("", stdout_content)
+        escaped_stdout = escape_html(cleaned_content)
+        # Use <pre> to preserve formatting and line breaks
+        content_html = (
+            f"<strong>Command Output:</strong><br>"
+            f"<pre class='command-output-content'>{escaped_stdout}</pre>"
+        )
+    else:
+        content_html = escape_html(text_content)
+
+    message_type = "system"
+    return css_class, content_html, message_type
+
+
+def _process_bash_input(text_content: str) -> tuple[str, str, str]:
+    """Process bash input command and return (css_class, content_html, message_type)."""
+    import re
+
+    css_class = "bash-input"
+
+    bash_match = re.search(
+        r"<bash-input>(.*?)</bash-input>",
+        text_content,
+        re.DOTALL,
+    )
+    if bash_match:
+        bash_command = bash_match.group(1).strip()
+        escaped_command = escape_html(bash_command)
+        content_html = (
+            f"<span class='bash-prompt'>❯</span> "
+            f"<code class='bash-command'>{escaped_command}</code>"
+        )
+    else:
+        content_html = escape_html(text_content)
+
+    message_type = "bash"
+    return css_class, content_html, message_type
+
+
+def _process_bash_output(text_content: str) -> tuple[str, str, str]:
+    """Process bash output and return (css_class, content_html, message_type)."""
+    import re
+
+    css_class = "bash-output"
+
+    stdout_match = re.search(
+        r"<bash-stdout>(.*?)</bash-stdout>",
+        text_content,
+        re.DOTALL,
+    )
+    stderr_match = re.search(
+        r"<bash-stderr>(.*?)</bash-stderr>",
+        text_content,
+        re.DOTALL,
+    )
+
+    output_parts = []
+    if stdout_match:
+        stdout_content = stdout_match.group(1).strip()
+        if stdout_content:
+            escaped_stdout = escape_html(stdout_content)
+            output_parts.append(f"<pre class='bash-stdout'>{escaped_stdout}</pre>")
+
+    if stderr_match:
+        stderr_content = stderr_match.group(1).strip()
+        if stderr_content:
+            escaped_stderr = escape_html(stderr_content)
+            output_parts.append(f"<pre class='bash-stderr'>{escaped_stderr}</pre>")
+
+    if output_parts:
+        content_html = "".join(output_parts)
+    else:
+        # Empty output
+        content_html = (
+            "<pre class='bash-stdout'><span class='bash-empty'>(no output)</span></pre>"
+        )
+
+    message_type = "bash"
+    return css_class, content_html, message_type
+
+
+def _process_regular_message(
+    text_only_content: Union[str, List[ContentItem]],
+    message_type: str,
+    is_sidechain: bool,
+) -> tuple[str, str, str]:
+    """Process regular message and return (css_class, content_html, message_type)."""
+    css_class = f"{message_type}"
+    content_html = render_message_content(text_only_content, message_type)
+
+    if is_sidechain:
+        css_class = f"{message_type} sidechain"
+        # Update message type for display
+        message_type = (
+            "📝 Sub-assistant prompt" if message_type == "user" else "🔗 Sub-assistant"
+        )
+
+    return css_class, content_html, message_type
+
+
 def _get_combined_transcript_link(cache_manager: "CacheManager") -> Optional[str]:
     """Get link to combined transcript if available."""
     try:
@@ -953,128 +1103,23 @@ def generate_html(
 
         # Determine CSS class and content based on message type and duplicate status
         if message_type == "summary":
-            css_class = "summary"
-            summary_text = (
-                message.summary
-                if isinstance(message, SummaryTranscriptEntry)
-                else "Summary"
-            )
-            content_html = f"<strong>Summary:</strong> {escape_html(str(summary_text))}"
+            css_class, content_html, message_type = _process_summary_message(message)
         elif is_command:
-            css_class = "system"
-            command_name, command_args, command_contents = extract_command_info(
+            css_class, content_html, message_type = _process_command_message(
                 text_content
             )
-            escaped_command_name = escape_html(command_name)
-            escaped_command_args = escape_html(command_args)
-
-            # Format the command contents with proper line breaks
-            formatted_contents = command_contents.replace("\\n", "\n")
-            escaped_command_contents = escape_html(formatted_contents)
-
-            # Build the content HTML
-            content_parts: List[str] = [
-                f"<strong>Command:</strong> {escaped_command_name}"
-            ]
-            if command_args:
-                content_parts.append(f"<strong>Args:</strong> {escaped_command_args}")
-            if command_contents:
-                details_html = create_collapsible_details(
-                    "Content", escaped_command_contents
-                )
-                content_parts.append(details_html)
-
-            content_html = "<br>".join(content_parts)
-            message_type = "system"
         elif is_local_output:
-            css_class = "system command-output"
-            # Extract content between <local-command-stdout> tags
-            import re
-
-            stdout_match = re.search(
-                r"<local-command-stdout>(.*?)</local-command-stdout>",
-                text_content,
-                re.DOTALL,
+            css_class, content_html, message_type = _process_local_command_output(
+                text_content
             )
-            if stdout_match:
-                stdout_content = stdout_match.group(1).strip()
-                # Remove ANSI escape codes for cleaner display
-                ansi_escape = re.compile(r"\x1b\[[0-9;]*m")
-                cleaned_content = ansi_escape.sub("", stdout_content)
-                escaped_stdout = escape_html(cleaned_content)
-                # Use <pre> to preserve formatting and line breaks
-                content_html = f"<strong>Command Output:</strong><br><pre class='command-output-content'>{escaped_stdout}</pre>"
-            else:
-                content_html = escape_html(text_content)
-            message_type = "system"
         elif is_bash_cmd:
-            css_class = "bash-input"
-            # Extract content between <bash-input> tags
-            import re
-
-            bash_match = re.search(
-                r"<bash-input>(.*?)</bash-input>",
-                text_content,
-                re.DOTALL,
-            )
-            if bash_match:
-                bash_command = bash_match.group(1).strip()
-                escaped_command = escape_html(bash_command)
-                content_html = f"<span class='bash-prompt'>❯</span> <code class='bash-command'>{escaped_command}</code>"
-            else:
-                content_html = escape_html(text_content)
-            message_type = "bash"
+            css_class, content_html, message_type = _process_bash_input(text_content)
         elif is_bash_result:
-            css_class = "bash-output"
-            # Extract stdout and stderr content
-            import re
-
-            stdout_match = re.search(
-                r"<bash-stdout>(.*?)</bash-stdout>",
-                text_content,
-                re.DOTALL,
-            )
-            stderr_match = re.search(
-                r"<bash-stderr>(.*?)</bash-stderr>",
-                text_content,
-                re.DOTALL,
-            )
-
-            output_parts = []
-            if stdout_match:
-                stdout_content = stdout_match.group(1).strip()
-                if stdout_content:
-                    escaped_stdout = escape_html(stdout_content)
-                    output_parts.append(
-                        f"<pre class='bash-stdout'>{escaped_stdout}</pre>"
-                    )
-
-            if stderr_match:
-                stderr_content = stderr_match.group(1).strip()
-                if stderr_content:
-                    escaped_stderr = escape_html(stderr_content)
-                    output_parts.append(
-                        f"<pre class='bash-stderr'>{escaped_stderr}</pre>"
-                    )
-
-            if output_parts:
-                content_html = "".join(output_parts)
-            else:
-                # Empty output
-                content_html = "<pre class='bash-stdout'><span class='bash-empty'>(no output)</span></pre>"
-            message_type = "bash"
+            css_class, content_html, message_type = _process_bash_output(text_content)
         else:
-            css_class = f"{message_type}"
-            content_html = render_message_content(text_only_content, message_type)
-            if getattr(message, "isSidechain", False):
-                css_class = f"{message_type} sidechain"
-
-                # Update message type for display
-                message_type = (
-                    "📝 Sub-assistant prompt"
-                    if message_type == "user"
-                    else "🔗 Sub-assistant"
-                )
+            css_class, content_html, message_type = _process_regular_message(
+                text_only_content, message_type, getattr(message, "isSidechain", False)
+            )
 
         # Create main message (if it has text content)
         if text_only_content and (
