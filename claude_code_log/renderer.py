@@ -28,6 +28,8 @@ from .parser import extract_text_content
 from .utils import (
     is_command_message,
     is_local_command_output,
+    is_bash_input,
+    is_bash_output,
     should_skip_message,
     should_use_as_session_starter,
     create_session_preview,
@@ -814,6 +816,8 @@ def generate_html(
         # Check message types for special handling
         is_command = is_command_message(text_content)
         is_local_output = is_local_command_output(text_content)
+        is_bash_cmd = is_bash_input(text_content)
+        is_bash_result = is_bash_output(text_content)
 
         # Check if we're in a new session
         session_id = getattr(message, "sessionId", "unknown")
@@ -1003,6 +1007,62 @@ def generate_html(
             else:
                 content_html = escape_html(text_content)
             message_type = "system"
+        elif is_bash_cmd:
+            css_class = "bash-input"
+            # Extract content between <bash-input> tags
+            import re
+
+            bash_match = re.search(
+                r"<bash-input>(.*?)</bash-input>",
+                text_content,
+                re.DOTALL,
+            )
+            if bash_match:
+                bash_command = bash_match.group(1).strip()
+                escaped_command = escape_html(bash_command)
+                content_html = f"<span class='bash-prompt'>❯</span> <code class='bash-command'>{escaped_command}</code>"
+            else:
+                content_html = escape_html(text_content)
+            message_type = "bash"
+        elif is_bash_result:
+            css_class = "bash-output"
+            # Extract stdout and stderr content
+            import re
+
+            stdout_match = re.search(
+                r"<bash-stdout>(.*?)</bash-stdout>",
+                text_content,
+                re.DOTALL,
+            )
+            stderr_match = re.search(
+                r"<bash-stderr>(.*?)</bash-stderr>",
+                text_content,
+                re.DOTALL,
+            )
+
+            output_parts = []
+            if stdout_match:
+                stdout_content = stdout_match.group(1).strip()
+                if stdout_content:
+                    escaped_stdout = escape_html(stdout_content)
+                    output_parts.append(
+                        f"<pre class='bash-stdout'>{escaped_stdout}</pre>"
+                    )
+
+            if stderr_match:
+                stderr_content = stderr_match.group(1).strip()
+                if stderr_content:
+                    escaped_stderr = escape_html(stderr_content)
+                    output_parts.append(
+                        f"<pre class='bash-stderr'>{escaped_stderr}</pre>"
+                    )
+
+            if output_parts:
+                content_html = "".join(output_parts)
+            else:
+                # Empty output
+                content_html = "<pre class='bash-stdout'><span class='bash-empty'>(no output)</span></pre>"
+            message_type = "bash"
         else:
             css_class = f"{message_type}"
             content_html = render_message_content(text_only_content, message_type)

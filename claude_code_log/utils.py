@@ -28,6 +28,16 @@ def is_local_command_output(text_content: str) -> bool:
     return "<local-command-stdout>" in text_content
 
 
+def is_bash_input(text_content: str) -> bool:
+    """Check if a message contains bash input command."""
+    return "<bash-input>" in text_content and "</bash-input>" in text_content
+
+
+def is_bash_output(text_content: str) -> bool:
+    """Check if a message contains bash command output."""
+    return "<bash-stdout>" in text_content or "<bash-stderr>" in text_content
+
+
 def should_skip_message(text_content: str) -> bool:
     """
     Determine if a message should be skipped in transcript rendering.

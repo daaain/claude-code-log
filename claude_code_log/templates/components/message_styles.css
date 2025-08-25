@@ -65,6 +65,69 @@
     overflow-x: auto;
 }
 
+/* Bash command styling */
+.bash-input {
+    background-color: #1e1e1e08;
+    border-left-color: #4caf50;
+}
+
+.bash-prompt {
+    color: #4caf50;
+    font-weight: bold;
+    font-size: 1.1em;
+    margin-right: 8px;
+}
+
+.bash-command {
+    font-family: 'Fira Code', 'Monaco', 'Consolas', monospace;
+    font-size: 0.95em;
+    color: #2c3e50;
+    background-color: #f8f9fa;
+    padding: 2px 6px;
+    border-radius: 3px;
+}
+
+/* Bash output styling */
+.bash-output {
+    background-color: #f8f9fa66;
+    border-left-color: #607d8b;
+}
+
+.bash-stdout {
+    background-color: #1e1e1e05;
+    padding: 12px;
+    border-radius: 4px;
+    border: 1px solid #00000011;
+    margin: 8px 0;
+    font-family: 'Fira Code', 'Monaco', 'Consolas', monospace;
+    font-size: 0.9em;
+    line-height: 1.4;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    color: #333;
+    overflow-x: auto;
+}
+
+.bash-stderr {
+    background-color: #ffebee;
+    padding: 12px;
+    border-radius: 4px;
+    border: 1px solid #ffcdd2;
+    margin: 8px 0;
+    font-family: 'Fira Code', 'Monaco', 'Consolas', monospace;
+    font-size: 0.9em;
+    line-height: 1.4;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    color: #c62828;
+    overflow-x: auto;
+}
+
+.bash-empty {
+    color: #999;
+    font-style: italic;
+}
+
 .tool_use {
     border-left-color: #e91e63;
 }
