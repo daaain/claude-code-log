@@ -653,8 +653,8 @@ def _convert_ansi_to_html(text: str) -> str:
     """
     import re
 
-    result = []
-    segments = []
+    result: List[str] = []
+    segments: List[Dict[str, Any]] = []
 
     # First pass: split text into segments with their styles
     last_end = 0
@@ -825,8 +825,8 @@ def _convert_ansi_to_html(text: str) -> str:
         if not segment["text"]:
             continue
 
-        classes = []
-        styles = []
+        classes: List[str] = []
+        styles: List[str] = []
 
         if segment["fg"]:
             classes.append(segment["fg"])
@@ -848,7 +848,7 @@ def _convert_ansi_to_html(text: str) -> str:
         escaped_text = escape_html(segment["text"])
 
         if classes or styles:
-            attrs = []
+            attrs: List[str] = []
             if classes:
                 attrs.append(f'class="{" ".join(classes)}"')
             if styles:
@@ -860,15 +860,12 @@ def _convert_ansi_to_html(text: str) -> str:
     return "".join(result)
 
 
-def _process_summary_message(message: SummaryTranscriptEntry) -> tuple[str, str, str]:
-    """Process a summary message and return (css_class, content_html, message_type)."""
-    css_class = "summary"
-    summary_text = (
-        message.summary if isinstance(message, SummaryTranscriptEntry) else "Summary"
-    )
-    content_html = f"<strong>Summary:</strong> {escape_html(str(summary_text))}"
-    message_type = "summary"
-    return css_class, content_html, message_type
+# def _process_summary_message(message: SummaryTranscriptEntry) -> tuple[str, str, str]:
+#     """Process a summary message and return (css_class, content_html, message_type)."""
+#     css_class = "summary"
+#     content_html = f"<strong>Summary:</strong> {escape_html(str(message.summary))}"
+#     message_type = "summary"
+#     return css_class, content_html, message_type
 
 
 def _process_command_message(text_content: str) -> tuple[str, str, str]:
@@ -964,7 +961,7 @@ def _process_bash_output(text_content: str) -> tuple[str, str, str]:
         re.DOTALL,
     )
 
-    output_parts = []
+    output_parts: List[str] = []
     if stdout_match:
         stdout_content = stdout_match.group(1).strip()
         if stdout_content:
@@ -1318,9 +1315,7 @@ def generate_html(
                 token_usage_str = " | ".join(token_parts)
 
         # Determine CSS class and content based on message type and duplicate status
-        if message_type == "summary":
-            css_class, content_html, message_type = _process_summary_message(message)
-        elif is_command:
+        if is_command:
             css_class, content_html, message_type = _process_command_message(
                 text_content
             )
