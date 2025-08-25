@@ -983,7 +983,7 @@ def generate_html(
             content_html = "<br>".join(content_parts)
             message_type = "system"
         elif is_local_output:
-            css_class = "system"
+            css_class = "system command-output"
             # Extract content between <local-command-stdout> tags
             import re
 
@@ -994,8 +994,12 @@ def generate_html(
             )
             if stdout_match:
                 stdout_content = stdout_match.group(1).strip()
-                escaped_stdout = escape_html(stdout_content)
-                content_html = f"<strong>Command Output:</strong><br><div class='content'>{escaped_stdout}</div>"
+                # Remove ANSI escape codes for cleaner display
+                ansi_escape = re.compile(r"\x1b\[[0-9;]*m")
+                cleaned_content = ansi_escape.sub("", stdout_content)
+                escaped_stdout = escape_html(cleaned_content)
+                # Use <pre> to preserve formatting and line breaks
+                content_html = f"<strong>Command Output:</strong><br><pre class='command-output-content'>{escaped_stdout}</pre>"
             else:
                 content_html = escape_html(text_content)
             message_type = "system"

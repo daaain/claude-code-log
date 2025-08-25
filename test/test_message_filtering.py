@@ -98,7 +98,7 @@ def test_caveat_message_filtering():
 
 
 def test_system_message_filtering():
-    """Test that other system messages are still filtered out."""
+    """Test that caveat messages are filtered but command output is shown."""
     stdout_message = {
         "type": "user",
         "timestamp": "2025-06-11T22:44:17.436Z",
@@ -160,10 +160,11 @@ def test_system_message_filtering():
         messages = load_transcript(test_file_path)
         html = generate_html(messages, "Test Transcript")
 
-        # These should NOT appear in HTML
-        assert "local-command-stdout" not in html, (
-            "stdout messages should be filtered out"
+        # Command output should now appear in HTML (rendered as "Command Output:")
+        assert "Command Output:" in html or "Some command output here" in html, (
+            "stdout messages should now be rendered"
         )
+        # But caveat messages should still be filtered out
         assert "Caveat: The messages below" not in html, (
             "caveat messages should be filtered out"
         )

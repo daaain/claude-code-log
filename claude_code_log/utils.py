@@ -36,9 +36,10 @@ def should_skip_message(text_content: str) -> bool:
     """
     is_system = is_system_message(text_content)
     is_command = is_command_message(text_content)
+    is_output = is_local_command_output(text_content)
 
-    # Skip system messages that are not command messages
-    return is_system and not is_command
+    # Skip system messages that are not command messages AND not local command output
+    return is_system and not is_command and not is_output
 
 
 def extract_init_command_description(text_content: str) -> str:

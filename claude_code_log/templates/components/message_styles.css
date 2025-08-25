@@ -44,6 +44,27 @@
     background-color: #e3f2fd88;
 }
 
+/* Command output styling */
+.command-output {
+    background-color: #1e1e1e11;
+    border-left-color: #00bcd4;
+}
+
+.command-output-content {
+    background-color: #1e1e1e08;
+    padding: 12px;
+    border-radius: 4px;
+    border: 1px solid #00000011;
+    margin-top: 8px;
+    font-family: 'Fira Code', 'Monaco', 'Consolas', monospace;
+    font-size: 0.9em;
+    line-height: 1.4;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    color: #333;
+    overflow-x: auto;
+}
+
 .tool_use {
     border-left-color: #e91e63;
 }
