@@ -6,6 +6,8 @@ from claude_code_log.utils import (
     is_system_message,
     is_command_message,
     is_local_command_output,
+    is_bash_input,
+    is_bash_output,
     should_skip_message,
     should_use_as_session_starter,
     extract_text_content_length,
@@ -104,6 +106,80 @@ class TestLocalCommandOutput:
     def test_is_local_command_output_empty_string(self):
         """Test command output detection with empty string."""
         assert is_local_command_output("") is False
+
+
+class TestBashCommandDetection:
+    """Test bash command input/output detection functionality."""
+
+    def test_is_bash_input_complete(self):
+        """Test detection of complete bash input tags."""
+        bash_text = "<bash-input>pwd</bash-input>"
+        assert is_bash_input(bash_text) is True
+
+    def test_is_bash_input_with_complex_command(self):
+        """Test detection with complex bash commands."""
+        bash_text = "<bash-input>ls -la /home/user | grep .txt</bash-input>"
+        assert is_bash_input(bash_text) is True
+
+    def test_is_bash_input_incomplete(self):
+        """Test that incomplete bash input tags are not detected."""
+        # Only opening tag
+        assert is_bash_input("<bash-input>pwd") is False
+        # Only closing tag
+        assert is_bash_input("pwd</bash-input>") is False
+        # Wrong tag name
+        assert is_bash_input("<bash-command>pwd</bash-command>") is False
+
+    def test_is_bash_input_empty_command(self):
+        """Test detection of empty bash input."""
+        bash_text = "<bash-input></bash-input>"
+        assert is_bash_input(bash_text) is True
+
+    def test_is_bash_input_normal_text(self):
+        """Test that normal text is not detected as bash input."""
+        normal_text = "This is a regular message without bash tags"
+        assert is_bash_input(normal_text) is False
+
+
+class TestBashOutputDetection:
+    """Test bash output detection functionality."""
+
+    def test_is_bash_output_stdout_only(self):
+        """Test detection of bash stdout."""
+        output_text = "<bash-stdout>/home/user</bash-stdout><bash-stderr></bash-stderr>"
+        assert is_bash_output(output_text) is True
+
+    def test_is_bash_output_stderr_only(self):
+        """Test detection of bash stderr."""
+        output_text = "<bash-stdout></bash-stdout><bash-stderr>Error: File not found</bash-stderr>"
+        assert is_bash_output(output_text) is True
+
+    def test_is_bash_output_both(self):
+        """Test detection with both stdout and stderr."""
+        output_text = (
+            "<bash-stdout>Output</bash-stdout><bash-stderr>Warning</bash-stderr>"
+        )
+        assert is_bash_output(output_text) is True
+
+    def test_is_bash_output_stdout_tag_only(self):
+        """Test detection with just stdout tag present."""
+        output_text = "Some text with <bash-stdout> tag"
+        assert is_bash_output(output_text) is True
+
+    def test_is_bash_output_stderr_tag_only(self):
+        """Test detection with just stderr tag present."""
+        output_text = "Some text with <bash-stderr> tag"
+        assert is_bash_output(output_text) is True
+
+    def test_is_bash_output_normal_text(self):
+        """Test that normal text is not detected as bash output."""
+        normal_text = "This is regular text without bash output tags"
+        assert is_bash_output(normal_text) is False
+
+    def test_is_bash_output_empty_tags(self):
+        """Test detection of empty output tags."""
+        output_text = "<bash-stdout></bash-stdout><bash-stderr></bash-stderr>"
+        assert is_bash_output(output_text) is True
 
 
 class TestMessageSkipping:
