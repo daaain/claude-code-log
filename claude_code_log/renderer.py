@@ -183,7 +183,7 @@ def render_markdown(text: str) -> str:
             "def_list",
         ],
         escape=False,  # Don't escape HTML since we want to render markdown properly
-        hard_wrap=True, # Line break for newlines (checklists in Assistant messages)
+        hard_wrap=True,  # Line break for newlines (checklists in Assistant messages)
     )
     return str(renderer(text))
 
