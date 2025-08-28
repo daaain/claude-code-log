@@ -93,9 +93,9 @@ class TestTemplateRendering:
         assert "Command:" in html_content
         assert "test-command" in html_content
 
-        # Check that local command output is filtered out (it's a system message)
-        assert "local-command-stdout" not in html_content
-        assert "Line 1 of output" not in html_content
+        # Check local command output is present (output from /context can be interesting)
+        assert "message system command-output" in html_content
+        assert "Line 1 of output" in html_content
 
         # Check special characters
         assert "café, naïve, résumé" in html_content
