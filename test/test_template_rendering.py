@@ -24,7 +24,7 @@ class TestTemplateRendering:
 
         # Convert to HTML
         html_file = convert_jsonl_to_html(test_data_path)
-        html_content = html_file.read_text()
+        html_content = html_file.read_text(encoding="utf-8")
 
         # Basic HTML structure checks
         assert "<!DOCTYPE html>" in html_content
@@ -68,7 +68,7 @@ class TestTemplateRendering:
 
         # Convert to HTML
         html_file = convert_jsonl_to_html(test_data_path)
-        html_content = html_file.read_text()
+        html_content = html_file.read_text(encoding="utf-8")
 
         # Basic checks
         assert "<!DOCTYPE html>" in html_content
@@ -122,7 +122,7 @@ class TestTemplateRendering:
 
             # Convert directory to HTML
             html_file = convert_jsonl_to_html(temp_path)
-            html_content = html_file.read_text()
+            html_content = html_file.read_text(encoding="utf-8")
 
             # Should have session headers for each session
             session_headers = html_content.count("session-header")
@@ -142,11 +142,11 @@ class TestTemplateRendering:
             jsonl_file = temp_path / "empty_test.jsonl"
 
             # Create file with empty content
-            jsonl_file.write_text("")
+            jsonl_file.write_text("", encoding="utf-8")
 
             # Should not crash
             html_file = convert_jsonl_to_html(jsonl_file)
-            html_content = html_file.read_text()
+            html_content = html_file.read_text(encoding="utf-8")
 
             assert "<!DOCTYPE html>" in html_content
             assert "<title>Claude Transcript - empty_test</title>" in html_content
@@ -186,7 +186,7 @@ class TestTemplateRendering:
         )
 
         html_file = convert_jsonl_to_html(test_data_path)
-        html_content = html_file.read_text()
+        html_content = html_file.read_text(encoding="utf-8")
 
         # Check timestamp format (YYYY-MM-DD HH:MM:SS)
         assert "2025-07-03 15:50:07" in html_content
@@ -246,7 +246,7 @@ class TestTemplateRendering:
         )
 
         html_file = convert_jsonl_to_html(test_data_path)
-        html_content = html_file.read_text()
+        html_content = html_file.read_text(encoding="utf-8")
 
         # Check message type classes
         assert "class='message user'" in html_content
@@ -265,7 +265,7 @@ class TestTemplateRendering:
         )
 
         html_file = convert_jsonl_to_html(test_data_path)
-        html_content = html_file.read_text()
+        html_content = html_file.read_text(encoding="utf-8")
 
         # Should NOT have client-side JavaScript for markdown rendering
         assert "marked" not in html_content
@@ -310,11 +310,11 @@ class TestTemplateRendering:
             temp_path = Path(temp_dir)
             jsonl_file = temp_path / "escape_test.jsonl"
 
-            with open(jsonl_file, "w") as f:
+            with open(jsonl_file, "w", encoding="utf-8") as f:
                 f.write(json.dumps(test_data) + "\n")
 
             html_file = convert_jsonl_to_html(jsonl_file)
-            html_content = html_file.read_text()
+            html_content = html_file.read_text(encoding="utf-8")
 
             # Check that HTML is escaped
             assert "&lt;script&gt;" in html_content

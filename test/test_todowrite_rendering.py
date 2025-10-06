@@ -199,11 +199,11 @@ class TestTodoWriteRendering:
             temp_path = Path(temp_dir)
             jsonl_file = temp_path / "todowrite_test.jsonl"
 
-            with open(jsonl_file, "w") as f:
+            with open(jsonl_file, "w", encoding="utf-8") as f:
                 f.write(json.dumps(test_data) + "\n")
 
             html_file = convert_jsonl_to_html(jsonl_file)
-            html_content = html_file.read_text()
+            html_content = html_file.read_text(encoding="utf-8")
 
             # Check TodoWrite specific rendering (now in message header)
             assert "📝 Todo List" in html_content  # in message header
@@ -310,11 +310,11 @@ class TestTodoWriteRendering:
             temp_path = Path(temp_dir)
             jsonl_file = temp_path / "css_test.jsonl"
 
-            with open(jsonl_file, "w") as f:
+            with open(jsonl_file, "w", encoding="utf-8") as f:
                 f.write(json.dumps(test_data) + "\n")
 
             html_file = convert_jsonl_to_html(jsonl_file)
-            html_content = html_file.read_text()
+            html_content = html_file.read_text(encoding="utf-8")
 
             # Check that TodoWrite CSS is included
             assert ".todo-write" in html_content

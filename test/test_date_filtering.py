@@ -104,7 +104,9 @@ def test_end_to_end_date_filtering():
     ]
 
     # Write to temporary JSONL file
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".jsonl", delete=False, encoding="utf-8"
+    ) as f:
         for msg in messages:
             f.write(json.dumps(msg) + "\n")
         f.flush()
@@ -121,7 +123,7 @@ def test_end_to_end_date_filtering():
         )
 
         # Check the generated HTML
-        html_content = result_path.read_text()
+        html_content = result_path.read_text(encoding="utf-8")
 
         # Should contain today's message (HTML escaped)
         assert "Today&#x27;s message" in html_content, (

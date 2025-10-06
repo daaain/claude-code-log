@@ -488,7 +488,7 @@ def get_library_version() -> str:
         pyproject_path = package_root / "pyproject.toml"
 
         if pyproject_path.exists():
-            with open(pyproject_path, "r") as f:
+            with open(pyproject_path, "r", encoding="utf-8") as f:
                 pyproject_data = toml.load(f)
             return pyproject_data.get("project", {}).get("version", "unknown")
     except Exception:
@@ -502,7 +502,7 @@ def get_library_version() -> str:
         pyproject_path = project_root / "pyproject.toml"
 
         if pyproject_path.exists():
-            with open(pyproject_path, "r") as f:
+            with open(pyproject_path, "r", encoding="utf-8") as f:
                 pyproject_data = toml.load(f)
             return pyproject_data.get("project", {}).get("version", "unknown")
     except Exception:

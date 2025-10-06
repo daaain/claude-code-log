@@ -114,7 +114,7 @@ class TestCacheManager:
     ):
         """Test saving and loading cached entries."""
         jsonl_path = temp_project_dir / "test.jsonl"
-        jsonl_path.write_text("dummy content")
+        jsonl_path.write_text("dummy content", encoding="utf-8")
 
         # Save entries to cache
         cache_manager.save_cached_entries(jsonl_path, sample_entries)
@@ -138,7 +138,7 @@ class TestCacheManager:
     ):
         """Test that cache uses timestamp-based structure."""
         jsonl_path = temp_project_dir / "test.jsonl"
-        jsonl_path.write_text("dummy content")
+        jsonl_path.write_text("dummy content", encoding="utf-8")
 
         cache_manager.save_cached_entries(jsonl_path, sample_entries)
 
@@ -163,7 +163,7 @@ class TestCacheManager:
     ):
         """Test cache invalidation when source file is modified."""
         jsonl_path = temp_project_dir / "test.jsonl"
-        jsonl_path.write_text("original content")
+        jsonl_path.write_text("original content", encoding="utf-8")
 
         # Save to cache
         cache_manager.save_cached_entries(jsonl_path, sample_entries)
@@ -173,7 +173,7 @@ class TestCacheManager:
         import time
 
         time.sleep(1.1)  # Ensure different mtime (increase to be more reliable)
-        jsonl_path.write_text("modified content")
+        jsonl_path.write_text("modified content", encoding="utf-8")
 
         # Cache should be invalidated
         assert not cache_manager.is_file_cached(jsonl_path)
@@ -236,7 +236,7 @@ class TestCacheManager:
         ]
 
         jsonl_path = temp_project_dir / "test.jsonl"
-        jsonl_path.write_text("dummy content")
+        jsonl_path.write_text("dummy content", encoding="utf-8")
 
         cache_manager.save_cached_entries(jsonl_path, entries)
 
@@ -256,7 +256,7 @@ class TestCacheManager:
     def test_clear_cache(self, cache_manager, temp_project_dir, sample_entries):
         """Test cache clearing functionality."""
         jsonl_path = temp_project_dir / "test.jsonl"
-        jsonl_path.write_text("dummy content")
+        jsonl_path.write_text("dummy content", encoding="utf-8")
 
         # Create cache
         cache_manager.save_cached_entries(jsonl_path, sample_entries)
@@ -316,8 +316,8 @@ class TestCacheManager:
         # Create multiple files
         file1 = temp_project_dir / "file1.jsonl"
         file2 = temp_project_dir / "file2.jsonl"
-        file1.write_text("content1")
-        file2.write_text("content2")
+        file1.write_text("content1", encoding="utf-8")
+        file2.write_text("content2", encoding="utf-8")
 
         # Cache only one file
         cache_manager.save_cached_entries(file1, sample_entries)
@@ -576,12 +576,12 @@ class TestCacheErrorHandling:
     def test_corrupted_cache_file(self, cache_manager, temp_project_dir):
         """Test handling of corrupted cache files."""
         jsonl_path = temp_project_dir / "test.jsonl"
-        jsonl_path.write_text("dummy content")
+        jsonl_path.write_text("dummy content", encoding="utf-8")
 
         # Create corrupted cache file
         cache_file = cache_manager._get_cache_file_path(jsonl_path)
         cache_file.parent.mkdir(exist_ok=True)
-        cache_file.write_text("invalid json content")
+        cache_file.write_text("invalid json content", encoding="utf-8")
 
         # Should handle gracefully
         result = cache_manager.load_cached_entries(jsonl_path)

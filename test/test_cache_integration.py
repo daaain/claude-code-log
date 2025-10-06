@@ -388,7 +388,7 @@ class TestCacheEdgeCases:
         cache_files = list(cache_dir.glob("*.json"))
         if cache_files:
             cache_file = [f for f in cache_files if f.name != "index.json"][0]
-            cache_file.write_text("corrupted json data")
+            cache_file.write_text("corrupted json data", encoding="utf-8")
 
         # Should recover gracefully
         output = convert_jsonl_to_html(input_path=project_dir, use_cache=True)

@@ -88,7 +88,9 @@ def create_test_jsonl():
     ]
 
     # Create temporary JSONL file
-    temp_file = tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False)
+    temp_file = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".jsonl", delete=False, encoding="utf-8"
+    )
     for msg in messages:
         json.dump(msg, temp_file)
         temp_file.write("\n")
@@ -106,7 +108,7 @@ def main():
         html_path = convert_jsonl_to_html(jsonl_path)
 
         # Read and display the HTML content
-        html_content = html_path.read_text()
+        html_content = html_path.read_text(encoding="utf-8")
         print("Generated HTML:")
         print("=" * 50)
         print(html_content)

@@ -27,13 +27,16 @@ class TestHtmlRegeneration:
         test_data_dir = Path(__file__).parent / "test_data"
         jsonl_file = project_dir / "test.jsonl"
         jsonl_file.write_text(
-            (test_data_dir / "representative_messages.jsonl").read_text()
+            (test_data_dir / "representative_messages.jsonl").read_text(
+                encoding="utf-8"
+            ),
+            encoding="utf-8",
         )
 
         # First run: Generate HTML
         output_file = convert_jsonl_to_html(project_dir)
         assert output_file.exists()
-        original_content = output_file.read_text()
+        original_content = output_file.read_text(encoding="utf-8")
         original_mtime = output_file.stat().st_mtime
 
         # Verify HTML was generated
@@ -55,7 +58,7 @@ class TestHtmlRegeneration:
         # Third run: Modify JSONL file, should regenerate
         time.sleep(1.1)  # Ensure > 1.0 second difference for cache detection
         new_message = '{"type":"user","timestamp":"2025-07-03T16:15:00Z","parentUuid":null,"isSidechain":false,"userType":"human","cwd":"/tmp","sessionId":"test_session","version":"1.0.0","uuid":"new_msg","message":{"role":"user","content":[{"type":"text","text":"This is a new message to test regeneration."}]}}\n'
-        with open(jsonl_file, "a") as f:
+        with open(jsonl_file, "a", encoding="utf-8") as f:
             f.write(new_message)
 
         # Should regenerate without explicit print check since it should happen silently
@@ -63,7 +66,7 @@ class TestHtmlRegeneration:
 
         # Verify file was regenerated
         assert output_file.stat().st_mtime > original_mtime
-        new_content = output_file.read_text()
+        new_content = output_file.read_text(encoding="utf-8")
         assert "This is a new message to test regeneration" in new_content
 
     def test_individual_session_regeneration_on_jsonl_change(self, tmp_path):
@@ -76,7 +79,10 @@ class TestHtmlRegeneration:
         test_data_dir = Path(__file__).parent / "test_data"
         jsonl_file = project_dir / "test.jsonl"
         jsonl_file.write_text(
-            (test_data_dir / "representative_messages.jsonl").read_text()
+            (test_data_dir / "representative_messages.jsonl").read_text(
+                encoding="utf-8"
+            ),
+            encoding="utf-8",
         )
 
         # First run: Generate HTML with individual sessions
@@ -111,7 +117,7 @@ class TestHtmlRegeneration:
         # Third run: Modify JSONL file, should regenerate
         time.sleep(1.1)  # Ensure > 1.0 second difference for cache detection
         new_message = '{"type":"assistant","timestamp":"2025-07-03T16:20:00Z","parentUuid":null,"isSidechain":false,"userType":"human","cwd":"/tmp","sessionId":"test_session","version":"1.0.0","uuid":"new_assistant_msg","requestId":"req_new","message":{"id":"new_assistant_msg","type":"message","role":"assistant","model":"claude-3-sonnet-20240229","content":[{"type":"text","text":"I can help you test session regeneration!"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":15,"output_tokens":10}}}\n'
-        with open(jsonl_file, "a") as f:
+        with open(jsonl_file, "a", encoding="utf-8") as f:
             f.write(new_message)
 
         # Should regenerate
@@ -119,7 +125,7 @@ class TestHtmlRegeneration:
 
         # Verify session file was regenerated
         assert session_file.stat().st_mtime > original_mtime
-        new_content = session_file.read_text()
+        new_content = session_file.read_text(encoding="utf-8")
         assert "I can help you test session regeneration" in new_content
 
     def test_projects_index_regeneration_on_jsonl_change(self, tmp_path):
@@ -136,15 +142,23 @@ class TestHtmlRegeneration:
         # Copy test data to projects
         test_data_dir = Path(__file__).parent / "test_data"
         jsonl1 = project1 / "test1.jsonl"
-        jsonl1.write_text((test_data_dir / "representative_messages.jsonl").read_text())
+        jsonl1.write_text(
+            (test_data_dir / "representative_messages.jsonl").read_text(
+                encoding="utf-8"
+            ),
+            encoding="utf-8",
+        )
 
         jsonl2 = project2 / "test2.jsonl"
-        jsonl2.write_text((test_data_dir / "edge_cases.jsonl").read_text())
+        jsonl2.write_text(
+            (test_data_dir / "edge_cases.jsonl").read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
 
         # First run: Generate index
         index_file = process_projects_hierarchy(projects_dir)
         assert index_file.exists()
-        original_content = index_file.read_text()
+        original_content = index_file.read_text(encoding="utf-8")
         original_mtime = index_file.stat().st_mtime
 
         # Verify index was generated with project data
@@ -165,7 +179,7 @@ class TestHtmlRegeneration:
         # Third run: Modify JSONL file in project1, should regenerate index
         time.sleep(1.1)  # Ensure > 1.0 second difference for cache detection
         new_message = '{"type":"summary","summary":"This project now has updated content for index regeneration test.","leafUuid":"msg_011","timestamp":"2025-07-03T16:25:00Z"}\n'
-        with open(jsonl1, "a") as f:
+        with open(jsonl1, "a", encoding="utf-8") as f:
             f.write(new_message)
 
         # Should regenerate index
@@ -184,7 +198,10 @@ class TestHtmlRegeneration:
         test_data_dir = Path(__file__).parent / "test_data"
         jsonl_file = project_dir / "test.jsonl"
         jsonl_file.write_text(
-            (test_data_dir / "representative_messages.jsonl").read_text()
+            (test_data_dir / "representative_messages.jsonl").read_text(
+                encoding="utf-8"
+            ),
+            encoding="utf-8",
         )
 
         # Initialize cache manager
@@ -208,7 +225,7 @@ class TestHtmlRegeneration:
         # Modify JSONL file
         time.sleep(1.1)  # Ensure > 1.0 second difference for cache detection
         new_message = '{"type":"user","timestamp":"2025-07-03T16:30:00Z","parentUuid":null,"isSidechain":false,"userType":"human","cwd":"/tmp","sessionId":"test_session","version":"1.0.0","uuid":"cache_test_msg","message":{"role":"user","content":[{"type":"text","text":"Testing cache update detection."}]}}\n'
-        with open(jsonl_file, "a") as f:
+        with open(jsonl_file, "a", encoding="utf-8") as f:
             f.write(new_message)
 
         # Now cache should detect the change
@@ -225,7 +242,10 @@ class TestHtmlRegeneration:
         test_data_dir = Path(__file__).parent / "test_data"
         jsonl_file = project_dir / "test.jsonl"
         jsonl_file.write_text(
-            (test_data_dir / "representative_messages.jsonl").read_text()
+            (test_data_dir / "representative_messages.jsonl").read_text(
+                encoding="utf-8"
+            ),
+            encoding="utf-8",
         )
 
         # First run: Generate HTML
@@ -233,14 +253,14 @@ class TestHtmlRegeneration:
         original_mtime = output_file.stat().st_mtime
 
         # Verify the HTML contains the version comment
-        content = output_file.read_text()
+        content = output_file.read_text(encoding="utf-8")
         library_version = get_library_version()
         assert f"Generated by claude-code-log v{library_version}" in content
 
         # Wait and modify JSONL file (this should trigger cache update and regeneration)
         time.sleep(1.1)  # Ensure > 1.0 second difference for cache detection
         new_message = '{"type":"user","timestamp":"2025-07-03T16:35:00Z","parentUuid":null,"isSidechain":false,"userType":"human","cwd":"/tmp","sessionId":"test_session","version":"1.0.0","uuid":"force_regen_msg","message":{"role":"user","content":[{"type":"text","text":"This should force regeneration despite same version."}]}}\n'
-        with open(jsonl_file, "a") as f:
+        with open(jsonl_file, "a", encoding="utf-8") as f:
             f.write(new_message)
 
         # Should regenerate because cache was updated (not because of version change)
@@ -248,7 +268,7 @@ class TestHtmlRegeneration:
 
         # Verify file was regenerated
         assert output_file.stat().st_mtime > original_mtime
-        new_content = output_file.read_text()
+        new_content = output_file.read_text(encoding="utf-8")
         assert "This should force regeneration despite same version" in new_content
 
     def test_single_file_mode_regeneration_behavior(self, tmp_path):
@@ -257,7 +277,10 @@ class TestHtmlRegeneration:
         test_data_dir = Path(__file__).parent / "test_data"
         jsonl_file = tmp_path / "single_test.jsonl"
         jsonl_file.write_text(
-            (test_data_dir / "representative_messages.jsonl").read_text()
+            (test_data_dir / "representative_messages.jsonl").read_text(
+                encoding="utf-8"
+            ),
+            encoding="utf-8",
         )
 
         # First run: Generate HTML for single file
@@ -279,7 +302,7 @@ class TestHtmlRegeneration:
         # Modify file - should NOT auto-regenerate in single file mode because there's no cache
         time.sleep(0.1)
         new_message = '{"type":"user","timestamp":"2025-07-03T16:40:00Z","parentUuid":null,"isSidechain":false,"userType":"human","cwd":"/tmp","sessionId":"test_session","version":"1.0.0","uuid":"single_file_msg","message":{"role":"user","content":[{"type":"text","text":"Single file mode test."}]}}\n'
-        with open(jsonl_file, "a") as f:
+        with open(jsonl_file, "a", encoding="utf-8") as f:
             f.write(new_message)
 
         # Single file mode doesn't have cache, so it should still skip based on version
