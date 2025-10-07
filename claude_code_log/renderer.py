@@ -317,19 +317,38 @@ def format_tool_use_content(tool_use: ToolUseContent) -> str:
 
 
 def format_tool_result_content(tool_result: ToolResultContent) -> str:
-    """Format tool result content as HTML."""
+    """Format tool result content as HTML, including images."""
     # Handle both string and structured content
     if isinstance(tool_result.content, str):
         raw_content = tool_result.content
+        has_images = False
+        image_html_parts: List[str] = []
     else:
-        # Content is a list of structured items, extract text
+        # Content is a list of structured items, extract text and images
         content_parts: List[str] = []
+        image_html_parts: List[str] = []
         for item in tool_result.content:
-            if isinstance(item, dict) and item.get("type") == "text":  # type: ignore
-                text_value = item.get("text")
-                if isinstance(text_value, str):
-                    content_parts.append(text_value)
+            if isinstance(item, dict):
+                item_type = item.get("type")
+                if item_type == "text":  # type: ignore
+                    text_value = item.get("text")
+                    if isinstance(text_value, str):
+                        content_parts.append(text_value)
+                elif item_type == "image":
+                    # Handle image content within tool results
+                    source = item.get("source", {})
+                    if isinstance(source, dict):
+                        media_type = source.get("media_type", "image/png")
+                        data = source.get("data", "")
+                        if data:
+                            data_url = f"data:{media_type};base64,{data}"
+                            image_html_parts.append(
+                                f'<img src="{data_url}" alt="Tool result image" '
+                                f'style="max-width: 100%; height: auto; border: 1px solid #ddd; '
+                                f'border-radius: 4px; margin: 10px 0;" />'
+                            )
         raw_content = "\n".join(content_parts)
+        has_images = len(image_html_parts) > 0
 
     # Check if this looks like Bash tool output and process ANSI codes
     # Bash tool results often contain ANSI escape sequences and terminal output
@@ -338,13 +357,34 @@ def format_tool_result_content(tool_result: ToolResultContent) -> str:
     else:
         escaped_content = escape_html(raw_content)
 
-    # For simple content, show directly without collapsible wrapper
-    if len(escaped_content) <= 200:
-        return f"<pre>{escaped_content}</pre>"
+    # Build final HTML based on content length and presence of images
+    if has_images:
+        # Combine text and images
+        text_html = f"<pre>{escaped_content}</pre>" if escaped_content else ""
+        images_html = "".join(image_html_parts)
+        combined_content = f"{text_html}{images_html}"
 
-    # For longer content, use collapsible details but no extra wrapper
-    preview_text = escaped_content[:200] + "..."
-    return f"""
+        # Always make collapsible when images are present
+        preview_text = "Text and image content (click to expand)"
+        return f"""
+    <details class="collapsible-details">
+        <summary>
+            <div class="preview-content">{preview_text}</div>
+        </summary>
+        <div class="details-content">
+            {combined_content}
+        </div>
+    </details>
+    """
+    else:
+        # Text-only content (existing behavior)
+        # For simple content, show directly without collapsible wrapper
+        if len(escaped_content) <= 200:
+            return f"<pre>{escaped_content}</pre>"
+
+        # For longer content, use collapsible details but no extra wrapper
+        preview_text = escaped_content[:200] + "..."
+        return f"""
     <details class="collapsible-details">
         <summary>
             <div class="preview-content"><pre>{preview_text}</pre></div>
