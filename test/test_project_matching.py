@@ -104,43 +104,62 @@ class TestProjectMatching:
         with tempfile.TemporaryDirectory() as temp_dir:
             projects_dir = Path(temp_dir)
 
-            # Create project with Claude-style naming convention
-            project_name = "-Users-test-workspace-myproject"
-            project1 = projects_dir / project_name
-            project1.mkdir()
-            (project1 / "test1.jsonl").touch()
+            # Create a real directory to test with (platform-independent)
+            with tempfile.TemporaryDirectory() as test_project_dir:
+                test_project_path = Path(test_project_dir)
 
-            with patch("claude_code_log.cli.CacheManager") as mock_cache_manager:
-                # Mock no cache data available
-                cache_instance = Mock()
-                cache_instance.get_cached_project_data.return_value = None
-                mock_cache_manager.return_value = cache_instance
+                # Import here to use the function
+                from claude_code_log.cli import convert_project_path_to_claude_dir
 
-                # Test matching based on reconstructed path from project name
-                matching_projects = find_projects_by_cwd(
-                    projects_dir, "/Users/test/workspace/myproject"
+                # Get the expected project name for this platform
+                expected_project_dir = convert_project_path_to_claude_dir(
+                    test_project_path
                 )
-                assert len(matching_projects) == 1
-                assert matching_projects[0] == project1
+                project_name = expected_project_dir.name
+
+                # Create project directory with Claude-style naming
+                project1 = projects_dir / project_name
+                project1.mkdir()
+                (project1 / "test1.jsonl").touch()
+
+                with patch("claude_code_log.cli.CacheManager") as mock_cache_manager:
+                    # Mock no cache data available
+                    cache_instance = Mock()
+                    cache_instance.get_cached_project_data.return_value = None
+                    mock_cache_manager.return_value = cache_instance
+
+                    # Test matching based on reconstructed path from project name
+                    matching_projects = find_projects_by_cwd(
+                        projects_dir, str(test_project_path)
+                    )
+                    assert len(matching_projects) == 1
+                    assert matching_projects[0] == project1
 
     def test_find_projects_by_cwd_default_current_directory(self):
         """Test using current working directory when none specified."""
         with tempfile.TemporaryDirectory() as temp_dir:
             projects_dir = Path(temp_dir)
 
-            with (
-                patch("claude_code_log.cli.os.getcwd") as mock_getcwd,
-                patch("claude_code_log.cli.CacheManager") as mock_cache_manager,
-            ):
-                mock_getcwd.return_value = "/current/working/directory"
+            # Use a real temporary directory for the current working directory
+            # to avoid issues with Path.resolve() calling os.getcwd() on Windows
+            with tempfile.TemporaryDirectory() as cwd_temp_dir:
+                cwd_path = str(Path(cwd_temp_dir).resolve())
 
-                # Mock no projects found
-                cache_instance = Mock()
-                cache_instance.get_cached_project_data.return_value = None
-                mock_cache_manager.return_value = cache_instance
+                with (
+                    patch("claude_code_log.cli.os.getcwd") as mock_getcwd,
+                    patch("claude_code_log.cli.CacheManager") as mock_cache_manager,
+                ):
+                    mock_getcwd.return_value = cwd_path
 
-                # Should use current working directory from os.getcwd()
-                find_projects_by_cwd(projects_dir)  # No cwd specified
+                    # Mock no projects found
+                    cache_instance = Mock()
+                    cache_instance.get_cached_project_data.return_value = None
+                    mock_cache_manager.return_value = cache_instance
 
-                # Verify os.getcwd() was called
-                mock_getcwd.assert_called_once()
+                    # Should use current working directory from os.getcwd()
+                    find_projects_by_cwd(projects_dir)  # No cwd specified
+
+                    # Verify os.getcwd() was called at least once
+                    # On Windows, Path.resolve() may call os.getcwd() internally,
+                    # so we check it was called rather than called_once
+                    assert mock_getcwd.called, "os.getcwd() should have been called"

@@ -62,12 +62,25 @@ def convert_project_path_to_claude_dir(input_path: Path) -> Path:
     real_path = input_path.resolve()
 
     # Convert the path to the expected format: replace slashes with hyphens
-    path_parts = real_path.parts
-    if path_parts[0] == "/":
-        path_parts = path_parts[1:]  # Remove leading slash
+    path_parts = list(real_path.parts)
 
-    # Join with hyphens instead of slashes, prepend with dash
-    claude_project_name = "-" + "-".join(path_parts)
+    # Handle platform-specific root components
+    if path_parts[0] == "/":
+        # Unix: Remove leading slash, then prepend with dash
+        # e.g., ['/', 'Users', 'test'] -> ['Users', 'test'] -> '-Users-test'
+        path_parts = path_parts[1:]
+        claude_project_name = "-" + "-".join(path_parts)
+    elif len(path_parts) > 0 and len(path_parts[0]) >= 2 and path_parts[0][1:2] == ":":
+        # Windows: Strip backslash and colon from drive letter, keep empty string for double dash
+        # e.g., ['E:\\', 'Workspace', 'src'] -> ['E', '', 'Workspace', 'src'] -> 'E--Workspace-src'
+        path_parts[0] = path_parts[0].rstrip("\\").rstrip(":")
+        path_parts.insert(
+            1, ""
+        )  # Insert empty string to create double dash after drive letter
+        claude_project_name = "-".join(path_parts)
+    else:
+        # Fallback for other cases
+        claude_project_name = "-" + "-".join(path_parts)
 
     # Construct the path in ~/.claude/projects/
     claude_projects_dir = Path.home() / ".claude" / "projects" / claude_project_name
@@ -179,17 +192,37 @@ def _find_relative_matches(
             else:
                 # Fall back to path name matching if no cache data
                 project_name = project_dir.name
+                reconstructed_path = None
+
                 if project_name.startswith("-"):
-                    # Convert Claude project name back to path
+                    # Unix path: -Users-test-workspace
                     path_parts = project_name[1:].split("-")
                     if path_parts:
                         reconstructed_path = Path("/") / Path(*path_parts)
-                        if (
-                            current_cwd_path == reconstructed_path
-                            or current_cwd_path.is_relative_to(reconstructed_path)
-                            or reconstructed_path.is_relative_to(current_cwd_path)
-                        ):
-                            relative_matches.append(project_dir)
+                elif len(project_name) >= 1 and not project_name.startswith("-"):
+                    # Windows path: C--Users-test or E--Workspace-src
+                    path_parts = project_name.split("-")
+                    if (
+                        len(path_parts) >= 2
+                        and len(path_parts[0]) == 1
+                        and path_parts[1] == ""
+                    ):
+                        # Drive letter detected (e.g., ['C', '', 'Users', ...])
+                        drive = path_parts[0] + ":\\"
+                        remaining_parts = [
+                            p for p in path_parts[2:] if p
+                        ]  # Skip drive and empty string
+                        if remaining_parts:
+                            reconstructed_path = Path(drive) / Path(*remaining_parts)
+                        else:
+                            reconstructed_path = Path(drive)
+
+                if reconstructed_path and (
+                    current_cwd_path == reconstructed_path
+                    or current_cwd_path.is_relative_to(reconstructed_path)
+                    or reconstructed_path.is_relative_to(current_cwd_path)
+                ):
+                    relative_matches.append(project_dir)
         except Exception:
             continue
 
