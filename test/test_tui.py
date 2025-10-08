@@ -2,6 +2,7 @@
 """Tests for the TUI module."""
 
 import json
+import sys
 import tempfile
 from pathlib import Path
 from typing import cast
@@ -899,7 +900,9 @@ class TestIntegration:
             app = SessionBrowser(project_path)
 
             async with app.run_test() as pilot:
-                await pilot.pause(0.1)
+                # Wait for initial load - longer on Windows due to Path.resolve() overhead
+                pause_time = 1.0 if sys.platform == "win32" else 0.1
+                await pilot.pause(pause_time)
 
                 # Should handle empty project gracefully
                 assert len(app.sessions) == 0
