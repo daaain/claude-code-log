@@ -157,7 +157,8 @@ def ensure_fresh_cache(
         return False  # Cache is already fresh
 
     # Load and process messages to populate cache
-    print(f"Updating cache for {project_dir.name}...")
+    if not silent:
+        print(f"Updating cache for {project_dir.name}...")
     messages = load_directory_transcripts(
         project_dir, cache_manager, from_date, to_date, silent
     )
