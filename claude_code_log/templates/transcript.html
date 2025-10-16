@@ -109,6 +109,41 @@
             // Timezone conversion (included as component)
             {% include 'components/timezone_converter.js' %}
 
+            // Parse URL parameters
+            function getUrlParams() {
+                const params = new URLSearchParams(window.location.search);
+                return {
+                    filter: params.get('filter')  // e.g., "user,assistant"
+                };
+            }
+
+            // Apply filters from URL parameters
+            function applyUrlFilters() {
+                const urlParams = getUrlParams();
+
+                // Apply message type filter
+                if (urlParams.filter) {
+                    const types = urlParams.filter.split(',').map(t => t.trim().toLowerCase());
+
+                    // Deactivate all toggles first
+                    filterToggles.forEach(toggle => {
+                        toggle.classList.remove('active');
+                    });
+
+                    // Activate only the specified types
+                    types.forEach(type => {
+                        const toggle = document.querySelector(`[data-type="${type}"]`);
+                        if (toggle) {
+                            toggle.classList.add('active');
+                        }
+                    });
+
+                    // Show filter toolbar if filters are applied
+                    filterToolbar.classList.add('visible');
+                    filterButton.classList.add('active');
+                }
+            }
+
             // Timeline toggle functionality
             if (timelineButton) {
                 timelineButton.addEventListener('click', function () {
@@ -203,12 +238,12 @@
                 const allMessages = document.querySelectorAll('.message:not(.session-header)');
                 allMessages.forEach(message => {
                     let shouldShow = false;
-                    
+
                     // Special handling for sidechain messages
                     if (message.classList.contains('sidechain')) {
                         // For sidechain messages, show if both sidechain filter is active AND their message type filter is active
                         const sidechainActive = activeTypes.includes('sidechain');
-                        const messageTypeActive = activeTypes.some(type => 
+                        const messageTypeActive = activeTypes.some(type =>
                             type !== 'sidechain' && message.classList.contains(type)
                         );
                         shouldShow = sidechainActive && messageTypeActive;
@@ -216,7 +251,7 @@
                         // For non-sidechain messages, show if any of their types are active
                         shouldShow = activeTypes.some(type => message.classList.contains(type));
                     }
-                    
+
                     if (shouldShow) {
                         message.classList.remove('filtered-hidden');
                     } else {
@@ -295,6 +330,12 @@
             // Initialize button state and message counts
             updateToggleButton();
             updateMessageCounts();
+
+            // Apply URL filters first (if any)
+            applyUrlFilters();
+
+            // Apply all filters on page load
+            applyFilter();
         });
     </script>
 </body>
