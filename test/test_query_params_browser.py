@@ -97,7 +97,10 @@ class TestQueryParamsBrowser:
 
         # Wait for page to load and filters to apply
         page.wait_for_load_state("networkidle")
-        page.wait_for_timeout(500)
+        # Wait for filter application by checking for filtered-hidden class to be applied
+        page.wait_for_selector(
+            ".message.assistant.filtered-hidden", state="attached", timeout=5000
+        )
 
         # Only user messages should be visible
         visible_user_messages = page.locator(".message.user:not(.filtered-hidden)")
