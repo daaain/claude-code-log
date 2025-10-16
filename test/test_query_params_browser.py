@@ -31,9 +31,12 @@ class TestQueryParamsBrowser:
         """Create a temporary HTML file for testing."""
         html_content = generate_html(messages, title)
 
-        # Create temporary file
-        temp_file = Path(tempfile.mktemp(suffix=".html"))
-        temp_file.write_text(html_content, encoding="utf-8")
+        # Create temporary file securely
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".html", delete=False, encoding="utf-8"
+        ) as f:
+            f.write(html_content)
+            temp_file = Path(f.name)
         self.temp_files.append(temp_file)
 
         return temp_file
