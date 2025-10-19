@@ -8,10 +8,15 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        python-version: ["3.12", "3.13"]
+        os: ["ubuntu-latest", "windows-latest"]
+        python-version: ["3.12", "3.13", "3.14"]
+        include:
+          - os: "ubuntu-latest"
+            python-version: "3.12"
+            is-primary: true
 
     steps:
     - uses: actions/checkout@v4
@@ -38,7 +43,7 @@ jobs:
 
     - name: Upload coverage HTML report as artifact
       uses: actions/upload-artifact@v4
-      if: matrix.python-version == '3.12'
+      if: matrix.is-primary
       with:
         name: coverage-report-html
         path: htmlcov/
@@ -46,14 +51,14 @@ jobs:
 
     - name: Upload coverage XML as artifact
       uses: actions/upload-artifact@v4
-      if: matrix.python-version == '3.12'
+      if: matrix.is-primary
       with:
         name: coverage-report-xml
         path: coverage.xml
         retention-days: 30
 
     - name: Coverage comment (PR only)
-      if: github.event_name == 'pull_request' && matrix.python-version == '3.12'
+      if: github.event_name == 'pull_request' && matrix.is-primary
       uses: py-cov-action/python-coverage-comment-action@v3
       with:
         GITHUB_TOKEN: ${{ github.token }}
