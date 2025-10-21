@@ -328,25 +328,24 @@ def format_tool_result_content(tool_result: ToolResultContent) -> str:
         content_parts: List[str] = []
         image_html_parts: List[str] = []
         for item in tool_result.content:
-            if isinstance(item, dict):
-                item_type = item.get("type")
-                if item_type == "text":  # type: ignore
-                    text_value = item.get("text")
-                    if isinstance(text_value, str):
-                        content_parts.append(text_value)
-                elif item_type == "image":
-                    # Handle image content within tool results
-                    source = item.get("source", {})
-                    if isinstance(source, dict):
-                        media_type = source.get("media_type", "image/png")
-                        data = source.get("data", "")
-                        if data:
-                            data_url = f"data:{media_type};base64,{data}"
-                            image_html_parts.append(
-                                f'<img src="{data_url}" alt="Tool result image" '
-                                f'style="max-width: 100%; height: auto; border: 1px solid #ddd; '
-                                f'border-radius: 4px; margin: 10px 0;" />'
-                            )
+            item_type = item.get("type")
+            if item_type == "text":
+                text_value = item.get("text")
+                if isinstance(text_value, str):
+                    content_parts.append(text_value)
+            elif item_type == "image":
+                # Handle image content within tool results
+                source = cast(Dict[str, Any], item.get("source", {}))
+                if source:
+                    media_type: str = str(source.get("media_type", "image/png"))
+                    data: str = str(source.get("data", ""))
+                    if data:
+                        data_url = f"data:{media_type};base64,{data}"
+                        image_html_parts.append(
+                            f'<img src="{data_url}" alt="Tool result image" '
+                            f'style="max-width: 100%; height: auto; border: 1px solid #ddd; '
+                            f'border-radius: 4px; margin: 10px 0;" />'
+                        )
         raw_content = "\n".join(content_parts)
         has_images = len(image_html_parts) > 0
 
