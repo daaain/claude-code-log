@@ -165,6 +165,30 @@
     font-style: italic;
 }
 
+/* Bash tool content styling (Tool Use message) */
+.bash-tool-content {
+    margin: 8px 0;
+}
+
+.bash-tool-description {
+    color: #666;
+    font-size: 0.95em;
+    margin-bottom: 8px;
+    line-height: 1.4;
+}
+
+.bash-tool-command {
+    background-color: #f8f9fa;
+    padding: 8px 12px;
+    border-radius: 4px;
+    border: 1px solid #dee2e6;
+    font-family: 'Fira Code', 'Monaco', 'Consolas', monospace;
+    font-size: 0.9em;
+    color: #2c3e50;
+    margin: 0;
+    overflow-x: auto;
+}
+
 .tool_use {
     border-left-color: #4caf50;
     margin-left: 2em; /* Extra indent - assistant-initiated */

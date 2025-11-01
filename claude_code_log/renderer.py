@@ -285,11 +285,36 @@ def format_todowrite_content(tool_use: ToolUseContent) -> str:
     """
 
 
+def format_bash_tool_content(tool_use: ToolUseContent) -> str:
+    """Format Bash tool use content in VS Code extension style."""
+    command = tool_use.input.get("command", "")
+    description = tool_use.input.get("description", "")
+
+    escaped_command = escape_html(command)
+
+    html_parts = ["<div class='bash-tool-content'>"]
+
+    # Add description if present
+    if description:
+        escaped_desc = escape_html(description)
+        html_parts.append(f"<div class='bash-tool-description'>{escaped_desc}</div>")
+
+    # Add command in preformatted block
+    html_parts.append(f"<pre class='bash-tool-command'>{escaped_command}</pre>")
+    html_parts.append("</div>")
+
+    return "".join(html_parts)
+
+
 def format_tool_use_content(tool_use: ToolUseContent) -> str:
     """Format tool use content as HTML."""
     # Special handling for TodoWrite
     if tool_use.name == "TodoWrite":
         return format_todowrite_content(tool_use)
+
+    # Special handling for Bash
+    if tool_use.name == "Bash":
+        return format_bash_tool_content(tool_use)
 
     # Format the input parameters
     try:
