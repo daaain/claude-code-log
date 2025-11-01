@@ -321,29 +321,38 @@ def format_tool_use_content(tool_use: ToolUseContent) -> str:
     if tool_use.name == "Bash":
         return format_bash_tool_content(tool_use)
 
-    # Format the input parameters
-    try:
-        formatted_input = json.dumps(tool_use.input, indent=2)
-        escaped_input = escape_html(formatted_input)
-    except (TypeError, ValueError):
-        escaped_input = escape_html(str(tool_use.input))
+    # Default: render as key/value table
+    if not tool_use.input:
+        return "<div style='color: #999; font-style: italic;'>No parameters</div>"
 
-    # For simple content, show directly without collapsible wrapper
-    if len(escaped_input) <= 200:
-        return f"<pre>{escaped_input}</pre>"
+    html_parts = ["<table style='width: 100%; border-collapse: collapse;'>"]
 
-    # For longer content, use collapsible details but no extra wrapper
-    preview_text = escaped_input[:200] + "..."
-    return f"""
-    <details class="collapsible-details">
-        <summary>
-            <div class="preview-content"><pre>{preview_text}</pre></div>
-        </summary>
-        <div class="details-content">
-            <pre>{escaped_input}</pre>
-        </div>
-    </details>
-    """
+    for key, value in tool_use.input.items():
+        escaped_key = escape_html(str(key))
+
+        # If value is structured (dict/list), render as JSON
+        if isinstance(value, (dict, list)):
+            try:
+                formatted_value = json.dumps(value, indent=2)
+                escaped_value = escape_html(formatted_value)
+                value_html = f"<pre style='margin: 0; background-color: #f8f9fa; padding: 4px; border-radius: 3px;'>{escaped_value}</pre>"
+            except (TypeError, ValueError):
+                escaped_value = escape_html(str(value))
+                value_html = escaped_value
+        else:
+            # Simple value, render as-is
+            escaped_value = escape_html(str(value))
+            value_html = escaped_value
+
+        html_parts.append(f"""
+            <tr style='border-bottom: 1px solid #e9ecef;'>
+                <td style='padding: 8px; font-weight: 600; color: #495057; vertical-align: top; width: 30%;'>{escaped_key}</td>
+                <td style='padding: 8px; color: #212529; vertical-align: top;'>{value_html}</td>
+            </tr>
+        """)
+
+    html_parts.append("</table>")
+    return "".join(html_parts)
 
 
 def format_tool_result_content(tool_result: ToolResultContent) -> str:
