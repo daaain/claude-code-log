@@ -269,6 +269,34 @@
     font-style: italic;
 }
 
+/* IDE selection styling */
+.ide-selection-collapsible {
+    margin-top: 4px;
+}
+
+.ide-selection-collapsible summary {
+    cursor: pointer;
+    color: #666;
+    user-select: none;
+}
+
+.ide-selection-collapsible summary:hover {
+    color: #333;
+}
+
+.ide-selection-content {
+    margin-top: 8px;
+    padding: 8px;
+    background-color: #f8f9fa;
+    border-radius: 3px;
+    border: 1px solid #dee2e6;
+    font-family: 'Fira Code', 'Monaco', 'Consolas', monospace;
+    font-size: 0.85em;
+    line-height: 1.4;
+    white-space: pre-wrap;
+    overflow-x: auto;
+}
+
 /* Content styling */
 .content {
     word-wrap: break-word;

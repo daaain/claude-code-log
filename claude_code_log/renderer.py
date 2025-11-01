@@ -552,6 +552,7 @@ def extract_ide_notifications(text: str) -> tuple[List[str], str]:
 
     Handles:
     - <ide_opened_file>: Simple file open notifications
+    - <ide_selection>: Code selection notifications (collapsible for large selections)
     - <post-tool-use-hook><ide_diagnostics>: JSON diagnostic arrays
 
     Returns:
@@ -577,7 +578,36 @@ def extract_ide_notifications(text: str) -> tuple[List[str], str]:
     # Remove ide_opened_file tags
     remaining_text = re.sub(ide_file_pattern, "", remaining_text, flags=re.DOTALL)
 
-    # Pattern 2: <post-tool-use-hook><ide_diagnostics>JSON</ide_diagnostics></post-tool-use-hook>
+    # Pattern 2: <ide_selection>content</ide_selection>
+    selection_pattern = r"<ide_selection>(.*?)</ide_selection>"
+    selection_matches = list(
+        re.finditer(selection_pattern, remaining_text, flags=re.DOTALL)
+    )
+
+    for match in selection_matches:
+        content = match.group(1).strip()
+        escaped_content = escape_html(content)
+
+        # For large selections, make them collapsible
+        if len(content) > 200:
+            preview = escape_html(content[:150]) + "..."
+            notification_html = f"""
+                <div class='ide-notification ide-selection'>
+                    <details class='ide-selection-collapsible'>
+                        <summary>📝 {preview}</summary>
+                        <pre class='ide-selection-content'>{escaped_content}</pre>
+                    </details>
+                </div>
+            """
+        else:
+            notification_html = f"<div class='ide-notification ide-selection'>📝 {escaped_content}</div>"
+
+        notifications.append(notification_html)
+
+    # Remove ide_selection tags
+    remaining_text = re.sub(selection_pattern, "", remaining_text, flags=re.DOTALL)
+
+    # Pattern 3: <post-tool-use-hook><ide_diagnostics>JSON</ide_diagnostics></post-tool-use-hook>
     hook_pattern = r"<post-tool-use-hook>\s*<ide_diagnostics>(.*?)</ide_diagnostics>\s*</post-tool-use-hook>"
     hook_matches = list(re.finditer(hook_pattern, remaining_text, flags=re.DOTALL))
 

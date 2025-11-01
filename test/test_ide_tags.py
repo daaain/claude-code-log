@@ -236,3 +236,115 @@ def test_extract_mixed_ide_tags():
 
     # Remaining text should be clean
     assert remaining == "Please review."
+
+
+def test_extract_ide_selection_short():
+    """Test extraction of short IDE selection."""
+    text = (
+        "<ide_selection>The user selected the lines 7 to 7 from file.py:\n"
+        "nx_utils\n\n"
+        "This may or may not be related to the current task.</ide_selection>\n"
+        "Can you explain this?"
+    )
+
+    notifications, remaining = extract_ide_notifications(text)
+
+    # Should have one notification
+    assert len(notifications) == 1
+
+    # Should have pencil emoji
+    assert "📝" in notifications[0]
+
+    # Should contain the selection text
+    assert "nx_utils" in notifications[0]
+    assert "lines 7 to 7" in notifications[0]
+
+    # Short selections should not be in a collapsible details element
+    assert "<details" not in notifications[0]
+
+    # Remaining text should not have the tag
+    assert remaining == "Can you explain this?"
+    assert "<ide_selection>" not in remaining
+
+
+def test_extract_ide_selection_long():
+    """Test extraction of long IDE selection with collapsible rendering."""
+    long_selection = "The user selected lines 1 to 50:\n" + ("line content\n" * 30)
+    text = f"<ide_selection>{long_selection}</ide_selection>\nWhat does this do?"
+
+    notifications, remaining = extract_ide_notifications(text)
+
+    # Should have one notification
+    assert len(notifications) == 1
+
+    # Should have pencil emoji
+    assert "📝" in notifications[0]
+
+    # Long selections should be in a collapsible details element
+    assert "<details class='ide-selection-collapsible'>" in notifications[0]
+    assert "<summary>" in notifications[0]
+    assert "<pre class='ide-selection-content'>" in notifications[0]
+
+    # Should show preview in summary (truncated)
+    assert "..." in notifications[0]  # Preview indicator
+
+    # Should contain the full content in the pre block
+    assert "line content" in notifications[0]
+
+    # Remaining text should not have the tag
+    assert remaining == "What does this do?"
+    assert "<ide_selection>" not in remaining
+
+
+def test_extract_ide_selection_with_special_chars():
+    """Test that special HTML characters are escaped in IDE selection."""
+    text = '<ide_selection>Code with <brackets> & "quotes"</ide_selection>'
+
+    notifications, remaining = extract_ide_notifications(text)
+
+    # Should have one notification
+    assert len(notifications) == 1
+
+    # Should escape HTML special characters
+    assert "&lt;brackets&gt;" in notifications[0]
+    assert "&amp;" in notifications[0]
+    assert (
+        "&quot;quotes&quot;" in notifications[0]
+        or "&#x27;quotes&#x27;" in notifications[0]
+    )
+
+    # Remaining should be empty
+    assert remaining == ""
+
+
+def test_extract_all_ide_tag_types():
+    """Test handling all IDE tag types together."""
+    text = (
+        "<ide_opened_file>User opened main.py</ide_opened_file>\n"
+        "<ide_selection>selected_variable</ide_selection>\n"
+        "<post-tool-use-hook><ide_diagnostics>["
+        '{"line": 5, "message": "Unused variable"}'
+        "]</ide_diagnostics></post-tool-use-hook>\n"
+        "Please help."
+    )
+
+    notifications, remaining = extract_ide_notifications(text)
+
+    # Should have 3 notifications total: 1 file + 1 selection + 1 diagnostic
+    assert len(notifications) == 3
+
+    # First should be file open
+    assert "🤖" in notifications[0]
+    assert "User opened main.py" in notifications[0]
+
+    # Second should be selection
+    assert "📝" in notifications[1]
+    assert "selected_variable" in notifications[1]
+
+    # Third should be diagnostic
+    assert "⚠️" in notifications[2]
+    assert "IDE Diagnostic" in notifications[2]
+    assert "Unused variable" in notifications[2]
+
+    # Remaining text should be clean
+    assert remaining == "Please help."
