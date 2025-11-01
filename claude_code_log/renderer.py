@@ -1644,10 +1644,11 @@ def generate_html(
                 escaped_id = escape_html(tool_use_converted.id)
                 item_tool_use_id = tool_use_converted.id
                 tool_title_hint = f"ID: {escaped_id}"
+                # Use simplified display names without "Tool Use:" prefix
                 if tool_use_converted.name == "TodoWrite":
                     tool_message_type = "📝 Todo List"
                 else:
-                    tool_message_type = f"Tool Use: {escaped_name}"
+                    tool_message_type = escaped_name
                 tool_css_class = "tool_use"
             elif isinstance(tool_item, ToolResultContent) or item_type == "tool_result":
                 # Convert Anthropic type to our format if necessary
@@ -1665,10 +1666,9 @@ def generate_html(
                 escaped_id = escape_html(tool_result_converted.tool_use_id)
                 item_tool_use_id = tool_result_converted.tool_use_id
                 tool_title_hint = f"ID: {escaped_id}"
+                # Simplified: no "Tool Result" heading, just show error indicator if present
                 error_indicator = "🚨 Error" if tool_result_converted.is_error else ""
-                tool_message_type = (
-                    f"Tool Result{': ' + error_indicator if error_indicator else ''}"
-                )
+                tool_message_type = error_indicator if error_indicator else ""
                 tool_css_class = (
                     "tool_result error"
                     if tool_result_converted.is_error
