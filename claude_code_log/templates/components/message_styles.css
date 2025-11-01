@@ -215,6 +215,7 @@
     background-color: #f8f9fa88;
     border-left-width: 2px;
     border-left-style: dashed;
+    margin-left: 4em; /* Extra indent - nested below Task tool use */
 }
 
 .sidechain .sidechain-indicator {

@@ -1342,10 +1342,15 @@ def _process_regular_message(
 
     # Handle user-specific preprocessing
     if message_type == "user":
-        content_html, is_compacted = render_user_message_content(text_only_content)
-        if is_compacted:
-            css_class = f"{message_type} compacted"
-            message_type = "🤖 User (compacted conversation)"
+        # Sub-assistant prompts (sidechain user messages) should be rendered as markdown
+        if is_sidechain:
+            content_html = render_message_content(text_only_content, "assistant")
+            is_compacted = False
+        else:
+            content_html, is_compacted = render_user_message_content(text_only_content)
+            if is_compacted:
+                css_class = f"{message_type} compacted"
+                message_type = "🤖 User (compacted conversation)"
     else:
         # Non-user messages: render directly
         content_html = render_message_content(text_only_content, message_type)
@@ -1401,7 +1406,7 @@ def _identify_message_pairs(messages: List[TemplateMessage]) -> None:
                 continue
 
         # Check for tool_use + tool_result pair (match by tool_use_id)
-        if current.css_class == "tool_use" and current.tool_use_id:
+        if "tool_use" in current.css_class and current.tool_use_id:
             # Look ahead for matching tool_result
             for j in range(
                 i + 1, min(i + 10, len(messages))
@@ -1429,9 +1434,9 @@ def _identify_message_pairs(messages: List[TemplateMessage]) -> None:
                 continue
 
         # Check for thinking + assistant pair
-        if current.css_class == "thinking" and i + 1 < len(messages):
+        if "thinking" in current.css_class and i + 1 < len(messages):
             next_msg = messages[i + 1]
-            if next_msg.css_class == "assistant":
+            if "assistant" in next_msg.css_class:
                 current.is_paired = True
                 current.pair_role = "pair_first"
                 next_msg.is_paired = True
