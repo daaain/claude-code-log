@@ -431,22 +431,26 @@ def _looks_like_bash_output(content: str) -> bool:
 
 
 def format_thinking_content(thinking: ThinkingContent) -> str:
-    """Format thinking content as HTML."""
-    escaped_thinking = escape_html(thinking.thinking.strip())
+    """Format thinking content as HTML with markdown rendering."""
+    thinking_text = thinking.thinking.strip()
+
+    # Render markdown to HTML
+    rendered_html = render_markdown(thinking_text)
 
     # For simple content, show directly without collapsible wrapper
-    if len(escaped_thinking) <= 200:
-        return f'<div class="thinking-text">{escaped_thinking}</div>'
+    if len(thinking_text) <= 200:
+        return f'<div class="thinking-text">{rendered_html}</div>'
 
     # For longer content, use collapsible details but no extra wrapper
-    preview_text = escaped_thinking[:200] + "..."
+    # Use plain text for preview (first 200 chars)
+    preview_text = escape_html(thinking_text[:200]) + "..."
     return f"""
     <details class="collapsible-details">
         <summary>
             <div class="preview-content"><div class="thinking-text">{preview_text}</div></div>
         </summary>
         <div class="details-content">
-            <div class="thinking-text">{escaped_thinking}</div>
+            <div class="thinking-text">{rendered_html}</div>
         </div>
     </details>
     """

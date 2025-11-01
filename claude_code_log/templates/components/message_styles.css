@@ -274,8 +274,6 @@
 }
 
 .thinking-text {
-    font-style: italic;
-    white-space: pre-wrap;
     word-wrap: break-word;
     color: #555;
 }
