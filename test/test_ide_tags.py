@@ -170,3 +170,69 @@ def test_render_message_content_single_text_item_assistant():
     assert "<pre>" not in html
     # Markdown should be processed
     assert "<strong>Bold</strong>" in html or "<b>Bold</b>" in html
+
+
+def test_extract_ide_diagnostics():
+    """Test extraction of IDE diagnostics from post-tool-use-hook."""
+    text = (
+        "<post-tool-use-hook><ide_diagnostics>["
+        '{"filePath": "/e:/Workspace/test.py", "line": 12, "column": 6, '
+        '"message": "Package not installed", "code": "[object Object]", "severity": "Hint"},'
+        '{"filePath": "/e:/Workspace/other.py", "line": 5, "column": 1, '
+        '"message": "Unused import", "severity": "Warning"}'
+        "]</ide_diagnostics></post-tool-use-hook>\n"
+        "Here is my question."
+    )
+
+    notifications, remaining = extract_ide_notifications(text)
+
+    # Should have two diagnostic notifications (one per diagnostic object)
+    assert len(notifications) == 2
+
+    # Each should have the warning emoji and "IDE Diagnostic" label
+    assert all("⚠️" in n for n in notifications)
+    assert all("IDE Diagnostic" in n for n in notifications)
+
+    # Should render as tables
+    assert all("<table class='tool-params-table'>" in n for n in notifications)
+
+    # Should contain diagnostic fields
+    assert "filePath" in notifications[0]
+    assert "/e:/Workspace/test.py" in notifications[0]
+    assert "Package not installed" in notifications[0]
+
+    assert "filePath" in notifications[1]
+    assert "/e:/Workspace/other.py" in notifications[1]
+    assert "Unused import" in notifications[1]
+
+    # Remaining text should not have the hook tags
+    assert remaining == "Here is my question."
+    assert "<post-tool-use-hook>" not in remaining
+
+
+def test_extract_mixed_ide_tags():
+    """Test handling both ide_opened_file and ide_diagnostics together."""
+    text = (
+        "<ide_opened_file>User opened config.json</ide_opened_file>\n"
+        "<post-tool-use-hook><ide_diagnostics>["
+        '{"line": 10, "message": "Syntax error"}'
+        "]</ide_diagnostics></post-tool-use-hook>\n"
+        "Please review."
+    )
+
+    notifications, remaining = extract_ide_notifications(text)
+
+    # Should have 2 notifications total: 1 file open + 1 diagnostic
+    assert len(notifications) == 2
+
+    # First should be file open notification
+    assert "🤖" in notifications[0]
+    assert "User opened config.json" in notifications[0]
+
+    # Second should be diagnostic
+    assert "⚠️" in notifications[1]
+    assert "IDE Diagnostic" in notifications[1]
+    assert "Syntax error" in notifications[1]
+
+    # Remaining text should be clean
+    assert remaining == "Please review."

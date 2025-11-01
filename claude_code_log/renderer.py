@@ -311,23 +311,17 @@ def format_bash_tool_content(tool_use: ToolUseContent) -> str:
     return "".join(html_parts)
 
 
-def format_tool_use_content(tool_use: ToolUseContent) -> str:
-    """Format tool use content as HTML."""
-    # Special handling for TodoWrite
-    if tool_use.name == "TodoWrite":
-        return format_todowrite_content(tool_use)
+def render_params_table(params: Dict[str, Any]) -> str:
+    """Render a dictionary of parameters as an HTML table.
 
-    # Special handling for Bash
-    if tool_use.name == "Bash":
-        return format_bash_tool_content(tool_use)
-
-    # Default: render as key/value table
-    if not tool_use.input:
+    Reusable for tool parameters, diagnostic objects, etc.
+    """
+    if not params:
         return "<div class='tool-params-empty'>No parameters</div>"
 
     html_parts = ["<table class='tool-params-table'>"]
 
-    for key, value in tool_use.input.items():
+    for key, value in params.items():
         escaped_key = escape_html(str(key))
 
         # If value is structured (dict/list), render as JSON
@@ -377,6 +371,20 @@ def format_tool_use_content(tool_use: ToolUseContent) -> str:
 
     html_parts.append("</table>")
     return "".join(html_parts)
+
+
+def format_tool_use_content(tool_use: ToolUseContent) -> str:
+    """Format tool use content as HTML."""
+    # Special handling for TodoWrite
+    if tool_use.name == "TodoWrite":
+        return format_todowrite_content(tool_use)
+
+    # Special handling for Bash
+    if tool_use.name == "Bash":
+        return format_bash_tool_content(tool_use)
+
+    # Default: render as key/value table using shared renderer
+    return render_params_table(tool_use.input)
 
 
 def format_tool_result_content(tool_result: ToolResultContent) -> str:
@@ -542,6 +550,10 @@ def _is_compacted_session_summary(text: str) -> bool:
 def extract_ide_notifications(text: str) -> tuple[List[str], str]:
     """Extract IDE notification tags from user message text.
 
+    Handles:
+    - <ide_opened_file>: Simple file open notifications
+    - <post-tool-use-hook><ide_diagnostics>: JSON diagnostic arrays
+
     Returns:
         A tuple of (notifications_html_list, remaining_text)
         where notifications are pre-rendered HTML divs and remaining_text
@@ -549,23 +561,55 @@ def extract_ide_notifications(text: str) -> tuple[List[str], str]:
     """
     import re
 
-    # Pattern to match <ide_opened_file>content</ide_opened_file>
-    ide_file_pattern = r"<ide_opened_file>(.*?)</ide_opened_file>"
-
     notifications = []
-    matches = list(re.finditer(ide_file_pattern, text, flags=re.DOTALL))
+    remaining_text = text
 
-    # Extract and render each notification
-    for match in matches:
+    # Pattern 1: <ide_opened_file>content</ide_opened_file>
+    ide_file_pattern = r"<ide_opened_file>(.*?)</ide_opened_file>"
+    file_matches = list(re.finditer(ide_file_pattern, remaining_text, flags=re.DOTALL))
+
+    for match in file_matches:
         content = match.group(1).strip()
         escaped_content = escape_html(content)
         notification_html = f"<div class='ide-notification'>🤖 {escaped_content}</div>"
         notifications.append(notification_html)
 
-    # Remove all IDE tags from the text
-    remaining_text = re.sub(ide_file_pattern, "", text, flags=re.DOTALL).strip()
+    # Remove ide_opened_file tags
+    remaining_text = re.sub(ide_file_pattern, "", remaining_text, flags=re.DOTALL)
 
-    return notifications, remaining_text
+    # Pattern 2: <post-tool-use-hook><ide_diagnostics>JSON</ide_diagnostics></post-tool-use-hook>
+    hook_pattern = r"<post-tool-use-hook>\s*<ide_diagnostics>(.*?)</ide_diagnostics>\s*</post-tool-use-hook>"
+    hook_matches = list(re.finditer(hook_pattern, remaining_text, flags=re.DOTALL))
+
+    for match in hook_matches:
+        json_content = match.group(1).strip()
+        try:
+            # Parse JSON array of diagnostic objects
+            diagnostics = json.loads(json_content)
+            if isinstance(diagnostics, list):
+                # Render each diagnostic as a table
+                for diagnostic in diagnostics:
+                    if isinstance(diagnostic, dict):
+                        table_html = render_params_table(diagnostic)
+                        notification_html = (
+                            f"<div class='ide-notification ide-diagnostic'>"
+                            f"⚠️ IDE Diagnostic<br>{table_html}"
+                            f"</div>"
+                        )
+                        notifications.append(notification_html)
+        except (json.JSONDecodeError, ValueError):
+            # If JSON parsing fails, render as plain text
+            escaped_content = escape_html(json_content[:200])
+            notification_html = (
+                f"<div class='ide-notification'>🤖 IDE Diagnostics (parse error)<br>"
+                f"<pre>{escaped_content}...</pre></div>"
+            )
+            notifications.append(notification_html)
+
+    # Remove hook tags
+    remaining_text = re.sub(hook_pattern, "", remaining_text, flags=re.DOTALL)
+
+    return notifications, remaining_text.strip()
 
 
 def render_user_message_content(content_list: List[ContentItem]) -> tuple[str, bool]:
