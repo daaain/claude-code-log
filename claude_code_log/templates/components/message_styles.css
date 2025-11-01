@@ -61,7 +61,7 @@
 .system-warning {
     border-left-color: #2196f3;
     background-color: #e3f2fd88;
-    /* Indented - not user-initiated */
+    margin-left: 1em; /* Override .system - not user-initiated */
 }
 
 .system-error {
@@ -73,7 +73,7 @@
 .system-info {
     border-left-color: #2196f366;
     background-color: #e3f2fd66;
-    /* Indented - not user-initiated */
+    margin-left: 1em; /* Override .system - not user-initiated */
 }
 
 /* Command output styling */
