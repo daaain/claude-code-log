@@ -12,6 +12,32 @@
     border-right: #00000017 1px solid;
 }
 
+/* Paired message styling */
+.message.paired-message {
+    margin-bottom: 0;
+}
+
+.message.paired-message.pair_first {
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+    border-bottom: none;
+}
+
+.message.paired-message.pair_last {
+    margin-top: 0;
+    margin-bottom: 1em;
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
+    border-top: 1px solid #00000011;
+}
+
+.message.paired-message.pair_middle {
+    margin-top: 0;
+    border-radius: 0;
+    border-top: 1px solid #00000011;
+    border-bottom: none;
+}
+
 .session-divider {
     margin: 70px 0;
     border-top: 2px solid #fff;
@@ -53,7 +79,7 @@
 /* Command output styling */
 .command-output {
     background-color: #1e1e1e11;
-    border-left-color: #00bcd4;
+    border-left-color: #f4433666;
 }
 
 .command-output-content {
@@ -135,11 +161,11 @@
 }
 
 .tool_use {
-    border-left-color: #e91e63;
+    border-left-color: #4caf50;
 }
 
 .tool_result {
-    border-left-color: #4caf50;
+    border-left-color: #4caf5066;
 }
 
 /* Sidechain message styling */

@@ -564,6 +564,8 @@ class TemplateMessage:
         session_id: Optional[str] = None,
         is_session_header: bool = False,
         token_usage: Optional[str] = None,
+        tool_use_id: Optional[str] = None,
+        title_hint: Optional[str] = None,
     ):
         self.type = message_type
         self.content_html = content_html
@@ -576,6 +578,11 @@ class TemplateMessage:
         self.is_session_header = is_session_header
         self.session_subtitle: Optional[str] = None
         self.token_usage = token_usage
+        self.tool_use_id = tool_use_id
+        self.title_hint = title_hint
+        # Pairing metadata
+        self.is_paired = False
+        self.pair_role: Optional[str] = None  # "pair_first", "pair_last", "pair_middle"
 
 
 class TemplateProject:
@@ -1128,6 +1135,62 @@ def _get_combined_transcript_link(cache_manager: "CacheManager") -> Optional[str
         return None
 
 
+def _identify_message_pairs(messages: List[TemplateMessage]) -> None:
+    """Identify and mark paired messages (e.g., command + output, tool use + result).
+
+    Modifies messages in-place by setting is_paired and pair_role fields.
+    """
+    i = 0
+    while i < len(messages):
+        current = messages[i]
+
+        # Skip session headers
+        if current.is_session_header:
+            i += 1
+            continue
+
+        # Check for system command + command output pair
+        if current.css_class == "system" and i + 1 < len(messages):
+            next_msg = messages[i + 1]
+            if "command-output" in next_msg.css_class:
+                current.is_paired = True
+                current.pair_role = "pair_first"
+                next_msg.is_paired = True
+                next_msg.pair_role = "pair_last"
+                i += 2
+                continue
+
+        # Check for tool_use + tool_result pair (match by tool_use_id)
+        if current.css_class == "tool_use" and current.tool_use_id:
+            # Look ahead for matching tool_result
+            for j in range(
+                i + 1, min(i + 10, len(messages))
+            ):  # Look ahead up to 10 messages
+                next_msg = messages[j]
+                if (
+                    next_msg.css_class == "tool_result"
+                    and next_msg.tool_use_id == current.tool_use_id
+                ):
+                    current.is_paired = True
+                    current.pair_role = "pair_first"
+                    next_msg.is_paired = True
+                    next_msg.pair_role = "pair_last"
+                    break
+
+        # Check for bash-input + bash-output pair
+        if current.css_class == "bash-input" and i + 1 < len(messages):
+            next_msg = messages[i + 1]
+            if next_msg.css_class == "bash-output":
+                current.is_paired = True
+                current.pair_role = "pair_first"
+                next_msg.is_paired = True
+                next_msg.pair_role = "pair_last"
+                i += 2
+                continue
+
+        i += 1
+
+
 def generate_session_html(
     messages: List[TranscriptEntry],
     session_id: str,
@@ -1474,6 +1537,8 @@ def generate_html(
 
             # Handle both custom types and Anthropic types
             item_type = getattr(tool_item, "type", None)
+            item_tool_use_id: Optional[str] = None
+            tool_title_hint: Optional[str] = None
 
             if isinstance(tool_item, ToolUseContent) or item_type == "tool_use":
                 # Convert Anthropic type to our format if necessary
@@ -1490,10 +1555,12 @@ def generate_html(
                 tool_content_html = format_tool_use_content(tool_use_converted)
                 escaped_name = escape_html(tool_use_converted.name)
                 escaped_id = escape_html(tool_use_converted.id)
+                item_tool_use_id = tool_use_converted.id
+                tool_title_hint = f"ID: {escaped_id}"
                 if tool_use_converted.name == "TodoWrite":
-                    tool_message_type = f"📝 Todo List (ID: {escaped_id})"
+                    tool_message_type = "📝 Todo List"
                 else:
-                    tool_message_type = f"Tool Use: {escaped_name} (ID: {escaped_id})"
+                    tool_message_type = f"Tool Use: {escaped_name}"
                 tool_css_class = "tool_use"
             elif isinstance(tool_item, ToolResultContent) or item_type == "tool_result":
                 # Convert Anthropic type to our format if necessary
@@ -1509,10 +1576,12 @@ def generate_html(
 
                 tool_content_html = format_tool_result_content(tool_result_converted)
                 escaped_id = escape_html(tool_result_converted.tool_use_id)
-                error_indicator = (
-                    " (🚨 Error)" if tool_result_converted.is_error else ""
+                item_tool_use_id = tool_result_converted.tool_use_id
+                tool_title_hint = f"ID: {escaped_id}"
+                error_indicator = "🚨 Error" if tool_result_converted.is_error else ""
+                tool_message_type = (
+                    f"Tool Result{': ' + error_indicator if error_indicator else ''}"
                 )
-                tool_message_type = f"Tool Result{error_indicator}: {escaped_id}"
                 tool_css_class = "tool_result"
             elif isinstance(tool_item, ThinkingContent) or item_type == "thinking":
                 # Convert Anthropic type to our format if necessary
@@ -1556,6 +1625,8 @@ def generate_html(
                 raw_timestamp=tool_timestamp,
                 session_summary=session_summary,
                 session_id=session_id,
+                tool_use_id=item_tool_use_id,
+                title_hint=tool_title_hint,
             )
             template_messages.append(tool_template_message)
 
@@ -1611,6 +1682,9 @@ def generate_html(
                 "token_summary": token_summary,
             }
         )
+
+    # Identify and mark paired messages (command+output, tool_use+tool_result, etc.)
+    _identify_message_pairs(template_messages)
 
     # Render template
     env = _get_template_environment()

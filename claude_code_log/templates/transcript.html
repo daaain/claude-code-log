@@ -43,9 +43,7 @@
                 <button class="filter-toggle active" data-type="sidechain">🔗 Sub-assistant <span
                         class="count">(0)</span></button>
                 <button class="filter-toggle active" data-type="system">⚙️ System <span class="count">(0)</span></button>
-                <button class="filter-toggle active" data-type="tool_use">🛠️ Tool Use <span
-                        class="count">(0)</span></button>
-                <button class="filter-toggle active" data-type="tool_result">🧰 Tool Results <span
+                <button class="filter-toggle active" data-type="tool">🛠️ Tool <span
                         class="count">(0)</span></button>
                 <button class="filter-toggle active" data-type="thinking">💭 Thinking <span
                         class="count">(0)</span></button>
@@ -81,9 +79,9 @@
 
     </div>
     {% else %}
-    <div class='message {{ message.css_class }}'>
+    <div class='message {{ message.css_class }}{% if message.is_paired %} paired-message {{ message.pair_role }}{% endif %}'>
         <div class='header'>
-            <span>{% if message.css_class == 'user' %}🤷 {% elif message.css_class == 'assistant' %}🤖 {% elif
+            <span{% if message.title_hint %} title="{{ message.title_hint }}"{% endif %}>{% if message.css_class == 'user' %}🤷 {% elif message.css_class == 'assistant' %}🤖 {% elif
                 message.css_class == 'system' %}⚙️ {% elif message.css_class == 'tool_use' %}🛠️ {% elif
                 message.css_class == 'tool_result' %}🧰 {% elif message.css_class == 'thinking' %}💭 {% elif
                 message.css_class == 'image' %}🖼️ {% endif %}{{ message.display_type }}</span>
@@ -223,13 +221,13 @@
 
             // Count messages by type and update button labels
             function updateMessageCounts() {
-                const messageTypes = ['user', 'assistant', 'sidechain', 'system', 'tool_use', 'tool_result', 'thinking', 'image'];
+                const messageTypes = ['user', 'assistant', 'sidechain', 'system', 'thinking', 'image'];
 
                 messageTypes.forEach(type => {
                     const messages = document.querySelectorAll(`.message.${type}:not(.session-header)`);
                     const count = messages.length;
                     const toggle = document.querySelector(`[data-type="${type}"]`);
-                    const countSpan = toggle.querySelector('.count');
+                    const countSpan = toggle ? toggle.querySelector('.count') : null;
 
                     if (countSpan) {
                         countSpan.textContent = `(${count})`;
@@ -242,6 +240,21 @@
                         }
                     }
                 });
+
+                // Handle combined "tool" filter (tool_use + tool_result)
+                const toolMessages = document.querySelectorAll(`.message.tool_use:not(.session-header), .message.tool_result:not(.session-header)`);
+                const toolCount = toolMessages.length;
+                const toolToggle = document.querySelector(`[data-type="tool"]`);
+                const toolCountSpan = toolToggle ? toolToggle.querySelector('.count') : null;
+
+                if (toolCountSpan) {
+                    toolCountSpan.textContent = `(${toolCount})`;
+                    if (toolCount === 0) {
+                        toolToggle.style.display = 'none';
+                    } else {
+                        toolToggle.style.display = 'flex';
+                    }
+                }
             }
 
             // Filter functionality
@@ -249,6 +262,16 @@
                 const activeTypes = Array.from(filterToggles)
                     .filter(toggle => toggle.classList.contains('active'))
                     .map(toggle => toggle.dataset.type);
+
+                // Expand "tool" to include both tool_use and tool_result
+                const expandedTypes = [];
+                activeTypes.forEach(type => {
+                    if (type === 'tool') {
+                        expandedTypes.push('tool_use', 'tool_result');
+                    } else {
+                        expandedTypes.push(type);
+                    }
+                });
 
                 // Show/hide messages based on active toggle buttons
                 const allMessages = document.querySelectorAll('.message:not(.session-header)');
@@ -258,14 +281,14 @@
                     // Special handling for sidechain messages
                     if (message.classList.contains('sidechain')) {
                         // For sidechain messages, show if both sidechain filter is active AND their message type filter is active
-                        const sidechainActive = activeTypes.includes('sidechain');
-                        const messageTypeActive = activeTypes.some(type =>
+                        const sidechainActive = expandedTypes.includes('sidechain');
+                        const messageTypeActive = expandedTypes.some(type =>
                             type !== 'sidechain' && message.classList.contains(type)
                         );
                         shouldShow = sidechainActive && messageTypeActive;
                     } else {
                         // For non-sidechain messages, show if any of their types are active
-                        shouldShow = activeTypes.some(type => message.classList.contains(type));
+                        shouldShow = expandedTypes.some(type => message.classList.contains(type));
                     }
 
                     if (shouldShow) {
