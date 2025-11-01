@@ -131,8 +131,13 @@ def format_timestamp(timestamp_str: str | None) -> str:
 
 
 def escape_html(text: str) -> str:
-    """Escape HTML special characters in text."""
-    return html.escape(text)
+    """Escape HTML special characters in text.
+
+    Also normalizes line endings (CRLF -> LF) to prevent double spacing in <pre> blocks.
+    """
+    # Normalize CRLF to LF to prevent double line breaks in HTML
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    return html.escape(normalized)
 
 
 def create_collapsible_details(

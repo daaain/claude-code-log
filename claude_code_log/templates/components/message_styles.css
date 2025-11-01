@@ -204,6 +204,10 @@
     background-color: #ffebee88;
 }
 
+.message.tool_result pre {
+    font-size: 80%;
+}
+
 /* Sidechain message styling */
 .sidechain {
     opacity: 0.85;
