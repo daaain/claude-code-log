@@ -1138,25 +1138,33 @@ def _process_regular_message(
     content_html = render_message_content(text_only_content, message_type)
 
     # Check if this is a compacted session summary (for special styling)
+    is_compacted = False
     if message_type == "user":
         # Check string content
         if isinstance(text_only_content, str):
             if _is_compacted_session_summary(text_only_content):
-                css_class = f"{message_type} compacted"
+                is_compacted = True
         # Check list content (first text item)
         elif isinstance(text_only_content, list) and text_only_content:
             first_item = text_only_content[0]
             if hasattr(first_item, "text"):
                 text_value = getattr(first_item, "text", "")
                 if _is_compacted_session_summary(text_value):
-                    css_class = f"{message_type} compacted"
+                    is_compacted = True
+
+        if is_compacted:
+            css_class = f"{message_type} compacted"
+            message_type = "🤖 User (compacted conversation)"
 
     if is_sidechain:
         css_class = f"{css_class} sidechain"
         # Update message type for display
-        message_type = (
-            "📝 Sub-assistant prompt" if message_type == "user" else "🔗 Sub-assistant"
-        )
+        if not is_compacted:  # Don't override compacted message type
+            message_type = (
+                "📝 Sub-assistant prompt"
+                if message_type == "user"
+                else "🔗 Sub-assistant"
+            )
 
     return css_class, content_html, message_type
 
