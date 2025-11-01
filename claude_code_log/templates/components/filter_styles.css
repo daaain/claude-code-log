@@ -107,11 +107,6 @@
     background-color: #ffffff66;
 }
 
-/* Dim count when filter is inactive */
-.filter-toggle:not(.active) .count {
-    opacity: 0.5;
-}
-
 /* Color-coded filter buttons */
 .filter-toggle[data-type="user"] {
     border-color: #ff9800;
