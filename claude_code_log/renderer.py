@@ -1304,9 +1304,7 @@ def generate_html(
 
             # Process ANSI codes in system messages (they may contain command output)
             html_content = _convert_ansi_to_html(message.content)
-            content_html = (
-                f"<strong>{level_icon} System {level.title()}:</strong> {html_content}"
-            )
+            content_html = f"<strong>{level_icon}</strong> {html_content}"
 
             system_template_message = TemplateMessage(
                 message_type=f"System {level.title()}",
