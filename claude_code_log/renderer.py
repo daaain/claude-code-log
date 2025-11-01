@@ -1137,8 +1137,22 @@ def _process_regular_message(
     css_class = f"{message_type}"
     content_html = render_message_content(text_only_content, message_type)
 
+    # Check if this is a compacted session summary (for special styling)
+    if message_type == "user":
+        # Check string content
+        if isinstance(text_only_content, str):
+            if _is_compacted_session_summary(text_only_content):
+                css_class = f"{message_type} compacted"
+        # Check list content (first text item)
+        elif isinstance(text_only_content, list) and text_only_content:
+            first_item = text_only_content[0]
+            if hasattr(first_item, "text"):
+                text_value = getattr(first_item, "text", "")
+                if _is_compacted_session_summary(text_value):
+                    css_class = f"{message_type} compacted"
+
     if is_sidechain:
-        css_class = f"{message_type} sidechain"
+        css_class = f"{css_class} sidechain"
         # Update message type for display
         message_type = (
             "📝 Sub-assistant prompt" if message_type == "user" else "🔗 Sub-assistant"
