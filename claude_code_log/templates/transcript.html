@@ -311,7 +311,7 @@
             }
 
             function updateVisibleCounts() {
-                const messageTypes = ['user', 'assistant', 'sidechain', 'system', 'tool_use', 'tool_result', 'thinking', 'image'];
+                const messageTypes = ['user', 'assistant', 'sidechain', 'system', 'thinking', 'image'];
 
                 messageTypes.forEach(type => {
                     const visibleMessages = document.querySelectorAll(`.message.${type}:not(.session-header):not(.filtered-hidden)`);
@@ -320,7 +320,7 @@
                     const totalCount = totalMessages.length;
 
                     const toggle = document.querySelector(`[data-type="${type}"]`);
-                    const countSpan = toggle.querySelector('.count');
+                    const countSpan = toggle ? toggle.querySelector('.count') : null;
 
                     if (countSpan && totalCount > 0) {
                         // Show "visible/total" format when filtering is active
@@ -337,6 +337,29 @@
                         }
                     }
                 });
+
+                // Handle combined "tool" filter separately
+                const visibleToolMessages = document.querySelectorAll(`.message.tool_use:not(.session-header):not(.filtered-hidden), .message.tool_result:not(.session-header):not(.filtered-hidden)`);
+                const totalToolMessages = document.querySelectorAll(`.message.tool_use:not(.session-header), .message.tool_result:not(.session-header)`);
+                const visibleToolCount = visibleToolMessages.length;
+                const totalToolCount = totalToolMessages.length;
+
+                const toolToggle = document.querySelector(`[data-type="tool"]`);
+                const toolCountSpan = toolToggle ? toolToggle.querySelector('.count') : null;
+
+                if (toolCountSpan && totalToolCount > 0) {
+                    const activeTypes = Array.from(filterToggles)
+                        .filter(toggle => toggle.classList.contains('active'))
+                        .map(toggle => toggle.dataset.type);
+
+                    const isFiltering = activeTypes.length < filterToggles.length;
+
+                    if (isFiltering && visibleToolCount !== totalToolCount) {
+                        toolCountSpan.textContent = `(${visibleToolCount}/${totalToolCount})`;
+                    } else {
+                        toolCountSpan.textContent = `(${totalToolCount})`;
+                    }
+                }
             }
 
             function toggleFilter(button) {
