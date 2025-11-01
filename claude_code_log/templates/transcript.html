@@ -81,12 +81,10 @@
     {% else %}
     <div class='message {{ message.css_class }}{% if message.is_paired %} paired-message {{ message.pair_role }}{% endif %}'>
         <div class='header'>
-            {% if message.display_type %}
-            <span{% if message.title_hint %} title="{{ message.title_hint }}"{% endif %}>{% if message.css_class == 'user' %}🤷 {% elif message.css_class == 'assistant' %}🤖 {% elif
+            <span{% if message.title_hint %} title="{{ message.title_hint }}"{% endif %}>{% if message.display_type %}{% if message.css_class == 'user' %}🤷 {% elif message.css_class == 'assistant' %}🤖 {% elif
                 message.css_class == 'system' %}⚙️ {% elif message.css_class == 'tool_use' %}🛠️ {% elif
                 message.css_class == 'tool_result' %}🧰 {% elif message.css_class == 'thinking' %}💭 {% elif
-                message.css_class == 'image' %}🖼️ {% endif %}{{ message.display_type }}</span>
-            {% endif %}
+                message.css_class == 'image' %}🖼️ {% endif %}{{ message.display_type }}{% endif %}</span>
             <div style='display: flex; flex-direction: column; align-items: flex-end; gap: 2px;'>
                 <span class='timestamp'{% if message.raw_timestamp %} data-timestamp='{{ message.raw_timestamp }}'{% endif %}>{{ message.formatted_timestamp }}</span>
                 {% if message.token_usage %}
