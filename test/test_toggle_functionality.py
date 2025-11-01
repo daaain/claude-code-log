@@ -98,7 +98,7 @@ class TestToggleFunctionality:
 
     def test_collapsible_details_structure(self):
         """Test the structure of collapsible details elements."""
-        # Create content long enough to trigger collapsible details
+        # Create content long enough to trigger collapsible in tool params
         long_input = {
             "data": "x" * 300
         }  # Definitely over 200 chars when JSON serialized
@@ -113,11 +113,12 @@ class TestToggleFunctionality:
 
         html = generate_html([message], "Test Structure")
 
-        # Check for collapsible details structure
-        assert 'class="collapsible-details"' in html, "Should have collapsible details"
+        # Check for tool parameter table with collapsible details
+        assert "class='tool-params-table'" in html, "Should have tool params table"
         assert "<summary>" in html, "Should have summary element"
-        assert 'class="preview-content"' in html, "Should have preview content"
-        assert 'class="details-content"' in html, "Should have details content"
+        assert "class='tool-param-collapsible'" in html, (
+            "Should have collapsible tool param"
+        )
 
     def test_collapsible_details_css_selectors(self):
         """Test that the CSS selectors used in JavaScript are present."""
@@ -179,14 +180,15 @@ class TestToggleFunctionality:
 
         html = generate_html([message], "Test Multiple")
 
-        # Should have multiple collapsible details (only count actual HTML elements, not in JS)
+        # Should have multiple collapsible tool params (only count actual HTML elements, not in JS)
         import re
 
         # Remove script tags and their content to avoid counting strings in JavaScript
         html_without_scripts = re.sub(r"<script.*?</script>", "", html, flags=re.DOTALL)
-        collapsible_count = html_without_scripts.count('class="collapsible-details"')
+        collapsible_count = html_without_scripts.count("class='tool-param-collapsible'")
+        # Each tool has 2 params (content and index), so 3 tools = 6 params, but only content is long enough to be collapsible
         assert collapsible_count == 3, (
-            f"Should have 3 collapsible details, got {collapsible_count}"
+            f"Should have 3 collapsible tool params, got {collapsible_count}"
         )
 
         # Toggle logic should handle multiple elements

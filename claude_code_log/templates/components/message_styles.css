@@ -258,6 +258,17 @@
     font-size: 1.2em;
 }
 
+/* IDE notification styling */
+.ide-notification {
+    background-color: #d2d6d966;
+    border-left: #9c27b0 2px solid;
+    padding: 8px 12px;
+    margin: 8px 0;
+    border-radius: 4px;
+    font-size: 0.9em;
+    font-style: italic;
+}
+
 /* Content styling */
 .content {
     word-wrap: break-word;
