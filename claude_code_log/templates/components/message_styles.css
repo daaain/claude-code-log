@@ -1,6 +1,7 @@
 /* Message and content styles */
 .message {
     margin-bottom: 1em;
+    margin-left: 1em;
     padding: 1em;
     border-radius: 8px;
     border-left: #ffffff66 2px solid;
@@ -18,7 +19,8 @@
 
 /* Message type styling */
 .user {
-    border-left-color: #2196f3;
+    border-left-color: #ff9800;
+    margin-left: 0;
 }
 
 .assistant {
@@ -26,22 +28,26 @@
 }
 
 .system {
-    border-left-color: #ff9800;
+    border-left-color: #f44336;
+    margin-left: 0;
 }
 
 .system-warning {
     border-left-color: #ff9800;
     background-color: #fff3e088;
+    margin-left: 0;
 }
 
 .system-error {
     border-left-color: #f44336;
     background-color: #ffebee88;
+    margin-left: 0;
 }
 
 .system-info {
     border-left-color: #2196f3;
     background-color: #e3f2fd88;
+    margin-left: 0;
 }
 
 /* Command output styling */

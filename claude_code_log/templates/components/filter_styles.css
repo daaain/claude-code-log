@@ -107,6 +107,17 @@
     background-color: #ffffff66;
 }
 
+/* Color-coded filter buttons */
+.filter-toggle[data-type="user"] {
+    border-color: #ff9800;
+    border-width: 2px;
+}
+
+.filter-toggle[data-type="system"] {
+    border-color: #f44336;
+    border-width: 2px;
+}
+
 .filter-actions {
     display: flex;
     gap: 6px;
