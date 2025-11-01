@@ -627,7 +627,8 @@ def render_user_message_content(content_list: List[ContentItem]) -> tuple[str, b
         # Check for compacted session summary first
         if _is_compacted_session_summary(first_text):
             # Render entire content as markdown for compacted summaries
-            content_html = render_message_content(content_list, "user")
+            # Use "assistant" to trigger markdown rendering instead of pre-formatted text
+            content_html = render_message_content(content_list, "assistant")
             return content_html, True
 
         # Extract IDE notifications from first text item
