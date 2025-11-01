@@ -179,3 +179,8 @@ test_output
 test/test_data/*.html
 .claude-trace
 .specstory
+
+# Local configuration files
+.claude/settings.local.json
+.vscode/settings.json
+local.ps1

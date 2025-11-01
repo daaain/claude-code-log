@@ -323,9 +323,9 @@ def format_tool_use_content(tool_use: ToolUseContent) -> str:
 
     # Default: render as key/value table
     if not tool_use.input:
-        return "<div style='color: #999; font-style: italic;'>No parameters</div>"
+        return "<div class='tool-params-empty'>No parameters</div>"
 
-    html_parts = ["<table style='width: 100%; border-collapse: collapse;'>"]
+    html_parts = ["<table class='tool-params-table'>"]
 
     for key, value in tool_use.input.items():
         escaped_key = escape_html(str(key))
@@ -335,19 +335,43 @@ def format_tool_use_content(tool_use: ToolUseContent) -> str:
             try:
                 formatted_value = json.dumps(value, indent=2)
                 escaped_value = escape_html(formatted_value)
-                value_html = f"<pre style='margin: 0; background-color: #f8f9fa; padding: 4px; border-radius: 3px;'>{escaped_value}</pre>"
+
+                # Make long structured values collapsible
+                if len(formatted_value) > 200:
+                    preview = escape_html(formatted_value[:100]) + "..."
+                    value_html = f"""
+                        <details class='tool-param-collapsible'>
+                            <summary>{preview}</summary>
+                            <pre class='tool-param-structured'>{escaped_value}</pre>
+                        </details>
+                    """
+                else:
+                    value_html = (
+                        f"<pre class='tool-param-structured'>{escaped_value}</pre>"
+                    )
             except (TypeError, ValueError):
                 escaped_value = escape_html(str(value))
                 value_html = escaped_value
         else:
-            # Simple value, render as-is
+            # Simple value, render as-is (or collapsible if long)
             escaped_value = escape_html(str(value))
-            value_html = escaped_value
+
+            # Make long string values collapsible
+            if len(str(value)) > 100:
+                preview = escape_html(str(value)[:80]) + "..."
+                value_html = f"""
+                    <details class='tool-param-collapsible'>
+                        <summary>{preview}</summary>
+                        <div class='tool-param-full'>{escaped_value}</div>
+                    </details>
+                """
+            else:
+                value_html = escaped_value
 
         html_parts.append(f"""
-            <tr style='border-bottom: 1px solid #e9ecef;'>
-                <td style='padding: 8px; font-weight: 600; color: #495057; vertical-align: top; width: 30%;'>{escaped_key}</td>
-                <td style='padding: 8px; color: #212529; vertical-align: top;'>{value_html}</td>
+            <tr>
+                <td class='tool-param-key'>{escaped_key}</td>
+                <td class='tool-param-value'>{value_html}</td>
             </tr>
         """)
 

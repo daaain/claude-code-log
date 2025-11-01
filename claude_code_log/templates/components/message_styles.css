@@ -302,6 +302,61 @@ code {
     border-right: #00000017 1px solid;
 }
 
+/* Tool parameter table styling */
+.tool-params-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 80%;
+}
+
+.tool-params-table tr {
+    border-bottom: 1px solid #4b494822;
+}
+
+.tool-param-key {
+    padding: 4px;
+    font-weight: 600;
+    color: #495057;
+    vertical-align: top;
+    width: 8em;
+}
+
+.tool-param-value {
+    padding: 4px;
+    color: #212529;
+    vertical-align: top;
+}
+
+.tool-param-structured {
+    margin: 0;
+    background-color: #f8f9fa;
+    padding: 4px;
+    border-radius: 3px;
+}
+
+.tool-param-collapsible {
+    margin: 0;
+}
+
+.tool-param-collapsible summary {
+    cursor: pointer;
+    color: #666;
+}
+
+.tool-param-collapsible summary:hover {
+    color: #333;
+}
+
+.tool-param-full {
+    margin-top: 4px;
+    word-break: break-all;
+}
+
+.tool-params-empty {
+    color: #999;
+    font-style: italic;
+}
+
 .tool-result {
     background-color: #e8f5e866;
     border-left: #4caf5088 1px solid;
