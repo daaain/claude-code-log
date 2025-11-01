@@ -245,7 +245,8 @@
 }
 
 /* Assistant and Thinking content styling */
-.assistant .content {
+.assistant .content,
+.user .content:not(:has(pre)) {
     font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
 

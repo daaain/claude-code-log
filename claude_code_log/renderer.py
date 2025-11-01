@@ -464,13 +464,28 @@ def format_image_content(image: ImageContent) -> str:
     return f'<img src="{data_url}" alt="Uploaded image" style="max-width: 100%; height: auto; border: 1px solid #ddd; border-radius: 4px; margin: 10px 0;" />'
 
 
+def _is_compacted_session_summary(text: str) -> bool:
+    """Check if text is a compacted session summary (model-generated markdown).
+
+    Compacted summaries are generated when a session runs out of context and
+    needs to be continued. They are well-formed markdown and should be rendered
+    as such rather than in preformatted blocks.
+    """
+    return text.startswith(
+        "This session is being continued from a previous conversation that ran out of context"
+    )
+
+
 def render_message_content(
     content: Union[str, List[ContentItem]], message_type: str
 ) -> str:
     """Render message content with proper tool use and tool result formatting."""
     if isinstance(content, str):
         if message_type == "user":
-            # User messages are shown as-is in preformatted blocks
+            # Check for compacted session summary (model-generated, well-formed markdown)
+            if _is_compacted_session_summary(content):
+                return render_markdown(content)
+            # Regular user messages are shown as-is in preformatted blocks
             escaped_text = escape_html(content)
             return "<pre>" + escaped_text + "</pre>"
         else:
@@ -490,9 +505,13 @@ def render_message_content(
             # Handle both TextContent and Anthropic TextBlock
             text_value = getattr(item, "text", str(item))
             if message_type == "user":
-                # User messages are shown as-is in preformatted blocks
-                escaped_text = escape_html(text_value)
-                rendered_parts.append("<pre>" + escaped_text + "</pre>")
+                # Check for compacted session summary (model-generated, well-formed markdown)
+                if _is_compacted_session_summary(text_value):
+                    rendered_parts.append(render_markdown(text_value))
+                else:
+                    # Regular user messages are shown as-is in preformatted blocks
+                    escaped_text = escape_html(text_value)
+                    rendered_parts.append("<pre>" + escaped_text + "</pre>")
             else:
                 # Assistant messages get markdown rendering
                 rendered_parts.append(render_markdown(text_value))
