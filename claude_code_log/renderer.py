@@ -1188,6 +1188,17 @@ def _identify_message_pairs(messages: List[TemplateMessage]) -> None:
                 i += 2
                 continue
 
+        # Check for thinking + assistant pair
+        if current.css_class == "thinking" and i + 1 < len(messages):
+            next_msg = messages[i + 1]
+            if next_msg.css_class == "assistant":
+                current.is_paired = True
+                current.pair_role = "pair_first"
+                next_msg.is_paired = True
+                next_msg.pair_role = "pair_last"
+                i += 2
+                continue
+
         i += 1
 
 
