@@ -244,6 +244,20 @@
     margin-left: 1em;
 }
 
+/* Assistant and Thinking content styling */
+.assistant .content {
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+/* Code block styling */
+pre > code {
+    display: block;
+}
+
+code {
+    background-color: #f5f1e8;
+}
+
 /* Tool content styling */
 .tool-content {
     background-color: #f8f9fa66;
@@ -274,6 +288,8 @@
 }
 
 .thinking-text {
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 90%;
     word-wrap: break-word;
     color: #555;
 }
