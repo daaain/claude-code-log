@@ -59,8 +59,8 @@
 }
 
 .system-warning {
-    border-left-color: #ff9800;
-    background-color: #fff3e088;
+    border-left-color: #2196f3;
+    background-color: #e3f2fd88;
     margin-left: 0;
 }
 
@@ -71,8 +71,8 @@
 }
 
 .system-info {
-    border-left-color: #2196f3;
-    background-color: #e3f2fd88;
+    border-left-color: #2196f366;
+    background-color: #e3f2fd66;
     margin-left: 0;
 }
 
