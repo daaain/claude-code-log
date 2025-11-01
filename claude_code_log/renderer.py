@@ -1168,7 +1168,7 @@ def _identify_message_pairs(messages: List[TemplateMessage]) -> None:
             ):  # Look ahead up to 10 messages
                 next_msg = messages[j]
                 if (
-                    next_msg.css_class == "tool_result"
+                    "tool_result" in next_msg.css_class
                     and next_msg.tool_use_id == current.tool_use_id
                 ):
                     current.is_paired = True
