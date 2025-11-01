@@ -54,7 +54,7 @@
 }
 
 .system {
-    border-left-color: #f44336;
+    border-left-color: #d98100;
     margin-left: 0;
 }
 
@@ -79,7 +79,7 @@
 /* Command output styling */
 .command-output {
     background-color: #1e1e1e11;
-    border-left-color: #f4433666;
+    border-left-color: #d9810066;
 }
 
 .command-output-content {
@@ -166,6 +166,11 @@
 
 .tool_result {
     border-left-color: #4caf5066;
+}
+
+.tool_result.error {
+    border-left-color: #f44336;
+    background-color: #ffebee88;
 }
 
 /* Sidechain message styling */

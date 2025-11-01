@@ -1582,7 +1582,11 @@ def generate_html(
                 tool_message_type = (
                     f"Tool Result{': ' + error_indicator if error_indicator else ''}"
                 )
-                tool_css_class = "tool_result"
+                tool_css_class = (
+                    "tool_result error"
+                    if tool_result_converted.is_error
+                    else "tool_result"
+                )
             elif isinstance(tool_item, ThinkingContent) or item_type == "thinking":
                 # Convert Anthropic type to our format if necessary
                 if not isinstance(tool_item, ThinkingContent):
