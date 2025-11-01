@@ -66,7 +66,7 @@
 .system-warning {
     border-left-color: #2196f3;
     background-color: #e3f2fd88;
-    margin-left: 1em; /* Override .system - not user-initiated */
+    margin-left: 2em; /* Extra indent - assistant-initiated */
 }
 
 .system-error {
@@ -78,7 +78,8 @@
 .system-info {
     border-left-color: #2196f366;
     background-color: #e3f2fd66;
-    margin-left: 1em; /* Override .system - not user-initiated */
+    margin-left: 2em; /* Extra indent - assistant-initiated */
+    font-size: 80%;
 }
 
 /* Command output styling */
