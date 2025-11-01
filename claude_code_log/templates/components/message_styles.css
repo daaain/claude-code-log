@@ -237,7 +237,8 @@
 }
 
 .image {
-    border-left-color: #ff5722;
+    border-left-color: #d48a5e;
+    margin-left: 0; /* Align with user messages */
 }
 
 /* Session header styling */
