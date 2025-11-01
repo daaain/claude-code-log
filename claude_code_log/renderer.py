@@ -3,7 +3,7 @@
 
 import json
 from pathlib import Path
-from typing import List, Optional, Union, Dict, Any, cast, TYPE_CHECKING
+from typing import List, Optional, Dict, Any, cast, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .cache import CacheManager
@@ -327,7 +327,7 @@ def render_params_table(params: Dict[str, Any]) -> str:
         # If value is structured (dict/list), render as JSON
         if isinstance(value, (dict, list)):
             try:
-                formatted_value = json.dumps(value, indent=2)
+                formatted_value = json.dumps(value, indent=2)  # type: ignore[arg-type]
                 escaped_value = escape_html(formatted_value)
 
                 # Make long structured values collapsible
@@ -344,7 +344,7 @@ def render_params_table(params: Dict[str, Any]) -> str:
                         f"<pre class='tool-param-structured'>{escaped_value}</pre>"
                     )
             except (TypeError, ValueError):
-                escaped_value = escape_html(str(value))
+                escaped_value = escape_html(str(value))  # type: ignore[arg-type]
                 value_html = escaped_value
         else:
             # Simple value, render as-is (or collapsible if long)
@@ -561,7 +561,7 @@ def extract_ide_notifications(text: str) -> tuple[List[str], str]:
     """
     import re
 
-    notifications = []
+    notifications: List[str] = []
     remaining_text = text
 
     # Pattern 1: <ide_opened_file>content</ide_opened_file>
@@ -585,12 +585,14 @@ def extract_ide_notifications(text: str) -> tuple[List[str], str]:
         json_content = match.group(1).strip()
         try:
             # Parse JSON array of diagnostic objects
-            diagnostics = json.loads(json_content)
+            diagnostics: Any = json.loads(json_content)
             if isinstance(diagnostics, list):
                 # Render each diagnostic as a table
-                for diagnostic in diagnostics:
+                for diagnostic in cast(List[Any], diagnostics):
                     if isinstance(diagnostic, dict):
-                        table_html = render_params_table(diagnostic)
+                        # Type assertion: we've confirmed it's a dict
+                        diagnostic_dict = cast(Dict[str, Any], diagnostic)
+                        table_html = render_params_table(diagnostic_dict)
                         notification_html = (
                             f"<div class='ide-notification ide-diagnostic'>"
                             f"⚠️ IDE Diagnostic<br>{table_html}"
