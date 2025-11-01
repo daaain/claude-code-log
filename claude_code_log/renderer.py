@@ -1302,8 +1302,11 @@ def generate_html(
             level_icon = {"warning": "⚠️", "error": "❌", "info": "ℹ️"}.get(level, "ℹ️")
             level_css = f"system system-{level}"
 
-            escaped_content = escape_html(message.content)
-            content_html = f"<strong>{level_icon} System {level.title()}:</strong> {escaped_content}"
+            # Process ANSI codes in system messages (they may contain command output)
+            html_content = _convert_ansi_to_html(message.content)
+            content_html = (
+                f"<strong>{level_icon} System {level.title()}:</strong> {html_content}"
+            )
 
             system_template_message = TemplateMessage(
                 message_type=f"System {level.title()}",
