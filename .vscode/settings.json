@@ -5,4 +5,5 @@
         "docs/claude-code-log-transcript.html": true,
         "test/test_data/cache/**": true,
     },
+    "workbench.colorTheme": "Solarized Dark",
 }

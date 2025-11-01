@@ -568,13 +568,71 @@ def extract_ide_notifications(text: str) -> tuple[List[str], str]:
     return notifications, remaining_text
 
 
+def render_user_message_content(
+    text_only_content: Union[str, List[ContentItem]],
+) -> tuple[str, bool]:
+    """Render user message content with IDE tag extraction and compacted summary handling.
+
+    Returns:
+        A tuple of (content_html, is_compacted)
+    """
+    # Normalize to list form for uniform processing
+    if isinstance(text_only_content, str):
+        content_list = [TextContent(type="text", text=text_only_content)]
+    else:
+        content_list = text_only_content
+
+    # Extract IDE notifications and check for compacted summaries
+    ide_notifications_html: List[str] = []
+    is_compacted = False
+
+    # Check first text item
+    if content_list and hasattr(content_list[0], "text"):
+        first_text = getattr(content_list[0], "text", "")
+
+        # Check for compacted session summary first
+        if _is_compacted_session_summary(first_text):
+            is_compacted = True
+            # Render entire content as markdown for compacted summaries
+            content_html = render_message_content(content_list, "user")
+            return content_html, is_compacted
+
+        # Extract IDE notifications from first text item
+        ide_notifications_html, remaining_text = extract_ide_notifications(first_text)
+
+        # Build new content list with remaining text
+        if remaining_text:
+            # Replace first item with remaining text
+            modified_content = [TextContent(type="text", text=remaining_text)] + list(
+                content_list[1:]
+            )
+        else:
+            # First item was all IDE notifications, use rest of content
+            modified_content = list(content_list[1:])
+
+        # Render the content
+        if modified_content:
+            content_html = render_message_content(modified_content, "user")
+        else:
+            content_html = ""
+
+        # Prepend IDE notifications
+        if ide_notifications_html:
+            content_html = "".join(ide_notifications_html) + content_html
+    else:
+        # No text in first item or empty list, render normally
+        content_html = render_message_content(content_list, "user")
+
+    return content_html, is_compacted
+
+
 def render_message_content(
     content: Union[str, List[ContentItem]], message_type: str
 ) -> str:
     """Render message content with proper tool use and tool result formatting.
 
     Note: This does NOT handle user-specific preprocessing like IDE tags or
-    compacted session summaries. Those should be handled before calling this function.
+    compacted session summaries. Those should be handled by render_user_message_content.
     """
     if isinstance(content, str):
         if message_type == "user":
@@ -1226,74 +1284,8 @@ def _process_regular_message(
     css_class = f"{message_type}"
 
     # Handle user-specific preprocessing
-    ide_notifications_html: List[str] = []
-    is_compacted = False
-
     if message_type == "user":
-        # Extract IDE notifications and check for compacted summaries
-        if isinstance(text_only_content, str):
-            # Check for compacted session summary first
-            if _is_compacted_session_summary(text_only_content):
-                is_compacted = True
-                # Render as markdown for compacted summaries
-                content_html = render_markdown(text_only_content)
-            else:
-                # Extract IDE notifications
-                ide_notifications_html, remaining_text = extract_ide_notifications(
-                    text_only_content
-                )
-                # Render remaining text as regular user content
-                if remaining_text:
-                    content_html = render_message_content(remaining_text, message_type)
-                else:
-                    content_html = ""
-                # Prepend IDE notifications
-                if ide_notifications_html:
-                    content_html = "".join(ide_notifications_html) + content_html
-        elif isinstance(text_only_content, list) and text_only_content:
-            # For list content, check first text item for compacted summary
-            first_item = text_only_content[0]
-            if hasattr(first_item, "text"):
-                text_value = getattr(first_item, "text", "")
-                if _is_compacted_session_summary(text_value):
-                    is_compacted = True
-
-            if is_compacted:
-                # Render as markdown for compacted summaries
-                content_html = render_message_content(text_only_content, message_type)
-            else:
-                # Extract IDE notifications from first text item if present
-                if hasattr(first_item, "text"):
-                    text_value = getattr(first_item, "text", "")
-                    ide_notifications_html, remaining_text = extract_ide_notifications(
-                        text_value
-                    )
-                    # Build new content list with remaining text
-                    if remaining_text:
-                        # Create new TextContent with remaining text
-                        modified_first = TextContent(type="text", text=remaining_text)
-                        modified_content = [modified_first] + text_only_content[1:]
-                        content_html = render_message_content(
-                            modified_content, message_type
-                        )
-                    else:
-                        # First item was all IDE notifications, render rest
-                        if len(text_only_content) > 1:
-                            content_html = render_message_content(
-                                text_only_content[1:], message_type
-                            )
-                        else:
-                            content_html = ""
-                    # Prepend IDE notifications
-                    if ide_notifications_html:
-                        content_html = "".join(ide_notifications_html) + content_html
-                else:
-                    # No text in first item, render normally
-                    content_html = render_message_content(
-                        text_only_content, message_type
-                    )
-        else:
-            content_html = render_message_content(text_only_content, message_type)
+        content_html, is_compacted = render_user_message_content(text_only_content)
 
         if is_compacted:
             css_class = f"{message_type} compacted"
@@ -1301,6 +1293,7 @@ def _process_regular_message(
     else:
         # Non-user messages: render directly
         content_html = render_message_content(text_only_content, message_type)
+        is_compacted = False
 
     if is_sidechain:
         css_class = f"{css_class} sidechain"
