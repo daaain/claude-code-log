@@ -52,7 +52,7 @@ class TestTemplateRendering:
         )
         assert "Python decorators" in html_content
         assert "Tool Use:" in html_content
-        assert "Tool Result:" in html_content
+        assert "Tool Result" in html_content  # Changed: no colon for non-error results
 
         # Check that markdown elements are rendered server-side
         assert (
@@ -83,7 +83,7 @@ class TestTemplateRendering:
 
         # Check tool error handling
         assert "Tool Result" in html_content
-        assert "Error):" in html_content
+        assert "🚨 Error" in html_content  # Changed: error indicator format
         assert "Tool execution failed" in html_content
 
         # Check system message filtering (caveat should be filtered out)
@@ -169,7 +169,7 @@ class TestTemplateRendering:
         assert "tool-use" in html_content
 
         # Check tool result formatting
-        assert "Tool Result:" in html_content
+        assert "Tool Result" in html_content  # Changed: no colon for non-error results
         assert "File created successfully" in html_content
         assert "tool-result" in html_content
 
@@ -254,9 +254,9 @@ class TestTemplateRendering:
         # Summary messages are now integrated into session headers
         assert "session-summary" in html_content or "Summary:" in html_content
 
-        # Check tool message classes (tools are now top-level messages)
-        assert "class='message tool_use'" in html_content
-        assert "class='message tool_result'" in html_content
+        # Check tool message classes (tools are now top-level messages, may include paired-message class)
+        assert "tool_use" in html_content and "class='message" in html_content
+        assert "tool_result" in html_content and "class='message" in html_content
 
     def test_server_side_markdown_rendering(self):
         """Test that markdown is rendered server-side, not client-side."""
