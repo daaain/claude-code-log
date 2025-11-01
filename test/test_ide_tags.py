@@ -1,7 +1,12 @@
 """Tests for IDE tag preprocessing in user messages."""
 
 import pytest
-from claude_code_log.renderer import extract_ide_notifications
+from claude_code_log.renderer import (
+    extract_ide_notifications,
+    render_user_message_content,
+    render_message_content,
+)
+from claude_code_log.models import TextContent, ImageContent, ImageSource
 
 
 def test_extract_ide_opened_file_tag():
@@ -102,3 +107,66 @@ def test_extract_special_chars_in_ide_tag():
     )
     # Remaining should be empty
     assert remaining == ""
+
+
+def test_render_user_message_with_multi_item_content():
+    """Test rendering user message with multiple content items (text + image)."""
+    # Simulate a user message with text containing IDE tag plus an image
+    text_with_tag = (
+        "<ide_opened_file>User opened example.py</ide_opened_file>\n"
+        "Please review this code and this screenshot:"
+    )
+    image_item = ImageContent(
+        type="image",
+        source=ImageSource(
+            type="base64",
+            media_type="image/png",
+            data="iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+        ),
+    )
+
+    content_list = [
+        TextContent(type="text", text=text_with_tag),
+        image_item,
+    ]
+
+    content_html, is_compacted = render_user_message_content(content_list)
+
+    # Should extract IDE notification
+    assert "🤖" in content_html
+    assert "ide-notification" in content_html
+    assert "User opened example.py" in content_html
+
+    # Should render remaining text
+    assert "Please review this code" in content_html
+
+    # Should render image
+    assert "<img src=" in content_html
+    assert "data:image/png;base64" in content_html
+
+    # Should not be compacted
+    assert is_compacted is False
+
+
+def test_render_message_content_single_text_item():
+    """Test that single TextContent item takes fast path for user messages."""
+    content = [TextContent(type="text", text="Simple user message")]
+
+    html = render_message_content(content, "user")
+
+    # Should be wrapped in <pre> for user messages
+    assert html.startswith("<pre>")
+    assert html.endswith("</pre>")
+    assert "Simple user message" in html
+
+
+def test_render_message_content_single_text_item_assistant():
+    """Test that single TextContent item takes fast path for assistant messages."""
+    content = [TextContent(type="text", text="**Bold** response")]
+
+    html = render_message_content(content, "assistant")
+
+    # Should be rendered as markdown (no <pre>)
+    assert "<pre>" not in html
+    # Markdown should be processed
+    assert "<strong>Bold</strong>" in html or "<b>Bold</b>" in html

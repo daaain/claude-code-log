@@ -568,53 +568,35 @@ def extract_ide_notifications(text: str) -> tuple[List[str], str]:
     return notifications, remaining_text
 
 
-def render_user_message_content(
-    text_only_content: Union[str, List[ContentItem]],
-) -> tuple[str, bool]:
+def render_user_message_content(content_list: List[ContentItem]) -> tuple[str, bool]:
     """Render user message content with IDE tag extraction and compacted summary handling.
 
     Returns:
         A tuple of (content_html, is_compacted)
     """
-    # Normalize to list form for uniform processing
-    if isinstance(text_only_content, str):
-        content_list = [TextContent(type="text", text=text_only_content)]
-    else:
-        content_list = text_only_content
-
-    # Extract IDE notifications and check for compacted summaries
-    ide_notifications_html: List[str] = []
-    is_compacted = False
-
     # Check first text item
     if content_list and hasattr(content_list[0], "text"):
         first_text = getattr(content_list[0], "text", "")
 
         # Check for compacted session summary first
         if _is_compacted_session_summary(first_text):
-            is_compacted = True
             # Render entire content as markdown for compacted summaries
             content_html = render_message_content(content_list, "user")
-            return content_html, is_compacted
+            return content_html, True
 
         # Extract IDE notifications from first text item
         ide_notifications_html, remaining_text = extract_ide_notifications(first_text)
+        modified_content = content_list[1:]
 
         # Build new content list with remaining text
         if remaining_text:
             # Replace first item with remaining text
-            modified_content = [TextContent(type="text", text=remaining_text)] + list(
-                content_list[1:]
-            )
-        else:
-            # First item was all IDE notifications, use rest of content
-            modified_content = list(content_list[1:])
+            modified_content = [
+                TextContent(type="text", text=remaining_text)
+            ] + modified_content
 
         # Render the content
-        if modified_content:
-            content_html = render_message_content(modified_content, "user")
-        else:
-            content_html = ""
+        content_html = render_message_content(modified_content, "user")
 
         # Prepend IDE notifications
         if ide_notifications_html:
@@ -623,25 +605,23 @@ def render_user_message_content(
         # No text in first item or empty list, render normally
         content_html = render_message_content(content_list, "user")
 
-    return content_html, is_compacted
+    return content_html, False
 
 
-def render_message_content(
-    content: Union[str, List[ContentItem]], message_type: str
-) -> str:
+def render_message_content(content: List[ContentItem], message_type: str) -> str:
     """Render message content with proper tool use and tool result formatting.
 
     Note: This does NOT handle user-specific preprocessing like IDE tags or
     compacted session summaries. Those should be handled by render_user_message_content.
     """
-    if isinstance(content, str):
+    if len(content) == 1 and isinstance(content[0], TextContent):
         if message_type == "user":
             # User messages are shown as-is in preformatted blocks
-            escaped_text = escape_html(content)
+            escaped_text = escape_html(content[0].text)
             return "<pre>" + escaped_text + "</pre>"
         else:
             # Assistant messages get markdown rendering
-            return render_markdown(content)
+            return render_markdown(content[0].text)
 
     # content is a list of ContentItem objects
     rendered_parts: List[str] = []
@@ -1276,7 +1256,7 @@ def _process_bash_output(text_content: str) -> tuple[str, str, str]:
 
 
 def _process_regular_message(
-    text_only_content: Union[str, List[ContentItem]],
+    text_only_content: List[ContentItem],
     message_type: str,
     is_sidechain: bool,
 ) -> tuple[str, str, str]:
@@ -1286,7 +1266,6 @@ def _process_regular_message(
     # Handle user-specific preprocessing
     if message_type == "user":
         content_html, is_compacted = render_user_message_content(text_only_content)
-
         if is_compacted:
             css_class = f"{message_type} compacted"
             message_type = "🤖 User (compacted conversation)"
@@ -1519,7 +1498,7 @@ def generate_html(
 
         # Separate tool/thinking/image content from text content
         tool_items: List[ContentItem] = []
-        text_only_content: Union[str, List[ContentItem]] = []
+        text_only_content: List[ContentItem] = []
 
         if isinstance(message_content, list):
             text_only_items: List[ContentItem] = []
@@ -1538,7 +1517,9 @@ def generate_html(
             text_only_content = text_only_items
         else:
             # Single string content
-            text_only_content = message_content
+            message_content = message_content.strip()
+            if message_content:
+                text_only_content = [TextContent(type="text", text=message_content)]
 
         # Skip if no meaningful content
         if not text_content.strip() and not tool_items:
@@ -1706,12 +1687,7 @@ def generate_html(
             )
 
         # Create main message (if it has text content)
-        if text_only_content and (
-            isinstance(text_only_content, str)
-            and text_only_content.strip()
-            or isinstance(text_only_content, list)
-            and text_only_content
-        ):
+        if text_only_content:
             template_message = TemplateMessage(
                 message_type=message_type,
                 content_html=content_html,
