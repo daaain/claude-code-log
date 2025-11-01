@@ -723,8 +723,7 @@ class TestTimelineBrowser:
             ("user", "User"),
             ("assistant", "Assistant"),
             ("sidechain", "Sub-assistant"),
-            ("tool_use", "Tool use"),
-            ("tool_result", "Tool result"),
+            ("tool", "Tool"),  # Unified filter for both tool_use and tool_result
             ("thinking", "Thinking"),
             ("system", "System"),
         ]
@@ -917,7 +916,11 @@ class TestTimelineBrowser:
 
         # Check that filter toggles exist for all message types found
         for message_type in message_type_classes:
-            filter_selector = f'.filter-toggle[data-type="{message_type}"]'
+            # Map tool_use and tool_result to unified "tool" filter
+            filter_type = (
+                "tool" if message_type in ["tool_use", "tool_result"] else message_type
+            )
+            filter_selector = f'.filter-toggle[data-type="{filter_type}"]'
             filter_toggle = page.locator(filter_selector)
 
             if message_type in [
@@ -931,7 +934,7 @@ class TestTimelineBrowser:
             ]:
                 # These message types should have filter toggles
                 assert filter_toggle.count() > 0, (
-                    f"Filter toggle should exist for message type: {message_type}"
+                    f"Filter toggle should exist for message type: {message_type} (filter: {filter_type})"
                 )
 
             # Test that timeline can handle filtering for this message type
