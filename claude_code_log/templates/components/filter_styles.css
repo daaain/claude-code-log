@@ -123,6 +123,16 @@
     border-width: 2px;
 }
 
+.filter-toggle[data-type="assistant"] {
+    border-color: #9c27b0;
+    border-width: 2px;
+}
+
+.filter-toggle[data-type="thinking"] {
+    border-color: #9c27b066;
+    border-width: 2px;
+}
+
 .filter-actions {
     display: flex;
     gap: 6px;

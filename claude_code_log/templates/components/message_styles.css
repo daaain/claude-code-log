@@ -53,6 +53,11 @@
     border-left-color: #9c27b0;
 }
 
+/* Dimmed assistant when paired with thinking */
+.assistant.paired-message {
+    border-left-color: #9c27b066;
+}
+
 .system {
     border-left-color: #d98100;
     margin-left: 0;
@@ -194,7 +199,12 @@
 }
 
 .thinking {
-    border-left-color: #9e9e9e;
+    border-left-color: #9c27b066;
+}
+
+/* Full purple when thinking is paired (as pair_first) */
+.thinking.paired-message.pair_first {
+    border-left-color: #9c27b0;
 }
 
 .image {
