@@ -61,7 +61,7 @@
 .system-warning {
     border-left-color: #2196f3;
     background-color: #e3f2fd88;
-    margin-left: 0;
+    /* Indented - not user-initiated */
 }
 
 .system-error {
@@ -73,7 +73,7 @@
 .system-info {
     border-left-color: #2196f366;
     background-color: #e3f2fd66;
-    margin-left: 0;
+    /* Indented - not user-initiated */
 }
 
 /* Command output styling */
@@ -162,10 +162,12 @@
 
 .tool_use {
     border-left-color: #4caf50;
+    margin-left: 2em; /* Extra indent - assistant-initiated */
 }
 
 .tool_result {
     border-left-color: #4caf5066;
+    margin-left: 2em; /* Extra indent - assistant-initiated */
 }
 
 .tool_result.error {
