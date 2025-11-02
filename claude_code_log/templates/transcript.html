@@ -279,8 +279,18 @@
                 allMessages.forEach(message => {
                     let shouldShow = false;
 
-                    // Check if message matches any active filter type
-                    shouldShow = expandedTypes.some(type => message.classList.contains(type));
+                    // Special handling for sidechain messages
+                    if (message.classList.contains('sidechain')) {
+                        // For sidechain messages, show if both sidechain filter is active AND their message type filter is active
+                        const sidechainActive = expandedTypes.includes('sidechain');
+                        const messageTypeActive = expandedTypes.some(type =>
+                            type !== 'sidechain' && message.classList.contains(type)
+                        );
+                        shouldShow = sidechainActive && messageTypeActive;
+                    } else {
+                        // For non-sidechain messages, show if any of their types are active
+                        shouldShow = expandedTypes.some(type => message.classList.contains(type));
+                    }
 
                     if (shouldShow) {
                         message.classList.remove('filtered-hidden');
