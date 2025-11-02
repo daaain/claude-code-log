@@ -46,17 +46,20 @@
 }
 
 /* Sidechain messages (sub-assistant hierarchy) */
+/* Sub-assistant prompt at same level as Task tool (2em) */
 .sidechain.user {
-    margin-left: 4em;
-    margin-right: 4em;
+    margin-left: 2em;
+    margin-right: 6em;
 }
 
+/* Sub-assistant response and thinking (nested below prompt) */
 .sidechain.assistant,
 .sidechain.thinking {
     margin-left: 4em;
     margin-right: 4em;
 }
 
+/* Sub-assistant tools (nested below sub-assistant) */
 .sidechain.tool_use,
 .sidechain.tool_result {
     margin-left: 6em;
