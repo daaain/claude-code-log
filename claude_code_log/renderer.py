@@ -317,7 +317,7 @@ def _highlight_code_with_pygments(
     # Create formatter with line numbers in table format
     formatter = HtmlFormatter(
         linenos="table" if show_linenos else False,
-        cssclass="pygments-highlight",
+        cssclass="highlight",
         wrapcode=True,
     )
 

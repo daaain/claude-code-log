@@ -56,6 +56,16 @@ h1 {
 }
 
 /* Common typography */
+
+code {
+    background-color: var(--code-bg-color);
+    padding: 2px 4px;
+    border-radius: 3px;
+    font-family: var(--font-monospace);
+    line-height: 1.5;
+}
+
+
 pre {
     background-color: #12121212;
     padding: 10px;

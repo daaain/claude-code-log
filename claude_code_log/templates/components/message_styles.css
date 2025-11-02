@@ -339,10 +339,6 @@ pre > code {
     display: block;
 }
 
-code {
-    background-color: var(--code-bg-color);
-}
-
 /* Tool content styling */
 .tool-content {
     background-color: var(--neutral-dimmed);

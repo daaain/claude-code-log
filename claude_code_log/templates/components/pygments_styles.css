@@ -1,56 +1,58 @@
 /* Pygments syntax highlighting styles */
 
 /* Base styles for highlighted code blocks */
-.pygments-highlight {
+.highlight {
     background: var(--color-bg-secondary);
     border-radius: 4px;
     overflow-x: auto;
 }
 
-.pygments-highlight pre {
+.highlight pre {
     margin: 0;
     padding: 0.5em;
-    line-height: 1.4;
+    line-height: 1.5;
     font-family: var(--font-monospace);
 }
 
 /* Line numbers table styling */
-.pygments-highlight .highlighttable {
+.highlight .highlighttable {
     width: 100%;
     border-spacing: 0;
     background: transparent;
 }
 
-.pygments-highlight .highlighttable td {
+.highlight .highlighttable td {
     padding: 0;
     vertical-align: top;
 }
 
-.pygments-highlight .highlighttable td.linenos {
+.highlight .highlighttable td.linenos {
     width: 1%;
     text-align: right;
     user-select: none;
-    padding-right: 0.8em;
     border-right: 1px solid var(--color-border-dim);
 }
 
-.pygments-highlight .linenos pre {
+.highlight .linenos pre {
     color: var(--color-text-dim);
     background: var(--color-bg-tertiary);
-    padding: 0.5em 0.5em 0.5em 0;
+    padding: 0.65em 0.5em 0.5em 0.8em;
     margin: 0;
+    line-height: 1.5;
+    white-space: pre;
 }
 
-.pygments-highlight .linenos .normal {
+.highlight .linenos .normal {
     color: inherit;
 }
 
-.pygments-highlight td.code {
+.highlight td.code {
     width: 99%;
 }
 
-.pygments-highlight td.code pre {
+.highlight td.code pre {
     padding-left: 0.8em;
+    line-height: 1.5;
 }
 
 /* Read tool specific styles */
