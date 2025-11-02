@@ -1408,13 +1408,27 @@ def _process_local_command_output(text_content: str) -> tuple[str, str, str]:
     )
     if stdout_match:
         stdout_content = stdout_match.group(1).strip()
-        # Convert ANSI codes to HTML for colored display
-        html_content = _convert_ansi_to_html(stdout_content)
-        # Use <pre> to preserve formatting and line breaks
-        content_html = (
-            f"<strong>Command Output:</strong><br>"
-            f"<pre class='command-output-content'>{html_content}</pre>"
-        )
+
+        # Check if content looks like markdown (starts with markdown headers)
+        is_markdown = bool(re.match(r"^#+\s+", stdout_content, re.MULTILINE))
+
+        if is_markdown:
+            # Render as markdown
+            import mistune
+
+            markdown_html = mistune.html(stdout_content)
+            content_html = (
+                f"<strong>Command Output:</strong><br>"
+                f"<div class='command-output-content'>{markdown_html}</div>"
+            )
+        else:
+            # Convert ANSI codes to HTML for colored display
+            html_content = _convert_ansi_to_html(stdout_content)
+            # Use <pre> to preserve formatting and line breaks
+            content_html = (
+                f"<strong>Command Output:</strong><br>"
+                f"<pre class='command-output-content'>{html_content}</pre>"
+            )
     else:
         content_html = escape_html(text_content)
 
