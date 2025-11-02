@@ -11,6 +11,10 @@ from datetime import datetime
 import html
 import mistune
 from jinja2 import Environment, FileSystemLoader, select_autoescape
+from pygments import highlight
+from pygments.lexers import get_lexer_for_filename, TextLexer
+from pygments.formatters import HtmlFormatter
+from pygments.util import ClassNotFound
 
 from .models import (
     AssistantTranscriptEntry,
@@ -290,6 +294,79 @@ def format_todowrite_content(tool_use: ToolUseContent) -> str:
     """
 
 
+def _highlight_code_with_pygments(
+    code: str, file_path: str, show_linenos: bool = True
+) -> str:
+    """Highlight code using Pygments with appropriate lexer based on file path.
+
+    Args:
+        code: The source code to highlight
+        file_path: Path to determine the appropriate lexer
+        show_linenos: Whether to show line numbers (default: True)
+
+    Returns:
+        HTML string with syntax-highlighted code
+    """
+    try:
+        # Try to get lexer based on filename
+        lexer = get_lexer_for_filename(file_path, code)
+    except ClassNotFound:
+        # Fall back to plain text lexer
+        lexer = TextLexer()
+
+    # Create formatter with line numbers in table format
+    formatter = HtmlFormatter(
+        linenos="table" if show_linenos else False,
+        cssclass="pygments-highlight",
+        wrapcode=True,
+    )
+
+    # Highlight the code
+    return str(highlight(code, lexer, formatter))
+
+
+def format_write_tool_content(tool_use: ToolUseContent) -> str:
+    """Format Write tool use content with Pygments syntax highlighting."""
+    file_path = tool_use.input.get("file_path", "")
+    content = tool_use.input.get("content", "")
+
+    escaped_path = escape_html(file_path)
+
+    html_parts = ["<div class='write-tool-content'>"]
+
+    # File path header with write icon
+    html_parts.append(f"<div class='write-file-path'>✍️ {escaped_path}</div>")
+
+    # Highlight code with Pygments
+    highlighted_html = _highlight_code_with_pygments(content, file_path)
+
+    # Make collapsible if content has more than 12 lines
+    lines = content.split("\n")
+    if len(lines) > 12:
+        # Get preview (first ~5 lines)
+        preview_lines = lines[:5]
+        preview_html = _highlight_code_with_pygments(
+            "\n".join(preview_lines), file_path
+        )
+
+        html_parts.append(f"""
+        <details class='collapsible-code'>
+            <summary>
+                <span class='code-preview-label'>{len(lines)} lines (click to expand)</span>
+                <div class='code-preview'>{preview_html}</div>
+            </summary>
+            <div class='code-full'>{highlighted_html}</div>
+        </details>
+        """)
+    else:
+        # Show directly without collapsible
+        html_parts.append(f"<div class='code-full'>{highlighted_html}</div>")
+
+    html_parts.append("</div>")
+
+    return "".join(html_parts)
+
+
 def format_bash_tool_content(tool_use: ToolUseContent) -> str:
     """Format Bash tool use content in VS Code extension style."""
     command = tool_use.input.get("command", "")
@@ -539,6 +616,10 @@ def format_tool_use_content(tool_use: ToolUseContent) -> str:
     # Special handling for Edit
     if tool_use.name == "Edit":
         return format_edit_tool_content(tool_use)
+
+    # Special handling for Write
+    if tool_use.name == "Write":
+        return format_write_tool_content(tool_use)
 
     # Default: render as key/value table using shared renderer
     return render_params_table(tool_use.input)

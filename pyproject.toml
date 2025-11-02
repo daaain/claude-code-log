@@ -26,6 +26,7 @@ dependencies = [
     "textual>=4.0.0",
     "packaging>=25.0",
     "gitpython>=3.1.45",
+    "pygments>=2.19.1",
 ]
 
 [project.urls]

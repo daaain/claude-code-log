@@ -100,6 +100,7 @@ dependencies = [
     { name = "mistune" },
     { name = "packaging" },
     { name = "pydantic" },
+    { name = "pygments" },
     { name = "textual" },
     { name = "toml" },
 ]
@@ -128,6 +129,7 @@ requires-dist = [
     { name = "mistune", specifier = ">=3.1.3" },
     { name = "packaging", specifier = ">=25.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
+    { name = "pygments", specifier = ">=2.19.1" },
     { name = "textual", specifier = ">=4.0.0" },
     { name = "toml", specifier = ">=0.10.2" },
 ]
