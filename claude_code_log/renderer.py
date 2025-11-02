@@ -11,10 +11,10 @@ from datetime import datetime
 import html
 import mistune
 from jinja2 import Environment, FileSystemLoader, select_autoescape
-from pygments import highlight
-from pygments.lexers import get_lexer_for_filename, TextLexer
-from pygments.formatters import HtmlFormatter
-from pygments.util import ClassNotFound
+from pygments import highlight  # type: ignore[reportUnknownVariableType]
+from pygments.lexers import get_lexer_for_filename, TextLexer  # type: ignore[reportUnknownVariableType]
+from pygments.formatters import HtmlFormatter  # type: ignore[reportUnknownVariableType]
+from pygments.util import ClassNotFound  # type: ignore[reportUnknownVariableType]
 
 from .models import (
     AssistantTranscriptEntry,
@@ -181,10 +181,10 @@ def create_collapsible_details(
 
 def _create_pygments_plugin() -> Any:
     """Create a mistune plugin that uses Pygments for code block syntax highlighting."""
-    from pygments import highlight
-    from pygments.lexers import get_lexer_by_name, TextLexer
-    from pygments.formatters import HtmlFormatter
-    from pygments.util import ClassNotFound
+    from pygments import highlight  # type: ignore[reportUnknownVariableType]
+    from pygments.lexers import get_lexer_by_name, TextLexer  # type: ignore[reportUnknownVariableType]
+    from pygments.formatters import HtmlFormatter  # type: ignore[reportUnknownVariableType]
+    from pygments.util import ClassNotFound  # type: ignore[reportUnknownVariableType]
 
     def plugin_pygments(md: Any) -> None:
         """Plugin to add Pygments syntax highlighting to code blocks."""
@@ -196,16 +196,16 @@ def _create_pygments_plugin() -> Any:
                 # Language hint provided, use Pygments
                 lang = info.split()[0] if info else ""
                 try:
-                    lexer = get_lexer_by_name(lang, stripall=True)
+                    lexer = get_lexer_by_name(lang, stripall=True)  # type: ignore[reportUnknownVariableType]
                 except ClassNotFound:
-                    lexer = TextLexer()
+                    lexer = TextLexer()  # type: ignore[reportUnknownVariableType]
 
-                formatter = HtmlFormatter(
+                formatter = HtmlFormatter(  # type: ignore[reportUnknownVariableType]
                     linenos=False,  # No line numbers in markdown code blocks
                     cssclass="highlight",
                     wrapcode=True,
                 )
-                return str(highlight(code, lexer, formatter))
+                return str(highlight(code, lexer, formatter))  # type: ignore[reportUnknownArgumentType]
             else:
                 # No language hint, use default rendering
                 return original_render(code, info)
@@ -347,13 +347,13 @@ def _highlight_code_with_pygments(
     """
     try:
         # Try to get lexer based on filename
-        lexer = get_lexer_for_filename(file_path, code)
+        lexer = get_lexer_for_filename(file_path, code)  # type: ignore[reportUnknownVariableType]
     except ClassNotFound:
         # Fall back to plain text lexer
-        lexer = TextLexer()
+        lexer = TextLexer()  # type: ignore[reportUnknownVariableType]
 
     # Create formatter with line numbers in table format
-    formatter = HtmlFormatter(
+    formatter = HtmlFormatter(  # type: ignore[reportUnknownVariableType]
         linenos="table" if show_linenos else False,
         cssclass="highlight",
         wrapcode=True,
@@ -361,7 +361,7 @@ def _highlight_code_with_pygments(
     )
 
     # Highlight the code
-    return str(highlight(code, lexer, formatter))
+    return str(highlight(code, lexer, formatter))  # type: ignore[reportUnknownArgumentType]
 
 
 def format_read_tool_content(tool_use: ToolUseContent) -> str:
