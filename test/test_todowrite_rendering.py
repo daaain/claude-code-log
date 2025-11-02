@@ -256,9 +256,9 @@ class TestTodoWriteRendering:
         regular_html = format_tool_use_content(regular_tool)
         todowrite_html = format_tool_use_content(todowrite_tool)
 
-        # Regular tool should use key/value table formatting
-        assert "<table" in regular_html
-        assert "file_path" in regular_html
+        # Edit tool should use diff formatting (not table)
+        assert "edit-diff" in regular_html
+        assert "edit-file-path" in regular_html
         assert "/tmp/test.py" in regular_html
         # Tool name/ID no longer in content, moved to message header
 

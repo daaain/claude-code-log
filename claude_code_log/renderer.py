@@ -373,6 +373,159 @@ def render_params_table(params: Dict[str, Any]) -> str:
     return "".join(html_parts)
 
 
+def format_edit_tool_content(tool_use: ToolUseContent) -> str:
+    """Format Edit tool use content as a diff view with intra-line highlighting."""
+    import difflib
+
+    file_path = tool_use.input.get("file_path", "")
+    old_string = tool_use.input.get("old_string", "")
+    new_string = tool_use.input.get("new_string", "")
+    replace_all = tool_use.input.get("replace_all", False)
+
+    escaped_path = escape_html(file_path)
+
+    html_parts = ["<div class='edit-tool-content'>"]
+
+    # File path header
+    html_parts.append(f"<div class='edit-file-path'>📝 {escaped_path}</div>")
+
+    if replace_all:
+        html_parts.append(
+            "<div class='edit-replace-all'>🔄 Replace all occurrences</div>"
+        )
+
+    # Split into lines for diff
+    old_lines = old_string.splitlines(keepends=True)
+    new_lines = new_string.splitlines(keepends=True)
+
+    # Generate unified diff to identify changed lines
+    differ = difflib.Differ()
+    diff = list(differ.compare(old_lines, new_lines))
+
+    html_parts.append("<div class='edit-diff'>")
+
+    i = 0
+    while i < len(diff):
+        line = diff[i]
+        prefix = line[0:2]
+        content = line[2:]
+
+        if prefix == "- ":
+            # Removed line - look ahead for corresponding addition
+            removed_lines = [content]
+            j = i + 1
+
+            # Collect consecutive removed lines
+            while j < len(diff) and diff[j].startswith("- "):
+                removed_lines.append(diff[j][2:])
+                j += 1
+
+            # Skip '? ' hint lines
+            while j < len(diff) and diff[j].startswith("? "):
+                j += 1
+
+            # Collect consecutive added lines
+            added_lines = []
+            while j < len(diff) and diff[j].startswith("+ "):
+                added_lines.append(diff[j][2:])
+                j += 1
+
+            # Skip '? ' hint lines
+            while j < len(diff) and diff[j].startswith("? "):
+                j += 1
+
+            # Generate character-level diff for paired lines
+            if added_lines:
+                for old_line, new_line in zip(removed_lines, added_lines):
+                    html_parts.append(_render_line_diff(old_line, new_line))
+
+                # Handle any unpaired lines
+                for old_line in removed_lines[len(added_lines) :]:
+                    escaped = escape_html(old_line.rstrip("\n"))
+                    html_parts.append(
+                        f"<div class='diff-line diff-removed'><span class='diff-marker'>-</span>{escaped}</div>"
+                    )
+
+                for new_line in added_lines[len(removed_lines) :]:
+                    escaped = escape_html(new_line.rstrip("\n"))
+                    html_parts.append(
+                        f"<div class='diff-line diff-added'><span class='diff-marker'>+</span>{escaped}</div>"
+                    )
+            else:
+                # No corresponding addition - just removed
+                for old_line in removed_lines:
+                    escaped = escape_html(old_line.rstrip("\n"))
+                    html_parts.append(
+                        f"<div class='diff-line diff-removed'><span class='diff-marker'>-</span>{escaped}</div>"
+                    )
+
+            i = j
+
+        elif prefix == "+ ":
+            # Added line without corresponding removal
+            escaped = escape_html(content.rstrip("\n"))
+            html_parts.append(
+                f"<div class='diff-line diff-added'><span class='diff-marker'>+</span>{escaped}</div>"
+            )
+            i += 1
+
+        elif prefix == "? ":
+            # Skip hint lines (already processed)
+            i += 1
+
+        else:
+            # Unchanged line - show for context
+            escaped = escape_html(content.rstrip("\n"))
+            html_parts.append(
+                f"<div class='diff-line diff-context'><span class='diff-marker'> </span>{escaped}</div>"
+            )
+            i += 1
+
+    html_parts.append("</div></div>")
+
+    return "".join(html_parts)
+
+
+def _render_line_diff(old_line: str, new_line: str) -> str:
+    """Render a pair of changed lines with character-level highlighting."""
+    import difflib
+
+    # Use SequenceMatcher for character-level diff
+    sm = difflib.SequenceMatcher(None, old_line.rstrip("\n"), new_line.rstrip("\n"))
+
+    # Build old line with highlighting
+    old_parts = []
+    old_parts.append(
+        "<div class='diff-line diff-removed'><span class='diff-marker'>-</span>"
+    )
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        chunk = old_line[i1:i2]
+        if tag == "equal":
+            old_parts.append(escape_html(chunk))
+        elif tag in ("delete", "replace"):
+            old_parts.append(
+                f"<mark class='diff-char-removed'>{escape_html(chunk)}</mark>"
+            )
+    old_parts.append("</div>")
+
+    # Build new line with highlighting
+    new_parts = []
+    new_parts.append(
+        "<div class='diff-line diff-added'><span class='diff-marker'>+</span>"
+    )
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        chunk = new_line[j1:j2]
+        if tag == "equal":
+            new_parts.append(escape_html(chunk))
+        elif tag in ("insert", "replace"):
+            new_parts.append(
+                f"<mark class='diff-char-added'>{escape_html(chunk)}</mark>"
+            )
+    new_parts.append("</div>")
+
+    return "".join(old_parts) + "".join(new_parts)
+
+
 def format_tool_use_content(tool_use: ToolUseContent) -> str:
     """Format tool use content as HTML."""
     # Special handling for TodoWrite
@@ -382,6 +535,10 @@ def format_tool_use_content(tool_use: ToolUseContent) -> str:
     # Special handling for Bash
     if tool_use.name == "Bash":
         return format_bash_tool_content(tool_use)
+
+    # Special handling for Edit
+    if tool_use.name == "Edit":
+        return format_edit_tool_content(tool_use)
 
     # Default: render as key/value table using shared renderer
     return render_params_table(tool_use.input)

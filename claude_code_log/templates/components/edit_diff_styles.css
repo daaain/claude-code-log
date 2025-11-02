@@ -1,0 +1,78 @@
+/* Edit tool diff styling */
+.edit-tool-content {
+    margin: 8px 0;
+}
+
+.edit-file-path {
+    font-weight: 600;
+    color: #495057;
+    margin-bottom: 8px;
+    font-size: 0.95em;
+}
+
+.edit-replace-all {
+    color: #666;
+    font-size: 0.85em;
+    font-style: italic;
+    margin-bottom: 8px;
+}
+
+.edit-diff {
+    background-color: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    overflow-x: auto;
+    font-family: 'Fira Code', 'Monaco', 'Consolas', monospace;
+    font-size: 0.85em;
+    line-height: 1.4;
+}
+
+/* Diff line styling */
+.diff-line {
+    padding: 2px 4px 2px 2px;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+
+.diff-marker {
+    display: inline-block;
+    width: 1.5em;
+    text-align: center;
+    user-select: none;
+    color: #666;
+}
+
+/* Line backgrounds */
+.diff-removed {
+    background-color: #ffebe9;
+    border-left: 3px solid #f85149;
+}
+
+.diff-added {
+    background-color: #dafbe1;
+    border-left: 3px solid #3fb950;
+}
+
+.diff-context {
+    background-color: #f8f9fa;
+    border-left: 3px solid transparent;
+}
+
+/* Character-level highlighting */
+.diff-char-removed {
+    background-color: #ffcecb;
+    border-radius: 2px;
+    padding: 0 2px;
+}
+
+.diff-char-added {
+    background-color: #abf2bc;
+    border-radius: 2px;
+    padding: 0 2px;
+}
+
+/* Remove default mark styling */
+mark.diff-char-removed,
+mark.diff-char-added {
+    color: inherit;
+}
