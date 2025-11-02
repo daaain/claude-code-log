@@ -68,6 +68,38 @@
     margin: 0.5em 0;
 }
 
+.read-tool-result .collapsible-code {
+    margin-top: 0.5em;
+}
+
+.read-tool-result .collapsible-code summary {
+    cursor: pointer;
+    padding: 0.5em;
+    background: var(--color-bg-secondary);
+    border-radius: 4px;
+    margin-bottom: 0.5em;
+}
+
+.read-tool-result .collapsible-code summary:hover {
+    background: var(--color-bg-tertiary);
+}
+
+.read-tool-result .code-preview-label {
+    font-weight: 600;
+    color: var(--color-text-secondary);
+    display: block;
+    margin-bottom: 0.5em;
+}
+
+.read-tool-result .code-preview {
+    margin-top: 0.5em;
+    opacity: 0.7;
+}
+
+.read-tool-result .code-full {
+    margin-top: 0.5em;
+}
+
 .read-tool-result .system-reminder {
     margin-top: 0.5em;
     padding: 0.5em;
@@ -81,6 +113,38 @@
 /* Edit tool result specific styles */
 .edit-tool-result {
     margin: 0.5em 0;
+}
+
+.edit-tool-result .collapsible-code {
+    margin-top: 0.5em;
+}
+
+.edit-tool-result .collapsible-code summary {
+    cursor: pointer;
+    padding: 0.5em;
+    background: var(--color-bg-secondary);
+    border-radius: 4px;
+    margin-bottom: 0.5em;
+}
+
+.edit-tool-result .collapsible-code summary:hover {
+    background: var(--color-bg-tertiary);
+}
+
+.edit-tool-result .code-preview-label {
+    font-weight: 600;
+    color: var(--color-text-secondary);
+    display: block;
+    margin-bottom: 0.5em;
+}
+
+.edit-tool-result .code-preview {
+    margin-top: 0.5em;
+    opacity: 0.7;
+}
+
+.edit-tool-result .code-full {
+    margin-top: 0.5em;
 }
 
 /* Multiedit tool specific styles */

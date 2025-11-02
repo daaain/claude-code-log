@@ -822,9 +822,31 @@ def format_tool_result_content(
             highlighted_html = _highlight_code_with_pygments(code_content, file_path)
 
             # Build result HTML
-            result_parts = ["<div class='read-tool-result'>", highlighted_html]
+            result_parts = ["<div class='read-tool-result'>"]
 
-            # Add system reminder if present
+            # Make collapsible if content has more than 12 lines
+            lines = code_content.split("\n")
+            if len(lines) > 12:
+                # Get preview (first ~5 lines)
+                preview_lines = lines[:5]
+                preview_html = _highlight_code_with_pygments(
+                    "\n".join(preview_lines), file_path
+                )
+
+                result_parts.append(f"""
+                <details class='collapsible-code'>
+                    <summary>
+                        <span class='code-preview-label'>{len(lines)} lines (click to expand)</span>
+                        <div class='code-preview'>{preview_html}</div>
+                    </summary>
+                    <div class='code-full'>{highlighted_html}</div>
+                </details>
+                """)
+            else:
+                # Show directly without collapsible
+                result_parts.append(highlighted_html)
+
+            # Add system reminder if present (after code, always visible)
             if system_reminder:
                 escaped_reminder = escape_html(system_reminder)
                 result_parts.append(
@@ -842,11 +864,31 @@ def format_tool_result_content(
             highlighted_html = _highlight_code_with_pygments(parsed_code, file_path)
 
             # Build result HTML
-            result_parts = [
-                "<div class='edit-tool-result'>",
-                highlighted_html,
-                "</div>",
-            ]
+            result_parts = ["<div class='edit-tool-result'>"]
+
+            # Make collapsible if content has more than 12 lines
+            lines = parsed_code.split("\n")
+            if len(lines) > 12:
+                # Get preview (first ~5 lines)
+                preview_lines = lines[:5]
+                preview_html = _highlight_code_with_pygments(
+                    "\n".join(preview_lines), file_path
+                )
+
+                result_parts.append(f"""
+                <details class='collapsible-code'>
+                    <summary>
+                        <span class='code-preview-label'>{len(lines)} lines (click to expand)</span>
+                        <div class='code-preview'>{preview_html}</div>
+                    </summary>
+                    <div class='code-full'>{highlighted_html}</div>
+                </details>
+                """)
+            else:
+                # Show directly without collapsible
+                result_parts.append(highlighted_html)
+
+            result_parts.append("</div>")
             return "".join(result_parts)
 
     # Check if this looks like Bash tool output and process ANSI codes
