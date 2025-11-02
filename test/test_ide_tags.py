@@ -1,6 +1,5 @@
 """Tests for IDE tag preprocessing in user messages."""
 
-import pytest
 from claude_code_log.renderer import (
     extract_ide_notifications,
     render_user_message_content,

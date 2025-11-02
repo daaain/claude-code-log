@@ -400,7 +400,7 @@ def format_edit_tool_content(tool_use: ToolUseContent) -> str:
 
     # Generate unified diff to identify changed lines
     differ = difflib.Differ()
-    diff = list(differ.compare(old_lines, new_lines))
+    diff: list[str] = list(differ.compare(old_lines, new_lines))
 
     html_parts.append("<div class='edit-diff'>")
 
@@ -412,7 +412,7 @@ def format_edit_tool_content(tool_use: ToolUseContent) -> str:
 
         if prefix == "- ":
             # Removed line - look ahead for corresponding addition
-            removed_lines = [content]
+            removed_lines: list[str] = [content]
             j = i + 1
 
             # Collect consecutive removed lines
@@ -425,7 +425,7 @@ def format_edit_tool_content(tool_use: ToolUseContent) -> str:
                 j += 1
 
             # Collect consecutive added lines
-            added_lines = []
+            added_lines: list[str] = []
             while j < len(diff) and diff[j].startswith("+ "):
                 added_lines.append(diff[j][2:])
                 j += 1
@@ -494,7 +494,7 @@ def _render_line_diff(old_line: str, new_line: str) -> str:
     sm = difflib.SequenceMatcher(None, old_line.rstrip("\n"), new_line.rstrip("\n"))
 
     # Build old line with highlighting
-    old_parts = []
+    old_parts: list[str] = []
     old_parts.append(
         "<div class='diff-line diff-removed'><span class='diff-marker'>-</span>"
     )
@@ -509,7 +509,7 @@ def _render_line_diff(old_line: str, new_line: str) -> str:
     old_parts.append("</div>")
 
     # Build new line with highlighting
-    new_parts = []
+    new_parts: list[str] = []
     new_parts.append(
         "<div class='diff-line diff-added'><span class='diff-marker'>+</span>"
     )
