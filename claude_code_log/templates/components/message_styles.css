@@ -1,7 +1,6 @@
 /* Message and content styles */
 .message {
     margin-bottom: 1em;
-    margin-left: 1em;
     padding: 1em;
     border-radius: 8px;
     border-left: var(--white-dimmed) 2px solid;
@@ -11,6 +10,60 @@
     border-bottom: #00000017 1px solid;
     border-right: #00000017 1px solid;
 }
+
+/* ========================================
+   CONVERSATION STRUCTURE - Margin Hierarchy
+   ======================================== */
+
+/* Right-aligned messages (user-initiated, right margin 0, left margin 33%) */
+.user:not(.compacted),
+.system,
+.system-error {
+    margin-left: 33%;
+    margin-right: 0;
+}
+
+/* Left-aligned messages (assistant-generated) with progressive indentation */
+/* Base assistant messages */
+.assistant,
+.thinking {
+    margin-left: 0;
+    margin-right: 8em;
+}
+
+/* Tool messages (nested under assistant) */
+.tool_use,
+.tool_result {
+    margin-left: 2em;
+    margin-right: 6em;
+}
+
+/* System warnings/info (assistant-initiated) */
+.system-warning,
+.system-info {
+    margin-left: 2em;
+    margin-right: 6em;
+}
+
+/* Sidechain messages (sub-assistant hierarchy) */
+.sidechain.user {
+    margin-left: 4em;
+    margin-right: 4em;
+}
+
+.sidechain.assistant,
+.sidechain.thinking {
+    margin-left: 4em;
+    margin-right: 4em;
+}
+
+.sidechain.tool_use,
+.sidechain.tool_result {
+    margin-left: 6em;
+    margin-right: 2em;
+}
+
+/* ======================================== */
 
 /* Message header info styling */
 .header-info {
@@ -72,7 +125,6 @@
 /* Message type styling */
 .user {
     border-left-color: #ff9800;
-    margin-left: 0;
 }
 
 .assistant {
@@ -86,25 +138,21 @@
 
 .system {
     border-left-color: #d98100;
-    margin-left: 0;
 }
 
 .system-warning {
     border-left-color: #2196f3;
     background-color: var(--highlight-semi);
-    margin-left: 2em; /* Extra indent - assistant-initiated */
 }
 
 .system-error {
     border-left-color: #f44336;
     background-color: var(--error-semi);
-    margin-left: 0;
 }
 
 .system-info {
     border-left-color: var(--info-dimmed);
     background-color: var(--highlight-dimmed);
-    margin-left: 2em; /* Extra indent - assistant-initiated */
     font-size: 80%;
 }
 
@@ -218,12 +266,10 @@
 
 .tool_use {
     border-left-color: #4caf50;
-    margin-left: 2em; /* Extra indent - assistant-initiated */
 }
 
 .tool_result {
     border-left-color: var(--success-dimmed);
-    margin-left: 2em; /* Extra indent - assistant-initiated */
 }
 
 .tool_result.error {
@@ -241,20 +287,6 @@
     background-color: var(--neutral-semi);
     border-left-width: 2px;
     border-left-style: dashed;
-}
-
-/* Sidechain indentation hierarchy */
-.sidechain.user {
-    margin-left: 3em; /* Sub-assistant Prompt - nested below Task tool use (2em) */
-}
-
-.sidechain.assistant {
-    margin-left: 4em; /* Sub-assistant - nested below prompt (3em) */
-}
-
-.sidechain.tool_use,
-.sidechain.tool_result {
-    margin-left: 5em; /* Sub-assistant tools - nested below assistant (4em) */
 }
 
 .sidechain .sidechain-indicator {
