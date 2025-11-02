@@ -62,13 +62,11 @@
 .diff-char-removed {
     background-color: #ffcecb;
     border-radius: 2px;
-    padding: 0 2px;
 }
 
 .diff-char-added {
     background-color: #abf2bc;
     border-radius: 2px;
-    padding: 0 2px;
 }
 
 /* Remove default mark styling */
