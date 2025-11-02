@@ -325,6 +325,17 @@ def _highlight_code_with_pygments(
     return str(highlight(code, lexer, formatter))
 
 
+def format_read_tool_content(tool_use: ToolUseContent) -> str:
+    """Format Read tool use content showing file path."""
+    file_path = tool_use.input.get("file_path", "")
+
+    escaped_path = escape_html(file_path)
+
+    # Simple display with read icon and file path
+    # Don't show offset/limit parameters as they'll be visible in the result
+    return f"<div class='read-tool-content'>📄 {escaped_path}</div>"
+
+
 def format_write_tool_content(tool_use: ToolUseContent) -> str:
     """Format Write tool use content with Pygments syntax highlighting."""
     file_path = tool_use.input.get("file_path", "")
@@ -617,6 +628,10 @@ def format_tool_use_content(tool_use: ToolUseContent) -> str:
     if tool_use.name == "Edit":
         return format_edit_tool_content(tool_use)
 
+    # Special handling for Read
+    if tool_use.name == "Read":
+        return format_read_tool_content(tool_use)
+
     # Special handling for Write
     if tool_use.name == "Write":
         return format_write_tool_content(tool_use)
@@ -625,8 +640,62 @@ def format_tool_use_content(tool_use: ToolUseContent) -> str:
     return render_params_table(tool_use.input)
 
 
-def format_tool_result_content(tool_result: ToolResultContent) -> str:
-    """Format tool result content as HTML, including images."""
+def _parse_read_tool_result(content: str) -> Optional[tuple[str, Optional[str]]]:
+    """Parse Read tool result in cat-n format.
+
+    Returns:
+        Tuple of (code_content, system_reminder) or None if not parseable
+    """
+    import re
+
+    # Check if content matches the cat-n format pattern (line_number → content)
+    lines = content.split("\n")
+    if not lines or not re.match(r"\s+\d+→", lines[0]):
+        return None
+
+    # Parse lines
+    code_lines: List[str] = []
+    system_reminder: Optional[str] = None
+    in_system_reminder = False
+
+    for line in lines:
+        # Check for system-reminder start
+        if "<system-reminder>" in line:
+            in_system_reminder = True
+            system_reminder = ""
+            continue
+
+        # Check for system-reminder end
+        if "</system-reminder>" in line:
+            in_system_reminder = False
+            continue
+
+        # If in system reminder, accumulate reminder text
+        if in_system_reminder:
+            if system_reminder is not None:
+                system_reminder += line + "\n"
+            continue
+
+        # Parse regular code line (format: "  123→content")
+        match = re.match(r"\s+\d+→(.*)$", line)
+        if match:
+            code_lines.append(match.group(1))
+        elif line.strip():  # Non-matching non-empty line
+            # If we encounter a line that doesn't match the format, bail out
+            return None
+
+    return ("\n".join(code_lines), system_reminder.strip() if system_reminder else None)
+
+
+def format_tool_result_content(
+    tool_result: ToolResultContent, file_path: Optional[str] = None
+) -> str:
+    """Format tool result content as HTML, including images.
+
+    Args:
+        tool_result: The tool result content
+        file_path: Optional file path for context (used for Read tool syntax highlighting)
+    """
     # Handle both string and structured content
     if isinstance(tool_result.content, str):
         raw_content = tool_result.content
@@ -657,6 +726,28 @@ def format_tool_result_content(tool_result: ToolResultContent) -> str:
                         )
         raw_content = "\n".join(content_parts)
         has_images = len(image_html_parts) > 0
+
+    # Try to parse as Read tool result if file_path is provided
+    if file_path and not has_images:
+        parsed_result = _parse_read_tool_result(raw_content)
+        if parsed_result:
+            code_content, system_reminder = parsed_result
+
+            # Highlight code with Pygments
+            highlighted_html = _highlight_code_with_pygments(code_content, file_path)
+
+            # Build result HTML
+            result_parts = ["<div class='read-tool-result'>", highlighted_html]
+
+            # Add system reminder if present
+            if system_reminder:
+                escaped_reminder = escape_html(system_reminder)
+                result_parts.append(
+                    f"<div class='system-reminder'>🤖 <em>{escaped_reminder}</em></div>"
+                )
+
+            result_parts.append("</div>")
+            return "".join(result_parts)
 
     # Check if this looks like Bash tool output and process ANSI codes
     # Bash tool results often contain ANSI escape sequences and terminal output
@@ -1789,6 +1880,26 @@ def generate_html(
     # Track which messages should show token usage (first occurrence of each requestId)
     show_tokens_for_message: set[str] = set()
 
+    # Build mapping of tool_use_id to tool info for specialized tool result rendering
+    tool_use_context: Dict[str, Dict[str, Any]] = {}
+    for message in messages:
+        if hasattr(message, "message") and hasattr(message.message, "content"):  # type: ignore
+            content = message.message.content  # type: ignore
+            if isinstance(content, list):
+                for item in content:
+                    # Check if it's a tool_use item
+                    if hasattr(item, "type") and hasattr(item, "id"):
+                        item_type = getattr(item, "type", None)
+                        if item_type == "tool_use":
+                            tool_id = getattr(item, "id", "")
+                            tool_name = getattr(item, "name", "")
+                            tool_input = getattr(item, "input", {})
+                            if tool_id:
+                                tool_use_context[tool_id] = {
+                                    "name": tool_name,
+                                    "input": tool_input,
+                                }
+
     # Process messages into template-friendly format
     template_messages: List[TemplateMessage] = []
 
@@ -2081,7 +2192,18 @@ def generate_html(
                 else:
                     tool_result_converted = tool_item
 
-                tool_content_html = format_tool_result_content(tool_result_converted)
+                # Get file_path from tool_use context for specialized rendering (e.g., Read tool)
+                result_file_path: Optional[str] = None
+                if tool_result_converted.tool_use_id in tool_use_context:
+                    tool_ctx = tool_use_context[tool_result_converted.tool_use_id]
+                    if tool_ctx.get("name") == "Read" and "file_path" in tool_ctx.get(
+                        "input", {}
+                    ):
+                        result_file_path = tool_ctx["input"]["file_path"]
+
+                tool_content_html = format_tool_result_content(
+                    tool_result_converted, result_file_path
+                )
                 escaped_id = escape_html(tool_result_converted.tool_use_id)
                 item_tool_use_id = tool_result_converted.tool_use_id
                 tool_title_hint = f"ID: {escaped_id}"
