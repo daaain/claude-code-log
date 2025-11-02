@@ -179,8 +179,44 @@ def create_collapsible_details(
     """
 
 
+def _create_pygments_plugin() -> Any:
+    """Create a mistune plugin that uses Pygments for code block syntax highlighting."""
+    from pygments import highlight
+    from pygments.lexers import get_lexer_by_name, TextLexer
+    from pygments.formatters import HtmlFormatter
+    from pygments.util import ClassNotFound
+
+    def plugin_pygments(md: Any) -> None:
+        """Plugin to add Pygments syntax highlighting to code blocks."""
+        original_render = md.renderer.block_code
+
+        def block_code(code: str, info: Optional[str] = None) -> str:
+            """Render code block with Pygments syntax highlighting if language is specified."""
+            if info:
+                # Language hint provided, use Pygments
+                lang = info.split()[0] if info else ""
+                try:
+                    lexer = get_lexer_by_name(lang, stripall=True)
+                except ClassNotFound:
+                    lexer = TextLexer()
+
+                formatter = HtmlFormatter(
+                    linenos=False,  # No line numbers in markdown code blocks
+                    cssclass="highlight",
+                    wrapcode=True,
+                )
+                return str(highlight(code, lexer, formatter))
+            else:
+                # No language hint, use default rendering
+                return original_render(code, info)
+
+        md.renderer.block_code = block_code
+
+    return plugin_pygments
+
+
 def render_markdown(text: str) -> str:
-    """Convert markdown text to HTML using mistune."""
+    """Convert markdown text to HTML using mistune with Pygments syntax highlighting."""
     # Configure mistune with GitHub-flavored markdown features
     renderer = mistune.create_markdown(
         plugins=[
@@ -190,6 +226,7 @@ def render_markdown(text: str) -> str:
             "url",
             "task_lists",
             "def_list",
+            _create_pygments_plugin(),
         ],
         escape=False,  # Don't escape HTML since we want to render markdown properly
         hard_wrap=True,  # Line break for newlines (checklists in Assistant messages)
