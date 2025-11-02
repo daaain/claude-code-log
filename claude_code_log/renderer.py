@@ -461,26 +461,12 @@ def render_params_table(params: Dict[str, Any]) -> str:
     return "".join(html_parts)
 
 
-def format_edit_tool_content(tool_use: ToolUseContent) -> str:
-    """Format Edit tool use content as a diff view with intra-line highlighting."""
+def _render_single_diff(old_string: str, new_string: str) -> str:
+    """Render a single diff between old_string and new_string.
+
+    Returns HTML for the diff view with intra-line highlighting.
+    """
     import difflib
-
-    file_path = tool_use.input.get("file_path", "")
-    old_string = tool_use.input.get("old_string", "")
-    new_string = tool_use.input.get("new_string", "")
-    replace_all = tool_use.input.get("replace_all", False)
-
-    escaped_path = escape_html(file_path)
-
-    html_parts = ["<div class='edit-tool-content'>"]
-
-    # File path header
-    html_parts.append(f"<div class='edit-file-path'>📝 {escaped_path}</div>")
-
-    if replace_all:
-        html_parts.append(
-            "<div class='edit-replace-all'>🔄 Replace all occurrences</div>"
-        )
 
     # Split into lines for diff
     old_lines = old_string.splitlines(keepends=True)
@@ -490,7 +476,7 @@ def format_edit_tool_content(tool_use: ToolUseContent) -> str:
     differ = difflib.Differ()
     diff: list[str] = list(differ.compare(old_lines, new_lines))
 
-    html_parts.append("<div class='edit-diff'>")
+    html_parts = ["<div class='edit-diff'>"]
 
     i = 0
     while i < len(diff):
@@ -569,7 +555,60 @@ def format_edit_tool_content(tool_use: ToolUseContent) -> str:
             )
             i += 1
 
-    html_parts.append("</div></div>")
+    html_parts.append("</div>")
+    return "".join(html_parts)
+
+
+def format_multiedit_tool_content(tool_use: ToolUseContent) -> str:
+    """Format Multiedit tool use content showing multiple diffs."""
+    file_path = tool_use.input.get("file_path", "")
+    edits = tool_use.input.get("edits", [])
+
+    escaped_path = escape_html(file_path)
+
+    html_parts = ["<div class='multiedit-tool-content'>"]
+
+    # File path header
+    html_parts.append(f"<div class='multiedit-file-path'>📝 {escaped_path}</div>")
+    html_parts.append(f"<div class='multiedit-count'>Applying {len(edits)} edits</div>")
+
+    # Render each edit as a diff
+    for idx, edit in enumerate(edits, 1):
+        old_string = edit.get("old_string", "")
+        new_string = edit.get("new_string", "")
+
+        html_parts.append(
+            f"<div class='multiedit-item'><div class='multiedit-item-header'>Edit #{idx}</div>"
+        )
+        html_parts.append(_render_single_diff(old_string, new_string))
+        html_parts.append("</div>")
+
+    html_parts.append("</div>")
+    return "".join(html_parts)
+
+
+def format_edit_tool_content(tool_use: ToolUseContent) -> str:
+    """Format Edit tool use content as a diff view with intra-line highlighting."""
+    file_path = tool_use.input.get("file_path", "")
+    old_string = tool_use.input.get("old_string", "")
+    new_string = tool_use.input.get("new_string", "")
+    replace_all = tool_use.input.get("replace_all", False)
+
+    escaped_path = escape_html(file_path)
+
+    html_parts = ["<div class='edit-tool-content'>"]
+
+    # File path header
+    html_parts.append(f"<div class='edit-file-path'>📝 {escaped_path}</div>")
+
+    if replace_all:
+        html_parts.append(
+            "<div class='edit-replace-all'>🔄 Replace all occurrences</div>"
+        )
+
+    # Use shared diff rendering helper
+    html_parts.append(_render_single_diff(old_string, new_string))
+    html_parts.append("</div>")
 
     return "".join(html_parts)
 
@@ -627,6 +666,10 @@ def format_tool_use_content(tool_use: ToolUseContent) -> str:
     # Special handling for Edit
     if tool_use.name == "Edit":
         return format_edit_tool_content(tool_use)
+
+    # Special handling for Multiedit
+    if tool_use.name == "Multiedit":
+        return format_multiedit_tool_content(tool_use)
 
     # Special handling for Read
     if tool_use.name == "Read":

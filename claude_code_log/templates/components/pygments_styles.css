@@ -81,6 +81,38 @@
     margin: 0.5em 0;
 }
 
+/* Multiedit tool specific styles */
+.multiedit-tool-content {
+    margin: 0.5em 0;
+}
+
+.multiedit-file-path {
+    font-weight: 600;
+    color: var(--color-purple);
+    margin-bottom: 0.5em;
+    font-family: var(--font-monospace);
+    font-size: 0.9em;
+}
+
+.multiedit-count {
+    font-size: 0.85em;
+    color: var(--color-text-secondary);
+    margin-bottom: 0.8em;
+}
+
+.multiedit-item {
+    margin-bottom: 1em;
+    border-left: 2px solid var(--color-border-dim);
+    padding-left: 1em;
+}
+
+.multiedit-item-header {
+    font-weight: 600;
+    color: var(--color-text-secondary);
+    margin-bottom: 0.5em;
+    font-size: 0.9em;
+}
+
 /* Write tool specific styles */
 .write-tool-content {
     margin: 0.5em 0;
