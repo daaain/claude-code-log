@@ -14,6 +14,11 @@
     font-family: var(--font-monospace);
 }
 
+/* Smaller font for code blocks in markdown content (assistant messages, thinking, etc.) */
+.content.markdown .highlight pre code {
+    font-size: 80%;
+}
+
 /* Line numbers table styling */
 .highlight .highlighttable {
     width: 100%;

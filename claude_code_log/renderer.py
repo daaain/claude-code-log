@@ -1323,6 +1323,7 @@ class TemplateMessage:
         token_usage: Optional[str] = None,
         tool_use_id: Optional[str] = None,
         title_hint: Optional[str] = None,
+        has_markdown: bool = False,
     ):
         self.type = message_type
         self.content_html = content_html
@@ -1337,6 +1338,7 @@ class TemplateMessage:
         self.token_usage = token_usage
         self.tool_use_id = tool_use_id
         self.title_hint = title_hint
+        self.has_markdown = has_markdown
         # Pairing metadata
         self.is_paired = False
         self.pair_role: Optional[str] = None  # "pair_first", "pair_last", "pair_middle"

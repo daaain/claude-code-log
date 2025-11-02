@@ -94,7 +94,7 @@
                 {% endif %}
             </div>
         </div>
-        <div class='content'>{{ message.content_html | safe }}</div>
+        <div class='content{% if message.css_class in ['assistant', 'thinking', 'sidechain'] or (message.css_class and 'compacted' in message.css_class) %} markdown{% endif %}'>{{ message.content_html | safe }}</div>
     </div>
     {% endif %}
     {% endfor %}
