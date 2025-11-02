@@ -722,26 +722,26 @@ def format_tool_use_content(tool_use: ToolUseContent) -> str:
     return render_params_table(tool_use.input)
 
 
-def _parse_read_tool_result(content: str) -> Optional[tuple[str, Optional[str], int]]:
-    """Parse Read tool result in cat-n format.
+def _parse_cat_n_snippet(
+    lines: List[str], start_idx: int = 0
+) -> Optional[tuple[str, Optional[str], int]]:
+    """Parse cat-n formatted snippet from lines.
+
+    Args:
+        lines: List of lines to parse
+        start_idx: Index to start parsing from (default: 0)
 
     Returns:
         Tuple of (code_content, system_reminder, line_offset) or None if not parseable
     """
     import re
 
-    # Check if content matches the cat-n format pattern (line_number → content)
-    lines = content.split("\n")
-    if not lines or not re.match(r"\s+\d+→", lines[0]):
-        return None
-
-    # Parse lines
     code_lines: List[str] = []
     system_reminder: Optional[str] = None
     in_system_reminder = False
     line_offset = 1  # Default offset
 
-    for line in lines:
+    for line in lines[start_idx:]:
         # Check for system-reminder start
         if "<system-reminder>" in line:
             in_system_reminder = True
@@ -767,15 +767,35 @@ def _parse_read_tool_result(content: str) -> Optional[tuple[str, Optional[str], 
             if not code_lines:
                 line_offset = line_num
             code_lines.append(match.group(2))
-        elif line.strip():  # Non-matching non-empty line
-            # If we encounter a line that doesn't match the format, bail out
-            return None
+        elif line.strip() == "":  # Allow empty lines between cat-n lines
+            continue
+        else:  # Non-matching non-empty line, stop parsing
+            break
+
+    if not code_lines:
+        return None
 
     return (
         "\n".join(code_lines),
         system_reminder.strip() if system_reminder else None,
         line_offset,
     )
+
+
+def _parse_read_tool_result(content: str) -> Optional[tuple[str, Optional[str], int]]:
+    """Parse Read tool result in cat-n format.
+
+    Returns:
+        Tuple of (code_content, system_reminder, line_offset) or None if not parseable
+    """
+    import re
+
+    # Check if content matches the cat-n format pattern (line_number → content)
+    lines = content.split("\n")
+    if not lines or not re.match(r"\s+\d+→", lines[0]):
+        return None
+
+    return _parse_cat_n_snippet(lines)
 
 
 def _parse_edit_tool_result(content: str) -> Optional[tuple[str, int]]:
@@ -803,26 +823,13 @@ def _parse_edit_tool_result(content: str) -> Optional[tuple[str, int]]:
     if code_start_idx is None:
         return None
 
-    # Parse lines from code_start_idx onwards
-    code_lines: List[str] = []
-    line_offset = 1  # Default offset
-    for line in lines[code_start_idx:]:
-        match = re.match(r"\s+(\d+)→(.*)$", line)
-        if match:
-            line_num = int(match.group(1))
-            # Capture the first line number as offset
-            if not code_lines:
-                line_offset = line_num
-            code_lines.append(match.group(2))
-        elif line.strip() == "":  # Allow empty lines
-            continue
-        else:  # Non-matching line, stop parsing
-            break
-
-    if not code_lines:
+    result = _parse_cat_n_snippet(lines, code_start_idx)
+    if result is None:
         return None
 
-    return ("\n".join(code_lines), line_offset)
+    code_content, system_reminder, line_offset = result
+    # Edit tool doesn't use system_reminder, so we just return code and offset
+    return (code_content, line_offset)
 
 
 def format_tool_result_content(

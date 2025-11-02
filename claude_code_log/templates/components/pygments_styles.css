@@ -12,6 +12,7 @@
     padding: 0.5em;
     line-height: 1.5;
     font-family: var(--font-monospace);
+    white-space: pre;  /* Prevent line wrapping */
 }
 
 /* Smaller font for code blocks in markdown content (assistant messages, thinking, etc.) */
