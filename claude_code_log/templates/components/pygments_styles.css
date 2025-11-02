@@ -94,6 +94,12 @@
 .read-tool-result .code-preview {
     margin-top: 0.5em;
     opacity: 0.7;
+    mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
+    -webkit-mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
+}
+
+.read-tool-result .collapsible-code[open] .code-preview {
+    display: none;
 }
 
 .read-tool-result .code-full {
@@ -141,6 +147,12 @@
 .edit-tool-result .code-preview {
     margin-top: 0.5em;
     opacity: 0.7;
+    mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
+    -webkit-mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
+}
+
+.edit-tool-result .collapsible-code[open] .code-preview {
+    display: none;
 }
 
 .edit-tool-result .code-full {
@@ -218,6 +230,12 @@
 .write-tool-content .code-preview {
     margin-top: 0.5em;
     opacity: 0.7;
+    mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
+    -webkit-mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
+}
+
+.write-tool-content .collapsible-code[open] .code-preview {
+    display: none;
 }
 
 .write-tool-content .code-full {
