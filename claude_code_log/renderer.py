@@ -2101,14 +2101,14 @@ def generate_html(
         if hasattr(message, "message") and hasattr(message.message, "content"):  # type: ignore
             content = message.message.content  # type: ignore
             if isinstance(content, list):
-                for item in content:
+                for item in content:  # type: ignore[reportUnknownVariableType]
                     # Check if it's a tool_use item
-                    if hasattr(item, "type") and hasattr(item, "id"):
-                        item_type = getattr(item, "type", None)
+                    if hasattr(item, "type") and hasattr(item, "id"):  # type: ignore[reportUnknownArgumentType]
+                        item_type = getattr(item, "type", None)  # type: ignore[reportUnknownArgumentType]
                         if item_type == "tool_use":
-                            tool_id = getattr(item, "id", "")
-                            tool_name = getattr(item, "name", "")
-                            tool_input = getattr(item, "input", {})
+                            tool_id = getattr(item, "id", "")  # type: ignore[reportUnknownArgumentType]
+                            tool_name = getattr(item, "name", "")  # type: ignore[reportUnknownArgumentType]
+                            tool_input = getattr(item, "input", {})  # type: ignore[reportUnknownArgumentType]
                             if tool_id:
                                 tool_use_context[tool_id] = {
                                     "name": tool_name,
