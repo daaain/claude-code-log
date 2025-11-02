@@ -332,7 +332,7 @@ def format_todowrite_content(tool_use: ToolUseContent) -> str:
 
 
 def _highlight_code_with_pygments(
-    code: str, file_path: str, show_linenos: bool = True
+    code: str, file_path: str, show_linenos: bool = True, linenostart: int = 1
 ) -> str:
     """Highlight code using Pygments with appropriate lexer based on file path.
 
@@ -340,6 +340,7 @@ def _highlight_code_with_pygments(
         code: The source code to highlight
         file_path: Path to determine the appropriate lexer
         show_linenos: Whether to show line numbers (default: True)
+        linenostart: Starting line number for display (default: 1)
 
     Returns:
         HTML string with syntax-highlighted code
@@ -356,6 +357,7 @@ def _highlight_code_with_pygments(
         linenos="table" if show_linenos else False,
         cssclass="highlight",
         wrapcode=True,
+        linenostart=linenostart,
     )
 
     # Highlight the code
@@ -720,11 +722,11 @@ def format_tool_use_content(tool_use: ToolUseContent) -> str:
     return render_params_table(tool_use.input)
 
 
-def _parse_read_tool_result(content: str) -> Optional[tuple[str, Optional[str]]]:
+def _parse_read_tool_result(content: str) -> Optional[tuple[str, Optional[str], int]]:
     """Parse Read tool result in cat-n format.
 
     Returns:
-        Tuple of (code_content, system_reminder) or None if not parseable
+        Tuple of (code_content, system_reminder, line_offset) or None if not parseable
     """
     import re
 
@@ -737,6 +739,7 @@ def _parse_read_tool_result(content: str) -> Optional[tuple[str, Optional[str]]]
     code_lines: List[str] = []
     system_reminder: Optional[str] = None
     in_system_reminder = False
+    line_offset = 1  # Default offset
 
     for line in lines:
         # Check for system-reminder start
@@ -757,17 +760,25 @@ def _parse_read_tool_result(content: str) -> Optional[tuple[str, Optional[str]]]
             continue
 
         # Parse regular code line (format: "  123→content")
-        match = re.match(r"\s+\d+→(.*)$", line)
+        match = re.match(r"\s+(\d+)→(.*)$", line)
         if match:
-            code_lines.append(match.group(1))
+            line_num = int(match.group(1))
+            # Capture the first line number as offset
+            if not code_lines:
+                line_offset = line_num
+            code_lines.append(match.group(2))
         elif line.strip():  # Non-matching non-empty line
             # If we encounter a line that doesn't match the format, bail out
             return None
 
-    return ("\n".join(code_lines), system_reminder.strip() if system_reminder else None)
+    return (
+        "\n".join(code_lines),
+        system_reminder.strip() if system_reminder else None,
+        line_offset,
+    )
 
 
-def _parse_edit_tool_result(content: str) -> Optional[str]:
+def _parse_edit_tool_result(content: str) -> Optional[tuple[str, int]]:
     """Parse Edit tool result to extract code snippet.
 
     Edit tool results typically have format:
@@ -775,7 +786,7 @@ def _parse_edit_tool_result(content: str) -> Optional[str]:
     followed by cat-n formatted lines.
 
     Returns:
-        Code content or None if not parseable
+        Tuple of (code_content, line_offset) or None if not parseable
     """
     import re
 
@@ -794,10 +805,15 @@ def _parse_edit_tool_result(content: str) -> Optional[str]:
 
     # Parse lines from code_start_idx onwards
     code_lines: List[str] = []
+    line_offset = 1  # Default offset
     for line in lines[code_start_idx:]:
-        match = re.match(r"\s+\d+→(.*)$", line)
+        match = re.match(r"\s+(\d+)→(.*)$", line)
         if match:
-            code_lines.append(match.group(1))
+            line_num = int(match.group(1))
+            # Capture the first line number as offset
+            if not code_lines:
+                line_offset = line_num
+            code_lines.append(match.group(2))
         elif line.strip() == "":  # Allow empty lines
             continue
         else:  # Non-matching line, stop parsing
@@ -806,7 +822,7 @@ def _parse_edit_tool_result(content: str) -> Optional[str]:
     if not code_lines:
         return None
 
-    return "\n".join(code_lines)
+    return ("\n".join(code_lines), line_offset)
 
 
 def format_tool_result_content(
@@ -853,10 +869,12 @@ def format_tool_result_content(
     if file_path and not has_images:
         parsed_result = _parse_read_tool_result(raw_content)
         if parsed_result:
-            code_content, system_reminder = parsed_result
+            code_content, system_reminder, line_offset = parsed_result
 
-            # Highlight code with Pygments
-            highlighted_html = _highlight_code_with_pygments(code_content, file_path)
+            # Highlight code with Pygments using correct line offset
+            highlighted_html = _highlight_code_with_pygments(
+                code_content, file_path, linenostart=line_offset
+            )
 
             # Build result HTML
             result_parts = ["<div class='read-tool-result'>"]
@@ -867,7 +885,7 @@ def format_tool_result_content(
                 # Get preview (first ~5 lines)
                 preview_lines = lines[:5]
                 preview_html = _highlight_code_with_pygments(
-                    "\n".join(preview_lines), file_path
+                    "\n".join(preview_lines), file_path, linenostart=line_offset
                 )
 
                 result_parts.append(f"""
@@ -895,10 +913,14 @@ def format_tool_result_content(
 
     # Try to parse as Edit tool result if file_path is provided
     if file_path and not has_images:
-        parsed_code = _parse_edit_tool_result(raw_content)
-        if parsed_code:
-            # Highlight code with Pygments
-            highlighted_html = _highlight_code_with_pygments(parsed_code, file_path)
+        parsed_result = _parse_edit_tool_result(raw_content)
+        if parsed_result:
+            parsed_code, line_offset = parsed_result
+
+            # Highlight code with Pygments using correct line offset
+            highlighted_html = _highlight_code_with_pygments(
+                parsed_code, file_path, linenostart=line_offset
+            )
 
             # Build result HTML
             result_parts = ["<div class='edit-tool-result'>"]
@@ -909,7 +931,7 @@ def format_tool_result_content(
                 # Get preview (first ~5 lines)
                 preview_lines = lines[:5]
                 preview_html = _highlight_code_with_pygments(
-                    "\n".join(preview_lines), file_path
+                    "\n".join(preview_lines), file_path, linenostart=line_offset
                 )
 
                 result_parts.append(f"""
