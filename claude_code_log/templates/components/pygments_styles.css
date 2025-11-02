@@ -74,7 +74,7 @@
 }
 
 .read-tool-result .collapsible-code {
-    margin-top: 0.5em;
+    margin-top: -2.5em;
 }
 
 .read-tool-result .collapsible-code summary {
@@ -127,7 +127,7 @@
 }
 
 .edit-tool-result .collapsible-code {
-    margin-top: 0.5em;
+    margin-top: -2.5em;
 }
 
 .edit-tool-result .collapsible-code summary {
@@ -207,10 +207,11 @@
     margin-bottom: 0.5em;
     font-family: var(--font-monospace);
     font-size: 0.9em;
+    padding-left: 1.5em;
 }
 
 .write-tool-content .collapsible-code {
-    margin-top: 0.5em;
+    margin-top: -2.5em;
 }
 
 .write-tool-content .collapsible-code summary {

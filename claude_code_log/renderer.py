@@ -384,8 +384,8 @@ def format_write_tool_content(tool_use: ToolUseContent) -> str:
 
     html_parts = ["<div class='write-tool-content'>"]
 
-    # File path header with write icon
-    html_parts.append(f"<div class='write-file-path'>✍️ {escaped_path}</div>")
+    # File path header (no icon to avoid visual clutter with collapsible)
+    html_parts.append(f"<div class='write-file-path'>{escaped_path}</div>")
 
     # Highlight code with Pygments
     highlighted_html = _highlight_code_with_pygments(content, file_path)
@@ -826,13 +826,16 @@ def _parse_edit_tool_result(content: str) -> Optional[tuple[str, int]]:
 
 
 def format_tool_result_content(
-    tool_result: ToolResultContent, file_path: Optional[str] = None
+    tool_result: ToolResultContent,
+    file_path: Optional[str] = None,
+    tool_name: Optional[str] = None,
 ) -> str:
     """Format tool result content as HTML, including images.
 
     Args:
         tool_result: The tool result content
-        file_path: Optional file path for context (used for Read tool syntax highlighting)
+        file_path: Optional file path for context (used for Read/Edit/Write tool rendering)
+        tool_name: Optional tool name for specialized rendering (e.g., "Write", "Read", "Edit")
     """
     # Handle both string and structured content
     if isinstance(tool_result.content, str):
@@ -865,8 +868,17 @@ def format_tool_result_content(
         raw_content = "\n".join(content_parts)
         has_images = len(image_html_parts) > 0
 
+    # Special handling for Write tool: only show first line (acknowledgment) on success
+    if tool_name == "Write" and not tool_result.is_error and not has_images:
+        lines = raw_content.split("\n")
+        if lines:
+            # Keep only the first acknowledgment line and add ellipsis
+            first_line = lines[0]
+            escaped_html = escape_html(first_line)
+            return f"<p>{escaped_html} ...</p>"
+
     # Try to parse as Read tool result if file_path is provided
-    if file_path and not has_images:
+    if file_path and tool_name == "Read" and not has_images:
         parsed_result = _parse_read_tool_result(raw_content)
         if parsed_result:
             code_content, system_reminder, line_offset = parsed_result
@@ -912,7 +924,7 @@ def format_tool_result_content(
             return "".join(result_parts)
 
     # Try to parse as Edit tool result if file_path is provided
-    if file_path and not has_images:
+    if file_path and tool_name == "Edit" and not has_images:
         parsed_result = _parse_edit_tool_result(raw_content)
         if parsed_result:
             parsed_code, line_offset = parsed_result
@@ -2395,18 +2407,21 @@ def generate_html(
                 else:
                     tool_result_converted = tool_item
 
-                # Get file_path from tool_use context for specialized rendering (e.g., Read, Edit tools)
+                # Get file_path and tool_name from tool_use context for specialized rendering
                 result_file_path: Optional[str] = None
+                result_tool_name: Optional[str] = None
                 if tool_result_converted.tool_use_id in tool_use_context:
                     tool_ctx = tool_use_context[tool_result_converted.tool_use_id]
-                    tool_name = tool_ctx.get("name")
-                    if tool_name in ("Read", "Edit") and "file_path" in tool_ctx.get(
-                        "input", {}
-                    ):
+                    result_tool_name = tool_ctx.get("name")
+                    if result_tool_name in (
+                        "Read",
+                        "Edit",
+                        "Write",
+                    ) and "file_path" in tool_ctx.get("input", {}):
                         result_file_path = tool_ctx["input"]["file_path"]
 
                 tool_content_html = format_tool_result_content(
-                    tool_result_converted, result_file_path
+                    tool_result_converted, result_file_path, result_tool_name
                 )
                 escaped_id = escape_html(tool_result_converted.tool_use_id)
                 item_tool_use_id = tool_result_converted.tool_use_id
