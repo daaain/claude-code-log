@@ -687,6 +687,48 @@ def _parse_read_tool_result(content: str) -> Optional[tuple[str, Optional[str]]]
     return ("\n".join(code_lines), system_reminder.strip() if system_reminder else None)
 
 
+def _parse_edit_tool_result(content: str) -> Optional[str]:
+    """Parse Edit tool result to extract code snippet.
+
+    Edit tool results typically have format:
+    "The file ... has been updated. Here's the result of running `cat -n` on a snippet..."
+    followed by cat-n formatted lines.
+
+    Returns:
+        Code content or None if not parseable
+    """
+    import re
+
+    # Look for the cat-n snippet after the preamble
+    # Pattern: look for first line that matches the cat-n format
+    lines = content.split("\n")
+    code_start_idx = None
+
+    for i, line in enumerate(lines):
+        if re.match(r"\s+\d+→", line):
+            code_start_idx = i
+            break
+
+    if code_start_idx is None:
+        return None
+
+    # Parse lines from code_start_idx onwards
+    code_lines: List[str] = []
+    for line in lines[code_start_idx:]:
+        match = re.match(r"\s+\d+→(.*)$", line)
+        if match:
+            code_lines.append(match.group(1))
+        elif line.strip() == "":  # Allow empty lines
+            continue
+        else:  # Non-matching line, stop parsing
+            break
+
+    if not code_lines:
+        return None
+
+    return "\n".join(code_lines)
+
+
 def format_tool_result_content(
     tool_result: ToolResultContent, file_path: Optional[str] = None
 ) -> str:
@@ -747,6 +789,21 @@ def format_tool_result_content(
                 )
 
             result_parts.append("</div>")
+            return "".join(result_parts)
+
+    # Try to parse as Edit tool result if file_path is provided
+    if file_path and not has_images:
+        parsed_code = _parse_edit_tool_result(raw_content)
+        if parsed_code:
+            # Highlight code with Pygments
+            highlighted_html = _highlight_code_with_pygments(parsed_code, file_path)
+
+            # Build result HTML
+            result_parts = [
+                "<div class='edit-tool-result'>",
+                highlighted_html,
+                "</div>",
+            ]
             return "".join(result_parts)
 
     # Check if this looks like Bash tool output and process ANSI codes
@@ -2192,11 +2249,12 @@ def generate_html(
                 else:
                     tool_result_converted = tool_item
 
-                # Get file_path from tool_use context for specialized rendering (e.g., Read tool)
+                # Get file_path from tool_use context for specialized rendering (e.g., Read, Edit tools)
                 result_file_path: Optional[str] = None
                 if tool_result_converted.tool_use_id in tool_use_context:
                     tool_ctx = tool_use_context[tool_result_converted.tool_use_id]
-                    if tool_ctx.get("name") == "Read" and "file_path" in tool_ctx.get(
+                    tool_name = tool_ctx.get("name")
+                    if tool_name in ("Read", "Edit") and "file_path" in tool_ctx.get(
                         "input", {}
                     ):
                         result_file_path = tool_ctx["input"]["file_path"]

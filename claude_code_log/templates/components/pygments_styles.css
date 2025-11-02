@@ -76,6 +76,11 @@
     color: var(--color-text-secondary);
 }
 
+/* Edit tool result specific styles */
+.edit-tool-result {
+    margin: 0.5em 0;
+}
+
 /* Write tool specific styles */
 .write-tool-content {
     margin: 0.5em 0;
