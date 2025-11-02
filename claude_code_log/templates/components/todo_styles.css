@@ -64,6 +64,7 @@
     color: #333;
     font-weight: 500;
     font-size: 90%;
+    font-family: var(--font-ui);
 }
 
 .todo-id {

@@ -22,9 +22,9 @@
     border: 1px solid #dee2e6;
     border-radius: 4px;
     overflow-x: auto;
-    font-family: 'Fira Code', 'Monaco', 'Consolas', monospace;
+    font-family: var(--font-monospace);
     font-size: 80%;
-    line-height: 1.4;
+    line-height: 2ex;
 }
 
 /* Diff line styling */
