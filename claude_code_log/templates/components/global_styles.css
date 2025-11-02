@@ -17,14 +17,6 @@ h1 {
 }
 
 /* Common typography */
-code {
-    background-color: #f5f5f5;
-    padding: 2px 4px;
-    border-radius: 3px;
-    font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', 'Droid Sans Mono', 'Source Code Pro', 'Ubuntu Mono', 'Cascadia Code', 'Menlo', 'Consolas', monospace;
-    line-height: 1.5;
-}
-
 pre {
     background-color: #12121212;
     padding: 10px;

@@ -23,7 +23,7 @@
     border-radius: 4px;
     overflow-x: auto;
     font-family: 'Fira Code', 'Monaco', 'Consolas', monospace;
-    font-size: 0.85em;
+    font-size: 80%;
     line-height: 1.4;
 }
 
@@ -54,7 +54,7 @@
 }
 
 .diff-context {
-    background-color: #f8f9fa;
+    background-color: #f5f1e8;
     border-left: 3px solid transparent;
 }
 
