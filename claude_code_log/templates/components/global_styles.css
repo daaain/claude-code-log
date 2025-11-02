@@ -1,4 +1,39 @@
 /* Global styles shared across all templates */
+
+/* CSS Variables for shared colors and consistent theming */
+:root {
+    /* Base colors */
+    --code-bg-color: #f5f1e8;
+    --tool-param-sep-color: #4b494822;
+
+    /* Dimmed/transparent variants (66 = ~40% opacity) */
+    --white-dimmed: #ffffff66;
+    --highlight-dimmed: #e3f2fd66;
+    --assistant-dimmed: #9c27b066;
+    --info-dimmed: #2196f366;
+    --warning-dimmed: #d9810066;
+    --success-dimmed: #4caf5066;
+    --error-dimmed: #f4433666;
+    --neutral-dimmed: #f8f9fa66;
+    --tool-input-dimmed: #fff3cd66;
+    --thinking-dimmed: #f0f0f066;
+    --tool-result-dimmed: #e8f5e866;
+    --session-bg-dimmed: #e8f4fd66;
+    --ide-notification-dimmed: #d2d6d966;
+
+    /* Fully transparent variants (88 = ~53% opacity) */
+    --highlight-semi: #e3f2fd88;
+    --error-semi: #ffebee88;
+    --neutral-semi: #f8f9fa88;
+
+    /* Slightly transparent variants (55 = ~33% opacity) */
+    --highlight-light: #e3f2fd55;
+
+    /* Solid colors for text and accents */
+    --text-muted: #666;
+    --text-secondary: #495057;
+}
+
 body {
     font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', 'Droid Sans Mono', 'Source Code Pro', 'Ubuntu Mono', 'Cascadia Code', 'Menlo', 'Consolas', monospace;
     line-height: 1.5;

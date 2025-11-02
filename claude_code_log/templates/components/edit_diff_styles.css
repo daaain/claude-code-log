@@ -5,13 +5,13 @@
 
 .edit-file-path {
     font-weight: 600;
-    color: #495057;
+    color: var(--text-secondary);
     margin-bottom: 8px;
     font-size: 0.95em;
 }
 
 .edit-replace-all {
-    color: #666;
+    color: var(--text-muted);
     font-size: 0.85em;
     font-style: italic;
     margin-bottom: 8px;
@@ -39,7 +39,7 @@
     width: 1.5em;
     text-align: center;
     user-select: none;
-    color: #666;
+    color: var(--text-muted);
 }
 
 /* Line backgrounds */
@@ -54,7 +54,7 @@
 }
 
 .diff-context {
-    background-color: #f5f1e8;
+    background-color: var(--code-bg-color);
     border-left: 3px solid transparent;
 }
 
