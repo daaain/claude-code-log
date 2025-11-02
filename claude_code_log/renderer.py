@@ -1409,6 +1409,9 @@ class TemplateMessage:
         title_hint: Optional[str] = None,
         has_markdown: bool = False,
         message_title: Optional[str] = None,
+        message_id: Optional[str] = None,
+        ancestry: Optional[List[str]] = None,
+        has_children: bool = False,
     ):
         self.type = message_type
         self.content_html = content_html
@@ -1426,6 +1429,9 @@ class TemplateMessage:
         self.token_usage = token_usage
         self.tool_use_id = tool_use_id
         self.title_hint = title_hint
+        self.message_id = message_id
+        self.ancestry = ancestry or []
+        self.has_children = has_children
         self.has_markdown = has_markdown
         # Pairing metadata
         self.is_paired = False
@@ -2200,6 +2206,108 @@ def generate_session_html(
     )
 
 
+def _get_message_hierarchy_level(css_class: str, is_sidechain: bool) -> int:
+    """Determine the hierarchy level for a message based on its type and sidechain status.
+
+    Hierarchy levels match the CSS margin-left indentation:
+    - Level 0 (0em): User (right-aligned), Assistant, Thinking
+    - Level 1 (2em): Tool use/result, System warnings/info, Sidechain user
+    - Level 2 (4em): Sidechain assistant/thinking
+    - Level 3 (6em): Sidechain tools
+
+    Returns:
+        Integer hierarchy level (0-3)
+    """
+    # User messages are conceptually at level 0 but right-aligned
+    if "user" in css_class and not is_sidechain:
+        return 0
+
+    # System messages at top level
+    if "system" in css_class:
+        return 0
+
+    # Sidechain user (sub-assistant prompt) is at level 1 (same as main assistant's tools)
+    if is_sidechain and "user" in css_class:
+        return 1
+
+    # Sidechain assistant/thinking at level 2
+    if is_sidechain and ("assistant" in css_class or "thinking" in css_class):
+        return 2
+
+    # Sidechain tools at level 3
+    if is_sidechain and ("tool" in css_class):
+        return 3
+
+    # Main assistant/thinking at level 0
+    if "assistant" in css_class or "thinking" in css_class:
+        return 0
+
+    # Main tools at level 1
+    if "tool" in css_class:
+        return 1
+
+    # Default to level 0
+    return 0
+
+
+def _update_hierarchy_stack(
+    hierarchy_stack: List[tuple[int, str]],
+    current_level: int,
+    message_id_counter: int,
+) -> tuple[str, List[str], int]:
+    """Update the hierarchy stack and return message ID and ancestry.
+
+    Args:
+        hierarchy_stack: Current stack of (level, message_id) tuples
+        current_level: Hierarchy level of the current message
+        message_id_counter: Current message ID counter
+
+    Returns:
+        Tuple of (message_id, ancestry, updated_counter)
+        - message_id: Unique ID for this message (e.g., "d-42")
+        - ancestry: List of ancestor message IDs (e.g., ["d-10", "d-23", "d-35"])
+        - updated_counter: Incremented message ID counter
+    """
+    # Pop stack until we find the appropriate parent level
+    # The parent is the last message at a level strictly less than current_level
+    while hierarchy_stack and hierarchy_stack[-1][0] >= current_level:
+        hierarchy_stack.pop()
+
+    # Build ancestry from remaining stack
+    ancestry = [msg_id for _, msg_id in hierarchy_stack]
+
+    # Generate new message ID
+    message_id = f"d-{message_id_counter}"
+    message_id_counter += 1
+
+    # Push current message onto stack (it could be a parent for future messages)
+    hierarchy_stack.append((current_level, message_id))
+
+    return (message_id, ancestry, message_id_counter)
+
+
+def _mark_messages_with_children(messages: List[TemplateMessage]) -> None:
+    """Mark messages that have children based on ancestry relationships.
+
+    A message has children if any subsequent message has this message's ID in its ancestry.
+    This is done in-place by setting the `has_children` attribute.
+
+    Args:
+        messages: List of template messages to process
+    """
+    # Build a set of all message IDs that appear in any ancestry list
+    parent_ids: set[str] = set()
+
+    for message in messages:
+        if message.ancestry:
+            parent_ids.update(message.ancestry)
+
+    # Mark messages that are parents
+    for message in messages:
+        if message.message_id and message.message_id in parent_ids:
+            message.has_children = True
+
+
 def generate_html(
     messages: List[TranscriptEntry],
     title: Optional[str] = None,
@@ -2359,6 +2467,11 @@ def generate_html(
     # Process messages into template-friendly format
     template_messages: List[TemplateMessage] = []
 
+    # Hierarchy tracking for message folding
+    # Stack of (level, message_id) tuples representing current nesting
+    hierarchy_stack: List[tuple[int, str]] = []
+    message_id_counter = 0
+
     for message in messages:
         message_type = message.type
 
@@ -2385,6 +2498,12 @@ def generate_html(
             html_content = _convert_ansi_to_html(message.content)
             content_html = f"<strong>{level_icon}</strong> {html_content}"
 
+            # Determine hierarchy level and update stack
+            current_level = _get_message_hierarchy_level(level_css, False)
+            msg_id, ancestry, message_id_counter = _update_hierarchy_stack(
+                hierarchy_stack, current_level, message_id_counter
+            )
+
             system_template_message = TemplateMessage(
                 message_type="system",
                 content_html=content_html,
@@ -2393,6 +2512,8 @@ def generate_html(
                 raw_timestamp=timestamp,
                 session_id=session_id,
                 message_title=f"System {level.title()}",
+                message_id=msg_id,
+                ancestry=ancestry,
             )
             template_messages.append(system_template_message)
             continue
@@ -2484,6 +2605,10 @@ def generate_html(
                     else session_id[:8]
                 )
 
+                # Reset hierarchy stack for new session
+                hierarchy_stack.clear()
+
+                # Session headers don't participate in folding hierarchy
                 session_header = TemplateMessage(
                     message_type="session_header",
                     content_html=session_title,
@@ -2600,6 +2725,13 @@ def generate_html(
                 )
             )
 
+        # Determine hierarchy level and update stack for main message
+        is_sidechain = getattr(message, "isSidechain", False)
+        current_level = _get_message_hierarchy_level(css_class, is_sidechain)
+        msg_id, ancestry, message_id_counter = _update_hierarchy_stack(
+            hierarchy_stack, current_level, message_id_counter
+        )
+
         # Create main message (if it has text content)
         if text_only_content:
             template_message = TemplateMessage(
@@ -2612,6 +2744,8 @@ def generate_html(
                 session_id=session_id,
                 token_usage=token_usage_str,
                 message_title=message_title,
+                message_id=msg_id,
+                ancestry=ancestry,
             )
             template_messages.append(template_message)
 
@@ -2751,6 +2885,13 @@ def generate_html(
             if getattr(message, "isSidechain", False):
                 tool_css_class += " sidechain"
 
+            # Determine hierarchy level and update stack for tool message
+            tool_is_sidechain = getattr(message, "isSidechain", False)
+            tool_level = _get_message_hierarchy_level(tool_css_class, tool_is_sidechain)
+            tool_msg_id, tool_ancestry, message_id_counter = _update_hierarchy_stack(
+                hierarchy_stack, tool_level, message_id_counter
+            )
+
             tool_template_message = TemplateMessage(
                 message_type=tool_message_type,
                 content_html=tool_content_html,
@@ -2762,6 +2903,8 @@ def generate_html(
                 tool_use_id=item_tool_use_id,
                 title_hint=tool_title_hint,
                 message_title=tool_message_title,
+                message_id=tool_msg_id,
+                ancestry=tool_ancestry,
             )
             template_messages.append(tool_template_message)
 
@@ -2823,6 +2966,9 @@ def generate_html(
 
     # Reorder messages so pairs are adjacent while preserving chronological order
     template_messages = _reorder_paired_messages(template_messages)
+
+    # Mark messages that have children for fold/unfold controls
+    _mark_messages_with_children(template_messages)
 
     # Render template
     env = _get_template_environment()

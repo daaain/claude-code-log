@@ -82,7 +82,10 @@
     </div>
     {% else %}
     {% set markdown = message.css_class in ['assistant', 'thinking', 'sidechain'] or (message.css_class and 'compacted' in message.css_class) %}
-    <div class='message {{ message.css_class }}{% if message.is_paired %} paired-message {{ message.pair_role }}{% endif %}'>
+    <div class='message {{ message.css_class }}{% if message.is_paired %} paired-message {{ message.pair_role }}{% endif %}{% for ancestor_id in message.ancestry %} {{ ancestor_id }}{% endfor %}' data-message-id='{{ message.message_id }}'>
+        {% if message.has_children %}
+        <button class='fold-toggle' data-fold-target='{{ message.message_id }}' title='Fold/unfold descendants'>▾</button>
+        {% endif %}
         <div class='header'>
             <span{% if message.title_hint %} title="{{ message.title_hint }}"{% endif %}>{% if message.message_title %}{%
                 if message.css_class == 'user' %}🤷 {%
@@ -407,6 +410,37 @@
 
             // Apply all filters on page load
             applyFilter();
+
+            // Fold/unfold functionality
+            const foldButtons = document.querySelectorAll('.fold-toggle');
+            foldButtons.forEach(button => {
+                button.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    const targetId = this.getAttribute('data-fold-target');
+
+                    // Find all descendants (messages with this ID in their class list)
+                    const descendants = document.querySelectorAll(`.message.${targetId}`);
+
+                    // Check current state
+                    const isFolded = this.classList.contains('folded');
+
+                    if (isFolded) {
+                        // Unfold: show descendants
+                        descendants.forEach(msg => {
+                            msg.style.display = 'block';
+                        });
+                        this.classList.remove('folded');
+                        this.textContent = '▾';
+                    } else {
+                        // Fold: hide descendants
+                        descendants.forEach(msg => {
+                            msg.style.display = 'none';
+                        });
+                        this.classList.add('folded');
+                        this.textContent = '▸';
+                    }
+                });
+            });
         });
     </script>
     <!-- Search functionality script -->
