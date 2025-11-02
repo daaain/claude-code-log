@@ -215,7 +215,20 @@
     background-color: #f8f9fa88;
     border-left-width: 2px;
     border-left-style: dashed;
-    margin-left: 4em; /* Extra indent - nested below Task tool use */
+}
+
+/* Sidechain indentation hierarchy */
+.sidechain.user {
+    margin-left: 3em; /* Sub-assistant Prompt - nested below Task tool use (2em) */
+}
+
+.sidechain.assistant {
+    margin-left: 4em; /* Sub-assistant - nested below prompt (3em) */
+}
+
+.sidechain.tool_use,
+.sidechain.tool_result {
+    margin-left: 5em; /* Sub-assistant tools - nested below assistant (4em) */
 }
 
 .sidechain .sidechain-indicator {
