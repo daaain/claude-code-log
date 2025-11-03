@@ -2733,11 +2733,19 @@ def generate_html(
             hierarchy_stack, current_level, message_id_counter
         )
 
-        # Create main message (if it has text content)
-        if text_only_content:
+        # Create main message if it has text content OR if it's an assistant/thinking with tool items
+        # (assistant/thinking messages need to exist for folding even without text)
+        should_create_message = text_only_content or (
+            message_type in ("assistant", "thinking") and tool_items
+        )
+
+        if should_create_message:
+            # If no text content, create minimal placeholder content
+            display_content = content_html if text_only_content else ""
+
             template_message = TemplateMessage(
                 message_type=message_type,
-                content_html=content_html,
+                content_html=display_content,
                 formatted_timestamp=formatted_timestamp,
                 css_class=css_class,
                 raw_timestamp=timestamp,
@@ -2890,14 +2898,32 @@ def generate_html(
             tool_is_sidechain = getattr(message, "isSidechain", False)
             tool_level = _get_message_hierarchy_level(tool_css_class, tool_is_sidechain)
 
-            # Special case: tool_result should be one level deeper than tool_use
-            # This makes tool_result a child of tool_use for folding purposes
-            if "tool_result" in tool_css_class:
-                tool_level += 1
+            # For tool_result, check if it's paired with a tool_use
+            # If paired, reuse the tool_use's message ID so they fold as a unit
+            tool_msg_id = None
+            tool_ancestry = []
 
-            tool_msg_id, tool_ancestry, message_id_counter = _update_hierarchy_stack(
-                hierarchy_stack, tool_level, message_id_counter
-            )
+            if "tool_result" in tool_css_class and item_tool_use_id:
+                # Look back in template_messages to find the matching tool_use
+                for prev_msg in reversed(
+                    template_messages[-10:]
+                ):  # Check last 10 messages
+                    if (
+                        prev_msg.tool_use_id == item_tool_use_id
+                        and "tool_use" in prev_msg.css_class
+                    ):
+                        # Reuse the tool_use's ID and ancestry - they're a unit
+                        tool_msg_id = prev_msg.message_id
+                        tool_ancestry = prev_msg.ancestry
+                        break
+
+            # If we didn't find a paired tool_use, or this isn't a tool_result, generate new ID
+            if tool_msg_id is None:
+                tool_msg_id, tool_ancestry, message_id_counter = (
+                    _update_hierarchy_stack(
+                        hierarchy_stack, tool_level, message_id_counter
+                    )
+                )
 
             tool_template_message = TemplateMessage(
                 message_type=tool_message_type,
