@@ -2889,6 +2889,12 @@ def generate_html(
             # Determine hierarchy level and update stack for tool message
             tool_is_sidechain = getattr(message, "isSidechain", False)
             tool_level = _get_message_hierarchy_level(tool_css_class, tool_is_sidechain)
+
+            # Special case: tool_result should be one level deeper than tool_use
+            # This makes tool_result a child of tool_use for folding purposes
+            if "tool_result" in tool_css_class:
+                tool_level += 1
+
             tool_msg_id, tool_ancestry, message_id_counter = _update_hierarchy_stack(
                 hierarchy_stack, tool_level, message_id_counter
             )
