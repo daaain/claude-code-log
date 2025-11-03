@@ -2209,42 +2209,43 @@ def generate_session_html(
 def _get_message_hierarchy_level(css_class: str, is_sidechain: bool) -> int:
     """Determine the hierarchy level for a message based on its type and sidechain status.
 
-    Hierarchy levels match the CSS margin-left indentation:
-    - Level 0 (0em): User (right-aligned), Assistant, Thinking
-    - Level 1 (2em): Tool use/result, System warnings/info, Sidechain user
-    - Level 2 (4em): Sidechain assistant/thinking
-    - Level 3 (6em): Sidechain tools
+    Correct hierarchy based on logical nesting:
+    - Level 0: User (triggers everything below), System
+    - Level 1: Assistant, Thinking, System warnings/info
+    - Level 2: Tool use/result (nested under assistant), Sidechain user (sub-assistant prompt)
+    - Level 3: Sidechain assistant/thinking (nested under sidechain user)
+    - Level 4: Sidechain tools (nested under sidechain assistant)
 
     Returns:
-        Integer hierarchy level (0-3)
+        Integer hierarchy level (0-4)
     """
-    # User messages are conceptually at level 0 but right-aligned
+    # User messages at level 0 (they trigger everything)
     if "user" in css_class and not is_sidechain:
         return 0
 
-    # System messages at top level
-    if "system" in css_class:
+    # System messages at top level (level 0)
+    if "system" in css_class and not is_sidechain:
         return 0
 
-    # Sidechain user (sub-assistant prompt) is at level 1 (same as main assistant's tools)
+    # Sidechain user (sub-assistant prompt) at level 2 (conceptually under Tool use that spawned it)
     if is_sidechain and "user" in css_class:
-        return 1
-
-    # Sidechain assistant/thinking at level 2
-    if is_sidechain and ("assistant" in css_class or "thinking" in css_class):
         return 2
 
-    # Sidechain tools at level 3
-    if is_sidechain and ("tool" in css_class):
+    # Sidechain assistant/thinking at level 3
+    if is_sidechain and ("assistant" in css_class or "thinking" in css_class):
         return 3
 
-    # Main assistant/thinking at level 0
-    if "assistant" in css_class or "thinking" in css_class:
-        return 0
+    # Sidechain tools at level 4
+    if is_sidechain and ("tool" in css_class):
+        return 4
 
-    # Main tools at level 1
-    if "tool" in css_class:
+    # Main assistant/thinking at level 1 (nested under user)
+    if "assistant" in css_class or "thinking" in css_class:
         return 1
+
+    # Main tools at level 2 (nested under assistant)
+    if "tool" in css_class:
+        return 2
 
     # Default to level 0
     return 0
