@@ -372,7 +372,7 @@ def generate_style_guide():
         # Write style guide data
         with open(jsonl_file, "w") as f:
             for entry in style_guide_data:
-                f.write(json.dumps(entry) + "\n")
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
         # Convert to HTML
         transcript_html = convert_jsonl_to_html(

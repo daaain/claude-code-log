@@ -327,7 +327,7 @@ def render_params_table(params: Dict[str, Any]) -> str:
         # If value is structured (dict/list), render as JSON
         if isinstance(value, (dict, list)):
             try:
-                formatted_value = json.dumps(value, indent=2)  # type: ignore[arg-type]
+                formatted_value = json.dumps(value, indent=2, ensure_ascii=False)  # type: ignore[arg-type]
                 escaped_value = escape_html(formatted_value)
 
                 # Make long structured values collapsible
