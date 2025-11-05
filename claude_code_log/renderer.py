@@ -875,6 +875,21 @@ def format_tool_result_content(
         raw_content = "\n".join(content_parts)
         has_images = len(image_html_parts) > 0
 
+    # Strip <tool_use_error> XML tags but keep the content inside
+    # Also strip redundant "String: ..." portions that echo the input
+    import re
+
+    if raw_content:
+        # Remove <tool_use_error>...</tool_use_error> tags but keep inner content
+        raw_content = re.sub(
+            r"<tool_use_error>(.*?)</tool_use_error>",
+            r"\1",
+            raw_content,
+            flags=re.DOTALL,
+        )
+        # Remove "String: ..." portions that echo the input (everything after "String:" to end)
+        raw_content = re.sub(r"\nString:.*$", "", raw_content, flags=re.DOTALL)
+
     # Special handling for Write tool: only show first line (acknowledgment) on success
     if tool_name == "Write" and not tool_result.is_error and not has_images:
         lines = raw_content.split("\n")
