@@ -2726,26 +2726,20 @@ def generate_html(
                 )
             )
 
-        # Determine hierarchy level and update stack for main message
-        is_sidechain = getattr(message, "isSidechain", False)
-        current_level = _get_message_hierarchy_level(css_class, is_sidechain)
-        msg_id, ancestry, message_id_counter = _update_hierarchy_stack(
-            hierarchy_stack, current_level, message_id_counter
-        )
-
-        # Create main message if it has text content OR if it's an assistant/thinking with tool items
-        # (assistant/thinking messages need to exist for folding even without text)
-        should_create_message = text_only_content or (
-            message_type in ("assistant", "thinking") and tool_items
-        )
-
-        if should_create_message:
-            # If no text content, create minimal placeholder content
-            display_content = content_html if text_only_content else ""
+        # Only create main message if it has text content
+        # For assistant/thinking with only tools (no text), we don't create a container message
+        # The tools will be direct children of the current hierarchy level
+        if text_only_content:
+            # Determine hierarchy level and update stack
+            is_sidechain = getattr(message, "isSidechain", False)
+            current_level = _get_message_hierarchy_level(css_class, is_sidechain)
+            msg_id, ancestry, message_id_counter = _update_hierarchy_stack(
+                hierarchy_stack, current_level, message_id_counter
+            )
 
             template_message = TemplateMessage(
                 message_type=message_type,
-                content_html=display_content,
+                content_html=content_html,
                 formatted_timestamp=formatted_timestamp,
                 css_class=css_class,
                 raw_timestamp=timestamp,
