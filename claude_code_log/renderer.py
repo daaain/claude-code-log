@@ -2027,6 +2027,80 @@ def _identify_message_pairs(messages: List[TemplateMessage]) -> None:
         i += 1
 
 
+def _reorder_paired_messages(messages: List[TemplateMessage]) -> List[TemplateMessage]:
+    """Reorder messages so paired messages are adjacent while preserving chronological order.
+
+    - Unpaired messages and first messages in pairs maintain chronological order
+    - Last messages in pairs are moved immediately after their first message
+    - Timestamps are enhanced to show duration for paired messages
+    """
+    from datetime import datetime
+
+    # Build a map of tool_use_id to pair indices
+    pair_map: Dict[str, tuple[int, int]] = {}  # tool_use_id -> (first_idx, last_idx)
+
+    for i, msg in enumerate(messages):
+        if msg.is_paired and msg.pair_role == "pair_first" and msg.tool_use_id:
+            # Find the matching pair_last
+            for j in range(i + 1, len(messages)):
+                if (
+                    messages[j].is_paired
+                    and messages[j].pair_role == "pair_last"
+                    and messages[j].tool_use_id == msg.tool_use_id
+                ):
+                    pair_map[msg.tool_use_id] = (i, j)
+                    break
+
+    # Create reordered list
+    reordered: List[TemplateMessage] = []
+    skip_indices: set[int] = set()
+
+    for i, msg in enumerate(messages):
+        if i in skip_indices:
+            continue
+
+        reordered.append(msg)
+
+        # If this is the first message in a pair, immediately add its pair_last
+        if msg.is_paired and msg.pair_role == "pair_first" and msg.tool_use_id:
+            if msg.tool_use_id in pair_map:
+                first_idx, last_idx = pair_map[msg.tool_use_id]
+                if first_idx == i:  # Confirm this is the right pair
+                    pair_last = messages[last_idx]
+                    reordered.append(pair_last)
+                    skip_indices.add(last_idx)
+
+                    # Calculate duration between pair messages
+                    try:
+                        if msg.raw_timestamp and pair_last.raw_timestamp:
+                            # Parse ISO timestamps
+                            first_time = datetime.fromisoformat(
+                                msg.raw_timestamp.replace("Z", "+00:00")
+                            )
+                            last_time = datetime.fromisoformat(
+                                pair_last.raw_timestamp.replace("Z", "+00:00")
+                            )
+                            duration = last_time - first_time
+
+                            # Format duration nicely
+                            total_seconds = duration.total_seconds()
+                            if total_seconds < 1:
+                                duration_str = f"took {int(total_seconds * 1000)} ms"
+                            elif total_seconds < 60:
+                                duration_str = f"took {total_seconds:.1f}s"
+                            else:
+                                minutes = int(total_seconds // 60)
+                                seconds = int(total_seconds % 60)
+                                duration_str = f"took {minutes}m {seconds}s"
+
+                            # Store duration in pair_last for template rendering
+                            pair_last.pair_duration = duration_str
+                    except (ValueError, AttributeError):
+                        pass
+
+    return reordered
+
+
 def generate_session_html(
     messages: List[TranscriptEntry],
     session_id: str,
@@ -2558,6 +2632,9 @@ def generate_html(
 
     # Identify and mark paired messages (command+output, tool_use+tool_result, etc.)
     _identify_message_pairs(template_messages)
+
+    # Reorder messages so pairs are adjacent while preserving chronological order
+    template_messages = _reorder_paired_messages(template_messages)
 
     # Render template
     env = _get_template_environment()
