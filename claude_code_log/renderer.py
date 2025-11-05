@@ -827,7 +827,7 @@ def _parse_edit_tool_result(content: str) -> Optional[tuple[str, int]]:
     if result is None:
         return None
 
-    code_content, system_reminder, line_offset = result
+    code_content, _system_reminder, line_offset = result
     # Edit tool doesn't use system_reminder, so we just return code and offset
     return (code_content, line_offset)
 
