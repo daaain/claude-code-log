@@ -119,6 +119,7 @@
     border-left: 3px solid var(--color-blue);
     border-radius: 4px;
     font-style: italic;
+    font-size: 80%;
     color: var(--color-text-secondary);
 }
 
