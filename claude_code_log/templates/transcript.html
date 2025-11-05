@@ -88,10 +88,12 @@
                 message.css_class == 'system' %}⚙️ {% elif message.css_class == 'tool_use' %}🛠️ {% elif
                 message.css_class == 'tool_result' %}🧰 {% elif message.css_class == 'thinking' %}💭 {% elif
                 message.css_class == 'image' %}🖼️ {% endif %}{{ message.display_type }}{% endif %}</span>
-            <div style='display: flex; flex-direction: column; align-items: flex-end; gap: 2px;'>
-                <span class='timestamp'{% if message.raw_timestamp %} data-timestamp='{{ message.raw_timestamp }}'{% endif %}>{{ message.formatted_timestamp }}</span>
+            <div class='header-info'>
+                <div class='timestamp-row'>
+                    <span class='timestamp'{% if message.raw_timestamp %} data-timestamp='{{ message.raw_timestamp }}'{% if message.pair_duration %} data-duration='{{ message.pair_duration }}'{% endif %}{% endif %}>{{ message.formatted_timestamp }}</span>
+                </div>
                 {% if message.token_usage %}
-                <span class='token-usage' style='font-size: 0.75em; color: #888;'>{{ message.token_usage }}</span>
+                <span class='token-usage'>{{ message.token_usage }}</span>
                 {% endif %}
             </div>
         </div>

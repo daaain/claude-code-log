@@ -12,6 +12,32 @@
     border-right: #00000017 1px solid;
 }
 
+/* Message header info styling */
+.header-info {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+}
+
+.timestamp-row {
+    display: flex;
+    flex-direction: row;
+    align-items: normal;
+    gap: 8px;
+}
+
+.pair-duration {
+    font-size: 80%;
+    color: #666;
+    font-style: italic;
+}
+
+.token-usage {
+    font-size: 0.75em;
+    color: #888;
+}
+
 /* Paired message styling */
 .message.paired-message {
     margin-bottom: 0;

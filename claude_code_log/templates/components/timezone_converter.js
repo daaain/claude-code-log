@@ -46,6 +46,7 @@
                 const element = timestampElements[i];
                 const rawTimestamp = element.getAttribute('data-timestamp');
                 const rawTimestampEnd = element.getAttribute('data-timestamp-end');
+                const duration = element.getAttribute('data-duration');
 
                 if (!rawTimestamp) continue;
 
@@ -70,7 +71,7 @@
                             // Update the element with range
                             if (localTime !== utcTime || localTimeEnd !== utcTimeEnd) {
                                 element.innerHTML = localTime + ' to ' + localTimeEnd + ' <span style="color: #888; font-size: 0.9em;">(' + timezoneName + ')</span>';
-                                element.title = 'UTC: ' + utcTime + ' to ' + utcTimeEnd + ' | Local: ' + localTime + ' to ' + localTimeEnd + ' (' + timezoneName + ')';
+                                element.title = 'UTC: ' + utcTime + ' to ' + utcTimeEnd;
                             } else {
                                 // If they're the same (user is in UTC), just show UTC
                                 element.innerHTML = utcTime + ' to ' + utcTimeEnd + ' <span style="color: #888; font-size: 0.9em;">(UTC)</span>';
@@ -81,11 +82,11 @@
                         // Single timestamp
                         if (localTime !== utcTime) {
                             element.innerHTML = localTime + ' <span style="color: #888; font-size: 0.9em;">(' + timezoneName + ')</span>';
-                            element.title = 'UTC: ' + utcTime + ' | Local: ' + localTime + ' (' + timezoneName + ')';
+                            element.title = duration ? duration : 'UTC: ' + utcTime;
                         } else {
                             // If they're the same (user is in UTC), just show UTC
                             element.innerHTML = utcTime + ' <span style="color: #888; font-size: 0.9em;">(UTC)</span>';
-                            element.title = 'UTC: ' + utcTime;
+                            element.title = duration ? duration : 'UTC: ' + utcTime;
                         }
                     }
 

@@ -1376,6 +1376,7 @@ class TemplateMessage:
         # Pairing metadata
         self.is_paired = False
         self.pair_role: Optional[str] = None  # "pair_first", "pair_last", "pair_middle"
+        self.pair_duration: Optional[str] = None  # Duration for pair_last messages
 
 
 class TemplateProject:
