@@ -103,10 +103,6 @@
     -webkit-mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
 }
 
-.read-tool-result .collapsible-code:not([open]) .code-preview {
-    display: block;
-}
-
 .read-tool-result .collapsible-code[open] .code-preview {
     display: none;
 }
@@ -158,10 +154,6 @@
     opacity: 0.7;
     mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
     -webkit-mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
-}
-
-.edit-tool-result .collapsible-code:not([open]) .code-preview {
-    display: block;
 }
 
 .edit-tool-result .collapsible-code[open] .code-preview {
@@ -245,10 +237,6 @@
     opacity: 0.7;
     mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
     -webkit-mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
-}
-
-.write-tool-content .collapsible-code:not([open]) .code-preview {
-    display: block;
 }
 
 .write-tool-content .collapsible-code[open] .code-preview {

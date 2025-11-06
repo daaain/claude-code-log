@@ -400,8 +400,10 @@ def format_write_tool_content(tool_use: ToolUseContent) -> str:
 
         html_parts.append(f"""
         <details class='collapsible-code'>
-            <summary><span class='line-count'>{len(lines)} lines</span></summary>
-            <div class='code-preview'>{preview_html}</div>
+            <summary>
+                <span class='line-count'>{len(lines)} lines</span>
+                <div class='code-preview'>{preview_html}</div>
+            </summary>
             <div class='code-full'>{highlighted_html}</div>
         </details>
         """)
@@ -942,8 +944,10 @@ def format_tool_result_content(
 
                 result_parts.append(f"""
                 <details class='collapsible-code'>
-                    <summary><span class='line-count'>{len(lines)} lines</span></summary>
-                    <div class='code-preview'>{preview_html}</div>
+                    <summary>
+                        <span class='line-count'>{len(lines)} lines</span>
+                        <div class='code-preview'>{preview_html}</div>
+                    </summary>
                     <div class='code-full'>{highlighted_html}</div>
                 </details>
                 """)
@@ -986,8 +990,10 @@ def format_tool_result_content(
 
                 result_parts.append(f"""
                 <details class='collapsible-code'>
-                    <summary><span class='line-count'>{len(lines)} lines</span></summary>
-                    <div class='code-preview'>{preview_html}</div>
+                    <summary>
+                        <span class='line-count'>{len(lines)} lines</span>
+                        <div class='code-preview'>{preview_html}</div>
+                    </summary>
                     <div class='code-full'>{highlighted_html}</div>
                 </details>
                 """)
