@@ -1971,7 +1971,9 @@ def _process_regular_message(
         # Update message title for display
         if not is_compacted:  # Don't override compacted message title
             message_title = (
-                "Sub-assistant prompt" if message_type == "user" else "Sub-assistant"
+                "📝 Sub-assistant prompt"
+                if message_type == "user"
+                else "🔗 Sub-assistant"
             )
 
     return css_class, content_html, message_type, message_title

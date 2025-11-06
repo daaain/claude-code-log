@@ -88,8 +88,8 @@
                 if message.css_class == 'user' %}🤷 {%
                 elif message.css_class == 'assistant' %}🤖 {%
                 elif message.css_class == 'system' %}⚙️ {%
-                elif message.css_class == 'tool_use' %}🛠️ {%
-                elif message.css_class == 'tool_result' %}🧰 {% elif message.css_class == 'thinking' %}💭 {%
+                elif message.css_class == 'tool_result' %}🧰 {%
+                elif message.css_class == 'thinking' %}💭 {%
                 elif message.css_class == 'image' %}🖼️ {% endif %}{{ message.message_title | safe }}{% endif %}</span>
             <div class='header-info'>
                 <div class='timestamp-row'>
