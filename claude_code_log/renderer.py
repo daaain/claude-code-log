@@ -1985,7 +1985,24 @@ def _identify_message_pairs(messages: List[TemplateMessage]) -> None:
     """Identify and mark paired messages (e.g., command + output, tool use + result).
 
     Modifies messages in-place by setting is_paired and pair_role fields.
+
+    Uses a two-pass algorithm:
+    1. First pass: Build index of tool_use_id -> message index for tool_use and tool_result
+    2. Second pass: Sequential scan for adjacent pairs (system+output, bash, thinking+assistant)
+                   and match tool_use/tool_result using the index
     """
+    # Pass 1: Build index of tool_use messages and tool_result messages by tool_use_id
+    tool_use_index: Dict[str, int] = {}  # tool_use_id -> message index
+    tool_result_index: Dict[str, int] = {}  # tool_use_id -> message index
+
+    for i, msg in enumerate(messages):
+        if msg.tool_use_id:
+            if "tool_use" in msg.css_class:
+                tool_use_index[msg.tool_use_id] = i
+            elif "tool_result" in msg.css_class:
+                tool_result_index[msg.tool_use_id] = i
+
+    # Pass 2: Sequential scan to identify pairs
     i = 0
     while i < len(messages):
         current = messages[i]
@@ -1995,7 +2012,7 @@ def _identify_message_pairs(messages: List[TemplateMessage]) -> None:
             i += 1
             continue
 
-        # Check for system command + command output pair
+        # Check for system command + command output pair (adjacent only)
         if current.css_class == "system" and i + 1 < len(messages):
             next_msg = messages[i + 1]
             if "command-output" in next_msg.css_class:
@@ -2006,24 +2023,17 @@ def _identify_message_pairs(messages: List[TemplateMessage]) -> None:
                 i += 2
                 continue
 
-        # Check for tool_use + tool_result pair (match by tool_use_id)
+        # Check for tool_use + tool_result pair using index (no distance limit)
         if "tool_use" in current.css_class and current.tool_use_id:
-            # Look ahead for matching tool_result
-            for j in range(
-                i + 1, min(i + 10, len(messages))
-            ):  # Look ahead up to 10 messages
-                next_msg = messages[j]
-                if (
-                    "tool_result" in next_msg.css_class
-                    and next_msg.tool_use_id == current.tool_use_id
-                ):
-                    current.is_paired = True
-                    current.pair_role = "pair_first"
-                    next_msg.is_paired = True
-                    next_msg.pair_role = "pair_last"
-                    break
+            if current.tool_use_id in tool_result_index:
+                result_idx = tool_result_index[current.tool_use_id]
+                result_msg = messages[result_idx]
+                current.is_paired = True
+                current.pair_role = "pair_first"
+                result_msg.is_paired = True
+                result_msg.pair_role = "pair_last"
 
-        # Check for bash-input + bash-output pair
+        # Check for bash-input + bash-output pair (adjacent only)
         if current.css_class == "bash-input" and i + 1 < len(messages):
             next_msg = messages[i + 1]
             if next_msg.css_class == "bash-output":
@@ -2034,7 +2044,7 @@ def _identify_message_pairs(messages: List[TemplateMessage]) -> None:
                 i += 2
                 continue
 
-        # Check for thinking + assistant pair
+        # Check for thinking + assistant pair (adjacent only)
         if "thinking" in current.css_class and i + 1 < len(messages):
             next_msg = messages[i + 1]
             if "assistant" in next_msg.css_class:
@@ -2054,23 +2064,19 @@ def _reorder_paired_messages(messages: List[TemplateMessage]) -> List[TemplateMe
     - Unpaired messages and first messages in pairs maintain chronological order
     - Last messages in pairs are moved immediately after their first message
     - Timestamps are enhanced to show duration for paired messages
+
+    Uses dictionary-based approach to find pairs efficiently:
+    1. Build index of all pair_last messages by tool_use_id
+    2. Single pass through messages, inserting pair_last immediately after pair_first
     """
     from datetime import datetime
 
-    # Build a map of tool_use_id to pair indices
-    pair_map: Dict[str, tuple[int, int]] = {}  # tool_use_id -> (first_idx, last_idx)
+    # Build index of pair_last messages by tool_use_id
+    pair_last_index: Dict[str, int] = {}  # tool_use_id -> message index
 
     for i, msg in enumerate(messages):
-        if msg.is_paired and msg.pair_role == "pair_first" and msg.tool_use_id:
-            # Find the matching pair_last
-            for j in range(i + 1, len(messages)):
-                if (
-                    messages[j].is_paired
-                    and messages[j].pair_role == "pair_last"
-                    and messages[j].tool_use_id == msg.tool_use_id
-                ):
-                    pair_map[msg.tool_use_id] = (i, j)
-                    break
+        if msg.is_paired and msg.pair_role == "pair_last" and msg.tool_use_id:
+            pair_last_index[msg.tool_use_id] = i
 
     # Create reordered list
     reordered: List[TemplateMessage] = []
@@ -2084,40 +2090,39 @@ def _reorder_paired_messages(messages: List[TemplateMessage]) -> List[TemplateMe
 
         # If this is the first message in a pair, immediately add its pair_last
         if msg.is_paired and msg.pair_role == "pair_first" and msg.tool_use_id:
-            if msg.tool_use_id in pair_map:
-                first_idx, last_idx = pair_map[msg.tool_use_id]
-                if first_idx == i:  # Confirm this is the right pair
-                    pair_last = messages[last_idx]
-                    reordered.append(pair_last)
-                    skip_indices.add(last_idx)
+            if msg.tool_use_id in pair_last_index:
+                last_idx = pair_last_index[msg.tool_use_id]
+                pair_last = messages[last_idx]
+                reordered.append(pair_last)
+                skip_indices.add(last_idx)
 
-                    # Calculate duration between pair messages
-                    try:
-                        if msg.raw_timestamp and pair_last.raw_timestamp:
-                            # Parse ISO timestamps
-                            first_time = datetime.fromisoformat(
-                                msg.raw_timestamp.replace("Z", "+00:00")
-                            )
-                            last_time = datetime.fromisoformat(
-                                pair_last.raw_timestamp.replace("Z", "+00:00")
-                            )
-                            duration = last_time - first_time
+                # Calculate duration between pair messages
+                try:
+                    if msg.raw_timestamp and pair_last.raw_timestamp:
+                        # Parse ISO timestamps
+                        first_time = datetime.fromisoformat(
+                            msg.raw_timestamp.replace("Z", "+00:00")
+                        )
+                        last_time = datetime.fromisoformat(
+                            pair_last.raw_timestamp.replace("Z", "+00:00")
+                        )
+                        duration = last_time - first_time
 
-                            # Format duration nicely
-                            total_seconds = duration.total_seconds()
-                            if total_seconds < 1:
-                                duration_str = f"took {int(total_seconds * 1000)} ms"
-                            elif total_seconds < 60:
-                                duration_str = f"took {total_seconds:.1f}s"
-                            else:
-                                minutes = int(total_seconds // 60)
-                                seconds = int(total_seconds % 60)
-                                duration_str = f"took {minutes}m {seconds}s"
+                        # Format duration nicely
+                        total_seconds = duration.total_seconds()
+                        if total_seconds < 1:
+                            duration_str = f"took {int(total_seconds * 1000)} ms"
+                        elif total_seconds < 60:
+                            duration_str = f"took {total_seconds:.1f}s"
+                        else:
+                            minutes = int(total_seconds // 60)
+                            seconds = int(total_seconds % 60)
+                            duration_str = f"took {minutes}m {seconds}s"
 
-                            # Store duration in pair_last for template rendering
-                            pair_last.pair_duration = duration_str
-                    except (ValueError, AttributeError):
-                        pass
+                        # Store duration in pair_last for template rendering
+                        pair_last.pair_duration = duration_str
+                except (ValueError, AttributeError):
+                    pass
 
     return reordered
 
