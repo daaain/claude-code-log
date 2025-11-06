@@ -88,6 +88,7 @@
                 if message.css_class == 'user' %}🤷 {%
                 elif message.css_class == 'assistant' %}🤖 {%
                 elif message.css_class == 'system' %}⚙️ {%
+                elif message.css_class == 'tool_use' and not starts_with_emoji(message.message_title) %}🛠️ {%
                 elif message.css_class == 'tool_result' %}🧰 {%
                 elif message.css_class == 'thinking' %}💭 {%
                 elif message.css_class == 'image' %}🖼️ {% endif %}{{ message.message_title | safe }}{% endif %}</span>
