@@ -498,13 +498,37 @@ details summary {
     cursor: pointer;
 }
 
+/* Collapsible code blocks (Read/Edit/Write tools) */
+.tool_result .collapsible-code {
+    margin-top: -2.5em;
+}
+
+.tool_result .collapsible-code summary {
+    cursor: pointer;
+    padding-top: 0.5em;
+    background: var(--color-bg-secondary);
+    border-radius: 4px;
+}
+
+.tool_result .collapsible-code summary:hover {
+    background: var(--color-bg-tertiary);
+}
+
 /* Preview content styling - shown when closed */
 .collapsible-details:not([open]) .preview-content {
     margin-top: 4px;
 }
 
-/* Hide preview content when details is open */
-.collapsible-details[open] .preview-content {
+/* Tool result preview content with gradient fade */
+.tool_result .preview-content {
+    opacity: 0.7;
+    mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
+    -webkit-mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
+}
+
+/* Hide preview content when details/collapsible is open */
+.collapsible-details[open] .preview-content,
+.collapsible-code[open] .preview-content {
     display: none;
 }
 

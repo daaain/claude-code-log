@@ -74,41 +74,10 @@
     margin: 0.5em 0;
 }
 
-.read-tool-result .collapsible-code {
-    margin-top: -2.5em;
-}
-
-.read-tool-result .collapsible-code summary {
-    cursor: pointer;
-    padding: 0.5em;
-    background: var(--color-bg-secondary);
-    border-radius: 4px;
-    margin-bottom: 0.5em;
-}
-
-.read-tool-result .collapsible-code summary:hover {
-    background: var(--color-bg-tertiary);
-}
-
 .read-tool-result .line-count {
     font-size: 0.9em;
     color: var(--color-text-secondary);
     margin-left: 0.5em;
-}
-
-.read-tool-result .code-preview {
-    margin-top: 0.5em;
-    opacity: 0.7;
-    mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
-    -webkit-mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
-}
-
-.read-tool-result .collapsible-code[open] .code-preview {
-    display: none;
-}
-
-.read-tool-result .code-full {
-    margin-top: 0.5em;
 }
 
 .read-tool-result .system-reminder {
@@ -127,41 +96,10 @@
     margin: 0.5em 0;
 }
 
-.edit-tool-result .collapsible-code {
-    margin-top: -2.5em;
-}
-
-.edit-tool-result .collapsible-code summary {
-    cursor: pointer;
-    padding: 0.5em;
-    background: var(--color-bg-secondary);
-    border-radius: 4px;
-    margin-bottom: 0.5em;
-}
-
-.edit-tool-result .collapsible-code summary:hover {
-    background: var(--color-bg-tertiary);
-}
-
 .edit-tool-result .line-count {
     font-size: 0.9em;
     color: var(--color-text-secondary);
     margin-left: 0.5em;
-}
-
-.edit-tool-result .code-preview {
-    margin-top: 0.5em;
-    opacity: 0.7;
-    mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
-    -webkit-mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
-}
-
-.edit-tool-result .collapsible-code[open] .code-preview {
-    display: none;
-}
-
-.edit-tool-result .code-full {
-    margin-top: 0.5em;
 }
 
 /* Multiedit tool specific styles */
@@ -210,41 +148,10 @@
     padding-left: 1.5em;
 }
 
-.write-tool-content .collapsible-code {
-    margin-top: -2.5em;
-}
-
-.write-tool-content .collapsible-code summary {
-    cursor: pointer;
-    padding: 0.5em;
-    background: var(--color-bg-secondary);
-    border-radius: 4px;
-    margin-bottom: 0.5em;
-}
-
-.write-tool-content .collapsible-code summary:hover {
-    background: var(--color-bg-tertiary);
-}
-
 .write-tool-content .line-count {
     font-size: 0.9em;
     color: var(--color-text-secondary);
     margin-left: 0.5em;
-}
-
-.write-tool-content .code-preview {
-    margin-top: 0.5em;
-    opacity: 0.7;
-    mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
-    -webkit-mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
-}
-
-.write-tool-content .collapsible-code[open] .code-preview {
-    display: none;
-}
-
-.write-tool-content .code-full {
-    margin-top: 0.5em;
 }
 
 /* Pygments token styles (based on 'default' theme) */
