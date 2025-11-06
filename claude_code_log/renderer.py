@@ -364,28 +364,27 @@ def _highlight_code_with_pygments(
     return str(highlight(code, lexer, formatter))  # type: ignore[reportUnknownArgumentType]
 
 
-def format_read_tool_content(tool_use: ToolUseContent) -> str:
-    """Format Read tool use content showing file path."""
-    file_path = tool_use.input.get("file_path", "")
+def format_read_tool_content(tool_use: ToolUseContent) -> str:  # noqa: ARG001
+    """Format Read tool use content showing file path.
 
-    escaped_path = escape_html(file_path)
-
-    # Simple display with read icon and file path
+    Note: File path is now shown in the header, so we skip content here.
+    """
+    # File path is now shown in header, so no content needed
     # Don't show offset/limit parameters as they'll be visible in the result
-    return f"<div class='read-tool-content'>📄 {escaped_path}</div>"
+    return ""
 
 
 def format_write_tool_content(tool_use: ToolUseContent) -> str:
-    """Format Write tool use content with Pygments syntax highlighting."""
+    """Format Write tool use content with Pygments syntax highlighting.
+
+    Note: File path is now shown in the header, so we skip it here.
+    """
     file_path = tool_use.input.get("file_path", "")
     content = tool_use.input.get("content", "")
 
-    escaped_path = escape_html(file_path)
-
     html_parts = ["<div class='write-tool-content'>"]
 
-    # File path header (no icon to avoid visual clutter with collapsible)
-    html_parts.append(f"<div class='write-file-path'>{escaped_path}</div>")
+    # File path is now shown in header, so we skip it here
 
     # Highlight code with Pygments
     highlighted_html = _highlight_code_with_pygments(content, file_path)
@@ -418,18 +417,17 @@ def format_write_tool_content(tool_use: ToolUseContent) -> str:
 
 
 def format_bash_tool_content(tool_use: ToolUseContent) -> str:
-    """Format Bash tool use content in VS Code extension style."""
+    """Format Bash tool use content in VS Code extension style.
+
+    Note: Description is now shown in the header, so we skip it here.
+    """
     command = tool_use.input.get("command", "")
-    description = tool_use.input.get("description", "")
 
     escaped_command = escape_html(command)
 
     html_parts = ["<div class='bash-tool-content'>"]
 
-    # Add description if present
-    if description:
-        escaped_desc = escape_html(description)
-        html_parts.append(f"<div class='bash-tool-description'>{escaped_desc}</div>")
+    # Description is now shown in header, so we skip it here
 
     # Add command in preformatted block
     html_parts.append(f"<pre class='bash-tool-command'>{escaped_command}</pre>")
@@ -627,18 +625,17 @@ def format_multiedit_tool_content(tool_use: ToolUseContent) -> str:
 
 
 def format_edit_tool_content(tool_use: ToolUseContent) -> str:
-    """Format Edit tool use content as a diff view with intra-line highlighting."""
-    file_path = tool_use.input.get("file_path", "")
+    """Format Edit tool use content as a diff view with intra-line highlighting.
+
+    Note: File path is now shown in the header, so we skip it here.
+    """
     old_string = tool_use.input.get("old_string", "")
     new_string = tool_use.input.get("new_string", "")
     replace_all = tool_use.input.get("replace_all", False)
 
-    escaped_path = escape_html(file_path)
-
     html_parts = ["<div class='edit-tool-content'>"]
 
-    # File path header
-    html_parts.append(f"<div class='edit-file-path'>📝 {escaped_path}</div>")
+    # File path is now shown in header, so we skip it here
 
     if replace_all:
         html_parts.append(
@@ -690,6 +687,29 @@ def _render_line_diff(old_line: str, new_line: str) -> str:
     new_parts.append("</div>")
 
     return "".join(old_parts) + "".join(new_parts)
+
+
+def get_tool_summary(tool_use: ToolUseContent) -> Optional[str]:
+    """Extract a one-line summary from tool parameters for display in header.
+
+    Returns a brief description or filename that can be shown in the message header
+    to save vertical space.
+    """
+    tool_name = tool_use.name
+    params = tool_use.input
+
+    if tool_name == "Bash":
+        # Return description if present
+        return params.get("description")
+
+    elif tool_name in ("Read", "Edit", "Write"):
+        # Return file path (without icon - caller adds it)
+        file_path = params.get("file_path")
+        if file_path:
+            return file_path
+
+    # No summary for other tools
+    return None
 
 
 def format_tool_use_content(tool_use: ToolUseContent) -> str:
@@ -1364,7 +1384,7 @@ class TemplateMessage:
         self.formatted_timestamp = formatted_timestamp
         self.css_class = css_class
         self.raw_timestamp = raw_timestamp
-        self.display_type = message_type.title()
+        self.display_type = message_type
         self.session_summary = session_summary
         self.session_id = session_id
         self.is_session_header = is_session_header
@@ -2486,9 +2506,32 @@ def generate_html(
                 escaped_id = escape_html(tool_use_converted.id)
                 item_tool_use_id = tool_use_converted.id
                 tool_title_hint = f"ID: {escaped_id}"
+
+                # Get summary for header (description or filepath)
+                summary = get_tool_summary(tool_use_converted)
+
                 # Use simplified display names without "Tool Use:" prefix
+                # Mark tools with custom icons using a prefix
                 if tool_use_converted.name == "TodoWrite":
-                    tool_message_type = "📝 Todo List"
+                    tool_message_type = "__CUSTOM_ICON__📝 Todo List"
+                elif tool_use_converted.name in ("Edit", "Write"):
+                    # Use 📝 icon for Edit/Write - mark with prefix to skip generic icon
+                    if summary:
+                        escaped_summary = escape_html(summary)
+                        tool_message_type = f"__CUSTOM_ICON__📝 {escaped_name} <span class='tool-summary'>{escaped_summary}</span>"
+                    else:
+                        tool_message_type = f"__CUSTOM_ICON__📝 {escaped_name}"
+                elif tool_use_converted.name == "Read":
+                    # Use 📄 icon for Read - mark with prefix to skip generic icon
+                    if summary:
+                        escaped_summary = escape_html(summary)
+                        tool_message_type = f"__CUSTOM_ICON__📄 {escaped_name} <span class='tool-summary'>{escaped_summary}</span>"
+                    else:
+                        tool_message_type = f"__CUSTOM_ICON__📄 {escaped_name}"
+                elif summary:
+                    # For other tools (like Bash), append summary
+                    escaped_summary = escape_html(summary)
+                    tool_message_type = f"{escaped_name} <span class='tool-summary'>{escaped_summary}</span>"
                 else:
                     tool_message_type = escaped_name
                 tool_css_class = "tool_use"
