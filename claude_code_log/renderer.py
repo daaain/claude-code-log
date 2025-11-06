@@ -1387,7 +1387,7 @@ def _get_template_environment() -> Environment:
         autoescape=select_autoescape(["html", "xml"]),
     )
     # Add custom filters/functions
-    env.globals["starts_with_emoji"] = starts_with_emoji
+    env.globals["starts_with_emoji"] = starts_with_emoji  # type: ignore[index]
     return env
 
 
