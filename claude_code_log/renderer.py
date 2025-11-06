@@ -917,7 +917,7 @@ def format_tool_result_content(
             # Keep only the first acknowledgment line and add ellipsis
             first_line = lines[0]
             escaped_html = escape_html(first_line)
-            return f"<p>{escaped_html} ...</p>"
+            return f"<pre>{escaped_html} ...</pre>"
 
     # Try to parse as Read tool result if file_path is provided
     if file_path and tool_name == "Read" and not has_images:
