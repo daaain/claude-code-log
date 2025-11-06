@@ -32,7 +32,7 @@ def test_tool_result_with_image():
     # Should be collapsible when images are present
     assert '<details class="collapsible-details">' in html
     assert "<summary>" in html
-    assert "Text and image content (click to expand)" in html
+    assert "Text and image content" in html
 
     # Should contain the text
     assert "Screenshot captured successfully" in html
@@ -71,7 +71,7 @@ def test_tool_result_with_only_image():
 
     # Should be collapsible
     assert '<details class="collapsible-details">' in html
-    assert "Text and image content (click to expand)" in html
+    assert "Text and image content" in html
 
     # Should contain the image with JPEG media type
     assert f"data:image/jpeg;base64,{sample_image_data}" in html

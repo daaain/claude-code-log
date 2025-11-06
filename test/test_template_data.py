@@ -31,10 +31,10 @@ class TestTemplateMessage:
         assert msg.content_html == "<p>Test content</p>"
         assert msg.formatted_timestamp == "2025-06-14 10:00:00"
         assert msg.css_class == "user"
-        assert msg.display_type == "User"
+        assert msg.message_title == "User"
 
-    def test_template_message_display_type_capitalization(self):
-        """Test that display_type properly capitalizes message types."""
+    def test_template_message_title_capitalization(self):
+        """Test that message_title properly capitalizes message types."""
         test_cases = [
             ("user", "User"),
             ("assistant", "Assistant"),
@@ -50,7 +50,7 @@ class TestTemplateMessage:
                 css_class="class",
                 raw_timestamp=None,
             )
-            assert msg.display_type == expected_display
+            assert msg.message_title == expected_display
 
 
 class TestTemplateProject:

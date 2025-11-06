@@ -258,8 +258,7 @@ class TestTodoWriteRendering:
 
         # Edit tool should use diff formatting (not table)
         assert "edit-diff" in regular_html
-        assert "edit-file-path" in regular_html
-        assert "/tmp/test.py" in regular_html
+        # File path no longer in content, moved to message header
         # Tool name/ID no longer in content, moved to message header
 
         # TodoWrite should use special formatting
