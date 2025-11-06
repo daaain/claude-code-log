@@ -1378,13 +1378,17 @@ class TemplateMessage:
         tool_use_id: Optional[str] = None,
         title_hint: Optional[str] = None,
         has_markdown: bool = False,
+        message_title: Optional[str] = None,
     ):
         self.type = message_type
         self.content_html = content_html
         self.formatted_timestamp = formatted_timestamp
         self.css_class = css_class
         self.raw_timestamp = raw_timestamp
-        self.display_type = message_type
+        # Display title for message header (capitalized, with decorations)
+        self.message_title = (
+            message_title if message_title is not None else message_type.title()
+        )
         self.session_summary = session_summary
         self.session_id = session_id
         self.is_session_header = is_session_header
@@ -1801,8 +1805,8 @@ def _convert_ansi_to_html(text: str) -> str:
 #     return css_class, content_html, message_type
 
 
-def _process_command_message(text_content: str) -> tuple[str, str, str]:
-    """Process a command message and return (css_class, content_html, message_type)."""
+def _process_command_message(text_content: str) -> tuple[str, str, str, str]:
+    """Process a command message and return (css_class, content_html, message_type, message_title)."""
     css_class = "system"
     command_name, command_args, command_contents = extract_command_info(text_content)
     escaped_command_name = escape_html(command_name)
@@ -1822,11 +1826,12 @@ def _process_command_message(text_content: str) -> tuple[str, str, str]:
 
     content_html = "<br>".join(content_parts)
     message_type = "system"
-    return css_class, content_html, message_type
+    message_title = "System"
+    return css_class, content_html, message_type, message_title
 
 
-def _process_local_command_output(text_content: str) -> tuple[str, str, str]:
-    """Process local command output and return (css_class, content_html, message_type)."""
+def _process_local_command_output(text_content: str) -> tuple[str, str, str, str]:
+    """Process local command output and return (css_class, content_html, message_type, message_title)."""
     import re
 
     css_class = "system command-output"
@@ -1863,11 +1868,12 @@ def _process_local_command_output(text_content: str) -> tuple[str, str, str]:
         content_html = escape_html(text_content)
 
     message_type = "system"
-    return css_class, content_html, message_type
+    message_title = "System"
+    return css_class, content_html, message_type, message_title
 
 
-def _process_bash_input(text_content: str) -> tuple[str, str, str]:
-    """Process bash input command and return (css_class, content_html, message_type)."""
+def _process_bash_input(text_content: str) -> tuple[str, str, str, str]:
+    """Process bash input command and return (css_class, content_html, message_type, message_title)."""
     import re
 
     css_class = "bash-input"
@@ -1888,11 +1894,12 @@ def _process_bash_input(text_content: str) -> tuple[str, str, str]:
         content_html = escape_html(text_content)
 
     message_type = "bash"
-    return css_class, content_html, message_type
+    message_title = "Bash"
+    return css_class, content_html, message_type, message_title
 
 
-def _process_bash_output(text_content: str) -> tuple[str, str, str]:
-    """Process bash output and return (css_class, content_html, message_type)."""
+def _process_bash_output(text_content: str) -> tuple[str, str, str, str]:
+    """Process bash output and return (css_class, content_html, message_type, message_title)."""
     import re
 
     css_class = "bash-output"
@@ -1930,16 +1937,18 @@ def _process_bash_output(text_content: str) -> tuple[str, str, str]:
         )
 
     message_type = "bash"
-    return css_class, content_html, message_type
+    message_title = "Bash"
+    return css_class, content_html, message_type, message_title
 
 
 def _process_regular_message(
     text_only_content: List[ContentItem],
     message_type: str,
     is_sidechain: bool,
-) -> tuple[str, str, str]:
-    """Process regular message and return (css_class, content_html, message_type)."""
+) -> tuple[str, str, str, str]:
+    """Process regular message and return (css_class, content_html, message_type, message_title)."""
     css_class = f"{message_type}"
+    message_title = message_type.title()  # Default title
 
     # Handle user-specific preprocessing
     if message_type == "user":
@@ -1951,7 +1960,7 @@ def _process_regular_message(
             content_html, is_compacted = render_user_message_content(text_only_content)
             if is_compacted:
                 css_class = f"{message_type} compacted"
-                message_type = "🤖 User (compacted conversation)"
+                message_title = "User (compacted conversation)"
     else:
         # Non-user messages: render directly
         content_html = render_message_content(text_only_content, message_type)
@@ -1959,15 +1968,13 @@ def _process_regular_message(
 
     if is_sidechain:
         css_class = f"{css_class} sidechain"
-        # Update message type for display
-        if not is_compacted:  # Don't override compacted message type
-            message_type = (
-                "📝 Sub-assistant prompt"
-                if message_type == "user"
-                else "🔗 Sub-assistant"
+        # Update message title for display
+        if not is_compacted:  # Don't override compacted message title
+            message_title = (
+                "Sub-assistant prompt" if message_type == "user" else "Sub-assistant"
             )
 
-    return css_class, content_html, message_type
+    return css_class, content_html, message_type, message_title
 
 
 def _get_combined_transcript_link(cache_manager: "CacheManager") -> Optional[str]:
@@ -2263,12 +2270,13 @@ def generate_html(
             content_html = f"<strong>{level_icon}</strong> {html_content}"
 
             system_template_message = TemplateMessage(
-                message_type=f"System {level.title()}",
+                message_type="system",
                 content_html=content_html,
                 formatted_timestamp=formatted_timestamp,
                 css_class=level_css,
                 raw_timestamp=timestamp,
                 session_id=session_id,
+                message_title=f"System {level.title()}",
             )
             template_messages.append(system_template_message)
             continue
@@ -2452,20 +2460,28 @@ def generate_html(
 
         # Determine CSS class and content based on message type and duplicate status
         if is_command:
-            css_class, content_html, message_type = _process_command_message(
-                text_content
+            css_class, content_html, message_type, message_title = (
+                _process_command_message(text_content)
             )
         elif is_local_output:
-            css_class, content_html, message_type = _process_local_command_output(
-                text_content
+            css_class, content_html, message_type, message_title = (
+                _process_local_command_output(text_content)
             )
         elif is_bash_cmd:
-            css_class, content_html, message_type = _process_bash_input(text_content)
+            css_class, content_html, message_type, message_title = _process_bash_input(
+                text_content
+            )
         elif is_bash_result:
-            css_class, content_html, message_type = _process_bash_output(text_content)
+            css_class, content_html, message_type, message_title = _process_bash_output(
+                text_content
+            )
         else:
-            css_class, content_html, message_type = _process_regular_message(
-                text_only_content, message_type, getattr(message, "isSidechain", False)
+            css_class, content_html, message_type, message_title = (
+                _process_regular_message(
+                    text_only_content,
+                    message_type,
+                    getattr(message, "isSidechain", False),
+                )
             )
 
         # Create main message (if it has text content)
@@ -2479,6 +2495,7 @@ def generate_html(
                 session_summary=session_summary,
                 session_id=session_id,
                 token_usage=token_usage_str,
+                message_title=message_title,
             )
             template_messages.append(template_message)
 
@@ -2515,30 +2532,30 @@ def generate_html(
                 # Get summary for header (description or filepath)
                 summary = get_tool_summary(tool_use_converted)
 
-                # Use simplified display names without "Tool Use:" prefix
-                # Mark tools with custom icons using a prefix
+                # Set message_type (for CSS/logic) and message_title (for display)
+                tool_message_type = "tool_use"
                 if tool_use_converted.name == "TodoWrite":
-                    tool_message_type = "__CUSTOM_ICON__📝 Todo List"
+                    tool_message_title = "📝 Todo List"
                 elif tool_use_converted.name in ("Edit", "Write"):
-                    # Use 📝 icon for Edit/Write - mark with prefix to skip generic icon
+                    # Use 📝 icon for Edit/Write
                     if summary:
                         escaped_summary = escape_html(summary)
-                        tool_message_type = f"__CUSTOM_ICON__📝 {escaped_name} <span class='tool-summary'>{escaped_summary}</span>"
+                        tool_message_title = f"📝 {escaped_name} <span class='tool-summary'>{escaped_summary}</span>"
                     else:
-                        tool_message_type = f"__CUSTOM_ICON__📝 {escaped_name}"
+                        tool_message_title = f"📝 {escaped_name}"
                 elif tool_use_converted.name == "Read":
-                    # Use 📄 icon for Read - mark with prefix to skip generic icon
+                    # Use 📄 icon for Read
                     if summary:
                         escaped_summary = escape_html(summary)
-                        tool_message_type = f"__CUSTOM_ICON__📄 {escaped_name} <span class='tool-summary'>{escaped_summary}</span>"
+                        tool_message_title = f"📄 {escaped_name} <span class='tool-summary'>{escaped_summary}</span>"
                     else:
-                        tool_message_type = f"__CUSTOM_ICON__📄 {escaped_name}"
+                        tool_message_title = f"📄 {escaped_name}"
                 elif summary:
                     # For other tools (like Bash), append summary
                     escaped_summary = escape_html(summary)
-                    tool_message_type = f"{escaped_name} <span class='tool-summary'>{escaped_summary}</span>"
+                    tool_message_title = f"{escaped_name} <span class='tool-summary'>{escaped_summary}</span>"
                 else:
-                    tool_message_type = escaped_name
+                    tool_message_title = escaped_name
                 tool_css_class = "tool_use"
             elif isinstance(tool_item, ToolResultContent) or item_type == "tool_result":
                 # Convert Anthropic type to our format if necessary
@@ -2572,8 +2589,10 @@ def generate_html(
                 item_tool_use_id = tool_result_converted.tool_use_id
                 tool_title_hint = f"ID: {escaped_id}"
                 # Simplified: no "Tool Result" heading, just show error indicator if present
-                error_indicator = "🚨 Error" if tool_result_converted.is_error else ""
-                tool_message_type = error_indicator if error_indicator else ""
+                tool_message_type = "tool_result"
+                tool_message_title = (
+                    "🚨 Error" if tool_result_converted.is_error else ""
+                )
                 tool_css_class = (
                     "tool_result error"
                     if tool_result_converted.is_error
@@ -2590,7 +2609,8 @@ def generate_html(
                     thinking_converted = tool_item
 
                 tool_content_html = format_thinking_content(thinking_converted)
-                tool_message_type = "Thinking"
+                tool_message_type = "thinking"
+                tool_message_title = "Thinking"
                 tool_css_class = "thinking"
             elif isinstance(tool_item, ImageContent) or item_type == "image":
                 # Convert Anthropic type to our format if necessary
@@ -2599,14 +2619,16 @@ def generate_html(
                     continue
                 else:
                     tool_content_html = format_image_content(tool_item)
-                tool_message_type = "Image"
+                tool_message_type = "image"
+                tool_message_title = "Image"
                 tool_css_class = "image"
             else:
                 # Handle unknown content types
                 tool_content_html = (
                     f"<p>Unknown content type: {escape_html(str(type(tool_item)))}</p>"
                 )
-                tool_message_type = "Unknown Content"
+                tool_message_type = "unknown"
+                tool_message_title = "Unknown Content"
                 tool_css_class = "unknown"
 
             # Preserve sidechain context for tool/thinking/image content within sidechain messages
@@ -2623,6 +2645,7 @@ def generate_html(
                 session_id=session_id,
                 tool_use_id=item_tool_use_id,
                 title_hint=tool_title_hint,
+                message_title=tool_message_title,
             )
             template_messages.append(tool_template_message)
 
