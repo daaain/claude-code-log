@@ -1046,11 +1046,11 @@ def format_tool_result_content(
         combined_content = f"{text_html}{images_html}"
 
         # Always make collapsible when images are present
-        preview_text = "Text and image content (click to expand)"
+        preview_text = "Text and image content"
         return f"""
     <details class="collapsible-details">
         <summary>
-            <div class="preview-content">{preview_text}</div>
+            <span class='preview-text'>{preview_text}</span>
         </summary>
         <div class="details-content">
             {combined_content}

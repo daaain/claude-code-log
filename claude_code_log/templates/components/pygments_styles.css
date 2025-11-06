@@ -74,7 +74,9 @@
     margin: 0.5em 0;
 }
 
-.read-tool-result .line-count {
+/* Unified styling for inline preview text in tool results */
+.tool-result .line-count,
+.tool-result .preview-text {
     font-size: 0.9em;
     color: var(--color-text-secondary);
     margin-left: 0.5em;
@@ -94,12 +96,6 @@
 /* Edit tool result specific styles */
 .edit-tool-result {
     margin: 0.5em 0;
-}
-
-.edit-tool-result .line-count {
-    font-size: 0.9em;
-    color: var(--color-text-secondary);
-    margin-left: 0.5em;
 }
 
 /* Multiedit tool specific styles */
@@ -148,11 +144,6 @@
     padding-left: 1.5em;
 }
 
-.write-tool-content .line-count {
-    font-size: 0.9em;
-    color: var(--color-text-secondary);
-    margin-left: 0.5em;
-}
 
 /* Pygments token styles (based on 'default' theme) */
 .highlight { background: var(--color-bg-secondary); }
