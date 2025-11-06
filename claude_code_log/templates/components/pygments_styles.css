@@ -90,11 +90,10 @@
     background: var(--color-bg-tertiary);
 }
 
-.read-tool-result .code-preview-label {
-    font-weight: 600;
+.read-tool-result .line-count {
+    font-size: 0.9em;
     color: var(--color-text-secondary);
-    display: block;
-    margin-bottom: 0.5em;
+    margin-left: 0.5em;
 }
 
 .read-tool-result .code-preview {
@@ -102,6 +101,10 @@
     opacity: 0.7;
     mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
     -webkit-mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
+}
+
+.read-tool-result .collapsible-code:not([open]) .code-preview {
+    display: block;
 }
 
 .read-tool-result .collapsible-code[open] .code-preview {
@@ -144,11 +147,10 @@
     background: var(--color-bg-tertiary);
 }
 
-.edit-tool-result .code-preview-label {
-    font-weight: 600;
+.edit-tool-result .line-count {
+    font-size: 0.9em;
     color: var(--color-text-secondary);
-    display: block;
-    margin-bottom: 0.5em;
+    margin-left: 0.5em;
 }
 
 .edit-tool-result .code-preview {
@@ -156,6 +158,10 @@
     opacity: 0.7;
     mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
     -webkit-mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
+}
+
+.edit-tool-result .collapsible-code:not([open]) .code-preview {
+    display: block;
 }
 
 .edit-tool-result .collapsible-code[open] .code-preview {
@@ -228,11 +234,10 @@
     background: var(--color-bg-tertiary);
 }
 
-.write-tool-content .code-preview-label {
-    font-weight: 600;
+.write-tool-content .line-count {
+    font-size: 0.9em;
     color: var(--color-text-secondary);
-    display: block;
-    margin-bottom: 0.5em;
+    margin-left: 0.5em;
 }
 
 .write-tool-content .code-preview {
@@ -240,6 +245,10 @@
     opacity: 0.7;
     mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
     -webkit-mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
+}
+
+.write-tool-content .collapsible-code:not([open]) .code-preview {
+    display: block;
 }
 
 .write-tool-content .collapsible-code[open] .code-preview {
