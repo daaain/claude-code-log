@@ -2209,6 +2209,86 @@ def generate_html(
     if not title:
         title = "Claude Transcript"
 
+    # Deduplicate messages caused by Claude Code version upgrade during session
+    # Only deduplicate when same message.id appears with DIFFERENT versions
+    # Streaming fragments (same message.id, same version) are kept as separate messages
+    from claude_code_log.models import AssistantTranscriptEntry, UserTranscriptEntry
+    from packaging.version import parse as parse_version
+    from collections import defaultdict
+
+    # Group messages by their unique identifier
+    message_groups: Dict[str, List[tuple[int, str, TranscriptEntry]]] = defaultdict(
+        list
+    )
+
+    for idx, message in enumerate(messages):
+        unique_id = None
+        version_str = getattr(message, "version", "0.0.0")
+
+        # Determine unique identifier based on message type
+        if isinstance(message, AssistantTranscriptEntry):
+            # Assistant messages: use message.id
+            if hasattr(message.message, "id"):
+                unique_id = f"msg:{message.message.id}"  # type: ignore
+
+        elif isinstance(message, UserTranscriptEntry):
+            # User messages (tool results): use tool_use_id
+            if hasattr(message, "message") and message.message.content:
+                for item in message.message.content:
+                    if hasattr(item, "tool_use_id"):
+                        unique_id = f"tool:{item.tool_use_id}"
+                        break
+
+        if unique_id:
+            message_groups[unique_id].append((idx, version_str, message))
+
+    # Determine which indices to keep
+    indices_to_keep = set()
+
+    for unique_id, group in message_groups.items():
+        if len(group) == 1:
+            # Single message, always keep
+            indices_to_keep.add(group[0][0])
+        else:
+            # Multiple messages with same ID - check if they have different versions
+            versions = {version_str for _, version_str, _ in group}
+
+            if len(versions) == 1:
+                # All same version = streaming fragments, keep ALL of them
+                for idx, _, _ in group:
+                    indices_to_keep.add(idx)
+            else:
+                # Different versions = version duplicates, keep only highest version
+                try:
+                    # Sort by semantic version, keep highest
+                    sorted_group = sorted(
+                        group, key=lambda x: parse_version(x[1]), reverse=True
+                    )
+                    indices_to_keep.add(sorted_group[0][0])
+                except Exception:
+                    # If version parsing fails, keep first occurrence
+                    indices_to_keep.add(group[0][0])
+
+    # Build deduplicated list
+    deduplicated_messages: List[TranscriptEntry] = []
+
+    for idx, message in enumerate(messages):
+        # Check if this message has a unique ID
+        has_unique_id = False
+        if isinstance(message, AssistantTranscriptEntry):
+            has_unique_id = hasattr(message.message, "id")
+        elif isinstance(message, UserTranscriptEntry):
+            if hasattr(message, "message") and message.message.content:
+                has_unique_id = any(
+                    hasattr(item, "tool_use_id") for item in message.message.content
+                )
+
+        # Keep message if: no unique ID (e.g., queue-operation) OR in keep set
+        if not has_unique_id or idx in indices_to_keep:
+            deduplicated_messages.append(message)
+
+    messages = deduplicated_messages
+
     # Pre-process to find and attach session summaries
     session_summaries: Dict[str, str] = {}
     uuid_to_session: Dict[str, str] = {}
