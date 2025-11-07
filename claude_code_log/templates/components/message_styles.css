@@ -231,7 +231,7 @@
     background-color: var(--error-semi);
 }
 
-.message.tool_result pre {
+.message.tool_use pre, .message.tool_result pre {
     font-size: 80%;
 }
 
