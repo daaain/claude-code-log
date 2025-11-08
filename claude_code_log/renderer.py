@@ -1432,7 +1432,7 @@ def _format_type_counts(type_counts: dict[str, int]) -> str:
         return f"{count} tool pair" if count == 1 else f"{count} tool pairs"
 
     # Build label parts
-    parts = []
+    parts: list[str] = []
     for msg_type, count in sorted(
         type_counts.items(), key=lambda x: x[1], reverse=True
     ):
