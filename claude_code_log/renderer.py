@@ -17,7 +17,6 @@ from pygments.formatters import HtmlFormatter  # type: ignore[reportUnknownVaria
 from pygments.util import ClassNotFound  # type: ignore[reportUnknownVariableType]
 
 from .models import (
-    AssistantTranscriptEntry,
     TranscriptEntry,
     SummaryTranscriptEntry,
     SystemTranscriptEntry,
@@ -2236,14 +2235,14 @@ def generate_html(
             if hasattr(message, "message") and message.message.content:
                 for item in message.message.content:
                     if hasattr(item, "tool_use_id"):
-                        unique_id = f"tool:{item.tool_use_id}"
+                        unique_id = f"tool:{item.tool_use_id}"  # type: ignore
                         break
 
         if unique_id:
             message_groups[unique_id].append((idx, version_str, message))
 
     # Determine which indices to keep
-    indices_to_keep = set()
+    indices_to_keep: set[int] = set()
 
     for unique_id, group in message_groups.items():
         if len(group) == 1:
