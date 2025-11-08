@@ -1,7 +1,7 @@
 /* Message and content styles */
 .message {
     margin-bottom: 1em;
-    padding: 1em;
+    padding: var(--message-padding);
     border-radius: 8px;
     border-left: var(--white-dimmed) 2px solid;
     background-color: var(--highlight-light);
@@ -12,14 +12,18 @@
     position: relative;
 }
 
-/* Horizontal Fold Bar */
+/* Message with fold bar: remove bottom padding */
+.message:has(.fold-bar) {
+    padding-bottom: 0;
+}
+
+/* Horizontal Fold Bar - integrated into message box */
 .fold-bar {
     display: flex;
-    margin: 0 0 1em 0;
+    margin: 1em calc(-1 * var(--message-padding)) 0;
     height: 28px;
-    border-radius: 0 0 4px 4px;
+    border-radius: 0 0 8px 8px;
     overflow: hidden;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
     transition: all 0.2s ease;
 }
 
@@ -35,19 +39,19 @@
     font-weight: 500;
     padding: 0.4em;
     transition: all 0.2s ease;
-    border-top: 2px solid;
+    border-bottom: 2px solid;
     background: linear-gradient(to bottom, #f8f8f8, #f0f0f0);
 }
 
 /* Double-line effect when folded */
 .fold-bar-section.folded {
-    border-top-style: double;
-    border-top-width: 4px;
+    border-bottom-style: double;
+    border-bottom-width: 4px;
 }
 
 .fold-bar-section:hover {
     background: linear-gradient(to bottom, #fff, #f5f5f5);
-    transform: translateY(-1px);
+    transform: translateY(1px);
 }
 
 .fold-bar-section:active {
@@ -57,6 +61,11 @@
 /* Left section: fold one level */
 .fold-one-level {
     border-right: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+/* Full-width single button when counts are equal */
+.fold-bar-section.full-width {
+    border-right: none;
 }
 
 /* Icon styling */
@@ -72,45 +81,49 @@
 }
 
 .fold-label {
-    color: #666;
+    color: var(--text-muted);
     font-size: 0.9em;
 }
 
 /* Border colors matching message types */
 .fold-bar[data-border-color="user"] .fold-bar-section {
-    border-top-color: #ff9800;
+    border-bottom-color: var(--user-color);
 }
 
 .fold-bar[data-border-color="assistant"] .fold-bar-section {
-    border-top-color: #9c27b0;
+    border-bottom-color: var(--assistant-color);
 }
 
 .fold-bar[data-border-color="system"] .fold-bar-section {
-    border-top-color: #d98100;
+    border-bottom-color: var(--system-color);
 }
 
 .fold-bar[data-border-color="system-warning"] .fold-bar-section {
-    border-top-color: #2196f3;
+    border-bottom-color: var(--system-warning-color);
 }
 
 .fold-bar[data-border-color="system-error"] .fold-bar-section {
-    border-top-color: #f44336;
+    border-bottom-color: var(--system-error-color);
 }
 
 .fold-bar[data-border-color="system-info"] .fold-bar-section {
-    border-top-color: var(--info-dimmed);
+    border-bottom-color: var(--info-dimmed);
 }
 
 .fold-bar[data-border-color="tool_use"] .fold-bar-section {
-    border-top-color: #4caf50;
+    border-bottom-color: var(--tool-use-color);
 }
 
 .fold-bar[data-border-color="tool_result"] .fold-bar-section {
-    border-top-color: var(--success-dimmed);
+    border-bottom-color: var(--success-dimmed);
 }
 
 .fold-bar[data-border-color="thinking"] .fold-bar-section {
-    border-top-color: var(--assistant-dimmed);
+    border-bottom-color: var(--assistant-dimmed);
+}
+
+.fold-bar[data-border-color="session-header"] .fold-bar-section {
+    border-bottom-color: #2196f3;
 }
 
 /* ========================================

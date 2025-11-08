@@ -211,8 +211,9 @@ class TestTodoWriteRendering:
             assert "Write tests" in html_content
             assert "🔄" in html_content  # in_progress emoji
             assert "⏳" in html_content  # pending emoji
+            # Check tool_use class is present (may have ancestor IDs appended)
             assert (
-                "class='message tool_use'" in html_content
+                "class='message tool_use" in html_content
             )  # tool as top-level message
 
             # Check CSS classes are applied

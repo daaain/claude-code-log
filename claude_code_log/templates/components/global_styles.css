@@ -29,9 +29,20 @@
     /* Slightly transparent variants (55 = ~33% opacity) */
     --highlight-light: #e3f2fd55;
 
+    /* Solid colors for message types */
+    --user-color: #ff9800;
+    --assistant-color: #9c27b0;
+    --system-color: #d98100;
+    --system-warning-color: #2196f3;
+    --system-error-color: #f44336;
+    --tool-use-color: #4caf50;
+
     /* Solid colors for text and accents */
     --text-muted: #666;
     --text-secondary: #495057;
+
+    /* Layout spacing */
+    --message-padding: 1em;
 
     /* Font families */
     --font-monospace: 'Fira Code', 'Monaco', 'Consolas', 'SF Mono', 'Inconsolata', 'Droid Sans Mono', 'Source Code Pro', 'Ubuntu Mono', 'Cascadia Code', 'Menlo', monospace;

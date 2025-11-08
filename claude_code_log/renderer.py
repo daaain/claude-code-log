@@ -1391,6 +1391,68 @@ def _get_template_environment() -> Environment:
     return env
 
 
+def _format_type_counts(type_counts: dict[str, int]) -> str:
+    """Format type counts into human-readable label.
+
+    Args:
+        type_counts: Dictionary of message type to count
+
+    Returns:
+        Human-readable label like "3 assistant, 4 tools" or "8 messages"
+
+    Examples:
+        {"assistant": 3, "tool_use": 4} -> "3 assistant, 4 tools"
+        {"tool_use": 2, "tool_result": 2} -> "2 tool pairs"
+        {"assistant": 1} -> "1 assistant"
+        {"thinking": 3} -> "3 thoughts"
+    """
+    if not type_counts:
+        return "0 messages"
+
+    # Type name mapping for better readability
+    type_labels = {
+        "assistant": ("assistant", "assistants"),
+        "user": ("user", "users"),
+        "tool_use": ("tool", "tools"),
+        "tool_result": ("result", "results"),
+        "thinking": ("thought", "thoughts"),
+        "system": ("system", "systems"),
+        "system-warning": ("warning", "warnings"),
+        "system-error": ("error", "errors"),
+        "system-info": ("info", "infos"),
+        "sidechain": ("task", "tasks"),
+    }
+
+    # Handle special case: tool_use and tool_result together = "tool pairs"
+    if (
+        set(type_counts.keys()) == {"tool_use", "tool_result"}
+        and type_counts["tool_use"] == type_counts["tool_result"]
+    ):
+        count = type_counts["tool_use"]
+        return f"{count} tool pair" if count == 1 else f"{count} tool pairs"
+
+    # Build label parts
+    parts = []
+    for msg_type, count in sorted(
+        type_counts.items(), key=lambda x: x[1], reverse=True
+    ):
+        singular, plural = type_labels.get(msg_type, (msg_type, f"{msg_type}s"))
+        label = singular if count == 1 else plural
+        parts.append(f"{count} {label}")
+
+    # Return combined label
+    if len(parts) == 1:
+        return parts[0]
+    elif len(parts) == 2:
+        return f"{parts[0]}, {parts[1]}"
+    else:
+        # For 3+ types, show top 2 and "X more"
+        remaining = sum(type_counts.values()) - sum(
+            type_counts[t] for t in list(type_counts.keys())[:2]
+        )
+        return f"{parts[0]}, {parts[1]}, {remaining} more"
+
+
 class TemplateMessage:
     """Structured message data for template rendering."""
 
@@ -1436,10 +1498,23 @@ class TemplateMessage:
         # Fold/unfold counts
         self.immediate_children_count = 0  # Direct children only
         self.total_descendants_count = 0  # All descendants recursively
+        # Type-aware counting for smarter labels
+        self.immediate_children_by_type: dict[
+            str, int
+        ] = {}  # {"assistant": 2, "tool_use": 3}
+        self.total_descendants_by_type: dict[str, int] = {}  # All descendants by type
         # Pairing metadata
         self.is_paired = False
         self.pair_role: Optional[str] = None  # "pair_first", "pair_last", "pair_middle"
         self.pair_duration: Optional[str] = None  # Duration for pair_last messages
+
+    def get_immediate_children_label(self) -> str:
+        """Generate human-readable label for immediate children."""
+        return _format_type_counts(self.immediate_children_by_type)
+
+    def get_total_descendants_label(self) -> str:
+        """Generate human-readable label for all descendants."""
+        return _format_type_counts(self.total_descendants_by_type)
 
 
 class TemplateProject:
@@ -2317,15 +2392,28 @@ def _mark_messages_with_children(messages: List[TemplateMessage]) -> None:
         # Get immediate parent (last in ancestry list)
         immediate_parent_id = message.ancestry[-1]
 
+        # Get message type for categorization
+        msg_type = message.css_class or message.type
+
         # Increment immediate parent's child count
         if immediate_parent_id in message_by_id:
-            message_by_id[immediate_parent_id].immediate_children_count += 1
-            message_by_id[immediate_parent_id].has_children = True
+            parent = message_by_id[immediate_parent_id]
+            parent.immediate_children_count += 1
+            parent.has_children = True
+            # Track by type
+            parent.immediate_children_by_type[msg_type] = (
+                parent.immediate_children_by_type.get(msg_type, 0) + 1
+            )
 
         # Increment descendant count for ALL ancestors
         for ancestor_id in message.ancestry:
             if ancestor_id in message_by_id:
-                message_by_id[ancestor_id].total_descendants_count += 1
+                ancestor = message_by_id[ancestor_id]
+                ancestor.total_descendants_count += 1
+                # Track by type
+                ancestor.total_descendants_by_type[msg_type] = (
+                    ancestor.total_descendants_by_type.get(msg_type, 0) + 1
+                )
 
 
 def generate_html(
@@ -2628,7 +2716,8 @@ def generate_html(
                 # Reset hierarchy stack for new session
                 hierarchy_stack.clear()
 
-                # Session headers don't participate in folding hierarchy
+                # Create session header with unique message ID so it can be a fold parent
+                session_message_id = f"session-{session_id}"
                 session_header = TemplateMessage(
                     message_type="session_header",
                     content_html=session_title,
@@ -2638,8 +2727,13 @@ def generate_html(
                     session_summary=current_session_summary,
                     session_id=session_id,
                     is_session_header=True,
+                    message_id=session_message_id,
+                    ancestry=[],  # Session headers are top-level
                 )
                 template_messages.append(session_header)
+
+                # Session header becomes the parent for all messages in this session
+                hierarchy_stack.append((0, session_message_id))
 
         # Update first user message if this is a user message and we don't have one yet
         elif message_type == "user" and not sessions[session_id]["first_user_message"]:

@@ -72,13 +72,33 @@
     {% for message in messages %}
     {% if message.is_session_header %}
     <div class="session-divider"></div>
-    <div id='session-{{ message.session_id }}' class='message session-header'>
+    <div id='session-{{ message.session_id }}' class='message session-header' data-message-id='{{ message.message_id }}'>
         <div class='header'>Session: {{ message.content_html }}</div>
         {% if message.session_subtitle %}
         <div class='session-subtitle' style='font-size: 0.9em; color: #666; margin-top: 4px;'>{{
             message.session_subtitle }} ({{message.session_subtitle.session_id}})</div>
         {% endif %}
-
+        {% if message.has_children %}
+        <div class='fold-bar' data-message-id='{{ message.message_id }}' data-border-color='session-header'>
+            {% if message.immediate_children_count == message.total_descendants_count %}
+            {# Same count = only one level, show single full-width button #}
+            <div class='fold-bar-section fold-one-level full-width' data-action='fold-one' data-target='{{ message.message_id }}' title='Fold {{ message.get_immediate_children_label() }}'>
+                <span class='fold-icon'>▼</span>
+                <span class='fold-label'>{{ message.get_immediate_children_label() }}</span>
+            </div>
+            {% else %}
+            {# Multiple levels, show both buttons #}
+            <div class='fold-bar-section fold-one-level' data-action='fold-one' data-target='{{ message.message_id }}' title='Fold {{ message.get_immediate_children_label() }}'>
+                <span class='fold-icon'>▼</span>
+                <span class='fold-label'>{{ message.get_immediate_children_label() }}</span>
+            </div>
+            <div class='fold-bar-section fold-all-levels' data-action='fold-all' data-target='{{ message.message_id }}' title='Fold all {{ message.total_descendants_count }} descendants'>
+                <span class='fold-icon'>▼▼</span>
+                <span class='fold-label'>{{ message.get_total_descendants_label() }} total</span>
+            </div>
+            {% endif %}
+        </div>
+        {% endif %}
     </div>
     {% else %}
     {% set markdown = message.css_class in ['assistant', 'thinking', 'sidechain'] or (message.css_class and 'compacted' in message.css_class) %}
@@ -102,21 +122,28 @@
             </div>
         </div>
         <div class='content{% if markdown %} markdown{% endif %}'>{{ message.content_html | safe }}</div>
-    </div>
-    {% if message.has_children %}
-    <div class='fold-bar' data-message-id='{{ message.message_id }}' data-border-color='{{ message.css_class }}'>
-        <div class='fold-bar-section fold-one-level' data-action='fold-one' data-target='{{ message.message_id }}' title='Unfold {{ message.immediate_children_count }} immediate {% if message.immediate_children_count == 1 %}child{% else %}children{% endif %}'>
-            <span class='fold-icon'>↓</span>
-            <span class='fold-count'>{{ message.immediate_children_count }}</span>
-            <span class='fold-label'>{% if message.immediate_children_count == 1 %}message{% else %}messages{% endif %}</span>
+        {% if message.has_children %}
+        <div class='fold-bar' data-message-id='{{ message.message_id }}' data-border-color='{{ message.css_class }}'>
+            {% if message.immediate_children_count == message.total_descendants_count %}
+            {# Same count = only one level, show single full-width button #}
+            <div class='fold-bar-section fold-one-level full-width' data-action='fold-one' data-target='{{ message.message_id }}' title='Fold {{ message.get_immediate_children_label() }}'>
+                <span class='fold-icon'>▼</span>
+                <span class='fold-label'>{{ message.get_immediate_children_label() }}</span>
+            </div>
+            {% else %}
+            {# Multiple levels, show both buttons #}
+            <div class='fold-bar-section fold-one-level' data-action='fold-one' data-target='{{ message.message_id }}' title='Fold {{ message.get_immediate_children_label() }}'>
+                <span class='fold-icon'>▼</span>
+                <span class='fold-label'>{{ message.get_immediate_children_label() }}</span>
+            </div>
+            <div class='fold-bar-section fold-all-levels' data-action='fold-all' data-target='{{ message.message_id }}' title='Fold all {{ message.total_descendants_count }} descendants'>
+                <span class='fold-icon'>▼▼</span>
+                <span class='fold-label'>{{ message.get_total_descendants_label() }} total</span>
+            </div>
+            {% endif %}
         </div>
-        <div class='fold-bar-section fold-all-levels' data-action='fold-all' data-target='{{ message.message_id }}' title='Unfold all {{ message.total_descendants_count }} descendants'>
-            <span class='fold-icon'>↓↓</span>
-            <span class='fold-count'>{{ message.total_descendants_count }}</span>
-            <span class='fold-label'>total</span>
-        </div>
+        {% endif %}
     </div>
-    {% endif %}
     {% endif %}
     {% endfor %}
 
@@ -462,22 +489,16 @@
                     // Unfold: show immediate children
                     immediateChildren.forEach(msg => {
                         msg.style.display = '';
-                        const foldBar = msg.nextElementSibling;
-                        if (foldBar && foldBar.classList.contains('fold-bar')) {
-                            foldBar.style.display = '';
-                        }
                     });
                     sectionElement.classList.remove('folded');
-                    sectionElement.querySelector('.fold-icon').textContent = '↓';
-                    updateFoldLabel(sectionElement, false);
+                    sectionElement.querySelector('.fold-icon').textContent = '▼';
                 } else {
                     // Fold: hide immediate children and their descendants
                     immediateChildren.forEach(msg => {
                         hideMessageAndDescendants(msg);
                     });
                     sectionElement.classList.add('folded');
-                    sectionElement.querySelector('.fold-icon').textContent = '▸';
-                    updateFoldLabel(sectionElement, true);
+                    sectionElement.querySelector('.fold-icon').textContent = '▶';
                 }
             }
 
@@ -489,36 +510,22 @@
                     // Unfold: show all descendants
                     descendants.forEach(msg => {
                         msg.style.display = '';
-                        const foldBar = msg.nextElementSibling;
-                        if (foldBar && foldBar.classList.contains('fold-bar')) {
-                            foldBar.style.display = '';
-                        }
                     });
                     sectionElement.classList.remove('folded');
-                    sectionElement.querySelector('.fold-icon').textContent = '↓↓';
+                    sectionElement.querySelector('.fold-icon').textContent = '▼▼';
                 } else {
                     // Fold: hide all descendants
                     descendants.forEach(msg => {
                         msg.style.display = 'none';
-                        const foldBar = msg.nextElementSibling;
-                        if (foldBar && foldBar.classList.contains('fold-bar')) {
-                            foldBar.style.display = 'none';
-                        }
                     });
                     sectionElement.classList.add('folded');
-                    sectionElement.querySelector('.fold-icon').textContent = '▸▸';
+                    sectionElement.querySelector('.fold-icon').textContent = '▶▶';
                 }
             }
 
             function hideMessageAndDescendants(message) {
-                // Hide the message
+                // Hide the message (fold bar is inside, so it gets hidden too)
                 message.style.display = 'none';
-
-                // Hide its fold bar
-                const foldBar = message.nextElementSibling;
-                if (foldBar && foldBar.classList.contains('fold-bar')) {
-                    foldBar.style.display = 'none';
-                }
 
                 // Find and hide all descendants recursively
                 const messageId = message.getAttribute('data-message-id');
@@ -530,49 +537,7 @@
                 }
             }
 
-            function updateFoldLabel(sectionElement, isFolded) {
-                const label = sectionElement.querySelector('.fold-label');
-                if (label) {
-                    const count = parseInt(sectionElement.querySelector('.fold-count').textContent);
-                    if (count === 1) {
-                        label.textContent = isFolded ? 'folded' : 'message';
-                    } else {
-                        label.textContent = isFolded ? 'folded' : 'messages';
-                    }
-                }
-            }
-
-            // Set default folded state: fold all messages except sessions
-            function setDefaultFoldedState() {
-                // Get all messages
-                const allMessages = document.querySelectorAll('.message');
-
-                // Find top-level messages (no ancestors in class list)
-                const topLevelMessages = Array.from(allMessages).filter(msg => {
-                    const classList = Array.from(msg.classList);
-                    const hasAncestors = classList.some(cls => cls.startsWith('d-'));
-                    return !hasAncestors;
-                });
-
-                // Fold each top-level message's children
-                topLevelMessages.forEach(msg => {
-                    const messageId = msg.getAttribute('data-message-id');
-                    if (!messageId) return;
-
-                    // Find its fold bar
-                    const foldBar = msg.nextElementSibling;
-                    if (foldBar && foldBar.classList.contains('fold-bar')) {
-                        // Click the "fold all" section to fold everything below
-                        const foldAllSection = foldBar.querySelector('.fold-all-levels');
-                        if (foldAllSection && !foldAllSection.classList.contains('folded')) {
-                            foldAllSection.click();
-                        }
-                    }
-                });
-            }
-
-            // Apply default folding after a short delay to ensure DOM is ready
-            setTimeout(setDefaultFoldedState, 100);
+            // No default folding - messages start expanded, fold bars show expanded state
         });
     </script>
     <!-- Search functionality script -->
