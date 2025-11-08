@@ -2633,6 +2633,7 @@ def generate_html(
         text_content = extract_text_content(message_content)
 
         # Separate tool/thinking/image content from text content
+        # Images in user messages stay inline, images in assistant messages are separate
         tool_items: List[ContentItem] = []
         text_only_content: List[ContentItem] = []
 
@@ -2641,12 +2642,16 @@ def generate_html(
             for item in message_content:
                 # Check for both custom types and Anthropic types
                 item_type = getattr(item, "type", None)
+                is_image = isinstance(item, ImageContent) or item_type == "image"
                 is_tool_item = isinstance(
                     item,
-                    (ToolUseContent, ToolResultContent, ThinkingContent, ImageContent),
-                ) or item_type in ("tool_use", "tool_result", "thinking", "image")
+                    (ToolUseContent, ToolResultContent, ThinkingContent),
+                ) or item_type in ("tool_use", "tool_result", "thinking")
 
-                if is_tool_item:
+                # Keep images inline for user messages, extract for assistant messages
+                if is_image and message_type == "user":
+                    text_only_items.append(item)
+                elif is_tool_item or is_image:
                     tool_items.append(item)
                 else:
                     text_only_items.append(item)
