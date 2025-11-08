@@ -480,7 +480,8 @@
                     if (!classList.includes(targetId)) return false;
 
                     // Check if it's an immediate child by finding all ancestor IDs
-                    const ancestorIds = classList.filter(cls => cls.startsWith('d-'));
+                    // Ancestor IDs can be either d-XXX (regular messages) or session-XXX (sessions)
+                    const ancestorIds = classList.filter(cls => cls.startsWith('d-') || cls.startsWith('session-'));
                     const lastAncestor = ancestorIds[ancestorIds.length - 1];
                     return lastAncestor === targetId;
                 });
