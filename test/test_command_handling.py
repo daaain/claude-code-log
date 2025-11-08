@@ -59,11 +59,11 @@ def test_system_message_command_handling():
         assert "<strong>Command:</strong> init" in html, (
             "Should show command name in summary"
         )
-        assert "class='message system'" in html, "Should have system CSS class"
+        # Check for system CSS class (may have ancestor IDs appended)
+        assert "class='message system" in html, "Should have system CSS class"
 
-        print(
-            "✓ Test passed: System messages with commands are shown in expandable details"
-        )
+        # Test passed successfully
+        pass
 
     finally:
         test_file_path.unlink()

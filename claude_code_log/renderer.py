@@ -2288,45 +2288,46 @@ def _get_message_hierarchy_level(css_class: str, is_sidechain: bool) -> int:
     """Determine the hierarchy level for a message based on its type and sidechain status.
 
     Correct hierarchy based on logical nesting:
-    - Level 0: User (triggers everything below), System
-    - Level 1: Assistant, Thinking, System warnings/info
-    - Level 2: Tool use/result (nested under assistant), Sidechain user (sub-assistant prompt)
-    - Level 3: Sidechain assistant/thinking (nested under sidechain user)
-    - Level 4: Sidechain tools (nested under sidechain assistant)
+    - Level 0: Session headers
+    - Level 1: User messages
+    - Level 2: System messages, Assistant, Thinking
+    - Level 3: Tool use/result (nested under assistant), Sidechain user (sub-assistant prompt)
+    - Level 4: Sidechain assistant/thinking (nested under sidechain user)
+    - Level 5: Sidechain tools (nested under sidechain assistant)
 
     Returns:
-        Integer hierarchy level (0-4)
+        Integer hierarchy level (1-5, session headers are 0)
     """
-    # User messages at level 0 (they trigger everything)
+    # User messages at level 1 (under session)
     if "user" in css_class and not is_sidechain:
-        return 0
-
-    # System messages at top level (level 0)
-    if "system" in css_class and not is_sidechain:
-        return 0
-
-    # Sidechain user (sub-assistant prompt) at level 2 (conceptually under Tool use that spawned it)
-    if is_sidechain and "user" in css_class:
-        return 2
-
-    # Sidechain assistant/thinking at level 3
-    if is_sidechain and ("assistant" in css_class or "thinking" in css_class):
-        return 3
-
-    # Sidechain tools at level 4
-    if is_sidechain and ("tool" in css_class):
-        return 4
-
-    # Main assistant/thinking at level 1 (nested under user)
-    if "assistant" in css_class or "thinking" in css_class:
         return 1
 
-    # Main tools at level 2 (nested under assistant)
-    if "tool" in css_class:
+    # System messages at level 2 (siblings to assistant, under user)
+    if "system" in css_class and not is_sidechain:
         return 2
 
-    # Default to level 0
-    return 0
+    # Sidechain user (sub-assistant prompt) at level 3 (conceptually under Tool use that spawned it)
+    if is_sidechain and "user" in css_class:
+        return 3
+
+    # Sidechain assistant/thinking at level 4
+    if is_sidechain and ("assistant" in css_class or "thinking" in css_class):
+        return 4
+
+    # Sidechain tools at level 5
+    if is_sidechain and ("tool" in css_class):
+        return 5
+
+    # Main assistant/thinking at level 2 (nested under user)
+    if "assistant" in css_class or "thinking" in css_class:
+        return 2
+
+    # Main tools at level 3 (nested under assistant)
+    if "tool" in css_class:
+        return 3
+
+    # Default to level 1
+    return 1
 
 
 def _update_hierarchy_stack(
