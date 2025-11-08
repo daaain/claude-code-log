@@ -493,6 +493,7 @@
                     });
                     sectionElement.classList.remove('folded');
                     sectionElement.querySelector('.fold-icon').textContent = '▼';
+                    // Note: Second button stays ▶▶ (we haven't unfolded everything)
                 } else {
                     // Fold: hide immediate children and their descendants
                     immediateChildren.forEach(msg => {
@@ -500,6 +501,15 @@
                     });
                     sectionElement.classList.add('folded');
                     sectionElement.querySelector('.fold-icon').textContent = '▶';
+
+                    // Coordinate: If we folded immediate children, all descendants are hidden
+                    // So update the "fold all" button to ▶▶ state
+                    const foldBar = sectionElement.parentElement;
+                    const foldAllSection = foldBar.querySelector('.fold-all-levels');
+                    if (foldAllSection) {
+                        foldAllSection.classList.add('folded');
+                        foldAllSection.querySelector('.fold-icon').textContent = '▶▶';
+                    }
                 }
             }
 
@@ -514,6 +524,15 @@
                     });
                     sectionElement.classList.remove('folded');
                     sectionElement.querySelector('.fold-icon').textContent = '▼▼';
+
+                    // Coordinate: If we unfolded all levels, immediate children are now visible
+                    // So update the "fold one" button to ▼ state
+                    const foldBar = sectionElement.parentElement;
+                    const foldOneSection = foldBar.querySelector('.fold-one-level');
+                    if (foldOneSection) {
+                        foldOneSection.classList.remove('folded');
+                        foldOneSection.querySelector('.fold-icon').textContent = '▼';
+                    }
                 } else {
                     // Fold: hide all descendants
                     descendants.forEach(msg => {
@@ -521,6 +540,15 @@
                     });
                     sectionElement.classList.add('folded');
                     sectionElement.querySelector('.fold-icon').textContent = '▶▶';
+
+                    // Coordinate: If we folded all levels, immediate children are now hidden
+                    // So update the "fold one" button to ▶ state
+                    const foldBar = sectionElement.parentElement;
+                    const foldOneSection = foldBar.querySelector('.fold-one-level');
+                    if (foldOneSection) {
+                        foldOneSection.classList.add('folded');
+                        foldOneSection.querySelector('.fold-icon').textContent = '▶';
+                    }
                 }
             }
 
@@ -538,7 +566,70 @@
                 }
             }
 
-            // No default folding - messages start expanded, fold bars show expanded state
+            // Set initial fold state on page load
+            function setInitialFoldState() {
+                // Get all messages
+                const allMessages = document.querySelectorAll('.message');
+
+                allMessages.forEach(msg => {
+                    const messageId = msg.getAttribute('data-message-id');
+                    if (!messageId) return;
+
+                    const isSession = msg.classList.contains('session-header');
+                    const isUser = msg.classList.contains('user');
+                    const foldBar = msg.querySelector('.fold-bar');
+
+                    if (!foldBar) return;
+
+                    const foldOneSection = foldBar.querySelector('.fold-one-level');
+                    const foldAllSection = foldBar.querySelector('.fold-all-levels');
+
+                    // Sessions and user messages: unfolded at first level
+                    if (isSession || isUser) {
+                        // First level is visible (▼), all levels are not (▶▶)
+                        if (foldOneSection) {
+                            foldOneSection.classList.remove('folded');
+                            foldOneSection.querySelector('.fold-icon').textContent = '▼';
+                        }
+                        if (foldAllSection) {
+                            foldAllSection.classList.add('folded');
+                            foldAllSection.querySelector('.fold-icon').textContent = '▶▶';
+                        }
+
+                        // Hide all descendants except immediate children
+                        const allDescendants = document.querySelectorAll(`.message.${messageId}`);
+                        allDescendants.forEach(descendant => {
+                            const classList = Array.from(descendant.classList);
+                            const ancestorIds = classList.filter(cls => cls.startsWith('d-') || cls.startsWith('session-'));
+                            const lastAncestor = ancestorIds[ancestorIds.length - 1];
+
+                            // Hide if it's not an immediate child
+                            if (lastAncestor !== messageId) {
+                                descendant.style.display = 'none';
+                            }
+                        });
+                    } else {
+                        // Assistant, system, thinking, tools: fully folded
+                        if (foldOneSection) {
+                            foldOneSection.classList.add('folded');
+                            foldOneSection.querySelector('.fold-icon').textContent = '▶';
+                        }
+                        if (foldAllSection) {
+                            foldAllSection.classList.add('folded');
+                            foldAllSection.querySelector('.fold-icon').textContent = '▶▶';
+                        }
+
+                        // Hide all descendants
+                        const allDescendants = document.querySelectorAll(`.message.${messageId}`);
+                        allDescendants.forEach(descendant => {
+                            descendant.style.display = 'none';
+                        });
+                    }
+                });
+            }
+
+            // Apply initial fold state
+            setInitialFoldState();
         });
     </script>
     <!-- Search functionality script -->
