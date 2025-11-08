@@ -40,7 +40,7 @@
     padding: 0.4em;
     transition: all 0.2s ease;
     border-bottom: 2px solid;
-    background: linear-gradient(to bottom, #f8f8f8, #f0f0f0);
+    background: linear-gradient(to bottom, #f8f8f844, #f0f0f0);
 }
 
 /* Double-line effect when folded */
