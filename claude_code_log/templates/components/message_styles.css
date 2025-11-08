@@ -12,36 +12,105 @@
     position: relative;
 }
 
-/* Fold/unfold toggle button */
-.fold-toggle {
-    position: absolute;
-    left: -20px;
-    top: 50%;
-    transform: translateY(-50%);
-    width: 18px;
-    height: 18px;
-    border: 1px solid #ccc;
-    background-color: #fff;
-    border-radius: 3px;
-    cursor: pointer;
-    font-size: 12px;
-    line-height: 1;
-    padding: 0;
+/* Horizontal Fold Bar */
+.fold-bar {
     display: flex;
-    align-items: center;
-    justify-content: center;
-    color: #666;
+    margin: 0 0 1em 0;
+    height: 28px;
+    border-radius: 0 0 4px 4px;
+    overflow: hidden;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
     transition: all 0.2s ease;
 }
 
-.fold-toggle:hover {
-    background-color: #f0f0f0;
-    border-color: #999;
-    color: #333;
+.fold-bar-section {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4em;
+    cursor: pointer;
+    user-select: none;
+    font-size: 0.9em;
+    font-weight: 500;
+    padding: 0.4em;
+    transition: all 0.2s ease;
+    border-top: 2px solid;
+    background: linear-gradient(to bottom, #f8f8f8, #f0f0f0);
 }
 
-.fold-toggle.folded {
-    color: #999;
+/* Double-line effect when folded */
+.fold-bar-section.folded {
+    border-top-style: double;
+    border-top-width: 4px;
+}
+
+.fold-bar-section:hover {
+    background: linear-gradient(to bottom, #fff, #f5f5f5);
+    transform: translateY(-1px);
+}
+
+.fold-bar-section:active {
+    transform: translateY(0);
+}
+
+/* Left section: fold one level */
+.fold-one-level {
+    border-right: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+/* Icon styling */
+.fold-icon {
+    font-size: 1.1em;
+    line-height: 1;
+}
+
+.fold-count {
+    font-weight: 600;
+    min-width: 1.5em;
+    text-align: center;
+}
+
+.fold-label {
+    color: #666;
+    font-size: 0.9em;
+}
+
+/* Border colors matching message types */
+.fold-bar[data-border-color="user"] .fold-bar-section {
+    border-top-color: #ff9800;
+}
+
+.fold-bar[data-border-color="assistant"] .fold-bar-section {
+    border-top-color: #9c27b0;
+}
+
+.fold-bar[data-border-color="system"] .fold-bar-section {
+    border-top-color: #d98100;
+}
+
+.fold-bar[data-border-color="system-warning"] .fold-bar-section {
+    border-top-color: #2196f3;
+}
+
+.fold-bar[data-border-color="system-error"] .fold-bar-section {
+    border-top-color: #f44336;
+}
+
+.fold-bar[data-border-color="system-info"] .fold-bar-section {
+    border-top-color: var(--info-dimmed);
+}
+
+.fold-bar[data-border-color="tool_use"] .fold-bar-section {
+    border-top-color: #4caf50;
+}
+
+.fold-bar[data-border-color="tool_result"] .fold-bar-section {
+    border-top-color: var(--success-dimmed);
+}
+
+.fold-bar[data-border-color="thinking"] .fold-bar-section {
+    border-top-color: var(--assistant-dimmed);
 }
 
 /* ========================================

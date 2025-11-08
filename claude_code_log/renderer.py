@@ -1433,6 +1433,9 @@ class TemplateMessage:
         self.ancestry = ancestry or []
         self.has_children = has_children
         self.has_markdown = has_markdown
+        # Fold/unfold counts
+        self.immediate_children_count = 0  # Direct children only
+        self.total_descendants_count = 0  # All descendants recursively
         # Pairing metadata
         self.is_paired = False
         self.pair_role: Optional[str] = None  # "pair_first", "pair_last", "pair_middle"
@@ -2288,25 +2291,41 @@ def _update_hierarchy_stack(
 
 
 def _mark_messages_with_children(messages: List[TemplateMessage]) -> None:
-    """Mark messages that have children based on ancestry relationships.
+    """Mark messages that have children and calculate descendant counts.
 
-    A message has children if any subsequent message has this message's ID in its ancestry.
-    This is done in-place by setting the `has_children` attribute.
+    Efficiently calculates:
+    - has_children: Whether message has any children
+    - immediate_children_count: Count of direct children only
+    - total_descendants_count: Count of all descendants recursively
+
+    Time complexity: O(n) where n is the number of messages.
 
     Args:
         messages: List of template messages to process
     """
-    # Build a set of all message IDs that appear in any ancestry list
-    parent_ids: set[str] = set()
-
+    # Build index of messages by ID for O(1) lookup
+    message_by_id: dict[str, TemplateMessage] = {}
     for message in messages:
-        if message.ancestry:
-            parent_ids.update(message.ancestry)
+        if message.message_id:
+            message_by_id[message.message_id] = message
 
-    # Mark messages that are parents
+    # Process each message and update counts for ancestors
     for message in messages:
-        if message.message_id and message.message_id in parent_ids:
-            message.has_children = True
+        if not message.ancestry:
+            continue  # Top-level message, no parents
+
+        # Get immediate parent (last in ancestry list)
+        immediate_parent_id = message.ancestry[-1]
+
+        # Increment immediate parent's child count
+        if immediate_parent_id in message_by_id:
+            message_by_id[immediate_parent_id].immediate_children_count += 1
+            message_by_id[immediate_parent_id].has_children = True
+
+        # Increment descendant count for ALL ancestors
+        for ancestor_id in message.ancestry:
+            if ancestor_id in message_by_id:
+                message_by_id[ancestor_id].total_descendants_count += 1
 
 
 def generate_html(
