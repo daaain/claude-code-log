@@ -102,7 +102,6 @@
                 {% if message.token_usage %}
                 <span class='token-usage'>{{ message.token_usage }}</span>
                 {% endif %}
-                <span style='font-size: 0.7em; color: #999; font-family: monospace;'>{{ message.message_id }}{% if message.ancestry %} ← [{% for aid in message.ancestry %}{{ aid }}{% if not loop.last %}, {% endif %}{% endfor %}]{% endif %}</span>
             </div>
         </div>
         <div class='content{% if markdown %} markdown{% endif %}'>{{ message.content_html | safe }}</div>
