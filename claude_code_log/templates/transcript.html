@@ -511,9 +511,10 @@
                     sectionElement.querySelector('.fold-icon').textContent = '▼';
                     // Note: Second button stays ▶▶ (we haven't unfolded everything)
                 } else {
-                    // Fold: hide immediate children and their descendants
-                    immediateChildren.forEach(msg => {
-                        hideMessageAndDescendants(msg);
+                    // Fold: hide ALL descendants (same approach as handleFoldAll for O(n) performance)
+                    const allDescendants = document.querySelectorAll(`.message.${targetId}`);
+                    allDescendants.forEach(msg => {
+                        msg.style.display = 'none';
                     });
                     sectionElement.classList.add('folded');
                     sectionElement.querySelector('.fold-icon').textContent = '▶';
@@ -605,20 +606,6 @@
                         foldOneSection.classList.remove('folded');
                         foldOneSection.querySelector('.fold-icon').textContent = '▼';
                     }
-                }
-            }
-
-            function hideMessageAndDescendants(message) {
-                // Hide the message (fold bar is inside, so it gets hidden too)
-                message.style.display = 'none';
-
-                // Find and hide all descendants recursively
-                const messageId = message.getAttribute('data-message-id');
-                if (messageId) {
-                    const descendants = document.querySelectorAll(`.message.${messageId}`);
-                    descendants.forEach(desc => {
-                        hideMessageAndDescendants(desc);
-                    });
                 }
             }
 
