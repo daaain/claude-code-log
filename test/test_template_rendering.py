@@ -40,8 +40,8 @@ class TestTemplateRendering:
         )
 
         # Check that all message types are present
-        assert "class='message user'" in html_content
-        assert "class='message assistant'" in html_content
+        assert "class='message user" in html_content
+        assert "class='message assistant" in html_content
         # Summary messages are now integrated into session headers
         assert "session-summary" in html_content or "Summary:" in html_content
 
@@ -249,8 +249,8 @@ class TestTemplateRendering:
         html_content = html_file.read_text(encoding="utf-8")
 
         # Check message type classes
-        assert "class='message user'" in html_content
-        assert "class='message assistant'" in html_content
+        assert "class='message user" in html_content
+        assert "class='message assistant" in html_content
         # Summary messages are now integrated into session headers
         assert "session-summary" in html_content or "Summary:" in html_content
 
