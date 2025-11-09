@@ -1,5 +1,23 @@
 # Fold Bar State Diagram
 
+Reminder: virtual parent/child structure of a conversation:
+
+```
+Session (level 0)
+└─  User message (level 1)
+      ├─ System: Info (level 2)
+      └─ Assistant response (level 2)
+          ├─ Tool: Read (level 3)
+          │   └─ Tool result (level 3, paired with Read)
+          └─ Tool: Task (level 3)
+              └─ Sub-assistant prompt (level 3, sidechain user)
+                  └─ Sub-assistant response (level 4, sidechain assistant)
+                      ├─ Sub-tool: Edit (level 5, sidechain tool)
+                      └─ Sub-tool result (level 5, sidechain tool)
+```
+
+At each level, we want to fold/unfold immediate children or all children.
+
 ## Proposed Behavior
 
 The fold bar has two buttons with four possible states:
