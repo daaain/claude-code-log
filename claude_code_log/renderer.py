@@ -1424,19 +1424,33 @@ def _format_type_counts(type_counts: dict[str, int]) -> str:
     }
 
     # Handle special case: tool_use and tool_result together = "tool pairs"
+    # Create a modified counts dict that combines tool pairs
+    modified_counts = dict(type_counts)
     if (
-        set(type_counts.keys()) == {"tool_use", "tool_result"}
-        and type_counts["tool_use"] == type_counts["tool_result"]
+        "tool_use" in modified_counts
+        and "tool_result" in modified_counts
+        and modified_counts["tool_use"] == modified_counts["tool_result"]
     ):
-        count = type_counts["tool_use"]
-        return f"{count} tool pair" if count == 1 else f"{count} tool pairs"
+        # Replace tool_use and tool_result with tool_pair
+        pair_count = modified_counts["tool_use"]
+        del modified_counts["tool_use"]
+        del modified_counts["tool_result"]
+        modified_counts["tool_pair"] = pair_count
+
+    # Add tool_pair label
+    type_labels_with_pairs = {
+        **type_labels,
+        "tool_pair": ("tool pair", "tool pairs"),
+    }
 
     # Build label parts
     parts: list[str] = []
     for msg_type, count in sorted(
-        type_counts.items(), key=lambda x: x[1], reverse=True
+        modified_counts.items(), key=lambda x: x[1], reverse=True
     ):
-        singular, plural = type_labels.get(msg_type, (msg_type, f"{msg_type}s"))
+        singular, plural = type_labels_with_pairs.get(
+            msg_type, (msg_type, f"{msg_type}s")
+        )
         label = singular if count == 1 else plural
         parts.append(f"{count} {label}")
 

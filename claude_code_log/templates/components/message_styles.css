@@ -126,16 +126,32 @@
     border-bottom-color: #2196f3;
 }
 
+/* Sidechain (sub-assistant) fold-bar styling */
+.sidechain .fold-bar-section {
+    border-bottom-style: dashed;
+    border-bottom-width: 2px;
+}
+
+.sidechain .fold-bar-section.folded {
+    border-bottom-style: dashed;
+    border-bottom-width: 4px;
+}
+
 /* ========================================
    CONVERSATION STRUCTURE - Margin Hierarchy
    ======================================== */
 
 /* Right-aligned messages (user-initiated, right margin 0, left margin 33%) */
-.user:not(.compacted),
-.system,
-.system-error {
+.user:not(.compacted) {
     margin-left: 33%;
     margin-right: 0;
+}
+
+/* System messages at level 2 (same as assistant) */
+.system,
+.system-error {
+    margin-left: 0;
+    margin-right: 8em;
 }
 
 /* Left-aligned messages (assistant-generated) with progressive indentation */
@@ -156,8 +172,8 @@
 /* System warnings/info (assistant-initiated) */
 .system-warning,
 .system-info {
-    margin-left: 2em;
-    margin-right: 6em;
+    margin-left: 0;
+    margin-right: 10em;
 }
 
 /* Sidechain messages (sub-assistant hierarchy) */
