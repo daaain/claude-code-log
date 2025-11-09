@@ -611,9 +611,37 @@
 
             // Set initial fold state on page load
             function setInitialFoldState() {
-                // Get all messages
+                // Get all messages once
                 const allMessages = document.querySelectorAll('.message');
 
+                // Build hierarchy lookup structure in a single pass - O(n)
+                const messagesByParentId = {};  // Maps parent ID -> immediate children elements
+                const allDescendantsByParentId = {};  // Maps parent ID -> all descendant elements
+
+                allMessages.forEach(msg => {
+                    const classList = Array.from(msg.classList);
+                    const ancestorIds = classList.filter(cls => cls.startsWith('d-') || cls.startsWith('session-'));
+
+                    if (ancestorIds.length > 0) {
+                        const lastAncestor = ancestorIds[ancestorIds.length - 1];
+
+                        // Track immediate children
+                        if (!messagesByParentId[lastAncestor]) {
+                            messagesByParentId[lastAncestor] = [];
+                        }
+                        messagesByParentId[lastAncestor].push(msg);
+
+                        // Track all descendants
+                        ancestorIds.forEach(ancestorId => {
+                            if (!allDescendantsByParentId[ancestorId]) {
+                                allDescendantsByParentId[ancestorId] = [];
+                            }
+                            allDescendantsByParentId[ancestorId].push(msg);
+                        });
+                    }
+                });
+
+                // Now process each message using cached hierarchy - O(n)
                 allMessages.forEach(msg => {
                     const messageId = msg.getAttribute('data-message-id');
                     if (!messageId) return;
@@ -630,12 +658,7 @@
                     // Check if user message has only tools (no assistant/system/thinking children)
                     let hasOnlyTools = false;
                     if (isUser) {
-                        const immediateChildren = Array.from(document.querySelectorAll(`.message.${messageId}`)).filter(descendant => {
-                            const classList = Array.from(descendant.classList);
-                            const ancestorIds = classList.filter(cls => cls.startsWith('d-') || cls.startsWith('session-'));
-                            const lastAncestor = ancestorIds[ancestorIds.length - 1];
-                            return lastAncestor === messageId;
-                        });
+                        const immediateChildren = messagesByParentId[messageId] || [];
 
                         const hasNonToolChildren = immediateChildren.some(child =>
                             child.classList.contains('assistant') ||
@@ -658,14 +681,12 @@
                         }
 
                         // Show immediate children, hide deeper descendants
-                        const allDescendants = document.querySelectorAll(`.message.${messageId}`);
-                        allDescendants.forEach(descendant => {
-                            const classList = Array.from(descendant.classList);
-                            const ancestorIds = classList.filter(cls => cls.startsWith('d-') || cls.startsWith('session-'));
-                            const lastAncestor = ancestorIds[ancestorIds.length - 1];
+                        const allDescendants = allDescendantsByParentId[messageId] || [];
+                        const immediateChildren = messagesByParentId[messageId] || [];
 
+                        allDescendants.forEach(descendant => {
                             // Show immediate children, hide non-immediate children
-                            if (lastAncestor === messageId) {
+                            if (immediateChildren.includes(descendant)) {
                                 descendant.style.display = '';  // Show immediate child
 
                                 // Set immediate children to folded state (▶/▶▶)
@@ -699,7 +720,7 @@
                         }
 
                         // Hide all descendants
-                        const allDescendants = document.querySelectorAll(`.message.${messageId}`);
+                        const allDescendants = allDescendantsByParentId[messageId] || [];
                         allDescendants.forEach(descendant => {
                             descendant.style.display = 'none';
                         });
