@@ -86,7 +86,8 @@
 }
 
 /* Border colors matching message types */
-.fold-bar[data-border-color="user"] .fold-bar-section {
+.fold-bar[data-border-color="user"] .fold-bar-section,
+.fold-bar[data-border-color="user compacted"] .fold-bar-section {
     border-bottom-color: var(--user-color);
 }
 
