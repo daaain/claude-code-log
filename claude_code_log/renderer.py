@@ -2,6 +2,7 @@
 """Render Claude transcript data to HTML format."""
 
 import json
+import re
 from pathlib import Path
 from typing import List, Optional, Dict, Any, cast, TYPE_CHECKING
 
@@ -1255,11 +1256,13 @@ def extract_ide_notifications(text: str) -> tuple[List[str], str]:
     return notifications, remaining_text.strip()
 
 
-def render_user_message_content(content_list: List[ContentItem]) -> tuple[str, bool]:
+def render_user_message_content(
+    content_list: List[ContentItem],
+) -> tuple[str, bool, bool]:
     """Render user message content with IDE tag extraction and compacted summary handling.
 
     Returns:
-        A tuple of (content_html, is_compacted)
+        A tuple of (content_html, is_compacted, is_memory_input)
     """
     # Check first text item
     if content_list and hasattr(content_list[0], "text"):
@@ -1270,7 +1273,20 @@ def render_user_message_content(content_list: List[ContentItem]) -> tuple[str, b
             # Render entire content as markdown for compacted summaries
             # Use "assistant" to trigger markdown rendering instead of pre-formatted text
             content_html = render_message_content(content_list, "assistant")
-            return content_html, True
+            return content_html, True, False
+
+        # Check for user memory input
+        memory_match = re.search(
+            r"<user-memory-input>(.*?)</user-memory-input>",
+            first_text,
+            re.DOTALL,
+        )
+        if memory_match:
+            memory_content = memory_match.group(1).strip()
+            # Render the memory content as user message
+            memory_content_list = [TextContent(type="text", text=memory_content)]
+            content_html = render_message_content(memory_content_list, "user")
+            return content_html, False, True
 
         # Extract IDE notifications from first text item
         ide_notifications_html, remaining_text = extract_ide_notifications(first_text)
@@ -1293,7 +1309,7 @@ def render_user_message_content(content_list: List[ContentItem]) -> tuple[str, b
         # No text in first item or empty list, render normally
         content_html = render_message_content(content_list, "user")
 
-    return content_html, False
+    return content_html, False, False
 
 
 def render_message_content(content: List[ContentItem], message_type: str) -> str:
@@ -1488,6 +1504,8 @@ class TemplateMessage:
         message_id: Optional[str] = None,
         ancestry: Optional[List[str]] = None,
         has_children: bool = False,
+        uuid: Optional[str] = None,
+        parent_uuid: Optional[str] = None,
     ):
         self.type = message_type
         self.content_html = content_html
@@ -1509,6 +1527,8 @@ class TemplateMessage:
         self.ancestry = ancestry or []
         self.has_children = has_children
         self.has_markdown = has_markdown
+        self.uuid = uuid
+        self.parent_uuid = parent_uuid
         # Fold/unfold counts
         self.immediate_children_count = 0  # Direct children only
         self.total_descendants_count = 0  # All descendants recursively
@@ -2084,11 +2104,16 @@ def _process_regular_message(
         if is_sidechain:
             content_html = render_message_content(text_only_content, "assistant")
             is_compacted = False
+            is_memory_input = False
         else:
-            content_html, is_compacted = render_user_message_content(text_only_content)
+            content_html, is_compacted, is_memory_input = render_user_message_content(
+                text_only_content
+            )
             if is_compacted:
                 css_class = f"{message_type} compacted"
                 message_title = "User (compacted conversation)"
+            elif is_memory_input:
+                message_title = "Memory"
     else:
         # Non-user messages: render directly
         content_html = render_message_content(text_only_content, message_type)
@@ -2125,12 +2150,14 @@ def _identify_message_pairs(messages: List[TemplateMessage]) -> None:
 
     Uses a two-pass algorithm:
     1. First pass: Build index of tool_use_id -> message index for tool_use and tool_result
+                   Build index of uuid -> message index for parent-child system messages
     2. Second pass: Sequential scan for adjacent pairs (system+output, bash, thinking+assistant)
-                   and match tool_use/tool_result using the index
+                   and match tool_use/tool_result and uuid-based pairs using the index
     """
     # Pass 1: Build index of tool_use messages and tool_result messages by tool_use_id
     tool_use_index: Dict[str, int] = {}  # tool_use_id -> message index
     tool_result_index: Dict[str, int] = {}  # tool_use_id -> message index
+    uuid_index: Dict[str, int] = {}  # uuid -> message index for parent-child pairing
 
     for i, msg in enumerate(messages):
         if msg.tool_use_id:
@@ -2138,6 +2165,9 @@ def _identify_message_pairs(messages: List[TemplateMessage]) -> None:
                 tool_use_index[msg.tool_use_id] = i
             elif "tool_result" in msg.css_class:
                 tool_result_index[msg.tool_use_id] = i
+        # Build UUID index for system messages (both parent and child)
+        if msg.uuid and "system" in msg.css_class:
+            uuid_index[msg.uuid] = i
 
     # Pass 2: Sequential scan to identify pairs
     i = 0
@@ -2169,6 +2199,16 @@ def _identify_message_pairs(messages: List[TemplateMessage]) -> None:
                 current.pair_role = "pair_first"
                 result_msg.is_paired = True
                 result_msg.pair_role = "pair_last"
+
+        # Check for UUID-based parent-child system message pair (no distance limit)
+        if "system" in current.css_class and current.parent_uuid:
+            if current.parent_uuid in uuid_index:
+                parent_idx = uuid_index[current.parent_uuid]
+                parent_msg = messages[parent_idx]
+                parent_msg.is_paired = True
+                parent_msg.pair_role = "pair_first"
+                current.is_paired = True
+                current.pair_role = "pair_last"
 
         # Check for bash-input + bash-output pair (adjacent only)
         if current.css_class == "bash-input" and i + 1 < len(messages):
@@ -2595,6 +2635,9 @@ def generate_html(
     hierarchy_stack: List[tuple[int, str]] = []
     message_id_counter = 0
 
+    # UUID to message ID mapping for parent-child relationships
+    uuid_to_msg_id: Dict[str, str] = {}
+
     for message in messages:
         message_type = message.type
 
@@ -2612,20 +2655,82 @@ def generate_html(
             timestamp = getattr(message, "timestamp", "")
             formatted_timestamp = format_timestamp(timestamp) if timestamp else ""
 
+            # Extract command name if present
+            command_name_match = re.search(
+                r"<command-name>(.*?)</command-name>", message.content, re.DOTALL
+            )
+            # Also check for command output (child of user command)
+            command_output_match = re.search(
+                r"<local-command-stdout>(.*?)</local-command-stdout>",
+                message.content,
+                re.DOTALL,
+            )
+
             # Create level-specific styling and icons
             level = getattr(message, "level", "info")
             level_icon = {"warning": "⚠️", "error": "❌", "info": "ℹ️"}.get(level, "ℹ️")
-            level_css = f"system system-{level}"
 
-            # Process ANSI codes in system messages (they may contain command output)
-            html_content = _convert_ansi_to_html(message.content)
-            content_html = f"<strong>{level_icon}</strong> {html_content}"
+            # Determine CSS class:
+            # - Command name (user-initiated): "system" only
+            # - Command output (assistant response): "system system-{level}"
+            # - Other system messages: "system system-{level}"
+            if command_name_match:
+                # User-initiated command
+                level_css = "system"
+            else:
+                # Command output or other system message
+                level_css = f"system system-{level}"
 
-            # Determine hierarchy level and update stack
-            current_level = _get_message_hierarchy_level(level_css, False)
-            msg_id, ancestry, message_id_counter = _update_hierarchy_stack(
-                hierarchy_stack, current_level, message_id_counter
-            )
+            # Process content: extract command name or command output, or use full content
+            if command_name_match:
+                # Show just the command name
+                command_name = command_name_match.group(1).strip()
+                html_content = f"<code>{html.escape(command_name)}</code>"
+                content_html = f"<strong>{level_icon}</strong> {html_content}"
+            elif command_output_match:
+                # Extract and process command output
+                output = command_output_match.group(1).strip()
+                html_content = _convert_ansi_to_html(output)
+                content_html = f"<strong>{level_icon}</strong> {html_content}"
+            else:
+                # Process ANSI codes in system messages (they may contain command output)
+                html_content = _convert_ansi_to_html(message.content)
+                content_html = f"<strong>{level_icon}</strong> {html_content}"
+
+            # Check if this message has a parent (for pairing system-info messages)
+            parent_uuid = getattr(message, "parentUuid", None)
+            is_sidechain = getattr(message, "isSidechain", False)
+
+            # Determine hierarchy: use parentUuid if available, otherwise use stack
+            if parent_uuid and parent_uuid in uuid_to_msg_id:
+                # This is a child message (e.g., command output following command invocation)
+                parent_msg_id = uuid_to_msg_id[parent_uuid]
+                # Find the parent's level in the stack
+                for i, (stack_id, stack_level) in enumerate(hierarchy_stack):
+                    if stack_id == parent_msg_id:
+                        # Child is one level deeper than parent
+                        current_level = stack_level + 1
+                        # Update stack: keep parent, add child
+                        hierarchy_stack = hierarchy_stack[: i + 1]
+                        break
+                else:
+                    # Parent not found in stack, use default
+                    current_level = _get_message_hierarchy_level(
+                        level_css, is_sidechain
+                    )
+
+                msg_id, ancestry, message_id_counter = _update_hierarchy_stack(
+                    hierarchy_stack, current_level, message_id_counter
+                )
+            else:
+                # No parent, use normal hierarchy determination
+                current_level = _get_message_hierarchy_level(level_css, is_sidechain)
+                msg_id, ancestry, message_id_counter = _update_hierarchy_stack(
+                    hierarchy_stack, current_level, message_id_counter
+                )
+
+            # Track this message's UUID for potential children
+            uuid_to_msg_id[message.uuid] = msg_id
 
             system_template_message = TemplateMessage(
                 message_type="system",
@@ -2637,6 +2742,8 @@ def generate_html(
                 message_title=f"System {level.title()}",
                 message_id=msg_id,
                 ancestry=ancestry,
+                uuid=message.uuid,  # Store UUID for pairing
+                parent_uuid=parent_uuid,  # Store parent UUID for pairing
             )
             template_messages.append(system_template_message)
             continue

@@ -114,12 +114,12 @@
 }
 
 .filter-toggle[data-type="system"] {
-    border-color: #d98100;
+    border-color: var(--system-color);
     border-width: 2px;
 }
 
 .filter-toggle[data-type="tool"] {
-    border-color: #4caf50;
+    border-color: var(--tool-use-color);
     border-width: 2px;
 }
 

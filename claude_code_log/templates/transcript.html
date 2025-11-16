@@ -105,7 +105,8 @@
     <div class='message {{ message.css_class }}{% if message.is_paired %} paired-message {{ message.pair_role }}{% endif %}{% for ancestor_id in message.ancestry %} {{ ancestor_id }}{% endfor %}' data-message-id='{{ message.message_id }}'>
         <div class='header'>
             <span{% if message.title_hint %} title="{{ message.title_hint }}"{% endif %}>{% if message.message_title %}{%
-                if message.css_class == 'user' %}🤷 {%
+                if message.message_title == 'Memory' %}💭 {%
+                elif message.css_class == 'user' %}🤷 {%
                 elif message.css_class == 'assistant' %}🤖 {%
                 elif message.css_class == 'system' %}⚙️ {%
                 elif message.css_class == 'tool_use' and not starts_with_emoji(message.message_title) %}🛠️ {%

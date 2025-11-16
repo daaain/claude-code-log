@@ -143,13 +143,13 @@
    ======================================== */
 
 /* Right-aligned messages (user-initiated, right margin 0, left margin 33%) */
-.user:not(.compacted) {
+.user:not(.compacted),
+.system {
     margin-left: 33%;
     margin-right: 0;
 }
 
-/* System messages at level 2 (same as assistant) */
-.system,
+/* System error messages (assistant-generated) */
 .system-error {
     margin-left: 0;
     margin-right: 8em;
@@ -175,6 +175,12 @@
 .system-info {
     margin-left: 0;
     margin-right: 10em;
+}
+
+/* Exception: paired system-info messages align right (like user commands) */
+.system.system-info.paired-message {
+    margin-left: 33%;
+    margin-right: 0;
 }
 
 /* Sidechain messages (sub-assistant hierarchy) */
@@ -272,16 +278,16 @@
 }
 
 .system {
-    border-left-color: #d98100;
+    border-left-color: var(--system-color);
 }
 
 .system-warning {
-    border-left-color: #2196f3;
+    border-left-color: var(--system-warning-color);
     background-color: var(--highlight-semi);
 }
 
 .system-error {
-    border-left-color: #f44336;
+    border-left-color: var(--system-error-color);
     background-color: var(--error-semi);
 }
 
