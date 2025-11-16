@@ -129,7 +129,9 @@ def test_render_user_message_with_multi_item_content():
         image_item,
     ]
 
-    content_html, is_compacted = render_user_message_content(content_list)
+    content_html, is_compacted, is_memory_input = render_user_message_content(
+        content_list
+    )
 
     # Should extract IDE notification
     assert "🤖" in content_html
@@ -145,6 +147,8 @@ def test_render_user_message_with_multi_item_content():
 
     # Should not be compacted
     assert is_compacted is False
+    # Should not be memory input
+    assert is_memory_input is False
 
 
 def test_render_message_content_single_text_item():
