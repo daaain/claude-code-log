@@ -2446,6 +2446,11 @@ def _mark_messages_with_children(messages: List[TemplateMessage]) -> None:
         if not message.ancestry:
             continue  # Top-level message, no parents
 
+        # Skip counting pair_last messages (second in a pair)
+        # Pairs are visually presented as a single unit, so we only count the first
+        if message.is_paired and message.pair_role == "pair_last":
+            continue
+
         # Get immediate parent (last in ancestry list)
         immediate_parent_id = message.ancestry[-1]
 
