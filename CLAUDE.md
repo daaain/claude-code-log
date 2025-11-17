@@ -1,13 +1,15 @@
 # Claude Code Log
 
-A Python CLI tool that converts Claude transcript JSONL files into readable HTML format.
+A Python CLI tool that converts Claude Code transcript JSONL files into readable HTML, text, markdown, or chat format.
 
 ## Project Overview
 
-This tool processes Claude Code transcript files (stored as JSONL) and generates clean, minimalist HTML pages with comprehensive session navigation and token usage tracking. It's designed to create a readable log of your Claude interactions with rich metadata and easy navigation.
+This tool processes Claude Code transcript files (stored as JSONL) and generates clean, readable output in multiple formats with comprehensive session navigation and token usage tracking. It supports HTML for browser viewing, verbose text for detailed analysis, markdown for documentation, and compact chat format for quick conversation review.
 
 ## Key Features
 
+- **Multiple Output Formats**: Generate HTML, plain text, markdown, or compact chat format from transcript files
+- **Stdin Piping Support**: Pipe JSONL data directly for use in CI/CD pipelines and automation
 - **Interactive TUI (Terminal User Interface)**: Browse and manage Claude Code sessions with real-time navigation, summaries, and quick actions for HTML export and session resuming
 - **Project Hierarchy Processing**: Process entire `~/.claude/projects/` directory with linked index page
 - **Individual Session Files**: Generate separate HTML files for each session with navigation links
@@ -113,10 +115,31 @@ claude-code-log /path/to/directory --from-date "yesterday" --to-date "today"
 claude-code-log /path/to/directory --from-date "3 days ago" --to-date "yesterday"
 ```
 
+### Text, Markdown, and Chat Output
+
+Generate non-HTML formats for documentation or quick review:
+
+```bash
+# Verbose text format (timestamps, tokens, full tool details)
+claude-code-log /path/to/directory --format text -o output.txt
+
+# Markdown format (for documentation)
+claude-code-log /path/to/directory --format markdown -o output.md
+
+# Compact chat format (clean conversation, like Claude Code UI)
+claude-code-log /path/to/directory --format chat -o chat.txt
+```
+
+**Format Comparison:**
+- **text**: Verbose with timestamps, token usage, working directories
+- **markdown**: Same as text with markdown heading hierarchy
+- **chat**: Compact conversation flow with tool symbols (⏺ for tool use, ⎿ for results)
+
 ## File Structure
 
 - `claude_code_log/parser.py` - Data extraction and parsing from JSONL files
 - `claude_code_log/renderer.py` - HTML generation and template rendering
+- `claude_code_log/text_renderer.py` - Plain text and markdown rendering
 - `claude_code_log/converter.py` - High-level conversion orchestration
 - `claude_code_log/cli.py` - Command-line interface with project discovery
 - `claude_code_log/models.py` - Pydantic models for transcript data structures

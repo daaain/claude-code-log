@@ -32,6 +32,135 @@ from .renderer import (
     is_html_outdated,
     get_project_display_name,
 )
+from .text_renderer import generate_text, generate_markdown, generate_chat
+
+
+def convert_jsonl_to_output(
+    input_path: Path,
+    output_path: Optional[Path] = None,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    output_format: str = "html",
+    generate_individual_sessions: bool = True,
+    use_cache: bool = True,
+    silent: bool = False,
+) -> Path:
+    """Convert JSONL transcript(s) to specified output format.
+
+    Args:
+        input_path: Path to JSONL file or directory
+        output_path: Optional output file path
+        from_date: Optional start date filter
+        to_date: Optional end date filter
+        output_format: Output format - "html", "text", or "markdown"
+        generate_individual_sessions: Whether to generate individual session files (HTML only)
+        use_cache: Whether to use cache
+        silent: Whether to suppress output messages
+
+    Returns:
+        Path to the generated output file
+    """
+    if output_format.lower() == "html":
+        return convert_jsonl_to_html(
+            input_path,
+            output_path,
+            from_date,
+            to_date,
+            generate_individual_sessions,
+            use_cache,
+            silent,
+        )
+    else:
+        # Text or markdown format
+        if not input_path.exists():
+            raise FileNotFoundError(f"Input path not found: {input_path}")
+
+        # Initialize cache manager for directory mode
+        cache_manager = None
+        if use_cache and input_path.is_dir():
+            try:
+                library_version = get_library_version()
+                cache_manager = CacheManager(input_path, library_version)
+            except Exception as e:
+                if not silent:
+                    print(f"Warning: Failed to initialize cache manager: {e}")
+
+        # Determine output file extension
+        if output_format.lower() == "markdown":
+            extension = ".md"
+        else:
+            extension = ".txt"
+
+        if input_path.is_file():
+            # Single file mode
+            if output_path is None:
+                output_path = input_path.with_suffix(extension)
+            messages = load_transcript(input_path, silent=silent)
+            title = f"Claude Transcript - {input_path.stem}"
+        else:
+            # Directory mode
+            if output_path is None:
+                if output_format.lower() == "markdown":
+                    output_filename = "combined_transcripts.md"
+                elif output_format.lower() == "chat":
+                    output_filename = "combined_transcripts_chat.txt"
+                else:
+                    output_filename = "combined_transcripts.txt"
+                output_path = input_path / output_filename
+
+            # Ensure cache is fresh
+            if cache_manager:
+                ensure_fresh_cache(
+                    input_path, cache_manager, from_date, to_date, silent
+                )
+
+            # Load messages
+            messages = load_directory_transcripts(
+                input_path, cache_manager, from_date, to_date, silent
+            )
+
+            # Extract working directories for title
+            working_directories = extract_working_directories(messages)
+            project_title = get_project_display_name(
+                input_path.name, working_directories
+            )
+            title = f"Claude Transcripts - {project_title}"
+
+        # Apply date filtering
+        messages = filter_messages_by_date(messages, from_date, to_date)
+
+        # Update title with date range if specified
+        if from_date or to_date:
+            date_range_parts: List[str] = []
+            if from_date:
+                date_range_parts.append(f"from {from_date}")
+            if to_date:
+                date_range_parts.append(f"to {to_date}")
+            date_range_str = " ".join(date_range_parts)
+            title += f" ({date_range_str})"
+
+        # Generate text/markdown/chat output
+        if output_format.lower() == "markdown":
+            content = generate_markdown(messages, title)
+        elif output_format.lower() == "chat":
+            content = generate_chat(messages, title)
+        else:
+            content = generate_text(messages, title, format_type="text")
+
+        # Write to file
+        assert output_path is not None
+        output_path.write_text(content, encoding="utf-8")
+
+        if not silent:
+            if input_path.is_file():
+                print(f"Successfully converted {input_path} to {output_path}")
+            else:
+                jsonl_count = len(list(input_path.glob("*.jsonl")))
+                print(
+                    f"Successfully combined {jsonl_count} transcript files from {input_path} to {output_path}"
+                )
+
+        return output_path
 
 
 def convert_jsonl_to_html(

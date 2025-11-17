@@ -10,7 +10,11 @@ from typing import Optional, List
 import click
 from git import Repo, InvalidGitRepositoryError
 
-from .converter import convert_jsonl_to_html, process_projects_hierarchy
+from .converter import (
+    convert_jsonl_to_html,
+    convert_jsonl_to_output,
+    process_projects_hierarchy,
+)
 from .cache import CacheManager, get_library_version
 
 
@@ -338,12 +342,20 @@ def _clear_html_files(input_path: Path, all_projects: bool) -> None:
     "-o",
     "--output",
     type=click.Path(path_type=Path),
-    help="Output HTML file path (default: input file with .html extension or combined_transcripts.html for directories)",
+    help="Output file path (default: input file with appropriate extension based on format)",
+)
+@click.option(
+    "-f",
+    "--format",
+    "output_format",
+    type=click.Choice(["html", "text", "markdown", "chat"], case_sensitive=False),
+    default="html",
+    help="Output format: html, text, markdown, or chat (default: html)",
 )
 @click.option(
     "--open-browser",
     is_flag=True,
-    help="Open the generated HTML file in the default browser",
+    help="Open the generated HTML file in the default browser (only works with HTML format)",
 )
 @click.option(
     "--from-date",
@@ -358,12 +370,12 @@ def _clear_html_files(input_path: Path, all_projects: bool) -> None:
 @click.option(
     "--all-projects",
     is_flag=True,
-    help="Process all projects in ~/.claude/projects/ hierarchy and create linked HTML files",
+    help="Process all projects in ~/.claude/projects/ hierarchy and create linked files",
 )
 @click.option(
     "--no-individual-sessions",
     is_flag=True,
-    help="Skip generating individual session HTML files (only create combined transcript)",
+    help="Skip generating individual session files (only create combined transcript)",
 )
 @click.option(
     "--no-cache",
@@ -388,6 +400,7 @@ def _clear_html_files(input_path: Path, all_projects: bool) -> None:
 def main(
     input_path: Optional[Path],
     output: Optional[Path],
+    output_format: str,
     open_browser: bool,
     from_date: Optional[str],
     to_date: Optional[str],
@@ -398,7 +411,7 @@ def main(
     clear_html: bool,
     tui: bool,
 ) -> None:
-    """Convert Claude transcript JSONL files to HTML.
+    """Convert Claude transcript JSONL files to HTML, text, or markdown.
 
     INPUT_PATH: Path to a Claude transcript JSONL file, directory containing JSONL files, or project path to convert. If not provided, defaults to ~/.claude/projects/ and --all-projects is used.
     """
@@ -406,7 +419,19 @@ def main(
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
 
     try:
-        # Handle TUI mode
+        # Validate incompatible options
+        if output_format.lower() != "html" and tui:
+            click.echo("Error: TUI mode only works with HTML format", err=True)
+            sys.exit(1)
+
+        if output_format.lower() != "html" and open_browser:
+            click.echo("Warning: --open-browser only works with HTML format", err=True)
+
+        if output_format.lower() != "html" and all_projects:
+            click.echo("Error: --all-projects only works with HTML format", err=True)
+            sys.exit(1)
+
+        # Handle TUI mode (HTML only)
         if tui:
             # Handle default case for TUI - use ~/.claude/projects if no input path
             if input_path is None:
@@ -571,11 +596,12 @@ def main(
                     f"Neither {input_path} nor {claude_path} exists"
                 )
 
-        output_path = convert_jsonl_to_html(
+        output_path = convert_jsonl_to_output(
             input_path,
             output,
             from_date,
             to_date,
+            output_format,
             not no_individual_sessions,
             not no_cache,
         )
@@ -583,7 +609,7 @@ def main(
             click.echo(f"Successfully converted {input_path} to {output_path}")
         else:
             jsonl_count = len(list(input_path.glob("*.jsonl")))
-            if not no_individual_sessions:
+            if output_format.lower() == "html" and not no_individual_sessions:
                 session_files = list(input_path.glob("session-*.html"))
                 click.echo(
                     f"Successfully combined {jsonl_count} transcript files from {input_path} to {output_path} and generated {len(session_files)} individual session files"

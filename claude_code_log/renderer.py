@@ -29,6 +29,13 @@ from .models import (
     ImageContent,
 )
 from .parser import extract_text_content
+from .content_extractor import (
+    extract_content_data,
+    ExtractedText,
+    ExtractedThinking,
+    ExtractedToolUse,
+    ExtractedToolResult,
+)
 from .utils import (
     is_command_message,
     is_local_command_output,
@@ -1302,79 +1309,71 @@ def render_message_content(content: List[ContentItem], message_type: str) -> str
     Note: This does NOT handle user-specific preprocessing like IDE tags or
     compacted session summaries. Those should be handled by render_user_message_content.
     """
-    if len(content) == 1 and isinstance(content[0], TextContent):
-        if message_type == "user":
-            # User messages are shown as-is in preformatted blocks
-            escaped_text = escape_html(content[0].text)
-            return "<pre>" + escaped_text + "</pre>"
-        else:
-            # Assistant messages get markdown rendering
-            return render_markdown(content[0].text)
+    # Fast path for single text content
+    if len(content) == 1:
+        extracted = extract_content_data(content[0])
+        if isinstance(extracted, ExtractedText):
+            if message_type == "user":
+                # User messages are shown as-is in preformatted blocks
+                escaped_text = escape_html(extracted.text)
+                return "<pre>" + escaped_text + "</pre>"
+            else:
+                # Assistant messages get markdown rendering
+                return render_markdown(extracted.text)
 
     # content is a list of ContentItem objects
     rendered_parts: List[str] = []
 
     for item in content:
-        # Handle both custom and Anthropic types
-        item_type = getattr(item, "type", None)
+        # Extract data from content item
+        extracted = extract_content_data(item)
 
-        if type(item) is TextContent or (
-            hasattr(item, "type") and hasattr(item, "text") and item_type == "text"
-        ):
-            # Handle both TextContent and Anthropic TextBlock
-            text_value = getattr(item, "text", str(item))
+        if extracted is None:
+            continue
+
+        if isinstance(extracted, ExtractedText):
             if message_type == "user":
                 # User messages are shown as-is in preformatted blocks
-                escaped_text = escape_html(text_value)
+                escaped_text = escape_html(extracted.text)
                 rendered_parts.append("<pre>" + escaped_text + "</pre>")
             else:
                 # Assistant messages get markdown rendering
-                rendered_parts.append(render_markdown(text_value))
-        elif type(item) is ToolUseContent or (
-            hasattr(item, "type") and item_type == "tool_use"
-        ):
-            # Handle both ToolUseContent and Anthropic ToolUseBlock
-            # Convert Anthropic type to our format if necessary
-            if not isinstance(item, ToolUseContent):
-                # Create a ToolUseContent from Anthropic ToolUseBlock
-                tool_use_item = ToolUseContent(
-                    type="tool_use",
-                    id=getattr(item, "id", ""),
-                    name=getattr(item, "name", ""),
-                    input=getattr(item, "input", {}),
-                )
-            else:
-                tool_use_item = item
+                rendered_parts.append(render_markdown(extracted.text))
+
+        elif isinstance(extracted, ExtractedToolUse):
+            # Create ToolUseContent for specialized formatter
+            tool_use_item = ToolUseContent(
+                type="tool_use",
+                id=extracted.id,
+                name=extracted.name,
+                input=extracted.input,
+            )
             rendered_parts.append(format_tool_use_content(tool_use_item))  # type: ignore
-        elif type(item) is ToolResultContent or (
-            hasattr(item, "type") and item_type == "tool_result"
-        ):
-            # Handle both ToolResultContent and Anthropic types
-            if not isinstance(item, ToolResultContent):
-                # Convert from Anthropic type if needed
-                tool_result_item = ToolResultContent(
-                    type="tool_result",
-                    tool_use_id=getattr(item, "tool_use_id", ""),
-                    content=getattr(item, "content", ""),
-                    is_error=getattr(item, "is_error", False),
-                )
-            else:
-                tool_result_item = item
+
+        elif isinstance(extracted, ExtractedToolResult):
+            # Create ToolResultContent for specialized formatter
+            tool_result_item = ToolResultContent(
+                type="tool_result",
+                tool_use_id=extracted.tool_use_id,
+                content=extracted.content,
+                is_error=extracted.is_error,
+            )
             rendered_parts.append(format_tool_result_content(tool_result_item))  # type: ignore
-        elif type(item) is ThinkingContent or (
-            hasattr(item, "type") and item_type == "thinking"
-        ):
-            # Handle both ThinkingContent and Anthropic ThinkingBlock
-            if not isinstance(item, ThinkingContent):
-                # Convert from Anthropic type if needed
-                thinking_item = ThinkingContent(
-                    type="thinking", thinking=getattr(item, "thinking", str(item))
-                )
-            else:
-                thinking_item = item
+
+        elif isinstance(extracted, ExtractedThinking):
+            # Create ThinkingContent for specialized formatter
+            thinking_item = ThinkingContent(
+                type="thinking",
+                thinking=extracted.thinking,
+                signature=extracted.signature,
+            )
             rendered_parts.append(format_thinking_content(thinking_item))  # type: ignore
-        elif type(item) is ImageContent:
-            rendered_parts.append(format_image_content(item))  # type: ignore
+
+        else:  # ExtractedImage
+            # For images, we still need the original ImageContent structure
+            # So we'll keep the original item if it's already ImageContent
+            if isinstance(item, ImageContent):
+                rendered_parts.append(format_image_content(item))  # type: ignore
 
     return "\n".join(rendered_parts)
 

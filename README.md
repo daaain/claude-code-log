@@ -28,6 +28,7 @@ uvx claude-code-log@latest --open-browser
 
 ## Key Features
 
+- **Multiple Output Formats**: Generate HTML, plain text, or markdown output from transcript files
 - **Interactive TUI (Terminal User Interface)**: Browse and manage Claude Code sessions with real-time navigation, summaries, and quick actions for HTML export and session resuming
 - **Project Hierarchy Processing**: Process entire `~/.claude/projects/` directory with linked index page
 - **Individual Session Files**: Generate separate HTML files for each session with navigation links
@@ -136,10 +137,42 @@ claude-code-log /path/to/directory --from-date "yesterday" --to-date "today"
 claude-code-log /path/to/directory --from-date "3 days ago" --to-date "yesterday"
 ```
 
+### Text and Markdown Output
+
+Convert transcripts to plain text or markdown format for documentation or terminal viewing:
+
+```bash
+# Generate plain text output (verbose with timestamps, token usage)
+claude-code-log /path/to/directory --format text -o output.txt
+
+# Generate markdown output
+claude-code-log /path/to/directory --format markdown -o output.md
+
+# Generate compact chat format (clean conversation flow)
+claude-code-log /path/to/directory --format chat -o chat.txt
+
+# Single file with chat format (most readable)
+claude-code-log transcript.jsonl --format chat
+```
+
+**Format Comparison:**
+
+- **text**: Verbose format with timestamps, token usage, working directories, and full tool details
+- **markdown**: Same as text but with markdown heading hierarchy for better document integration
+- **chat**: Compact format mimicking Claude Code UI - clean conversation flow with tool use symbols (⏺) and truncated results (⎿)
+
+**All Format Features:**
+- Session headers with IDs and summaries (text/markdown only)
+- User and assistant message separation
+- Tool use and tool result rendering
+- Thinking content blocks (text/markdown only)
+- Chat format: clean, minimal output perfect for quick review
+
 ## File Structure
 
 - `claude_code_log/parser.py` - Data extraction and parsing from JSONL files
 - `claude_code_log/renderer.py` - HTML generation and template rendering
+- `claude_code_log/text_renderer.py` - Plain text and markdown rendering
 - `claude_code_log/converter.py` - High-level conversion orchestration
 - `claude_code_log/cli.py` - Command-line interface with project discovery
 - `claude_code_log/models.py` - Pydantic models for transcript data structures
