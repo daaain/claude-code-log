@@ -1284,7 +1284,9 @@ def render_user_message_content(
         if memory_match:
             memory_content = memory_match.group(1).strip()
             # Render the memory content as user message
-            memory_content_list = [TextContent(type="text", text=memory_content)]
+            memory_content_list: List[ContentItem] = [
+                TextContent(type="text", text=memory_content)
+            ]
             content_html = render_message_content(memory_content_list, "user")
             return content_html, False, True
 
@@ -2706,12 +2708,13 @@ def generate_html(
                 # This is a child message (e.g., command output following command invocation)
                 parent_msg_id = uuid_to_msg_id[parent_uuid]
                 # Find the parent's level in the stack
-                for i, (stack_id, stack_level) in enumerate(hierarchy_stack):
-                    if stack_id == parent_msg_id:
+                current_level: int
+                for idx, (stack_level, stack_msg_id) in enumerate(hierarchy_stack):
+                    if stack_msg_id == parent_msg_id:
                         # Child is one level deeper than parent
                         current_level = stack_level + 1
                         # Update stack: keep parent, add child
-                        hierarchy_stack = hierarchy_stack[: i + 1]
+                        hierarchy_stack = hierarchy_stack[: idx + 1]
                         break
                 else:
                     # Parent not found in stack, use default
