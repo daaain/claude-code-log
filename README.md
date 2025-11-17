@@ -28,7 +28,7 @@ uvx claude-code-log@latest --open-browser
 
 ## Key Features
 
-- **Multiple Output Formats**: Generate HTML, plain text, or markdown output from transcript files
+- **Multiple Output Formats**: Generate HTML, plain text, markdown, or compact chat output from transcript files
 - **Interactive TUI (Terminal User Interface)**: Browse and manage Claude Code sessions with real-time navigation, summaries, and quick actions for HTML export and session resuming
 - **Project Hierarchy Processing**: Process entire `~/.claude/projects/` directory with linked index page
 - **Individual Session Files**: Generate separate HTML files for each session with navigation links
