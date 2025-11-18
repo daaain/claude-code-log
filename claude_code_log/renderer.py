@@ -20,7 +20,6 @@ from pygments.util import ClassNotFound  # type: ignore[reportUnknownVariableTyp
 from .models import (
     TranscriptEntry,
     SummaryTranscriptEntry,
-    SystemTranscriptEntry,
     QueueOperationTranscriptEntry,
     ContentItem,
     TextContent,
