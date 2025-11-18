@@ -3050,6 +3050,7 @@ def _process_messages_loop(
             first_user_message = ""
             if (
                 message_type == "user"
+                and not isinstance(message, QueueOperationTranscriptEntry)
                 and hasattr(message, "message")
                 and should_use_as_session_starter(text_content)
             ):
@@ -3104,7 +3105,9 @@ def _process_messages_loop(
 
         # Update first user message if this is a user message and we don't have one yet
         elif message_type == "user" and not sessions[session_id]["first_user_message"]:
-            if hasattr(message, "message"):
+            if not isinstance(message, QueueOperationTranscriptEntry) and hasattr(
+                message, "message"
+            ):
                 first_user_content = extract_text_content(message.message.content)
                 if should_use_as_session_starter(first_user_content):
                     sessions[session_id]["first_user_message"] = create_session_preview(
