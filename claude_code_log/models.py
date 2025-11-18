@@ -228,14 +228,17 @@ class SystemTranscriptEntry(BaseTranscriptEntry):
 
 
 class QueueOperationTranscriptEntry(BaseModel):
-    """Queue operations (enqueue/dequeue) for message queueing tracking.
+    """Queue operations (enqueue/dequeue/remove) for message queueing tracking.
 
-    These are internal operations that track when messages are queued and dequeued.
+    enqueue/dequeue are internal operations that track when messages are queued and dequeued.
     They are parsed but not rendered, as the content duplicates actual user messages.
+
+    'remove' operations are out-of-band user inputs made visible to the agent while working
+    for "steering" purposes. These should be rendered as user messages with a 'steering' CSS class.
     """
 
     type: Literal["queue-operation"]
-    operation: Literal["enqueue", "dequeue"]
+    operation: Literal["enqueue", "dequeue", "remove"]
     timestamp: str
     sessionId: str
     content: Optional[List[ContentItem]] = None  # Only present for enqueue operations

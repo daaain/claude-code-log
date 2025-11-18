@@ -298,6 +298,12 @@
     border-left-color: #ff9800;
 }
 
+/* Steering user messages (out-of-band input while agent is working) */
+.user.steering {
+    border-left-color: #ff9800;
+    opacity: 0.7;
+}
+
 .assistant {
     border-left-color: #9c27b0;
 }

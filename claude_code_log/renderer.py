@@ -2869,9 +2869,12 @@ def _process_messages_loop(
         if isinstance(message, SummaryTranscriptEntry):
             continue
 
-        # Skip queue-operation messages - they duplicate user messages
+        # Skip enqueue/dequeue queue operations - they duplicate user messages
+        # But render 'remove' operations as steering user messages
         if isinstance(message, QueueOperationTranscriptEntry):
-            continue
+            if message.operation in ("enqueue", "dequeue"):
+                continue
+            # 'remove' operations fall through to be rendered as user messages
 
         # Handle system messages separately
         if isinstance(message, SystemTranscriptEntry):
@@ -2973,9 +2976,17 @@ def _process_messages_loop(
             template_messages.append(system_template_message)
             continue
 
-        # Extract message content first to check for duplicates
-        # Must be UserTranscriptEntry or AssistantTranscriptEntry
-        message_content = message.message.content  # type: ignore
+        # Handle queue-operation 'remove' messages as user messages
+        if isinstance(message, QueueOperationTranscriptEntry):
+            # Queue operations have content directly, not in message.message
+            message_content = message.content if message.content else []
+            # Treat as user message type
+            message_type = "queue-operation"
+        else:
+            # Extract message content first to check for duplicates
+            # Must be UserTranscriptEntry or AssistantTranscriptEntry
+            message_content = message.message.content  # type: ignore
+
         text_content = extract_text_content(message_content)
 
         # Separate tool/thinking/image content from text content
@@ -3183,13 +3194,28 @@ def _process_messages_loop(
                 text_content
             )
         else:
-            css_class, content_html, message_type, message_title = (
+            # For queue-operation messages, treat them as user messages
+            if isinstance(message, QueueOperationTranscriptEntry):
+                effective_type = "user"
+            else:
+                effective_type = message_type
+
+            css_class, content_html, message_type_result, message_title = (
                 _process_regular_message(
                     text_only_content,
-                    message_type,
+                    effective_type,
                     getattr(message, "isSidechain", False),
                 )
             )
+            message_type = message_type_result  # Update message_type with result
+
+            # Add 'steering' CSS class for queue-operation 'remove' messages
+            if (
+                isinstance(message, QueueOperationTranscriptEntry)
+                and message.operation == "remove"
+            ):
+                css_class = f"{css_class} steering"
+                message_title = "User (steering)"
 
         # Only create main message if it has text content
         # For assistant/thinking with only tools (no text), we don't create a container message
