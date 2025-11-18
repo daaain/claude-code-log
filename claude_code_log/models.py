@@ -419,7 +419,7 @@ def parse_transcript_entry(data: Dict[str, Any]) -> TranscriptEntry:
         return SystemTranscriptEntry.model_validate(data)
 
     elif entry_type == "queue-operation":
-        # Parse content if present (only in enqueue operations)
+        # Parse content if present (in enqueue and remove operations)
         data_copy = data.copy()
         if "content" in data_copy and isinstance(data_copy["content"], list):
             data_copy["content"] = parse_message_content(data_copy["content"])
