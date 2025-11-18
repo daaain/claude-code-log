@@ -300,7 +300,7 @@
 
 /* Steering user messages (out-of-band input while agent is working) */
 .user.steering {
-    border-left-color: #ff9800;
+    border-left-color: var(--user-dimmed);
     opacity: 0.7;
 }
 

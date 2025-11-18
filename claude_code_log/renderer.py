@@ -3005,8 +3005,12 @@ def _process_messages_loop(
                     (ToolUseContent, ToolResultContent, ThinkingContent),
                 ) or item_type in ("tool_use", "tool_result", "thinking")
 
-                # Keep images inline for user messages, extract for assistant messages
-                if is_image and message_type == "user":
+                # Keep images inline for user messages and queue operations (steering),
+                # extract for assistant messages
+                if is_image and (
+                    message_type == "user"
+                    or isinstance(message, QueueOperationTranscriptEntry)
+                ):
                     text_only_items.append(item)
                 elif is_tool_item or is_image:
                     tool_items.append(item)
