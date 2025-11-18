@@ -159,7 +159,7 @@ def load_transcript(
     with open(jsonl_path, "r", encoding="utf-8", errors="replace") as f:
         if not silent:
             print(f"Processing {jsonl_path}...")
-        for line_no, line in enumerate(f):
+        for line_no, line in enumerate(f, 1):  # Start counting from 1
             line = line.strip()
             if line:
                 try:
