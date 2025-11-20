@@ -87,15 +87,19 @@
 
 /* Border colors matching message types */
 .fold-bar[data-border-color="user"] .fold-bar-section,
-.fold-bar[data-border-color="user compacted"] .fold-bar-section {
+.fold-bar[data-border-color="user compacted"] .fold-bar-section,
+.fold-bar[data-border-color="user sidechain"] .fold-bar-section,
+.fold-bar[data-border-color="user compacted sidechain"] .fold-bar-section {
     border-bottom-color: var(--user-color);
 }
 
-.fold-bar[data-border-color="assistant"] .fold-bar-section {
+.fold-bar[data-border-color="assistant"] .fold-bar-section,
+.fold-bar[data-border-color="assistant sidechain"] .fold-bar-section {
     border-bottom-color: var(--assistant-color);
 }
 
-.fold-bar[data-border-color="system"] .fold-bar-section {
+.fold-bar[data-border-color="system"] .fold-bar-section,
+.fold-bar[data-border-color="system command-output"] .fold-bar-section {
     border-bottom-color: var(--system-color);
 }
 
@@ -111,16 +115,42 @@
     border-bottom-color: var(--info-dimmed);
 }
 
-.fold-bar[data-border-color="tool_use"] .fold-bar-section {
+.fold-bar[data-border-color="tool_use"] .fold-bar-section,
+.fold-bar[data-border-color="tool_use sidechain"] .fold-bar-section {
     border-bottom-color: var(--tool-use-color);
 }
 
-.fold-bar[data-border-color="tool_result"] .fold-bar-section {
+.fold-bar[data-border-color="tool_result"] .fold-bar-section,
+.fold-bar[data-border-color="tool_result sidechain"] .fold-bar-section {
     border-bottom-color: var(--success-dimmed);
 }
 
-.fold-bar[data-border-color="thinking"] .fold-bar-section {
+.fold-bar[data-border-color="tool_result error"] .fold-bar-section,
+.fold-bar[data-border-color="tool_result error sidechain"] .fold-bar-section {
+    border-bottom-color: var(--error-dimmed);
+}
+
+.fold-bar[data-border-color="thinking"] .fold-bar-section,
+.fold-bar[data-border-color="thinking sidechain"] .fold-bar-section {
     border-bottom-color: var(--assistant-dimmed);
+}
+
+.fold-bar[data-border-color="image"] .fold-bar-section,
+.fold-bar[data-border-color="image sidechain"] .fold-bar-section {
+    border-bottom-color: var(--info-dimmed);
+}
+
+.fold-bar[data-border-color="unknown"] .fold-bar-section,
+.fold-bar[data-border-color="unknown sidechain"] .fold-bar-section {
+    border-bottom-color: var(--neutral-dimmed);
+}
+
+.fold-bar[data-border-color="bash-input"] .fold-bar-section {
+    border-bottom-color: var(--tool-use-color);
+}
+
+.fold-bar[data-border-color="bash-output"] .fold-bar-section {
+    border-bottom-color: var(--success-dimmed);
 }
 
 .fold-bar[data-border-color="session-header"] .fold-bar-section {
@@ -529,7 +559,8 @@
 /* Assistant and Thinking content styling */
 .assistant .content,
 .thinking-text,
-.user.compacted .content {
+.user.compacted .content,
+.markdown {
     font-family: var(--font-ui);
 }
 
