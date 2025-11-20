@@ -716,6 +716,37 @@ def _render_line_diff(old_line: str, new_line: str) -> str:
     return "".join(old_parts) + "".join(new_parts)
 
 
+def format_task_tool_content(tool_use: ToolUseContent) -> str:
+    """Format Task tool content with markdown-rendered prompt.
+
+    Task tool spawns sub-agents. We render the prompt as the main content
+    (like it would appear in the "Sub-assistant prompt" message).
+    """
+    prompt = tool_use.input.get("prompt", "")
+
+    if not prompt:
+        # No prompt, show parameters table as fallback
+        return render_params_table(tool_use.input)
+
+    # Render prompt as markdown (like assistant/sidechain messages)
+    from mistune import create_markdown
+
+    md = create_markdown(
+        plugins=[
+            "strikethrough",
+            "footnotes",
+            "table",
+            "url",
+            "task_lists",
+            "def_list",
+            "abbr",
+        ]
+    )
+    rendered_html = md(prompt)
+
+    return f'<div class="task-prompt markdown">{rendered_html}</div>'
+
+
 def get_tool_summary(tool_use: ToolUseContent) -> Optional[str]:
     """Extract a one-line summary from tool parameters for display in header.
 
@@ -734,6 +765,12 @@ def get_tool_summary(tool_use: ToolUseContent) -> Optional[str]:
         file_path = params.get("file_path")
         if file_path:
             return file_path
+
+    elif tool_name == "Task":
+        # Return description if present
+        description = params.get("description")
+        if description:
+            return description
 
     # No summary for other tools
     return None
@@ -764,6 +801,10 @@ def format_tool_use_content(tool_use: ToolUseContent) -> str:
     # Special handling for Write
     if tool_use.name == "Write":
         return format_write_tool_content(tool_use)
+
+    # Special handling for Task (agent spawning)
+    if tool_use.name == "Task":
+        return format_task_tool_content(tool_use)
 
     # Default: render as key/value table using shared renderer
     return render_params_table(tool_use.input)
@@ -1030,6 +1071,24 @@ def format_tool_result_content(
 
             result_parts.append("</div>")
             return "".join(result_parts)
+
+    # Special handling for Task tool: render result as markdown (agent's final message)
+    if tool_name == "Task" and not has_images:
+        from mistune import create_markdown
+
+        md = create_markdown(
+            plugins=[
+                "strikethrough",
+                "footnotes",
+                "table",
+                "url",
+                "task_lists",
+                "def_list",
+                "abbr",
+            ]
+        )
+        rendered_html = md(raw_content)
+        return f'<div class="task-result markdown">{rendered_html}</div>'
 
     # Check if this looks like Bash tool output and process ANSI codes
     # Bash tool results often contain ANSI escape sequences and terminal output
@@ -2579,10 +2638,19 @@ def generate_html(
                             tool_name = getattr(item, "name", "")  # type: ignore[reportUnknownArgumentType]
                             tool_input = getattr(item, "input", {})  # type: ignore[reportUnknownArgumentType]
                             if tool_id:
-                                tool_use_context[tool_id] = {
+                                tool_ctx: Dict[str, Any] = {
                                     "name": tool_name,
                                     "input": tool_input,
                                 }
+                                # For Task tools, store the prompt for comparison
+                                if tool_name == "Task" and isinstance(tool_input, dict):
+                                    prompt_value = tool_input.get("prompt", "")
+                                    tool_ctx["prompt"] = (
+                                        prompt_value
+                                        if isinstance(prompt_value, str)
+                                        else ""
+                                    )
+                                tool_use_context[tool_id] = tool_ctx
 
     # Process messages into template-friendly format
     template_messages: List[TemplateMessage] = []
@@ -2987,6 +3055,24 @@ def generate_html(
                 tool_message_type = "tool_use"
                 if tool_use_converted.name == "TodoWrite":
                     tool_message_title = "📝 Todo List"
+                elif tool_use_converted.name == "Task":
+                    # Special handling for Task tool: show subagent_type and description
+                    subagent_type = tool_use_converted.input.get("subagent_type", "")
+                    description = tool_use_converted.input.get("description", "")
+                    escaped_subagent = (
+                        escape_html(subagent_type) if subagent_type else ""
+                    )
+
+                    if description and subagent_type:
+                        escaped_desc = escape_html(description)
+                        tool_message_title = f"🔧 {escaped_name} <span class='tool-summary'>{escaped_desc}</span> <span class='tool-subagent'>({escaped_subagent})</span>"
+                    elif description:
+                        escaped_desc = escape_html(description)
+                        tool_message_title = f"🔧 {escaped_name} <span class='tool-summary'>{escaped_desc}</span>"
+                    elif subagent_type:
+                        tool_message_title = f"🔧 {escaped_name} <span class='tool-subagent'>({escaped_subagent})</span>"
+                    else:
+                        tool_message_title = f"🔧 {escaped_name}"
                 elif tool_use_converted.name in ("Edit", "Write"):
                     # Use 📝 icon for Edit/Write
                     if summary:

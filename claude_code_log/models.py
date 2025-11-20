@@ -74,6 +74,7 @@ class ToolResultContent(BaseModel):
     tool_use_id: str
     content: Union[str, List[Dict[str, Any]]]
     is_error: Optional[bool] = None
+    agentId: Optional[str] = None  # Reference to agent file for sub-agent messages
 
 
 class ThinkingContent(BaseModel):
@@ -202,6 +203,7 @@ class UserTranscriptEntry(BaseTranscriptEntry):
     type: Literal["user"]
     message: UserMessage
     toolUseResult: Optional[ToolUseResult] = None
+    agentId: Optional[str] = None  # From toolUseResult when present
 
 
 class AssistantTranscriptEntry(BaseTranscriptEntry):

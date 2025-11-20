@@ -120,8 +120,22 @@ def load_transcript(
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
     silent: bool = False,
+    _loaded_files: Optional[set[Path]] = None,
 ) -> List[TranscriptEntry]:
-    """Load and parse JSONL transcript file, using cache if available."""
+    """Load and parse JSONL transcript file, using cache if available.
+
+    Args:
+        _loaded_files: Internal parameter to track loaded files and prevent infinite recursion.
+    """
+    # Initialize loaded files set on first call
+    if _loaded_files is None:
+        _loaded_files = set()
+
+    # Prevent infinite recursion by checking if this file is already being loaded
+    if jsonl_path in _loaded_files:
+        return []
+
+    _loaded_files.add(jsonl_path)
     # Try to load from cache first
     if cache_manager is not None:
         # Use filtered loading if date parameters are provided
@@ -139,6 +153,7 @@ def load_transcript(
 
     # Parse from source file
     messages: List[TranscriptEntry] = []
+    agent_ids: set[str] = set()  # Collect agentId references while parsing
 
     with open(jsonl_path, "r", encoding="utf-8", errors="replace") as f:
         if not silent:
@@ -153,6 +168,25 @@ def load_transcript(
                             f"Line {line_no} of {jsonl_path} is not a JSON object: {line}"
                         )
                         continue
+
+                    # Check for agentId BEFORE Pydantic parsing
+                    # agentId can be at top level OR nested in toolUseResult
+                    # For UserTranscriptEntry, we need to copy it to top level so Pydantic preserves it
+                    if "agentId" in entry_dict:
+                        agent_id = entry_dict.get("agentId")
+                        if agent_id:
+                            agent_ids.add(agent_id)
+                    elif "toolUseResult" in entry_dict:
+                        tool_use_result = entry_dict.get("toolUseResult")
+                        if (
+                            isinstance(tool_use_result, dict)
+                            and "agentId" in tool_use_result
+                        ):
+                            agent_id = tool_use_result.get("agentId")
+                            if agent_id:
+                                agent_ids.add(agent_id)
+                                # Copy agentId to top level for Pydantic to preserve
+                                entry_dict["agentId"] = agent_id
 
                     entry_type: str | None = entry_dict.get("type")
 
@@ -194,6 +228,47 @@ def load_transcript(
                         f"Line {line_no} of {jsonl_path} | Unexpected error: {str(e)}"
                         "\n{traceback.format_exc()}"
                     )
+
+    # Load agent files if any were referenced
+    # Build a map of agentId -> agent messages
+    agent_messages_map: dict[str, List[TranscriptEntry]] = {}
+    if agent_ids:
+        parent_dir = jsonl_path.parent
+        for agent_id in agent_ids:
+            agent_file = parent_dir / f"agent-{agent_id}.jsonl"
+            # Skip if the agent file is the same as the current file (self-reference)
+            if agent_file == jsonl_path:
+                continue
+            if agent_file.exists():
+                if not silent:
+                    print(f"Loading agent file {agent_file}...")
+                # Recursively load the agent file (it might reference other agents)
+                agent_messages = load_transcript(
+                    agent_file,
+                    cache_manager,
+                    from_date,
+                    to_date,
+                    silent=True,
+                    _loaded_files=_loaded_files,
+                )
+                agent_messages_map[agent_id] = agent_messages
+
+    # Insert agent messages at their point of use
+    if agent_messages_map:
+        # Iterate through messages and insert agent messages after the message
+        # that references them (via UserTranscriptEntry.agentId)
+        result_messages: List[TranscriptEntry] = []
+        for message in messages:
+            result_messages.append(message)
+
+            # Check if this is a UserTranscriptEntry with agentId
+            if hasattr(message, "agentId") and message.agentId:
+                agent_id = message.agentId
+                if agent_id in agent_messages_map:
+                    # Insert agent messages right after this message
+                    result_messages.extend(agent_messages_map[agent_id])
+
+        messages = result_messages
 
     # Save to cache if cache manager is available
     if cache_manager is not None:
