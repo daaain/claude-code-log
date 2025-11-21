@@ -930,7 +930,7 @@ def format_tool_result_content(
     Args:
         tool_result: The tool result content
         file_path: Optional file path for context (used for Read/Edit/Write tool rendering)
-        tool_name: Optional tool name for specialized rendering (e.g., "Write", "Read", "Edit")
+        tool_name: Optional tool name for specialized rendering (e.g., "Write", "Read", "Edit", "Task")
     """
     # Handle both string and structured content
     if isinstance(tool_result.content, str):
@@ -1073,6 +1073,7 @@ def format_tool_result_content(
             return "".join(result_parts)
 
     # Special handling for Task tool: render result as markdown (agent's final message)
+    # Deduplication is now handled retroactively by replacing the sub-assistant content
     if tool_name == "Task" and not has_images:
         from mistune import create_markdown
 
@@ -2663,6 +2664,10 @@ def generate_html(
     # UUID to message ID mapping for parent-child relationships
     uuid_to_msg_id: Dict[str, str] = {}
 
+    # Track Task results and sidechain assistants for deduplication
+    # Maps raw content -> (template_messages index, message_id, type: "task" or "assistant")
+    content_map: Dict[str, tuple[int, str, str]] = {}
+
     for message in messages:
         message_type = message.type
 
@@ -3018,6 +3023,26 @@ def generate_html(
             )
             template_messages.append(template_message)
 
+            # Track sidechain assistant messages for deduplication
+            if message_type == "assistant" and is_sidechain and text_content.strip():
+                template_msg_index = len(template_messages) - 1
+                content_key = text_content.strip()
+
+                # Check if we already have a Task result with this content
+                if content_key in content_map:
+                    existing_index, existing_id, existing_type = content_map[
+                        content_key
+                    ]
+                    if existing_type == "task":
+                        # Found matching Task result - deduplicate this assistant message
+                        forward_link_html = f'<p><em>(Content duplicates <a href="#msg-{existing_id}">Task tool result above</a>)</em></p>'
+                        template_messages[
+                            template_msg_index
+                        ].content_html = forward_link_html
+                else:
+                    # Track this assistant in case we see a matching Task result later
+                    content_map[content_key] = (template_msg_index, msg_id, "assistant")
+
         # Create separate messages for each tool/thinking/image item
         for tool_item in tool_items:
             tool_timestamp = getattr(message, "timestamp", "")
@@ -3029,6 +3054,9 @@ def generate_html(
             item_type = getattr(tool_item, "type", None)
             item_tool_use_id: Optional[str] = None
             tool_title_hint: Optional[str] = None
+            pending_dedup: Optional[tuple[int, str, str]] = (
+                None  # Initialize for each tool item
+            )
 
             if isinstance(tool_item, ToolUseContent) or item_type == "tool_use":
                 # Convert Anthropic type to our format if necessary
@@ -3120,8 +3148,34 @@ def generate_html(
                         result_file_path = tool_ctx["input"]["file_path"]
 
                 tool_content_html = format_tool_result_content(
-                    tool_result_converted, result_file_path, result_tool_name
+                    tool_result_converted,
+                    result_file_path,
+                    result_tool_name,
                 )
+
+                # Retroactive deduplication: if Task result matches a sidechain assistant, replace that assistant with a forward link
+                if result_tool_name == "Task":
+                    # Extract text content from tool result
+                    # Note: tool_result.content can be str or List[Dict[str, Any]] (not List[ContentItem])
+                    if isinstance(tool_result_converted.content, str):
+                        task_result_content = tool_result_converted.content.strip()
+                    elif isinstance(tool_result_converted.content, list):
+                        # Handle list of dicts (tool result format) or ContentItem objects
+                        content_parts = []
+                        for item in tool_result_converted.content:
+                            if isinstance(item, dict) and item.get("type") == "text":
+                                content_parts.append(item.get("text", ""))
+                            elif isinstance(item, TextContent):
+                                content_parts.append(item.text)
+                        task_result_content = "\n".join(content_parts).strip()
+                    else:
+                        task_result_content = ""
+
+                    # Store for deduplication - we'll check/update after we have the message_id
+                    pending_dedup = task_result_content if task_result_content else None
+                else:
+                    pending_dedup = None
+
                 escaped_id = escape_html(tool_result_converted.tool_use_id)
                 item_tool_use_id = tool_result_converted.tool_use_id
                 tool_title_hint = f"ID: {escaped_id}"
@@ -3218,6 +3272,33 @@ def generate_html(
                 ancestry=tool_ancestry,
             )
             template_messages.append(tool_template_message)
+
+            # Track Task results and check for matching assistants
+            if pending_dedup is not None and isinstance(pending_dedup, str):
+                # pending_dedup contains the task result content
+                task_result_content = pending_dedup
+                template_msg_index = len(template_messages) - 1
+
+                # Check if we already have a sidechain assistant with this content
+                if task_result_content in content_map:
+                    existing_index, existing_id, existing_type = content_map[
+                        task_result_content
+                    ]
+                    if existing_type == "assistant":
+                        # Found matching assistant - deduplicate it by replacing with forward link
+                        forward_link_html = f'<p><em>(Content duplicates <a href="#msg-{tool_msg_id}">Task tool result below</a>)</em></p>'
+                        template_messages[
+                            existing_index
+                        ].content_html = forward_link_html
+                else:
+                    # Track this Task result in case we see a matching assistant later
+                    content_map[task_result_content] = (
+                        template_msg_index,
+                        tool_msg_id,
+                        "task",
+                    )
+
+                pending_dedup = None  # Reset for next iteration
 
     # Prepare session navigation data
     session_nav: List[Dict[str, Any]] = []
