@@ -241,7 +241,18 @@ def _create_pygments_plugin() -> Any:
                     cssclass="highlight",
                     wrapcode=True,
                 )
-                return str(highlight(code, lexer, formatter))  # type: ignore[reportUnknownArgumentType]
+                # Track Pygments timing if enabled
+                if DEBUG_TIMING:
+                    t_start = time.time()
+                    result = str(highlight(code, lexer, formatter))  # type: ignore[reportUnknownArgumentType]
+                    duration = time.time() - t_start
+                    if "_pygments_timings" in globals():
+                        globals()["_pygments_timings"].append(
+                            (duration, globals().get("_current_msg_uuid", ""))
+                        )
+                    return result
+                else:
+                    return str(highlight(code, lexer, formatter))  # type: ignore[reportUnknownArgumentType]
             else:
                 # No language hint, use default rendering
                 return original_render(code, info)
@@ -253,6 +264,10 @@ def _create_pygments_plugin() -> Any:
 
 def render_markdown(text: str) -> str:
     """Convert markdown text to HTML using mistune with Pygments syntax highlighting."""
+    # Track markdown rendering time if enabled
+    if DEBUG_TIMING:
+        t_start = time.time()
+
     # Configure mistune with GitHub-flavored markdown features
     renderer = mistune.create_markdown(
         plugins=[
@@ -267,7 +282,17 @@ def render_markdown(text: str) -> str:
         escape=False,  # Don't escape HTML since we want to render markdown properly
         hard_wrap=True,  # Line break for newlines (checklists in Assistant messages)
     )
-    return str(renderer(text))
+    result = str(renderer(text))
+
+    # Record timing if enabled
+    if DEBUG_TIMING:
+        duration = time.time() - t_start
+        if "_markdown_timings" in globals():
+            globals()["_markdown_timings"].append(
+                (duration, globals().get("_current_msg_uuid", ""))
+            )
+
+    return result
 
 
 def extract_command_info(text_content: str) -> tuple[str, str, str]:
@@ -396,8 +421,18 @@ def _highlight_code_with_pygments(
         linenostart=linenostart,
     )
 
-    # Highlight the code
-    return str(highlight(code, lexer, formatter))  # type: ignore[reportUnknownArgumentType]
+    # Highlight the code with timing if enabled
+    if DEBUG_TIMING:
+        t_start = time.time()
+        result = str(highlight(code, lexer, formatter))  # type: ignore[reportUnknownArgumentType]
+        duration = time.time() - t_start
+        if "_pygments_timings" in globals():
+            globals()["_pygments_timings"].append(
+                (duration, globals().get("_current_msg_uuid", ""))
+            )
+        return result
+    else:
+        return str(highlight(code, lexer, formatter))  # type: ignore[reportUnknownArgumentType]
 
 
 def format_read_tool_content(tool_use: ToolUseContent) -> str:  # noqa: ARG001
@@ -2678,13 +2713,27 @@ def generate_html(
 
     # Per-message timing tracking
     message_timings: List[
-        tuple[float, str, int]
-    ] = []  # (duration, message_type, index)
-    loop_phase_times: Dict[str, float] = {}  # Accumulate time per phase
+        tuple[float, str, int, str]
+    ] = []  # (duration, message_type, index, uuid)
+
+    # Track expensive operations
+    markdown_timings: List[tuple[float, str]] = []  # (duration, context_uuid)
+    pygments_timings: List[tuple[float, str]] = []  # (duration, context_uuid)
+
+    # Make timing lists available to nested functions via globals
+    if DEBUG_TIMING:
+        globals()["_markdown_timings"] = markdown_timings
+        globals()["_pygments_timings"] = pygments_timings
+        globals()["_current_msg_uuid"] = ""
 
     for msg_idx, message in enumerate(messages):
         msg_start_time = time.time() if DEBUG_TIMING else 0.0
         message_type = message.type
+        msg_uuid = getattr(message, "uuid", f"no-uuid-{msg_idx}")
+
+        # Update current message UUID for timing tracking
+        if DEBUG_TIMING:
+            globals()["_current_msg_uuid"] = msg_uuid
 
         # Skip summary messages - they should already be attached to their sessions
         if isinstance(message, SummaryTranscriptEntry):
@@ -3293,7 +3342,7 @@ def generate_html(
         # Track message timing
         if DEBUG_TIMING:
             msg_duration = time.time() - msg_start_time
-            message_timings.append((msg_duration, message_type, msg_idx))
+            message_timings.append((msg_duration, message_type, msg_idx, msg_uuid))
 
     # Report loop statistics
     if DEBUG_TIMING and message_timings:
@@ -3305,17 +3354,45 @@ def generate_html(
         avg_time = total_msg_time / len(message_timings)
 
         # Report slowest messages
-        print(f"\n[TIMING] Loop statistics:", flush=True)
+        print("\n[TIMING] Loop statistics:", flush=True)
         print(f"[TIMING]   Total messages: {len(message_timings)}", flush=True)
         print(
             f"[TIMING]   Average time per message: {avg_time * 1000:.1f}ms", flush=True
         )
-        print(f"[TIMING]   Slowest 10 messages:", flush=True)
-        for duration, msg_type, idx in sorted_timings[:10]:
+        print("[TIMING]   Slowest 10 messages:", flush=True)
+        for duration, msg_type, idx, uuid in sorted_timings[:10]:
             print(
-                f"[TIMING]     Message #{idx} ({msg_type}): {duration * 1000:.1f}ms",
+                f"[TIMING]     Message {uuid} (#{idx}, {msg_type}): {duration * 1000:.1f}ms",
                 flush=True,
             )
+
+        # Report markdown rendering statistics
+        if markdown_timings:
+            sorted_markdown = sorted(markdown_timings, key=lambda x: x[0], reverse=True)
+            total_markdown_time = sum(t[0] for t in markdown_timings)
+            print(f"\n[TIMING] Markdown rendering:", flush=True)
+            print(f"[TIMING]   Total operations: {len(markdown_timings)}", flush=True)
+            print(f"[TIMING]   Total time: {total_markdown_time:.3f}s", flush=True)
+            print(f"[TIMING]   Slowest 10 operations:", flush=True)
+            for duration, uuid in sorted_markdown[:10]:
+                print(
+                    f"[TIMING]     {uuid}: {duration * 1000:.1f}ms",
+                    flush=True,
+                )
+
+        # Report Pygments highlighting statistics
+        if pygments_timings:
+            sorted_pygments = sorted(pygments_timings, key=lambda x: x[0], reverse=True)
+            total_pygments_time = sum(t[0] for t in pygments_timings)
+            print(f"\n[TIMING] Pygments highlighting:", flush=True)
+            print(f"[TIMING]   Total operations: {len(pygments_timings)}", flush=True)
+            print(f"[TIMING]   Total time: {total_pygments_time:.3f}s", flush=True)
+            print(f"[TIMING]   Slowest 10 operations:", flush=True)
+            for duration, uuid in sorted_pygments[:10]:
+                print(
+                    f"[TIMING]     {uuid}: {duration * 1000:.1f}ms",
+                    flush=True,
+                )
 
     log_timing(
         f"Main message processing loop ({len(template_messages)} template messages)"
