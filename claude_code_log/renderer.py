@@ -2676,7 +2676,14 @@ def generate_html(
     # Maps raw content -> (template_messages index, message_id, type: "task" or "assistant")
     content_map: Dict[str, tuple[int, str, str]] = {}
 
-    for message in messages:
+    # Per-message timing tracking
+    message_timings: List[
+        tuple[float, str, int]
+    ] = []  # (duration, message_type, index)
+    loop_phase_times: Dict[str, float] = {}  # Accumulate time per phase
+
+    for msg_idx, message in enumerate(messages):
+        msg_start_time = time.time() if DEBUG_TIMING else 0.0
         message_type = message.type
 
         # Skip summary messages - they should already be attached to their sessions
@@ -3282,6 +3289,33 @@ def generate_html(
                     )
 
                 pending_dedup = None  # Reset for next iteration
+
+        # Track message timing
+        if DEBUG_TIMING:
+            msg_duration = time.time() - msg_start_time
+            message_timings.append((msg_duration, message_type, msg_idx))
+
+    # Report loop statistics
+    if DEBUG_TIMING and message_timings:
+        # Sort by duration descending
+        sorted_timings = sorted(message_timings, key=lambda x: x[0], reverse=True)
+
+        # Calculate statistics
+        total_msg_time = sum(t[0] for t in message_timings)
+        avg_time = total_msg_time / len(message_timings)
+
+        # Report slowest messages
+        print(f"\n[TIMING] Loop statistics:", flush=True)
+        print(f"[TIMING]   Total messages: {len(message_timings)}", flush=True)
+        print(
+            f"[TIMING]   Average time per message: {avg_time * 1000:.1f}ms", flush=True
+        )
+        print(f"[TIMING]   Slowest 10 messages:", flush=True)
+        for duration, msg_type, idx in sorted_timings[:10]:
+            print(
+                f"[TIMING]     Message #{idx} ({msg_type}): {duration * 1000:.1f}ms",
+                flush=True,
+            )
 
     log_timing(
         f"Main message processing loop ({len(template_messages)} template messages)"
