@@ -10,6 +10,7 @@ import dateparser
 
 from .models import (
     TranscriptEntry,
+    UserTranscriptEntry,
     SummaryTranscriptEntry,
     parse_transcript_entry,
     ContentItem,
@@ -182,11 +183,11 @@ def load_transcript(
                             isinstance(tool_use_result, dict)
                             and "agentId" in tool_use_result
                         ):
-                            agent_id = tool_use_result.get("agentId")
-                            if agent_id:
-                                agent_ids.add(agent_id)
+                            agent_id_value = tool_use_result.get("agentId")  # type: ignore[reportUnknownVariableType, reportUnknownMemberType]
+                            if isinstance(agent_id_value, str):
+                                agent_ids.add(agent_id_value)
                                 # Copy agentId to top level for Pydantic to preserve
-                                entry_dict["agentId"] = agent_id
+                                entry_dict["agentId"] = agent_id_value
 
                     entry_type: str | None = entry_dict.get("type")
 
@@ -262,7 +263,7 @@ def load_transcript(
             result_messages.append(message)
 
             # Check if this is a UserTranscriptEntry with agentId
-            if hasattr(message, "agentId") and message.agentId:
+            if isinstance(message, UserTranscriptEntry) and message.agentId:
                 agent_id = message.agentId
                 if agent_id in agent_messages_map:
                     # Insert agent messages right after this message

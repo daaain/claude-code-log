@@ -2619,7 +2619,7 @@ def generate_html(
                                 }
                                 # For Task tools, store the prompt for comparison
                                 if tool_name == "Task" and isinstance(tool_input, dict):
-                                    prompt_value = tool_input.get("prompt", "")
+                                    prompt_value = tool_input.get("prompt", "")  # type: ignore[reportUnknownVariableType, reportUnknownMemberType]
                                     tool_ctx["prompt"] = (
                                         prompt_value
                                         if isinstance(prompt_value, str)
@@ -3028,8 +3028,8 @@ def generate_html(
             item_type = getattr(tool_item, "type", None)
             item_tool_use_id: Optional[str] = None
             tool_title_hint: Optional[str] = None
-            pending_dedup: Optional[tuple[int, str, str]] = (
-                None  # Initialize for each tool item
+            pending_dedup: Optional[str] = (
+                None  # Holds task result content for deduplication
             )
 
             if isinstance(tool_item, ToolUseContent) or item_type == "tool_use":
@@ -3133,17 +3133,15 @@ def generate_html(
                     # Note: tool_result.content can be str or List[Dict[str, Any]] (not List[ContentItem])
                     if isinstance(tool_result_converted.content, str):
                         task_result_content = tool_result_converted.content.strip()
-                    elif isinstance(tool_result_converted.content, list):
-                        # Handle list of dicts (tool result format) or ContentItem objects
-                        content_parts = []
-                        for item in tool_result_converted.content:
-                            if isinstance(item, dict) and item.get("type") == "text":
-                                content_parts.append(item.get("text", ""))
-                            elif isinstance(item, TextContent):
-                                content_parts.append(item.text)
-                        task_result_content = "\n".join(content_parts).strip()
                     else:
-                        task_result_content = ""
+                        # Handle list of dicts (tool result format)
+                        content_parts: list[str] = []
+                        for item in tool_result_converted.content:
+                            # tool_result_converted.content is List[Dict[str, Any]]
+                            text_val = item.get("text", "")
+                            if isinstance(text_val, str):
+                                content_parts.append(text_val)
+                        task_result_content = "\n".join(content_parts).strip()
 
                     # Store for deduplication - we'll check/update after we have the message_id
                     pending_dedup = task_result_content if task_result_content else None
@@ -3248,7 +3246,7 @@ def generate_html(
             template_messages.append(tool_template_message)
 
             # Track Task results and check for matching assistants
-            if pending_dedup is not None and isinstance(pending_dedup, str):
+            if pending_dedup is not None:
                 # pending_dedup contains the task result content
                 task_result_content = pending_dedup
                 template_msg_index = len(template_messages) - 1
