@@ -728,21 +728,8 @@ def format_task_tool_content(tool_use: ToolUseContent) -> str:
         # No prompt, show parameters table as fallback
         return render_params_table(tool_use.input)
 
-    # Render prompt as markdown (like assistant/sidechain messages)
-    from mistune import create_markdown
-
-    md = create_markdown(
-        plugins=[
-            "strikethrough",
-            "footnotes",
-            "table",
-            "url",
-            "task_lists",
-            "def_list",
-            "abbr",
-        ]
-    )
-    rendered_html = md(prompt)
+    # Render prompt as markdown with Pygments syntax highlighting
+    rendered_html = render_markdown(prompt)
 
     return f'<div class="task-prompt markdown">{rendered_html}</div>'
 
@@ -1072,23 +1059,10 @@ def format_tool_result_content(
             result_parts.append("</div>")
             return "".join(result_parts)
 
-    # Special handling for Task tool: render result as markdown (agent's final message)
+    # Special handling for Task tool: render result as markdown with Pygments (agent's final message)
     # Deduplication is now handled retroactively by replacing the sub-assistant content
     if tool_name == "Task" and not has_images:
-        from mistune import create_markdown
-
-        md = create_markdown(
-            plugins=[
-                "strikethrough",
-                "footnotes",
-                "table",
-                "url",
-                "task_lists",
-                "def_list",
-                "abbr",
-            ]
-        )
-        rendered_html = md(raw_content)
+        rendered_html = render_markdown(raw_content)
         return f'<div class="task-result markdown">{rendered_html}</div>'
 
     # Check if this looks like Bash tool output and process ANSI codes

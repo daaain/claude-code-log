@@ -72,7 +72,7 @@
     {% for message in messages %}
     {% if message.is_session_header %}
     <div class="session-divider"></div>
-    <div id='session-{{ message.session_id }}' class='message session-header' data-message-id='{{ message.message_id }}'>
+    <div id='session-{{ message.session_id }}' class='message session-header' data-message-id='{{ message.message_id }}' id='msg-{{ message.message_id }}'>
         <div class='header'>Session: {{ message.content_html }}</div>
         {% if message.session_subtitle %}
         <div class='session-subtitle' style='font-size: 0.9em; color: #666; margin-top: 4px;'>{{
@@ -102,7 +102,7 @@
     </div>
     {% else %}
     {% set markdown = message.css_class in ['assistant', 'thinking', 'sidechain'] or (message.css_class and 'compacted' in message.css_class) %}
-    <div class='message {{ message.css_class }}{% if message.is_paired %} paired-message {{ message.pair_role }}{% endif %}{% for ancestor_id in message.ancestry %} {{ ancestor_id }}{% endfor %}' data-message-id='{{ message.message_id }}'>
+    <div class='message {{ message.css_class }}{% if message.is_paired %} paired-message {{ message.pair_role }}{% endif %}{% for ancestor_id in message.ancestry %} {{ ancestor_id }}{% endfor %}' data-message-id='{{ message.message_id }}' id='msg-{{ message.message_id }}'>
         <div class='header'>
             <span{% if message.title_hint %} title="{{ message.title_hint }}"{% endif %}>{% if message.message_title %}{%
                 if message.message_title == 'Memory' %}💭 {%
