@@ -2,7 +2,9 @@
 """Render Claude transcript data to HTML format."""
 
 import json
+import os
 import re
+import time
 from pathlib import Path
 from typing import List, Optional, Dict, Any, cast, TYPE_CHECKING
 
@@ -16,6 +18,13 @@ from pygments import highlight  # type: ignore[reportUnknownVariableType]
 from pygments.lexers import get_lexer_for_filename, TextLexer  # type: ignore[reportUnknownVariableType]
 from pygments.formatters import HtmlFormatter  # type: ignore[reportUnknownVariableType]
 from pygments.util import ClassNotFound  # type: ignore[reportUnknownVariableType]
+
+# Performance debugging
+DEBUG_TIMING = os.getenv("CLAUDE_CODE_LOG_DEBUG_TIMING", "").lower() in (
+    "1",
+    "true",
+    "yes",
+)
 
 from .models import (
     TranscriptEntry,
@@ -2517,8 +2526,27 @@ def generate_html(
     combined_transcript_link: Optional[str] = None,
 ) -> str:
     """Generate HTML from transcript messages using Jinja2 templates."""
+    # Performance timing
+    t_start = time.time()
+    t_last = t_start
+
+    def log_timing(phase: str) -> None:
+        """Log timing for a phase if DEBUG_TIMING is enabled."""
+        nonlocal t_last
+        if DEBUG_TIMING:
+            t_now = time.time()
+            phase_time = t_now - t_last
+            total_time = t_now - t_start
+            print(
+                f"[TIMING] {phase:40s} {phase_time:8.3f}s (total: {total_time:8.3f}s)",
+                flush=True,
+            )
+            t_last = t_now
+
     if not title:
         title = "Claude Transcript"
+
+    log_timing("Initialization")
 
     # Deduplicate messages by (message_type, timestamp)
     # Messages with the exact same timestamp are duplicates by definition -
@@ -2550,6 +2578,8 @@ def generate_html(
             deduplicated_messages.append(message)
 
     messages = deduplicated_messages
+
+    log_timing(f"Deduplication ({len(messages)} messages)")
 
     # Pre-process to find and attach session summaries
     session_summaries: Dict[str, str] = {}
@@ -2587,6 +2617,8 @@ def generate_html(
             session_id = getattr(message, "sessionId", "")
             if session_id in session_summaries:
                 setattr(message, "_session_summary", session_summaries[session_id])
+
+    log_timing("Session summary processing")
 
     # Group messages by session and collect session info for navigation
     sessions: Dict[str, Dict[str, Any]] = {}
@@ -2626,6 +2658,8 @@ def generate_html(
                                         else ""
                                     )
                                 tool_use_context[tool_id] = tool_ctx
+
+    log_timing(f"Tool use context building ({len(tool_use_context)} tools)")
 
     # Process messages into template-friendly format
     template_messages: List[TemplateMessage] = []
@@ -3249,6 +3283,10 @@ def generate_html(
 
                 pending_dedup = None  # Reset for next iteration
 
+    log_timing(
+        f"Main message processing loop ({len(template_messages)} template messages)"
+    )
+
     # Prepare session navigation data
     session_nav: List[Dict[str, Any]] = []
     for session_id in session_order:
@@ -3302,19 +3340,30 @@ def generate_html(
             }
         )
 
+    log_timing(f"Session navigation building ({len(session_nav)} sessions)")
+
     # Identify and mark paired messages (command+output, tool_use+tool_result, etc.)
     _identify_message_pairs(template_messages)
+
+    log_timing("Identify message pairs")
 
     # Reorder messages so pairs are adjacent while preserving chronological order
     template_messages = _reorder_paired_messages(template_messages)
 
+    log_timing("Reorder paired messages")
+
     # Mark messages that have children for fold/unfold controls
     _mark_messages_with_children(template_messages)
+
+    log_timing("Mark messages with children")
 
     # Render template
     env = _get_template_environment()
     template = env.get_template("transcript.html")
-    return str(
+
+    log_timing("Template environment setup")
+
+    html_output = str(
         template.render(
             title=title,
             messages=template_messages,
@@ -3323,6 +3372,10 @@ def generate_html(
             library_version=get_library_version(),
         )
     )
+
+    log_timing(f"Template rendering ({len(html_output)} chars)")
+
+    return html_output
 
 
 def generate_projects_index_html(
