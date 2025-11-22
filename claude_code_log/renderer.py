@@ -3009,7 +3009,7 @@ def generate_html(
                     ]
                     if existing_type == "task":
                         # Found matching Task result - deduplicate this assistant message
-                        forward_link_html = f'<p><em>(Content duplicates <a href="#msg-{existing_id}-last">Task tool result above</a>)</em></p>'
+                        forward_link_html = f'<p><em>(Task summary — already displayed in <a href="#msg-{existing_id}-last">Task tool result above</a>)</em></p>'
                         template_messages[
                             template_msg_index
                         ].content_html = forward_link_html
@@ -3258,7 +3258,7 @@ def generate_html(
                     ]
                     if existing_type == "assistant":
                         # Found matching assistant - deduplicate it by replacing with forward link
-                        forward_link_html = f'<p><em>(Content duplicates <a href="#msg-{tool_msg_id}-last">Task tool result below</a>)</em></p>'
+                        forward_link_html = f'<p><em>(Task summary — already displayed in <a href="#msg-{tool_msg_id}-last">Task tool result below</a>)</em></p>'
                         template_messages[
                             existing_index
                         ].content_html = forward_link_html
