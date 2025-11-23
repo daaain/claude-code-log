@@ -4,6 +4,7 @@
 import json
 import os
 import re
+import sys
 import time
 from pathlib import Path
 from typing import List, Optional, Dict, Any, cast, TYPE_CHECKING
@@ -1057,7 +1058,7 @@ def format_tool_result_content(
         if parsed_result:
             code_content, system_reminder, line_offset = parsed_result
 
-            # Highlight code with Pygments using correct line offset
+            # Highlight code with Pygments using correct line offset (single call)
             highlighted_html = _highlight_code_with_pygments(
                 code_content, file_path, linenostart=line_offset
             )
@@ -1068,11 +1069,21 @@ def format_tool_result_content(
             # Make collapsible if content has more than 12 lines
             lines = code_content.split("\n")
             if len(lines) > 12:
-                # Get preview (first ~5 lines)
-                preview_lines = lines[:5]
-                preview_html = _highlight_code_with_pygments(
-                    "\n".join(preview_lines), file_path, linenostart=line_offset
+                # Extract preview from already-highlighted HTML to avoid double-highlighting
+                # The highlighted HTML has structure: <div class="highlight"><table><tbody>...</tbody></table></div>
+                # Extract first ~5 <tr> rows
+                tr_matches = list(
+                    re.finditer(r"<tr>.*?</tr>", highlighted_html, re.DOTALL)
                 )
+                if len(tr_matches) >= 5:
+                    # Get HTML up to and including the 5th <tr>
+                    preview_end = tr_matches[4].end()
+                    preview_html_fragment = highlighted_html[:preview_end]
+                    # Close unclosed tags properly
+                    preview_html = preview_html_fragment + "</tbody></table></div>"
+                else:
+                    # Fallback if we can't extract rows (shouldn't happen)
+                    preview_html = highlighted_html
 
                 result_parts.append(f"""
                 <details class='collapsible-code'>
