@@ -2807,8 +2807,6 @@ def generate_html(
         # Update current message UUID for timing tracking
         if DEBUG_TIMING:
             globals()["_current_msg_uuid"] = msg_uuid
-            phase_timings: List[tuple[str, float]] = []
-            phase_start = time.time()
 
         # Skip summary messages - they should already be attached to their sessions
         if isinstance(message, SummaryTranscriptEntry):
@@ -2817,10 +2815,6 @@ def generate_html(
         # Skip queue-operation messages - they duplicate user messages
         if isinstance(message, QueueOperationTranscriptEntry):
             continue
-
-        if DEBUG_TIMING:
-            phase_timings.append(("initial_checks", time.time() - phase_start))
-            phase_start = time.time()
 
         # Handle system messages separately
         if isinstance(message, SystemTranscriptEntry):
