@@ -475,19 +475,12 @@ def _highlight_code_with_pygments(
         lexer = TextLexer()  # type: ignore[reportUnknownVariableType]
 
     # Create formatter with line numbers in table format
-    if DEBUG_TIMING:
-        t_formatter = time.time()
     formatter = HtmlFormatter(  # type: ignore[reportUnknownVariableType]
         linenos="table" if show_linenos else False,
         cssclass="highlight",
         wrapcode=True,
         linenostart=linenostart,
     )
-    if DEBUG_TIMING:
-        print(
-            f"[HIGHLIGHT-DEBUG] Create formatter: {(time.time() - t_formatter) * 1000:.1f}ms",
-            file=sys.stderr,
-        )
 
     # Highlight the code with timing if enabled
     if DEBUG_TIMING:
@@ -1088,40 +1081,17 @@ def format_tool_result_content(
 
     # Try to parse as Read tool result if file_path is provided
     if file_path and tool_name == "Read" and not has_images:
-        if DEBUG_TIMING:
-            t_parse = time.time()
         parsed_result = _parse_read_tool_result(raw_content)
-        if DEBUG_TIMING:
-            print(
-                f"[READ-DEBUG] Parse: {(time.time() - t_parse) * 1000:.1f}ms",
-                file=sys.stderr,
-            )
 
         if parsed_result:
-            if DEBUG_TIMING:
-                t_extract = time.time()
             code_content, system_reminder, line_offset = parsed_result
-            if DEBUG_TIMING:
-                print(
-                    f"[READ-DEBUG] Extract tuple: {(time.time() - t_extract) * 1000:.1f}ms",
-                    file=sys.stderr,
-                )
 
             # Highlight code with Pygments using correct line offset (single call)
-            if DEBUG_TIMING:
-                t_highlight = time.time()
             highlighted_html = _highlight_code_with_pygments(
                 code_content, file_path, linenostart=line_offset
             )
-            if DEBUG_TIMING:
-                print(
-                    f"[READ-DEBUG] Highlight: {(time.time() - t_highlight) * 1000:.1f}ms",
-                    file=sys.stderr,
-                )
 
             # Build result HTML
-            if DEBUG_TIMING:
-                t_build = time.time()
             result_parts = ["<div class='read-tool-result'>"]
 
             # Make collapsible if content has more than 12 lines
@@ -1130,16 +1100,9 @@ def format_tool_result_content(
                 # Extract preview from already-highlighted HTML to avoid double-highlighting
                 # The highlighted HTML has structure: <div class="highlight"><table><tbody>...</tbody></table></div>
                 # Extract first ~5 <tr> rows
-                if DEBUG_TIMING:
-                    t_regex = time.time()
                 tr_matches = list(
                     re.finditer(r"<tr>.*?</tr>", highlighted_html, re.DOTALL)
                 )
-                if DEBUG_TIMING:
-                    print(
-                        f"[READ-DEBUG] Regex finditer: {(time.time() - t_regex) * 1000:.1f}ms",
-                        file=sys.stderr,
-                    )
 
                 if len(tr_matches) >= 5:
                     # Get HTML up to and including the 5th <tr>
@@ -1163,12 +1126,6 @@ def format_tool_result_content(
             else:
                 # Show directly without collapsible
                 result_parts.append(highlighted_html)
-
-            if DEBUG_TIMING:
-                print(
-                    f"[READ-DEBUG] Build HTML: {(time.time() - t_build) * 1000:.1f}ms",
-                    file=sys.stderr,
-                )
 
             # Add system reminder if present (after code, always visible)
             if system_reminder:
