@@ -416,8 +416,11 @@ def _highlight_code_with_pygments(
     from pygments.lexers import get_lexer_by_name, get_all_lexers  # type: ignore[reportUnknownVariableType]
 
     # Build pattern->alias mapping on first call (cached as function attribute)
+    # OPTIMIZATION: Create both direct extension lookup and full pattern cache
     if not hasattr(_highlight_code_with_pygments, "_pattern_cache"):
         pattern_cache: dict[str, str] = {}
+        extension_cache: dict[str, str] = {}  # Fast lookup for simple *.ext patterns
+
         # Use public API: get_all_lexers() returns (name, aliases, patterns, mimetypes) tuples
         for name, aliases, patterns, mimetypes in get_all_lexers():  # type: ignore[reportUnknownVariableType]
             if aliases and patterns:
@@ -425,35 +428,66 @@ def _highlight_code_with_pygments(
                 lexer_alias = aliases[0]
                 # Map each filename pattern to this lexer alias
                 for pattern in patterns:
-                    pattern_cache[pattern.lower()] = lexer_alias
+                    pattern_lower = pattern.lower()
+                    pattern_cache[pattern_lower] = lexer_alias
+                    # Extract simple extension patterns (*.ext) for fast lookup
+                    if (
+                        pattern_lower.startswith("*.")
+                        and "*" not in pattern_lower[2:]
+                        and "?" not in pattern_lower[2:]
+                    ):
+                        ext = pattern_lower[2:]  # Remove "*."
+                        # Prefer first match for each extension
+                        if ext not in extension_cache:
+                            extension_cache[ext] = lexer_alias
+
         _highlight_code_with_pygments._pattern_cache = pattern_cache  # type: ignore[attr-defined]
+        _highlight_code_with_pygments._extension_cache = extension_cache  # type: ignore[attr-defined]
 
     # Get basename for matching (patterns are like "*.py")
     basename = os.path.basename(file_path).lower()
 
     try:
-        # Try exact pattern match first (fastest)
+        # Get caches
         pattern_cache = _highlight_code_with_pygments._pattern_cache  # type: ignore[attr-defined]
+        extension_cache = _highlight_code_with_pygments._extension_cache  # type: ignore[attr-defined]
 
-        # Check for direct pattern match
-        for pattern, lexer_alias in pattern_cache.items():
-            if fnmatch.fnmatch(basename, pattern):
-                lexer = get_lexer_by_name(lexer_alias, stripall=True)  # type: ignore[reportUnknownVariableType]
-                break
+        # OPTIMIZATION: Try fast extension lookup first (O(1) dict lookup)
+        lexer_alias = None
+        if "." in basename:
+            ext = basename.split(".")[-1]  # Get last extension (handles .tar.gz, etc.)
+            lexer_alias = extension_cache.get(ext)
+
+        # Fall back to pattern matching only if extension lookup failed
+        if lexer_alias is None:
+            for pattern, lex_alias in pattern_cache.items():
+                if fnmatch.fnmatch(basename, pattern):
+                    lexer_alias = lex_alias
+                    break
+
+        # Get lexer or use TextLexer as fallback
+        if lexer_alias:
+            lexer = get_lexer_by_name(lexer_alias, stripall=True)  # type: ignore[reportUnknownVariableType]
         else:
-            # No match found, use TextLexer
             lexer = TextLexer()  # type: ignore[reportUnknownVariableType]
     except ClassNotFound:
         # Fall back to plain text lexer
         lexer = TextLexer()  # type: ignore[reportUnknownVariableType]
 
     # Create formatter with line numbers in table format
+    if DEBUG_TIMING:
+        t_formatter = time.time()
     formatter = HtmlFormatter(  # type: ignore[reportUnknownVariableType]
         linenos="table" if show_linenos else False,
         cssclass="highlight",
         wrapcode=True,
         linenostart=linenostart,
     )
+    if DEBUG_TIMING:
+        print(
+            f"[HIGHLIGHT-DEBUG] Create formatter: {(time.time() - t_formatter) * 1000:.1f}ms",
+            file=sys.stderr,
+        )
 
     # Highlight the code with timing if enabled
     if DEBUG_TIMING:
@@ -1054,16 +1088,40 @@ def format_tool_result_content(
 
     # Try to parse as Read tool result if file_path is provided
     if file_path and tool_name == "Read" and not has_images:
+        if DEBUG_TIMING:
+            t_parse = time.time()
         parsed_result = _parse_read_tool_result(raw_content)
+        if DEBUG_TIMING:
+            print(
+                f"[READ-DEBUG] Parse: {(time.time() - t_parse) * 1000:.1f}ms",
+                file=sys.stderr,
+            )
+
         if parsed_result:
+            if DEBUG_TIMING:
+                t_extract = time.time()
             code_content, system_reminder, line_offset = parsed_result
+            if DEBUG_TIMING:
+                print(
+                    f"[READ-DEBUG] Extract tuple: {(time.time() - t_extract) * 1000:.1f}ms",
+                    file=sys.stderr,
+                )
 
             # Highlight code with Pygments using correct line offset (single call)
+            if DEBUG_TIMING:
+                t_highlight = time.time()
             highlighted_html = _highlight_code_with_pygments(
                 code_content, file_path, linenostart=line_offset
             )
+            if DEBUG_TIMING:
+                print(
+                    f"[READ-DEBUG] Highlight: {(time.time() - t_highlight) * 1000:.1f}ms",
+                    file=sys.stderr,
+                )
 
             # Build result HTML
+            if DEBUG_TIMING:
+                t_build = time.time()
             result_parts = ["<div class='read-tool-result'>"]
 
             # Make collapsible if content has more than 12 lines
@@ -1072,9 +1130,17 @@ def format_tool_result_content(
                 # Extract preview from already-highlighted HTML to avoid double-highlighting
                 # The highlighted HTML has structure: <div class="highlight"><table><tbody>...</tbody></table></div>
                 # Extract first ~5 <tr> rows
+                if DEBUG_TIMING:
+                    t_regex = time.time()
                 tr_matches = list(
                     re.finditer(r"<tr>.*?</tr>", highlighted_html, re.DOTALL)
                 )
+                if DEBUG_TIMING:
+                    print(
+                        f"[READ-DEBUG] Regex finditer: {(time.time() - t_regex) * 1000:.1f}ms",
+                        file=sys.stderr,
+                    )
+
                 if len(tr_matches) >= 5:
                     # Get HTML up to and including the 5th <tr>
                     preview_end = tr_matches[4].end()
@@ -1097,6 +1163,12 @@ def format_tool_result_content(
             else:
                 # Show directly without collapsible
                 result_parts.append(highlighted_html)
+
+            if DEBUG_TIMING:
+                print(
+                    f"[READ-DEBUG] Build HTML: {(time.time() - t_build) * 1000:.1f}ms",
+                    file=sys.stderr,
+                )
 
             # Add system reminder if present (after code, always visible)
             if system_reminder:
