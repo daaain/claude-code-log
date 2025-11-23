@@ -406,19 +406,19 @@ def _highlight_code_with_pygments(
     Returns:
         HTML string with syntax-highlighted code
     """
-    # PERFORMANCE FIX: Use Pygments' internal filename pattern mapping to avoid filesystem I/O
+    # PERFORMANCE FIX: Use Pygments' public API to build filename pattern mapping, avoiding filesystem I/O
     # get_lexer_for_filename performs I/O operations (file existence checks, reading bytes)
     # which causes severe slowdowns, especially on Windows with antivirus scanning
-    # Solution: Build a reverse mapping from filename patterns to lexer aliases (done once)
+    # Solution: Build a reverse mapping from filename patterns to lexer aliases using get_all_lexers() (done once)
     import os
     import fnmatch
-    from pygments.lexers import get_lexer_by_name  # type: ignore[reportUnknownVariableType]
-    from pygments.lexers._mapping import LEXERS  # type: ignore[reportUnknownVariableType]
+    from pygments.lexers import get_lexer_by_name, get_all_lexers  # type: ignore[reportUnknownVariableType]
 
     # Build pattern->alias mapping on first call (cached as function attribute)
     if not hasattr(_highlight_code_with_pygments, "_pattern_cache"):
         pattern_cache: dict[str, str] = {}
-        for lexer_name, (module, name, aliases, patterns, mimetypes) in LEXERS.items():
+        # Use public API: get_all_lexers() returns (name, aliases, patterns, mimetypes) tuples
+        for name, aliases, patterns, mimetypes in get_all_lexers():  # type: ignore[reportUnknownVariableType]
             if aliases and patterns:
                 # Use first alias as the lexer name
                 lexer_alias = aliases[0]
