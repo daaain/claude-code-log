@@ -406,9 +406,42 @@ def _highlight_code_with_pygments(
     Returns:
         HTML string with syntax-highlighted code
     """
+    # PERFORMANCE FIX: Use Pygments' internal filename pattern mapping to avoid filesystem I/O
+    # get_lexer_for_filename performs I/O operations (file existence checks, reading bytes)
+    # which causes severe slowdowns, especially on Windows with antivirus scanning
+    # Solution: Build a reverse mapping from filename patterns to lexer aliases (done once)
+    import os
+    import fnmatch
+    from pygments.lexers import get_lexer_by_name  # type: ignore[reportUnknownVariableType]
+    from pygments.lexers._mapping import LEXERS  # type: ignore[reportUnknownVariableType]
+
+    # Build pattern->alias mapping on first call (cached as function attribute)
+    if not hasattr(_highlight_code_with_pygments, "_pattern_cache"):
+        pattern_cache: dict[str, str] = {}
+        for lexer_name, (module, name, aliases, patterns, mimetypes) in LEXERS.items():
+            if aliases and patterns:
+                # Use first alias as the lexer name
+                lexer_alias = aliases[0]
+                # Map each filename pattern to this lexer alias
+                for pattern in patterns:
+                    pattern_cache[pattern.lower()] = lexer_alias
+        _highlight_code_with_pygments._pattern_cache = pattern_cache  # type: ignore[attr-defined]
+
+    # Get basename for matching (patterns are like "*.py")
+    basename = os.path.basename(file_path).lower()
+
     try:
-        # Try to get lexer based on filename
-        lexer = get_lexer_for_filename(file_path, code)  # type: ignore[reportUnknownVariableType]
+        # Try exact pattern match first (fastest)
+        pattern_cache = _highlight_code_with_pygments._pattern_cache  # type: ignore[attr-defined]
+
+        # Check for direct pattern match
+        for pattern, lexer_alias in pattern_cache.items():
+            if fnmatch.fnmatch(basename, pattern):
+                lexer = get_lexer_by_name(lexer_alias, stripall=True)  # type: ignore[reportUnknownVariableType]
+                break
+        else:
+            # No match found, use TextLexer
+            lexer = TextLexer()  # type: ignore[reportUnknownVariableType]
     except ClassNotFound:
         # Fall back to plain text lexer
         lexer = TextLexer()  # type: ignore[reportUnknownVariableType]
@@ -2734,6 +2767,8 @@ def generate_html(
         # Update current message UUID for timing tracking
         if DEBUG_TIMING:
             globals()["_current_msg_uuid"] = msg_uuid
+            phase_timings: List[tuple[str, float]] = []
+            phase_start = time.time()
 
         # Skip summary messages - they should already be attached to their sessions
         if isinstance(message, SummaryTranscriptEntry):
@@ -2742,6 +2777,10 @@ def generate_html(
         # Skip queue-operation messages - they duplicate user messages
         if isinstance(message, QueueOperationTranscriptEntry):
             continue
+
+        if DEBUG_TIMING:
+            phase_timings.append(("initial_checks", time.time() - phase_start))
+            phase_start = time.time()
 
         # Handle system messages separately
         if isinstance(message, SystemTranscriptEntry):
