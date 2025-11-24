@@ -1,11 +1,16 @@
-"""Timing utilities for renderer performance profiling."""
+"""Timing utilities for renderer performance profiling.
+
+This module provides timing and performance profiling utilities for the renderer.
+All timing-related configuration and functionality is centralized here.
+"""
 
 import os
 import time
 from contextlib import contextmanager
 from typing import List, Tuple, Iterator, Any, Dict, Callable, Union, Optional
 
-# Performance debugging
+# Performance debugging - enabled via CLAUDE_CODE_LOG_DEBUG_TIMING environment variable
+# Set to "1", "true", or "yes" to enable timing output
 DEBUG_TIMING = os.getenv("CLAUDE_CODE_LOG_DEBUG_TIMING", "").lower() in (
     "1",
     "true",

@@ -19,13 +19,6 @@ from pygments.lexers import TextLexer  # type: ignore[reportUnknownVariableType]
 from pygments.formatters import HtmlFormatter  # type: ignore[reportUnknownVariableType]
 from pygments.util import ClassNotFound  # type: ignore[reportUnknownVariableType]
 
-# Performance debugging
-DEBUG_TIMING = os.getenv("CLAUDE_CODE_LOG_DEBUG_TIMING", "").lower() in (
-    "1",
-    "true",
-    "yes",
-)
-
 from .models import (
     TranscriptEntry,
     AssistantTranscriptEntry,
@@ -50,6 +43,7 @@ from .utils import (
     create_session_preview,
 )
 from .renderer_timings import (
+    DEBUG_TIMING,
     report_timing_statistics,
     timing_stat,
     set_timing_var,
@@ -397,7 +391,6 @@ def _highlight_code_with_pygments(
     # get_lexer_for_filename performs I/O operations (file existence checks, reading bytes)
     # which causes severe slowdowns, especially on Windows with antivirus scanning
     # Solution: Build a reverse mapping from filename patterns to lexer aliases using get_all_lexers() (done once)
-    import os
     import fnmatch
     from pygments.lexers import get_lexer_by_name, get_all_lexers  # type: ignore[reportUnknownVariableType]
 
