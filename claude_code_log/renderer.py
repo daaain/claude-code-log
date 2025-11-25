@@ -466,6 +466,49 @@ def _highlight_code_with_pygments(
         return str(highlight(code, lexer, formatter))  # type: ignore[reportUnknownArgumentType]
 
 
+def _truncate_highlighted_preview(highlighted_html: str, max_lines: int) -> str:
+    """Truncate Pygments highlighted HTML to first N lines.
+
+    HtmlFormatter(linenos="table") produces a single <tr> with two <td>s:
+      <td class="linenos"><div class="linenodiv"><pre>LINE_NUMS</pre></div></td>
+      <td class="code"><div><pre>CODE</pre></div></td>
+
+    We truncate content within each <pre> tag to the first max_lines lines.
+
+    Args:
+        highlighted_html: Full Pygments-highlighted HTML
+        max_lines: Maximum number of lines to include in preview
+
+    Returns:
+        Truncated HTML with same structure but fewer lines
+    """
+
+    def truncate_pre_content(match: re.Match[str]) -> str:
+        """Truncate content inside a <pre> tag to max_lines."""
+        prefix, content, suffix = match.groups()
+        lines = content.split("\n")
+        truncated = "\n".join(lines[:max_lines])
+        return prefix + truncated + suffix
+
+    # Truncate linenos <pre> content (line numbers separated by newlines)
+    result = re.sub(
+        r'(<div class="linenodiv"><pre>)(.*?)(</pre></div>)',
+        truncate_pre_content,
+        highlighted_html,
+        flags=re.DOTALL,
+    )
+
+    # Truncate code <pre> content
+    result = re.sub(
+        r'(<td class="code"><div><pre[^>]*>)(.*?)(</pre></div></td>)',
+        truncate_pre_content,
+        result,
+        flags=re.DOTALL,
+    )
+
+    return result
+
+
 def format_read_tool_content(tool_use: ToolUseContent) -> str:  # noqa: ARG001
     """Format Read tool use content showing file path.
 
@@ -1068,21 +1111,11 @@ def format_tool_result_content(
             lines = code_content.split("\n")
             if len(lines) > 12:
                 # Extract preview from already-highlighted HTML to avoid double-highlighting
-                # The highlighted HTML has structure: <div class="highlight"><table><tbody>...</tbody></table></div>
-                # Extract first ~5 <tr> rows
-                tr_matches = list(
-                    re.finditer(r"<tr>.*?</tr>", highlighted_html, re.DOTALL)
-                )
-
-                if len(tr_matches) >= 5:
-                    # Get HTML up to and including the 5th <tr>
-                    preview_end = tr_matches[4].end()
-                    preview_html_fragment = highlighted_html[:preview_end]
-                    # Close unclosed tags properly
-                    preview_html = preview_html_fragment + "</tbody></table></div>"
-                else:
-                    # Fallback if we can't extract rows (shouldn't happen)
-                    preview_html = highlighted_html
+                # HtmlFormatter(linenos="table") produces a single <tr> with two <td>s:
+                #   <td class="linenos">...<pre>LINE_NUMS</pre>...</td>
+                #   <td class="code">...<pre>CODE</pre>...</td>
+                # We truncate content within each <pre> to first 5 lines
+                preview_html = _truncate_highlighted_preview(highlighted_html, 5)
 
                 result_parts.append(f"""
                 <details class='collapsible-code'>
