@@ -43,52 +43,26 @@ The fold bar has two buttons with three possible states:
 ## State Transitions
 
 ```
-        ┌─────────────────────────────────────┐
-        │         State A (▶ ▶▶)             │
-        │      Nothing visible               │
-        └─────────────────────────────────────┘
-                 │             │
-    Click ▶      │             │      Click ▶▶
-   (unfold 1)    │             │      (unfold all)
-                 ▼             ▼
-        ┌─────────────┐   ┌─────────────┐
-        │  State B    │   │  State B    │
-        │  (▼ ▶▶)     │◄──┤  (▼ ▶▶)     │
-        │  First      │   │  First      │
-        │  level      │   │  level      │
-        │  visible    │   │  visible    │
-        └─────────────┘   └─────────────┘
-                 │             │
-    Click ▶▶     │             │      Click ▼
-   (unfold all)  │             │      (fold 1)
-                 ▼             ▼
-        ┌─────────────┐   ┌─────────────┐
-        │  State C    │   │  State A    │
-        │  (▼ ▼▼)     │   │  (▶ ▶▶)     │
-        │  All levels │   │  Nothing    │
-        │  visible    │   │  visible    │
-        └─────────────┘   └─────────────┘
-                 │             │
-    Click ▼▼     │             │      Click ▶▶
-   (fold all)    │             │      (unfold all)
-                 ▼             ▼
-        ┌─────────────┐   ┌─────────────┐
-        │  State B    │   │  State C    │
-        │  (▼ ▶▶)     │   │  (▼ ▼▼)     │
-        │  First      │   │  All levels │
-        │  level      │   │  visible    │
-        │  visible    │   │             │
-        └─────────────┘   └─────────────┘
-                 │
-    Click ▼      │
-   (fold 1)      │
-                 ▼
-        ┌─────────────┐
-        │  State A    │
-        │  (▶ ▶▶)     │
-        │  Nothing    │
-        │  visible    │
-        └─────────────┘
+            ┌────────────────────────────────┐
+  ┌────────►│       State A (▶ / ▶▶)        │◄────────┐
+  │         │       Nothing visible          │         │
+  │         └────────────────────────────────┘         │
+  │                │                   │               │
+  │      Click ▶   │                   │  Click ▶▶    │
+  │     (unfold 1) │                   │  (unfold all) │
+  │                ▼                   ▼               │
+  │      ┌─────────────┐      ┌─────────────┐         │
+  │      │  State B    │      │  State C    │         │
+  │      │  (▼ / ▶▶)  │      │  (▼ / ▼▼)  │         │
+  │      │  First      │      │  All        │         │
+  │      │  level      │      │  levels     │         │
+  │      │  visible    │      │  visible    │         │
+  │      └─────────────┘      └─────────────┘         │
+  │         │       │              │       │          │
+  │  Click ▼│       └── ▶▶ ↔ ▼▼ ──┘       │Click ▼   │
+  │         │       (unfold all / fold 1)  │          │
+  └─────────┘                              └──────────┘
+       (fold all)                            (fold all)
 ```
 
 ## Simplified Transition Table
