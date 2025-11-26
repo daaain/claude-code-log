@@ -117,6 +117,7 @@ claude-code-log /path/to/directory --from-date "3 days ago" --to-date "yesterday
 
 - `claude_code_log/parser.py` - Data extraction and parsing from JSONL files
 - `claude_code_log/renderer.py` - HTML generation and template rendering
+- `claude_code_log/renderer_timings.py` - Performance timing instrumentation
 - `claude_code_log/converter.py` - High-level conversion orchestration
 - `claude_code_log/cli.py` - Command-line interface with project discovery
 - `claude_code_log/models.py` - Pydantic models for transcript data structures
@@ -218,6 +219,45 @@ HTML coverage reports are generated in `htmlcov/index.html`.
 - **Format code**: `ruff format`
 - **Lint and fix**: `ruff check --fix`
 - **Type checking**: `uv run pyright` and `uv run ty check`
+
+### Performance Profiling
+
+Enable timing instrumentation to identify performance bottlenecks:
+
+```bash
+# Enable timing output
+CLAUDE_CODE_LOG_DEBUG_TIMING=1 claude-code-log path/to/file.jsonl
+
+# Or export for a session
+export CLAUDE_CODE_LOG_DEBUG_TIMING=1
+claude-code-log path/to/file.jsonl
+```
+
+This outputs detailed timing for each rendering phase:
+
+```
+[TIMING] Initialization                      0.001s (total:    0.001s)
+[TIMING] Deduplication (1234 messages)       0.050s (total:    0.051s)
+[TIMING] Session summary processing          0.012s (total:    0.063s)
+[TIMING] Main message processing loop        5.234s (total:    5.297s)
+[TIMING] Template rendering (30MB chars)    15.432s (total:   20.729s)
+
+[TIMING] Loop statistics:
+[TIMING]   Total messages: 1234
+[TIMING]   Average time per message: 4.2ms
+[TIMING]   Slowest 10 messages:
+[TIMING]     Message abc-123 (#42, assistant): 245.3ms
+[TIMING]     ...
+
+[TIMING] Pygments highlighting:
+[TIMING]   Total operations: 89
+[TIMING]   Total time: 1.234s
+[TIMING]   Slowest 10 operations:
+[TIMING]     def-456: 50.2ms
+[TIMING]     ...
+```
+
+The timing module is in `claude_code_log/renderer_timings.py`.
 
 ### Testing & Style Guide
 
