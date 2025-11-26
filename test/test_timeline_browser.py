@@ -38,16 +38,23 @@ class TestTimelineBrowser:
 
         return temp_file
 
-    def _wait_for_timeline_loaded(self, page: Page):
-        """Wait for timeline to be fully loaded and initialized."""
+    def _wait_for_timeline_loaded(self, page: Page, expect_items: bool = True):
+        """Wait for timeline to be fully loaded and initialized.
+
+        Args:
+            page: The Playwright page object
+            expect_items: Whether to wait for timeline items (default True).
+                         Set to False when filters might hide all messages.
+        """
         # Wait for timeline container to be visible
         page.wait_for_selector("#timeline-container", state="attached")
 
         # Wait for vis-timeline to create its DOM elements
         page.wait_for_selector(".vis-timeline", timeout=10000)
 
-        # Wait for timeline items to be rendered
-        page.wait_for_selector(".vis-item", timeout=5000)
+        # Wait for timeline items to be rendered (if expected)
+        if expect_items:
+            page.wait_for_selector(".vis-item", timeout=5000)
 
     @pytest.mark.browser
     def test_timeline_toggle_button_exists(self, page: Page):
@@ -603,18 +610,21 @@ class TestTimelineBrowser:
 
         # Open filter panel
         page.locator("#filterMessages").click()
+        filter_toolbar = page.locator(".filter-toolbar")
+        expect(filter_toolbar).to_be_visible()
 
         # Test multiple filter combinations
+        # Note: Filter buttons with 0 count are hidden, so we skip them
         test_cases = [
-            ("user", '.filter-toggle[data-type="user"]'),
             ("assistant", '.filter-toggle[data-type="assistant"]'),
             ("sidechain", '.filter-toggle[data-type="sidechain"]'),
         ]
 
         for filter_type, selector in test_cases:
-            if page.locator(selector).count() > 0:
+            filter_toggle = page.locator(selector)
+            if filter_toggle.count() > 0 and filter_toggle.is_visible():
                 # Deselect the filter
-                page.locator(selector).click()
+                filter_toggle.click()
                 page.wait_for_timeout(100)  # Allow filters to apply
 
                 # Check that main messages are filtered
@@ -629,7 +639,7 @@ class TestTimelineBrowser:
                 # because timeline groups messages differently)
 
                 # Re-enable the filter
-                page.locator(selector).click()
+                filter_toggle.click()
                 page.wait_for_timeout(100)
 
                 # Check that messages are visible again
@@ -769,18 +779,21 @@ class TestTimelineBrowser:
 
         # Test rapid filter toggling
         page.locator("#filterMessages").click()
+        filter_toolbar = page.locator(".filter-toolbar")
+        expect(filter_toolbar).to_be_visible()
 
-        user_filter = page.locator('.filter-toggle[data-type="user"]')
+        # Note: Filter buttons with 0 count are hidden (e.g., user filter when sidechain.jsonl has no regular users)
+        sidechain_filter = page.locator('.filter-toggle[data-type="sidechain"]')
         assistant_filter = page.locator('.filter-toggle[data-type="assistant"]')
 
-        if user_filter.count() > 0 and assistant_filter.count() > 0:
+        if sidechain_filter.is_visible() and assistant_filter.is_visible():
             # Rapidly toggle filters
             for _ in range(3):
-                user_filter.click()
+                sidechain_filter.click()
                 page.wait_for_timeout(50)
                 assistant_filter.click()
                 page.wait_for_timeout(50)
-                user_filter.click()
+                sidechain_filter.click()
                 page.wait_for_timeout(50)
                 assistant_filter.click()
                 page.wait_for_timeout(50)
@@ -795,13 +808,13 @@ class TestTimelineBrowser:
         page.wait_for_timeout(200)
 
         # Change filters while timeline is hidden
-        if user_filter.count() > 0:
-            user_filter.click()
+        if sidechain_filter.is_visible():
+            sidechain_filter.click()
             page.wait_for_timeout(100)
 
-        # Show timeline again
+        # Show timeline again (may have no items if filters hide all messages)
         page.locator("#toggleTimeline").click()
-        self._wait_for_timeline_loaded(page)
+        self._wait_for_timeline_loaded(page, expect_items=False)
 
         # Timeline should reflect current filter state
         timeline_items = page.locator(".vis-item")
@@ -827,22 +840,25 @@ class TestTimelineBrowser:
 
         # Open filter panel
         page.locator("#filterMessages").click()
+        filter_toolbar = page.locator(".filter-toolbar")
+        expect(filter_toolbar).to_be_visible()
 
         # Perform multiple filter operations in sequence
         start_time = page.evaluate("() => performance.now()")
 
         # Test sequence of filter operations
+        # Note: Filter buttons with 0 count are hidden, so check visibility
         operations = [
             "#selectNone",
             "#selectAll",
-            '.filter-toggle[data-type="user"]',
             '.filter-toggle[data-type="assistant"]',
             '.filter-toggle[data-type="sidechain"]',
         ]
 
         for operation in operations:
-            if page.locator(operation).count() > 0:
-                page.locator(operation).click()
+            locator = page.locator(operation)
+            if locator.count() > 0 and locator.is_visible():
+                locator.click()
                 page.wait_for_timeout(100)
 
         end_time = page.evaluate("() => performance.now()")
@@ -957,55 +973,62 @@ class TestTimelineBrowser:
 
         # Open filter panel and turn off user messages
         page.locator("#filterMessages").click()
-        user_filter = page.locator('.filter-toggle[data-type="user"]')
-        if user_filter.count() > 0:
-            user_filter.click()  # Turn off user messages
+        filter_toolbar = page.locator(".filter-toolbar")
+        expect(filter_toolbar).to_be_visible()
+
+        # Note: User filter may be hidden if sidechain.jsonl has no regular user messages
+        # Use sidechain filter instead for this test
+        sidechain_filter = page.locator('.filter-toggle[data-type="sidechain"]')
+        if sidechain_filter.is_visible():
+            sidechain_filter.click()  # Turn off sidechain messages
             page.wait_for_timeout(100)
 
-            # Check that user messages are hidden in main content
-            visible_user_messages = page.locator(
-                ".message.user:not(.filtered-hidden)"
+            # Check that sidechain messages are hidden in main content
+            visible_sidechain_messages = page.locator(
+                ".message.sidechain:not(.filtered-hidden)"
             ).count()
-            assert visible_user_messages == 0, (
-                "User messages should be hidden by main filter"
+            assert visible_sidechain_messages == 0, (
+                "Sidechain messages should be hidden by main filter"
             )
 
-            # Now activate timeline
+            # Now activate timeline (may have no items if filters hide all messages)
             page.locator("#toggleTimeline").click()
-            self._wait_for_timeline_loaded(page)
+            self._wait_for_timeline_loaded(page, expect_items=False)
 
-            # Timeline should NOT contain user messages since they're filtered out
+            # Timeline should NOT contain sidechain messages since they're filtered out
             # This is the core issue - timeline might be building from all messages, not just visible ones
 
-            # Check timeline items - if the bug exists, we'll see user messages in timeline
+            # Check timeline items - if the bug exists, we'll see sidechain messages in timeline
             # even though they're filtered out in main view
             timeline_items = page.locator(".vis-item")
             timeline_count = timeline_items.count()
 
-            # Let's check if any timeline items contain user content that should be filtered
+            # Let's check if any timeline items contain sidechain content that should be filtered
             # This is tricky because we need to check the timeline's internal representation
 
             # For now, let's just verify that timeline filtering matches main filtering
-            # by checking if timeline shows fewer items when user filter is off
+            # by checking if timeline shows fewer items when sidechain filter is off
 
-            # Turn user filter back on
-            user_filter.click()
+            # Turn sidechain filter back on
+            sidechain_filter.click()
             page.wait_for_timeout(100)
 
-            # Timeline should now show more items (or same if no user messages were in timeline)
-            timeline_items_with_user = page.locator(".vis-item")
-            timeline_count_with_user = timeline_items_with_user.count()
+            # Timeline should now show more items (or same if no sidechain messages were in timeline)
+            timeline_items_with_sidechain = page.locator(".vis-item")
+            timeline_count_with_sidechain = timeline_items_with_sidechain.count()
 
-            # The counts should be different if user messages are properly filtered
+            # The counts should be different if sidechain messages are properly filtered
             # But this test documents the expected behavior even if it's currently broken
-            print(f"Timeline items without user filter: {timeline_count}")
-            print(f"Timeline items with user filter: {timeline_count_with_user}")
+            print(f"Timeline items without sidechain filter: {timeline_count}")
+            print(
+                f"Timeline items with sidechain filter: {timeline_count_with_sidechain}"
+            )
 
             # The assertion here documents what SHOULD happen
-            # If timeline filtering works correctly, timeline_count_with_user should be >= timeline_count
-            # because enabling user filter should show same or more items
-            assert timeline_count_with_user >= timeline_count, (
-                "Timeline should show same or more items when user filter is enabled"
+            # If timeline filtering works correctly, timeline_count_with_sidechain should be >= timeline_count
+            # because enabling sidechain filter should show same or more items
+            assert timeline_count_with_sidechain >= timeline_count, (
+                "Timeline should show same or more items when sidechain filter is enabled"
             )
 
     @pytest.mark.browser

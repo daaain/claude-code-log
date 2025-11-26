@@ -86,33 +86,36 @@ class TestQueryParamsBrowser:
 
     @pytest.mark.browser
     def test_filter_query_param_filters_messages(self, page: Page):
-        """Test that filter query parameter actually hides/shows messages."""
+        """Test that filter query parameter actually hides/shows messages.
+
+        Note: sidechain.jsonl only has sidechain user messages which are now skipped
+        (they duplicate Task tool input). Test with sidechain+assistant filters instead.
+        """
         sidechain_file = Path("test/test_data/sidechain.jsonl")
         messages = load_transcript(sidechain_file)
         temp_file = self._create_temp_html(messages, "Query Param Filtering Test")
 
-        # Load page with user and sidechain filters active
-        # (sidechain messages require both sidechain AND their type filter)
-        page.goto(f"file://{temp_file}?filter=user,sidechain")
+        # Load page with sidechain and assistant filters active
+        page.goto(f"file://{temp_file}?filter=sidechain,assistant")
 
         # Wait for page to load and filters to apply
         page.wait_for_load_state("networkidle")
         # Wait for filter application by checking for filtered-hidden class to be applied
         page.wait_for_selector(
-            ".message.assistant.filtered-hidden", state="attached", timeout=5000
+            ".message.tool_use.filtered-hidden", state="attached", timeout=5000
         )
 
-        # Only user messages should be visible
-        visible_user_messages = page.locator(".message.user:not(.filtered-hidden)")
-        user_count = visible_user_messages.count()
-        assert user_count > 0, "User messages should be visible"
-
-        # Assistant messages should be hidden
-        visible_assistant_messages = page.locator(
-            ".message.assistant:not(.filtered-hidden)"
+        # Sidechain assistant messages should be visible
+        visible_sidechain_messages = page.locator(
+            ".message.sidechain.assistant:not(.filtered-hidden)"
         )
-        assistant_count = visible_assistant_messages.count()
-        assert assistant_count == 0, "Assistant messages should be hidden"
+        sidechain_count = visible_sidechain_messages.count()
+        assert sidechain_count > 0, "Sidechain assistant messages should be visible"
+
+        # Tool use messages should be hidden (not in filter)
+        visible_tool_messages = page.locator(".message.tool_use:not(.filtered-hidden)")
+        tool_count = visible_tool_messages.count()
+        assert tool_count == 0, "Tool use messages should be hidden"
 
     @pytest.mark.browser
     def test_no_query_params_toolbar_hidden(self, page: Page):
