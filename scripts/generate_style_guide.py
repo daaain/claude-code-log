@@ -13,8 +13,8 @@ import tempfile
 from pathlib import Path
 
 # Ensure stdout uses UTF-8 for emoji output on Windows
-if sys.stdout.encoding != "utf-8":
-    sys.stdout.reconfigure(encoding="utf-8")
+if sys.stdout.encoding != "utf-8" and hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
 from claude_code_log.converter import (
     convert_jsonl_to_html,
     generate_projects_index_html,
