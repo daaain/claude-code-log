@@ -239,11 +239,11 @@ class QueueOperationTranscriptEntry(BaseModel):
     """
 
     type: Literal["queue-operation"]
-    operation: Literal["enqueue", "dequeue", "remove"]
+    operation: Literal["enqueue", "dequeue", "remove", "popAll"]
     timestamp: str
     sessionId: str
     content: Optional[Union[List[ContentItem], str]] = (
-        None  # List for enqueue, str for remove
+        None  # List for enqueue, str for remove/popAll
     )
 
 
