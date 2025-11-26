@@ -837,8 +837,8 @@ def _render_line_diff(old_line: str, new_line: str) -> str:
 def format_task_tool_content(tool_use: ToolUseContent) -> str:
     """Format Task tool content with markdown-rendered prompt.
 
-    Task tool spawns sub-agents. We render the prompt as the main content
-    (like it would appear in the "Sub-assistant prompt" message).
+    Task tool spawns sub-agents. We render the prompt as the main content.
+    The sidechain user message (which would duplicate this prompt) is skipped.
     """
     prompt = tool_use.input.get("prompt", "")
 
@@ -2230,40 +2230,35 @@ def _process_regular_message(
     message_type: str,
     is_sidechain: bool,
 ) -> tuple[str, str, str, str]:
-    """Process regular message and return (css_class, content_html, message_type, message_title)."""
+    """Process regular message and return (css_class, content_html, message_type, message_title).
+
+    Note: Sidechain user messages (Sub-assistant prompts) are now skipped entirely
+    in the main processing loop since they duplicate the Task tool input prompt.
+    """
     css_class = f"{message_type}"
     message_title = message_type.title()  # Default title
+    is_compacted = False
 
     # Handle user-specific preprocessing
     if message_type == "user":
-        # Sub-assistant prompts (sidechain user messages) should be rendered as markdown
-        if is_sidechain:
-            content_html = render_message_content(text_only_content, "assistant")
-            is_compacted = False
-            is_memory_input = False
-        else:
-            content_html, is_compacted, is_memory_input = render_user_message_content(
-                text_only_content
-            )
-            if is_compacted:
-                css_class = f"{message_type} compacted"
-                message_title = "User (compacted conversation)"
-            elif is_memory_input:
-                message_title = "Memory"
+        # Note: sidechain user messages are skipped before reaching this function
+        content_html, is_compacted, is_memory_input = render_user_message_content(
+            text_only_content
+        )
+        if is_compacted:
+            css_class = f"{message_type} compacted"
+            message_title = "User (compacted conversation)"
+        elif is_memory_input:
+            message_title = "Memory"
     else:
         # Non-user messages: render directly
         content_html = render_message_content(text_only_content, message_type)
-        is_compacted = False
 
     if is_sidechain:
         css_class = f"{css_class} sidechain"
-        # Update message title for display
-        if not is_compacted:  # Don't override compacted message title
-            message_title = (
-                "📝 Sub-assistant prompt"
-                if message_type == "user"
-                else "🔗 Sub-assistant"
-            )
+        # Update message title for display (only non-user types reach here)
+        if not is_compacted:
+            message_title = "🔗 Sub-assistant"
 
     return css_class, content_html, message_type, message_title
 
@@ -2481,14 +2476,18 @@ def _get_message_hierarchy_level(css_class: str, is_sidechain: bool) -> int:
     - Level 0: Session headers
     - Level 1: User messages
     - Level 2: System messages, Assistant, Thinking
-    - Level 3: Tool use/result (nested under assistant), Sidechain user (sub-assistant prompt)
-    - Level 4: Sidechain assistant/thinking (nested under sidechain user)
+    - Level 3: Tool use/result (nested under assistant)
+    - Level 4: Sidechain assistant/thinking (nested under Task tool result)
     - Level 5: Sidechain tools (nested under sidechain assistant)
+
+    Note: Sidechain user messages (Sub-assistant prompts) are now skipped entirely
+    since they duplicate the Task tool input prompt.
 
     Returns:
         Integer hierarchy level (1-5, session headers are 0)
     """
     # User messages at level 1 (under session)
+    # Note: sidechain user messages are skipped before reaching this function
     if "user" in css_class and not is_sidechain:
         return 1
 
@@ -2496,11 +2495,7 @@ def _get_message_hierarchy_level(css_class: str, is_sidechain: bool) -> int:
     if "system" in css_class and not is_sidechain:
         return 2
 
-    # Sidechain user (sub-assistant prompt) at level 3 (conceptually under Tool use that spawned it)
-    if is_sidechain and "user" in css_class:
-        return 3
-
-    # Sidechain assistant/thinking at level 4
+    # Sidechain assistant/thinking at level 4 (nested under Task tool result)
     if is_sidechain and ("assistant" in css_class or "thinking" in css_class):
         return 4
 
@@ -2864,6 +2859,11 @@ def _process_messages_loop(
 
         # Update current message UUID for timing tracking
         set_timing_var("_current_msg_uuid", msg_uuid)
+
+        # Skip sidechain user messages (Sub-assistant prompts)
+        # These duplicate the Task tool input prompt and are redundant
+        if message_type == "user" and getattr(message, "isSidechain", False):
+            continue
 
         # Skip summary messages - they should already be attached to their sessions
         if isinstance(message, SummaryTranscriptEntry):

@@ -287,18 +287,23 @@ class TestTimelineBrowser:
 
     @pytest.mark.browser
     def test_sidechain_messages_html_css_classes(self, page: Page):
-        """Test that sidechain messages in the main content have correct CSS classes."""
+        """Test that sidechain messages in the main content have correct CSS classes.
+
+        Note: User sidechain messages (Sub-assistant prompts) are now skipped
+        since they duplicate the Task tool input prompt.
+        """
         sidechain_file = Path("test/test_data/sidechain.jsonl")
         messages = load_transcript(sidechain_file)
         temp_file = self._create_temp_html(messages, "Sidechain CSS Classes Test")
 
         page.goto(f"file://{temp_file}")
 
-        # Check for sub-assistant user messages in main content
+        # User sidechain messages should no longer be produced
+        # (they duplicate the Task tool input prompt)
         user_sidechain_messages = page.locator(".message.user.sidechain")
         user_count = user_sidechain_messages.count()
-        assert user_count > 0, (
-            "Should have user sidechain messages with 'user sidechain' classes"
+        assert user_count == 0, (
+            "User sidechain messages should no longer be produced (duplicates Task tool input)"
         )
 
         # Check for sub-assistant assistant messages in main content
@@ -306,19 +311,6 @@ class TestTimelineBrowser:
         assistant_count = assistant_sidechain_messages.count()
         assert assistant_count > 0, (
             "Should have assistant sidechain messages with 'assistant sidechain' classes"
-        )
-
-        # Verify that we found the expected sidechain message types
-        assert user_count > 0 and assistant_count > 0, (
-            f"Should have both user ({user_count}) and assistant ({assistant_count}) sidechain messages"
-        )
-
-        # Check that the specific failing test message has the right classes
-        failing_test_message = page.locator(
-            '.message.user.sidechain:has-text("failing test")'
-        )
-        assert failing_test_message.count() > 0, (
-            "Sub-assistant prompt about failing test should have 'user sidechain' classes"
         )
 
     @pytest.mark.browser

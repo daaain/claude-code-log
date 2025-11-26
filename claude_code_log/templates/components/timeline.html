@@ -133,14 +133,14 @@
                 let displayContent = content ?? messageTypeGroups[messageType].content;
 
                 // Check for sidechain context regardless of primary message type
+                // Note: Sidechain user messages (Sub-assistant prompts) are now skipped
+                // since they duplicate the Task tool input prompt
                 if (classList.includes('sidechain')) {
                     // Override group for sidechain messages, but preserve the content
                     messageType = 'sidechain';
 
                     // For sidechain messages, prefix with appropriate icon based on original type
-                    if (classList.includes('user')) {
-                        displayContent = '📝 ' + (content ?? 'Sub-assistant prompt');
-                    } else if (classList.includes('assistant')) {
+                    if (classList.includes('assistant')) {
                         displayContent = '🔗 ' + (content ?? 'Sub-assistant response');
                     } else if (classList.includes('tool_use')) {
                         displayContent = '🔗 ' + (content ?? 'Sub-assistant tool use');

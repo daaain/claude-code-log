@@ -214,13 +214,10 @@
 }
 
 /* Sidechain messages (sub-assistant hierarchy) */
-/* Sub-assistant prompt at same level as Task tool (2em) */
-.sidechain.user {
-    margin-left: 2em;
-    margin-right: 6em;
-}
+/* Note: .sidechain.user (Sub-assistant prompt) is no longer produced
+   since it duplicates the Task tool input prompt */
 
-/* Sub-assistant response and thinking (nested below prompt) */
+/* Sub-assistant response and thinking (nested under Task tool result) */
 .sidechain.assistant,
 .sidechain.thinking {
     margin-left: 4em;
