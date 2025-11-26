@@ -51,7 +51,7 @@
 }
 
 body {
-    font-family: var(--font-monospace);
+    font-family: var(--font-ui);
     line-height: 1.5;
     max-width: 1200px;
     margin: 0 auto;
