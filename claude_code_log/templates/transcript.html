@@ -106,12 +106,12 @@
         <div class='header'>
             <span{% if message.title_hint %} title="{{ message.title_hint }}"{% endif %}>{% if message.message_title %}{%
                 if message.message_title == 'Memory' %}💭 {%
-                elif message.css_class == 'user' %}🤷 {%
-                elif message.css_class == 'assistant' %}🤖 {%
+                elif message.css_class.startswith('user') %}🤷 {%
+                elif message.css_class.startswith('assistant') %}🤖 {%
                 elif message.css_class == 'system' %}⚙️ {%
-                elif message.css_class == 'tool_use' and not starts_with_emoji(message.message_title) %}🛠️ {%
-                elif message.css_class == 'tool_result' %}🧰 {%
-                elif message.css_class == 'thinking' %}💭 {%
+                elif message.css_class.startswith('tool_use') and not starts_with_emoji(message.message_title) %}🛠️ {%
+                elif message.css_class.startswith('tool_result') %}🧰 {%
+                elif message.css_class.startswith('thinking') %}💭 {%
                 elif message.css_class == 'image' %}🖼️ {% endif %}{{ message.message_title | safe }}{% endif %}</span>
             <div class='header-info'>
                 <div class='timestamp-row'>
