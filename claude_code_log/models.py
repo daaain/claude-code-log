@@ -235,13 +235,16 @@ class QueueOperationTranscriptEntry(BaseModel):
 
     'remove' operations are out-of-band user inputs made visible to the agent while working
     for "steering" purposes. These should be rendered as user messages with a 'steering' CSS class.
+    Content can be a list of ContentItems or a simple string (for 'remove' operations).
     """
 
     type: Literal["queue-operation"]
     operation: Literal["enqueue", "dequeue", "remove"]
     timestamp: str
     sessionId: str
-    content: Optional[List[ContentItem]] = None  # Only present for enqueue operations
+    content: Optional[Union[List[ContentItem], str]] = (
+        None  # List for enqueue, str for remove
+    )
 
 
 TranscriptEntry = Union[
