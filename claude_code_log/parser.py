@@ -201,6 +201,14 @@ def load_transcript(
                         # Parse using Pydantic models
                         entry = parse_transcript_entry(entry_dict)
                         messages.append(entry)
+                    elif (
+                        entry_type
+                        in [
+                            "file-history-snapshot",  # Internal Claude Code file backup metadata
+                        ]
+                    ):
+                        # Silently skip internal message types we don't render
+                        pass
                     else:
                         print(
                             f"Line {line_no} of {jsonl_path} is not a recognised message type: {line}"
