@@ -276,6 +276,36 @@ def render_markdown(text: str) -> str:
         return str(renderer(text))
 
 
+def render_collapsible_code(
+    preview_html: str,
+    full_html: str,
+    line_count: int,
+    is_markdown: bool = False,
+) -> str:
+    """Render a collapsible code/content block with preview.
+
+    Creates a details element with a line count badge and preview content
+    that expands to show the full content.
+
+    Args:
+        preview_html: HTML content to show in the collapsed summary
+        full_html: HTML content to show when expanded
+        line_count: Number of lines (shown in the badge)
+        is_markdown: If True, adds 'markdown' class to the full content div
+
+    Returns:
+        HTML string with collapsible details element
+    """
+    markdown_class = " markdown" if is_markdown else ""
+    return f"""<details class='collapsible-code'>
+        <summary>
+            <span class='line-count'>{line_count} lines</span>
+            <div class='preview-content'>{preview_html}</div>
+        </summary>
+        <div class='code-full{markdown_class}'>{full_html}</div>
+    </details>"""
+
+
 def render_markdown_collapsible(
     raw_content: str,
     css_class: str,
@@ -308,17 +338,12 @@ def render_markdown_collapsible(
     preview_text = "\n".join(preview_lines)
     if len(lines) > preview_line_count:
         preview_text += "\n..."
-    preview_html = html.escape(preview_text).replace("\n", "<br>")
+    preview_html = f"<pre>{html.escape(preview_text).replace(chr(10), '<br>')}</pre>"
 
-    return f"""<div class="{css_class}">
-        <details class='collapsible-code'>
-            <summary>
-                <span class='line-count'>{len(lines)} lines</span>
-                <div class='preview-content'><pre>{preview_html}</pre></div>
-            </summary>
-            <div class='code-full markdown'>{rendered_html}</div>
-        </details>
-    </div>"""
+    collapsible = render_collapsible_code(
+        preview_html, rendered_html, len(lines), is_markdown=True
+    )
+    return f'<div class="{css_class}">{collapsible}</div>'
 
 
 def extract_command_info(text_content: str) -> tuple[str, str, str]:
@@ -587,16 +612,9 @@ def format_write_tool_content(tool_use: ToolUseContent) -> str:
         preview_html = _highlight_code_with_pygments(
             "\n".join(preview_lines), file_path
         )
-
-        html_parts.append(f"""
-        <details class='collapsible-code'>
-            <summary>
-                <span class='line-count'>{len(lines)} lines</span>
-                <div class='preview-content'>{preview_html}</div>
-            </summary>
-            <div class='code-full'>{highlighted_html}</div>
-        </details>
-        """)
+        html_parts.append(
+            render_collapsible_code(preview_html, highlighted_html, len(lines))
+        )
     else:
         # Show directly without collapsible
         html_parts.append(f"<div class='code-full'>{highlighted_html}</div>")
@@ -1162,15 +1180,9 @@ def format_tool_result_content(
                 # We truncate content within each <pre> to first 5 lines
                 preview_html = _truncate_highlighted_preview(highlighted_html, 5)
 
-                result_parts.append(f"""
-                <details class='collapsible-code'>
-                    <summary>
-                        <span class='line-count'>{len(lines)} lines</span>
-                        <div class='preview-content'>{preview_html}</div>
-                    </summary>
-                    <div class='code-full'>{highlighted_html}</div>
-                </details>
-                """)
+                result_parts.append(
+                    render_collapsible_code(preview_html, highlighted_html, len(lines))
+                )
             else:
                 # Show directly without collapsible
                 result_parts.append(highlighted_html)
@@ -1208,15 +1220,9 @@ def format_tool_result_content(
                     "\n".join(preview_lines), file_path, linenostart=line_offset
                 )
 
-                result_parts.append(f"""
-                <details class='collapsible-code'>
-                    <summary>
-                        <span class='line-count'>{len(lines)} lines</span>
-                        <div class='preview-content'>{preview_html}</div>
-                    </summary>
-                    <div class='code-full'>{highlighted_html}</div>
-                </details>
-                """)
+                result_parts.append(
+                    render_collapsible_code(preview_html, highlighted_html, len(lines))
+                )
             else:
                 # Show directly without collapsible
                 result_parts.append(highlighted_html)
