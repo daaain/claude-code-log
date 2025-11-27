@@ -276,6 +276,51 @@ def render_markdown(text: str) -> str:
         return str(renderer(text))
 
 
+def render_markdown_collapsible(
+    raw_content: str,
+    css_class: str,
+    line_threshold: int = 20,
+    preview_line_count: int = 5,
+) -> str:
+    """Render markdown content, making it collapsible if it exceeds a line threshold.
+
+    For long content, creates a collapsible details element with a preview.
+    For short content, renders inline with the specified CSS class.
+
+    Args:
+        raw_content: The raw text content to render as markdown
+        css_class: CSS class for the wrapper div (e.g., "task-prompt", "task-result")
+        line_threshold: Number of lines above which content becomes collapsible (default 20)
+        preview_line_count: Number of lines to show in the preview (default 5)
+
+    Returns:
+        HTML string with rendered markdown, optionally wrapped in collapsible details
+    """
+    rendered_html = render_markdown(raw_content)
+
+    lines = raw_content.splitlines()
+    if len(lines) <= line_threshold:
+        # Short content, show inline
+        return f'<div class="{css_class} markdown">{rendered_html}</div>'
+
+    # Long content - make collapsible with preview
+    preview_lines = lines[:preview_line_count]
+    preview_text = "\n".join(preview_lines)
+    if len(lines) > preview_line_count:
+        preview_text += "\n..."
+    preview_html = html.escape(preview_text).replace("\n", "<br>")
+
+    return f"""<div class="{css_class}">
+        <details class='collapsible-code'>
+            <summary>
+                <span class='line-count'>{len(lines)} lines</span>
+                <div class='preview-content'><pre>{preview_html}</pre></div>
+            </summary>
+            <div class='code-full markdown'>{rendered_html}</div>
+        </details>
+    </div>"""
+
+
 def extract_command_info(text_content: str) -> tuple[str, str, str]:
     """Extract command info from system message with command tags."""
     import re
@@ -849,32 +894,7 @@ def format_task_tool_content(tool_use: ToolUseContent) -> str:
         # No prompt, show parameters table as fallback
         return render_params_table(tool_use.input)
 
-    # Render prompt as markdown with Pygments syntax highlighting
-    rendered_html = render_markdown(prompt)
-
-    # Check if prompt is long enough to warrant collapsing
-    lines = prompt.splitlines()
-    if len(lines) <= 20:
-        # Short prompt, show inline
-        return f'<div class="task-prompt markdown">{rendered_html}</div>'
-
-    # Long prompt - make collapsible with preview
-    # Create preview from first 5 lines of raw text
-    preview_lines = lines[:5]
-    preview_text = "\n".join(preview_lines)
-    if len(lines) > 5:
-        preview_text += "\n..."
-    preview_html = html.escape(preview_text).replace("\n", "<br>")
-
-    return f"""<div class="task-prompt">
-        <details class='collapsible-code'>
-            <summary>
-                <span class='line-count'>{len(lines)} lines</span>
-                <div class='preview-content'><pre>{preview_html}</pre></div>
-            </summary>
-            <div class='code-full markdown'>{rendered_html}</div>
-        </details>
-    </div>"""
+    return render_markdown_collapsible(prompt, "task-prompt")
 
 
 def get_tool_summary(tool_use: ToolUseContent) -> Optional[str]:
@@ -1207,30 +1227,7 @@ def format_tool_result_content(
     # Special handling for Task tool: render result as markdown with Pygments (agent's final message)
     # Deduplication is now handled retroactively by replacing the sub-assistant content
     if tool_name == "Task" and not has_images:
-        rendered_html = render_markdown(raw_content)
-
-        # Check if result is long enough to warrant collapsing
-        lines = raw_content.splitlines()
-        if len(lines) <= 20:
-            # Short result, show inline
-            return f'<div class="task-result markdown">{rendered_html}</div>'
-
-        # Long result - make collapsible with preview
-        preview_lines = lines[:5]
-        preview_text = "\n".join(preview_lines)
-        if len(lines) > 5:
-            preview_text += "\n..."
-        preview_html = html.escape(preview_text).replace("\n", "<br>")
-
-        return f"""<div class="task-result">
-            <details class='collapsible-code'>
-                <summary>
-                    <span class='line-count'>{len(lines)} lines</span>
-                    <div class='preview-content'><pre>{preview_html}</pre></div>
-                </summary>
-                <div class='code-full markdown'>{rendered_html}</div>
-            </details>
-        </div>"""
+        return render_markdown_collapsible(raw_content, "task-result")
 
     # Check if this looks like Bash tool output and process ANSI codes
     # Bash tool results often contain ANSI escape sequences and terminal output
