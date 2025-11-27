@@ -46,16 +46,16 @@ def test_system_message_command_handling():
         messages = load_transcript(test_file_path)
         html = generate_html(messages, "Test Transcript")
 
-        # Check if content is long enough for collapsible details or short content format
-        if len('{"type": "text", "text": "Please analyze this codebase..."}') > 200:
-            assert 'class="collapsible-details"' in html, (
-                "Should contain collapsible details element for long content"
+        # Check if content is present (short content shown inline, long content collapsible)
+        content = '{"type": "text", "text": "Please analyze this codebase..."}'
+        lines = content.splitlines()
+        if len(lines) > 12:
+            assert "collapsible-code" in html, (
+                "Should contain collapsible-code element for long content"
             )
         else:
-            # For short content, should have details-content div but not collapsible-details class
-            assert "details-content" in html, (
-                "Should contain details-content div for short content"
-            )
+            # For short content, should have pre tag with the escaped content
+            assert "<pre>" in html, "Should contain pre tag for short content"
         assert "<strong>Command:</strong> init" in html, (
             "Should show command name in summary"
         )

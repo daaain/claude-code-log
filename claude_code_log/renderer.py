@@ -182,41 +182,6 @@ def escape_html(text: str) -> str:
     return html.escape(normalized)
 
 
-def create_collapsible_details(
-    summary: str, content: str, css_classes: str = ""
-) -> str:
-    """Create a collapsible details element with consistent styling and preview functionality."""
-    class_attr = ' class="collapsible-details"'
-    wrapper_classes = f"tool-content{' ' + css_classes if css_classes else ''}"
-
-    if len(content) <= 200:
-        return f"""
-        <div class="{wrapper_classes}">
-            {summary}
-            <div class="details-content">
-                {content}
-            </div>
-        </div>
-        """
-
-    # Get first ~200 characters, break at word boundaries
-    preview_text = content[:200] + "..."
-
-    return f"""
-    <div class="{wrapper_classes}">
-        <details{class_attr}>
-            <summary>
-                {summary}
-                <div class="preview-content">{preview_text}</div>
-            </summary>
-            <div class="details-content">
-                {content}
-            </div>
-        </details>
-    </div>
-    """
-
-
 def _create_pygments_plugin() -> Any:
     """Create a mistune plugin that uses Pygments for code block syntax highlighting."""
     from pygments import highlight  # type: ignore[reportUnknownVariableType]
@@ -2147,7 +2112,22 @@ def _process_command_message(text_content: str) -> tuple[str, str, str, str]:
     if command_args:
         content_parts.append(f"<strong>Args:</strong> {escaped_command_args}")
     if command_contents:
-        details_html = create_collapsible_details("Content", escaped_command_contents)
+        lines = escaped_command_contents.splitlines()
+        line_count = len(lines)
+        if line_count <= 12:
+            # Short content, show inline
+            details_html = (
+                f"<strong>Content:</strong><pre>{escaped_command_contents}</pre>"
+            )
+        else:
+            # Long content, make collapsible
+            preview = "\n".join(lines[:5])
+            collapsible = render_collapsible_code(
+                f"<pre>{preview}</pre>",
+                f"<pre>{escaped_command_contents}</pre>",
+                line_count,
+            )
+            details_html = f"<strong>Content:</strong>{collapsible}"
         content_parts.append(details_html)
 
     content_html = "<br>".join(content_parts)
