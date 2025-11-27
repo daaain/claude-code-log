@@ -2251,11 +2251,15 @@ def _process_regular_message(
     text_only_content: List[ContentItem],
     message_type: str,
     is_sidechain: bool,
+    is_meta: bool = False,
 ) -> tuple[str, str, str, str]:
     """Process regular message and return (css_class, content_html, message_type, message_title).
 
     Note: Sidechain user messages (Sub-assistant prompts) are now skipped entirely
     in the main processing loop since they duplicate the Task tool input prompt.
+
+    Args:
+        is_meta: True for slash command expanded prompts (isMeta=True in JSONL)
     """
     css_class = f"{message_type}"
     message_title = message_type.title()  # Default title
@@ -2270,6 +2274,10 @@ def _process_regular_message(
         if is_compacted:
             css_class = f"{message_type} compacted"
             message_title = "User (compacted conversation)"
+        elif is_meta:
+            # Slash command expanded prompts - LLM-generated content
+            css_class = f"{message_type} slash-command"
+            message_title = "User (slash command)"
         elif is_memory_input:
             message_title = "Memory"
     else:
@@ -3239,6 +3247,7 @@ def _process_messages_loop(
                     text_only_content,
                     effective_type,
                     getattr(message, "isSidechain", False),
+                    getattr(message, "isMeta", False),
                 )
             )
             message_type = message_type_result  # Update message_type with result

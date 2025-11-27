@@ -93,6 +93,11 @@
     border-bottom-color: var(--user-color);
 }
 
+.fold-bar[data-border-color="user slash-command"] .fold-bar-section,
+.fold-bar[data-border-color="user slash-command sidechain"] .fold-bar-section {
+    border-bottom-color: var(--user-dimmed);
+}
+
 .fold-bar[data-border-color="assistant"] .fold-bar-section,
 .fold-bar[data-border-color="assistant sidechain"] .fold-bar-section {
     border-bottom-color: var(--assistant-color);
@@ -299,6 +304,12 @@
 .user.steering {
     border-left-color: var(--user-dimmed);
     opacity: 0.7;
+}
+
+/* Slash command prompts (isMeta=true, LLM-generated content) */
+.user.slash-command {
+    border-left-color: var(--user-dimmed);
+    opacity: 0.85;
 }
 
 .assistant {
