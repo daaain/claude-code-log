@@ -2869,10 +2869,9 @@ def _process_messages_loop(
         if isinstance(message, SummaryTranscriptEntry):
             continue
 
-        # Skip enqueue/dequeue queue operations - they duplicate user messages
-        # But render 'remove' operations as steering user messages
+        # Skip most queue operations - only render 'remove' as steering user messages
         if isinstance(message, QueueOperationTranscriptEntry):
-            if message.operation in ("enqueue", "dequeue"):
+            if message.operation != "remove":
                 continue
             # 'remove' operations fall through to be rendered as user messages
 
