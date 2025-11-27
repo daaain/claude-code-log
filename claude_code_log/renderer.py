@@ -1311,26 +1311,10 @@ def format_thinking_content(thinking: ThinkingContent) -> str:
     """Format thinking content as HTML with markdown rendering."""
     thinking_text = thinking.thinking.strip()
 
-    # Render markdown to HTML
-    rendered_html = render_markdown(thinking_text)
-
-    # For simple content, show directly without collapsible wrapper
-    if len(thinking_text) <= 200:
-        return f'<div class="thinking-text">{rendered_html}</div>'
-
-    # For longer content, use collapsible details but no extra wrapper
-    # Use plain text for preview (first 200 chars)
-    preview_text = escape_html(thinking_text[:200]) + "..."
-    return f"""
-    <details class="collapsible-details">
-        <summary>
-            <div class="preview-content"><div class="thinking-text">{preview_text}</div></div>
-        </summary>
-        <div class="details-content">
-            <div class="thinking-text">{rendered_html}</div>
-        </div>
-    </details>
-    """
+    # Use line-based collapsible rendering (10 lines threshold, 5 preview)
+    return render_markdown_collapsible(
+        thinking_text, "thinking-text", line_threshold=10
+    )
 
 
 def format_image_content(image: ImageContent) -> str:
@@ -1525,8 +1509,13 @@ def render_message_content(content: List[ContentItem], message_type: str) -> str
             escaped_text = escape_html(content[0].text)
             return "<pre>" + escaped_text + "</pre>"
         else:
-            # Assistant messages get markdown rendering
-            return render_markdown(content[0].text)
+            # Assistant messages get markdown rendering with collapsible for long content
+            return render_markdown_collapsible(
+                content[0].text,
+                "assistant-text",
+                line_threshold=30,
+                preview_line_count=10,
+            )
 
     # content is a list of ContentItem objects
     rendered_parts: List[str] = []
@@ -1545,8 +1534,15 @@ def render_message_content(content: List[ContentItem], message_type: str) -> str
                 escaped_text = escape_html(text_value)
                 rendered_parts.append("<pre>" + escaped_text + "</pre>")
             else:
-                # Assistant messages get markdown rendering
-                rendered_parts.append(render_markdown(text_value))
+                # Assistant messages get markdown rendering with collapsible for long content
+                rendered_parts.append(
+                    render_markdown_collapsible(
+                        text_value,
+                        "assistant-text",
+                        line_threshold=30,
+                        preview_line_count=10,
+                    )
+                )
         elif type(item) is ToolUseContent or (
             hasattr(item, "type") and item_type == "tool_use"
         ):
