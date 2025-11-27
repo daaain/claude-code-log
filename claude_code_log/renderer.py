@@ -1208,7 +1208,29 @@ def format_tool_result_content(
     # Deduplication is now handled retroactively by replacing the sub-assistant content
     if tool_name == "Task" and not has_images:
         rendered_html = render_markdown(raw_content)
-        return f'<div class="task-result markdown">{rendered_html}</div>'
+
+        # Check if result is long enough to warrant collapsing
+        lines = raw_content.splitlines()
+        if len(lines) <= 20:
+            # Short result, show inline
+            return f'<div class="task-result markdown">{rendered_html}</div>'
+
+        # Long result - make collapsible with preview
+        preview_lines = lines[:5]
+        preview_text = "\n".join(preview_lines)
+        if len(lines) > 5:
+            preview_text += "\n..."
+        preview_html = html.escape(preview_text).replace("\n", "<br>")
+
+        return f"""<div class="task-result">
+            <details class='collapsible-code'>
+                <summary>
+                    <span class='line-count'>{len(lines)} lines</span>
+                    <div class='preview-content'><pre>{preview_html}</pre></div>
+                </summary>
+                <div class='code-full markdown'>{rendered_html}</div>
+            </details>
+        </div>"""
 
     # Check if this looks like Bash tool output and process ANSI codes
     # Bash tool results often contain ANSI escape sequences and terminal output
