@@ -726,7 +726,8 @@ details summary {
     margin-top: 4px;
 }
 
-/* Tool result preview content with gradient fade */
+/* Tool use/result preview content with gradient fade */
+.tool_use .preview-content,
 .tool_result .preview-content {
     opacity: 0.7;
     mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
