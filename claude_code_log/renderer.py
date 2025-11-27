@@ -346,6 +346,60 @@ def render_markdown_collapsible(
     return f'<div class="{css_class}">{collapsible}</div>'
 
 
+def render_file_content_collapsible(
+    code_content: str,
+    file_path: str,
+    css_class: str,
+    linenostart: int = 1,
+    line_threshold: int = 12,
+    preview_line_count: int = 5,
+    suffix_html: str = "",
+) -> str:
+    """Render file content with syntax highlighting, collapsible if long.
+
+    Highlights code using Pygments and wraps in a collapsible details element
+    if the content exceeds the line threshold. Uses preview truncation from
+    already-highlighted HTML to avoid double Pygments calls.
+
+    Args:
+        code_content: The raw code content to highlight
+        file_path: File path for syntax detection (extension-based)
+        css_class: CSS class for the wrapper div (e.g., 'write-tool-content')
+        linenostart: Starting line number for Pygments (default 1)
+        line_threshold: Number of lines above which content becomes collapsible
+        preview_line_count: Number of lines to show in the preview
+        suffix_html: Optional HTML to append after the code (inside wrapper div)
+
+    Returns:
+        HTML string with highlighted code, collapsible if >line_threshold lines
+    """
+    # Highlight code with Pygments (single call)
+    highlighted_html = _highlight_code_with_pygments(
+        code_content, file_path, linenostart=linenostart
+    )
+
+    html_parts = [f"<div class='{css_class}'>"]
+
+    lines = code_content.split("\n")
+    if len(lines) > line_threshold:
+        # Extract preview from already-highlighted HTML (avoids double highlighting)
+        preview_html = _truncate_highlighted_preview(
+            highlighted_html, preview_line_count
+        )
+        html_parts.append(
+            render_collapsible_code(preview_html, highlighted_html, len(lines))
+        )
+    else:
+        # Show directly without collapsible
+        html_parts.append(highlighted_html)
+
+    if suffix_html:
+        html_parts.append(suffix_html)
+
+    html_parts.append("</div>")
+    return "".join(html_parts)
+
+
 def extract_command_info(text_content: str) -> tuple[str, str, str]:
     """Extract command info from system message with command tags."""
     import re
@@ -597,31 +651,7 @@ def format_write_tool_content(tool_use: ToolUseContent) -> str:
     file_path = tool_use.input.get("file_path", "")
     content = tool_use.input.get("content", "")
 
-    html_parts = ["<div class='write-tool-content'>"]
-
-    # File path is now shown in header, so we skip it here
-
-    # Highlight code with Pygments
-    highlighted_html = _highlight_code_with_pygments(content, file_path)
-
-    # Make collapsible if content has more than 12 lines
-    lines = content.split("\n")
-    if len(lines) > 12:
-        # Get preview (first ~5 lines)
-        preview_lines = lines[:5]
-        preview_html = _highlight_code_with_pygments(
-            "\n".join(preview_lines), file_path
-        )
-        html_parts.append(
-            render_collapsible_code(preview_html, highlighted_html, len(lines))
-        )
-    else:
-        # Show directly without collapsible
-        html_parts.append(f"<div class='code-full'>{highlighted_html}</div>")
-
-    html_parts.append("</div>")
-
-    return "".join(html_parts)
+    return render_file_content_collapsible(content, file_path, "write-tool-content")
 
 
 def format_bash_tool_content(tool_use: ToolUseContent) -> str:
@@ -1162,73 +1192,33 @@ def format_tool_result_content(
         if parsed_result:
             code_content, system_reminder, line_offset = parsed_result
 
-            # Highlight code with Pygments using correct line offset (single call)
-            highlighted_html = _highlight_code_with_pygments(
-                code_content, file_path, linenostart=line_offset
-            )
-
-            # Build result HTML
-            result_parts = ["<div class='read-tool-result'>"]
-
-            # Make collapsible if content has more than 12 lines
-            lines = code_content.split("\n")
-            if len(lines) > 12:
-                # Extract preview from already-highlighted HTML to avoid double-highlighting
-                # HtmlFormatter(linenos="table") produces a single <tr> with two <td>s:
-                #   <td class="linenos">...<pre>LINE_NUMS</pre>...</td>
-                #   <td class="code">...<pre>CODE</pre>...</td>
-                # We truncate content within each <pre> to first 5 lines
-                preview_html = _truncate_highlighted_preview(highlighted_html, 5)
-
-                result_parts.append(
-                    render_collapsible_code(preview_html, highlighted_html, len(lines))
-                )
-            else:
-                # Show directly without collapsible
-                result_parts.append(highlighted_html)
-
-            # Add system reminder if present (after code, always visible)
+            # Build system reminder suffix if present
+            suffix_html = ""
             if system_reminder:
                 escaped_reminder = escape_html(system_reminder)
-                result_parts.append(
+                suffix_html = (
                     f"<div class='system-reminder'>🤖 <em>{escaped_reminder}</em></div>"
                 )
 
-            result_parts.append("</div>")
-            return "".join(result_parts)
+            return render_file_content_collapsible(
+                code_content,
+                file_path,
+                "read-tool-result",
+                linenostart=line_offset,
+                suffix_html=suffix_html,
+            )
 
     # Try to parse as Edit tool result if file_path is provided
     if file_path and tool_name == "Edit" and not has_images:
         parsed_result = _parse_edit_tool_result(raw_content)
         if parsed_result:
             parsed_code, line_offset = parsed_result
-
-            # Highlight code with Pygments using correct line offset
-            highlighted_html = _highlight_code_with_pygments(
-                parsed_code, file_path, linenostart=line_offset
+            return render_file_content_collapsible(
+                parsed_code,
+                file_path,
+                "edit-tool-result",
+                linenostart=line_offset,
             )
-
-            # Build result HTML
-            result_parts = ["<div class='edit-tool-result'>"]
-
-            # Make collapsible if content has more than 12 lines
-            lines = parsed_code.split("\n")
-            if len(lines) > 12:
-                # Get preview (first ~5 lines)
-                preview_lines = lines[:5]
-                preview_html = _highlight_code_with_pygments(
-                    "\n".join(preview_lines), file_path, linenostart=line_offset
-                )
-
-                result_parts.append(
-                    render_collapsible_code(preview_html, highlighted_html, len(lines))
-                )
-            else:
-                # Show directly without collapsible
-                result_parts.append(highlighted_html)
-
-            result_parts.append("</div>")
-            return "".join(result_parts)
 
     # Special handling for Task tool: render result as markdown with Pygments (agent's final message)
     # Deduplication is now handled retroactively by replacing the sub-assistant content
