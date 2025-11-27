@@ -839,6 +839,9 @@ def format_task_tool_content(tool_use: ToolUseContent) -> str:
 
     Task tool spawns sub-agents. We render the prompt as the main content.
     The sidechain user message (which would duplicate this prompt) is skipped.
+
+    For long prompts (>20 lines), the content is made collapsible with a
+    preview of the first few lines to keep the transcript vertically compact.
     """
     prompt = tool_use.input.get("prompt", "")
 
@@ -849,7 +852,29 @@ def format_task_tool_content(tool_use: ToolUseContent) -> str:
     # Render prompt as markdown with Pygments syntax highlighting
     rendered_html = render_markdown(prompt)
 
-    return f'<div class="task-prompt markdown">{rendered_html}</div>'
+    # Check if prompt is long enough to warrant collapsing
+    lines = prompt.splitlines()
+    if len(lines) <= 20:
+        # Short prompt, show inline
+        return f'<div class="task-prompt markdown">{rendered_html}</div>'
+
+    # Long prompt - make collapsible with preview
+    # Create preview from first 5 lines of raw text
+    preview_lines = lines[:5]
+    preview_text = "\n".join(preview_lines)
+    if len(lines) > 5:
+        preview_text += "\n..."
+    preview_html = html.escape(preview_text).replace("\n", "<br>")
+
+    return f"""<div class="task-prompt">
+        <details class='collapsible-code'>
+            <summary>
+                <span class='line-count'>{len(lines)} lines</span>
+                <div class='preview-content'><pre>{preview_html}</pre></div>
+            </summary>
+            <div class='code-full markdown'>{rendered_html}</div>
+        </details>
+    </div>"""
 
 
 def get_tool_summary(tool_use: ToolUseContent) -> Optional[str]:
