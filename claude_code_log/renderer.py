@@ -2664,8 +2664,14 @@ def generate_html(
             # Get timestamp
             timestamp = getattr(message, "timestamp", "")
 
-            # Create deduplication key
-            dedup_key = (message_type, timestamp)
+            # Get isMeta flag (slash command prompts have isMeta=True with same timestamp as parent)
+            is_meta = getattr(message, "isMeta", False)
+
+            # Get sessionId for multi-session report deduplication
+            session_id = getattr(message, "sessionId", "")
+
+            # Create deduplication key - include isMeta and sessionId for proper deduplication
+            dedup_key = (message_type, timestamp, is_meta, session_id)
 
             # Keep only first occurrence
             if dedup_key not in seen:
