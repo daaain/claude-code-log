@@ -734,6 +734,12 @@ details summary {
     -webkit-mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
 }
 
+/* Fix list rendering in preview-content inside summary */
+/* Mistune wraps list content in <p> tags which causes line breaks */
+.preview-content li > p:first-child {
+    display: inline;
+}
+
 /* Hide preview content when details/collapsible is open */
 .collapsible-details[open] .preview-content,
 .collapsible-code[open] .preview-content {

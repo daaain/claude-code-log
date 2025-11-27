@@ -1468,9 +1468,9 @@ def render_user_message_content(
             all_text = "\n\n".join(
                 item.text for item in content_list if isinstance(item, TextContent)
             )
-            # Render as collapsible markdown (threshold=60, preview=30 for large summaries)
+            # Render as collapsible markdown (threshold=30, preview=10 for large summaries)
             content_html = render_markdown_collapsible(
-                all_text, "compacted-summary", line_threshold=60, preview_line_count=30
+                all_text, "compacted-summary", line_threshold=30, preview_line_count=10
             )
             return content_html, True, False
 
