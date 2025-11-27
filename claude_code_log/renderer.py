@@ -1464,9 +1464,14 @@ def render_user_message_content(
 
         # Check for compacted session summary first
         if _is_compacted_session_summary(first_text):
-            # Render entire content as markdown for compacted summaries
-            # Use "assistant" to trigger markdown rendering instead of pre-formatted text
-            content_html = render_message_content(content_list, "assistant")
+            # Combine all text content for compacted summaries
+            all_text = "\n\n".join(
+                item.text for item in content_list if isinstance(item, TextContent)
+            )
+            # Render as collapsible markdown (threshold=60, preview=30 for large summaries)
+            content_html = render_markdown_collapsible(
+                all_text, "compacted-summary", line_threshold=60, preview_line_count=30
+            )
             return content_html, True, False
 
         # Check for user memory input
