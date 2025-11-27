@@ -362,6 +362,15 @@
     overflow-x: auto;
 }
 
+.command-output-content td {
+    border-left: 1px dotted #bbb;
+    padding: 0 1em;
+}
+.command-output-content th {
+    text-align: left;
+    padding: 0 1em;
+}
+
 /* Bash command styling */
 .bash-input {
     background-color: #1e1e1e08;
