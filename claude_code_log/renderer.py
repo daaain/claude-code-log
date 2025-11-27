@@ -291,7 +291,7 @@ def render_collapsible_code(
         preview_html: HTML content to show in the collapsed summary
         full_html: HTML content to show when expanded
         line_count: Number of lines (shown in the badge)
-        is_markdown: If True, adds 'markdown' class to the full content div
+        is_markdown: If True, adds 'markdown' class to preview and full content divs
 
     Returns:
         HTML string with collapsible details element
@@ -300,7 +300,7 @@ def render_collapsible_code(
     return f"""<details class='collapsible-code'>
         <summary>
             <span class='line-count'>{line_count} lines</span>
-            <div class='preview-content'>{preview_html}</div>
+            <div class='preview-content{markdown_class}'>{preview_html}</div>
         </summary>
         <div class='code-full{markdown_class}'>{full_html}</div>
     </details>"""
@@ -333,12 +333,13 @@ def render_markdown_collapsible(
         # Short content, show inline
         return f'<div class="{css_class} markdown">{rendered_html}</div>'
 
-    # Long content - make collapsible with preview
+    # Long content - make collapsible with rendered preview
     preview_lines = lines[:preview_line_count]
     preview_text = "\n".join(preview_lines)
     if len(lines) > preview_line_count:
-        preview_text += "\n..."
-    preview_html = f"<pre>{html.escape(preview_text).replace(chr(10), '<br>')}</pre>"
+        preview_text += "\n\n..."
+    # Render truncated markdown (produces valid HTML with proper tag closure)
+    preview_html = render_markdown(preview_text)
 
     collapsible = render_collapsible_code(
         preview_html, rendered_html, len(lines), is_markdown=True
