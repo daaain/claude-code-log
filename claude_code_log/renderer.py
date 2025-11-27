@@ -2656,8 +2656,8 @@ def generate_html(
     with log_timing(
         lambda: f"Deduplication ({len(deduplicated_messages)} messages)", t_start
     ):
-        # Track seen (message_type, timestamp) pairs
-        seen: set[tuple[str, str]] = set()
+        # Track seen (message_type, timestamp, is_meta, session_id) tuples
+        seen: set[tuple[str, str, bool, str]] = set()
         deduplicated_messages: List[TranscriptEntry] = []
 
         for message in messages:
