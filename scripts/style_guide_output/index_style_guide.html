@@ -39,9 +39,21 @@
     /* Slightly transparent variants (55 = ~33% opacity) */
     --highlight-light: #e3f2fd55;
 
+    /* Solid colors for message types */
+    --user-color: #ff9800;
+    --user-dimmed: #ff980066;
+    --assistant-color: #9c27b0;
+    --system-color: #d98100;
+    --system-warning-color: #2196f3;
+    --system-error-color: #f44336;
+    --tool-use-color: #4caf50;
+
     /* Solid colors for text and accents */
     --text-muted: #666;
     --text-secondary: #495057;
+
+    /* Layout spacing */
+    --message-padding: 1em;
 
     /* Font families */
     --font-monospace: 'Fira Code', 'Monaco', 'Consolas', 'SF Mono', 'Inconsolata', 'Droid Sans Mono', 'Source Code Pro', 'Ubuntu Mono', 'Cascadia Code', 'Menlo', monospace;
@@ -49,7 +61,7 @@
 }
 
 body {
-    font-family: var(--font-monospace);
+    font-family: var(--font-ui);
     line-height: 1.5;
     max-width: 1200px;
     margin: 0 auto;
@@ -1580,7 +1592,7 @@ pre {
                 <div class='stat'>📁 12 transcript files</div>
                 <div class='stat'>💬 445 messages</div>
                 
-                <div class='stat'>🕒 2023-11-15 19:03:20</div>
+                <div class='stat'>🕒 2023-11-15 20:03:20</div>
                 
                 
             </div>
@@ -1597,7 +1609,7 @@ pre {
                 <div class='stat'>📁 8 transcript files</div>
                 <div class='stat'>💬 203 messages</div>
                 
-                <div class='stat'>🕒 2023-11-15 12:06:40</div>
+                <div class='stat'>🕒 2023-11-15 13:06:40</div>
                 
                 
             </div>
@@ -1614,7 +1626,7 @@ pre {
                 <div class='stat'>📁 3 transcript files</div>
                 <div class='stat'>💬 89 messages</div>
                 
-                <div class='stat'>🕒 2023-11-15 05:10:00</div>
+                <div class='stat'>🕒 2023-11-15 06:10:00</div>
                 
                 
             </div>
@@ -1631,7 +1643,7 @@ pre {
                 <div class='stat'>📁 5 transcript files</div>
                 <div class='stat'>💬 127 messages</div>
                 
-                <div class='stat'>🕒 2023-11-14 22:13:20</div>
+                <div class='stat'>🕒 2023-11-14 23:13:20</div>
                 
                 
             </div>
