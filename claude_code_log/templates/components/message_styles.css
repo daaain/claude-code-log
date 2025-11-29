@@ -651,6 +651,10 @@ pre > code {
     color: #333;
 }
 
+.tool-param-collapsible[open] > summary {
+    display: none;
+}
+
 .tool-param-full {
     margin-top: 4px;
     word-break: break-all;

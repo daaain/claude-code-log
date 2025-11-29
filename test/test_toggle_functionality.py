@@ -259,3 +259,23 @@ class TestToggleFunctionality:
         assert "🧰 🚨" not in html, "Should not have double icons"
         # The error icon should be before "Error" text
         assert "🚨 Error" in html, "Should show error icon with Error text"
+
+    def test_tool_param_collapsible_hides_summary_when_open(self):
+        """Test that CSS hides summary when tool param details is open."""
+        long_content = "x" * 300
+        tool_use_content = {
+            "type": "tool_use",
+            "id": "test_tool",
+            "name": "TestTool",
+            "input": {"content": long_content},
+        }
+
+        message = self._create_assistant_message([tool_use_content])
+
+        html = generate_html([message], "Test Param Visibility")
+
+        # Check CSS rule that hides summary when details is open
+        assert ".tool-param-collapsible[open] > summary" in html, (
+            "CSS should target open collapsible summary"
+        )
+        assert "display: none" in html, "CSS should hide summary when details is open"
