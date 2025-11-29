@@ -159,3 +159,19 @@
     color: #666;
     font-size: 0.9em;
 }
+
+/* ExitPlanMode tool styling */
+.plan-content {
+    font-family: var(--font-ui);
+}
+
+.plan-content.markdown {
+    background-color: #f8f9fa;
+    border-radius: 6px;
+    padding: 12px;
+    border-left: 3px solid #6c63ff;
+}
+
+.plan-content .collapsible-code {
+    border-left: 3px solid #6c63ff;
+}

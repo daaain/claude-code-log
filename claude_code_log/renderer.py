@@ -475,6 +475,45 @@ def format_askuserquestion_content(tool_use: ToolUseContent) -> str:
     return "".join(html_parts)
 
 
+def format_exitplanmode_content(tool_use: ToolUseContent) -> str:
+    """Format ExitPlanMode tool use content with collapsible plan markdown.
+
+    Renders the plan markdown in a collapsible section, similar to Task tool results.
+    """
+    plan = tool_use.input.get("plan", "")
+
+    if not plan:
+        # No plan, show parameters table as fallback
+        return render_params_table(tool_use.input)
+
+    return render_markdown_collapsible(plan, "plan-content")
+
+
+def format_exitplanmode_result(content: str) -> str:
+    """Format ExitPlanMode tool result, truncating the redundant plan echo.
+
+    When a plan is approved, the result contains:
+    1. A confirmation message
+    2. Path to saved plan file
+    3. "## Approved Plan:" followed by full plan text (redundant)
+
+    We truncate everything after "## Approved Plan:" to avoid duplication.
+    For error results (plan not approved), we keep the full content.
+    """
+    # Check if this is a successful approval
+    if "User has approved your plan" in content:
+        # Truncate at "## Approved Plan:"
+        marker = "## Approved Plan:"
+        marker_pos = content.find(marker)
+        if marker_pos > 0:
+            # Keep everything before the marker, but add a note
+            truncated = content[:marker_pos].rstrip()
+            return truncated + "\n\n*(Plan content shown above)*"
+
+    # For errors or other cases, return as-is
+    return content
+
+
 def format_todowrite_content(tool_use: ToolUseContent) -> str:
     """Format TodoWrite tool use content as an actual todo list with checkboxes."""
     # Parse todos from input
@@ -1044,6 +1083,10 @@ def format_tool_use_content(tool_use: ToolUseContent) -> str:
     if tool_use.name == "AskUserQuestion":
         return format_askuserquestion_content(tool_use)
 
+    # Special handling for ExitPlanMode
+    if tool_use.name == "ExitPlanMode":
+        return format_exitplanmode_content(tool_use)
+
     # Default: render as key/value table using shared renderer
     return render_params_table(tool_use.input)
 
@@ -1264,6 +1307,12 @@ def format_tool_result_content(
     # Deduplication is now handled retroactively by replacing the sub-assistant content
     if tool_name == "Task" and not has_images:
         return render_markdown_collapsible(raw_content, "task-result")
+
+    # Special handling for ExitPlanMode tool: truncate redundant plan echo on success
+    if tool_name == "ExitPlanMode" and not has_images:
+        processed_content = format_exitplanmode_result(raw_content)
+        escaped_content = escape_html(processed_content)
+        return f"<pre>{escaped_content}</pre>"
 
     # Check if this looks like Bash tool output and process ANSI codes
     # Bash tool results often contain ANSI escape sequences and terminal output
