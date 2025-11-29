@@ -94,3 +94,68 @@
 .todo-item.completed {
     background-color: #d4edda;
 }
+
+/* AskUserQuestion tool styling */
+.askuserquestion-content {
+    font-family: var(--font-ui);
+    padding: 8px 0;
+}
+
+.question-block {
+    margin-bottom: 16px;
+    padding: 12px;
+    background-color: #fffbf0;
+    border-radius: 6px;
+    border-left: 3px solid #f5a623;
+}
+
+.question-block:last-child {
+    margin-bottom: 0;
+}
+
+.question-header {
+    font-size: 0.85em;
+    font-weight: 600;
+    color: #666;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+}
+
+.question-text {
+    font-size: 1.1em;
+    font-weight: 500;
+    color: #333;
+    line-height: 1.4;
+    margin-bottom: 8px;
+}
+
+.question-options-hint {
+    font-size: 0.8em;
+    color: #888;
+    font-style: italic;
+    margin-bottom: 6px;
+}
+
+.question-options {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.question-option {
+    padding: 8px 12px;
+    margin: 4px 0;
+    background-color: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 4px;
+}
+
+.question-option strong {
+    color: #333;
+}
+
+.question-option .option-desc {
+    color: #666;
+    font-size: 0.9em;
+}

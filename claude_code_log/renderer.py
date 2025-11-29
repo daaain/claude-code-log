@@ -406,6 +406,75 @@ def extract_command_info(text_content: str) -> tuple[str, str, str]:
     return command_name, command_args, command_contents
 
 
+def format_askuserquestion_content(tool_use: ToolUseContent) -> str:
+    """Format AskUserQuestion tool use content with prominent question display.
+
+    Handles multiple questions in a single tool use, each with optional header,
+    options (with label and description), and multiSelect flag.
+    """
+    questions_data = tool_use.input.get("questions", [])
+    # Also handle single question format for backwards compatibility
+    if not questions_data:
+        single_question = tool_use.input.get("question", "")
+        if single_question:
+            questions_data = [{"question": single_question}]
+
+    if not questions_data:
+        return render_params_table(tool_use.input)
+
+    # Build HTML for all questions
+    html_parts: List[str] = ['<div class="askuserquestion-content">']
+
+    for q_data in questions_data:
+        try:
+            question_text = escape_html(str(q_data.get("question", "")))
+            header = q_data.get("header", "")
+            options = q_data.get("options", [])
+            multi_select = q_data.get("multiSelect", False)
+
+            # Question container
+            html_parts.append('<div class="question-block">')
+
+            # Header (if present)
+            if header:
+                escaped_header = escape_html(str(header))
+                html_parts.append(
+                    f'<div class="question-header">{escaped_header}</div>'
+                )
+
+            # Question text with icon
+            html_parts.append(f'<div class="question-text">❓ {question_text}</div>')
+
+            # Options (if present)
+            if options:
+                select_hint = "(select multiple)" if multi_select else "(select one)"
+                html_parts.append(
+                    f'<div class="question-options-hint">{select_hint}</div>'
+                )
+                html_parts.append('<ul class="question-options">')
+                for opt in options:
+                    label = escape_html(str(opt.get("label", "")))
+                    desc = opt.get("description", "")
+                    if desc:
+                        desc_html = f'<span class="option-desc"> — {escape_html(str(desc))}</span>'
+                    else:
+                        desc_html = ""
+                    html_parts.append(
+                        f'<li class="question-option"><strong>{label}</strong>{desc_html}</li>'
+                    )
+                html_parts.append("</ul>")
+
+            html_parts.append("</div>")  # Close question-block
+        except (AttributeError, TypeError):
+            # Fallback for unexpected format
+            html_parts.append(
+                f'<div class="question-text">❓ {escape_html(str(q_data))}</div>'
+            )
+
+    html_parts.append("</div>")  # Close askuserquestion-content
+    return "".join(html_parts)
+
+
 def format_todowrite_content(tool_use: ToolUseContent) -> str:
     """Format TodoWrite tool use content as an actual todo list with checkboxes."""
     # Parse todos from input
@@ -970,6 +1039,10 @@ def format_tool_use_content(tool_use: ToolUseContent) -> str:
     # Special handling for Task (agent spawning)
     if tool_use.name == "Task":
         return format_task_tool_content(tool_use)
+
+    # Special handling for AskUserQuestion
+    if tool_use.name == "AskUserQuestion":
+        return format_askuserquestion_content(tool_use)
 
     # Default: render as key/value table using shared renderer
     return render_params_table(tool_use.input)
