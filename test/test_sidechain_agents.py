@@ -143,6 +143,58 @@ def test_agent_messages_marked_as_sidechain():
         )  # Tool result ID should appear in ancestry for sidechain messages
 
 
+def test_sidechain_tool_results_rendered():
+    """Test that tool results from sidechain agents are rendered (not skipped).
+
+    Regression test for bug where all sidechain user messages were skipped,
+    which incorrectly also skipped tool results that come in user messages.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+
+        # Create a main file with Task tool use and result
+        main_file = tmpdir_path / "main.jsonl"
+        main_file.write_text(
+            '{"parentUuid":null,"isSidechain":false,"userType":"external","cwd":"/workspace","sessionId":"test-tool-results","version":"2.0.46","gitBranch":"main","type":"user","message":{"role":"user","content":[{"type":"text","text":"Search for files"}]},"uuid":"u-0","timestamp":"2025-01-15T14:00:00.000Z"}\n'
+            '{"parentUuid":"u-0","isSidechain":false,"userType":"external","cwd":"/workspace","sessionId":"test-tool-results","version":"2.0.46","gitBranch":"main","message":{"model":"claude-sonnet-4-5-20250929","id":"msg_main","type":"message","role":"assistant","content":[{"type":"tool_use","id":"task-glob","name":"Task","input":{"prompt":"Find test files"}}],"stop_reason":"tool_use","stop_sequence":null,"usage":{"input_tokens":100,"output_tokens":50}},"requestId":"req_main","type":"assistant","uuid":"a-0","timestamp":"2025-01-15T14:00:05.000Z"}\n'
+            '{"parentUuid":"a-0","isSidechain":false,"userType":"external","cwd":"/workspace","sessionId":"test-tool-results","version":"2.0.46","gitBranch":"main","type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"task-glob","content":"Found files: test.py"}]},"uuid":"u-1","timestamp":"2025-01-15T14:00:20.000Z","toolUseResult":{"agentId":"glob-agent","content":"Found files: test.py"},"agentId":"glob-agent"}\n'
+        )
+
+        # Create agent file with tool use (Glob) and its result
+        agent_file = tmpdir_path / "agent-glob-agent.jsonl"
+        agent_file.write_text(
+            # Sidechain user prompt (should be skipped in output)
+            '{"parentUuid":null,"isSidechain":true,"userType":"external","cwd":"/workspace","sessionId":"test-tool-results","version":"2.0.46","gitBranch":"main","agentId":"glob-agent","type":"user","message":{"role":"user","content":[{"type":"text","text":"Find test files"}]},"uuid":"agent-u-0","timestamp":"2025-01-15T14:00:06.000Z"}\n'
+            # Assistant uses Glob tool
+            '{"parentUuid":"agent-u-0","isSidechain":true,"userType":"external","cwd":"/workspace","sessionId":"test-tool-results","version":"2.0.46","gitBranch":"main","agentId":"glob-agent","message":{"model":"claude-sonnet-4-5-20250929","id":"msg_agent","type":"message","role":"assistant","content":[{"type":"tool_use","id":"glob-123","name":"Glob","input":{"pattern":"**/*.py"}}],"stop_reason":"tool_use","stop_sequence":null,"usage":{"input_tokens":50,"output_tokens":25}},"requestId":"req_agent","type":"assistant","uuid":"agent-a-0","timestamp":"2025-01-15T14:00:08.000Z"}\n'
+            # Tool result comes in a sidechain user message - THIS SHOULD BE RENDERED
+            '{"parentUuid":"agent-a-0","isSidechain":true,"userType":"external","cwd":"/workspace","sessionId":"test-tool-results","version":"2.0.46","gitBranch":"main","agentId":"glob-agent","type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"glob-123","content":"/workspace/test.py"}]},"uuid":"agent-u-1","timestamp":"2025-01-15T14:00:10.000Z"}\n'
+            # Final assistant message
+            '{"parentUuid":"agent-u-1","isSidechain":true,"userType":"external","cwd":"/workspace","sessionId":"test-tool-results","version":"2.0.46","gitBranch":"main","agentId":"glob-agent","message":{"model":"claude-sonnet-4-5-20250929","id":"msg_agent_final","type":"message","role":"assistant","content":[{"type":"text","text":"Found files: test.py"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":60,"output_tokens":15}},"requestId":"req_agent_final","type":"assistant","uuid":"agent-a-1","timestamp":"2025-01-15T14:00:15.000Z"}\n'
+        )
+
+        messages = load_transcript(main_file)
+        html = generate_html(messages, title="Test")
+
+        # The sidechain Glob tool use should be rendered
+        assert "🛠️ Glob" in html or "Glob" in html
+
+        # The sidechain tool RESULT should be rendered (was the bug - it was skipped)
+        # The content "/workspace/test.py" should appear in the output
+        assert "/workspace/test.py" in html, (
+            "Sidechain tool result content should be rendered"
+        )
+
+        # The sidechain prompt text "Find test files" should NOT be rendered
+        # as a separate user message (only the tool results should come through)
+        # No sidechain user messages with text content should be rendered
+        # (tool results are rendered as tool_result, not as user messages)
+        assert (
+            "<div class='content'><p>Find test files</p></div>" not in html
+            or "class='message user sidechain" not in html
+        ), "Sidechain user prompts should be skipped"
+
+
 def test_multiple_agent_invocations():
     """Test handling of multiple Task invocations in same session."""
     with tempfile.TemporaryDirectory() as tmpdir:

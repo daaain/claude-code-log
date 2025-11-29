@@ -2896,10 +2896,8 @@ def _process_messages_loop(
         # Update current message UUID for timing tracking
         set_timing_var("_current_msg_uuid", msg_uuid)
 
-        # Skip sidechain user messages (Sub-assistant prompts)
-        # These duplicate the Task tool input prompt and are redundant
-        if message_type == "user" and getattr(message, "isSidechain", False):
-            continue
+        # NOTE: Sidechain user messages are handled below after content extraction
+        # to distinguish prompts (skip) from tool results (render)
 
         # Skip summary messages - they should already be attached to their sessions
         if isinstance(message, SummaryTranscriptEntry):
@@ -3065,6 +3063,22 @@ def _process_messages_loop(
         # Skip messages that should be filtered out
         if should_skip_message(text_content):
             continue
+
+        # Skip sidechain user messages that are just prompts (no tool results)
+        # Sidechain prompts duplicate the Task tool input and are redundant,
+        # but tool results from sidechain agents should be rendered
+        if message_type == "user" and getattr(message, "isSidechain", False):
+            has_tool_results = any(
+                getattr(item, "type", None) == "tool_result"
+                or isinstance(item, ToolResultContent)
+                for item in tool_items
+            )
+            if not has_tool_results:
+                continue
+            # For sidechain user messages with tool results, clear text content
+            # to avoid rendering the redundant prompt text
+            text_only_content = []
+            text_content = ""
 
         # Check message types for special handling
         is_command = is_command_message(text_content)
