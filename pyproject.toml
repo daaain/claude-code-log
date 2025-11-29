@@ -51,6 +51,7 @@ markers = [
     "tui: TUI tests using Textual framework (requires isolated event loop)",
     "browser: Browser integration tests using Playwright (requires Chromium)",
     "integration: Integration tests with realistic JSONL data",
+    "slow: Slower tests that measure performance (may take several seconds)",
 ]
 
 [tool.pyright]
