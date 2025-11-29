@@ -8,7 +8,11 @@ but HtmlFormatter(linenos="table") produces a single <tr> with two <td>s.
 from pathlib import Path
 
 from claude_code_log.parser import load_transcript
-from claude_code_log.renderer import generate_html, _truncate_highlighted_preview
+from claude_code_log.renderer import (
+    generate_html,
+    _truncate_highlighted_preview,
+    _highlight_code_with_pygments,
+)
 
 
 class TestPreviewTruncation:
@@ -127,3 +131,52 @@ line 10
         assert "_timing_data" in full_html, "Full content should contain line 15"
         assert "DEBUG_TIMING" in full_html, "Full content should contain line 26"
         assert "contextmanager" in full_html, "Full content should contain line 30"
+
+
+class TestPygmentsWhitespace:
+    """Tests for whitespace preservation in Pygments highlighting."""
+
+    def test_leading_whitespace_preserved(self):
+        """Test that leading whitespace is preserved in Pygments highlighted code.
+
+        Regression test for: Code like "   240→        if path.is_dir():"
+        from Read tool results was rendered without leading spaces due to
+        Pygments stripall=True.
+        """
+        # Simulate Read tool output with line numbers and indentation
+        # This is similar to what the Read tool returns
+        code = "   240→        if path.is_dir():\n   241→            return True\n"
+
+        # Get highlighted HTML
+        html = _highlight_code_with_pygments(
+            code,
+            file_path="test.py",
+            show_linenos=True,
+        )
+
+        # The leading spaces should be preserved in the output
+        # Pygments wraps content in span tags, so we look for spaces followed by span
+        # The pattern in output is: "   <span" for the leading 3 spaces of the line number prefix
+        assert "   240" in html or ("   <span" in html and "240" in html), (
+            "Leading whitespace on first line should be preserved"
+        )
+        # Also check the 8 spaces before "if" after the arrow
+        assert "        <span" in html or ">        if" in html, (
+            "Indentation before code content should be preserved"
+        )
+
+    def test_indentation_preserved_in_python(self):
+        """Test that Python indentation is preserved."""
+        code = "def foo():\n    pass\n"
+
+        html = _highlight_code_with_pygments(
+            code,
+            file_path="test.py",
+            show_linenos=False,
+        )
+
+        # The 4-space indentation before "pass" should be preserved
+        # In Pygments output, it appears as "\n    <span" or ">    <span"
+        assert "\n    " in html or ">    <" in html, (
+            "Python indentation should be preserved"
+        )

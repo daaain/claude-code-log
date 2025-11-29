@@ -535,8 +535,9 @@ def _highlight_code_with_pygments(
                     break
 
         # Get lexer or use TextLexer as fallback
+        # Note: stripall=False preserves leading whitespace (important for code indentation)
         if lexer_alias:
-            lexer = get_lexer_by_name(lexer_alias, stripall=True)  # type: ignore[reportUnknownVariableType]
+            lexer = get_lexer_by_name(lexer_alias, stripall=False)  # type: ignore[reportUnknownVariableType]
         else:
             lexer = TextLexer()  # type: ignore[reportUnknownVariableType]
     except ClassNotFound:
