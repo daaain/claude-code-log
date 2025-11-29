@@ -3463,11 +3463,9 @@ def _process_messages_loop(
                 escaped_id = escape_html(tool_result_converted.tool_use_id)
                 item_tool_use_id = tool_result_converted.tool_use_id
                 tool_title_hint = f"ID: {escaped_id}"
-                # Simplified: no "Tool Result" heading, just show error indicator if present
+                # Simplified: no "Tool Result" heading, icon is set by template
                 tool_message_type = "tool_result"
-                tool_message_title = (
-                    "🚨 Error" if tool_result_converted.is_error else ""
-                )
+                tool_message_title = "Error" if tool_result_converted.is_error else ""
                 tool_css_class = (
                     "tool_result error"
                     if tool_result_converted.is_error

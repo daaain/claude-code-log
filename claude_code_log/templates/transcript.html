@@ -110,6 +110,7 @@
                 elif message.css_class.startswith('assistant') %}🤖 {%
                 elif message.css_class == 'system' %}⚙️ {%
                 elif message.css_class.startswith('tool_use') and not starts_with_emoji(message.message_title) %}🛠️ {%
+                elif message.css_class == 'tool_result error' %}🚨 {%
                 elif message.css_class.startswith('tool_result') %}🧰 {%
                 elif message.css_class.startswith('thinking') %}💭 {%
                 elif message.css_class == 'image' %}🖼️ {% endif %}{{ message.message_title | safe }}{% endif %}</span>

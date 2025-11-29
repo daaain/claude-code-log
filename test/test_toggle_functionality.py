@@ -237,4 +237,25 @@ class TestToggleFunctionality:
         assert 'class="collapsible-details"' in html, (
             "Tool result should be collapsible"
         )
-        assert "🧰 Tool Result" in html, "Should show tool result icon"
+        assert "🧰" in html, "Should show tool result icon"
+
+    def test_tool_result_error_single_icon(self):
+        """Test that error tool results show only the error icon, not double icons."""
+        error_result = "Error: Something went wrong"
+        tool_result_content = {
+            "type": "tool_result",
+            "tool_use_id": "test_tool",
+            "content": error_result,
+            "is_error": True,
+        }
+
+        message = self._create_assistant_message([tool_result_content])
+
+        html = generate_html([message], "Test Error Tool Result")
+
+        # Should have the error icon, not the tool result icon
+        assert "🚨" in html, "Should show error icon"
+        # Should NOT have double icons (🧰 followed by 🚨)
+        assert "🧰 🚨" not in html, "Should not have double icons"
+        # The error icon should be before "Error" text
+        assert "🚨 Error" in html, "Should show error icon with Error text"
