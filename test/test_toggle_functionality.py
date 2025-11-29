@@ -134,12 +134,19 @@ class TestToggleFunctionality:
 
         html = generate_html([message], "Test Selectors")
 
-        # Check that JavaScript uses the correct selectors
-        assert "querySelectorAll('details.collapsible-details')" in html, (
-            "JavaScript should target collapsible details correctly"
+        # Check that JavaScript uses the correct selectors for ALL collapsible types
+        assert "collapsibleSelector" in html, (
+            "JavaScript should define collapsible selector variable"
         )
-        assert "querySelectorAll('details[open].collapsible-details')" in html, (
-            "JavaScript should target open details correctly"
+        # All three collapsible classes should be included
+        assert "details.collapsible-details" in html, (
+            "JavaScript should target collapsible-details"
+        )
+        assert "details.collapsible-code" in html, (
+            "JavaScript should target collapsible-code"
+        )
+        assert "details.tool-param-collapsible" in html, (
+            "JavaScript should target tool-param-collapsible"
         )
 
     def test_toggle_button_icons_and_titles(self):
@@ -166,7 +173,7 @@ class TestToggleFunctionality:
     def test_multiple_collapsible_elements(self):
         """Test handling of multiple collapsible elements."""
         # Create multiple tool uses
-        tool_contents = []
+        tool_contents: List[Dict[str, Any]] = []
         for i in range(3):
             tool_content = {
                 "type": "tool_use",

@@ -212,9 +212,13 @@
             }
 
             // Toggle details functionality
+            // Selector for all collapsible details elements (multiple classes)
+            const collapsibleSelector = 'details.collapsible-details, details.collapsible-code, details.tool-param-collapsible';
+            const collapsibleOpenSelector = 'details[open].collapsible-details, details[open].collapsible-code, details[open].tool-param-collapsible';
+
             function updateToggleButton() {
-                const allDetails = document.querySelectorAll('details.collapsible-details');
-                const openCount = document.querySelectorAll('details[open].collapsible-details').length;
+                const allDetails = document.querySelectorAll(collapsibleSelector);
+                const openCount = document.querySelectorAll(collapsibleOpenSelector).length;
                 const totalCount = allDetails.length;
 
                 if (totalCount === 0) {
@@ -229,8 +233,8 @@
             }
 
             function toggleAllDetails() {
-                const allDetails = document.querySelectorAll('details.collapsible-details');
-                const openCount = document.querySelectorAll('details[open].collapsible-details').length;
+                const allDetails = document.querySelectorAll(collapsibleSelector);
+                const openCount = document.querySelectorAll(collapsibleOpenSelector).length;
                 const shouldOpen = openCount <= allDetails.length / 2;
 
                 allDetails.forEach(details => {
