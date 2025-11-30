@@ -90,7 +90,8 @@ This is the full plan that should be truncated.
         assert "saved to:" in processed
         assert "## Approved Plan:" not in processed
         assert "This is the full plan" not in processed
-        assert "*(Plan content shown above)*" in processed
+        # Should not include any extra trailing text
+        assert not processed.endswith("\n")
 
     def test_format_exitplanmode_result_not_approved(self):
         """Test ExitPlanMode result keeps error content intact."""
@@ -118,7 +119,7 @@ Please modify the following aspects:
         assert processed == result_content
 
     def test_format_exitplanmode_escapes_html_in_result(self):
-        """Test that HTML is properly escaped in result content."""
+        """Test that HTML content is preserved (escaping happens later)."""
         result_content = """User has approved your plan. <script>alert('xss')</script>
 
 Your plan has been saved.
@@ -129,6 +130,8 @@ Your plan has been saved.
 
         processed = format_exitplanmode_result(result_content)
 
-        # The script tag should be in the truncated content
-        assert "<script>" in processed  # Not escaped yet, escaping happens later
+        # The script tag should be in the truncated content (escaping happens later)
+        assert "<script>" in processed
         assert "## Approved Plan:" not in processed
+        # Should end cleanly without trailing whitespace
+        assert not processed.endswith("\n")

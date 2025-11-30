@@ -506,9 +506,8 @@ def format_exitplanmode_result(content: str) -> str:
         marker = "## Approved Plan:"
         marker_pos = content.find(marker)
         if marker_pos > 0:
-            # Keep everything before the marker, but add a note
-            truncated = content[:marker_pos].rstrip()
-            return truncated + "\n\n*(Plan content shown above)*"
+            # Keep everything before the marker, strip trailing whitespace
+            return content[:marker_pos].rstrip()
 
     # For errors or other cases, return as-is
     return content
