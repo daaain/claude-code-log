@@ -5,7 +5,6 @@ Uses the sample session in test/test_data/sessions/deep-manifest-tar/
 which represents a moderate complexity session (~1.2MB, ~325 messages).
 """
 
-import os
 import time
 from pathlib import Path
 from typing import List
@@ -26,15 +25,17 @@ class TestRenderPerformance:
         """Path to the sample session data."""
         return Path(__file__).parent / "test_data" / "sessions" / "deep-manifest-tar"
 
-    def test_render_performance_under_threshold(self, sample_session_path: Path):
+    def test_render_performance_under_threshold(
+        self, sample_session_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
         """Test that rendering the sample session completes within threshold.
 
         The ~1.2MB sample session with ~325 messages should render in under 5 seconds.
         This includes loading, parsing, and HTML generation but not disk I/O for
         writing the output file.
         """
-        # Enable timing if desired (timing output goes to stderr)
-        os.environ["CLAUDE_CODE_LOG_DEBUG_TIMING"] = "1"
+        # Enable timing output (goes to stderr) - monkeypatch ensures cleanup
+        monkeypatch.setenv("CLAUDE_CODE_LOG_DEBUG_TIMING", "1")
 
         # Load all JSONL files in the session directory
         messages: List[TranscriptEntry] = []
