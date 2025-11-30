@@ -59,8 +59,8 @@ test-cov:
     uv run pytest -n auto -m browser --cov=claude_code_log --cov-append --cov-report=xml --cov-report=html --cov-report=term -v
     echo "🔄 Running integration tests with coverage append..."
     uv run pytest -n auto -m integration --cov=claude_code_log --cov-append --cov-report=xml --cov-report=html --cov-report=term -v
-    echo "📊 Running benchmark tests..."
-    uv run pytest -m benchmark -v
+    echo "📊 Running benchmark tests with coverage append..."
+    uv run pytest -m benchmark --cov=claude_code_log --cov-append --cov-report=xml --cov-report=html --cov-report=term -v
     echo "✅ All tests with coverage completed!"
 
 format:
