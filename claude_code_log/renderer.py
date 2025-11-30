@@ -475,6 +475,58 @@ def format_askuserquestion_content(tool_use: ToolUseContent) -> str:
     return "".join(html_parts)
 
 
+def format_askuserquestion_result(content: str) -> str:
+    """Format AskUserQuestion tool result with styled question/answer pairs.
+
+    Parses the result format:
+    'User has answered your questions: "Q1"="A1", "Q2"="A2". You can now continue...'
+
+    Returns HTML with styled Q&A blocks matching the input styling.
+    """
+    import re
+
+    # Check if this is a successful answer
+    if not content.startswith("User has answered your question"):
+        # Return as-is for errors or unexpected format
+        return ""
+
+    # Extract the Q&A portion between the colon and the final sentence
+    # Pattern: 'User has answered your questions: "Q"="A", "Q"="A". You can now...'
+    match = re.match(
+        r"User has answered your questions?: (.+)\. You can now continue",
+        content,
+        re.DOTALL,
+    )
+    if not match:
+        return ""
+
+    qa_portion = match.group(1)
+
+    # Parse "Question"="Answer" pairs
+    # Pattern: "question text"="answer text"
+    qa_pattern = re.compile(r'"([^"]+)"="([^"]+)"')
+    pairs = qa_pattern.findall(qa_portion)
+
+    if not pairs:
+        return ""
+
+    # Build styled HTML
+    html_parts: List[str] = [
+        '<div class="askuserquestion-content askuserquestion-result">'
+    ]
+
+    for question, answer in pairs:
+        escaped_q = escape_html(question)
+        escaped_a = escape_html(answer)
+        html_parts.append('<div class="question-block answered">')
+        html_parts.append(f'<div class="question-text">❓ {escaped_q}</div>')
+        html_parts.append(f'<div class="answer-text">✅ {escaped_a}</div>')
+        html_parts.append("</div>")
+
+    html_parts.append("</div>")
+    return "".join(html_parts)
+
+
 def format_exitplanmode_content(tool_use: ToolUseContent) -> str:
     """Format ExitPlanMode tool use content with collapsible plan markdown.
 
@@ -1312,6 +1364,13 @@ def format_tool_result_content(
         processed_content = format_exitplanmode_result(raw_content)
         escaped_content = escape_html(processed_content)
         return f"<pre>{escaped_content}</pre>"
+
+    # Special handling for AskUserQuestion tool: render Q&A pairs with styling
+    if tool_name == "AskUserQuestion" and not has_images:
+        styled_result = format_askuserquestion_result(raw_content)
+        if styled_result:
+            return styled_result
+        # Fall through to default handling if parsing fails
 
     # Check if this looks like Bash tool output and process ANSI codes
     # Bash tool results often contain ANSI escape sequences and terminal output

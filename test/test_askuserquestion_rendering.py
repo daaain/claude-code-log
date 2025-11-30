@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Test cases for AskUserQuestion tool rendering."""
 
-from claude_code_log.renderer import format_askuserquestion_content
+from claude_code_log.renderer import (
+    format_askuserquestion_content,
+    format_askuserquestion_result,
+)
 from claude_code_log.models import ToolUseContent
 
 
@@ -221,3 +224,99 @@ class TestAskUserQuestionRendering:
         assert "&lt;test&gt;" in html
         assert "&lt;option&gt;" in html
         assert "&amp;amp;" in html or "& symbol" not in html
+
+
+class TestAskUserQuestionResultRendering:
+    """Test AskUserQuestion tool result rendering functionality."""
+
+    def test_format_result_single_qa(self):
+        """Test formatting a result with a single Q&A pair."""
+        content = (
+            'User has answered your question: "What is your preference?"="Option A". '
+            "You can now continue with the user's answers in mind."
+        )
+
+        html = format_askuserquestion_result(content)
+
+        # Should render styled HTML
+        assert 'class="askuserquestion-content askuserquestion-result"' in html
+        assert 'class="question-block answered"' in html
+        assert "What is your preference?" in html
+        assert "Option A" in html
+        assert "❓" in html
+        assert "✅" in html
+
+    def test_format_result_multiple_qa(self):
+        """Test formatting a result with multiple Q&A pairs."""
+        content = (
+            "User has answered your questions: "
+            '"Should tar archives be processed recursively?"="Yes, both filesystem and embedded", '
+            '"Which tar formats should be supported?"="Also .tgz". '
+            "You can now continue with the user's answers in mind."
+        )
+
+        html = format_askuserquestion_result(content)
+
+        # Should have two question blocks
+        assert html.count('class="question-block answered"') == 2
+
+        # Check both Q&A pairs
+        assert "Should tar archives be processed recursively?" in html
+        assert "Yes, both filesystem and embedded" in html
+        assert "Which tar formats should be supported?" in html
+        assert "Also .tgz" in html
+
+    def test_format_result_not_answered(self):
+        """Test that non-answer results return empty string."""
+        content = "User cancelled the question."
+
+        html = format_askuserquestion_result(content)
+
+        # Should return empty to fall through to default handling
+        assert html == ""
+
+    def test_format_result_error_message(self):
+        """Test that error messages return empty string."""
+        content = "Error: Could not parse user response."
+
+        html = format_askuserquestion_result(content)
+
+        assert html == ""
+
+    def test_format_result_escapes_html(self):
+        """Test that HTML in questions/answers is escaped."""
+        content = (
+            'User has answered your question: "Use <script> tag?"="Yes, use <b>bold</b>". '
+            "You can now continue with the user's answers in mind."
+        )
+
+        html = format_askuserquestion_result(content)
+
+        # HTML should be escaped
+        assert "&lt;script&gt;" in html
+        assert "&lt;b&gt;bold&lt;/b&gt;" in html
+        # Should not have raw HTML tags
+        assert "<script>" not in html
+        assert "<b>" not in html
+
+    def test_format_result_malformed_no_closing(self):
+        """Test handling of malformed result without closing sentence."""
+        content = 'User has answered your question: "Q"="A"'
+
+        html = format_askuserquestion_result(content)
+
+        # Should return empty due to missing closing sentence
+        assert html == ""
+
+    def test_format_result_with_quotes_in_answer(self):
+        """Test handling answers that might contain special characters."""
+        # Note: This tests the regex pattern's ability to handle the format
+        content = (
+            'User has answered your question: "Preference?"="Option with comma, here". '
+            "You can now continue with the user's answers in mind."
+        )
+
+        html = format_askuserquestion_result(content)
+
+        assert "Preference?" in html
+        assert "Option with comma, here" in html

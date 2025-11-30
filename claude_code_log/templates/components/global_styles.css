@@ -38,9 +38,38 @@
     --system-error-color: #f44336;
     --tool-use-color: #4caf50;
 
+    /* Question/answer tool colors */
+    --question-accent: #f5a623;
+    --question-bg: #fffbf0;
+    --answer-accent: #4caf50;
+    --answer-bg: #f0fff4;
+
+    /* Priority colors for todos */
+    --priority-high: #dc3545;
+    --priority-medium: #ffc107;
+    --priority-low: #28a745;
+
+    /* Status colors */
+    --status-in-progress: #fff3cd;
+    --status-completed: #d4edda;
+
+    /* Plan/todo accent color */
+    --plan-accent: #6c63ff;
+    --todo-accent: #4169e1;
+
     /* Solid colors for text and accents */
+    --text-primary: #333;
     --text-muted: #666;
     --text-secondary: #495057;
+
+    /* Border colors */
+    --border-light: #e0e0e0;
+    --border-separator: #f0f3f6;
+
+    /* Background colors */
+    --bg-card: #ffffff66;
+    --bg-hover: #f8f9fa;
+    --bg-neutral: #f8f9fa;
 
     /* Layout spacing */
     --message-padding: 1em;

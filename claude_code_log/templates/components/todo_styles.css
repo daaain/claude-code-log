@@ -1,24 +1,24 @@
 /* TodoWrite tool styling */
 .todo-write {
-    background-color: #f0f8ff66;
-    border-left: #4169e188 3px solid;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
+    background-color: var(--highlight-dimmed);
+    border-left: var(--todo-accent) 3px solid;
+    font-family: var(--font-ui);
 }
 
 .tool-header {
     font-weight: 600;
     margin-bottom: 12px;
-    color: #2c3e50;
+    color: var(--text-secondary);
     font-size: 1.1em;
 }
 
 .todo-list {
-    background-color: #ffffff66;
+    background-color: var(--bg-card);
     border-radius: 6px;
     padding: 8px;
     box-shadow: -7px -7px 10px #eeeeee44, 7px 7px 10px #00000011;
-    border-left: #ffffff66 1px solid;
-    border-top: #ffffff66 1px solid;
+    border-left: var(--bg-card) 1px solid;
+    border-top: var(--bg-card) 1px solid;
     border-bottom: #00000017 1px solid;
     border-right: #00000017 1px solid;
 }
@@ -28,7 +28,7 @@
     align-items: center;
     gap: 8px;
     padding: 8px 4px;
-    border-bottom: 1px solid #f0f3f6;
+    border-bottom: 1px solid var(--border-separator);
     transition: background-color 0.2s ease;
 }
 
@@ -37,7 +37,7 @@
 }
 
 .todo-item:hover {
-    background-color: #f8f9fa;
+    background-color: var(--bg-hover);
 }
 
 .todo-item.completed {
@@ -46,7 +46,7 @@
 
 .todo-item.completed .todo-content {
     text-decoration: line-through;
-    color: #6c757d;
+    color: var(--text-muted);
 }
 
 .todo-item input[type="checkbox"] {
@@ -61,7 +61,7 @@
 
 .todo-content {
     flex: 1;
-    color: #333;
+    color: var(--text-primary);
     font-weight: 500;
     font-size: 90%;
     font-family: var(--font-ui);
@@ -69,30 +69,30 @@
 
 .todo-id {
     font-size: 0.8em;
-    color: #6c757d;
+    color: var(--text-muted);
     font-weight: normal;
 }
 
 /* Priority-based left border colors */
 .todo-item.high {
-    border-left: 3px solid #dc3545;
+    border-left: 3px solid var(--priority-high);
 }
 
 .todo-item.medium {
-    border-left: 3px solid #ffc107;
+    border-left: 3px solid var(--priority-medium);
 }
 
 .todo-item.low {
-    border-left: 3px solid #28a745;
+    border-left: 3px solid var(--priority-low);
 }
 
 /* Status-based background tints */
 .todo-item.in_progress {
-    background-color: #fff3cd;
+    background-color: var(--status-in-progress);
 }
 
 .todo-item.completed {
-    background-color: #d4edda;
+    background-color: var(--status-completed);
 }
 
 /* AskUserQuestion tool styling */
@@ -104,19 +104,25 @@
 .question-block {
     margin-bottom: 16px;
     padding: 12px;
-    background-color: #fffbf0;
+    background-color: var(--question-bg);
     border-radius: 6px;
-    border-left: 3px solid #f5a623;
+    border-left: 3px solid var(--question-accent);
 }
 
 .question-block:last-child {
     margin-bottom: 0;
 }
 
+/* Answered questions in result (lighter, success-tinted) */
+.question-block.answered {
+    background-color: var(--answer-bg);
+    border-left-color: var(--answer-accent);
+}
+
 .question-header {
     font-size: 0.85em;
     font-weight: 600;
-    color: #666;
+    color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.5px;
     margin-bottom: 4px;
@@ -125,14 +131,22 @@
 .question-text {
     font-size: 1.1em;
     font-weight: 500;
-    color: #333;
+    color: var(--text-primary);
     line-height: 1.4;
     margin-bottom: 8px;
 }
 
+.answer-text {
+    font-size: 1.05em;
+    font-weight: 600;
+    color: var(--answer-accent);
+    line-height: 1.4;
+    padding-left: 4px;
+}
+
 .question-options-hint {
     font-size: 0.8em;
-    color: #888;
+    color: var(--text-muted);
     font-style: italic;
     margin-bottom: 6px;
 }
@@ -147,16 +161,16 @@
     padding: 8px 12px;
     margin: 4px 0;
     background-color: #fff;
-    border: 1px solid #e0e0e0;
+    border: 1px solid var(--border-light);
     border-radius: 4px;
 }
 
 .question-option strong {
-    color: #333;
+    color: var(--text-primary);
 }
 
 .question-option .option-desc {
-    color: #666;
+    color: var(--text-muted);
     font-size: 0.9em;
 }
 
@@ -166,11 +180,11 @@
 }
 
 .plan-content.markdown {
-    background-color: #f8f9fa;
+    background-color: var(--bg-neutral);
     border-radius: 6px;
     padding: 12px;
 }
 
 .plan-content .collapsible-code {
-    border-left: 3px solid #6c63ff;
+    border-left: 3px solid var(--plan-accent);
 }
