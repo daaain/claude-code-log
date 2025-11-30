@@ -7,7 +7,15 @@ cli *ARGS:
 
 # Run only unit tests (fast, no external dependencies)
 test:
-    uv run pytest -n auto -m "not (tui or browser)" -v
+    uv run pytest -n auto -m "not (tui or browser or benchmark)" -v
+
+# Run benchmark tests (outputs to GITHUB_STEP_SUMMARY in CI)
+test-benchmark:
+    uv run pytest -m benchmark -v
+
+# Update snapshot tests
+update-snapshot:
+    uv run pytest -n auto test/test_snapshot_html.py --snapshot-update
 
 # Run TUI tests (requires isolated event loop)
 test-tui:
@@ -27,13 +35,15 @@ test-all:
     set -e  # Exit on first failure
     echo "🧪 Running all tests in sequence..."
     echo "📦 Running unit tests..."
-    uv run pytest -n auto -m "not (tui or browser or integration)" -v
+    uv run pytest -n auto -m "not (tui or browser or integration or benchmark)" -v
     echo "🖥️  Running TUI tests..."
     uv run pytest -n auto -m tui -v
     echo "🌐 Running browser tests..."
     uv run pytest -n auto -m browser -v
     echo "🔄 Running integration tests..."
     uv run pytest -n auto -m integration -v
+    echo "📊 Running benchmark tests..."
+    uv run pytest -m benchmark -v
     echo "✅ All tests completed!"
 
 # Run tests with coverage (all categories)
@@ -42,13 +52,15 @@ test-cov:
     set -e  # Exit on first failure
     echo "📊 Running all tests with coverage..."
     echo "📦 Running unit tests with coverage..."
-    uv run pytest -n auto -m "not (tui or browser or integration)" --cov=claude_code_log --cov-report=xml --cov-report=html --cov-report=term -v
+    uv run pytest -n auto -m "not (tui or browser or integration or benchmark)" --cov=claude_code_log --cov-report=xml --cov-report=html --cov-report=term -v
     echo "🖥️  Running TUI tests with coverage append..."
     uv run pytest -n auto -m tui --cov=claude_code_log --cov-append --cov-report=xml --cov-report=html --cov-report=term -v
     echo "🌐 Running browser tests with coverage append..."
     uv run pytest -n auto -m browser --cov=claude_code_log --cov-append --cov-report=xml --cov-report=html --cov-report=term -v
     echo "🔄 Running integration tests with coverage append..."
     uv run pytest -n auto -m integration --cov=claude_code_log --cov-append --cov-report=xml --cov-report=html --cov-report=term -v
+    echo "📊 Running benchmark tests..."
+    uv run pytest -m benchmark -v
     echo "✅ All tests with coverage completed!"
 
 format:

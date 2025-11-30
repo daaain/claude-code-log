@@ -50,9 +50,38 @@
       --system-error-color: #f44336;
       --tool-use-color: #4caf50;
   
+      /* Question/answer tool colors */
+      --question-accent: #f5a623;
+      --question-bg: #fffbf0;
+      --answer-accent: #4caf50;
+      --answer-bg: #f0fff4;
+  
+      /* Priority colors for todos */
+      --priority-high: #dc3545;
+      --priority-medium: #ffc107;
+      --priority-low: #28a745;
+  
+      /* Status colors */
+      --status-in-progress: #fff3cd;
+      --status-completed: #d4edda;
+  
+      /* Plan/todo accent color */
+      --plan-accent: #6c63ff;
+      --todo-accent: #4169e1;
+  
       /* Solid colors for text and accents */
+      --text-primary: #333;
       --text-muted: #666;
       --text-secondary: #495057;
+  
+      /* Border colors */
+      --border-light: #e0e0e0;
+      --border-separator: #f0f3f6;
+  
+      /* Background colors */
+      --bg-card: #ffffff66;
+      --bg-hover: #f8f9fa;
+      --bg-neutral: #f8f9fa;
   
       /* Layout spacing */
       --message-padding: 1em;
@@ -1844,9 +1873,38 @@
       --system-error-color: #f44336;
       --tool-use-color: #4caf50;
   
+      /* Question/answer tool colors */
+      --question-accent: #f5a623;
+      --question-bg: #fffbf0;
+      --answer-accent: #4caf50;
+      --answer-bg: #f0fff4;
+  
+      /* Priority colors for todos */
+      --priority-high: #dc3545;
+      --priority-medium: #ffc107;
+      --priority-low: #28a745;
+  
+      /* Status colors */
+      --status-in-progress: #fff3cd;
+      --status-completed: #d4edda;
+  
+      /* Plan/todo accent color */
+      --plan-accent: #6c63ff;
+      --todo-accent: #4169e1;
+  
       /* Solid colors for text and accents */
+      --text-primary: #333;
       --text-muted: #666;
       --text-secondary: #495057;
+  
+      /* Border colors */
+      --border-light: #e0e0e0;
+      --border-separator: #f0f3f6;
+  
+      /* Background colors */
+      --bg-card: #ffffff66;
+      --bg-hover: #f8f9fa;
+      --bg-neutral: #f8f9fa;
   
       /* Layout spacing */
       --message-padding: 1em;
@@ -2647,6 +2705,10 @@
       color: #333;
   }
   
+  .tool-param-collapsible[open] > summary {
+      display: none;
+  }
+  
   .tool-param-full {
       margin-top: 4px;
       word-break: break-all;
@@ -3099,25 +3161,25 @@
   }
   /* TodoWrite tool styling */
   .todo-write {
-      background-color: #f0f8ff66;
-      border-left: #4169e188 3px solid;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
+      background-color: var(--highlight-dimmed);
+      border-left: var(--todo-accent) 3px solid;
+      font-family: var(--font-ui);
   }
   
   .tool-header {
       font-weight: 600;
       margin-bottom: 12px;
-      color: #2c3e50;
+      color: var(--text-secondary);
       font-size: 1.1em;
   }
   
   .todo-list {
-      background-color: #ffffff66;
+      background-color: var(--bg-card);
       border-radius: 6px;
       padding: 8px;
       box-shadow: -7px -7px 10px #eeeeee44, 7px 7px 10px #00000011;
-      border-left: #ffffff66 1px solid;
-      border-top: #ffffff66 1px solid;
+      border-left: var(--bg-card) 1px solid;
+      border-top: var(--bg-card) 1px solid;
       border-bottom: #00000017 1px solid;
       border-right: #00000017 1px solid;
   }
@@ -3127,7 +3189,7 @@
       align-items: center;
       gap: 8px;
       padding: 8px 4px;
-      border-bottom: 1px solid #f0f3f6;
+      border-bottom: 1px solid var(--border-separator);
       transition: background-color 0.2s ease;
   }
   
@@ -3136,7 +3198,7 @@
   }
   
   .todo-item:hover {
-      background-color: #f8f9fa;
+      background-color: var(--bg-hover);
   }
   
   .todo-item.completed {
@@ -3145,7 +3207,7 @@
   
   .todo-item.completed .todo-content {
       text-decoration: line-through;
-      color: #6c757d;
+      color: var(--text-muted);
   }
   
   .todo-item input[type="checkbox"] {
@@ -3160,7 +3222,7 @@
   
   .todo-content {
       flex: 1;
-      color: #333;
+      color: var(--text-primary);
       font-weight: 500;
       font-size: 90%;
       font-family: var(--font-ui);
@@ -3168,30 +3230,120 @@
   
   .todo-id {
       font-size: 0.8em;
-      color: #6c757d;
+      color: var(--text-muted);
       font-weight: normal;
   }
   
   /* Priority-based left border colors */
   .todo-item.high {
-      border-left: 3px solid #dc3545;
+      border-left: 3px solid var(--priority-high);
   }
   
   .todo-item.medium {
-      border-left: 3px solid #ffc107;
+      border-left: 3px solid var(--priority-medium);
   }
   
   .todo-item.low {
-      border-left: 3px solid #28a745;
+      border-left: 3px solid var(--priority-low);
   }
   
   /* Status-based background tints */
   .todo-item.in_progress {
-      background-color: #fff3cd;
+      background-color: var(--status-in-progress);
   }
   
   .todo-item.completed {
-      background-color: #d4edda;
+      background-color: var(--status-completed);
+  }
+  
+  /* AskUserQuestion tool styling */
+  .askuserquestion-content {
+      font-family: var(--font-ui);
+      padding: 8px 0;
+  }
+  
+  .question-block {
+      margin-bottom: 16px;
+      padding: 12px;
+      background-color: var(--question-bg);
+      border-radius: 6px;
+      border-left: 3px solid var(--question-accent);
+  }
+  
+  .question-block:last-child {
+      margin-bottom: 0;
+  }
+  
+  /* Answered questions in result (lighter, success-tinted) */
+  .question-block.answered {
+      background-color: var(--answer-bg);
+      border-left-color: var(--answer-accent);
+  }
+  
+  .question-header {
+      font-size: 0.85em;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 4px;
+  }
+  
+  .question-text {
+      font-size: 1.1em;
+      font-weight: 500;
+      color: var(--text-primary);
+      line-height: 1.4;
+      margin-bottom: 8px;
+  }
+  
+  .answer-text {
+      font-size: 1.05em;
+      font-weight: 600;
+      color: var(--answer-accent);
+      line-height: 1.4;
+      padding-left: 4px;
+  }
+  
+  .question-options-hint {
+      font-size: 0.8em;
+      color: var(--text-muted);
+      font-style: italic;
+      margin-bottom: 6px;
+  }
+  
+  .question-options {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+  }
+  
+  .question-option {
+      padding: 8px 12px;
+      margin: 4px 0;
+      background-color: #fff;
+      border: 1px solid var(--border-light);
+      border-radius: 4px;
+  }
+  
+  .question-option strong {
+      color: var(--text-primary);
+  }
+  
+  .question-option .option-desc {
+      color: var(--text-muted);
+      font-size: 0.9em;
+  }
+  
+  /* ExitPlanMode tool styling */
+  .plan-content {
+      font-family: var(--font-ui);
+  }
+  
+  .plan-content.markdown {
+      background-color: var(--bg-neutral);
+      border-radius: 6px;
+      padding: 12px;
   }
   /* Timeline-specific styles for vis-timeline */
   
@@ -5026,9 +5178,13 @@
               }
   
               // Toggle details functionality
+              // Selector for all collapsible details elements (multiple classes)
+              const collapsibleSelector = 'details.collapsible-details, details.collapsible-code, details.tool-param-collapsible';
+              const collapsibleOpenSelector = 'details[open].collapsible-details, details[open].collapsible-code, details[open].tool-param-collapsible';
+  
               function updateToggleButton() {
-                  const allDetails = document.querySelectorAll('details.collapsible-details');
-                  const openCount = document.querySelectorAll('details[open].collapsible-details').length;
+                  const allDetails = document.querySelectorAll(collapsibleSelector);
+                  const openCount = document.querySelectorAll(collapsibleOpenSelector).length;
                   const totalCount = allDetails.length;
   
                   if (totalCount === 0) {
@@ -5043,8 +5199,8 @@
               }
   
               function toggleAllDetails() {
-                  const allDetails = document.querySelectorAll('details.collapsible-details');
-                  const openCount = document.querySelectorAll('details[open].collapsible-details').length;
+                  const allDetails = document.querySelectorAll(collapsibleSelector);
+                  const openCount = document.querySelectorAll(collapsibleOpenSelector).length;
                   const shouldOpen = openCount <= allDetails.length / 2;
   
                   allDetails.forEach(details => {
@@ -6363,9 +6519,38 @@
       --system-error-color: #f44336;
       --tool-use-color: #4caf50;
   
+      /* Question/answer tool colors */
+      --question-accent: #f5a623;
+      --question-bg: #fffbf0;
+      --answer-accent: #4caf50;
+      --answer-bg: #f0fff4;
+  
+      /* Priority colors for todos */
+      --priority-high: #dc3545;
+      --priority-medium: #ffc107;
+      --priority-low: #28a745;
+  
+      /* Status colors */
+      --status-in-progress: #fff3cd;
+      --status-completed: #d4edda;
+  
+      /* Plan/todo accent color */
+      --plan-accent: #6c63ff;
+      --todo-accent: #4169e1;
+  
       /* Solid colors for text and accents */
+      --text-primary: #333;
       --text-muted: #666;
       --text-secondary: #495057;
+  
+      /* Border colors */
+      --border-light: #e0e0e0;
+      --border-separator: #f0f3f6;
+  
+      /* Background colors */
+      --bg-card: #ffffff66;
+      --bg-hover: #f8f9fa;
+      --bg-neutral: #f8f9fa;
   
       /* Layout spacing */
       --message-padding: 1em;
@@ -7166,6 +7351,10 @@
       color: #333;
   }
   
+  .tool-param-collapsible[open] > summary {
+      display: none;
+  }
+  
   .tool-param-full {
       margin-top: 4px;
       word-break: break-all;
@@ -7618,25 +7807,25 @@
   }
   /* TodoWrite tool styling */
   .todo-write {
-      background-color: #f0f8ff66;
-      border-left: #4169e188 3px solid;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
+      background-color: var(--highlight-dimmed);
+      border-left: var(--todo-accent) 3px solid;
+      font-family: var(--font-ui);
   }
   
   .tool-header {
       font-weight: 600;
       margin-bottom: 12px;
-      color: #2c3e50;
+      color: var(--text-secondary);
       font-size: 1.1em;
   }
   
   .todo-list {
-      background-color: #ffffff66;
+      background-color: var(--bg-card);
       border-radius: 6px;
       padding: 8px;
       box-shadow: -7px -7px 10px #eeeeee44, 7px 7px 10px #00000011;
-      border-left: #ffffff66 1px solid;
-      border-top: #ffffff66 1px solid;
+      border-left: var(--bg-card) 1px solid;
+      border-top: var(--bg-card) 1px solid;
       border-bottom: #00000017 1px solid;
       border-right: #00000017 1px solid;
   }
@@ -7646,7 +7835,7 @@
       align-items: center;
       gap: 8px;
       padding: 8px 4px;
-      border-bottom: 1px solid #f0f3f6;
+      border-bottom: 1px solid var(--border-separator);
       transition: background-color 0.2s ease;
   }
   
@@ -7655,7 +7844,7 @@
   }
   
   .todo-item:hover {
-      background-color: #f8f9fa;
+      background-color: var(--bg-hover);
   }
   
   .todo-item.completed {
@@ -7664,7 +7853,7 @@
   
   .todo-item.completed .todo-content {
       text-decoration: line-through;
-      color: #6c757d;
+      color: var(--text-muted);
   }
   
   .todo-item input[type="checkbox"] {
@@ -7679,7 +7868,7 @@
   
   .todo-content {
       flex: 1;
-      color: #333;
+      color: var(--text-primary);
       font-weight: 500;
       font-size: 90%;
       font-family: var(--font-ui);
@@ -7687,30 +7876,120 @@
   
   .todo-id {
       font-size: 0.8em;
-      color: #6c757d;
+      color: var(--text-muted);
       font-weight: normal;
   }
   
   /* Priority-based left border colors */
   .todo-item.high {
-      border-left: 3px solid #dc3545;
+      border-left: 3px solid var(--priority-high);
   }
   
   .todo-item.medium {
-      border-left: 3px solid #ffc107;
+      border-left: 3px solid var(--priority-medium);
   }
   
   .todo-item.low {
-      border-left: 3px solid #28a745;
+      border-left: 3px solid var(--priority-low);
   }
   
   /* Status-based background tints */
   .todo-item.in_progress {
-      background-color: #fff3cd;
+      background-color: var(--status-in-progress);
   }
   
   .todo-item.completed {
-      background-color: #d4edda;
+      background-color: var(--status-completed);
+  }
+  
+  /* AskUserQuestion tool styling */
+  .askuserquestion-content {
+      font-family: var(--font-ui);
+      padding: 8px 0;
+  }
+  
+  .question-block {
+      margin-bottom: 16px;
+      padding: 12px;
+      background-color: var(--question-bg);
+      border-radius: 6px;
+      border-left: 3px solid var(--question-accent);
+  }
+  
+  .question-block:last-child {
+      margin-bottom: 0;
+  }
+  
+  /* Answered questions in result (lighter, success-tinted) */
+  .question-block.answered {
+      background-color: var(--answer-bg);
+      border-left-color: var(--answer-accent);
+  }
+  
+  .question-header {
+      font-size: 0.85em;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 4px;
+  }
+  
+  .question-text {
+      font-size: 1.1em;
+      font-weight: 500;
+      color: var(--text-primary);
+      line-height: 1.4;
+      margin-bottom: 8px;
+  }
+  
+  .answer-text {
+      font-size: 1.05em;
+      font-weight: 600;
+      color: var(--answer-accent);
+      line-height: 1.4;
+      padding-left: 4px;
+  }
+  
+  .question-options-hint {
+      font-size: 0.8em;
+      color: var(--text-muted);
+      font-style: italic;
+      margin-bottom: 6px;
+  }
+  
+  .question-options {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+  }
+  
+  .question-option {
+      padding: 8px 12px;
+      margin: 4px 0;
+      background-color: #fff;
+      border: 1px solid var(--border-light);
+      border-radius: 4px;
+  }
+  
+  .question-option strong {
+      color: var(--text-primary);
+  }
+  
+  .question-option .option-desc {
+      color: var(--text-muted);
+      font-size: 0.9em;
+  }
+  
+  /* ExitPlanMode tool styling */
+  .plan-content {
+      font-family: var(--font-ui);
+  }
+  
+  .plan-content.markdown {
+      background-color: var(--bg-neutral);
+      border-radius: 6px;
+      padding: 12px;
   }
   /* Timeline-specific styles for vis-timeline */
   
@@ -9292,7 +9571,7 @@
       
       <div class='message tool_result error paired-message pair_last session-edge_cases d-2' data-message-id='d-4' id='msg-d-4-last'>
           <div class='header'>
-              <span title="ID: tool_edge_001">🧰 🚨 Error</span>
+              <span title="ID: tool_edge_001">🚨 Error</span>
               <div class='header-info'>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2025-06-14T11:01:31Z' data-duration='took 1.0s'>2025-06-14 11:01:31</span>
@@ -9703,9 +9982,13 @@
               }
   
               // Toggle details functionality
+              // Selector for all collapsible details elements (multiple classes)
+              const collapsibleSelector = 'details.collapsible-details, details.collapsible-code, details.tool-param-collapsible';
+              const collapsibleOpenSelector = 'details[open].collapsible-details, details[open].collapsible-code, details[open].tool-param-collapsible';
+  
               function updateToggleButton() {
-                  const allDetails = document.querySelectorAll('details.collapsible-details');
-                  const openCount = document.querySelectorAll('details[open].collapsible-details').length;
+                  const allDetails = document.querySelectorAll(collapsibleSelector);
+                  const openCount = document.querySelectorAll(collapsibleOpenSelector).length;
                   const totalCount = allDetails.length;
   
                   if (totalCount === 0) {
@@ -9720,8 +10003,8 @@
               }
   
               function toggleAllDetails() {
-                  const allDetails = document.querySelectorAll('details.collapsible-details');
-                  const openCount = document.querySelectorAll('details[open].collapsible-details').length;
+                  const allDetails = document.querySelectorAll(collapsibleSelector);
+                  const openCount = document.querySelectorAll(collapsibleOpenSelector).length;
                   const shouldOpen = openCount <= allDetails.length / 2;
   
                   allDetails.forEach(details => {
@@ -11040,9 +11323,38 @@
       --system-error-color: #f44336;
       --tool-use-color: #4caf50;
   
+      /* Question/answer tool colors */
+      --question-accent: #f5a623;
+      --question-bg: #fffbf0;
+      --answer-accent: #4caf50;
+      --answer-bg: #f0fff4;
+  
+      /* Priority colors for todos */
+      --priority-high: #dc3545;
+      --priority-medium: #ffc107;
+      --priority-low: #28a745;
+  
+      /* Status colors */
+      --status-in-progress: #fff3cd;
+      --status-completed: #d4edda;
+  
+      /* Plan/todo accent color */
+      --plan-accent: #6c63ff;
+      --todo-accent: #4169e1;
+  
       /* Solid colors for text and accents */
+      --text-primary: #333;
       --text-muted: #666;
       --text-secondary: #495057;
+  
+      /* Border colors */
+      --border-light: #e0e0e0;
+      --border-separator: #f0f3f6;
+  
+      /* Background colors */
+      --bg-card: #ffffff66;
+      --bg-hover: #f8f9fa;
+      --bg-neutral: #f8f9fa;
   
       /* Layout spacing */
       --message-padding: 1em;
@@ -11843,6 +12155,10 @@
       color: #333;
   }
   
+  .tool-param-collapsible[open] > summary {
+      display: none;
+  }
+  
   .tool-param-full {
       margin-top: 4px;
       word-break: break-all;
@@ -12295,25 +12611,25 @@
   }
   /* TodoWrite tool styling */
   .todo-write {
-      background-color: #f0f8ff66;
-      border-left: #4169e188 3px solid;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
+      background-color: var(--highlight-dimmed);
+      border-left: var(--todo-accent) 3px solid;
+      font-family: var(--font-ui);
   }
   
   .tool-header {
       font-weight: 600;
       margin-bottom: 12px;
-      color: #2c3e50;
+      color: var(--text-secondary);
       font-size: 1.1em;
   }
   
   .todo-list {
-      background-color: #ffffff66;
+      background-color: var(--bg-card);
       border-radius: 6px;
       padding: 8px;
       box-shadow: -7px -7px 10px #eeeeee44, 7px 7px 10px #00000011;
-      border-left: #ffffff66 1px solid;
-      border-top: #ffffff66 1px solid;
+      border-left: var(--bg-card) 1px solid;
+      border-top: var(--bg-card) 1px solid;
       border-bottom: #00000017 1px solid;
       border-right: #00000017 1px solid;
   }
@@ -12323,7 +12639,7 @@
       align-items: center;
       gap: 8px;
       padding: 8px 4px;
-      border-bottom: 1px solid #f0f3f6;
+      border-bottom: 1px solid var(--border-separator);
       transition: background-color 0.2s ease;
   }
   
@@ -12332,7 +12648,7 @@
   }
   
   .todo-item:hover {
-      background-color: #f8f9fa;
+      background-color: var(--bg-hover);
   }
   
   .todo-item.completed {
@@ -12341,7 +12657,7 @@
   
   .todo-item.completed .todo-content {
       text-decoration: line-through;
-      color: #6c757d;
+      color: var(--text-muted);
   }
   
   .todo-item input[type="checkbox"] {
@@ -12356,7 +12672,7 @@
   
   .todo-content {
       flex: 1;
-      color: #333;
+      color: var(--text-primary);
       font-weight: 500;
       font-size: 90%;
       font-family: var(--font-ui);
@@ -12364,30 +12680,120 @@
   
   .todo-id {
       font-size: 0.8em;
-      color: #6c757d;
+      color: var(--text-muted);
       font-weight: normal;
   }
   
   /* Priority-based left border colors */
   .todo-item.high {
-      border-left: 3px solid #dc3545;
+      border-left: 3px solid var(--priority-high);
   }
   
   .todo-item.medium {
-      border-left: 3px solid #ffc107;
+      border-left: 3px solid var(--priority-medium);
   }
   
   .todo-item.low {
-      border-left: 3px solid #28a745;
+      border-left: 3px solid var(--priority-low);
   }
   
   /* Status-based background tints */
   .todo-item.in_progress {
-      background-color: #fff3cd;
+      background-color: var(--status-in-progress);
   }
   
   .todo-item.completed {
-      background-color: #d4edda;
+      background-color: var(--status-completed);
+  }
+  
+  /* AskUserQuestion tool styling */
+  .askuserquestion-content {
+      font-family: var(--font-ui);
+      padding: 8px 0;
+  }
+  
+  .question-block {
+      margin-bottom: 16px;
+      padding: 12px;
+      background-color: var(--question-bg);
+      border-radius: 6px;
+      border-left: 3px solid var(--question-accent);
+  }
+  
+  .question-block:last-child {
+      margin-bottom: 0;
+  }
+  
+  /* Answered questions in result (lighter, success-tinted) */
+  .question-block.answered {
+      background-color: var(--answer-bg);
+      border-left-color: var(--answer-accent);
+  }
+  
+  .question-header {
+      font-size: 0.85em;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 4px;
+  }
+  
+  .question-text {
+      font-size: 1.1em;
+      font-weight: 500;
+      color: var(--text-primary);
+      line-height: 1.4;
+      margin-bottom: 8px;
+  }
+  
+  .answer-text {
+      font-size: 1.05em;
+      font-weight: 600;
+      color: var(--answer-accent);
+      line-height: 1.4;
+      padding-left: 4px;
+  }
+  
+  .question-options-hint {
+      font-size: 0.8em;
+      color: var(--text-muted);
+      font-style: italic;
+      margin-bottom: 6px;
+  }
+  
+  .question-options {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+  }
+  
+  .question-option {
+      padding: 8px 12px;
+      margin: 4px 0;
+      background-color: #fff;
+      border: 1px solid var(--border-light);
+      border-radius: 4px;
+  }
+  
+  .question-option strong {
+      color: var(--text-primary);
+  }
+  
+  .question-option .option-desc {
+      color: var(--text-muted);
+      font-size: 0.9em;
+  }
+  
+  /* ExitPlanMode tool styling */
+  .plan-content {
+      font-family: var(--font-ui);
+  }
+  
+  .plan-content.markdown {
+      background-color: var(--bg-neutral);
+      border-radius: 6px;
+      padding: 12px;
   }
   /* Timeline-specific styles for vis-timeline */
   
@@ -14346,9 +14752,13 @@
               }
   
               // Toggle details functionality
+              // Selector for all collapsible details elements (multiple classes)
+              const collapsibleSelector = 'details.collapsible-details, details.collapsible-code, details.tool-param-collapsible';
+              const collapsibleOpenSelector = 'details[open].collapsible-details, details[open].collapsible-code, details[open].tool-param-collapsible';
+  
               function updateToggleButton() {
-                  const allDetails = document.querySelectorAll('details.collapsible-details');
-                  const openCount = document.querySelectorAll('details[open].collapsible-details').length;
+                  const allDetails = document.querySelectorAll(collapsibleSelector);
+                  const openCount = document.querySelectorAll(collapsibleOpenSelector).length;
                   const totalCount = allDetails.length;
   
                   if (totalCount === 0) {
@@ -14363,8 +14773,8 @@
               }
   
               function toggleAllDetails() {
-                  const allDetails = document.querySelectorAll('details.collapsible-details');
-                  const openCount = document.querySelectorAll('details[open].collapsible-details').length;
+                  const allDetails = document.querySelectorAll(collapsibleSelector);
+                  const openCount = document.querySelectorAll(collapsibleOpenSelector).length;
                   const shouldOpen = openCount <= allDetails.length / 2;
   
                   allDetails.forEach(details => {
@@ -15683,9 +16093,38 @@
       --system-error-color: #f44336;
       --tool-use-color: #4caf50;
   
+      /* Question/answer tool colors */
+      --question-accent: #f5a623;
+      --question-bg: #fffbf0;
+      --answer-accent: #4caf50;
+      --answer-bg: #f0fff4;
+  
+      /* Priority colors for todos */
+      --priority-high: #dc3545;
+      --priority-medium: #ffc107;
+      --priority-low: #28a745;
+  
+      /* Status colors */
+      --status-in-progress: #fff3cd;
+      --status-completed: #d4edda;
+  
+      /* Plan/todo accent color */
+      --plan-accent: #6c63ff;
+      --todo-accent: #4169e1;
+  
       /* Solid colors for text and accents */
+      --text-primary: #333;
       --text-muted: #666;
       --text-secondary: #495057;
+  
+      /* Border colors */
+      --border-light: #e0e0e0;
+      --border-separator: #f0f3f6;
+  
+      /* Background colors */
+      --bg-card: #ffffff66;
+      --bg-hover: #f8f9fa;
+      --bg-neutral: #f8f9fa;
   
       /* Layout spacing */
       --message-padding: 1em;
@@ -16486,6 +16925,10 @@
       color: #333;
   }
   
+  .tool-param-collapsible[open] > summary {
+      display: none;
+  }
+  
   .tool-param-full {
       margin-top: 4px;
       word-break: break-all;
@@ -16938,25 +17381,25 @@
   }
   /* TodoWrite tool styling */
   .todo-write {
-      background-color: #f0f8ff66;
-      border-left: #4169e188 3px solid;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
+      background-color: var(--highlight-dimmed);
+      border-left: var(--todo-accent) 3px solid;
+      font-family: var(--font-ui);
   }
   
   .tool-header {
       font-weight: 600;
       margin-bottom: 12px;
-      color: #2c3e50;
+      color: var(--text-secondary);
       font-size: 1.1em;
   }
   
   .todo-list {
-      background-color: #ffffff66;
+      background-color: var(--bg-card);
       border-radius: 6px;
       padding: 8px;
       box-shadow: -7px -7px 10px #eeeeee44, 7px 7px 10px #00000011;
-      border-left: #ffffff66 1px solid;
-      border-top: #ffffff66 1px solid;
+      border-left: var(--bg-card) 1px solid;
+      border-top: var(--bg-card) 1px solid;
       border-bottom: #00000017 1px solid;
       border-right: #00000017 1px solid;
   }
@@ -16966,7 +17409,7 @@
       align-items: center;
       gap: 8px;
       padding: 8px 4px;
-      border-bottom: 1px solid #f0f3f6;
+      border-bottom: 1px solid var(--border-separator);
       transition: background-color 0.2s ease;
   }
   
@@ -16975,7 +17418,7 @@
   }
   
   .todo-item:hover {
-      background-color: #f8f9fa;
+      background-color: var(--bg-hover);
   }
   
   .todo-item.completed {
@@ -16984,7 +17427,7 @@
   
   .todo-item.completed .todo-content {
       text-decoration: line-through;
-      color: #6c757d;
+      color: var(--text-muted);
   }
   
   .todo-item input[type="checkbox"] {
@@ -16999,7 +17442,7 @@
   
   .todo-content {
       flex: 1;
-      color: #333;
+      color: var(--text-primary);
       font-weight: 500;
       font-size: 90%;
       font-family: var(--font-ui);
@@ -17007,30 +17450,120 @@
   
   .todo-id {
       font-size: 0.8em;
-      color: #6c757d;
+      color: var(--text-muted);
       font-weight: normal;
   }
   
   /* Priority-based left border colors */
   .todo-item.high {
-      border-left: 3px solid #dc3545;
+      border-left: 3px solid var(--priority-high);
   }
   
   .todo-item.medium {
-      border-left: 3px solid #ffc107;
+      border-left: 3px solid var(--priority-medium);
   }
   
   .todo-item.low {
-      border-left: 3px solid #28a745;
+      border-left: 3px solid var(--priority-low);
   }
   
   /* Status-based background tints */
   .todo-item.in_progress {
-      background-color: #fff3cd;
+      background-color: var(--status-in-progress);
   }
   
   .todo-item.completed {
-      background-color: #d4edda;
+      background-color: var(--status-completed);
+  }
+  
+  /* AskUserQuestion tool styling */
+  .askuserquestion-content {
+      font-family: var(--font-ui);
+      padding: 8px 0;
+  }
+  
+  .question-block {
+      margin-bottom: 16px;
+      padding: 12px;
+      background-color: var(--question-bg);
+      border-radius: 6px;
+      border-left: 3px solid var(--question-accent);
+  }
+  
+  .question-block:last-child {
+      margin-bottom: 0;
+  }
+  
+  /* Answered questions in result (lighter, success-tinted) */
+  .question-block.answered {
+      background-color: var(--answer-bg);
+      border-left-color: var(--answer-accent);
+  }
+  
+  .question-header {
+      font-size: 0.85em;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 4px;
+  }
+  
+  .question-text {
+      font-size: 1.1em;
+      font-weight: 500;
+      color: var(--text-primary);
+      line-height: 1.4;
+      margin-bottom: 8px;
+  }
+  
+  .answer-text {
+      font-size: 1.05em;
+      font-weight: 600;
+      color: var(--answer-accent);
+      line-height: 1.4;
+      padding-left: 4px;
+  }
+  
+  .question-options-hint {
+      font-size: 0.8em;
+      color: var(--text-muted);
+      font-style: italic;
+      margin-bottom: 6px;
+  }
+  
+  .question-options {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+  }
+  
+  .question-option {
+      padding: 8px 12px;
+      margin: 4px 0;
+      background-color: #fff;
+      border: 1px solid var(--border-light);
+      border-radius: 4px;
+  }
+  
+  .question-option strong {
+      color: var(--text-primary);
+  }
+  
+  .question-option .option-desc {
+      color: var(--text-muted);
+      font-size: 0.9em;
+  }
+  
+  /* ExitPlanMode tool styling */
+  .plan-content {
+      font-family: var(--font-ui);
+  }
+  
+  .plan-content.markdown {
+      background-color: var(--bg-neutral);
+      border-radius: 6px;
+      padding: 12px;
   }
   /* Timeline-specific styles for vis-timeline */
   
@@ -18865,9 +19398,13 @@
               }
   
               // Toggle details functionality
+              // Selector for all collapsible details elements (multiple classes)
+              const collapsibleSelector = 'details.collapsible-details, details.collapsible-code, details.tool-param-collapsible';
+              const collapsibleOpenSelector = 'details[open].collapsible-details, details[open].collapsible-code, details[open].tool-param-collapsible';
+  
               function updateToggleButton() {
-                  const allDetails = document.querySelectorAll('details.collapsible-details');
-                  const openCount = document.querySelectorAll('details[open].collapsible-details').length;
+                  const allDetails = document.querySelectorAll(collapsibleSelector);
+                  const openCount = document.querySelectorAll(collapsibleOpenSelector).length;
                   const totalCount = allDetails.length;
   
                   if (totalCount === 0) {
@@ -18882,8 +19419,8 @@
               }
   
               function toggleAllDetails() {
-                  const allDetails = document.querySelectorAll('details.collapsible-details');
-                  const openCount = document.querySelectorAll('details[open].collapsible-details').length;
+                  const allDetails = document.querySelectorAll(collapsibleSelector);
+                  const openCount = document.querySelectorAll(collapsibleOpenSelector).length;
                   const shouldOpen = openCount <= allDetails.length / 2;
   
                   allDetails.forEach(details => {
