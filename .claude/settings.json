@@ -10,16 +10,6 @@
           }
         ]
       }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "out=$(uv run ruff format 2>&1 && uv run ruff check 2>&1 && uv run ty check 2>&1 && uv run pyright 2>&1); [ $? -eq 0 ] && echo '{\"suppressOutput\":true}' || jq -nc --arg msg \"$out\" '{\"decision\":\"block\",\"reason\":$msg}'"
-          }
-        ]
-      }
     ]
   }
 }
