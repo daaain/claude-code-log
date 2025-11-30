@@ -26,6 +26,7 @@ from .models import (
     UserTranscriptEntry,
 )
 from .renderer import (
+    deduplicate_messages,
     generate_html,
     generate_session_html,
     generate_projects_index_html,
@@ -86,6 +87,9 @@ def convert_jsonl_to_html(
 
     # Apply date filtering
     messages = filter_messages_by_date(messages, from_date, to_date)
+
+    # Deduplicate messages (removes version stutters while preserving concurrent tool results)
+    messages = deduplicate_messages(messages)
 
     # Update title to include date range if specified
     if from_date or to_date:

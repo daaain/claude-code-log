@@ -22,6 +22,7 @@ from pygments.util import ClassNotFound  # type: ignore[reportUnknownVariableTyp
 from .models import (
     TranscriptEntry,
     AssistantTranscriptEntry,
+    UserTranscriptEntry,
     SystemTranscriptEntry,
     SummaryTranscriptEntry,
     QueueOperationTranscriptEntry,
@@ -2818,6 +2819,77 @@ def _mark_messages_with_children(messages: List[TemplateMessage]) -> None:
                 )
 
 
+def deduplicate_messages(messages: List[TranscriptEntry]) -> List[TranscriptEntry]:
+    """Remove duplicate messages based on (type, timestamp, sessionId, content_key).
+
+    Messages with the exact same timestamp are duplicates by definition -
+    the differences (like IDE selection tags) are just logging artifacts.
+
+    We need a content-based key to handle two cases:
+    1. Version stutter: Same message logged twice during Claude Code upgrade
+       -> Same timestamp, same message.id or tool_use_id -> SHOULD deduplicate
+    2. Concurrent tool results: Multiple tool results with same timestamp
+       -> Same timestamp, different tool_use_ids -> should NOT deduplicate
+
+    Args:
+        messages: List of transcript entries to deduplicate
+
+    Returns:
+        List of deduplicated messages, preserving order (first occurrence kept)
+    """
+    # Track seen (message_type, timestamp, is_meta, session_id, content_key) tuples
+    seen: set[tuple[str, str, bool, str, str]] = set()
+    deduplicated: List[TranscriptEntry] = []
+
+    for message in messages:
+        # Get basic message type
+        message_type = getattr(message, "type", "unknown")
+
+        # For system messages, include level to differentiate info/warning/error
+        if isinstance(message, SystemTranscriptEntry):
+            level = getattr(message, "level", "info")
+            message_type = f"system-{level}"
+
+        # Get timestamp
+        timestamp = getattr(message, "timestamp", "")
+
+        # Get isMeta flag (slash command prompts have isMeta=True with same timestamp as parent)
+        is_meta = getattr(message, "isMeta", False)
+
+        # Get sessionId for multi-session report deduplication
+        session_id = getattr(message, "sessionId", "")
+
+        # Get content key for differentiating concurrent messages
+        # - For assistant messages: use message.id (same for stutters, different for different msgs)
+        # - For user messages with tool results: use first tool_use_id
+        # - For other messages: use uuid as fallback
+        content_key = ""
+        if isinstance(message, AssistantTranscriptEntry):
+            # For assistant messages, use the message id
+            content_key = message.message.id
+        elif isinstance(message, UserTranscriptEntry):
+            # For user messages, check for tool results
+            if isinstance(message.message.content, list):
+                for item in message.message.content:
+                    if isinstance(item, ToolResultContent):
+                        content_key = item.tool_use_id
+                        break
+        # Fallback to uuid if no content key found
+        if not content_key:
+            content_key = getattr(message, "uuid", "")
+
+        # Create deduplication key - include content_key for proper handling
+        # of both version stutters and concurrent tool results
+        dedup_key = (message_type, timestamp, is_meta, session_id, content_key)
+
+        # Keep only first occurrence
+        if dedup_key not in seen:
+            seen.add(dedup_key)
+            deduplicated.append(message)
+
+    return deduplicated
+
+
 def generate_html(
     messages: List[TranscriptEntry],
     title: Optional[str] = None,
@@ -2830,71 +2902,6 @@ def generate_html(
     with log_timing("Initialization", t_start):
         if not title:
             title = "Claude Transcript"
-
-    # Deduplicate messages by (message_type, timestamp, content_key)
-    # Messages with the exact same timestamp are duplicates by definition -
-    # the differences (like IDE selection tags) are just logging artifacts.
-    #
-    # We need a content-based key to handle two cases:
-    # 1. Version stutter: Same message logged twice during Claude Code upgrade
-    #    -> Same timestamp, same message.id or tool_use_id -> SHOULD deduplicate
-    # 2. Concurrent tool results: Multiple tool results with same timestamp
-    #    -> Same timestamp, different tool_use_ids -> should NOT deduplicate
-    with log_timing(
-        lambda: f"Deduplication ({len(deduplicated_messages)} messages)", t_start
-    ):
-        # Track seen (message_type, timestamp, is_meta, session_id, content_key) tuples
-        seen: set[tuple[str, str, bool, str, str]] = set()
-        deduplicated_messages: List[TranscriptEntry] = []
-
-        for message in messages:
-            # Get basic message type
-            message_type = getattr(message, "type", "unknown")
-
-            # For system messages, include level to differentiate info/warning/error
-            if isinstance(message, SystemTranscriptEntry):
-                level = getattr(message, "level", "info")
-                message_type = f"system-{level}"
-
-            # Get timestamp
-            timestamp = getattr(message, "timestamp", "")
-
-            # Get isMeta flag (slash command prompts have isMeta=True with same timestamp as parent)
-            is_meta = getattr(message, "isMeta", False)
-
-            # Get sessionId for multi-session report deduplication
-            session_id = getattr(message, "sessionId", "")
-
-            # Get content key for differentiating concurrent messages
-            # - For assistant messages: use message.id (same for stutters, different for different msgs)
-            # - For user messages with tool results: use first tool_use_id
-            # - For other messages: use uuid as fallback
-            content_key = ""
-            if hasattr(message, "message"):
-                msg = message.message
-                # For assistant messages, use the message id
-                if hasattr(msg, "id"):
-                    content_key = msg.id
-                # For user messages, check for tool results
-                elif hasattr(msg, "content") and isinstance(msg.content, list):
-                    for item in msg.content:
-                        if hasattr(item, "tool_use_id"):
-                            content_key = item.tool_use_id
-                            break
-            # Fallback to uuid if no content key found
-            if not content_key:
-                content_key = getattr(message, "uuid", "")
-
-            # Create deduplication key - include content_key for proper handling
-            # of both version stutters and concurrent tool results
-            dedup_key = (message_type, timestamp, is_meta, session_id, content_key)
-
-            # Keep only first occurrence
-            if dedup_key not in seen:
-                seen.add(dedup_key)
-                deduplicated_messages.append(message)
-
-        messages = deduplicated_messages
 
     # Pre-process to find and attach session summaries
     with log_timing("Session summary processing", t_start):

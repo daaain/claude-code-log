@@ -10,7 +10,7 @@ from claude_code_log.models import (
     ToolUseContent,
     ToolResultContent,
 )
-from claude_code_log.renderer import generate_html
+from claude_code_log.renderer import deduplicate_messages, generate_html
 
 
 class TestVersionDeduplication:
@@ -85,7 +85,8 @@ class TestVersionDeduplication:
 
         # Test both orderings
         for messages in [[msg_v1, msg_v2], [msg_v2, msg_v1]]:
-            html = generate_html(messages, "Version Test")
+            deduped = deduplicate_messages(messages)
+            html = generate_html(deduped, "Version Test")
 
             # Should appear only once
             tool_summary_count = html.count(
@@ -146,7 +147,8 @@ class TestVersionDeduplication:
 
         # Test both orderings
         for messages in [[result_v1, result_v2], [result_v2, result_v1]]:
-            html = generate_html(messages, "Tool Result Test")
+            deduped = deduplicate_messages(messages)
+            html = generate_html(deduped, "Tool Result Test")
 
             # Should appear only once
             content_count = html.count("File contents here")
@@ -258,7 +260,8 @@ class TestVersionDeduplication:
 
         # Combine: v1 pair, then v2 pair
         messages = [assist_v1, result_v1, assist_v2, result_v2]
-        html = generate_html(messages, "Full Pair Test")
+        deduped = deduplicate_messages(messages)
+        html = generate_html(deduped, "Full Pair Test")
 
         # Each should appear only once
         file_path_count = html.count("/test/data.txt")
