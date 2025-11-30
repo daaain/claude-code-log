@@ -52,6 +52,7 @@ markers = [
     "browser: Browser integration tests using Playwright (requires Chromium)",
     "integration: Integration tests with realistic JSONL data",
     "slow: Slower tests that measure performance (may take several seconds)",
+    "benchmark: Performance benchmarks that output to GitHub Job Summary",
 ]
 
 [tool.pyright]
