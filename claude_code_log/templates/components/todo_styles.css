@@ -184,7 +184,3 @@
     border-radius: 6px;
     padding: 12px;
 }
-
-.plan-content .collapsible-code {
-    border-left: 3px solid var(--plan-accent);
-}
