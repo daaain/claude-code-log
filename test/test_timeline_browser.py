@@ -31,8 +31,9 @@ class TestTimelineBrowser:
         """Create a temporary HTML file for testing."""
         html_content = generate_html(messages, title)
 
-        # Create temporary file
-        temp_file = Path(tempfile.mktemp(suffix=".html"))
+        # Create temporary file (using NamedTemporaryFile to avoid deprecated mktemp)
+        with tempfile.NamedTemporaryFile(suffix=".html", delete=False) as f:
+            temp_file = Path(f.name)
         temp_file.write_text(html_content, encoding="utf-8")
         self.temp_files.append(temp_file)
 

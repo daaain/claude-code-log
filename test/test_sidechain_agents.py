@@ -37,7 +37,7 @@ def test_agent_insertion():
         tool_result_idx = next(
             i
             for i, msg in enumerate(messages)
-            if msg.uuid == "97965533-18f3-41b7-aa07-0c438f2a5893"
+            if getattr(msg, "uuid", None) == "97965533-18f3-41b7-aa07-0c438f2a5893"
         )
 
         # Verify agent messages come right after tool result

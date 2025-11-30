@@ -74,7 +74,11 @@ def test_date_filtering():
 
 def test_invalid_date_handling():
     """Test handling of invalid date strings."""
-    messages = [create_test_message("2025-06-08T12:00:00Z", "Test message")]
+    messages = [
+        parse_transcript_entry(
+            create_test_message("2025-06-08T12:00:00Z", "Test message")
+        )
+    ]
 
     try:
         filter_messages_by_date(messages, "invalid-date", None)

@@ -8,6 +8,7 @@ from claude_code_log.converter import (
     load_transcript,
     generate_html,
 )
+from claude_code_log.models import QueueOperationTranscriptEntry
 
 
 def test_summary_type_support():
@@ -117,12 +118,14 @@ def test_queue_operation_type_support():
         assert messages[0].type == "queue-operation", (
             "First message should be queue-operation"
         )
+        assert isinstance(messages[0], QueueOperationTranscriptEntry)
         assert messages[0].operation == "enqueue", "First message should be enqueue"
         assert messages[0].content is not None, "Enqueue should have content"
 
         assert messages[1].type == "queue-operation", (
             "Second message should be queue-operation"
         )
+        assert isinstance(messages[1], QueueOperationTranscriptEntry)
         assert messages[1].operation == "dequeue", "Second message should be dequeue"
         assert messages[1].content is None, "Dequeue should not have content"
 

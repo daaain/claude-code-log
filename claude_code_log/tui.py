@@ -629,12 +629,12 @@ class SessionBrowser(App[Optional[str]]):
         if self.is_expanded:
             # Hide expanded content
             self.is_expanded = False
-            expanded_content.styles.display = "none"
+            expanded_content.set_styles("display: none;")
             expanded_content.update("")
         else:
             # Show expanded content
             self.is_expanded = True
-            expanded_content.styles.display = "block"
+            expanded_content.set_styles("display: block;")
             self._update_expanded_content()
 
     def action_toggle_help(self) -> None:
