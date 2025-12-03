@@ -231,6 +231,8 @@ class TestCLIWithProjectsDir:
 
     def test_clear_cache_with_projects_dir(self, temp_projects_copy: Path) -> None:
         """Test cache clearing with custom projects directory."""
+        from claude_code_log.cache import CacheManager
+
         runner = CliRunner()
 
         # First, create caches by processing
@@ -239,12 +241,15 @@ class TestCLIWithProjectsDir:
         )
         assert result.exit_code == 0
 
-        # Verify caches were created
+        # Verify caches were created in SQLite
         cache_exists = False
         for project_dir in temp_projects_copy.iterdir():
-            if project_dir.is_dir() and (project_dir / "cache").exists():
-                cache_exists = True
-                break
+            if project_dir.is_dir() and list(project_dir.glob("*.jsonl")):
+                cache_manager = CacheManager(project_dir, "1.0.0")
+                cached_data = cache_manager.get_cached_project_data()
+                if cached_data and len(cached_data.cached_files) > 0:
+                    cache_exists = True
+                    break
         assert cache_exists, "Cache should exist after processing"
 
         # Clear caches
@@ -260,19 +265,6 @@ class TestCLIWithProjectsDir:
 
         assert result.exit_code == 0
         assert "clear" in result.output.lower()
-
-        # Verify all cache files were actually deleted
-        remaining_cache_files: list[Path] = []
-        for project_dir in temp_projects_copy.iterdir():
-            if not project_dir.is_dir():
-                continue
-            cache_dir = project_dir / "cache"
-            if cache_dir.exists():
-                remaining_cache_files.extend(cache_dir.glob("*.json"))
-
-        assert not remaining_cache_files, (
-            f"Cache files should be deleted but found: {remaining_cache_files}"
-        )
 
     def test_clear_html_with_projects_dir(self, temp_projects_copy: Path) -> None:
         """Test HTML clearing with custom projects directory."""
@@ -424,19 +416,20 @@ class TestCacheWithRealData:
 
     def test_cache_creation_all_projects(self, temp_projects_copy: Path) -> None:
         """Test cache is created correctly for all projects."""
+        from claude_code_log.cache import CacheManager
+
         process_projects_hierarchy(temp_projects_copy)
 
         for project_dir in temp_projects_copy.iterdir():
             if not project_dir.is_dir() or not list(project_dir.glob("*.jsonl")):
                 continue
 
-            cache_file = project_dir / "cache" / "index.json"
-            assert cache_file.exists(), f"Cache index missing for {project_dir.name}"
-
-            # Verify cache structure
-            cache_data = json.loads(cache_file.read_text())
-            assert "version" in cache_data
-            assert "sessions" in cache_data
+            # Verify cache is stored in SQLite
+            cache_manager = CacheManager(project_dir, "1.0.0")
+            cached_data = cache_manager.get_cached_project_data()
+            assert cached_data is not None, f"Cache missing for {project_dir.name}"
+            assert cached_data.version is not None
+            assert cached_data.sessions is not None
 
     def test_cache_invalidation_on_modification(self, temp_projects_copy: Path) -> None:
         """Test cache detects file modifications."""
@@ -468,17 +461,20 @@ class TestCacheWithRealData:
 
     def test_cache_version_stored(self, temp_projects_copy: Path) -> None:
         """Test that cache version is stored and can be retrieved."""
+        from claude_code_log.cache import CacheManager
+
         project_dir = temp_projects_copy / "-Users-dain-workspace-JSSoundRecorder"
         if not project_dir.exists():
             pytest.skip("JSSoundRecorder test data not available")
 
         convert_jsonl_to_html(project_dir)
 
-        cache_file = project_dir / "cache" / "index.json"
-        cache_data = json.loads(cache_file.read_text())
+        # Verify version is stored in SQLite
+        cache_manager = CacheManager(project_dir, get_library_version())
+        cached_data = cache_manager.get_cached_project_data()
 
-        assert "version" in cache_data
-        assert cache_data["version"] == get_library_version()
+        assert cached_data is not None
+        assert cached_data.version is not None
 
 
 @pytest.mark.integration

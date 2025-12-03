@@ -1,10 +1,33 @@
 """Pytest configuration and shared fixtures."""
 
+import tempfile
 from pathlib import Path
 
 import pytest
 
 from test.snapshot_serializers import NormalisedHTMLSerializer
+
+
+@pytest.fixture(autouse=True)
+def temp_sqlite_db(tmp_path):
+    """Set up temporary SQLite database for each test.
+
+    This fixture runs automatically for all tests and ensures each test
+    gets an isolated database.
+    """
+    from claude_code_log.cache import CacheManager
+
+    # Create a unique temp database path for this test
+    db_path = tmp_path / "test_cache.db"
+
+    # Set the class-level database path
+    CacheManager.set_db_path(db_path)
+
+    yield db_path
+
+    # Cleanup: close connections and reset
+    CacheManager.close_all_connections()
+    CacheManager._db_initialized = False
 
 
 @pytest.fixture
