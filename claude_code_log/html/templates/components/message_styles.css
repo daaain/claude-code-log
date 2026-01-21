@@ -917,3 +917,42 @@ details summary {
     border-radius: 4px;
     margin: 10px 0;
 }
+
+@media (max-width: 1280px) {
+    .fold-bar {
+        height: auto;
+    }
+    .user:not(.compacted),
+    .bash-input,
+    .bash-output,
+    .system:not(.system-info):not(.system-warning):not(.system-error) {
+        margin-left: 10%;
+    }
+    .system-error {
+        margin-right: 8%;
+    }
+    .assistant,
+    .thinking {
+        margin-right: 8%;
+    }
+    .tool_use,
+    .tool_result {
+        margin-left: 2%;
+        margin-right: 6%;
+    }
+    .system-warning,
+    .system-info {
+        margin-left: 2%;
+        margin-right: 6%;
+    }
+    .sidechain.assistant,
+    .sidechain.thinking {
+        margin-left: 4%;
+        margin-right: 4%;
+    }
+    .sidechain.tool_use,
+    .sidechain.tool_result {
+        margin-left: 6%;
+        margin-right: 2%;
+    }
+}
