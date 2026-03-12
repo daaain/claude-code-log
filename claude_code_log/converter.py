@@ -1609,6 +1609,135 @@ def _generate_individual_session_files(
     return regenerated_count
 
 
+def generate_single_session_file(
+    format: str,
+    input_path: Path,
+    session_id: str,
+    output: Optional[Path] = None,
+    use_cache: bool = True,
+    image_export_mode: Optional[str] = None,
+) -> Path:
+    """Generate a single session output file for the given session ID.
+
+    Args:
+        format: Output format ('html', 'md', 'markdown')
+        input_path: Project directory containing JSONL files
+        session_id: Full or 8-char prefix session ID
+        output: Optional output file path (defaults to session-{id}.{ext} in input_path)
+        use_cache: Whether to use caching
+        image_export_mode: Image export mode
+
+    Returns:
+        Path to the generated file
+
+    Raises:
+        ValueError: If session ID not found or ambiguous
+        FileNotFoundError: If input_path doesn't exist or is not a directory
+    """
+    if not input_path.exists() or not input_path.is_dir():
+        raise FileNotFoundError(f"Project directory not found: {input_path}")
+
+    # Setup cache
+    cache_manager = (
+        CacheManager(input_path, get_library_version()) if use_cache else None
+    )
+
+    # Ensure fresh cache
+    ensure_fresh_cache(input_path, cache_manager, silent=True)
+
+    # Load messages from JSONL files
+    messages = load_directory_transcripts(input_path, cache_manager)
+
+    # Collect all known session IDs: from loaded messages + cache metadata
+    all_session_ids: set[str] = {
+        getattr(msg, "sessionId")
+        for msg in messages
+        if hasattr(msg, "sessionId") and getattr(msg, "sessionId")
+    }
+    if cache_manager:
+        project_cache = cache_manager.get_cached_project_data()
+        if project_cache:
+            all_session_ids |= set(project_cache.sessions.keys())
+
+    # Resolve short ID prefix to full ID
+    matched_id: Optional[str] = None
+    if session_id in all_session_ids:
+        matched_id = session_id
+    else:
+        matches = [sid for sid in all_session_ids if sid.startswith(session_id)]
+        if len(matches) == 1:
+            matched_id = matches[0]
+        elif len(matches) > 1:
+            raise ValueError(
+                f"Ambiguous session ID prefix '{session_id}' matches multiple sessions: "
+                + ", ".join(sorted(m[:8] for m in matches))
+            )
+
+    if matched_id is None:
+        raise ValueError(f"Session '{session_id}' not found in {input_path}")
+
+    # For archived sessions, load messages from cache if not in JSONL files
+    session_messages = [
+        m
+        for m in messages
+        if hasattr(m, "sessionId") and getattr(m, "sessionId") == matched_id
+    ]
+    if not session_messages and cache_manager:
+        archived = cache_manager.load_session_entries(matched_id)
+        if archived:
+            messages = archived
+            session_messages = archived
+
+    if not session_messages:
+        raise ValueError(f"No messages found for session '{matched_id[:8]}'")
+
+    # Build session title from cache metadata
+    session_data: dict[str, Any] = {}
+    working_directories: list[str] = []
+    if cache_manager:
+        project_cache = cache_manager.get_cached_project_data()
+        if project_cache:
+            session_data = {s.session_id: s for s in project_cache.sessions.values()}
+        working_directories = cache_manager.get_working_directories()
+
+    project_title = get_project_display_name(input_path.name, working_directories)
+
+    if matched_id in session_data:
+        session_cache_data = session_data[matched_id]
+        if session_cache_data.summary:
+            session_title = f"{project_title}: {session_cache_data.summary}"
+        else:
+            preview = session_cache_data.first_user_message
+            if preview and len(preview) > 50:
+                preview = preview[:50] + "..."
+            session_title = (
+                f"{project_title}: {preview}"
+                if preview
+                else f"{project_title}: Session {matched_id[:8]}"
+            )
+    else:
+        session_title = f"{project_title}: Session {matched_id[:8]}"
+
+    # Determine output path
+    ext = get_file_extension(format)
+    output_dir = input_path
+    if output is not None:
+        output_file = output
+        output_dir = output.parent
+    else:
+        output_file = input_path / f"session-{matched_id}.{ext}"
+
+    # Generate content and write
+    renderer = get_renderer(format, image_export_mode)
+    session_content = renderer.generate_session(
+        messages, matched_id, session_title, cache_manager, output_dir
+    )
+    assert session_content is not None
+    output_file.write_text(session_content, encoding="utf-8")
+
+    return output_file
+
+
 def _get_cleanup_period_days() -> Optional[int]:
     """Read cleanupPeriodDays from Claude Code settings.
 

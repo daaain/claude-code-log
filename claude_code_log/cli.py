@@ -14,6 +14,7 @@ from .converter import (
     convert_jsonl_to,
     convert_jsonl_to_html,
     ensure_fresh_cache,
+    generate_single_session_file,
     get_file_extension,
     process_projects_hierarchy,
 )
@@ -507,6 +508,11 @@ def _clear_output_files(input_path: Path, all_projects: bool, file_ext: str) -> 
     help="Maximum messages per page for combined transcript (default: 2000). Sessions are never split across pages.",
 )
 @click.option(
+    "--session-id",
+    default=None,
+    help="Export a single session by ID (full ID or 8-char prefix). Requires a project directory path.",
+)
+@click.option(
     "--debug",
     is_flag=True,
     default=False,
@@ -528,6 +534,7 @@ def main(
     output_format: str,
     image_export_mode: Optional[str],
     page_size: int,
+    session_id: Optional[str],
     debug: bool,
 ) -> None:
     """Convert Claude transcript JSONL files to HTML or Markdown.
@@ -647,6 +654,38 @@ def main(
                 # Single project directory
                 _launch_tui_with_cache_check(input_path)
                 return
+
+        # Handle --session-id: export a single session by ID
+        if session_id is not None:
+            if input_path is None:
+                click.echo(
+                    "Error: --session-id requires a project directory path as argument",
+                    err=True,
+                )
+                sys.exit(1)
+
+            # Convert project path if needed
+            if not input_path.exists() or (
+                input_path.is_dir() and not list(input_path.glob("*.jsonl"))
+            ):
+                claude_path = convert_project_path_to_claude_dir(
+                    input_path, projects_dir
+                )
+                if claude_path.exists():
+                    input_path = claude_path
+
+            output_path = generate_single_session_file(
+                output_format,
+                input_path,
+                session_id,
+                output,
+                not no_cache,
+                image_export_mode,
+            )
+            click.echo(f"Successfully exported session to {output_path}")
+            if open_browser:
+                click.launch(str(output_path))
+            return
 
         # Handle default case - process all projects hierarchy if no input path and --all-projects flag
         if input_path is None:
