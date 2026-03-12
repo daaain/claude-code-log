@@ -30,6 +30,7 @@ from ..models import (
     EditInput,
     ExitPlanModeInput,
     GlobInput,
+    GrepInput,
     MultiEditInput,
     ReadInput,
     TaskInput,
@@ -92,6 +93,7 @@ from .tool_formatters import (
     format_edit_input,
     format_edit_output,
     format_exitplanmode_input,
+    format_grep_input,
     format_exitplanmode_output,
     format_multiedit_input,
     format_read_input,
@@ -310,6 +312,10 @@ class HtmlRenderer(Renderer):
         """Format → empty string (no content)."""
         return format_exitplanmode_input(input)
 
+    def format_GrepInput(self, input: GrepInput, _: TemplateMessage) -> str:
+        """Format → pattern + params (path, glob, type, mode)."""
+        return format_grep_input(input)
+
     def format_WebSearchInput(self, input: WebSearchInput, _: TemplateMessage) -> str:
         """Format → search query display."""
         return format_websearch_input(input)
@@ -444,6 +450,10 @@ class HtmlRenderer(Renderer):
         if input.path:
             summary = f"{summary} in {input.path}"
         return self._tool_title(message, "🔍", summary)
+
+    def title_GrepInput(self, input: GrepInput, message: TemplateMessage) -> str:
+        """Title → '🔎 Grep `pattern`'."""
+        return self._tool_title(message, "🔎", input.pattern)
 
     def title_BashInput(self, input: BashInput, message: TemplateMessage) -> str:
         """Title → '💻 Bash <description>'."""

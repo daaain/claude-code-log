@@ -36,6 +36,7 @@ from ..models import (
     EditOutput,
     ExitPlanModeInput,
     ExitPlanModeOutput,
+    GrepInput,
     MultiEditInput,
     ReadInput,
     ReadOutput,
@@ -266,6 +267,33 @@ def format_websearch_output(output: WebSearchOutput) -> str:
     """
     markdown_content = _websearch_as_markdown(output)
     return render_markdown_collapsible(markdown_content, "websearch-results")
+
+
+# -- Grep Tool ----------------------------------------------------------------
+
+
+def format_grep_input(grep_input: GrepInput) -> str:
+    """Format Grep tool use content showing search parameters.
+
+    Args:
+        grep_input: Typed GrepInput with pattern, path, glob, type, etc.
+
+    Each field is shown on its own line with a consistent label: value format.
+    """
+    html_parts = ["<div class='grep-tool-content'>"]
+    html_parts.append(f"<div class='grep-tool-field'><span class='grep-tool-label'>pattern:</span> <code>{escape_html(grep_input.pattern)}</code></div>")
+    if grep_input.path:
+        html_parts.append(f"<div class='grep-tool-field'><span class='grep-tool-label'>path:</span> <code>{escape_html(grep_input.path)}</code></div>")
+    if grep_input.glob:
+        html_parts.append(f"<div class='grep-tool-field'><span class='grep-tool-label'>glob:</span> <code>{escape_html(grep_input.glob)}</code></div>")
+    if grep_input.type:
+        html_parts.append(f"<div class='grep-tool-field'><span class='grep-tool-label'>type:</span> <code>{escape_html(grep_input.type)}</code></div>")
+    if grep_input.output_mode:
+        html_parts.append(f"<div class='grep-tool-field'><span class='grep-tool-label'>mode:</span> <code>{escape_html(grep_input.output_mode)}</code></div>")
+    if grep_input.multiline:
+        html_parts.append(f"<div class='grep-tool-field'><span class='grep-tool-label'>multiline:</span> <code>true</code></div>")
+    html_parts.append("</div>")
+    return "".join(html_parts)
 
 
 # -- TodoWrite Tool -----------------------------------------------------------
@@ -832,6 +860,7 @@ __all__ = [
     "format_edit_input",
     "format_multiedit_input",
     "format_bash_input",
+    "format_grep_input",
     "format_task_input",
     "format_websearch_input",
     "format_webfetch_input",
