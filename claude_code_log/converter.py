@@ -1685,7 +1685,6 @@ def generate_single_session_file(
     if not session_messages and cache_manager:
         archived = cache_manager.load_session_entries(matched_id)
         if archived:
-            messages = archived
             session_messages = archived
 
     if not session_messages:
@@ -1730,7 +1729,7 @@ def generate_single_session_file(
     # Generate content and write
     renderer = get_renderer(format, image_export_mode)
     session_content = renderer.generate_session(
-        messages, matched_id, session_title, cache_manager, output_dir
+        session_messages, matched_id, session_title, cache_manager, output_dir
     )
     assert session_content is not None
     output_file.write_text(session_content, encoding="utf-8")

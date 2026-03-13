@@ -510,7 +510,7 @@ def _clear_output_files(input_path: Path, all_projects: bool, file_ext: str) -> 
 @click.option(
     "--session-id",
     default=None,
-    help="Export a single session by ID (full ID or 8-char prefix). Requires a project directory path.",
+    help="Export a single session by ID (full ID or prefix). Requires a project directory path.",
 )
 @click.option(
     "--debug",
