@@ -665,6 +665,7 @@ def main(
                 sys.exit(1)
 
             # Convert project path if needed
+            assert input_path is not None
             if not input_path.exists() or (
                 input_path.is_dir() and not list(input_path.glob("*.jsonl"))
             ):
