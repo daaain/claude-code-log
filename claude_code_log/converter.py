@@ -1474,6 +1474,11 @@ def build_session_title(
     session_id: str,
     session_cache: Optional[SessionCacheData],
 ) -> str:
+    """Build a display title for a session.
+
+    Uses the session summary if available, otherwise the first user message
+    preview (truncated to 50 chars), falling back to "Session {id[:8]}".
+    """
     if session_cache:
         if session_cache.summary:
             return f"{project_title}: {session_cache.summary}"
