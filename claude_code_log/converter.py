@@ -1472,7 +1472,7 @@ def _collect_project_sessions(messages: list[TranscriptEntry]) -> list[dict[str,
 def build_session_title(
     project_title: str,
     session_id: str,
-    session_cache: Optional[Any],
+    session_cache: Optional[SessionCacheData],
 ) -> str:
     if session_cache:
         if session_cache.summary:
