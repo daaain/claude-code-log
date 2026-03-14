@@ -1469,6 +1469,22 @@ def _collect_project_sessions(messages: list[TranscriptEntry]) -> list[dict[str,
     )
 
 
+def build_session_title(
+    project_title: str,
+    session_id: str,
+    session_cache: Optional[Any],
+) -> str:
+    if session_cache:
+        if session_cache.summary:
+            return f"{project_title}: {session_cache.summary}"
+        preview = session_cache.first_user_message
+        if preview:
+            if len(preview) > 50:
+                preview = preview[:50] + "..."
+            return f"{project_title}: {preview}"
+    return f"{project_title}: Session {session_id[:8]}"
+
+
 def _generate_individual_session_files(
     format: str,
     messages: list[TranscriptEntry],
@@ -1520,23 +1536,11 @@ def _generate_individual_session_files(
     # Generate HTML file for each session
     for session_id in session_ids:
         # Create session-specific title using cache data if available
-        if session_id in session_data:
-            session_cache = session_data[session_id]
-            if session_cache.summary:
-                session_title = f"{project_title}: {session_cache.summary}"
-            else:
-                # Fall back to first user message preview
-                preview = session_cache.first_user_message
-                if preview and len(preview) > 50:
-                    preview = preview[:50] + "..."
-                session_title = (
-                    f"{project_title}: {preview}"
-                    if preview
-                    else f"{project_title}: Session {session_id[:8]}"
-                )
-        else:
-            # Fall back to basic session title
-            session_title = f"{project_title}: Session {session_id[:8]}"
+        session_title = build_session_title(
+            project_title,
+            session_id,
+            session_data.get(session_id),
+        )
 
         # Add date range if specified
         if from_date or to_date:
@@ -1638,9 +1642,12 @@ def generate_single_session_file(
         raise FileNotFoundError(f"Project directory not found: {input_path}")
 
     # Setup cache
-    cache_manager = (
-        CacheManager(input_path, get_library_version()) if use_cache else None
-    )
+    cache_manager = None
+    if use_cache:
+        try:
+            cache_manager = CacheManager(input_path, get_library_version())
+        except Exception as e:
+            print(f"Warning: Failed to initialize cache manager: {e}")
 
     # Ensure fresh cache
     ensure_fresh_cache(input_path, cache_manager, silent=True)
@@ -1687,6 +1694,8 @@ def generate_single_session_file(
         if archived:
             session_messages = archived
 
+    session_messages = deduplicate_messages(session_messages)
+
     if not session_messages:
         raise ValueError(f"No messages found for session '{matched_id[:8]}'")
 
@@ -1701,21 +1710,11 @@ def generate_single_session_file(
 
     project_title = get_project_display_name(input_path.name, working_directories)
 
-    if matched_id in session_data:
-        session_cache_data = session_data[matched_id]
-        if session_cache_data.summary:
-            session_title = f"{project_title}: {session_cache_data.summary}"
-        else:
-            preview = session_cache_data.first_user_message
-            if preview and len(preview) > 50:
-                preview = preview[:50] + "..."
-            session_title = (
-                f"{project_title}: {preview}"
-                if preview
-                else f"{project_title}: Session {matched_id[:8]}"
-            )
-    else:
-        session_title = f"{project_title}: Session {matched_id[:8]}"
+    session_title = build_session_title(
+        project_title,
+        matched_id,
+        session_data.get(matched_id),
+    )
 
     # Determine output path
     ext = get_file_extension(format)

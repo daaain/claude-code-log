@@ -24,6 +24,7 @@ from textual.reactive import reactive
 
 from .cache import CacheManager, SessionCacheData, get_library_version
 from .converter import (
+    build_session_title,
     ensure_fresh_cache,
     get_file_extension,
     load_directory_transcripts,
@@ -1849,15 +1850,7 @@ class SessionBrowser(App[Optional[str]]):
                 self.project_path.name,
                 project_cache.working_directories if project_cache else None,
             )
-            if session_data and session_data.summary:
-                session_title = f"{project_name}: {session_data.summary}"
-            elif session_data and session_data.first_user_message:
-                preview = session_data.first_user_message
-                if len(preview) > 50:
-                    preview = preview[:50] + "..."
-                session_title = f"{project_name}: {preview}"
-            else:
-                session_title = f"{project_name}: Session {session_id[:8]}"
+            session_title = build_session_title(project_name, session_id, session_data)
 
             # Generate session content
             session_content = renderer.generate_session(
