@@ -88,6 +88,11 @@
 
         // Initialize UI state
         updateSearchInputState();
+
+        // Re-index when filters change (transcript pages only)
+        if (!searchState.isIndexPage) {
+            setupTranscriptFilterObserver();
+        }
     }
 
     // Build search index from current page
@@ -733,8 +738,7 @@
     }
 
     // Re-index when filters change (for transcript pages)
-    if (!searchState.isIndexPage) {
-        // Listen for filter changes
+    function setupTranscriptFilterObserver() {
         let isUpdatingFilters = false;
         const observer = new MutationObserver((mutations) => {
             // Only react to filtered-hidden class changes, not search highlights
