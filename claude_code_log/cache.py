@@ -1556,6 +1556,47 @@ def get_all_cached_projects(
     return result
 
 
+def find_session_in_cache(
+    session_id: str,
+    projects_dir: Path,
+    db_path: Optional[Path] = None,
+) -> list[tuple[str, str]]:
+    """Find a session by ID or prefix across all projects in cache.
+
+    Standalone function that queries the cache database directly.
+
+    Args:
+        session_id: Full session ID or prefix to match.
+        projects_dir: Path to the projects directory (for default DB location).
+        db_path: Optional explicit path to the cache database.
+
+    Returns:
+        List of (project_path, full_session_id) tuples for all matches.
+    """
+    actual_db_path = db_path or get_cache_db_path(projects_dir)
+    if not actual_db_path.exists():
+        return []
+
+    try:
+        conn = sqlite3.connect(actual_db_path, timeout=30.0)
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute(
+                """SELECT p.project_path, s.session_id
+                   FROM sessions s
+                   JOIN projects p ON s.project_id = p.id
+                   WHERE s.session_id = ? OR s.session_id LIKE ?
+                   ORDER BY s.first_timestamp DESC""",
+                (session_id, f"{session_id}%"),
+            ).fetchall()
+            return [(row["project_path"], row["session_id"]) for row in rows]
+        finally:
+            conn.close()
+    except (sqlite3.Error, OSError) as e:
+        logger.debug("Failed to find session in cache: %s", e)
+        return []
+
+
 __all__ = [
     "CacheManager",
     "CachedFileInfo",
@@ -1563,6 +1604,7 @@ __all__ = [
     "PageCacheData",
     "ProjectCache",
     "SessionCacheData",
+    "find_session_in_cache",
     "get_all_cached_projects",
     "get_cache_db_path",
     "get_library_version",

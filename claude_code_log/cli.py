@@ -20,6 +20,7 @@ from .converter import (
 )
 from .cache import (
     CacheManager,
+    find_session_in_cache,
     get_all_cached_projects,
     get_cache_db_path,
     get_library_version,
@@ -510,7 +511,7 @@ def _clear_output_files(input_path: Path, all_projects: bool, file_ext: str) -> 
 @click.option(
     "--session-id",
     default=None,
-    help="Export a single session by ID (full ID or prefix). Requires a project directory path.",
+    help="Export a single session by ID (full ID or prefix). Project path is optional — looks up the session globally via cache.",
 )
 @click.option(
     "--debug",
@@ -658,22 +659,41 @@ def main(
         # Handle --session-id: export a single session by ID
         if session_id is not None:
             if input_path is None:
-                click.echo(
-                    "Error: --session-id requires a project directory path as argument",
-                    err=True,
-                )
-                sys.exit(1)
-
-            # Convert project path if needed
-            assert input_path is not None
-            if not input_path.exists() or (
-                input_path.is_dir() and not list(input_path.glob("*.jsonl"))
-            ):
-                claude_path = convert_project_path_to_claude_dir(
-                    input_path, projects_dir
-                )
-                if claude_path.exists():
-                    input_path = claude_path
+                # Global lookup via cache
+                effective_projects_dir = projects_dir or get_default_projects_dir()
+                matches = find_session_in_cache(session_id, effective_projects_dir)
+                if not matches:
+                    click.echo(
+                        f"Error: Session '{session_id}' not found in cache. "
+                        "Try providing a project directory path, or run "
+                        "claude-code-log first to populate the cache.",
+                        err=True,
+                    )
+                    sys.exit(1)
+                if len(matches) > 1:
+                    # Check if all matches resolve to the same session ID
+                    unique_ids = {m[1] for m in matches}
+                    if len(unique_ids) > 1:
+                        click.echo(
+                            f"Error: Ambiguous session ID prefix '{session_id}' "
+                            "matches multiple sessions:",
+                            err=True,
+                        )
+                        for proj_path, sid in matches:
+                            click.echo(f"  {sid[:8]} in {proj_path}", err=True)
+                        sys.exit(1)
+                input_path = Path(matches[0][0])
+                session_id = matches[0][1]
+            else:
+                # Convert project path if needed
+                if not input_path.exists() or (
+                    input_path.is_dir() and not list(input_path.glob("*.jsonl"))
+                ):
+                    claude_path = convert_project_path_to_claude_dir(
+                        input_path, projects_dir
+                    )
+                    if claude_path.exists():
+                        input_path = claude_path
 
             output_path = generate_single_session_file(
                 output_format,

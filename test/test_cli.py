@@ -432,15 +432,40 @@ class TestCLIMainCommand:
 class TestSessionIdOption:
     """Tests for --session-id CLI option."""
 
-    def test_session_id_no_path_errors(
+    def test_session_id_no_path_not_in_cache_errors(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ):
-        """--session-id without a project path argument exits with error."""
+        """--session-id without path and no cache match exits with error."""
         monkeypatch.setenv("CLAUDE_CODE_LOG_CACHE_PATH", str(tmp_path / "test.db"))
         runner = CliRunner()
         result = runner.invoke(main, ["--session-id", "abc12345"])
         assert result.exit_code != 0
-        assert "error" in result.output.lower() or "Error" in result.output
+        assert "not found" in result.output.lower()
+
+    def test_session_id_no_path_global_lookup(
+        self, cli_projects_setup: ProjectsSetup, sample_jsonl_content: list[dict]
+    ):
+        """--session-id without path finds session via cache global lookup."""
+        project_dir = create_project_with_jsonl(
+            cli_projects_setup.projects_dir, "my-project", sample_jsonl_content
+        )
+        runner = CliRunner()
+        # First, generate with path to populate cache
+        result = runner.invoke(main, [str(project_dir), "--session-id", "session-1"])
+        assert result.exit_code == 0
+
+        # Now use --session-id without path, relying on global cache lookup
+        result = runner.invoke(
+            main,
+            [
+                "--session-id",
+                "session-1",
+                "--projects-dir",
+                str(cli_projects_setup.projects_dir),
+            ],
+        )
+        assert result.exit_code == 0
+        assert "Successfully exported session" in result.output
 
     def test_session_id_valid_full_id(
         self, cli_projects_setup: ProjectsSetup, sample_jsonl_content: list[dict]
