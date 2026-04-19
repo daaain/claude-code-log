@@ -1319,7 +1319,7 @@ class TestPassthroughDagChain:
                 "p1", "s1", "2025-07-01T10:00:10.000Z", "u1", "attachment"
             ),
             _make_passthrough_entry(
-                "p2", "s1", "2025-07-01T10:00:20.000Z", "p1", "permission-mode"
+                "p2", "s1", "2025-07-01T10:00:20.000Z", "p1", "other-unknown-type"
             ),
             _make_passthrough_entry(
                 "p3", "s1", "2025-07-01T10:00:30.000Z", "p2", "unknown-future-type"

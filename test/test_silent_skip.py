@@ -35,6 +35,39 @@ class TestSilentSkipTypes:
         assert "last-prompt" in SILENT_SKIP_TYPES
         assert "file-history-snapshot" in SILENT_SKIP_TYPES
 
+    def test_constant_covers_session_metadata(self) -> None:
+        """Issue #94: session-metadata types (no uuid/timestamp) drop silently."""
+        for t in ("permission-mode", "custom-title", "agent-name", "agent-color"):
+            assert t in SILENT_SKIP_TYPES
+
+    @pytest.mark.parametrize(
+        "entry",
+        [
+            {
+                "type": "permission-mode",
+                "permissionMode": "acceptEdits",
+                "sessionId": "s1",
+            },
+            {"type": "custom-title", "customTitle": "CCL (Monk)", "sessionId": "s1"},
+            {"type": "agent-name", "agentName": "CCL (Monk)", "sessionId": "s1"},
+            {"type": "agent-color", "agentColor": "purple", "sessionId": "s1"},
+        ],
+    )
+    def test_session_metadata_silent(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        entry: dict[str, object],
+    ) -> None:
+        jsonl = tmp_path / "session.jsonl"
+        _write_jsonl(jsonl, [entry])
+
+        messages = load_transcript(jsonl, silent=False)
+        captured = capsys.readouterr()
+
+        assert messages == []
+        assert "unrecognised" not in captured.out
+
     def test_file_history_snapshot_silent(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
@@ -129,9 +162,8 @@ class TestUnrecognisedTypesWarn:
     @pytest.mark.parametrize(
         "entry",
         [
-            {"type": "custom-title", "customTitle": "Dave", "sessionId": "s1"},
-            {"type": "agent-name", "agentName": "Dave", "sessionId": "s1"},
-            {"type": "future-metadata-type", "payload": 42},
+            {"type": "future-metadata-type", "payload": 42, "sessionId": "s1"},
+            {"type": "another-hypothetical", "something": "value"},
         ],
     )
     def test_unknown_without_uuid_warns(
@@ -154,7 +186,7 @@ class TestUnrecognisedTypesWarn:
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         jsonl = tmp_path / "session.jsonl"
-        _write_jsonl(jsonl, [{"type": "custom-title", "customTitle": "x"}])
+        _write_jsonl(jsonl, [{"type": "future-unknown-type", "payload": 1}])
 
         messages = load_transcript(jsonl, silent=True)
         captured = capsys.readouterr()
