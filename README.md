@@ -256,6 +256,17 @@ uv run claude-code-log
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, testing, and architecture documentation.
 
+## Community Extensions
+
+Projects built on top of `claude-code-log`:
+
+- **[archive-session](https://github.com/lifeinchords/claude-code-skills#archive-session-skill--slash-command--optional-hook)** by [@lifeinchords](https://github.com/lifeinchords). Wraps the CLI as three integration surfaces:
+  - a Claude Code [Skill](https://github.com/lifeinchords/claude-code-skills/blob/main/.claude/skills/archive-session/SKILL.md)
+  - a Claude Code slash [Command](https://github.com/lifeinchords/claude-code-skills/blob/main/.claude/commands/archive-session.md) `/archive-session` for explicit in-chat invocation
+  - a Claude Code PreCompact [Hook](https://github.com/lifeinchords/claude-code-skills/blob/main/.claude/hooks/pre-compact-archive.sh) that auto-archives transcripts and subagent logs right before context compaction
+
+Cross-platform (macOS and Windows/MSYS).
+
 ## TODO
 
 - tutorial overlay
