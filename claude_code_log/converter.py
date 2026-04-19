@@ -46,6 +46,19 @@ from .dag import SessionTree, build_dag_from_entries, traverse_session_tree
 from .renderer import get_renderer, is_html_outdated
 
 
+# Internal Claude Code message types that carry no DAG fields and are
+# dropped without warning. Unknown types outside this set are surfaced
+# so we notice new kinds worth supporting (see the else branch in
+# load_transcript). `progress` is not here because it has uuid+sessionId
+# and participates in the DAG as a PassthroughTranscriptEntry.
+SILENT_SKIP_TYPES: frozenset[str] = frozenset(
+    {
+        "file-history-snapshot",  # Internal file backup metadata
+        "last-prompt",  # Trailing marker written as the last line of a .jsonl
+    }
+)
+
+
 def get_file_extension(format: str) -> str:
     """Get the file extension for a format.
 
@@ -327,6 +340,9 @@ def load_transcript(
                         # Parse using Pydantic models
                         entry = create_transcript_entry(entry_dict)
                         messages.append(entry)
+                    elif entry_type in SILENT_SKIP_TYPES:
+                        # Internal Claude Code entries with no DAG fields.
+                        pass
                     elif entry_dict.get("uuid") and entry_dict.get("sessionId"):
                         # Unknown type with DAG-relevant fields — create a
                         # PassthroughTranscriptEntry to preserve DAG chain
@@ -342,6 +358,16 @@ def load_transcript(
                                 agentId=entry_dict.get("agentId"),
                             )
                         )
+                    else:
+                        # Unknown type with no DAG fields (e.g. custom-title,
+                        # agent-name). Warn so we notice when Claude Code
+                        # introduces new metadata worth supporting — add to
+                        # SILENT_SKIP_TYPES once confirmed safe to drop.
+                        if not silent:
+                            print(
+                                f"Line {line_no} of {jsonl_path}: unrecognised message type "
+                                f"{entry_type!r} - skipping"
+                            )
                 except json.JSONDecodeError as e:
                     print(
                         f"Line {line_no} of {jsonl_path} | JSON decode error: {str(e)}"
