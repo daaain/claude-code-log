@@ -373,7 +373,7 @@ def load_transcript(
                         # SILENT_SKIP_TYPES once confirmed safe to drop.
                         if not silent:
                             print(
-                                f"Line {line_no} of {jsonl_path}: unrecognised message type "
+                                f"Line {line_no} of {jsonl_path}: unrecognized message type "
                                 f"{entry_type!r} - skipping"
                             )
                 except json.JSONDecodeError as e:

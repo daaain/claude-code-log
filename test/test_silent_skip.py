@@ -62,11 +62,11 @@ class TestSilentSkipTypes:
         jsonl = tmp_path / "session.jsonl"
         _write_jsonl(jsonl, [entry])
 
-        messages = load_transcript(jsonl, silent=False)
+        messages = load_transcript(jsonl, silent=True)
         captured = capsys.readouterr()
 
         assert messages == []
-        assert "unrecognised" not in captured.out
+        assert captured.out == ""
 
     def test_file_history_snapshot_silent(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -88,12 +88,11 @@ class TestSilentSkipTypes:
             ],
         )
 
-        messages = load_transcript(jsonl, silent=False)
+        messages = load_transcript(jsonl, silent=True)
         captured = capsys.readouterr()
 
         assert messages == []
-        assert "unrecognised" not in captured.out
-        assert "not a recognised" not in captured.out
+        assert captured.out == ""
 
     def test_last_prompt_silent(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -110,12 +109,11 @@ class TestSilentSkipTypes:
             ],
         )
 
-        messages = load_transcript(jsonl, silent=False)
+        messages = load_transcript(jsonl, silent=True)
         captured = capsys.readouterr()
 
         assert messages == []
-        assert "unrecognised" not in captured.out
-        assert "last-prompt" not in captured.out
+        assert captured.out == ""
 
 
 class TestProgressStaysInDag:
@@ -144,20 +142,20 @@ class TestProgressStaysInDag:
             ],
         )
 
-        messages = load_transcript(jsonl, silent=False)
+        messages = load_transcript(jsonl, silent=True)
         captured = capsys.readouterr()
 
         assert len(messages) == 1
         assert isinstance(messages[0], PassthroughTranscriptEntry)
         assert messages[0].type == "progress"
         assert messages[0].uuid == "p1"
-        assert "unrecognised" not in captured.out
+        assert captured.out == ""
 
 
-class TestUnrecognisedTypesWarn:
+class TestUnrecognizedTypesWarn:
     """Unknown types with no DAG fields surface a warning so we notice
-    new Claude Code metadata worth supporting (custom-title, agent-name,
-    and anything that arrives later)."""
+    when Claude Code ships new metadata worth supporting — anything
+    outside the explicit silent-skip list or the Passthrough fallback."""
 
     @pytest.mark.parametrize(
         "entry",
@@ -179,7 +177,7 @@ class TestUnrecognisedTypesWarn:
         captured = capsys.readouterr()
 
         assert messages == []
-        assert "unrecognised message type" in captured.out
+        assert "unrecognized message type" in captured.out
         assert repr(entry["type"]) in captured.out
 
     def test_silent_mode_suppresses_warning(
@@ -214,9 +212,9 @@ class TestUnrecognisedTypesWarn:
             ],
         )
 
-        messages = load_transcript(jsonl, silent=False)
+        messages = load_transcript(jsonl, silent=True)
         captured = capsys.readouterr()
 
         assert len(messages) == 1
         assert isinstance(messages[0], PassthroughTranscriptEntry)
-        assert "unrecognised" not in captured.out
+        assert captured.out == ""
