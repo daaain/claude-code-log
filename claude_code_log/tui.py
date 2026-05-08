@@ -1675,7 +1675,7 @@ class SessionBrowser(App[Optional[str]]):
                 self.notify("Failed to generate Markdown file", severity="error")
                 return
 
-            content = session_file.read_text(encoding="utf-8")
+            content = session_file.read_text(encoding="utf-8", errors="replace")
             title = f"Session: {self.selected_session_id[:8]}..."
             self.push_screen(MarkdownViewerScreen(content, title))
             if force:
@@ -1864,7 +1864,7 @@ class SessionBrowser(App[Optional[str]]):
                 self.project_path,
             )
             if session_content:
-                session_file.write_text(session_content, encoding="utf-8")
+                session_file.write_text(session_content, encoding="utf-8", errors="replace")
                 return session_file
         except Exception:
             return None
