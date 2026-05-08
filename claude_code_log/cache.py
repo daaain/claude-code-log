@@ -125,13 +125,15 @@ class ProjectCache(BaseModel):
 # ========== Helper Functions ==========
 
 
-def _scrub_surrogates(s: Optional[str]) -> Optional[str]:
+def scrub_surrogates(s: Optional[str]) -> Optional[str]:
     """Replace lone surrogates (U+DC80…U+DCFF) with U+FFFD.
 
-    Lone surrogates that leak in via ``surrogateescape``-decoded JSONL
-    data crash sqlite3's text-binding path with ``UnicodeEncodeError``
-    the moment we try to persist them. Same root-cause family as #139's
-    HTML write-side fix; this is the cache-DB-side companion.
+    Public helper used wherever ``surrogateescape``-decoded JSONL data
+    might cross a strict-UTF-8 boundary (issue #139). Examples:
+    sqlite3's text-binding path (``cache.update_session_cache``) and
+    TUI export (``tui.SessionBrowser._ensure_session_file``) — both
+    raise ``UnicodeEncodeError`` on lone surrogates the moment we try
+    to persist them.
 
     Encoding via ``surrogateescape`` (which round-trips lone surrogates
     back to their raw bytes — ``\\udcb2`` → ``b"\\xb2"``) followed by
@@ -644,17 +646,17 @@ class CacheManager:
                         # sqlite3 raises UnicodeEncodeError on lone
                         # surrogates that surrogateescape-decoded JSONL
                         # may have leaked into these text fields. (#139)
-                        _scrub_surrogates(data.summary),
+                        scrub_surrogates(data.summary),
                         data.first_timestamp,
                         data.last_timestamp,
                         data.message_count,
-                        _scrub_surrogates(data.first_user_message),
-                        _scrub_surrogates(data.cwd),
+                        scrub_surrogates(data.first_user_message),
+                        scrub_surrogates(data.cwd),
                         data.total_input_tokens,
                         data.total_output_tokens,
                         data.total_cache_creation_tokens,
                         data.total_cache_read_tokens,
-                        _scrub_surrogates(data.team_name),
+                        scrub_surrogates(data.team_name),
                     ),
                 )
 

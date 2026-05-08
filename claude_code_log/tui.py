@@ -23,7 +23,12 @@ from textual.widgets import (
 from textual.reactive import reactive
 from rich.markup import escape as escape_markup
 
-from .cache import CacheManager, SessionCacheData, get_library_version
+from .cache import (
+    CacheManager,
+    SessionCacheData,
+    get_library_version,
+    scrub_surrogates,
+)
 from .converter import (
     build_session_title,
     ensure_fresh_cache,
@@ -1864,7 +1869,14 @@ class SessionBrowser(App[Optional[str]]):
                 self.project_path,
             )
             if session_content:
-                session_file.write_text(session_content, encoding="utf-8", errors="replace")
+                # Scrub lone surrogates to U+FFFD before strict-UTF-8 write
+                # (#139). `errors="replace"` is defense-in-depth — the
+                # broader `try/except` below silently swallows any residual
+                # encode error, and "Failed to generate" with no traceback
+                # is the worst outcome (worse than the CLI's loud crash,
+                # which is how #139 surfaced in the first place).
+                scrubbed = scrub_surrogates(session_content) or session_content
+                session_file.write_text(scrubbed, encoding="utf-8", errors="replace")
                 return session_file
         except Exception:
             return None
