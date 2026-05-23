@@ -32,6 +32,7 @@ from claude_code_log.converter import (
     _get_page_html_path,
     convert_jsonl_to,
     generate_single_session_file,
+    process_projects_hierarchy,
 )
 from claude_code_log.models import DetailLevel
 from claude_code_log.utils import VARIANT_ENTRY_RE, variant_suffix
@@ -631,3 +632,166 @@ class TestPaginatedVariantCoexistence:
         assert (fp2_again.st_mtime_ns, fp2_again.st_ino) == full_page2_sig, (
             "Second FULL render should have been a cache hit (page 2)"
         )
+
+
+# ---------------------------------------------------------------------------
+# Projects index regeneration when variant flags toggle
+# ---------------------------------------------------------------------------
+
+
+def _build_one_project_projects_dir(root: Path, encoded: str = "-p") -> Path:
+    """Minimal `~/.claude/projects/` shape with one project + one session.
+
+    Mirrors `test_obsidian_output._build_fake_projects_dir` but inlined
+    to avoid a cross-module fixture dependency."""
+    projects_dir = root / "projects"
+    projects_dir.mkdir()
+    proj = projects_dir / encoded
+    proj.mkdir()
+    entry = {
+        "parentUuid": None,
+        "isSidechain": False,
+        "userType": "external",
+        "cwd": "/home/joe/p",
+        "sessionId": "sess1",
+        "version": "2.1.0",
+        "type": "user",
+        "uuid": "u1",
+        "timestamp": "2026-05-10T10:00:00.000Z",
+        "message": {
+            "role": "user",
+            "content": [{"type": "text", "text": "hi"}],
+        },
+    }
+    (proj / "sess1.jsonl").write_text(json.dumps(entry) + "\n", encoding="utf-8")
+    return projects_dir
+
+
+class TestProjectsIndexVariantRefresh:
+    """Regression: toggling a Markdown variant flag (`--compact`,
+    `--no-timestamps`, `--detail`) between runs produces new per-project
+    output filenames (e.g. `combined_transcripts.compact.md`). The
+    projects `index.md` must regenerate on that re-run so its links
+    point at the variant-suffixed filenames — not the stale unsuffixed
+    ones from the previous run.
+
+    Pre-fix, the index was gated on a "source JSONL changed" flag, so
+    flag-only re-runs (forward or backward through the variant matrix)
+    left the index stale even when per-project files were rewritten
+    or the user re-targeted a pre-existing variant. Always regenerating
+    the index closes both directions; the cost is one template pass +
+    file write over already-aggregated `project_summaries`."""
+
+    def test_compact_toggle_refreshes_index_link(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Isolate the cache so we don't poison the user's real one and
+        # so the run is fully deterministic.
+        monkeypatch.setenv("CLAUDE_CODE_LOG_CACHE_PATH", str(tmp_path / "cache.db"))
+
+        projects_dir = _build_one_project_projects_dir(tmp_path)
+        index_path = projects_dir / "index.md"
+
+        # First run: default (no variant flag).
+        process_projects_hierarchy(projects_dir, output_format="md")
+        assert (projects_dir / "-p" / "combined_transcripts.md").exists()
+        assert index_path.exists()
+        first_index = index_path.read_text(encoding="utf-8")
+        assert "combined_transcripts.md" in first_index
+        assert "combined_transcripts.compact.md" not in first_index
+
+        # Second run: same sources, `--compact` toggled on. This is the
+        # regression scenario — no source files changed, so the legacy
+        # `any_cache_updated` flag stays False, but a new variant file
+        # is produced and the index must follow.
+        process_projects_hierarchy(projects_dir, output_format="md", compact=True)
+        assert (projects_dir / "-p" / "combined_transcripts.compact.md").exists()
+        refreshed_index = index_path.read_text(encoding="utf-8")
+        assert "combined_transcripts.compact.md" in refreshed_index, (
+            "Index should have been regenerated to point at the .compact "
+            "variant; it still references the bare filename."
+        )
+
+    def test_expand_paths_combined_no_refreshes_index_link(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """`--expand-paths` mode uses `--combined no` (per-session
+        files only, no `combined_transcripts*`). Toggling `--compact`
+        must still refresh the index so the per-session bullet links
+        carry the `.compact` suffix."""
+        monkeypatch.setenv("CLAUDE_CODE_LOG_CACHE_PATH", str(tmp_path / "cache.db"))
+
+        projects_dir = _build_one_project_projects_dir(tmp_path)
+        out = tmp_path / "out"
+        index_path = out / "index.md"
+
+        process_projects_hierarchy(
+            projects_dir,
+            output_format="md",
+            output_dir=out,
+            expand_paths=True,
+            write_combined=False,
+        )
+        assert index_path.exists()
+        first_index = index_path.read_text(encoding="utf-8")
+        # Per-session bullet should point at the bare session filename.
+        assert "session-sess1.md" in first_index
+        assert "session-sess1.compact.md" not in first_index
+
+        process_projects_hierarchy(
+            projects_dir,
+            output_format="md",
+            output_dir=out,
+            expand_paths=True,
+            write_combined=False,
+            compact=True,
+        )
+        # Per-session variant file must exist on disk.
+        assert (out / "home" / "joe" / "p" / "session-sess1.compact.md").exists()
+        refreshed_index = index_path.read_text(encoding="utf-8")
+        assert "session-sess1.compact.md" in refreshed_index, (
+            "Index should refresh per-session links to the .compact "
+            "variant when `--combined no` is in effect."
+        )
+
+    def test_toggle_back_to_default_refreshes_index_link(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Symmetric case: after running with `--compact`, re-running
+        WITHOUT the flag must point the index back at the unsuffixed
+        filename — even though the bare file already exists from an
+        earlier run (no source/cache changes, no slow-path entry for
+        the project).
+
+        Pre-"always regenerate" fix this stayed stale: the slow path
+        wasn't entered for the project, so the dirty flag never
+        flipped, and the index kept `.compact` links."""
+        monkeypatch.setenv("CLAUDE_CODE_LOG_CACHE_PATH", str(tmp_path / "cache.db"))
+
+        projects_dir = _build_one_project_projects_dir(tmp_path)
+        index_path = projects_dir / "index.md"
+
+        # Seed both variants on disk.
+        process_projects_hierarchy(projects_dir, output_format="md")
+        process_projects_hierarchy(projects_dir, output_format="md", compact=True)
+        # Index now reflects the most recent (compact) run.
+        assert "combined_transcripts.compact.md" in index_path.read_text(
+            encoding="utf-8"
+        )
+
+        # Re-run default. No source change, the bare combined file
+        # already exists → the per-project loop takes the fast path.
+        # Index must still flip back to the unsuffixed link.
+        process_projects_hierarchy(projects_dir, output_format="md")
+        final_index = index_path.read_text(encoding="utf-8")
+        assert "combined_transcripts.compact.md" not in final_index, (
+            "Index should no longer reference the .compact variant "
+            "after toggling back to the default."
+        )
+        assert "combined_transcripts.md" in final_index

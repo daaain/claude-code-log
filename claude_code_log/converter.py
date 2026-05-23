@@ -2573,7 +2573,6 @@ def process_projects_hierarchy(
 
     # Process each project directory
     project_summaries: list[dict[str, Any]] = []
-    any_cache_updated = False  # Track if any project had cache updates
 
     # Aggregated stats
     total_projects = len(project_dirs)
@@ -2748,9 +2747,7 @@ def process_projects_hierarchy(
                 stats.files_loaded_from_cache = len(jsonl_files) - stats.files_updated
                 stats.sessions_regenerated = len(stale_sessions)
 
-                # Track if cache was updated (for index regeneration)
                 if modified_files:
-                    any_cache_updated = True
                     projects_with_updates += 1
 
                 # Generate output for this project (handles cache updates internally)
@@ -3138,33 +3135,31 @@ def process_projects_hierarchy(
     # Update total projects count to include archived
     total_projects = len(project_dirs) + archived_project_count
 
-    # Generate index (always regenerate if outdated). Index lives at
-    # the root of the output destination — `output_dir` if set
-    # (#151), else the legacy `projects_path` location.
-    ext = get_file_extension(output_format)
+    # Generate index — always regenerated. Skipping when "nothing
+    # changed" would let stale links survive a variant-flag toggle
+    # (e.g. `--compact` / `--no-timestamps` / `--detail`), which
+    # produces new per-project filenames without touching the cache.
+    # The index is built from the already-aggregated
+    # `project_summaries` in memory (one template pass + one write),
+    # so unconditional regeneration is cheap.
     index_path = index_root / get_index_filename(output_format)
     renderer = get_renderer(output_format, image_export_mode)
-    index_regenerated = False
-    if renderer.is_outdated(index_path) or from_date or to_date or any_cache_updated:
-        # Under `--expand-paths` (Obsidian mode), both Markdown and
-        # HTML render the index as a nested directory hierarchy that
-        # mirrors the projected folder tree. JSON keeps a flat list
-        # (structured data — tree shape isn't meaningful) so it does
-        # not accept the kwarg.
-        index_kwargs: dict[str, Any] = {}
-        if expand_paths and output_format in ("md", "markdown", "html"):
-            index_kwargs["expand_paths_tree"] = True
-        index_content = renderer.generate_projects_index(
-            project_summaries, from_date, to_date, **index_kwargs
-        )
-        assert index_content is not None
-        # Ensure the index root exists when projecting into a fresh dir.
-        index_path.parent.mkdir(parents=True, exist_ok=True)
-        # See issue #139: errors="replace" for lone-surrogate safety.
-        index_path.write_text(index_content, encoding="utf-8", errors="replace")
-        index_regenerated = True
-    elif not silent:
-        print(f"Index {ext.upper()} is current, skipping regeneration")
+    # Under `--expand-paths` (Obsidian mode), both Markdown and HTML
+    # render the index as a nested directory hierarchy that mirrors
+    # the projected folder tree. JSON keeps a flat list (structured
+    # data — tree shape isn't meaningful) so it does not accept the
+    # kwarg.
+    index_kwargs: dict[str, Any] = {}
+    if expand_paths and output_format in ("md", "markdown", "html"):
+        index_kwargs["expand_paths_tree"] = True
+    index_content = renderer.generate_projects_index(
+        project_summaries, from_date, to_date, **index_kwargs
+    )
+    assert index_content is not None
+    # Ensure the index root exists when projecting into a fresh dir.
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    # See issue #139: errors="replace" for lone-surrogate safety.
+    index_path.write_text(index_content, encoding="utf-8", errors="replace")
 
     # Count total sessions from project summaries
     for summary in project_summaries:
@@ -3185,8 +3180,6 @@ def process_projects_hierarchy(
     summary_parts.append(f"Processed {total_projects} projects in {elapsed:.1f}s")
     if projects_with_updates > 0:
         summary_parts.append(f"  {projects_with_updates} projects updated")
-    if index_regenerated:
-        summary_parts.append("  Index regenerated")
     print("\n".join(summary_parts))
 
     # Show archived sessions note if any exist
