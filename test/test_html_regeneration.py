@@ -197,9 +197,24 @@ class TestHtmlRegeneration:
         with open(jsonl1, "a", encoding="utf-8") as f:
             f.write(new_message)
 
+        # Capture before re-run so we can prove the index *content*
+        # actually changed (not just its mtime). The projects index
+        # surfaces project-level metadata (counts, date ranges, session
+        # AI titles) — not raw message text — so a string match on the
+        # appended message body isn't a reliable signal. A direct
+        # content comparison catches a "byte-equivalent rewrite" stale
+        # bug that an mtime check alone would silently pass.
+        pre_change_content = index_file.read_text(encoding="utf-8")
         post_change_mtime_ns = index_file.stat().st_mtime_ns
         process_projects_hierarchy(projects_dir)
         assert index_file.stat().st_mtime_ns > post_change_mtime_ns
+        post_change_content = index_file.read_text(encoding="utf-8")
+        assert post_change_content != pre_change_content, (
+            "Regenerated index should reflect the appended JSONL entry "
+            "(project metadata: message count, date range, session "
+            "summary). An mtime bump alone wouldn't catch a "
+            "stale-content regression."
+        )
 
     def test_cache_update_detection(self, tmp_path):
         """Test that cache updates are properly detected and used to trigger regeneration."""

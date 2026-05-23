@@ -1099,7 +1099,11 @@ class TestIndexHTMLRegeneration:
     def test_index_regenerated_when_project_cache_updates(
         self, temp_projects_copy: Path
     ) -> None:
-        """Index HTML regenerates when any project cache changes."""
+        """Index HTML is rewritten on every `process_projects_hierarchy`
+        call (always-regenerate semantics — see PR #168). The JSONL edit
+        here is incidental cargo from when index regen was gated on
+        project-cache changes; today the assertion holds even without it,
+        which is the contract we want pinned."""
         # Initial processing
         process_projects_hierarchy(temp_projects_copy)
         index_file = temp_projects_copy / "index.html"
