@@ -266,11 +266,53 @@ class HtmlRenderer(Renderer):
 
     # Consulted by Renderer._dispatch_format Strategy 2: plugin-defined
     # content classes contributing a ``format_html`` method get picked up
-    # here. See work/tool-renderer-plugins.md §`_dispatch_format`
-    # resolution order. Class-side ``format_html`` may return None to
-    # opt for mistune-derived HTML; that fallback is handled by callers
-    # of format_content, not by the dispatcher itself.
+    # here. See dev-docs/plugins.md §5 for the resolution order.
+    #
+    # v1 contract: ``format_html`` MUST return a real string. The
+    # absence of the method on a plugin class drives the fallback —
+    # ``_dispatch_format`` (overridden below) synthesizes HTML from
+    # the class-side ``format_markdown`` via mistune when only the
+    # Markdown side is implemented. There is no None-as-sentinel.
     _class_dispatch_format: str = "html"
+
+    def _dispatch_format(self, obj: Any, message: "TemplateMessage") -> str:
+        """HtmlRenderer-specific dispatch with Markdown→HTML synthesis.
+
+        Resolution order on the actual class (`type(obj)`):
+
+        1. Class defines ``format_html`` in its ``__dict__`` → use it
+           verbatim. The return MUST be a real string (no None sentinel).
+        2. Class defines ``format_markdown`` (but not ``format_html``)
+           in its ``__dict__`` → synthesize HTML by rendering the
+           Markdown via mistune, wrapped in ``<div class="markdown">``
+           so theme rules scoped under ``.markdown`` fire. By
+           definition the synthesized output is Markdown-derived, so
+           the wrap is automatic — plugin authors don't need
+           ``has_markdown = True`` for this path.
+        3. Neither on the actual class → defer to the base MRO walk
+           (which finds renderer-side ``format_<ClassName>`` methods
+           for built-in content classes, or class-side methods on
+           ancestors).
+
+        Step 2 deliberately wins over an ancestor's renderer-side
+        ``format_<ClassName>``: a plugin author who defined
+        ``format_markdown`` on their subclass meant for their Markdown
+        to drive the rendering, not for the parent class's built-in
+        renderer behaviour to take over.
+        """
+        from .utils import render_markdown
+
+        # ``obj`` is intentionally untyped (``Any``); the class-side
+        # methods we look up on its ``__dict__`` are plugin-defined.
+        obj_cls = cast("type[object]", type(obj))
+        html_method = obj_cls.__dict__.get("format_html")
+        if html_method is not None:
+            return cast(str, html_method(obj, self, message))
+        md_method = obj_cls.__dict__.get("format_markdown")
+        if md_method is not None:
+            md_source = cast(str, md_method(obj, self, message))
+            return f'<div class="markdown">{render_markdown(md_source)}</div>'
+        return super()._dispatch_format(obj, message)
 
     def __init__(self, image_export_mode: str = "embedded"):
         """Initialize the HTML renderer.

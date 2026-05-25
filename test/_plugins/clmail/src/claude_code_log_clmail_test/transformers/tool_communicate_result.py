@@ -81,15 +81,20 @@ class TestClmailCommunicateResultMessage(ToolResultMessage):
             return "_(test) ClMail result (empty)_"
         return body  # The Markdown body is the natural rendering.
 
-    def format_html(self, _renderer, _message) -> Optional[str]:
+    def format_html(self, _renderer, _message) -> str:
+        # Explicit ``format_html`` because we need richer HTML than
+        # mistune-of-format_markdown produces: a collapsible
+        # ``<details>`` block with a preview for long bodies. Per v1
+        # contract this MUST return a real string (no None sentinel).
         body = _body_text(self.output)
         if not body:
             return "<em>(test) ClMail result (empty)</em>"
         # Long bodies (e.g. multi-paragraph mail) collapse to a
         # preview with an expand toggle; short bodies render inline.
-        # The wrapper div carries ``markdown`` so the host theme's
-        # ``.markdown table`` / ``.markdown pre`` styling fires —
-        # important for replies that contain tables or code blocks.
+        # ``render_markdown_collapsible`` already emits ``<div class=
+        # "{css_class} markdown">`` for the short-content branch, so
+        # the ``.markdown`` CSS scope fires. ``has_markdown = True``
+        # above flips the host's outer ``<div class='content'>`` too.
         return render_markdown_collapsible(
             raw_content=body,
             css_class="test-clmail-result",

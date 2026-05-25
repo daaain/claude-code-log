@@ -234,26 +234,26 @@ Signature contract for each method:
 
 | Method | Signature | Return | Notes |
 |---|---|---|---|
-| `format_markdown` | `(self, renderer, message) -> str` | Markdown source string. | Always provide this; `format_html` can route through it (see caveat below). |
-| `format_html` | `(self, renderer, message) -> str` | Raw HTML string. | See **v1 caveat** below — do NOT return `None` today; render Markdown explicitly via `render_markdown(self.format_markdown(...))`. |
+| `format_markdown` | `(self, renderer, message) -> str` | Markdown source string. | Define this whenever your class produces meaningful Markdown. Drives both Markdown output AND HTML output (via mistune) unless `format_html` is also defined. |
+| `format_html` | `(self, renderer, message) -> str` | Raw HTML string (real string — no None sentinel). | Define this ONLY when you need HTML different from mistune-of-`format_markdown`. The dispatcher synthesizes that fallback automatically when `format_html` is absent. |
 | `title` | `(self, renderer, message) -> Optional[str]` | Heading text or `None`. | Return `None` for "headless" (inline) messages. Return `""` (empty string, not None) to suppress the heading explicitly — the dispatcher distinguishes the two. |
 
-**v1 caveat: `format_html` returning `None` does NOT today fall back
-to mistune.** The dispatcher returns `None` verbatim and the host
-template renders the literal string `"None"` in the card body. Until
-the v2 dispatch auto-wrap lands (see [§12](#12-v2-directions-informational)),
-plugin authors should render Markdown explicitly:
+**`format_html` is opt-in.** If your plugin class defines only
+`format_markdown`, the HtmlRenderer dispatcher automatically
+synthesizes HTML by running the Markdown through mistune and
+wrapping the result in `<div class="markdown">…</div>`. You do NOT
+need to write a `render_markdown(self.format_markdown(...))` shim
+— that's the dispatcher's job.
 
-```python
-from claude_code_log.plugins import render_markdown
-
-def format_html(self, _renderer, _message) -> str:
-    return render_markdown(self.format_markdown(_renderer, _message))
-```
-
-The reference plugins follow this pattern. Returning a richer HTML
-construction (e.g. via `render_markdown_collapsible` for long bodies)
-is the common alternative — see [§4.1](#41-plugin-facing-helpers).
+Define `format_html` only when you need HTML that differs from the
+synthesized fallback (e.g. a collapsible `<details>` block for long
+bodies, custom DOM structure, embedded SVG). When you do, return a
+real string. There is no `None`-as-sentinel: returning `None` would
+render as the literal string `"None"` in the card body (and may
+raise a type error). The reference plugin's `tool_communicate_result.py`
+shows the explicit-`format_html` pattern for a collapsible long-body
+case; `tool_communicate.py` and `hook_demotion.py` show the absent-
+`format_html`-let-the-synthesizer-handle-it pattern.
 
 **Error-shaped results.** Set `is_error=True` on a `ToolResultMessage`
 subclass replacement to inherit the host's standard error chrome
@@ -330,6 +330,34 @@ the dispatcher never reaches the parent's renderer-side method.
 `_dispatch_title` for the same reason — without delegation, a
 `title_ToolUseMessage` on the base renderer would shadow your
 class-side `title()` at the top level.
+
+### 5.1 HtmlRenderer extension: actual-class precedence + Markdown synthesis
+
+`HtmlRenderer._dispatch_format` overrides the base walk with two
+additional rules, applied to the actual class (`type(obj)`) before
+the standard MRO walk runs:
+
+1. **`format_html` on the actual class wins outright.** If
+   `type(obj).__dict__["format_html"]` exists, use it. Skip the MRO
+   walk entirely — a plugin author who wrote `format_html` on their
+   subclass owns the HTML rendering.
+2. **`format_markdown` on the actual class triggers synthesis.** If
+   `format_html` is absent but `format_markdown` is defined on the
+   actual class, the dispatcher renders the Markdown through mistune
+   and wraps the result in `<div class="markdown">…</div>`. Skip the
+   MRO walk — the synthesized output is the answer.
+3. **Otherwise, defer to the base walk.** This finds renderer-side
+   `format_<ClassName>` methods for built-in content classes and
+   class-side methods on ancestors via the normal MRO.
+
+The actual-class precedence is the key behavioural difference from
+the base dispatcher: a plugin subclass of `UserTextMessage` that
+defines `format_markdown` (but not `format_html`) gets its Markdown
+promoted to HTML via synthesis even though the base renderer has
+`format_UserTextMessage` that would normally win the MRO walk. The
+intent: when a plugin author wrote `format_markdown` on a subclass,
+they meant their Markdown to drive rendering, not for the parent
+class's built-in renderer behaviour to take over.
 
 ---
 
@@ -642,6 +670,16 @@ carries the class. Two ways to opt in:
 content branch emits `<div class="{css_class} markdown">`); only
 the bare `render_markdown` path needs one of the two recipes above.
 
+**Note on the synthesis path.** When you DON'T define `format_html`
+and the HtmlRenderer dispatch synthesizes HTML from your
+`format_markdown` (see [§5.1](#51-htmlrenderer-extension-actual-class-precedence--markdown-synthesis)),
+the synthesizer always wraps the mistune output in
+`<div class="markdown">`. You don't need to set `has_markdown = True`
+for that path — it's implicit in the synthesis. `has_markdown` only
+matters when you implement `format_html` yourself and want the host
+template's outer `<div class='content'>` wrapper to pick up the
+`.markdown` class.
+
 ---
 
 ## 11. Reference
@@ -677,14 +715,3 @@ re-rediscovering them:
   large plugin ecosystems may want per-plugin priority namespaces
   with explicit ordering hints (e.g. `before=other_plugin`). Not
   needed at current scale.
-- **Dispatch auto-wrap for Markdown-shaped returns.** Today plugin
-  `format_html` returns are wrapped in `<div class="content">…</div>`
-  by the host; theme rules scoped under `.markdown` don't fire
-  unless the plugin remembers to add the class itself (see
-  [§10's wrap note](#10-common-patterns-and-pitfalls)). A v2 dispatch
-  could let a plugin signal "this is Markdown-shaped" (e.g. a
-  `markdown_html: bool = False` class attribute) and have the host
-  emit `<div class="content markdown">…</div>`. Pushes the styling
-  contract into the plugin protocol rather than relying on author
-  vigilance. Deferred — needs design discussion of the signalling
-  shape and the interaction with renderer-side overrides.

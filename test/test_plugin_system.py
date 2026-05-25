@@ -516,6 +516,41 @@ class TestToolResultTransformerWithCollapsibleBody:
         assert title == "✉ ClMail result"
 
     @reference_plugin_required
+    def test_absent_format_html_synthesizes_from_format_markdown(self):
+        """HtmlRenderer dispatch: a plugin class with ``format_markdown``
+        but no ``format_html`` gets HTML synthesized via mistune,
+        wrapped in ``<div class="markdown">``. The actual class's
+        ``format_markdown`` wins over any inherited renderer-side
+        ``format_<ParentClass>`` method.
+
+        Validates the v1 contract pivot: ``format_html`` is opt-in;
+        absence drives the synthesis fallback (no None sentinel)."""
+        from claude_code_log.factories.user_factory import create_user_message
+        from claude_code_log.html.renderer import HtmlRenderer
+        from claude_code_log_clmail_test.transformers.hook_demotion import (
+            TestHookNotificationMessage,
+        )
+
+        # TestHookNotificationMessage subclasses UserTextMessage and
+        # defines format_markdown only. The host renderer has
+        # format_UserTextMessage — proves the actual-class precedence
+        # rule (synthesis wins over inherited Strategy 1).
+        meta = MessageMeta.empty()
+        items = [TextContent(type="text", text="[testhook] hello world")]
+        result = create_user_message(meta, items, "[testhook] hello world")
+        assert isinstance(result, TestHookNotificationMessage)
+
+        renderer = HtmlRenderer(image_export_mode="placeholder")
+        html = renderer._dispatch_format(result, MagicMock())
+        # Mistune emitted the italics (em) for "*hello world*"; the
+        # synthesizer wrapped the lot in <div class="markdown">.
+        assert html.startswith('<div class="markdown">')
+        assert "<em>" in html
+        assert "hello world" in html
+        # The literal string "None" must NOT appear — the old bug.
+        assert "None" not in html
+
+    @reference_plugin_required
     def test_has_markdown_property_pins_markdown_css_scope(self):
         """``has_markdown = True`` on the subclass opts the host template's
         wrapping ``<div class='content'>`` into the ``markdown`` CSS scope

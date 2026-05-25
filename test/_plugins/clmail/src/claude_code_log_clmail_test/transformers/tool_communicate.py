@@ -41,6 +41,11 @@ class TestClmailCommunicateInputMessage(ToolUseMessage):
     # the core _LOW_KEEP_TOOLS allowlist.
     detail_visibility: ClassVar[DetailLevel] = DetailLevel.LOW
 
+    # No ``format_html`` defined: HtmlRenderer dispatch synthesizes
+    # HTML from this ``format_markdown`` output via mistune and wraps
+    # in ``<div class="markdown">``. See dev-docs/plugins.md §4 for
+    # when to add ``format_html`` (custom HTML construction) vs
+    # leaving it absent (mistune-of-format_markdown is enough).
     def format_markdown(self, _renderer, _message) -> str:
         # Pull the action out of the parsed input (or the raw input dict).
         raw_input = getattr(self.input, "input", None)
@@ -49,15 +54,6 @@ class TestClmailCommunicateInputMessage(ToolUseMessage):
         else:
             action = "?"
         return f"_(test) ClMail communicate action={action}_"
-
-    def format_html(self, _renderer, _message) -> str:
-        # v1: render the Markdown body explicitly. ``return None`` does
-        # NOT today fall back to mistune — it'd render as the literal
-        # string "None" in the rendered card. See dev-docs/plugins.md
-        # §4 caveat + §12 v2 dispatch auto-wrap plan.
-        from claude_code_log.plugins import render_markdown
-
-        return render_markdown(self.format_markdown(_renderer, _message))
 
     def title(self, _renderer, _message) -> Optional[str]:
         raw_input = getattr(self.input, "input", None)

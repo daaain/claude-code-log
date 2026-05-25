@@ -18,7 +18,6 @@ the items the RFC explicitly deferred to v2.
 - **Transformer chaining.** First non-None wins in v1; no chaining. Revisit only with a concrete use case.
 - **Interleaved dispatch.** Today plugins run as a post-classification pass. Letting plugins run *between* built-in detectors (e.g. before the generic `TextFallback` classifier) would let a plugin claim a `UserTextMessage` before the built-in chain has decided. Needs a redesign of the factory loop to call into the plugin chain at each detector boundary.
 - **Namespace-collision diagnosis.** No `--list-plugins` CLI in v1. Startup warning logs cover the worst case (two transformers with same priority and `applies_to`). Follow-up if needed.
-- **Dispatch auto-wrap for Markdown-shaped returns.** Today plugin `format_html` returns are wrapped in `<div class="content">…</div>`; theme rules scoped under `.markdown` don't fire unless the plugin adds the class itself. A v2 dispatch could let a plugin signal "this is Markdown-shaped" via a class attribute and have the host emit `<div class="content markdown">…</div>`. Pushes the styling contract into the plugin protocol rather than relying on author vigilance.
 
 ## Future extensions (post-v2)
 
