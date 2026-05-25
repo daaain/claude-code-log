@@ -26,6 +26,7 @@ from __future__ import annotations
 import logging
 from importlib.metadata import EntryPoint, entry_points
 from typing import (
+    TYPE_CHECKING,
     Any,
     ClassVar,
     Optional,
@@ -33,6 +34,12 @@ from typing import (
     cast,
     runtime_checkable,
 )
+
+if TYPE_CHECKING:
+    # Visible to static type-checkers (pyright/mypy) and to
+    # ``__all__`` validation; resolved at runtime via the
+    # PEP-562 ``__getattr__`` further down.
+    from .html.utils import render_markdown, render_markdown_collapsible
 
 from .models import MessageContent, MessageMeta
 
@@ -313,10 +320,52 @@ def apply_transformers(
     return candidate
 
 
+# ----------------------------------------------------------------------
+# Public re-exports for plugin authors
+# ----------------------------------------------------------------------
+# Helpers that live in ``claude_code_log/html/utils.py`` and are useful
+# in plugin ``format_html`` methods. Re-exported under
+# ``claude_code_log.plugins`` so plugin code imports from a stable
+# namespace; the internal ``html/utils.py`` can churn (rename, split,
+# restructure) without breaking plugin authors as long as the names
+# below keep working.
+#
+# Resolved lazily via PEP-562 ``__getattr__`` because ``html`` itself
+# imports from this module's siblings (``factories``, ``utils``), and
+# an eager top-level import would close a circular loop during package
+# init. Plugin authors are unaffected — ``from claude_code_log.plugins
+# import render_markdown_collapsible`` Just Works because Python calls
+# ``__getattr__`` when the name isn't already in the module dict.
+#
+# Add to ``_PUBLIC_HELPERS`` only on concrete plugin-author demand —
+# a wider public surface is a wider commitment. See
+# ``dev-docs/plugins.md`` §4.1 "Plugin-facing helpers" for the
+# documented signatures.
+
+_PUBLIC_HELPERS: frozenset[str] = frozenset(
+    {"render_markdown", "render_markdown_collapsible"}
+)
+
+
+def __getattr__(name: str) -> Any:  # PEP 562
+    if name in _PUBLIC_HELPERS:
+        from .html.utils import (
+            render_markdown as _rm,
+            render_markdown_collapsible as _rmc,
+        )
+
+        globals()["render_markdown"] = _rm
+        globals()["render_markdown_collapsible"] = _rmc
+        return globals()[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 __all__ = [
     "ENTRY_POINT_GROUP",
     "MessageTransformer",
     "apply_transformers",
     "load_transformers",
+    "render_markdown",
+    "render_markdown_collapsible",
     "reset_cache",
 ]

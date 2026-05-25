@@ -21,5 +21,11 @@ testhook_demotion = "claude_code_log_clmail_test.transformers.hook_demotion:Test
 # methods (exercises Strategy 2 of _dispatch_format).
 tool_clmail_communicate = "claude_code_log_clmail_test.transformers.tool_communicate:ClmailCommunicateInputTransformer"
 
+# Companion result transformer: rewrites ToolResultMessage for the
+# same tool name. Demonstrates the long-Markdown-body pattern via
+# render_markdown_collapsible (the public helper re-exported from
+# claude_code_log.plugins) and exercises applies_to=(ToolResultMessage,).
+tool_clmail_communicate_result = "claude_code_log_clmail_test.transformers.tool_communicate_result:ClmailCommunicateResultTransformer"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/claude_code_log_clmail_test"]

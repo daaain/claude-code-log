@@ -125,21 +125,55 @@ Steps:
    your return value, then add `format_markdown` / `format_html` /
    `title` methods. See [§4](#4-class-side-format--title-methods).
 
+   Field-copy patterns for the common parent classes (constructor
+   signatures spelled out so the keyword-only-with-`None`-default
+   fields aren't easy to miss):
+
+   ```python
+   # ToolUseMessage — copying every parent field including the
+   # optional `skill_body` (kw-only, defaults to None; carries the
+   # Skill-tool slash-command body when present per issue #93).
+   return MyToolUseSubclass(
+       meta=content.meta,
+       input=content.input,
+       tool_use_id=content.tool_use_id,
+       tool_name=content.tool_name,
+       skill_body=content.skill_body,  # keep — None is the common case
+   )
+
+   # ToolResultMessage — `is_error` / `tool_name` / `file_path` all
+   # default to False/None but must be copied to preserve the
+   # surrounding context (error styling, downstream tool grouping,
+   # Read/Edit/Write file backlinks).
+   return MyToolResultSubclass(
+       meta=content.meta,
+       tool_use_id=content.tool_use_id,
+       output=content.output,
+       is_error=content.is_error,
+       tool_name=content.tool_name,
+       file_path=content.file_path,
+   )
+   ```
+
 5. **Install and run.** `pip install -e .` against your plugin
    package; the next `claude-code-log` invocation discovers it.
 
 6. **Test it.** See [§9](#9-testing-your-plugin) for layer-by-layer
    coverage suggestions.
 
-The reference plugin demonstrates both branches of the contract:
+The reference plugin demonstrates three branches of the contract:
 
 - [`hook_demotion.py`](../test/_plugins/clmail/src/claude_code_log_clmail_test/transformers/hook_demotion.py)
   — rewrite a `UserTextMessage` based on text-prefix match.
 - [`tool_communicate.py`](../test/_plugins/clmail/src/claude_code_log_clmail_test/transformers/tool_communicate.py)
   — rewrite a `ToolUseMessage` based on `tool_name`.
+- [`tool_communicate_result.py`](../test/_plugins/clmail/src/claude_code_log_clmail_test/transformers/tool_communicate_result.py)
+  — rewrite a `ToolResultMessage`, demonstrating the long-Markdown-body
+  collapsible-rendering pattern via the public
+  [`render_markdown_collapsible`](#41-plugin-facing-helpers) helper.
 
-Read both before writing your own; together they cover ~95 % of the
-shapes a real plugin needs.
+Read all three before writing your own; together they cover ~95 % of
+the shapes a real plugin needs.
 
 ---
 
@@ -210,6 +244,34 @@ opts in by defining the method ON the class itself**. Inheriting
 `format_markdown` from a parent does NOT auto-enable dispatch for
 the subclass; the subclass must define its own or the MRO walk
 moves to the next ancestor.
+
+### 4.1 Plugin-facing helpers
+
+Two helpers are re-exported from `claude_code_log.plugins` for use
+in `format_html` / `format_markdown` methods. The re-export is the
+stable plugin API; the underlying implementation in
+`claude_code_log/html/utils.py` may move or be renamed.
+
+```python
+from claude_code_log.plugins import (
+    render_markdown,
+    render_markdown_collapsible,
+)
+```
+
+| Helper | Signature | Use when |
+|---|---|---|
+| `render_markdown(text)` | `(str) -> str` | You need Markdown→HTML inside a custom `format_html` (e.g. embedding a Markdown fragment in a richer HTML scaffold). |
+| `render_markdown_collapsible(raw_content, css_class, *, line_threshold=20, preview_line_count=5)` | `(str, str, int, int) -> str` | Long Markdown bodies (mail bodies, agent responses, multi-paragraph result text). Returns inline `<div class="{css_class} markdown">…</div>` for short content, a collapsible `<details>` with preview + full body for content exceeding `line_threshold`. |
+
+The reference plugin's
+[`tool_communicate_result.py`](../test/_plugins/clmail/src/claude_code_log_clmail_test/transformers/tool_communicate_result.py)
+shows the collapsible helper in use; the inline-vs-collapsed
+threshold + preview length are both tunable per call.
+
+Add to `claude_code_log.plugins.__all__` only on concrete plugin-author
+demand — every entry is an API commitment. Open an issue if a helper
+you need isn't exposed.
 
 ---
 
@@ -298,6 +360,22 @@ filter membership through the bridge.
   right choice for a tool/hook plugin; reserved for user-originated
   content).
 
+**`HIGH` vs `FULL` for hook-style content** — the two reference
+plugins make different choices here, deliberately:
+
+- `hook_demotion.py` (this repo's test plugin) uses `FULL` —
+  surfaces only in the most-verbose view. Right when the hook
+  notification is pure noise reduction for typical reviewers.
+- A real-world plugin (e.g. for clmail-style hook notifications a
+  reviewer wants to *see when they fired*) typically picks `HIGH`
+  — surfaces in `HIGH` *and* `FULL`, hidden at `LOW` and below.
+  Right when the hook firing itself is signal worth keeping in the
+  detail view.
+
+The rule of thumb: ask "would a reviewer skimming at `HIGH` want
+to know this happened?" If yes, pick `HIGH`. If only at the
+debug-the-transcript level, pick `FULL`.
+
 ---
 
 ## 7. Runtime contract enforcement
@@ -373,6 +451,29 @@ Transformers are sorted by `(priority, __module__, __qualname__)`:
   cross-environment ordering when two plugins land at the same
   priority but in different packages. A `(priority, applies_to)`
   collision still triggers a `WARNING` so you can detect overlap.
+
+**Convention for multi-transformer plugins.** When a single plugin
+ships several transformers that share an `applies_to` (e.g. a
+plugin covering five MCP tools, all matching `ToolUseMessage` at
+`TOOL_INPUT_GENERIC - 500`), they will collide with each other on
+the `(priority, applies_to)` tie and emit warnings at startup. Two
+ways to silence the self-collision:
+
+1. **Per-tool offset.** Give each transformer in the plugin a
+   small single-digit offset off the base: `priority =
+   TOOL_INPUT_GENERIC - 504`, `- 503`, `- 502`, `- 501`, `- 500`.
+   The offset range stays narrow enough that the plugin still
+   sits in a coherent "slot" relative to built-ins / other
+   plugins, but each transformer is uniquely ordered against the
+   others in the same plugin.
+2. **Narrow `applies_to`.** If the transformers actually match
+   disjoint subsets (one targets ToolUseMessage, another
+   ToolResultMessage), the tie disappears naturally — same
+   priority is fine.
+
+The per-tool-offset pattern is the right answer when all your
+transformers genuinely share `applies_to` and only differ in the
+`tool_name` they narrow to inside `transform()`.
 
 **Important caveat about v1 semantics.** In v1, plugin transformers
 run as a **post-classification pass**: the built-in factory chain
@@ -478,6 +579,24 @@ yourself: the keep-list is bypassed. Usually what you want; mention
 it if you're debugging a "why is my plugin visible at LOW even though
 the tool isn't in `_LOW_KEEP_TOOLS`?" question.
 
+**Wrap Markdown-shaped HTML returns in `<div class="markdown">`.**
+The dispatcher returns your `format_html` output unmodified — the
+host wraps it in `<div class="content">…</div>`, *not*
+`<div class="content markdown">…</div>`. So host theme rules
+scoped under `.markdown` (table borders, code-block backgrounds,
+`<pre>` overflow, list spacing) won't fire on your output unless
+the wrapper class is present. If you emit Markdown-rendered HTML
+directly (e.g. via `render_markdown(...)`), wrap the result:
+
+```python
+def format_html(self, _renderer, _message) -> str:
+    return f'<div class="markdown">{render_markdown(self.body)}</div>'
+```
+
+`render_markdown_collapsible` already does this for you (its short-
+content branch wraps in `<div class="{css_class} markdown">`); only
+the bare `render_markdown` path needs the explicit wrap.
+
 ---
 
 ## 11. Reference
@@ -513,3 +632,14 @@ re-rediscovering them:
   large plugin ecosystems may want per-plugin priority namespaces
   with explicit ordering hints (e.g. `before=other_plugin`). Not
   needed at current scale.
+- **Dispatch auto-wrap for Markdown-shaped returns.** Today plugin
+  `format_html` returns are wrapped in `<div class="content">…</div>`
+  by the host; theme rules scoped under `.markdown` don't fire
+  unless the plugin remembers to add the class itself (see
+  [§10's wrap note](#10-common-patterns-and-pitfalls)). A v2 dispatch
+  could let a plugin signal "this is Markdown-shaped" (e.g. a
+  `markdown_html: bool = False` class attribute) and have the host
+  emit `<div class="content markdown">…</div>`. Pushes the styling
+  contract into the plugin protocol rather than relying on author
+  vigilance. Deferred — needs design discussion of the signalling
+  shape and the interaction with renderer-side overrides.
