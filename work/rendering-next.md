@@ -94,42 +94,9 @@ class MarkdownVisitor(MessageVisitor[str]):
 
 The current dispatcher approach works well; the visitor pattern would mainly help if we add many more output formats.
 
-### ✅ COMPLETED: Consistent (obj, message) Signatures
-
-Previously there was an asymmetry in method signatures:
-- `format_{ClassName}(obj)` received the precise type directly
-- `title_{ClassName}(message)` received the `TemplateMessage` wrapper
-
-**Resolution**: All `format_*` and `title_*` methods now consistently receive both parameters:
-
-```python
-def format_BashInput(self, input: BashInput, _: TemplateMessage) -> str:
-    ...
-
-def title_BashInput(self, input: BashInput, message: TemplateMessage) -> str:
-    ...
-```
-
-This gives handlers access to both the specific type (for type-safe field access) and the full context (for paired message lookups, ancestry, etc.). Methods that don't need the message parameter use `_` or `_message` to indicate it's unused.
-
 ---
 
-## 3. Additional Tool Output Parsers
-
-Currently parsed: `ReadOutput`, `WriteOutput`, `EditOutput`, `BashOutput`, `TaskOutput`, `AskUserQuestionOutput`, `ExitPlanModeOutput`
-
-### Not Yet Parsed (fallback to `ToolResultContent`)
-
-- `GlobOutput` - Would enable structured file list display
-- `GrepOutput` - Would enable structured search result display
-- `WebFetchOutput` - Would enable structured web content display
-- `WebSearchOutput` - Would enable structured search result display
-
-Adding these would improve rendering for those tool results.
-
----
-
-## 4. Performance Optimization
+## 3. Performance Optimization
 
 Benchmarks (3.35s for 3917 messages) show adequate performance, but potential improvements:
 
