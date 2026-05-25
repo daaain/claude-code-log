@@ -680,6 +680,18 @@ matters when you implement `format_html` yourself and want the host
 template's outer `<div class='content'>` wrapper to pick up the
 `.markdown` class.
 
+**Don't combine `has_markdown = True` with the synthesis path.** If
+your class has no `format_html` (so synthesis fires AND wraps in
+`<div class="markdown">`) AND you also set `has_markdown = True`,
+the host template flips the `markdown` class onto its outer
+`<div class='content'>` wrapper — you end up with the synthesizer's
+`<div class="markdown">` nested inside `<div class="content markdown">`.
+Benign for CSS (selectors don't care about depth) but visible in
+the DOM, surprising on `view-source`, and harmlessly heavier. Rule
+of thumb: `has_markdown = True` is the right opt-in only for
+classes with an **explicit** `format_html` whose return value does
+NOT already wrap. Synthesis classes leave `has_markdown` alone.
+
 ---
 
 ## 11. Reference
