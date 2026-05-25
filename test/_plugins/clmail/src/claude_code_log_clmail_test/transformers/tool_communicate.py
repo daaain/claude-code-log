@@ -50,8 +50,14 @@ class TestClmailCommunicateInputMessage(ToolUseMessage):
             action = "?"
         return f"_(test) ClMail communicate action={action}_"
 
-    def format_html(self, _renderer, _message) -> Optional[str]:
-        return None  # fall back to mistune(format_markdown)
+    def format_html(self, _renderer, _message) -> str:
+        # v1: render the Markdown body explicitly. ``return None`` does
+        # NOT today fall back to mistune — it'd render as the literal
+        # string "None" in the rendered card. See dev-docs/plugins.md
+        # §4 caveat + §12 v2 dispatch auto-wrap plan.
+        from claude_code_log.plugins import render_markdown
+
+        return render_markdown(self.format_markdown(_renderer, _message))
 
     def title(self, _renderer, _message) -> Optional[str]:
         raw_input = getattr(self.input, "input", None)

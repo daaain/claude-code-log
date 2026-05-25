@@ -515,6 +515,27 @@ class TestToolResultTransformerWithCollapsibleBody:
         title = renderer._dispatch_title(instance, MagicMock())
         assert title == "✉ ClMail result"
 
+    @reference_plugin_required
+    def test_has_markdown_property_pins_markdown_css_scope(self):
+        """``has_markdown = True`` on the subclass opts the host template's
+        wrapping ``<div class='content'>`` into the ``markdown`` CSS scope
+        (the host reads ``message.content.has_markdown``). Mirrors
+        built-in ``AwaySummaryMessage`` / ``TeammateMessage``."""
+        from claude_code_log.models import ToolResultContent
+        from claude_code_log_clmail_test.transformers.tool_communicate_result import (
+            TOOL_NAME,
+            TestClmailCommunicateResultMessage,
+        )
+
+        tr = ToolResultContent(tool_use_id="t4", type="tool_result", content="x")
+        instance = TestClmailCommunicateResultMessage(
+            meta=MessageMeta.empty(),
+            tool_use_id="t4",
+            output=tr,
+            tool_name=TOOL_NAME,
+        )
+        assert instance.has_markdown is True
+
 
 class TestApplyTransformersExceptionSafety:
     """A buggy plugin's transform() exception is logged and skipped."""

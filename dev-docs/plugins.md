@@ -234,9 +234,33 @@ Signature contract for each method:
 
 | Method | Signature | Return | Notes |
 |---|---|---|---|
-| `format_markdown` | `(self, renderer, message) -> str` | Markdown source string. | Always provide this; HTML can fall back to it. |
-| `format_html` | `(self, renderer, message) -> Optional[str]` | Raw HTML or `None`. | Returning `None` runs `format_markdown` through mistune. Most plugins do this. |
+| `format_markdown` | `(self, renderer, message) -> str` | Markdown source string. | Always provide this; `format_html` can route through it (see caveat below). |
+| `format_html` | `(self, renderer, message) -> str` | Raw HTML string. | See **v1 caveat** below — do NOT return `None` today; render Markdown explicitly via `render_markdown(self.format_markdown(...))`. |
 | `title` | `(self, renderer, message) -> Optional[str]` | Heading text or `None`. | Return `None` for "headless" (inline) messages. Return `""` (empty string, not None) to suppress the heading explicitly — the dispatcher distinguishes the two. |
+
+**v1 caveat: `format_html` returning `None` does NOT today fall back
+to mistune.** The dispatcher returns `None` verbatim and the host
+template renders the literal string `"None"` in the card body. Until
+the v2 dispatch auto-wrap lands (see [§12](#12-v2-directions-informational)),
+plugin authors should render Markdown explicitly:
+
+```python
+from claude_code_log.plugins import render_markdown
+
+def format_html(self, _renderer, _message) -> str:
+    return render_markdown(self.format_markdown(_renderer, _message))
+```
+
+The reference plugins follow this pattern. Returning a richer HTML
+construction (e.g. via `render_markdown_collapsible` for long bodies)
+is the common alternative — see [§4.1](#41-plugin-facing-helpers).
+
+**Error-shaped results.** Set `is_error=True` on a `ToolResultMessage`
+subclass replacement to inherit the host's standard error chrome
+(🚨 emoji, red `.tool_result.error` CSS class). The mechanism is
+wired in `html/utils.py`: `isinstance(content, ToolResultMessage)
+and content.is_error` triggers both. Bash errors use the same
+primitive — no custom plugin styling needed.
 
 The dispatcher looks up these methods on each MRO node's `__dict__`
 explicitly (not via `getattr`/inheritance). That means: **a class
@@ -579,23 +603,44 @@ yourself: the keep-list is bypassed. Usually what you want; mention
 it if you're debugging a "why is my plugin visible at LOW even though
 the tool isn't in `_LOW_KEEP_TOOLS`?" question.
 
-**Wrap Markdown-shaped HTML returns in `<div class="markdown">`.**
-The dispatcher returns your `format_html` output unmodified — the
-host wraps it in `<div class="content">…</div>`, *not*
-`<div class="content markdown">…</div>`. So host theme rules
-scoped under `.markdown` (table borders, code-block backgrounds,
-`<pre>` overflow, list spacing) won't fire on your output unless
-the wrapper class is present. If you emit Markdown-rendered HTML
-directly (e.g. via `render_markdown(...)`), wrap the result:
+**Markdown-shaped HTML and the `.markdown` CSS scope.** The
+dispatcher returns your `format_html` output unmodified; the host
+template wraps it in `<div class="content">…</div>`, *not*
+`<div class="content markdown">…</div>`. So host theme rules scoped
+under `.markdown` (table borders, code-block backgrounds, `<pre>`
+overflow, list spacing) won't fire on your output unless the wrap
+carries the class. Two ways to opt in:
 
-```python
-def format_html(self, _renderer, _message) -> str:
-    return f'<div class="markdown">{render_markdown(self.body)}</div>'
-```
+1. **`has_markdown = True` on the subclass** (preferred when your
+   `format_html` emits Markdown-shaped content end-to-end). The host
+   template at `html/templates/transcript.html` reads
+   `message.content.has_markdown` and flips the `markdown` class
+   onto the wrapping `<div class='content'>` automatically:
 
-`render_markdown_collapsible` already does this for you (its short-
-content branch wraps in `<div class="{css_class} markdown">`); only
-the bare `render_markdown` path needs the explicit wrap.
+   ```python
+   @dataclass
+   class MyMarkdownShapedMessage(ToolResultMessage):
+       @property
+       def has_markdown(self) -> bool:
+           return True  # → <div class='content markdown'>
+   ```
+
+   Mirrors what built-ins (`AwaySummaryMessage`, `TeammateMessage`,
+   `AssistantTextMessage`) already do — no plugin-author divergence.
+   See `tool_communicate_result.py` in the reference plugin for a
+   worked example.
+
+2. **Wrap inline** (`<div class="markdown">…</div>`) when only part
+   of your output is Markdown-shaped or when you need fine-grained
+   scope control:
+
+   ```python
+   return f'<div class="markdown">{render_markdown(self.body)}</div>'
+   ```
+
+`render_markdown_collapsible` already wraps for you (its short-
+content branch emits `<div class="{css_class} markdown">`); only
+the bare `render_markdown` path needs one of the two recipes above.
 
 ---
 

@@ -63,6 +63,18 @@ class TestClmailCommunicateResultMessage(ToolResultMessage):
     # actual reply text in the default summary view.
     detail_visibility: ClassVar[DetailLevel] = DetailLevel.LOW
 
+    @property
+    def has_markdown(self) -> bool:
+        # Opts the host's wrapping ``<div class='content'>`` into the
+        # ``markdown`` CSS scope (see ``html/templates/transcript.html``
+        # — the host template flips on the ``markdown`` class when
+        # ``message.content.has_markdown`` is True). Built-in
+        # Markdown-shaped content classes (``AwaySummaryMessage``,
+        # ``TeammateMessage``, ``AssistantTextMessage``) use the same
+        # primitive — preferred over wrapping inline in
+        # ``<div class='markdown'>`` from inside ``format_html``.
+        return True
+
     def format_markdown(self, _renderer, _message) -> str:
         body = _body_text(self.output)
         if not body:
