@@ -521,6 +521,7 @@ def _validate_git_link_template(template: str) -> None:
 
 
 @click.command()
+@click.version_option(version=get_library_version(), prog_name="claude-code-log")
 @click.argument("input_path", type=click.Path(path_type=Path), required=False)
 @click.option(
     "-o",
