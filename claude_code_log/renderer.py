@@ -104,9 +104,9 @@ class RenderingContext:
             A slot may be ``None`` — a "ghost" — when a pass drops the message
             from the visible render path while preserving its index slot so
             every stored reference (parent_message_index, session_first_message,
-            junction_forward_links, pair_first/last/middle) stays valid. See
-            ``work/ghosting-epic-plan.md``. Iterators that don't want to see
-            ghosts should use ``_visible(...)`` or ``if m is None: continue``.
+            junction_forward_links, pair_first/last/middle) stays valid.
+            Iterators that don't want to see ghosts should use
+            ``_visible(...)`` or ``if m is None: continue``.
         tool_use_context: Maps tool_use_id -> ToolUseContent for result rendering.
         session_first_message: Maps session_id -> index of first message in session.
     """
@@ -197,9 +197,9 @@ def _visible(
     """Yield only non-ghost messages.
 
     Ghosts are ``None`` slots in ``RenderingContext.messages`` —
-    see ``RenderingContext.messages`` docstring and
-    ``work/ghosting-epic-plan.md`` for the model. Use this helper
-    instead of ``for m in messages`` when the loop body shouldn't
+    see the ``RenderingContext.messages`` docstring for the model. Use
+    this helper instead of ``for m in messages`` when the loop body
+    shouldn't
     touch a ghosted slot.
     """
     for m in messages:
@@ -771,7 +771,7 @@ def generate_template_messages(
     # for each filtered slot and repairs anchor-target references
     # (``session_first_message``, ``parent_message_index``,
     # ``junction_forward_links``) so dropped fork-points don't leave
-    # dead ``#msg-d-{N}`` links. See ``work/ghosting-epic-plan.md`` §3.2.
+    # dead ``#msg-d-{N}`` links.
     if detail != DetailLevel.FULL:
         with log_timing(f"Detail post-render filter ({detail.value})", t_start):
             _ghost_template_by_detail(ctx, detail)
@@ -3043,9 +3043,8 @@ def _reorder_session_template_messages(
     This must be called BEFORE _identify_message_pairs and _reorder_paired_messages,
     since those functions expect messages to be in session-grouped order.
 
-    Accepts ghost-aware input (None slots) — see
-    ``work/ghosting-epic-plan.md``; ghosts are silently dropped from
-    the returned list, so downstream passes that consume this
+    Accepts ghost-aware input (None slots); ghosts are silently dropped
+    from the returned list, so downstream passes that consume this
     function's output don't need ghost-awareness.
 
     Args:
@@ -3439,8 +3438,7 @@ def _pair_skill_tool_uses(ctx: RenderingContext) -> None:
     # session_first_message, pair_first/last/middle) keeps pointing
     # at the right slot — no reindex needed. Downstream iterators
     # see None at the ghosted positions and skip via ``_visible(...)``
-    # or an explicit ``if m is None: continue``. See
-    # ``work/ghosting-epic-plan.md`` §3.1.
+    # or an explicit ``if m is None: continue``.
     for idx in consumed_indices:
         ctx.messages[idx] = None
 
@@ -3508,8 +3506,7 @@ def _ghost_template_by_detail(
 
     This replaces the kept-list + reindex pattern that
     ``_reindex_filtered_context`` used pre-ghosting: indices stay stable,
-    only references to ghosted targets are sanitized in place. See
-    ``work/ghosting-epic-plan.md`` §3.2.
+    only references to ghosted targets are sanitized in place.
     """
     for idx, msg in enumerate(ctx.messages):
         if msg is None:

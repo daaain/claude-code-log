@@ -585,7 +585,7 @@ class TestSkillFoldOnFork:
     """The D12-prerequisite test the verifier flagged as missing.
 
     Skill-fold happens inside a within-session branch, rendered at
-    FULL detail. Under the ghosting model (`work/ghosting-epic-plan.md`)
+    FULL detail. Under the ghosting model,
     ``_pair_skill_tool_uses`` ghosts the consumed slots in place
     instead of deleting + reindexing — so the branch header's
     ``parent_message_index`` (set at register time in

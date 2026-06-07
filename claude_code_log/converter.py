@@ -1068,8 +1068,7 @@ def compute_session_data(
     cache-miss fallback (``_build_session_data_from_messages``), and
     the projects-index nav builder (``_collect_project_sessions``).
     All three previously inlined slight variants of this loop; the
-    divergences were deliberately consolidated by opportunity 9 (see
-    ``work/simplify-converter-renderer.md``) onto two locked rules:
+    divergences were deliberately consolidated onto two locked rules:
 
     - **D1** (count un-keyed assistant usage): assistant entries with
       a ``requestId`` are deduped via ``seen_request_ids`` (a retried

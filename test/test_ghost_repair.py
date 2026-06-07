@@ -1,5 +1,5 @@
 """Regression coverage for ``_repair_stale_anchor_refs`` (Phase 2 of the
-ghosting epic — see ``work/ghosting-epic-plan.md`` §3.2).
+ghosting epic).
 
 When ``_ghost_template_by_detail`` sets a fork-point's slot to ``None``,
 every cached anchor-target reference must be sanitized so no rendered
