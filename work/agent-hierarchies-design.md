@@ -203,3 +203,19 @@ fixtures must come from real spawns, not from trusting the narrative.
    is treated as unbounded throughout.
 4. **PR slicing per §5 approved**: PR1 structural (Phases A+B+D),
    PR2 visual (Phase C).
+
+## 8. PR2 scope (visual layer — in progress)
+
+Branch `dev/agent-hierarchies-visuals`, stacked on PR1 (#218):
+
+- [ ] Depth badge on nested agent spawn cards (nothing at depth 1).
+- [ ] Optional per-depth group-line color ramp (5-color cycle, d1 keeps
+      tool-green) — only if it stays cheap and looks better.
+- [ ] "transcript ≡ result" marker for fully-collapsed spawns (a
+      verbatim-deduped transcript is currently indistinguishable from a
+      never-rendered one).
+- [ ] Deep-chain indent ergonomics: cumulative 2em steps push very deep
+      chains (observed: 79 levels) off-screen — consider capping or
+      compressing the step at high depth once the badge carries the
+      depth information.
+- [ ] Interactive polish round on real nested-session data.
