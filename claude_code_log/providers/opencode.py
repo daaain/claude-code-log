@@ -166,6 +166,7 @@ class OpenCodeProvider(BaseProvider):
 
                 if text_parts:
                     yield UserTranscriptEntry(
+                        type="user",
                         parentUuid=None,
                         isSidechain=False,
                         userType="external",
@@ -196,6 +197,7 @@ class OpenCodeProvider(BaseProvider):
                         text = part.get("text", "")
                         if text:
                             yield AssistantTranscriptEntry(
+                        type="assistant",
                                 parentUuid=None,
                                 isSidechain=False,
                                 userType="external",
@@ -218,6 +220,7 @@ class OpenCodeProvider(BaseProvider):
                         text = part.get("text", "")
                         if text:
                             yield AssistantTranscriptEntry(
+                        type="assistant",
                                 parentUuid=None,
                                 isSidechain=False,
                                 userType="external",
@@ -249,6 +252,7 @@ class OpenCodeProvider(BaseProvider):
                         input_data = part.get("input", {})
 
                         yield AssistantTranscriptEntry(
+                        type="assistant",
                             parentUuid=None,
                             isSidechain=False,
                             userType="external",
@@ -283,6 +287,7 @@ class OpenCodeProvider(BaseProvider):
                             output = part.get("output", "")
                             if output:
                                 yield UserTranscriptEntry(
+                        type="user",
                                     parentUuid=None,
                                     isSidechain=False,
                                     userType="external",

@@ -177,6 +177,7 @@ class CodexProvider(BaseProvider):
 
                 if text_parts:
                     yield AssistantTranscriptEntry(
+                        type="assistant",
                         parentUuid=None,
                         isSidechain=False,
                         userType="external",
@@ -204,6 +205,7 @@ class CodexProvider(BaseProvider):
 
                 if text_parts:
                     yield AssistantTranscriptEntry(
+                        type="assistant",
                         parentUuid=None,
                         isSidechain=False,
                         userType="external",
@@ -237,6 +239,7 @@ class CodexProvider(BaseProvider):
                 arguments = {"raw": arguments_str}
 
             yield AssistantTranscriptEntry(
+                        type="assistant",
                 parentUuid=None,
                 isSidechain=False,
                 userType="external",
@@ -266,6 +269,7 @@ class CodexProvider(BaseProvider):
             output = payload.get("output", "")
 
             yield UserTranscriptEntry(
+                        type="user",
                 parentUuid=None,
                 isSidechain=False,
                 userType="external",
@@ -301,6 +305,7 @@ class CodexProvider(BaseProvider):
             message = payload.get("message", "")
             if message:
                 yield AssistantTranscriptEntry(
+                        type="assistant",
                     parentUuid=None,
                     isSidechain=False,
                     userType="external",

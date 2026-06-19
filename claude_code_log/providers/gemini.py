@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-from typing import Any, Iterator, Optional
+from typing import Iterator, Optional
 
 from claude_code_log.models import (
     AssistantMessageModel,
@@ -12,7 +12,6 @@ from claude_code_log.models import (
     ToolResultContent,
     ToolUseContent,
     TranscriptEntry,
-    UsageInfo,
     UserMessageModel,
     UserTranscriptEntry,
 )
@@ -64,10 +63,10 @@ class GeminiProvider(BaseProvider):
     def load_session(self, session_id: str) -> Iterator[TranscriptEntry]:
         """Load a Gemini CLI session.
 
-        Parses JSONL format:
-        - ConversationRecord with messages array
-        - Each message has type: user|info|error|warning|gemini
-        - Gemini messages include toolCalls, thoughts, tokens
+        Parses JSONL format with individual messages per line:
+        - Session metadata (first line)
+        - Individual messages with type: user|info|error|warning|gemini
+        - $set operations (metadata updates)
         """
         data_dir = self.get_data_dir()
         if data_dir is None:
@@ -120,178 +119,190 @@ class GeminiProvider(BaseProvider):
                 if "$set" in entry:
                     continue
 
-                if "messages" in entry:
-                    yield from self._parse_conversation_record(
+                # Skip session metadata (first line with sessionId, projectHash, etc.)
+                if (
+                    "sessionId" in entry
+                    and "projectHash" in entry
+                    and "messages" not in entry
+                ):
+                    continue
+
+                # Handle individual messages (the actual format)
+                if "type" in entry and "timestamp" in entry:
+                    yield from self._parse_individual_message(
                         entry, session_id, timestamp_counter
                     )
-                    break
+                    timestamp_counter += 1
 
-    def _parse_conversation_record(
+    def _parse_individual_message(
         self,
-        record: dict,
+        entry: dict,
         session_id: str,
         counter: int,
     ) -> Iterator[TranscriptEntry]:
-        """Parse a ConversationRecord."""
-        messages = record.get("messages", [])
+        """Parse an individual message entry."""
+        msg_type = entry.get("type")
+        timestamp = entry.get("timestamp", "")
+        content = entry.get("content", "")
+        msg_id = entry.get("id", f"{session_id}-{counter}")
 
-        for msg in messages:
-            if not isinstance(msg, dict):
-                continue
+        if msg_type == "user":
+            # Handle content that might be a list of parts
+            if isinstance(content, list):
+                text_parts = []
+                for part in content:
+                    if isinstance(part, dict) and "text" in part:
+                        text_parts.append(part["text"])
+                    elif isinstance(part, str):
+                        text_parts.append(part)
+                content = "\n".join(text_parts)
 
-            msg_type = msg.get("type")
-            timestamp = msg.get("timestamp", "")
-            content = msg.get("content", "")
+            yield UserTranscriptEntry(
+                type="user",
+                parentUuid=None,
+                isSidechain=False,
+                userType="external",
+                cwd="",
+                sessionId=session_id,
+                version="",
+                uuid=msg_id,
+                timestamp=timestamp,
+                message=UserMessageModel(
+                    role="user",
+                    content=[TextContent(type="text", text=str(content))],
+                ),
+            )
 
-            if msg_type == "user":
-                yield UserTranscriptEntry(
+        elif msg_type == "gemini":
+            tool_calls = entry.get("toolCalls", [])
+            thoughts = entry.get("thoughts", [])
+            model = entry.get("model", "gemini")
+
+            if content:
+                yield AssistantTranscriptEntry(
+                    type="assistant",
                     parentUuid=None,
                     isSidechain=False,
                     userType="external",
                     cwd="",
                     sessionId=session_id,
                     version="",
-                    uuid=f"{session_id}-{counter}",
+                    uuid=msg_id,
                     timestamp=timestamp,
-                    message=UserMessageModel(
-                        role="user",
+                    message=AssistantMessageModel(
+                        id=msg_id,
+                        type="message",
+                        role="assistant",
+                        model=model,
                         content=[TextContent(type="text", text=str(content))],
                     ),
                 )
-                counter += 1
 
-            elif msg_type == "gemini":
-                tool_calls = msg.get("toolCalls", [])
-                thoughts = msg.get("thoughts", [])
-                tokens = msg.get("tokens")
-                model = msg.get("model", "gemini")
-
-                if content:
-                    yield AssistantTranscriptEntry(
-                        parentUuid=None,
-                        isSidechain=False,
-                        userType="external",
-                        cwd="",
-                        sessionId=session_id,
-                        version="",
-                        uuid=f"{session_id}-{counter}",
-                        timestamp=timestamp,
-                        message=AssistantMessageModel(
-                            id=f"{session_id}-{counter}",
-                            type="message",
-                            role="assistant",
-                            model=model,
-                            content=[TextContent(type="text", text=str(content))],
-                        ),
-                    )
-                    counter += 1
-
-                for thought in thoughts:
-                    if isinstance(thought, dict):
-                        thought_text = thought.get("summary", "")
-                        if thought_text:
-                            yield AssistantTranscriptEntry(
-                                parentUuid=None,
-                                isSidechain=False,
-                                userType="external",
-                                cwd="",
-                                sessionId=session_id,
-                                version="",
-                                uuid=f"{session_id}-{counter}",
-                                timestamp=thought.get("timestamp", timestamp),
-                                message=AssistantMessageModel(
-                                    id=f"{session_id}-{counter}",
-                                    type="message",
-                                    role="assistant",
-                                    model=model,
-                                    content=[
-                                        ThinkingContent(
-                                            type="thinking",
-                                            thinking=thought_text,
-                                        )
-                                    ],
-                                ),
-                            )
-                            counter += 1
-
-                for tool_call in tool_calls:
-                    if not isinstance(tool_call, dict):
-                        continue
-
-                    call_id = tool_call.get("id", f"{session_id}-{counter}")
-                    name = tool_call.get("name", "unknown")
-                    args = tool_call.get("args", {})
-                    result = tool_call.get("result")
-                    status = tool_call.get("status")
-
-                    yield AssistantTranscriptEntry(
-                        parentUuid=None,
-                        isSidechain=False,
-                        userType="external",
-                        cwd="",
-                        sessionId=session_id,
-                        version="",
-                        uuid=f"{session_id}-{counter}",
-                        timestamp=tool_call.get("timestamp", timestamp),
-                        message=AssistantMessageModel(
-                            id=f"{session_id}-{counter}",
-                            type="message",
-                            role="assistant",
-                            model=model,
-                            content=[
-                                ToolUseContent(
-                                    type="tool_use",
-                                    id=call_id,
-                                    name=name,
-                                    input=args,
-                                )
-                            ],
-                        ),
-                    )
-                    counter += 1
-
-                    if result is not None:
-                        yield UserTranscriptEntry(
+            for thought in thoughts:
+                if isinstance(thought, dict):
+                    thought_text = thought.get("summary", "")
+                    if thought_text:
+                        yield AssistantTranscriptEntry(
+                            type="assistant",
                             parentUuid=None,
                             isSidechain=False,
                             userType="external",
                             cwd="",
                             sessionId=session_id,
                             version="",
-                            uuid=f"{session_id}-{counter}",
-                            timestamp=tool_call.get("timestamp", timestamp),
-                            message=UserMessageModel(
-                                role="user",
+                            uuid=f"{msg_id}-thought-{counter}",
+                            timestamp=thought.get("timestamp", timestamp),
+                            message=AssistantMessageModel(
+                                id=f"{msg_id}-thought-{counter}",
+                                type="message",
+                                role="assistant",
+                                model=model,
                                 content=[
-                                    ToolResultContent(
-                                        type="tool_result",
-                                        tool_use_id=call_id,
-                                        content=str(result),
+                                    ThinkingContent(
+                                        type="thinking",
+                                        thinking=thought_text,
                                     )
                                 ],
                             ),
                         )
-                        counter += 1
 
-            elif msg_type in ("info", "error", "warning"):
+            for tool_call in tool_calls:
+                if not isinstance(tool_call, dict):
+                    continue
+
+                call_id = tool_call.get("id", f"{msg_id}-tool-{counter}")
+                name = tool_call.get("name", "unknown")
+                args = tool_call.get("args", {})
+                result = tool_call.get("result")
+
                 yield AssistantTranscriptEntry(
+                    type="assistant",
                     parentUuid=None,
                     isSidechain=False,
                     userType="external",
                     cwd="",
                     sessionId=session_id,
                     version="",
-                    uuid=f"{session_id}-{counter}",
-                    timestamp=timestamp,
+                    uuid=f"{msg_id}-tooluse-{counter}",
+                    timestamp=tool_call.get("timestamp", timestamp),
                     message=AssistantMessageModel(
-                        id=f"{session_id}-{counter}",
+                        id=f"{msg_id}-tooluse-{counter}",
                         type="message",
                         role="assistant",
-                        model="gemini",
-                        content=[TextContent(type="text", text=str(content))],
+                        model=model,
+                        content=[
+                            ToolUseContent(
+                                type="tool_use",
+                                id=call_id,
+                                name=name,
+                                input=args,
+                            )
+                        ],
                     ),
                 )
-                counter += 1
+
+                if result is not None:
+                    yield UserTranscriptEntry(
+                        type="user",
+                        parentUuid=None,
+                        isSidechain=False,
+                        userType="external",
+                        cwd="",
+                        sessionId=session_id,
+                        version="",
+                        uuid=f"{msg_id}-toolresult-{counter}",
+                        timestamp=tool_call.get("timestamp", timestamp),
+                        message=UserMessageModel(
+                            role="user",
+                            content=[
+                                ToolResultContent(
+                                    type="tool_result",
+                                    tool_use_id=call_id,
+                                    content=str(result),
+                                )
+                            ],
+                        ),
+                    )
+
+        elif msg_type in ("info", "error", "warning"):
+            yield AssistantTranscriptEntry(
+                type="assistant",
+                parentUuid=None,
+                isSidechain=False,
+                userType="external",
+                cwd="",
+                sessionId=session_id,
+                version="",
+                uuid=msg_id,
+                timestamp=timestamp,
+                message=AssistantMessageModel(
+                    id=msg_id,
+                    type="message",
+                    role="assistant",
+                    model="gemini",
+                    content=[TextContent(type="text", text=str(content))],
+                ),
+            )
 
     def _get_file_mtime(self, path: Path) -> str:
         """Get file modification time as ISO string."""
