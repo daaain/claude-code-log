@@ -1,7 +1,7 @@
 """Antigravity CLI (agy) session provider."""
 
 import json
-import sqlite3
+import re
 from pathlib import Path
 from typing import Iterator, Optional
 
@@ -9,9 +9,6 @@ from claude_code_log.models import (
     AssistantMessageModel,
     AssistantTranscriptEntry,
     TextContent,
-    ThinkingContent,
-    ToolResultContent,
-    ToolUseContent,
     TranscriptEntry,
     UserMessageModel,
     UserTranscriptEntry,
@@ -23,128 +20,122 @@ from .base import BaseProvider, SessionInfo
 class AgyProvider(BaseProvider):
     """Provider for Antigravity CLI (agy) sessions.
 
-    Supports two storage formats:
-    - SQLite .db files (newer CLI releases >= 1.0.4)
-    - Encrypted .pb files (older releases, requires agy-reader for decryption)
+    Session storage layout:
+        ~/.gemini/antigravity-cli/
+            conversations/<uuid>.db     - SQLite protobuf (binary, not used directly)
+            brain/<uuid>/.system_generated/logs/transcript.jsonl  - Human-readable transcript
+            history.jsonl               - User input history with timestamps
 
-    Storage location: ~/.gemini/antigravity-cli/conversations/
+    This provider reads transcript.jsonl for message content, falling back
+    to history.jsonl for session discovery metadata.
     """
 
     def get_provider_name(self) -> str:
         return "agy"
 
     def get_session_format(self) -> str:
-        return "sqlite"
+        return "jsonl"
 
     def get_data_dir(self) -> Optional[Path]:
-        """Return the agy-cli conversations directory."""
-        data_dir = Path.home() / ".gemini" / "antigravity-cli" / "conversations"
+        """Return the agy-cli root directory."""
+        data_dir = Path.home() / ".gemini" / "antigravity-cli"
         return data_dir if data_dir.exists() else None
 
     def discover_sessions(self) -> Iterator[SessionInfo]:
-        """Discover all agy-cli sessions.
-
-        Discovers both SQLite .db files (newer) and encrypted .pb files (older).
-        """
+        """Discover all agy-cli sessions from brain/ transcript logs."""
         data_dir = self.get_data_dir()
         if data_dir is None:
             return
 
-        # Discover SQLite .db files (newer format)
-        for db_file in data_dir.glob("*.db"):
-            session_id = db_file.stem
+        brain_dir = data_dir / "brain"
+        if not brain_dir.exists():
+            return
+
+        for session_dir in brain_dir.iterdir():
+            if not session_dir.is_dir():
+                continue
+
+            transcript_file = (
+                session_dir / ".system_generated" / "logs" / "transcript.jsonl"
+            )
+            if not transcript_file.exists():
+                continue
+
+            session_id = session_dir.name
             yield SessionInfo(
                 provider="agy",
                 session_id=session_id,
-                created_at=self._get_file_mtime(db_file),
+                created_at=self._get_file_mtime(transcript_file),
             )
 
-        # Discover encrypted .pb files (older format)
-        for pb_file in data_dir.glob("*.pb"):
-            session_id = pb_file.stem
-            # Check if a .trajectory.json sidecar exists (decrypted by agy-reader)
-            trajectory_file = pb_file.with_suffix(".trajectory.json")
-            if trajectory_file.exists():
-                yield SessionInfo(
-                    provider="agy",
-                    session_id=session_id,
-                    created_at=self._get_file_mtime(pb_file),
-                )
-
     def load_session(self, session_id: str) -> Iterator[TranscriptEntry]:
-        """Load an agy-cli session.
-
-        For SQLite .db files: Directly queries the database.
-        For encrypted .pb files: Requires agy-reader to have generated
-        a .trajectory.json sidecar.
-        """
+        """Load an agy-cli session from transcript.jsonl."""
         data_dir = self.get_data_dir()
         if data_dir is None:
             raise ValueError("Antigravity CLI data directory not found")
 
-        # Try SQLite .db first (newer format)
-        db_file = data_dir / f"{session_id}.db"
-        if db_file.exists():
-            yield from self._load_sqlite_session(db_file, session_id)
-            return
+        transcript_file = (
+            data_dir
+            / "brain"
+            / session_id
+            / ".system_generated"
+            / "logs"
+            / "transcript.jsonl"
+        )
 
-        # Fall back to .trajectory.json sidecar (agy-reader decrypted)
-        trajectory_file = data_dir / f"{session_id}.trajectory.json"
-        if trajectory_file.exists():
-            yield from self._load_trajectory_session(trajectory_file, session_id)
-            return
+        if not transcript_file.exists():
+            raise FileNotFoundError(
+                f"Transcript for session {session_id} not found at {transcript_file}"
+            )
 
-        raise FileNotFoundError(f"Session {session_id} not found")
+        with open(transcript_file, "r", encoding="utf-8") as f:
+            for i, line in enumerate(f):
+                line = line.strip()
+                if not line:
+                    continue
 
-    def _load_sqlite_session(
-        self, db_file: Path, session_id: str
+                entry = json.loads(line)
+                yield from self._parse_entry(entry, session_id, i)
+
+    def _parse_entry(
+        self, entry: dict, session_id: str, index: int
     ) -> Iterator[TranscriptEntry]:
-        """Load session from SQLite database."""
-        try:
-            conn = sqlite3.connect(str(db_file))
-            cursor = conn.cursor()
+        """Parse a single transcript entry into TranscriptEntry objects."""
+        entry_type = entry.get("type", "")
+        timestamp = entry.get("created_at", "")
+        content = entry.get("content", "")
 
-            # Query the steps table (schema may vary by version)
-            # This is a heuristic based on common agy-cli DB schemas
-            try:
-                cursor.execute(
-                    "SELECT timestamp, role, content, tool_name, tool_input, tool_output "
-                    "FROM steps ORDER BY timestamp"
+        if entry_type == "USER_INPUT":
+            # Extract the actual user message from <USER_REQUEST> tags
+            text = self._extract_user_request(content)
+            if text:
+                yield UserTranscriptEntry(
+                    type="user",
+                    parentUuid=None,
+                    isSidechain=False,
+                    userType="external",
+                    cwd="",
+                    sessionId=session_id,
+                    version="",
+                    uuid=f"agy-{session_id}-{index}",
+                    timestamp=timestamp,
+                    message=UserMessageModel(
+                        role="user",
+                        content=[TextContent(type="text", text=text)],
+                    ),
                 )
-                rows = cursor.fetchall()
-            except sqlite3.OperationalError:
-                # Table structure may be different, try alternative schema
-                try:
-                    cursor.execute(
-                        "SELECT created_at, role, content FROM messages ORDER BY created_at"
-                    )
-                    rows = cursor.fetchall()
-                except sqlite3.OperationalError:
-                    conn.close()
-                    return
 
-            for i, row in enumerate(rows):
-                timestamp = str(row[0]) if row[0] else ""
-                role = row[1] if len(row) > 1 else "user"
-                content = row[2] if len(row) > 2 else ""
-
-                if role == "user":
-                    yield UserTranscriptEntry(
-                        type="user",
-                        parentUuid=None,
-                        isSidechain=False,
-                        userType="external",
-                        cwd="",
-                        sessionId=session_id,
-                        version="",
-                        uuid=f"{session_id}-{i}",
-                        timestamp=timestamp,
-                        message=UserMessageModel(
-                            role="user",
-                            content=[TextContent(type="text", text=str(content))],
-                        ),
+        elif entry_type in ("PLANNER_RESPONSE", "CHECKPOINT"):
+            # Assistant responses
+            text = content if isinstance(content, str) else json.dumps(content)
+            if text:
+                # For PLANNER_RESPONSE, check for tool calls first
+                tool_calls = entry.get("tool_calls", [])
+                if tool_calls:
+                    yield from self._parse_tool_calls(
+                        tool_calls, text, session_id, index, timestamp
                     )
-                elif role == "assistant":
+                else:
                     yield AssistantTranscriptEntry(
                         type="assistant",
                         parentUuid=None,
@@ -153,74 +144,110 @@ class AgyProvider(BaseProvider):
                         cwd="",
                         sessionId=session_id,
                         version="",
-                        uuid=f"{session_id}-{i}",
+                        uuid=f"agy-{session_id}-{index}",
                         timestamp=timestamp,
                         message=AssistantMessageModel(
-                            id=f"{session_id}-{i}",
+                            id=f"agy-{session_id}-{index}",
                             type="message",
                             role="assistant",
                             model="antigravity",
-                            content=[TextContent(type="text", text=str(content))],
+                            content=[TextContent(type="text", text=text)],
                         ),
                     )
 
-            conn.close()
+        elif entry_type == "LIST_DIRECTORY":
+            # Tool result — emit as assistant message with tool context
+            text = content if isinstance(content, str) else json.dumps(content)
+            if text:
+                yield AssistantTranscriptEntry(
+                    type="assistant",
+                    parentUuid=None,
+                    isSidechain=False,
+                    userType="external",
+                    cwd="",
+                    sessionId=session_id,
+                    version="",
+                    uuid=f"agy-{session_id}-{index}",
+                    timestamp=timestamp,
+                    message=AssistantMessageModel(
+                        id=f"agy-{session_id}-{index}",
+                        type="message",
+                        role="assistant",
+                        model="antigravity",
+                        content=[
+                            TextContent(type="text", text=f"[tool: list_dir]\n{text}")
+                        ],
+                    ),
+                )
 
-        except Exception as e:
-            raise ValueError(f"Failed to load SQLite session: {e}")
+        # CONVERSATION_HISTORY entries have no content — skip them
 
-    def _load_trajectory_session(
-        self, trajectory_file: Path, session_id: str
-    ) -> Iterator[TranscriptEntry]:
-        """Load session from .trajectory.json sidecar (agy-reader output)."""
-        try:
-            with open(trajectory_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
+    def _parse_tool_calls(
+        self,
+        tool_calls: list,
+        fallback_text: str,
+        session_id: str,
+        index: int,
+        timestamp: str,
+    ) -> Iterator[AssistantTranscriptEntry]:
+        """Parse tool calls into assistant entries."""
+        for tc in tool_calls:
+            name = tc.get("name", "unknown")
+            args = tc.get("args", {})
 
-            steps = data.get("steps", [])
-            for i, step in enumerate(steps):
-                timestamp = step.get("metadata", {}).get("createdAt", "")
-                role = step.get("role", "user")
-                content = step.get("content", "")
+            # Format tool call as readable text
+            args_str = json.dumps(args, indent=2) if args else ""
+            text = f"[tool: {name}]\n{args_str}" if args_str else f"[tool: {name}]"
 
-                if role == "user":
-                    yield UserTranscriptEntry(
-                        type="user",
-                        parentUuid=None,
-                        isSidechain=False,
-                        userType="external",
-                        cwd="",
-                        sessionId=session_id,
-                        version="",
-                        uuid=f"{session_id}-{i}",
-                        timestamp=timestamp,
-                        message=UserMessageModel(
-                            role="user",
-                            content=[TextContent(type="text", text=str(content))],
-                        ),
-                    )
-                elif role == "assistant":
-                    yield AssistantTranscriptEntry(
-                        type="assistant",
-                        parentUuid=None,
-                        isSidechain=False,
-                        userType="external",
-                        cwd="",
-                        sessionId=session_id,
-                        version="",
-                        uuid=f"{session_id}-{i}",
-                        timestamp=timestamp,
-                        message=AssistantMessageModel(
-                            id=f"{session_id}-{i}",
-                            type="message",
-                            role="assistant",
-                            model="antigravity",
-                            content=[TextContent(type="text", text=str(content))],
-                        ),
-                    )
+            yield AssistantTranscriptEntry(
+                type="assistant",
+                parentUuid=None,
+                isSidechain=False,
+                userType="external",
+                cwd="",
+                sessionId=session_id,
+                version="",
+                uuid=f"agy-{session_id}-{index}-{name}",
+                timestamp=timestamp,
+                message=AssistantMessageModel(
+                    id=f"agy-{session_id}-{index}-{name}",
+                    type="message",
+                    role="assistant",
+                    model="antigravity",
+                    content=[TextContent(type="text", text=text)],
+                ),
+            )
 
-        except Exception as e:
-            raise ValueError(f"Failed to load trajectory session: {e}")
+        # If there was also a content response, emit it
+        if fallback_text and not fallback_text.startswith("[tool:"):
+            yield AssistantTranscriptEntry(
+                type="assistant",
+                parentUuid=None,
+                isSidechain=False,
+                userType="external",
+                cwd="",
+                sessionId=session_id,
+                version="",
+                uuid=f"agy-{session_id}-{index}-response",
+                timestamp=timestamp,
+                message=AssistantMessageModel(
+                    id=f"agy-{session_id}-{index}-response",
+                    type="message",
+                    role="assistant",
+                    model="antigravity",
+                    content=[TextContent(type="text", text=fallback_text)],
+                ),
+            )
+
+    def _extract_user_request(self, content: str) -> str:
+        """Extract user message from <USER_REQUEST> tags."""
+        match = re.search(
+            r"<USER_REQUEST>\s*(.*?)\s*</USER_REQUEST>", content, re.DOTALL
+        )
+        if match:
+            return match.group(1).strip()
+        # Fallback: return raw content if no tags found
+        return content.strip() if content else ""
 
     def _get_file_mtime(self, path: Path) -> str:
         """Get file modification time as ISO string."""
