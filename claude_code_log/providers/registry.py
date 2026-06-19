@@ -79,12 +79,14 @@ def discover_providers() -> ProviderRegistry:
     from .codex import CodexProvider
     from .gemini import GeminiProvider
     from .opencode import OpenCodeProvider
+    from .agy import AgyProvider
 
     # Register all provider classes
     registry.register_class("claude", ClaudeProvider)
     registry.register_class("codex", CodexProvider)
     registry.register_class("gemini", GeminiProvider)
     registry.register_class("opencode", OpenCodeProvider)
+    registry.register_class("agy", AgyProvider)
 
     # Instantiate and register providers
     for name, provider_class in registry._provider_classes.items():

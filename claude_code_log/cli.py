@@ -719,7 +719,7 @@ def _validate_git_link_template(template: str) -> None:
 @click.option(
     "--provider",
     type=click.Choice(
-        ["claude", "codex", "gemini", "opencode", "all"], case_sensitive=False
+        ["claude", "codex", "gemini", "opencode", "agy", "all"], case_sensitive=False
     ),
     default=None,
     help=(

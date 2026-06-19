@@ -2143,8 +2143,8 @@ class SessionBrowser(App[Optional[str]]):
         self.exit(result="back_to_projects")
 
     def action_filter_provider(self) -> None:
-        """Cycle through provider filters: None -> claude -> codex -> gemini -> opencode -> None"""
-        providers = [None, "claude", "codex", "gemini", "opencode"]
+        """Cycle through provider filters: None -> claude -> codex -> gemini -> opencode -> agy -> None"""
+        providers = [None, "claude", "codex", "gemini", "opencode", "agy"]
         current_idx = (
             providers.index(self.selected_provider)
             if self.selected_provider in providers

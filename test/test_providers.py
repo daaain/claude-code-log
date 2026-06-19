@@ -20,11 +20,12 @@ class TestProviderBase:
     def test_discover_providers(self):
         """Test that providers can be discovered."""
         registry = discover_providers()
-        assert len(registry.get_all_providers()) == 4
+        assert len(registry.get_all_providers()) == 5
         assert "claude" in registry.get_all_providers()
         assert "codex" in registry.get_all_providers()
         assert "gemini" in registry.get_all_providers()
         assert "opencode" in registry.get_all_providers()
+        assert "agy" in registry.get_all_providers()
 
     def test_provider_availability(self):
         """Test that provider availability can be checked."""
@@ -152,7 +153,13 @@ class TestGeminiProvider:
         session_file = chats_dir / "test-session.jsonl"
         with open(session_file, "w") as f:
             f.write(
-                '{"sessionId":"test-session","projectHash":"abc123","startTime":"2026-06-19T10:00:00.000Z","messages":[{"type":"user","id":"msg-001","timestamp":"2026-06-19T10:00:00.000Z","content":"Hello"},{"type":"gemini","id":"msg-002","timestamp":"2026-06-19T10:00:01.000Z","content":"Hi there!"}]}\n'
+                '{"sessionId":"test-session","projectHash":"abc123","startTime":"2026-06-19T10:00:00.000Z"}\n'
+            )
+            f.write(
+                '{"type":"user","id":"msg-001","timestamp":"2026-06-19T10:00:00.000Z","content":"Hello"}\n'
+            )
+            f.write(
+                '{"type":"gemini","id":"msg-002","timestamp":"2026-06-19T10:00:01.000Z","content":"Hi there!"}\n'
             )
 
         # Override get_data_dir to use our test directory
