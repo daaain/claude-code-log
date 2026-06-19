@@ -767,9 +767,12 @@ def main(
     list_providers: bool,
     debug: bool,
 ) -> None:
-    """Convert Claude transcript JSONL files to HTML or Markdown.
+    """Convert AI coding assistant transcripts to HTML or Markdown.
 
-    INPUT_PATH: Path to a Claude transcript JSONL file, directory containing JSONL files, or project path to convert. If not provided, defaults to ~/.claude/projects/ and --all-projects is used.
+    INPUT_PATH: Path to a transcript JSONL file, directory containing session files,
+    or project path to convert. If not provided, auto-discovers sessions from all
+    available providers (Claude Code, Codex CLI, Gemini CLI, OpenCode, agy).
+    Use --provider to limit to a specific provider.
     """
     # Install signal-based stack dumper before any heavy work, so a hang
     # can be diagnosed with `kill -USR1 <pid>` without root or restart.
