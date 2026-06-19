@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [Unreleased]
+
+### Added
+
+- **Multi-provider session support** — Now supports sessions from 5 AI coding assistants:
+  - Claude Code (original)
+  - Codex CLI (OpenAI)
+  - Gemini CLI (Google)
+  - OpenCode
+  - Antigravity CLI (agy)
+- **Provider abstraction layer** — Clean provider interface for adding new session sources
+- **Unified session discovery** — Auto-detects sessions across all providers
+- **Provider filtering in TUI** — Press `f` to cycle through providers (All → claude → codex → gemini → opencode → agy)
+- **Provider badges** — Session rows show `[CLAUDE]`, `[CODEX]`, `[GEMINI]`, `[OPENCODE]`, `[AGY]` badges
+- **New CLI options** — `--provider` flag (claude|codex|gemini|opencode|agy|all) and `--list-providers`
+- **HTML/Markdown rendering** — Works for all providers using existing renderers
+
+### Fixed
+
+- **Type field on TranscriptEntry** — All entries now have required `type="user"` or `type="assistant"` field
+- **Gemini parser** — Now correctly handles individual-message-per-line format (not `messages` array)
+
 ## [1.4.0] - 2026-06-03
 
 ### Changed
