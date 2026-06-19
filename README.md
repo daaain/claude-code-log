@@ -1,6 +1,8 @@
 # Claude Code Log
 
-A Python CLI tool that converts Claude Code transcript JSONL files into readable HTML and Markdown formats.
+A Python CLI tool that converts AI coding assistant transcripts into readable HTML and Markdown formats.
+
+**Supported providers:** Claude Code, Codex CLI, Gemini CLI, OpenCode, Antigravity CLI (agy)
 
 Browser log demo:
 
@@ -14,13 +16,13 @@ TUI demo:
 
 📋 **[View Changelog](CHANGELOG.md)** - See what's new in each release
 
-This tool generates clean, minimalist HTML pages showing user prompts and assistant responses chronologically. It's designed to create a readable log of your Claude Code interactions with support for both individual files and entire project hierarchies.
+This tool generates clean, minimalist HTML pages showing user prompts and assistant responses chronologically. It's designed to create a readable log of your AI coding assistant interactions with support for multiple providers (Claude Code, Codex CLI, Gemini CLI, OpenCode, Antigravity CLI) and both individual files and entire project hierarchies.
 
 📄 **[View Example HTML Output](https://daaain.github.io/claude-code-log/example/)** - A real example generated from a sample of this project's development, regenerated on every docs build
 
 ## Quickstart
 
-TL;DR: run the command below and browse the pages generated from your entire Claude Code archives:
+TL;DR: run the command below and browse the pages generated from all your AI coding assistant archives:
 
 ```sh
 uvx claude-code-log@latest --open-browser
@@ -28,14 +30,16 @@ uvx claude-code-log@latest --open-browser
 
 ## Key Features
 
-- **Interactive TUI (Terminal User Interface)**: Browse and manage Claude Code sessions with real-time navigation, summaries, and quick actions for HTML export and session resuming
-- **Project Hierarchy Processing**: Process entire `~/.claude/projects/` directory with linked index page
+- **Multi-Provider Support**: Works with Claude Code, Codex CLI, Gemini CLI, OpenCode, and Antigravity CLI (agy) sessions
+- **Interactive TUI (Terminal User Interface)**: Browse and manage sessions across all providers with real-time navigation, summaries, and quick actions for HTML export and session resuming
+- **Provider Filtering**: Filter sessions by provider in the TUI (press `f` to cycle)
+- **Project Hierarchy Processing**: Process entire project directories with linked index page
 - **Individual Session Files**: Generate separate HTML files for each session with navigation links
 - **Single File or Directory Processing**: Convert individual JSONL files or specific directories
 - **Session Navigation**: Interactive table of contents with session summaries and quick navigation
 - **Token Usage Tracking**: Display token consumption for individual messages and session totals
 - **Runtime Message Filtering**: JavaScript-powered filtering to show/hide message types (user, assistant, system, tool use, etc.)
-- **Chronological Ordering**: All messages sorted by timestamp across sessions
+- **Chronological Ordering**: All messages sorted by timestamp across sessions and providers
 - **Interactive timeline**: Generate an interactive, zoomable timeline grouped by message times to navigate conversations visually
 - **Cross-Session Summary Matching**: Properly match async-generated summaries to their original sessions
 - **Date Range Filtering**: Filter messages by date range using natural language (e.g., "today", "yesterday", "last week")
@@ -50,21 +54,21 @@ uvx claude-code-log@latest --open-browser
 
 This tool helps you answer questions like:
 
-- **"How can I review all my Claude Code conversations?"**
-- **"What did I work on with Claude yesterday/last week?"**
-- **"How much are my Claude Code sessions costing?"**
-- **"How can I search through my entire Claude Code history?"**
-- **"What tools did Claude use in this project?"**
-- **"How can I share my Claude Code conversation with others?"**
+- **"How can I review all my AI coding assistant conversations?"**
+- **"What did I work on with [Claude/Codex/Gemini/agy] yesterday/last week?"**
+- **"How much are my coding assistant sessions costing?"**
+- **"How can I search through my entire coding history across all tools?"**
+- **"What tools did my assistant use in this project?"**
+- **"How can I share my coding conversation with others?"**
 - **"What's the timeline of my project development?"**
-- **"How can I analyse patterns in my Claude Code usage?"**
+- **"How can I analyse patterns in my coding assistant usage?"**
 - **"How can I feed a past session back to an LLM for analysis or experience building?"**
 
 ## Usage
 
 ### Interactive TUI (Terminal User Interface)
 
-The TUI provides an interactive interface for browsing and managing Claude Code sessions with real-time navigation, session summaries, and quick actions.
+The TUI provides an interactive interface for browsing and managing sessions across all supported providers with real-time navigation, session summaries, and quick actions.
 
 ```bash
 # Launch TUI for all projects (default behavior)
@@ -73,36 +77,41 @@ claude-code-log --tui
 # Launch TUI for specific project directory
 claude-code-log /path/to/project --tui
 
-# Launch TUI for specific Claude project
-claude-code-log my-project --tui  # Automatically converts to ~/.claude/projects/-path-to-my-project
+# Launch TUI for specific project (auto-resolves ~/.claude/projects/ path)
+claude-code-log my-project --tui
 ```
 
 **TUI Features:**
 
-- **Session Listing**: Interactive table showing session IDs, summaries, timestamps, message counts, and token usage
-- **Smart Summaries**: Prioritizes Claude-generated summaries over first user messages for better session identification
+- **Multi-Provider Session Listing**: Interactive table showing session IDs, provider badges, summaries, timestamps, message counts, and token usage
+- **Provider Filter**: Press `f` to cycle through providers (All → Claude → Codex → Gemini → OpenCode → agy)
+- **Smart Summaries**: Prioritizes assistant-generated summaries over first user messages for better session identification
 - **Working Directory Matching**: Automatically finds and opens projects matching your current working directory
 - **Quick Actions**:
   - `h`: Generate and open session HTML in browser
   - `m`: Generate and open session Markdown in browser
   - `v`: View session Markdown in embedded viewer (with table of contents)
-  - `c`: Resume session in Claude Code with `claude -r <sessionId>`
+  - `c`: Resume session in its native CLI (where supported)
   - `r`: Reload session data from files
   - `p`: Switch to project selector view
   - `H`/`M`/`V`: Force regenerate HTML/Markdown (hidden shortcuts for development)
 - **Project Statistics**: Real-time display of total sessions, messages, tokens, and date range
 - **Cache Integration**: Leverages existing cache system for fast loading with automatic cache validation
-- **Keyboard Navigation**: Arrow keys to navigate, Enter to expand row details, `q` to quit
+- **Keyboard Navigation**: Arrow keys to navigate, Enter to expand row details, `q to quit
 - **Row Expansion**: Press Enter to expand selected row showing full summary, first user message, working directory, and detailed token usage
 
 ### Default Behavior (Process All Projects)
 
 ```bash
-# Process all projects in ~/.claude/projects/ (default behavior)
+# Process all projects across all providers (default behavior)
 claude-code-log
 
-# Explicitly process all projects
-claude-code-log --all-projects
+# Process all projects from a specific provider
+claude-code-log --provider claude
+claude-code-log --provider codex
+claude-code-log --provider gemini
+claude-code-log --provider opencode
+claude-code-log --provider agy
 
 # Process all projects and open in browser
 claude-code-log --open-browser
@@ -113,6 +122,9 @@ claude-code-log --from-date "last week"
 
 # Skip individual session files (only create combined transcripts)
 claude-code-log --no-individual-sessions
+
+# List available providers
+claude-code-log --list-providers
 ```
 
 This creates:
@@ -181,9 +193,10 @@ Placeholders: `{host}`, `{path}`, `{sha}`. The template fires only when the stat
 
 ## Project Hierarchy Output
 
-When processing all projects, the tool generates:
+When processing all projects, the tool generates output under each provider's data directory:
 
 ```sh
+# Claude Code
 ~/.claude/projects/
 ├── index.html                           # Master index with project cards
 ├── project1/
@@ -191,10 +204,28 @@ When processing all projects, the tool generates:
 │   ├── session-{session-id}.html        # Individual session pages
 │   ├── session-{session-id}.md          # Markdown version (on-demand via TUI)
 │   └── session-{session-id2}.html       # More session pages...
-├── project2/
-│   ├── combined_transcripts.html
-│   └── session-{session-id}.html
 └── ...
+
+# Codex CLI
+~/.codex/sessions/YYYY/MM/DD/
+└── rollout-*.jsonl                      # Session rollout files
+
+# Gemini CLI
+~/.gemini/tmp/<project-hash>/chats/
+└── session-*.jsonl                      # Session files
+
+# OpenCode
+~/.local/share/opencode/storage/
+├── session/                             # Session metadata
+├── message/                             # Messages per session
+└── part/                                # Message parts
+
+# Antigravity CLI (agy)
+~/.gemini/antigravity-cli/
+├── conversations/                       # SQLite databases
+├── brain/<uuid>/.system_generated/logs/
+│   └── transcript.jsonl                 # Human-readable transcript
+└── history.jsonl                        # User input history
 ```
 
 ### Index Page Features
@@ -209,12 +240,12 @@ When processing all projects, the tool generates:
 ## Message Types Supported
 
 - **User Messages**: Regular user inputs and prompts
-- **Assistant Messages**: Claude's responses with token usage display
+- **Assistant Messages**: AI responses with token usage display
 - **Summary Messages**: Session summaries with cross-session matching
 - **System Commands**: Commands like `init` shown in expandable details with structured parsing
 - **Tool Use**: Tool invocations with collapsible details and special TodoWrite rendering
 - **Tool Results**: Tool execution results with error handling
-- **Thinking Content**: Claude's internal reasoning processes
+- **Thinking Content**: AI's internal reasoning processes (where available)
 - **Images**: Pasted images and screenshots
 
 ## HTML Output Features
