@@ -1,0 +1,24 @@
+{
+  "type": "assistant",
+  "sessionId": "cb2e607c-c758-415a-8b45-c49e4631906a",
+  "timestamp": "2025-11-17T11:24:30.683Z",
+  "uuid": "e7ec4aaa-9676-4055-91eb-f2776361ec6f",
+  "parentUuid": "e753d86a-d3a6-409d-90b6-6064080be49c",
+  "isSidechain": false,
+  "message": {
+    "role": "assistant",
+    "type": "message",
+    "model": "claude-sonnet-4-5-20250929",
+    "id": "msg_0128UrZy2Lq7Tdn7FYWLDgi7",
+    "content": [
+      {
+        "type": "tool_use",
+        "id": "toolu_013Cho8SURc4ESongaWZu4d7",
+        "name": "AskUserQuestion",
+        "input": {
+          "question": "I need to understand your preferred installation approach to give you the best solution:\n\n... [trunc... [truncated]"
+        }
+      }
+    ]
+  }
+}

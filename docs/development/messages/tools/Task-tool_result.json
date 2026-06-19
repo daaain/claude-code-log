@@ -1,0 +1,24 @@
+{
+  "type": "user",
+  "sessionId": "cb2e607c-c758-415a-8b45-c49e4631906a",
+  "timestamp": "2025-11-17T11:24:15.312Z",
+  "uuid": "70f14719-7300-4566-9a4c-f4a6476e4a38",
+  "parentUuid": "93476638-874f-4088-a7c3-4cd32130ec88",
+  "isSidechain": false,
+  "message": {
+    "role": "user",
+    "content": [
+      {
+        "type": "tool_result",
+        "tool_use_id": "toolu_01HD7PpSCWhP2gP8dXvJiyZN",
+        "is_error": false,
+        "content": [
+          {
+            "_note": "1 items"
+          }
+        ]
+      }
+    ]
+  },
+  "toolUseResult": {}
+}

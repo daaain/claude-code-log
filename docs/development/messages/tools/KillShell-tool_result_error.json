@@ -1,0 +1,20 @@
+{
+  "type": "user",
+  "sessionId": "7acd37a8-2745-4b58-a8a9-46164b22ad9e",
+  "timestamp": "2025-11-18T00:06:18.278Z",
+  "uuid": "e2e69f87-726c-49d2-ae72-0ece69a814bc",
+  "parentUuid": "d57b0882-4dbe-45e1-8ce1-1ed843e00e66",
+  "isSidechain": false,
+  "message": {
+    "role": "user",
+    "content": [
+      {
+        "type": "tool_result",
+        "tool_use_id": "toolu_01ATgCqMQ92ZeGeENzzfTRi6",
+        "is_error": true,
+        "content": "Shell dce0af is not running, so cannot be killed (status: killed)"
+      }
+    ]
+  },
+  "toolUseResult": "Error: Shell dce0af is not running, so cannot be killed (status: killed)"
+}

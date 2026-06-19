@@ -1,0 +1,20 @@
+{
+  "type": "user",
+  "sessionId": "9e953218-585f-4692-89df-9e0747a31c68",
+  "timestamp": "2025-10-04T00:01:48.266Z",
+  "uuid": "2a6064fb-0f9b-4058-a9b9-faed1637dd55",
+  "parentUuid": "8fd655c9-4dc9-43e7-a333-063020015afd",
+  "isSidechain": false,
+  "message": {
+    "role": "user",
+    "content": [
+      {
+        "type": "tool_result",
+        "tool_use_id": "toolu_01YKFv5mcsGBX463DAn2h9YD",
+        "is_error": true,
+        "content": "please add transformer.js too first"
+      }
+    ]
+  },
+  "toolUseResult": "Error: please add transformer.js too first"
+}

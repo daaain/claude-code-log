@@ -1,0 +1,12 @@
+{
+  "type": "user",
+  "sessionId": "cbc0f75b-b36d-4efd-a7da-ac800ea30eb6",
+  "timestamp": "2025-07-19T14:35:08.714Z",
+  "uuid": "5310c7e8-5a78-49e3-b414-042a69c9c7d5",
+  "parentUuid": "cc67b20e-4350-4a71-bc4f-8b64f2adb806",
+  "isSidechain": false,
+  "message": {
+    "role": "user",
+    "content": "<bash-input> uv run pytest -m \"not (tui or browser)\" -v</bash-input>"
+  }
+}

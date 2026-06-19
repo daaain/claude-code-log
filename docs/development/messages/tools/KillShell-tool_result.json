@@ -1,0 +1,20 @@
+{
+  "type": "user",
+  "sessionId": "7acd37a8-2745-4b58-a8a9-46164b22ad9e",
+  "timestamp": "2025-11-18T00:03:32.383Z",
+  "uuid": "49ce97eb-fc4c-4c77-a78b-a923eeab4eb1",
+  "parentUuid": "054c1d19-9bee-4151-95e1-63ec99cf013a",
+  "isSidechain": false,
+  "message": {
+    "role": "user",
+    "content": [
+      {
+        "type": "tool_result",
+        "tool_use_id": "toolu_01Cv6rrwQjDynhg6WkqYWhAn",
+        "is_error": false,
+        "content": "{\"message\":\"Successfully killed shell: dce0af (pnpm dev)\",\"shell_id\":\"dce0af\"}"
+      }
+    ]
+  },
+  "toolUseResult": {}
+}

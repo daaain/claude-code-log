@@ -1,0 +1,15 @@
+{
+  "type": "user",
+  "message": {
+    "role": "user",
+    "content": "<command-name>/model</command-name>\n            <command-message>model</command-message>\n            <command-args></command-args>"
+  },
+  "parentUuid": "92757a7c-5fef-4e3f-8f26-4cd4c3069187",
+  "isSidechain": false,
+  "userType": "external",
+  "cwd": "/src/deep-manifest",
+  "sessionId": "a7da6a22-facc-4fcd-8bab-f83c87862004",
+  "version": "2.0.55",
+  "uuid": "200652a8-ed8f-40ca-9239-5a661fa2c9be",
+  "timestamp": "2025-11-29T15:17:28.972Z"
+}

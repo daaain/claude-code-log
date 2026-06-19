@@ -1,0 +1,25 @@
+{
+  "type": "assistant",
+  "sessionId": "741790a4-4fe2-4644-9a51-fb4482074060",
+  "timestamp": "2025-11-13T13:09:37.381Z",
+  "uuid": "0202e25d-9d68-456e-a764-e085e06aad63",
+  "parentUuid": "2ddf06a0-6ee1-4695-86a5-2c9e1983f607",
+  "isSidechain": true,
+  "message": {
+    "role": "assistant",
+    "type": "message",
+    "model": "claude-sonnet-4-5-20250929",
+    "id": "msg_01QcaYHrVe7qKdjUKUjMJjSg",
+    "content": [
+      {
+        "type": "tool_use",
+        "id": "toolu_01WB97t4LJ8M2hrZpQnQCJxG",
+        "name": "WebFetch",
+        "input": {
+          "url": "https://docs.github.com/en/rest/pulls/comments",
+          "prompt": "What fields are returned in the response from GET /repos/OWNER/REPO/pulls/PULL_NUMBER/comments? Spec... [truncated]"
+        }
+      }
+    ]
+  }
+}

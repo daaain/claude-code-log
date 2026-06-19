@@ -1,0 +1,20 @@
+{
+  "type": "user",
+  "sessionId": "937c6e6b-27e7-4edd-86f1-ad28f9731841",
+  "timestamp": "2025-07-17T20:46:04.642Z",
+  "uuid": "6aa8995e-7895-49be-9e40-debc9a835837",
+  "parentUuid": "ae68c646-5555-475a-b747-0e8d77d9b91c",
+  "isSidechain": false,
+  "message": {
+    "role": "user",
+    "content": [
+      {
+        "type": "tool_result",
+        "tool_use_id": "toolu_016MENZjjHeA5TapmSdkmCWq",
+        "is_error": true,
+        "content": "Found 2 matches of the string to replace, but replace_all is false. To replace all occurrences, set replace_all to true. To replace only one occurrence, please provide more context to uniquely identif... [truncated]"
+      }
+    ]
+  },
+  "toolUseResult": "Error: Found 2 matches of the string to replace, but replace_all is false. To replace all occurrences, set replace_all to true. To replace only one occurrence, please provide more context to uniquely ... [truncated]"
+}

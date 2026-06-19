@@ -1,0 +1,20 @@
+{
+  "type": "user",
+  "sessionId": "741790a4-4fe2-4644-9a51-fb4482074060",
+  "timestamp": "2025-11-13T13:09:31.016Z",
+  "uuid": "1e5e4e35-3c24-475e-b0fc-d637fe46e645",
+  "parentUuid": "1eb97b54-2407-473e-8c4d-439ad378efbc",
+  "isSidechain": true,
+  "message": {
+    "role": "user",
+    "content": [
+      {
+        "type": "tool_result",
+        "tool_use_id": "toolu_01Fa61Wkr6FFgFGSpZ2BSXED",
+        "is_error": false,
+        "content": "Web search results for query: \"GitHub API pulls comments endpoint response fields path line position 2025\"\n\nLinks: [{\"title\":\"REST API endpoints for pull request reviews - GitHub Docs\",\"url\":\"https://... [truncated]"
+      }
+    ]
+  },
+  "toolUseResult": {}
+}

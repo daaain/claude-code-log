@@ -1,0 +1,24 @@
+{
+  "type": "assistant",
+  "sessionId": "07047a7d-ecbf-4e09-9f96-43949ae2e4f4",
+  "timestamp": "2025-06-27T00:13:52.054Z",
+  "uuid": "1dea3b4c-9292-424b-8f8e-1835078d6185",
+  "parentUuid": "6d61f53f-ad87-4ed5-a047-dc52251df302",
+  "isSidechain": false,
+  "message": {
+    "role": "assistant",
+    "type": "message",
+    "model": "claude-sonnet-4-20250514",
+    "id": "msg_01SY3bH7Ty4f7xye4u9jrnUD",
+    "content": [
+      {
+        "type": "tool_use",
+        "id": "toolu_01XUruhhzr6TGcoFy832ESHU",
+        "name": "exit_plan_mode",
+        "input": {
+          "plan": "## Clean Up Message Filtering Logic\n\n... [truncated]"
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "type": "user",
+  "sessionId": "7864f562-717b-4d70-a1cb-b588f7826a1a",
+  "timestamp": "2025-10-29T16:03:05.129Z",
+  "uuid": "86a390e3-356f-4e9b-9584-cd5d5b9af948",
+  "parentUuid": null,
+  "isSidechain": true,
+  "message": {
+    "role": "user",
+    "content": "Warmup"
+  }
+}

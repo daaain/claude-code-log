@@ -1,0 +1,25 @@
+{
+  "type": "user",
+  "sessionId": "9e953218-585f-4692-89df-9e0747a31c68",
+  "timestamp": "2025-10-04T12:32:34.402Z",
+  "uuid": "924fbd38-7ef9-4907-91fd-ade65d44ff0b",
+  "parentUuid": "9c9252a8-1c2c-45d4-8065-0acda205cb91",
+  "isSidechain": false,
+  "message": {
+    "role": "user",
+    "content": [
+      {
+        "type": "image",
+        "source": {
+          "type": "base64",
+          "media_type": "image/png",
+          "data": "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAIAQMAAAD+wSzIAAAABlBMVEX///+/v7+jQ3Y5AAAADklEQVQI12P4AIX8EAgALgAD/aNpbtEAAAAASUVORK5CYII [abbreviated]"
+        }
+      },
+      {
+        "type": "text",
+        "text": "Do you think we could set up rewrites for the JS and CSS? This basePath method does the job, but we end up with two failed requests for so it impacts page load times"
+      }
+    ]
+  }
+}

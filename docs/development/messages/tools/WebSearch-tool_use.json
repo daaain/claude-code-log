@@ -1,0 +1,24 @@
+{
+  "type": "assistant",
+  "sessionId": "741790a4-4fe2-4644-9a51-fb4482074060",
+  "timestamp": "2025-11-13T12:14:44.735Z",
+  "uuid": "4d6d4310-d5b2-4c4d-b2b7-d70ed9caf921",
+  "parentUuid": "89c3edde-8686-48c5-871d-3770fc5dc61d",
+  "isSidechain": true,
+  "message": {
+    "role": "assistant",
+    "type": "message",
+    "model": "claude-sonnet-4-5-20250929",
+    "id": "msg_018sPiYDNCm5ytiGsmMeBRDn",
+    "content": [
+      {
+        "type": "tool_use",
+        "id": "toolu_01Fa61Wkr6FFgFGSpZ2BSXED",
+        "name": "WebSearch",
+        "input": {
+          "query": "GitHub API pulls comments endpoint response fields path line position 2025"
+        }
+      }
+    ]
+  }
+}

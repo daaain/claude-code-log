@@ -1,0 +1,23 @@
+{
+  "type": "user",
+  "sessionId": "7acd37a8-2745-4b58-a8a9-46164b22ad9e",
+  "timestamp": "2025-11-18T00:03:27.238Z",
+  "uuid": "0aaed81b-3220-4424-ac7d-235802db656a",
+  "parentUuid": "be2b84d8-d747-48d3-adf0-143393870c88",
+  "isSidechain": false,
+  "message": {
+    "role": "user",
+    "content": [
+      {
+        "type": "tool_result",
+        "tool_use_id": "toolu_01GvxiBWatZMFVNvxyDms7Ey",
+        "is_error": false,
+        "content": "<status>running</status>\n\n<stdout>\n... [truncated]"
+      }
+    ]
+  },
+  "toolUseResult": {
+    "stdout": "> jssoundrecorder@0.1.0 dev /Users/dain/workspace/JSSoundRecorder\n> vite\n\n... [truncated]",
+    "stderr": ""
+  }
+}

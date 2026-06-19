@@ -1,0 +1,20 @@
+{
+  "type": "user",
+  "sessionId": "a7da6a22-facc-4fcd-8bab-f83c87862004",
+  "timestamp": "2025-11-29T15:24:52.265Z",
+  "uuid": "87fa9554-9180-4d41-8e41-6fac9cc2e302",
+  "parentUuid": "d6ee300f-5e71-47c3-ac2d-c4aa5c6526e3",
+  "isSidechain": true,
+  "message": {
+    "role": "user",
+    "content": [
+      {
+        "type": "tool_result",
+        "tool_use_id": "toolu_019PsYX89dHWK39GLHCS6MVo",
+        "is_error": true,
+        "content": "EISDIR: illegal operation on a directory, read"
+      }
+    ]
+  },
+  "toolUseResult": "Error: EISDIR: illegal operation on a directory, read"
+}

@@ -1,0 +1,20 @@
+{
+  "type": "user",
+  "sessionId": "07047a7d-ecbf-4e09-9f96-43949ae2e4f4",
+  "timestamp": "2025-06-27T00:16:45.772Z",
+  "uuid": "a8dec12b-93b5-46b6-9c0d-0bd128e0f03d",
+  "parentUuid": "1dea3b4c-9292-424b-8f8e-1835078d6185",
+  "isSidechain": false,
+  "message": {
+    "role": "user",
+    "content": [
+      {
+        "type": "tool_result",
+        "tool_use_id": "toolu_01XUruhhzr6TGcoFy832ESHU",
+        "is_error": false,
+        "content": "User has approved your plan. You can now start coding."
+      }
+    ]
+  },
+  "toolUseResult": {}
+}

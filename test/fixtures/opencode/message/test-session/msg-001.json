@@ -1,0 +1,1 @@
+{"id":"msg-001","sessionID":"test-session","role":"user","time":{"created":1750310400000},"agent":"default","model":{"providerID":"anthropic","modelID":"claude-3-5-sonnet-20241022"}}

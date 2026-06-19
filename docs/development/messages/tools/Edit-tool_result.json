@@ -1,0 +1,20 @@
+{
+  "type": "user",
+  "sessionId": "b25638d7-b104-4f06-a797-70ac33d069ed",
+  "timestamp": "2025-09-29T17:08:56.317Z",
+  "uuid": "642ea10e-e0d8-43f4-9c26-ebce0828a8b9",
+  "parentUuid": "9112bb66-ff4b-499f-bef8-03fc2317a56f",
+  "isSidechain": false,
+  "message": {
+    "role": "user",
+    "content": [
+      {
+        "type": "tool_result",
+        "tool_use_id": "toolu_01LsK8An4morbFYkB3fejkoX",
+        "is_error": true,
+        "content": "<tool_use_error>File has not been read yet. Read it first before writing to it.</tool_use_error>"
+      }
+    ]
+  },
+  "toolUseResult": "Error: File has not been read yet. Read it first before writing to it."
+}

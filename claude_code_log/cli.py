@@ -717,6 +717,22 @@ def _validate_git_link_template(template: str) -> None:
     ),
 )
 @click.option(
+    "--provider",
+    type=click.Choice(
+        ["claude", "codex", "gemini", "opencode", "all"], case_sensitive=False
+    ),
+    default=None,
+    help=(
+        "Session provider to use. Default: auto-detect based on available ~/. directories. "
+        "Use 'all' to discover sessions from all providers."
+    ),
+)
+@click.option(
+    "--list-providers",
+    is_flag=True,
+    help="List available session providers and exit.",
+)
+@click.option(
     "--debug",
     is_flag=True,
     default=False,
@@ -747,6 +763,8 @@ def main(
     git_link: Optional[str],
     no_timestamps: bool,
     no_recaps: bool,
+    provider: Optional[str],
+    list_providers: bool,
     debug: bool,
 ) -> None:
     """Convert Claude transcript JSONL files to HTML or Markdown.
@@ -756,6 +774,16 @@ def main(
     # Install signal-based stack dumper before any heavy work, so a hang
     # can be diagnosed with `kill -USR1 <pid>` without root or restart.
     _install_stack_dump_signal()
+
+    if list_providers:
+        from .providers import discover_providers
+
+        registry = discover_providers()
+        click.echo("Available session providers:")
+        for name in registry.get_all_providers():
+            status = "✓" if name in registry.get_available_providers() else "✗"
+            click.echo(f"  {status} {name}")
+        return
 
     # Custom-forge URL template: validate eagerly with a loud error,
     # then pin to the env var so the resolver (which reads the env at

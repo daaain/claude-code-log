@@ -1,0 +1,12 @@
+{
+  "type": "user",
+  "sessionId": "b25638d7-b104-4f06-a797-70ac33d069ed",
+  "timestamp": "2025-09-29T17:07:46.135Z",
+  "uuid": "39ea49bc-8cc9-4ec3-b598-4d75428d7c5e",
+  "parentUuid": null,
+  "isSidechain": false,
+  "message": {
+    "role": "user",
+    "content": "Oh, I just found out that this is not supported by Chrome :(\\\n\\\nThis is the relevant CSS:\\\n... [truncated]"
+  }
+}

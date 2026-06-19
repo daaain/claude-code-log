@@ -1259,6 +1259,12 @@ class SessionBrowser(App[Optional[str]]):
         border: solid $secondary;
         overflow-y: auto;
     }
+    
+    #provider-filter {
+        height: 3;
+        border: solid $secondary;
+        margin-bottom: 1;
+    }
     """
 
     TITLE = "Claude Code Log - Session Browser"
@@ -1279,15 +1285,18 @@ class SessionBrowser(App[Optional[str]]):
         Binding("d", "delete_session", "Delete Session"),
         Binding("e", "toggle_expanded", "Toggle Expanded View"),
         Binding("p", "back_to_projects", "Open Project Selector"),
+        Binding("f", "filter_provider", "Filter Provider"),
         Binding("?", "toggle_help", "Help"),
     ]
 
     selected_session_id: reactive[Optional[str]] = reactive(cast(Optional[str], None))
     is_expanded: reactive[bool] = reactive(False)
+    selected_provider: reactive[Optional[str]] = reactive(cast(Optional[str], None))
     project_path: Path
     cache_manager: CacheManager
     sessions: dict[str, SessionCacheData]
     archived_sessions: dict[str, SessionCacheData]
+    provider_sessions: dict[str, str]  # session_id -> provider_name
 
     def __init__(self, project_path: Path, is_archived: bool = False):
         """Initialize the session browser with a project path."""
@@ -1298,6 +1307,7 @@ class SessionBrowser(App[Optional[str]]):
         self.cache_manager = CacheManager(self.project_path, get_library_version())
         self.sessions = {}
         self.archived_sessions = {}
+        self.provider_sessions = {}
 
     def compose(self) -> ComposeResult:
         """Create the UI layout."""
@@ -1447,6 +1457,14 @@ class SessionBrowser(App[Optional[str]]):
         for session_id, session_data in self.archived_sessions.items():
             all_sessions.append((session_id, session_data, True))
 
+        # Filter by provider if selected
+        if self.selected_provider:
+            all_sessions = [
+                (sid, data, archived)
+                for sid, data, archived in all_sessions
+                if self.provider_sessions.get(sid) == self.selected_provider
+            ]
+
         # Sort all sessions by start time (newest first)
         sorted_sessions = sorted(
             all_sessions, key=lambda x: x[1].first_timestamp, reverse=True
@@ -1483,9 +1501,13 @@ class SessionBrowser(App[Optional[str]]):
             if is_archived:
                 preview = f"\\[ARCHIVED] {preview}"
 
+            # Add provider badge
+            provider = self.provider_sessions.get(session_id, "claude")
+            provider_badge = f"[{provider.upper()}] "
+
             table.add_row(
                 session_id[:8],
-                preview,
+                f"{provider_badge}{preview}",
                 start_time,
                 end_time,
                 str(session_data.message_count),
@@ -1502,12 +1524,17 @@ class SessionBrowser(App[Optional[str]]):
             s.total_input_tokens + s.total_output_tokens for s in all_sessions.values()
         )
 
+        # Calculate per-provider stats
+        provider_counts: dict[str, int] = {}
+        for session_id in all_sessions:
+            provider = self.provider_sessions.get(session_id, "claude")
+            provider_counts[provider] = provider_counts.get(provider, 0) + 1
+
         # Get project name using shared logic
         working_directories: List[str] = []
         try:
             working_directories = self.cache_manager.get_working_directories()
         except Exception:
-            # Fall back to directory name if cache fails
             pass
 
         project_name = get_project_display_name(
@@ -1547,13 +1574,19 @@ class SessionBrowser(App[Optional[str]]):
         else:
             mode_indicator = ""
 
+        # Show provider filter if active
+        filter_indicator = ""
+        if self.selected_provider:
+            filter_indicator = f" [Filter: {self.selected_provider.upper()}]"
+
         # Project section (left aligned)
-        project_section = (
-            f"[bold]Project:[/bold] {project_name} {mode_indicator}".strip()
-        )
+        project_section = f"[bold]Project:[/bold] {project_name} {mode_indicator}{filter_indicator}".strip()
 
         # Sessions info section (center)
-        sessions_section = f"[bold]Sessions:[/bold] {total_sessions:,} | [bold]Messages:[/bold] {total_messages:,} | [bold]Tokens:[/bold] {total_tokens:,}"
+        provider_stats = " | ".join(
+            f"{k}: {v}" for k, v in sorted(provider_counts.items())
+        )
+        sessions_section = f"[bold]Sessions:[/bold] {total_sessions:,} ({provider_stats}) | [bold]Messages:[/bold] {total_messages:,} | [bold]Tokens:[/bold] {total_tokens:,}"
 
         # Date range section (right aligned)
         date_section = f"[bold]Date Range:[/bold] {date_range}"
@@ -2108,6 +2141,25 @@ class SessionBrowser(App[Optional[str]]):
         """Navigate to the project selector."""
         # Exit with a special return value to signal we want to go to project selector
         self.exit(result="back_to_projects")
+
+    def action_filter_provider(self) -> None:
+        """Cycle through provider filters: None -> claude -> codex -> gemini -> opencode -> None"""
+        providers = [None, "claude", "codex", "gemini", "opencode"]
+        current_idx = (
+            providers.index(self.selected_provider)
+            if self.selected_provider in providers
+            else 0
+        )
+        next_idx = (current_idx + 1) % len(providers)
+        self.selected_provider = providers[next_idx]
+        self.populate_table()
+        if self.selected_provider:
+            self.notify(
+                f"Filtering by provider: {self.selected_provider}",
+                severity="information",
+            )
+        else:
+            self.notify("Showing all providers", severity="information")
 
     async def action_quit(self) -> None:
         """Quit the application with proper cleanup."""

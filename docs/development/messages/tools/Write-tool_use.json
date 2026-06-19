@@ -1,0 +1,25 @@
+{
+  "type": "assistant",
+  "sessionId": "9e953218-585f-4692-89df-9e0747a31c68",
+  "timestamp": "2025-10-03T23:59:52.232Z",
+  "uuid": "3b742928-0e5b-4fa9-9174-89c58b692497",
+  "parentUuid": "78649cc5-e531-4ea9-b748-2a92d402ae89",
+  "isSidechain": false,
+  "message": {
+    "role": "assistant",
+    "type": "message",
+    "model": "claude-sonnet-4-5-20250929",
+    "id": "msg_01NHFT4LdUekGkqFuzi2dxRx",
+    "content": [
+      {
+        "type": "tool_use",
+        "id": "toolu_01BM49RbbGYRjhjgHRECVjyo",
+        "name": "Write",
+        "input": {
+          "file_path": "/Users/dain/workspace/online-llm-tokenizer/README.md",
+          "content": "# Online LLM Tokenizer\n\n... [truncated]"
+        }
+      }
+    ]
+  }
+}

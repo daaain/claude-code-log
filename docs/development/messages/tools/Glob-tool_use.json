@@ -1,0 +1,24 @@
+{
+  "type": "assistant",
+  "sessionId": "9e953218-585f-4692-89df-9e0747a31c68",
+  "timestamp": "2025-10-04T00:10:56.890Z",
+  "uuid": "3e6f0af7-e562-4e94-a5fb-4a89dc732b3a",
+  "parentUuid": "bc3b3fa9-42f4-4ba6-8b5d-057dfa4205b6",
+  "isSidechain": false,
+  "message": {
+    "role": "assistant",
+    "type": "message",
+    "model": "claude-sonnet-4-5-20250929",
+    "id": "msg_0168zew6cQfdRGi5A6PK24A4",
+    "content": [
+      {
+        "type": "tool_use",
+        "id": "toolu_01G5ufg57YNH1LHkRbRsFb2d",
+        "name": "Glob",
+        "input": {
+          "pattern": "package.json"
+        }
+      }
+    ]
+  }
+}

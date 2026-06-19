@@ -1,0 +1,20 @@
+{
+  "type": "user",
+  "sessionId": "858d9e0c-1f3f-4b19-ac5c-b0573d8f5ec3",
+  "timestamp": "2025-06-23T23:47:53.249Z",
+  "uuid": "b798b408-a8a9-4f31-b1e8-41e9c1dbe286",
+  "parentUuid": "0a7cf970-4266-4b9d-af3d-df49a89cf873",
+  "isSidechain": true,
+  "message": {
+    "role": "user",
+    "content": [
+      {
+        "type": "tool_result",
+        "tool_use_id": "toolu_012fQhHuTkyHqwemmGoHJKhh",
+        "is_error": false,
+        "content": "- /Users/dain/workspace/claude-code-log/\n  - claude_code_log/\n    - templates/\n... [truncated]"
+      }
+    ]
+  },
+  "toolUseResult": "- /Users/dain/workspace/claude-code-log/\n  - claude_code_log/\n    - templates/\n... [truncated]"
+}

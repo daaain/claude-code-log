@@ -1,0 +1,20 @@
+{
+  "type": "user",
+  "sessionId": "741790a4-4fe2-4644-9a51-fb4482074060",
+  "timestamp": "2025-11-13T14:08:07.080Z",
+  "uuid": "9b80622a-bed6-43e4-a9c0-1d68ecd9c412",
+  "parentUuid": "0202e25d-9d68-456e-a764-e085e06aad63",
+  "isSidechain": true,
+  "message": {
+    "role": "user",
+    "content": [
+      {
+        "type": "tool_result",
+        "tool_use_id": "toolu_01WB97t4LJ8M2hrZpQnQCJxG",
+        "is_error": false,
+        "content": "# Fields Returned by GET /repos/OWNER/REPO/pulls/PULL_NUMBER/comments\n\nBased on the GitHub API documentation, the response includes these location-related fields:\n... [truncated]"
+      }
+    ]
+  },
+  "toolUseResult": {}
+}

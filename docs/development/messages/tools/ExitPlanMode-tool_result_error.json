@@ -1,0 +1,20 @@
+{
+  "type": "user",
+  "sessionId": "f852ad25-1024-47da-964e-5eaae5bd6e6a",
+  "timestamp": "2025-09-29T18:03:58.529Z",
+  "uuid": "7ad0670f-71d6-4b9a-92eb-6aec57054171",
+  "parentUuid": "63d8b8a5-ff78-427b-8f0c-2f1442b4413b",
+  "isSidechain": false,
+  "message": {
+    "role": "user",
+    "content": [
+      {
+        "type": "tool_result",
+        "tool_use_id": "toolu_017mbHLs6TBUKmPTEbgKUZtH",
+        "is_error": true,
+        "content": "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to... [truncated]"
+      }
+    ]
+  },
+  "toolUseResult": "Error: The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the ... [truncated]"
+}

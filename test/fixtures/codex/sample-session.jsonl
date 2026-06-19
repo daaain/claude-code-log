@@ -1,0 +1,9 @@
+{"timestamp":"2026-06-19T10:00:00.000Z","type":"session_meta","payload":{"model_provider":"openai","cli_version":"0.137.0"}}
+{"timestamp":"2026-06-19T10:00:01.000Z","type":"turn_context","payload":{"model":"gpt-4o"}}
+{"timestamp":"2026-06-19T10:00:02.000Z","type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"output_text","text":"You are a helpful coding assistant."}]}}
+{"timestamp":"2026-06-19T10:00:03.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Hello! How can I help you today?"}]}}
+{"timestamp":"2026-06-19T10:00:04.000Z","type":"event_msg","payload":{"type":"agent_message","message":"The user is greeting me. I should respond politely."}}
+{"timestamp":"2026-06-19T10:00:05.000Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"command\":\"ls -la\"}","call_id":"call_001"}}
+{"timestamp":"2026-06-19T10:00:06.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_001","output":"total 32\ndrwxr-xr-x  6 user  staff  192 Jun 19 10:00 .\ndrwxr-xr-x  3 user  staff   96 Jun 19 10:00 .."}}
+{"timestamp":"2026-06-19T10:00:07.000Z","type":"event_msg","payload":{"type":"token_count","usage":{"prompt_tokens":100,"completion_tokens":50,"total_tokens":150}}}
+{"timestamp":"2026-06-19T10:00:08.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"I can see the directory contents. Let me know if you need anything else!"}]}}

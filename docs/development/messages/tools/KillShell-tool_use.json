@@ -1,0 +1,24 @@
+{
+  "type": "assistant",
+  "sessionId": "7acd37a8-2745-4b58-a8a9-46164b22ad9e",
+  "timestamp": "2025-11-18T00:03:32.341Z",
+  "uuid": "054c1d19-9bee-4151-95e1-63ec99cf013a",
+  "parentUuid": "46911bf4-c7c4-4bac-ab78-0a6b3e2ff028",
+  "isSidechain": false,
+  "message": {
+    "role": "assistant",
+    "type": "message",
+    "model": "claude-sonnet-4-5-20250929",
+    "id": "msg_01P5Rd3DEkoNowEpc41U8kzs",
+    "content": [
+      {
+        "type": "tool_use",
+        "id": "toolu_01Cv6rrwQjDynhg6WkqYWhAn",
+        "name": "KillShell",
+        "input": {
+          "shell_id": "dce0af"
+        }
+      }
+    ]
+  }
+}

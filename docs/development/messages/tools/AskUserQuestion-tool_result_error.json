@@ -1,0 +1,20 @@
+{
+  "type": "user",
+  "sessionId": "cb2e607c-c758-415a-8b45-c49e4631906a",
+  "timestamp": "2025-11-17T11:24:30.745Z",
+  "uuid": "c37b9c09-2cf8-4d20-afcf-60d2f90f0eb1",
+  "parentUuid": "e7ec4aaa-9676-4055-91eb-f2776361ec6f",
+  "isSidechain": false,
+  "message": {
+    "role": "user",
+    "content": [
+      {
+        "type": "tool_result",
+        "tool_use_id": "toolu_013Cho8SURc4ESongaWZu4d7",
+        "is_error": true,
+        "content": "<tool_use_error>Error: No such tool available: AskUserQuestion</tool_use_error>"
+      }
+    ]
+  },
+  "toolUseResult": "Error: No such tool available: AskUserQuestion"
+}

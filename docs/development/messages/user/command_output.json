@@ -1,0 +1,15 @@
+{
+  "type": "user",
+  "message": {
+    "role": "user",
+    "content": "<local-command-stdout>Set model to \u001b[1mopus (claude-opus-4-5-20251101)\u001b[22m</local-command-stdout>"
+  },
+  "parentUuid": "200652a8-ed8f-40ca-9239-5a661fa2c9be",
+  "isSidechain": false,
+  "userType": "external",
+  "cwd": "/src/deep-manifest",
+  "sessionId": "a7da6a22-facc-4fcd-8bab-f83c87862004",
+  "version": "2.0.55",
+  "uuid": "f880c35d-8afe-4cfb-82bf-37c39f423457",
+  "timestamp": "2025-11-29T15:17:28.972Z"
+}
