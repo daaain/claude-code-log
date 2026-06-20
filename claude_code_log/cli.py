@@ -20,6 +20,7 @@ from .converter import (
     get_file_extension,
     get_index_filename,
     process_projects_hierarchy,
+    generate_all_providers_index,
 )
 from .cache import (
     CacheManager,
@@ -583,6 +584,11 @@ def _validate_git_link_template(template: str) -> None:
     help="Process all projects in ~/.claude/projects/ hierarchy and create linked HTML files",
 )
 @click.option(
+    "--all-providers",
+    is_flag=True,
+    help="Discover sessions from ALL providers (Claude, Codex, Gemini, OpenCode, agy) and generate a unified index page",
+)
+@click.option(
     "--no-individual-sessions",
     is_flag=True,
     help=(
@@ -748,6 +754,7 @@ def main(
     from_date: Optional[str],
     to_date: Optional[str],
     all_projects: bool,
+    all_providers: bool,
     no_individual_sessions: bool,
     no_cache: bool,
     clear_cache: bool,
@@ -1050,6 +1057,61 @@ def main(
                 no_recaps=no_recaps,
             )
             click.echo(f"Successfully exported session to {output_path}")
+            if open_browser:
+                click.launch(str(output_path))
+            return
+
+        # Handle --all-providers: discover from all providers and generate unified index
+        if all_providers:
+            from .providers import discover_providers
+
+            registry = discover_providers()
+
+            # Get available providers
+            available = registry.get_available_providers()
+            if not available:
+                click.echo(
+                    "No providers found. Make sure at least one AI assistant is installed."
+                )
+                return
+
+            click.echo(f"Discovering sessions from providers: {', '.join(available)}")
+
+            # Collect sessions from all providers
+            all_sessions = []
+            for name in available:
+                provider = registry.get_provider(name)
+                try:
+                    sessions = list(provider.discover_sessions())
+                    for s in sessions:
+                        all_sessions.append((name, s))
+                except Exception as e:
+                    click.echo(f"Warning: Failed to discover {name} sessions: {e}")
+
+            if not all_sessions:
+                click.echo("No sessions found across any provider.")
+                return
+
+            click.echo(
+                f"Found {len(all_sessions)} total sessions across {len(available)} providers"
+            )
+
+            # Generate unified index
+            output_path = generate_all_providers_index(
+                all_sessions,
+                output_format,
+                output,
+                from_date,
+                to_date,
+                detail_level,
+                compact,
+                no_timestamps,
+                no_recaps,
+                image_export_mode,
+            )
+
+            click.echo(f"Successfully created unified index at {output_path}")
+
             if open_browser:
                 click.launch(str(output_path))
             return
