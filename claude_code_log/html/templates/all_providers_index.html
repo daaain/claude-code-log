@@ -228,9 +228,12 @@
         </div>
     </div>
 
-    <div class='provider-list'>
+    <div class='project-list'>
         {% for provider in providers %}
-        <div class='provider-card'>
+        <div class='project-card provider-card'>
+            <div class='project-name'>
+                <a href="#" class="provider-link">{{ provider.name }}</a>
+            </div>
             <div class='provider-header'>
                 <span class='provider-badge'>[{{ provider.name }}]</span>
                 <div class='provider-stats'>
@@ -242,9 +245,9 @@
             </div>
             <ul class='provider-sessions'>
                 {% for session in provider.sessions[:15] %}
-                <li>
+                <li class='session-link' data-session-id="{{ session.id }}" data-project-name="{{ provider.name }}" data-session-preview="" data-session-meta="{{ session.created_at[:19].replace('T', ' ') if session.created_at else 'unknown' }}">
                     <span class='session-id'>{{ session.id }}</span>
-                    <span class='session-date'>{{ session.created_at[:19].replace('T', ' ') if session.created_at else 'unknown' }}</span>
+                    <span class='session-date' data-timestamp="{{ session.created_at }}">{{ session.created_at[:19].replace('T', ' ') if session.created_at else 'unknown' }}</span>
                 </li>
                 {% endfor %}
                 {% if provider.sessions|length > 15 %}
