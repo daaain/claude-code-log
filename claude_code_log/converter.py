@@ -3173,6 +3173,7 @@ def _generate_all_providers_html_index(
                 "to_date": to_date,
             },
             library_version=get_library_version(),
+            is_transcript=False,
         )
     )
 

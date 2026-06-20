@@ -46,8 +46,8 @@
 
 <script>
 (function() {
-    // Search state
-    let searchState = {
+    // Search state - expose globally
+    window.searchState = {
         query: '',
         useRegex: false,
         searchInFiltered: true,
@@ -56,6 +56,7 @@
         searchIndex: null,
         isIndexPage: null
     };
+    let searchState = window.searchState;
 
     // DOM elements
     const searchContainer = document.getElementById('searchContainer');
@@ -99,6 +100,48 @@
     function buildSearchIndex() {
         searchState.searchIndex = [];
         
+        // Check for all-providers full index data
+        if (searchState.isIndexPage && window.__allProvidersSearchData) {
+            // Use full provider data for complete search coverage
+            window.__allProvidersSearchData.forEach(provider => {
+                const projectName = provider.name;
+                const projectLink = '#'; // Provider link
+                const sessionCount = provider.sessions?.length || 0;
+                
+                // Index the provider
+                searchState.searchIndex.push({
+                    type: 'project',
+                    name: projectName,
+                    stats: `${sessionCount} sessions`,
+                    element: document.querySelector(`.project-card .provider-link[href="#"]`).closest('.project-card'),
+                    link: projectLink,
+                    searchText: `${projectName} ${sessionCount} sessions`,
+                    originalText: `${projectName} ${sessionCount} sessions`
+                });
+                
+                // Index ALL sessions from this provider (not just displayed 15)
+                (provider.sessions || []).forEach(session => {
+                    const sessionId = session.id;
+                    const createdAt = session.created_at || '';
+                    const createdAtDisplay = createdAt ? createdAt.slice(0, 19).replace('T', ' ') : 'unknown';
+                    
+                    searchState.searchIndex.push({
+                        type: 'session',
+                        projectName: projectName,
+                        sessionText: sessionId,
+                        sessionPreview: '',
+                        sessionMeta: createdAtDisplay,
+                        element: document.querySelector(`.session-link[data-session-id="${sessionId}"]`) || document.body,
+                        link: '#', // No direct link from index page
+                        searchText: `${projectName} ${sessionId} ${createdAtDisplay}`,
+                        originalText: `${sessionId} ${createdAtDisplay}`
+                    });
+                });
+            });
+            return;
+        }
+        
+        // Original index page logic
         if (searchState.isIndexPage) {
             // Index page: index projects with individual sessions
             document.querySelectorAll('.project-card').forEach(card => {
@@ -775,5 +818,10 @@
     } else {
         initSearch();
     }
+
+    // Expose globally for external use
+    window.initSearch = initSearch;
+    window.buildSearchIndex = buildSearchIndex;
+    window.performSearch = performSearch;
 })();
 </script>
