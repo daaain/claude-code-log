@@ -271,7 +271,6 @@
             try {
                 const providers = JSON.parse(fullIndexEl.dataset.providers);
                 window.__allProvidersSearchData = providers;
-                console.debug('Loaded full search index immediately:', providers.reduce((sum, p) => sum + (p.sessions?.length || 0), 0), 'sessions');
             } catch (e) {
                 console.error('Failed to parse full search index:', e);
             }

@@ -99,11 +99,9 @@
     // Build search index from current page
     function buildSearchIndex() {
         searchState.searchIndex = [];
-        console.debug('buildSearchIndex called, isIndexPage:', searchState.isIndexPage, 'hasAllProvidersData:', !!window.__allProvidersSearchData);
         
         // Check for all-providers full index data
         if (searchState.isIndexPage && window.__allProvidersSearchData) {
-            console.debug('Using all-providers full data for search index');
             // Use full provider data for complete search coverage
             window.__allProvidersSearchData.forEach(provider => {
                 const projectName = provider.name;
@@ -128,7 +126,6 @@
                     const createdAtDisplay = createdAt ? createdAt.slice(0, 19).replace('T', ' ') : 'unknown';
                     // Get content preview from full data
                     const contentPreview = session.content_preview || '';
-                    console.debug('Search index session:', session.id, 'content_preview:', session.content_preview ? session.content_preview.substring(0, 50) : 'NONE');
                     
                     searchState.searchIndex.push({
                         type: 'session',
@@ -145,7 +142,6 @@
             });
             return;
         }
-        console.debug('Using original index page logic');
         
         // Original index page logic
         if (searchState.isIndexPage) {
