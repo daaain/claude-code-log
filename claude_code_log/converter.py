@@ -3063,10 +3063,11 @@ def generate_all_providers_index(
         from .providers import discover_providers
 
         registry = discover_providers()
-        # Limit content previews to first 50 sessions per provider for performance
-        preview_limit = 50
+        # Load content previews for ALL sessions for full-text search
+        # (was limited to 50 for performance, but 883 is manageable)
+        preview_limit = 1000
         for i, s in enumerate(sorted_sessions):
-            # Only load preview for first N sessions per provider
+            # Load content preview for search
             if i < preview_limit:
                 # Load content preview for search
                 try:
