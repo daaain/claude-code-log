@@ -82,13 +82,19 @@ class OpenCodeProvider(BaseProvider):
                 except (json.JSONDecodeError, OSError):
                     continue
 
-    def load_session(self, session_id: str) -> Iterator[TranscriptEntry]:
+    def load_session(
+        self, session_id: str, max_messages: Optional[int] = None
+    ) -> Iterator[TranscriptEntry]:
         """Load an OpenCode session.
 
         Parses sharded JSON format:
         - session/*.json: Session metadata
         - message/{session-id}/*.json: Messages with role (user/assistant)
         - part/{message-id}/*.json: Parts (text, tool-invocation, tool-result, reasoning)
+
+        Args:
+            session_id: Session ID to load
+            max_messages: Optional maximum number of messages to yield (for previews)
         """
         data_dir = self.get_data_dir()
         if data_dir is None:
@@ -98,7 +104,7 @@ class OpenCodeProvider(BaseProvider):
         if session_data is None:
             raise FileNotFoundError(f"Session {session_id} not found")
 
-        yield from self._parse_session(data_dir, session_id, session_data)
+        yield from self._parse_session(data_dir, session_id, session_data, max_messages)
 
     def _load_session_data(self, data_dir: Path, session_id: str) -> Optional[dict]:
         """Load session metadata from JSON file."""
@@ -125,6 +131,7 @@ class OpenCodeProvider(BaseProvider):
         data_dir: Path,
         session_id: str,
         session_data: dict,
+        max_messages: Optional[int] = None,
     ) -> Iterator[TranscriptEntry]:
         """Parse an OpenCode session."""
         message_dir = data_dir / "message" / session_id
@@ -133,8 +140,12 @@ class OpenCodeProvider(BaseProvider):
 
         part_dir = data_dir / "part"
         timestamp_counter = 0
+        message_count = 0
 
         for message_file in sorted(message_dir.glob("*.json")):
+            if max_messages is not None and message_count >= max_messages:
+                break
+            message_count += 1
             try:
                 with open(message_file, "r", encoding="utf-8") as f:
                     message_data = json.load(f)
@@ -197,7 +208,7 @@ class OpenCodeProvider(BaseProvider):
                         text = part.get("text", "")
                         if text:
                             yield AssistantTranscriptEntry(
-                        type="assistant",
+                                type="assistant",
                                 parentUuid=None,
                                 isSidechain=False,
                                 userType="external",
@@ -220,7 +231,7 @@ class OpenCodeProvider(BaseProvider):
                         text = part.get("text", "")
                         if text:
                             yield AssistantTranscriptEntry(
-                        type="assistant",
+                                type="assistant",
                                 parentUuid=None,
                                 isSidechain=False,
                                 userType="external",
@@ -252,7 +263,7 @@ class OpenCodeProvider(BaseProvider):
                         input_data = part.get("input", {})
 
                         yield AssistantTranscriptEntry(
-                        type="assistant",
+                            type="assistant",
                             parentUuid=None,
                             isSidechain=False,
                             userType="external",
@@ -287,7 +298,7 @@ class OpenCodeProvider(BaseProvider):
                             output = part.get("output", "")
                             if output:
                                 yield UserTranscriptEntry(
-                        type="user",
+                                    type="user",
                                     parentUuid=None,
                                     isSidechain=False,
                                     userType="external",

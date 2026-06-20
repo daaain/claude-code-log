@@ -179,6 +179,7 @@ cython_debug/
 
 .examples
 test_output
+claude-code-log-output/
 .DS_Store
 test/test_data/*.html
 .claude-trace

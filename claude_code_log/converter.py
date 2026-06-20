@@ -229,11 +229,13 @@ def load_transcript(
     to_date: Optional[str] = None,
     silent: bool = False,
     _loaded_files: Optional[set[Path]] = None,
+    max_messages: Optional[int] = None,
 ) -> list[TranscriptEntry]:
     """Load and parse JSONL transcript file, using cache if available.
 
     Args:
         _loaded_files: Internal parameter to track loaded files and prevent infinite recursion.
+        max_messages: Optional maximum number of messages to return (for previews)
     """
     # Initialize loaded files set on first call
     if _loaded_files is None:
@@ -326,6 +328,10 @@ def load_transcript(
                         # the payload away at parse time).
                         entry = create_transcript_entry(entry_dict)
                         messages.append(entry)
+
+                        # Check max_messages limit for preview loading
+                        if max_messages is not None and len(messages) >= max_messages:
+                            break
                     elif entry_type in SILENT_SKIP_TYPES:
                         # Internal Claude Code entries with no DAG fields.
                         pass
@@ -3069,10 +3075,10 @@ def generate_all_providers_index(
         for i, s in enumerate(sorted_sessions):
             # Load content preview for search
             if i < preview_limit:
-                # Load content preview for search
                 try:
                     provider = registry.get_provider(provider_name)
-                    entries = list(provider.load_session(s.session_id))
+                    # Use max_messages=10 for fast preview loading
+                    entries = list(provider.load_session(s.session_id, max_messages=10))
                     # Extract text content from first ~10 messages as preview
                     preview_parts = []
                     for entry in entries[:10]:
@@ -3084,7 +3090,7 @@ def generate_all_providers_index(
                                         preview_parts.append(content.text)
                                     elif isinstance(content, str):
                                         preview_parts.append(content)
-                    preview = " ".join(preview_parts)[:5000]  # Limit preview size
+                    preview = " ".join(preview_parts)[:10000]  # Limit preview size
                 except Exception as e:
                     print(
                         f"    Warning: Failed to load preview for {s.session_id}: {e}"

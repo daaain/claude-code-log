@@ -68,7 +68,9 @@ class AgyProvider(BaseProvider):
                 created_at=self._get_file_mtime(transcript_file),
             )
 
-    def load_session(self, session_id: str) -> Iterator[TranscriptEntry]:
+    def load_session(
+        self, session_id: str, max_messages: Optional[int] = None
+    ) -> Iterator[TranscriptEntry]:
         """Load an agy-cli session from transcript.jsonl."""
         data_dir = self.get_data_dir()
         if data_dir is None:
@@ -96,6 +98,9 @@ class AgyProvider(BaseProvider):
 
                 entry = json.loads(line)
                 yield from self._parse_entry(entry, session_id, i)
+
+                if max_messages is not None and i >= max_messages:
+                    break
 
     def _parse_entry(
         self, entry: dict, session_id: str, index: int

@@ -626,19 +626,21 @@
             
             // Show session matches
             groups.sessions.forEach(match => {
-                const sessionId = match.link.split('/').pop().replace('session-', '').replace('.html', '').substring(0, 8);
+                const sessionId = match.sessionText || match.id || 'unknown';
+                // Escape for onclick handler
+                const safeSessionId = sessionId.replace(/'/g, "\\'");
+                const safeProjectName = (match.projectName || '').replace(/'/g, "\\'");
+                const safeExcerpt = (match.excerpt || '').replace(/'/g, "\\'");
                 html += `
-                    <div class="search-result-item">
-                        <a href="${match.link}">
-                            <div class="search-result-session">💬 Session ${sessionId}</div>
-                            <div class="search-result-excerpt">
-                                ${highlightText(match.excerpt, searchState.query)}
-                            </div>
-                            <div class="search-result-meta">
-                                <span>${match.matchCount} matches</span>
-                                <span>${match.sessionMeta}</span>
-                            </div>
-                        </a>
+                    <div class="search-result-item" data-session-id="${match.sessionText || match.id}" data-project="${safeProjectName}" style="cursor: pointer;">
+                        <div class="search-result-session">💬 Session ${sessionId.substring(0, 16)}</div>
+                        <div class="search-result-excerpt">
+                            ${highlightText(match.excerpt, searchState.query)}
+                        </div>
+                        <div class="search-result-meta">
+                            <span>${match.matchCount} matches</span>
+                            <span>${match.sessionMeta || ''}</span>
+                        </div>
                     </div>
                 `;
             });
@@ -647,6 +649,15 @@
         });
         
         searchResultsContent.innerHTML = html;
+
+        // Add click handlers for session items
+        searchResultsContent.querySelectorAll('.search-result-item[data-session-id]').forEach(item => {
+            item.addEventListener('click', () => {
+                const sessionId = item.dataset.sessionId;
+                const project = item.dataset.project;
+                // console.log(`Session clicked: ${sessionId} (Project: ${project})`);
+            });
+        });
     }
 
     // Highlight text in search results (always case-insensitive)

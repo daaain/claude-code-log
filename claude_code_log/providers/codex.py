@@ -66,13 +66,19 @@ class CodexProvider(BaseProvider):
                             created_at=f"{year_dir.name}-{month_dir.name}-{day_dir.name}",
                         )
 
-    def load_session(self, session_id: str) -> Iterator[TranscriptEntry]:
+    def load_session(
+        self, session_id: str, max_messages: Optional[int] = None
+    ) -> Iterator[TranscriptEntry]:
         """Load a Codex CLI session.
 
         Parses rollout JSONL format:
         - session_meta: First line, session-level metadata
         - response_item: Messages, tool calls, tool outputs
         - event_msg: Token counts, task lifecycle, agent reasoning
+
+        Args:
+            session_id: Session ID to load
+            max_messages: Optional maximum number of messages to yield (for previews)
         """
         data_dir = self.get_data_dir()
         if data_dir is None:
@@ -108,13 +114,19 @@ class CodexProvider(BaseProvider):
 
         return None
 
-    def _parse_rollout_file(self, rollout_file: Path) -> Iterator[TranscriptEntry]:
+    def _parse_rollout_file(
+        self, rollout_file: Path, max_messages: Optional[int] = None
+    ) -> Iterator[TranscriptEntry]:
         """Parse a Codex rollout JSONL file."""
         session_id = rollout_file.stem
         timestamp_counter = 0
+        message_count = 0
 
         with open(rollout_file, "r", encoding="utf-8") as f:
             for line_no, line in enumerate(f, 1):
+                if max_messages is not None and message_count >= max_messages:
+                    break
+                message_count += 1
                 line = line.strip()
                 if not line:
                     continue
@@ -239,7 +251,7 @@ class CodexProvider(BaseProvider):
                 arguments = {"raw": arguments_str}
 
             yield AssistantTranscriptEntry(
-                        type="assistant",
+                type="assistant",
                 parentUuid=None,
                 isSidechain=False,
                 userType="external",
@@ -269,7 +281,7 @@ class CodexProvider(BaseProvider):
             output = payload.get("output", "")
 
             yield UserTranscriptEntry(
-                        type="user",
+                type="user",
                 parentUuid=None,
                 isSidechain=False,
                 userType="external",
@@ -305,7 +317,7 @@ class CodexProvider(BaseProvider):
             message = payload.get("message", "")
             if message:
                 yield AssistantTranscriptEntry(
-                        type="assistant",
+                    type="assistant",
                     parentUuid=None,
                     isSidechain=False,
                     userType="external",

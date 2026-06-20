@@ -60,13 +60,19 @@ class GeminiProvider(BaseProvider):
                     created_at=self._get_file_mtime(session_file),
                 )
 
-    def load_session(self, session_id: str) -> Iterator[TranscriptEntry]:
+    def load_session(
+        self, session_id: str, max_messages: Optional[int] = None
+    ) -> Iterator[TranscriptEntry]:
         """Load a Gemini CLI session.
 
         Parses JSONL format with individual messages per line:
         - Session metadata (first line)
         - Individual messages with type: user|info|error|warning|gemini
         - $set operations (metadata updates)
+
+        Args:
+            session_id: Session ID to load
+            max_messages: Optional maximum number of messages to yield (for previews)
         """
         data_dir = self.get_data_dir()
         if data_dir is None:
@@ -94,13 +100,19 @@ class GeminiProvider(BaseProvider):
 
         return None
 
-    def _parse_session_file(self, session_file: Path) -> Iterator[TranscriptEntry]:
+    def _parse_session_file(
+        self, session_file: Path, max_messages: Optional[int] = None
+    ) -> Iterator[TranscriptEntry]:
         """Parse a Gemini CLI session JSONL file."""
         session_id = session_file.stem
         timestamp_counter = 0
+        message_count = 0
 
         with open(session_file, "r", encoding="utf-8") as f:
             for line_no, line in enumerate(f, 1):
+                if max_messages is not None and message_count >= max_messages:
+                    break
+                message_count += 1
                 line = line.strip()
                 if not line:
                     continue

@@ -49,10 +49,16 @@ class ClaudeProvider(BaseProvider):
                     created_at=self._get_file_mtime(jsonl_file),
                 )
 
-    def load_session(self, session_id: str) -> Iterator[TranscriptEntry]:
+    def load_session(
+        self, session_id: str, max_messages: Optional[int] = None
+    ) -> Iterator[TranscriptEntry]:
         """Load a Claude Code session.
 
         This uses the existing load_transcript function from converter.py.
+
+        Args:
+            session_id: Session ID to load
+            max_messages: Optional maximum number of messages to yield (for previews)
         """
         from claude_code_log.converter import load_transcript
 
