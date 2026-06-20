@@ -3084,7 +3084,7 @@ def generate_all_providers_index(
                                         preview_parts.append(content.text)
                                     elif isinstance(content, str):
                                         preview_parts.append(content)
-                    preview = " ".join(preview_parts[:5])[:500]  # Limit preview size
+                    preview = " ".join(preview_parts)[:5000]  # Limit preview size
                 except Exception as e:
                     print(
                         f"    Warning: Failed to load preview for {s.session_id}: {e}"
