@@ -265,19 +265,17 @@
 
     <script>
         // Pre-populate search index from full provider data (all sessions, not just displayed 15)
-        document.addEventListener('DOMContentLoaded', function() {
-            const fullIndexEl = document.getElementById('search-full-index');
-            if (fullIndexEl && fullIndexEl.dataset.providers) {
-                try {
-                    const providers = JSON.parse(fullIndexEl.dataset.providers);
-                    // Store in window for search script to use
-                    window.__allProvidersSearchData = providers;
-                    console.log('Loaded full search index:', providers.reduce((sum, p) => sum + (p.sessions?.length || 0), 0), 'sessions');
-                } catch (e) {
-                    console.error('Failed to parse full search index:', e);
-                }
+        // Run immediately (not waiting for DOMContentLoaded) so it's available forBuildSearchIndex can use it
+        const fullIndexEl = document.getElementById('search-full-index');
+        if (fullIndexEl && fullIndexEl.dataset.providers) {
+            try {
+                const providers = JSON.parse(fullIndexEl.dataset.providers);
+                window.__allProvidersSearchData = providers;
+                console.debug('Loaded full search index immediately:', providers.reduce((sum, p) => sum + (p.sessions?.length || 0), 0), 'sessions');
+            } catch (e) {
+                console.error('Failed to parse full search index:', e);
             }
-        });
+        }
     </script>
 
     <script>

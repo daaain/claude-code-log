@@ -3060,13 +3060,45 @@ def generate_all_providers_index(
         )
 
         session_data = []
-        for s in sorted_sessions:
+        from .providers import discover_providers
+
+        registry = discover_providers()
+        # Limit content previews to first 50 sessions per provider for performance
+        preview_limit = 50
+        for i, s in enumerate(sorted_sessions):
+            # Only load preview for first N sessions per provider
+            if i < preview_limit:
+                # Load content preview for search
+                try:
+                    provider = registry.get_provider(provider_name)
+                    entries = list(provider.load_session(s.session_id))
+                    # Extract text content from first ~10 messages as preview
+                    preview_parts = []
+                    for entry in entries[:10]:
+                        if hasattr(entry, "message") and entry.message:
+                            msg = entry.message
+                            if hasattr(msg, "content"):
+                                for content in msg.content:
+                                    if hasattr(content, "text"):
+                                        preview_parts.append(content.text)
+                                    elif isinstance(content, str):
+                                        preview_parts.append(content)
+                    preview = " ".join(preview_parts[:5])[:500]  # Limit preview size
+                except Exception as e:
+                    print(
+                        f"    Warning: Failed to load preview for {s.session_id}: {e}"
+                    )
+                    preview = ""
+            else:
+                preview = ""
+
             session_data.append(
                 {
                     "id": s.session_id,
                     "provider": provider_name,
                     "created_at": s.created_at,
                     "file": None,  # No per-session files in all-providers index
+                    "content_preview": preview,
                 }
             )
 
