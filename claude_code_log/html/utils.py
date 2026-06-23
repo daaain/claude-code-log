@@ -265,6 +265,20 @@ def css_class_from_message(msg: "TemplateMessage") -> str:
     if msg.is_sidechain:
         parts.append("sidechain")
 
+    # Agent-nesting depth (#213 visual layer). A message at depth d (d >= 1)
+    # carries:
+    #   - ``agent-depth-{d}``       exact depth (data / tests / timeline)
+    #   - ``agent-ring-{1..5}``     5-colour cycle bucket for the group line
+    #   - ``agent-deep``            d >= 6 → compress the indent step
+    # All three are derivable from d, but CSS can't compute them, so we emit
+    # the classes. Depth 0 (trunk / non-agent) adds nothing.
+    if msg.agent_depth >= 1:
+        d = msg.agent_depth
+        parts.append(f"agent-depth-{d}")
+        parts.append(f"agent-ring-{((d - 1) % 5) + 1}")
+        if d >= 6:
+            parts.append("agent-deep")
+
     return " ".join(parts)
 
 

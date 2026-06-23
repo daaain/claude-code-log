@@ -268,6 +268,22 @@ class TemplateMessage:
         # JSON blocks extracted into params tables.
         self.in_workflow_sidechannel: bool = False
 
+        # Agent-nesting depth of this message's session line (#213 visual
+        # layer): 0 for the trunk / non-agent messages, 1 for a directly
+        # spawned sub-agent, 2 for a sub-agent of a sub-agent, … Set by
+        # _build_message_hierarchy (chasing spawned_agent_id links); drives
+        # the per-depth group-line colour ramp, the spawn-card depth badge,
+        # and the deep-chain indent compression.
+        self.agent_depth: int = 0
+
+        # Set by _cleanup_sidechain_duplicates on a Task/Agent spawn
+        # tool_result whose sub-agent transcript collapsed ENTIRELY into the
+        # prompt + result already shown (the agent answered directly, with no
+        # surviving tool calls or thinking). Lets the renderer mark it so a
+        # fully-elided transcript reads as "nothing hidden" rather than as a
+        # spawn that produced no transcript at all (#213 visual layer).
+        self.spawns_collapsed_transcript: bool = False
+
         # Per-render annotations populated by the HTML renderer's tree walk
         # (HtmlRenderer._annotate_tree_for_render). The recursive template
         # macro reads these instead of receiving a flat (msg, title, html,
@@ -2422,9 +2438,9 @@ def _build_message_hierarchy(messages: list[TemplateMessage]) -> None:
             # Determine level from message type and modifiers, shifted by
             # the agent-nesting depth of the message's session line.
             current_level = _get_message_hierarchy_level(message)
-            agent_depth = _agent_depth(message.meta.session_id or "")
-            if agent_depth > 1:
-                current_level += 2 * (agent_depth - 1)
+            message.agent_depth = _agent_depth(message.meta.session_id or "")
+            if message.agent_depth > 1:
+                current_level += 2 * (message.agent_depth - 1)
 
         # Pop stack until we find the appropriate parent level
         while hierarchy_stack and hierarchy_stack[-1][0] >= current_level:
@@ -3580,6 +3596,16 @@ def _cleanup_sidechain_duplicates(root_messages: list[TemplateMessage]) -> None:
                 # Drop duplicate sidechain assistant message
                 del children[i]
                 break
+
+        # Fully-collapsed nested spawn (#213 visual layer): the sub-agent's
+        # whole transcript was just prompt → answer (both already shown), so
+        # dedup emptied it. Mark it — but only for a NESTED spawn (the result
+        # card itself sits inside an agent transcript, ``agent_depth >= 1``);
+        # trunk-level direct sub-agents keep their pre-#213 rendering. The
+        # marker distinguishes "transcript identical to result" from "spawn
+        # with no transcript at all", which otherwise look the same.
+        if not children and message.agent_depth >= 1:
+            message.spawns_collapsed_transcript = True
 
     for root in root_messages:
         process_message(root)
