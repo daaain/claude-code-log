@@ -941,6 +941,25 @@ class HtmlRenderer(Renderer):
             return ""
         return super().title_ToolUseMessage(content, message)
 
+    def title_ToolResultMessage(
+        self, content: ToolResultMessage, message: TemplateMessage
+    ) -> str:
+        """Tool-result title, plus the fully-collapsed-transcript marker
+        (#213 visual layer): when a nested Task/Agent spawn's entire
+        transcript deduped away (the sub-agent answered directly, no tool
+        calls), tag the result so it reads as 'this IS the whole transcript'
+        rather than a spawn that produced nothing."""
+        base = super().title_ToolResultMessage(content, message)
+        if message.spawns_collapsed_transcript:
+            marker = (
+                "<span class='spawn-collapsed-marker'"
+                " title='The sub-agent answered directly (no tool calls); its"
+                " full transcript was just the prompt and this result'>"
+                "≡ full transcript</span>"
+            )
+            return f"{base} {marker}" if base else marker
+        return base
+
     def title_TaskInput(self, input: TaskInput, message: TemplateMessage) -> str:
         """Title → '🔧 Task <desc> (subagent_type) [async #<id>]'.
 
@@ -968,21 +987,42 @@ class HtmlRenderer(Renderer):
             if input.run_in_background
             else ""
         )
+        suffix = async_hint + self._agent_depth_badge(message)
         if input.description and input.subagent_type:
             escaped_desc = escape_html(input.description)
             return (
                 f"🔧 {escaped_name} <span class='tool-summary'>{escaped_desc}</span>"
                 f" <span class='tool-subagent'>({escaped_subagent})</span>"
-                f"{async_hint}"
+                f"{suffix}"
             )
         elif input.description:
-            return self._tool_title(message, "🔧", input.description) + async_hint
+            return self._tool_title(message, "🔧", input.description) + suffix
         elif input.subagent_type:
             return (
                 f"🔧 {escaped_name} <span class='tool-subagent'>({escaped_subagent})</span>"
-                f"{async_hint}"
+                f"{suffix}"
             )
-        return f"🔧 {escaped_name}{async_hint}"
+        return f"🔧 {escaped_name}{suffix}"
+
+    def _agent_depth_badge(self, message: TemplateMessage) -> str:
+        """Depth badge for a nested spawn card (#213 visual layer).
+
+        Shows the depth of the sub-agent this Task/Agent call opens — the
+        card's own ``agent_depth`` + 1, since the spawned agent sits exactly
+        one level deeper. Empty for top-level spawns (which open a depth-1
+        transcript) so the common shallow case stays uncluttered. The badge's
+        ring class colour-matches the group line that frames the transcript
+        directly below it.
+        """
+        spawned_depth = message.agent_depth + 1
+        if spawned_depth < 2:
+            return ""
+        ring = ((spawned_depth - 1) % 5) + 1
+        return (
+            f" <span class='agent-depth-badge agent-ring-{ring}'"
+            f" title='Opens a depth-{spawned_depth} sub-agent transcript'>"
+            f"Depth {spawned_depth}</span>"
+        )
 
     def _async_id_suffix(
         self,

@@ -43,6 +43,16 @@
     --workflow-phase-color: #3a7d3c;
     --workflow-agent-color: #9e9e9e;
 
+    /* Nested-agent depth ramp (#213 visual layer): the group line framing a
+       depth-d sub-agent transcript cycles through these 5 colors via
+       ((d-1) mod 5). Ring 1 is tool-green so a plain depth-1 sub-agent keeps
+       its existing look; deeper rings stay distinct against the cream bg. */
+    --agent-ring-1: #4caf50;
+    --agent-ring-2: #1e88e5;
+    --agent-ring-3: #8e44ad;
+    --agent-ring-4: #e67e22;
+    --agent-ring-5: #00897b;
+
     /* Fork/branch structural colors */
     --fork-point-color: #adb5bd;
     --branch-point-color: #adb5bd;

@@ -1544,12 +1544,95 @@ details summary {
    to the tool_use when the spawn has no result yet (running /
    interrupted). The :not(.workflow_agent) keeps this higher-specificity
    rule off workflow agents' side-channel groups (their card is ALSO
-   tool_use-classed; their group line is grey, see below). Per-depth
-   line colors + depth badges: PR2 of #213. */
+   tool_use-classed; their group line is grey, see below). This is the
+   BASE: indent 2em + tool-green; the per-depth ramp below recolours
+   rings 2-5 and the deep-indent rule below compresses the step. */
 .message-node:has(> .message.tool_result) > .children:has(> .message-node > .message.sidechain),
 .message-node:has(> .message.tool_use:not(.workflow_agent)) > .children:has(> .message-node > .message.sidechain) {
     margin-left: 2em;
     border-left: 2px solid var(--tool-use-color);
+}
+
+/* Per-depth colour ramp (#213 visual layer): the group line takes the colour
+   of the depth it frames, cycling every 5 levels. Ring 1 = tool-green is the
+   base above (no override needed). Rings 2-5 override border-left-color only;
+   same selector shape as the base → equal specificity, so source order (these
+   come after) wins the tie while margin-left is inherited from the base. */
+.message-node:has(> .message.tool_result) > .children:has(> .message-node > .message.agent-ring-2),
+.message-node:has(> .message.tool_use:not(.workflow_agent)) > .children:has(> .message-node > .message.agent-ring-2) {
+    border-left-color: var(--agent-ring-2);
+}
+
+.message-node:has(> .message.tool_result) > .children:has(> .message-node > .message.agent-ring-3),
+.message-node:has(> .message.tool_use:not(.workflow_agent)) > .children:has(> .message-node > .message.agent-ring-3) {
+    border-left-color: var(--agent-ring-3);
+}
+
+.message-node:has(> .message.tool_result) > .children:has(> .message-node > .message.agent-ring-4),
+.message-node:has(> .message.tool_use:not(.workflow_agent)) > .children:has(> .message-node > .message.agent-ring-4) {
+    border-left-color: var(--agent-ring-4);
+}
+
+.message-node:has(> .message.tool_result) > .children:has(> .message-node > .message.agent-ring-5),
+.message-node:has(> .message.tool_use:not(.workflow_agent)) > .children:has(> .message-node > .message.agent-ring-5) {
+    border-left-color: var(--agent-ring-5);
+}
+
+/* Deep-chain indent compression (#213 visual layer): the cumulative 2em step
+   marches very deep chains off-screen (observed 79 levels in the wild). Once
+   the depth badge carries the absolute depth, levels 6+ (cards tagged
+   .agent-deep) need only a token step — depth stays legible via the badge and
+   the cycling line colour, not the indent. Steps 1-5 keep the comfortable 2em. */
+.message-node:has(> .message.tool_result) > .children:has(> .message-node > .message.agent-deep),
+.message-node:has(> .message.tool_use:not(.workflow_agent)) > .children:has(> .message-node > .message.agent-deep) {
+    margin-left: 0.5em;
+}
+
+/* Depth badge on a nested spawn card's title (#213 visual layer): a small
+   pill reading e.g. "d3" for "opens a depth-3 sub-agent". Its ring class
+   colour-matches the group line framing the transcript directly below. */
+.agent-depth-badge {
+    display: inline-block;
+    font-size: 0.7em;
+    font-weight: 700;
+    line-height: 1.4;
+    padding: 0 0.45em;
+    border-radius: 0.8em;
+    vertical-align: middle;
+    color: #fff;
+    background-color: var(--agent-ring-1);
+}
+
+.agent-depth-badge.agent-ring-1 {
+    background-color: var(--agent-ring-1);
+}
+
+.agent-depth-badge.agent-ring-2 {
+    background-color: var(--agent-ring-2);
+}
+
+.agent-depth-badge.agent-ring-3 {
+    background-color: var(--agent-ring-3);
+}
+
+.agent-depth-badge.agent-ring-4 {
+    background-color: var(--agent-ring-4);
+}
+
+.agent-depth-badge.agent-ring-5 {
+    background-color: var(--agent-ring-5);
+}
+
+/* "≡ full transcript" marker on a fully-collapsed nested spawn's result
+   (#213 visual layer): the sub-agent answered directly, so its whole
+   transcript was just the prompt + this result — nothing was hidden. Muted
+   so it reads as reassurance, not a warning. */
+.spawn-collapsed-marker {
+    font-size: 0.8em;
+    font-weight: 500;
+    color: var(--text-muted, #888);
+    font-style: italic;
+    white-space: nowrap;
 }
 
 /* A phase's agents group — continues the phase card's dark green. */
@@ -1579,6 +1662,12 @@ details summary {
     .message-node:has(> .message.tool_result) > .children:has(> .message-node > .message.sidechain),
     .message-node:has(> .message.tool_use:not(.workflow_agent)) > .children:has(> .message-node > .message.sidechain) {
         margin-left: 2%;
+    }
+
+    /* Deep-chain compression mirrored for the percentage scale. */
+    .message-node:has(> .message.tool_result) > .children:has(> .message-node > .message.agent-deep),
+    .message-node:has(> .message.tool_use:not(.workflow_agent)) > .children:has(> .message-node > .message.agent-deep) {
+        margin-left: 0.6%;
     }
 }
 
