@@ -204,18 +204,22 @@ fixtures must come from real spawns, not from trusting the narrative.
 4. **PR slicing per §5 approved**: PR1 structural (Phases A+B+D),
    PR2 visual (Phase C).
 
-## 8. PR2 scope (visual layer — in progress)
+## 8. PR2 scope (visual layer)
 
-Branch `dev/agent-hierarchies-visuals`, stacked on PR1 (#218):
+Branch `dev/agent-hierarchies-visuals` (PR #219, vs main). As-built
+reference: [agents.md](../dev-docs/agents.md) §5.4.
 
-- [ ] Depth badge on nested agent spawn cards (nothing at depth 1).
-- [ ] Optional per-depth group-line color ramp (5-color cycle, d1 keeps
-      tool-green) — only if it stays cheap and looks better.
-- [ ] "transcript ≡ result" marker for fully-collapsed spawns (a
-      verbatim-deduped transcript is currently indistinguishable from a
-      never-rendered one).
-- [ ] Deep-chain indent ergonomics: cumulative 2em steps push very deep
-      chains (observed: 79 levels) off-screen — consider capping or
-      compressing the step at high depth once the badge carries the
-      depth information.
-- [ ] Interactive polish round on real nested-session data.
+- [x] Depth badge ("Depth N") on nested spawn cards — shows the depth
+      the spawn opens; nothing at depth 1.
+- [x] Per-depth group-line colour ramp (5-cycle, depth 1 = tool-green;
+      2 blue, 3 purple, 4 orange, 5 teal).
+- [x] "≡ full transcript" marker for fully-collapsed nested spawns
+      (the sub-agent answered directly; what's shown is its whole
+      transcript) — distinguishes it from a spawn with no transcript.
+- [x] Deep-chain indent ergonomics: 2em step for depths 1-5, compressed
+      to 0.5em for depths 6+ (cards tagged `.agent-deep`), so an
+      80-level chain fits (~1118px vs ~2560px); depth read from the
+      badge + colour.
+- [x] Interactive polish round on cboos's real nested session
+      (2026-06-23): badge wording "Depth N", palette + marker + indent
+      confirmed.
