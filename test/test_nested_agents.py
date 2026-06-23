@@ -208,7 +208,60 @@ class TestNestedTree:
         assert lines_above.get(INTR) == []
 
 
-class TestNestedCacheInvalidation:
+class TestNestedVisualLayer:
+    """The #213 visual layer: per-message agent_depth, the fully-collapsed
+    marker, and the spawn-card depth badge."""
+
+    def _ctx_messages(self) -> list[TemplateMessage]:
+        _roots, _nav, ctx = generate_template_messages(_load_integrated())
+        return [m for m in ctx.messages if m is not None]
+
+    def test_agent_depth_set_per_session_line(self) -> None:
+        msgs = self._ctx_messages()
+        # Highest depth among messages that survived rendering. chain3 (d3)
+        # and the leaves (d2) mostly collapse; mid/chain1 content is d1, and
+        # chain2's surviving spawn pair is d2.
+        by_line_depth = {
+            _line_of(m.meta.session_id or ""): m.agent_depth
+            for m in msgs
+            if _line_of(m.meta.session_id or "")
+        }
+        assert by_line_depth.get(MID1) == 1
+        assert by_line_depth.get(MID2) == 1
+        assert by_line_depth.get(CHAIN1) == 1
+        assert by_line_depth.get(CHAIN2) == 2
+        assert by_line_depth.get("nsleaf22") == 2
+        # Trunk messages stay at depth 0.
+        assert all(
+            m.agent_depth == 0 for m in msgs if not _line_of(m.meta.session_id or "")
+        )
+
+    def test_collapsed_flag_marks_verbatim_nested_spawns_only(self) -> None:
+        msgs = self._ctx_messages()
+        collapsed = {
+            m.meta.spawned_agent_id for m in msgs if m.spawns_collapsed_transcript
+        }
+        # Three verbatim leaves + the chain bottom collapse; the divergent
+        # leaf22 and the interrupted spawn do not.
+        assert collapsed == {"nsleaf11", "nsleaf12", "nsleaf21", CHAIN3}
+
+    def test_collapsed_flag_never_on_trunk_level_spawns(self) -> None:
+        # Trunk-level (depth-1-spawning) Task/Agent results keep their
+        # pre-#213 rendering — the marker is nested-only.
+        msgs = self._ctx_messages()
+        assert all(m.agent_depth >= 1 for m in msgs if m.spawns_collapsed_transcript)
+
+    def test_depth_badge_html_uses_spawned_depth(self) -> None:
+        from claude_code_log.html.renderer import generate_html
+
+        html = generate_html(_load_integrated(), "badge")
+        # A leaf-spawn card (inside a depth-1 agent) opens depth 2.
+        assert "Depth 2</span>" in html
+        # chain2's spawn of chain3 opens depth 3.
+        assert "Depth 3</span>" in html
+        # The collapsed marker renders.
+        assert "≡ full transcript" in html
+
     def test_new_sidecar_invalidates_cached_trunk(self, tmp_path: Path) -> None:
         """Sidecar inputs are part of the cache key (PR #218 review).
 
