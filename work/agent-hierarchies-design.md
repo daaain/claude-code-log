@@ -223,3 +223,7 @@ reference: [agents.md](../dev-docs/agents.md) §5.4.
 - [x] Interactive polish round on cboos's real nested session
       (2026-06-23): badge wording "Depth N", palette + marker + indent
       confirmed.
+
+Deferred follow-up (monk review of #219, optional): a fixture variant
+with a thinking→spawn block to unit-pin the 0-width passthrough that
+§5.4/§5.5 currently only verify on real data.
