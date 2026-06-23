@@ -91,6 +91,19 @@ class TestHtmlStructuredContent:
         assert "<script>" not in html
         assert "&lt;script&gt;" in html
 
+    def test_is_error_structured_still_renders_table(self):
+        """A typed-item result still renders the table when is_error.
+
+        Decision (cboos): tool_reference (and other typed) items are not
+        error *message text*, so they keep the structured table rendering —
+        the is_error->read-as-text guard only covers the JSON-string path.
+        Pins the ordering so a future refactor can't move the guard ahead
+        of the structured path and silently swallow these.
+        """
+        html = format_tool_result_content_raw(_result([_TOOL_REFERENCE], is_error=True))
+        assert "tool-result-json" in html
+        assert "mcp__plugin_clmail__terminal" in html
+
     def test_string_content_unchanged(self):
         """Plain string results keep the legacy <pre> rendering."""
         html = format_tool_result_content_raw(_result("hello"))
@@ -126,6 +139,13 @@ class TestMarkdownStructuredContent:
         assert "hi there" in out
         # text is not embedded inside the json block
         assert out.index("hi there") < out.index("```json")
+        assert "mcp__plugin_clmail__terminal" in out
+
+    def test_is_error_structured_renders_json_block(self):
+        """Parity with HTML: typed items render even when is_error."""
+        output = _result([_TOOL_REFERENCE], is_error=True)
+        out = self.r.format_ToolResultContent(output, _md_message(output))
+        assert "```json" in out
         assert "mcp__plugin_clmail__terminal" in out
 
     def test_string_content_unchanged(self):
