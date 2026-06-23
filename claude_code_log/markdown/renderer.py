@@ -1681,7 +1681,27 @@ class MarkdownRenderer(Renderer):
         if isinstance(output.content, str):
             text = strip_error_tags(output.content)
             return self._code_fence(text)
-        return self._code_fence(json.dumps(output.content, indent=2), "json")
+        # Structured list content: render text items as text and keep any
+        # other typed items (e.g. ToolSearch's tool_reference) as a JSON
+        # block, instead of dumping the whole list verbatim (issue #227).
+        text_parts: list[str] = []
+        structured_items: list[dict[str, Any]] = []
+        for item in output.content:
+            if item.get("type") == "text":
+                text_parts.append(str(item.get("text", "")))
+            else:
+                structured_items.append(item)
+        parts: list[str] = []
+        text = strip_error_tags("\n".join(text_parts)).strip()
+        if text:
+            parts.append(text)
+        if structured_items:
+            parts.append(
+                self._code_fence(
+                    json.dumps(structured_items, indent=2, ensure_ascii=False), "json"
+                )
+            )
+        return "\n\n".join(parts)
 
     # -------------------------------------------------------------------------
     # Title Methods (for tool use dispatch)

@@ -1275,6 +1275,23 @@ def _json_result_table_html(raw_content: str) -> Optional[str]:
     return f"<div class='tool-result-json'>{_params_root_html(table_html)}</div>"
 
 
+def _structured_items_html(items: "list[dict[str, Any]]") -> str:
+    """Render leftover typed content items as a JSON/Markdown hybrid table.
+
+    Used for tool results whose ``content`` is a list carrying items other
+    than ``text``/``image`` — e.g. ToolSearch's ``tool_reference`` blocks.
+    These used to be dropped, leaving the result side blank (issue #227);
+    now they render with the same table machinery as JSON results.
+    """
+    raw = json.dumps(items, ensure_ascii=False)
+    table = _json_result_table_html(raw)
+    if table is not None:
+        return table
+    # Breadth-capped (or otherwise non-tabular): fall back to a JSON dump.
+    pretty = json.dumps(items, indent=2, ensure_ascii=False)
+    return f"<div class='tool-result-json'>{_json_dump_value_html(pretty)}</div>"
+
+
 def format_tool_result_content_raw(tool_result: ToolResultContent) -> str:
     """Format raw ToolResultContent as HTML (fallback formatter).
 
@@ -1289,10 +1306,15 @@ def format_tool_result_content_raw(tool_result: ToolResultContent) -> str:
         raw_content = tool_result.content
         has_images = False
         image_html_parts: list[str] = []
+        structured_html = ""
     else:
-        # Content is a list of structured items, extract text and images
+        # Content is a list of structured items, extract text and images.
+        # Any other typed item (e.g. ``tool_reference`` from ToolSearch) is
+        # kept verbatim and rendered as a JSON/Markdown hybrid table below,
+        # instead of being silently dropped (issue #227).
         content_parts: list[str] = []
         image_html_parts: list[str] = []
+        structured_items: list[dict[str, Any]] = []
         for item in tool_result.content:
             item_type = item.get("type")
             if item_type == "text":
@@ -1325,8 +1347,16 @@ def format_tool_result_content_raw(tool_result: ToolResultContent) -> str:
                             f'<img src="{escape_html(data_url)}" alt="Tool result image" '
                             f'class="tool-result-image" />'
                         )
+            else:
+                # Any other typed item (the loop already assumes dict via
+                # ``item.get`` above) — keep it for the JSON table.
+                structured_items.append(item)
         raw_content = "\n".join(content_parts)
         has_images = len(image_html_parts) > 0
+        # Render leftover typed items (no text, not images) as a JSON table.
+        structured_html = (
+            _structured_items_html(structured_items) if structured_items else ""
+        )
 
     # Strip <tool_use_error> XML tags but keep the content inside
     # Also strip redundant "String: ..." portions that echo the input
@@ -1345,10 +1375,10 @@ def format_tool_result_content_raw(tool_result: ToolResultContent) -> str:
 
     # Build final HTML based on content length and presence of images
     if has_images:
-        # Combine text and images
+        # Combine text, structured items and images
         text_html = f"<pre>{full_html}</pre>" if full_html else ""
         images_html = "".join(image_html_parts)
-        combined_content = f"{text_html}{images_html}"
+        combined_content = f"{text_html}{structured_html}{images_html}"
 
         # Always make collapsible when images are present
         preview_text = "Text and image content"
@@ -1363,6 +1393,15 @@ def format_tool_result_content_raw(tool_result: ToolResultContent) -> str:
     </details>
     """
     else:
+        # Typed items with no plain text (e.g. ToolSearch's tool_reference):
+        # the JSON table is the whole result (issue #227). When text is also
+        # present, show it first, then the structured items.
+        if structured_html:
+            if not raw_content:
+                return structured_html
+            text_html = f"<pre>{full_html}</pre>" if full_html else ""
+            return f"{text_html}{structured_html}"
+
         # Text-only content that parses as structured JSON renders as a
         # params-style table (not for errors — those read as text).
         if not tool_result.is_error:
