@@ -23,6 +23,7 @@ from typing import Any, Optional, cast
 
 from .utils import (
     escape_html,
+    is_markdown_path,
     is_memory_path,
     render_collapsible_code,
     render_async_result_body,
@@ -391,6 +392,26 @@ def format_read_input(read_input: ReadInput) -> str:  # noqa: ARG001
 # Parsing (parse_read_output, parse_edit_output) is now in factories/tool_factory.py
 
 
+def _is_full_read(output: ReadOutput) -> bool:
+    """True when a Read result covers the file from line 1 with no truncation.
+
+    A full read is safe to render as Markdown; a partial slice (``start_line``
+    > 1 or truncated content) can split a code fence and is kept as Pygments
+    source (issue #232). The text-only parser fallback can't recover
+    ``total_lines`` and reports ``is_truncated=False`` with ``start_line=1``
+    for a whole-file read, so it correctly reads as full.
+
+    Residual edge: a *truncated* read that started at line 1, parsed via the
+    text-only fallback (no structured ``toolUseResult.file``), forces
+    ``is_truncated=False`` and so reads as full — rendering as Markdown even
+    though the tail was cut, which may garble a fence straddling the cut.
+    This is narrow (old transcripts only; modern ones carry the structured
+    metadata that classifies it correctly) and cosmetic (escaping still
+    applies, so no XSS/crash).
+    """
+    return output.start_line == 1 and not output.is_truncated
+
+
 def format_read_output(output: ReadOutput) -> str:
     """Format Read tool result as HTML with syntax highlighting.
 
@@ -411,11 +432,23 @@ def format_read_output(output: ReadOutput) -> str:
     # Auto-memory files are Markdown (MEMORY.md + topic .md), so render a
     # recalled-memory body as rendered Markdown rather than syntax-highlighted
     # source — using the project's usual collapsible-markdown helper (#192).
+    # Memory bodies render as Markdown unconditionally (even partial reads):
+    # memory files are small and read whole, and #192 pinned this behavior.
     if is_memory_path(output.file_path):
         # Escape HTML: memory files are untrusted content — raw <script>/HTML
         # must render as text, not live DOM when the transcript is opened.
         body = render_user_markdown_collapsible(output.content, "read-tool-result")
         return resolve_memory_body_links(body, output.file_path) + suffix_html
+
+    # Any other Markdown file: render the body as Markdown too (#232) — but
+    # only for a *full* read. A partial read (offset/limit) can begin or end
+    # mid-fence, which would render as garbled Markdown; a line-numbered
+    # source view is both safe and more useful for a slice, so partial reads
+    # keep Pygments. The escaping helper is used because file content is
+    # untrusted regardless of whether it's a memory file.
+    if is_markdown_path(output.file_path) and _is_full_read(output):
+        body = render_user_markdown_collapsible(output.content, "read-tool-result")
+        return body + suffix_html
 
     return render_file_content_collapsible(
         output.content,
@@ -651,13 +684,21 @@ def format_write_input(write_input: WriteInput) -> str:
     Note: File path is now shown in the header, so we skip it here.
     """
     # Memory files are Markdown — render a written memory body as rendered
-    # Markdown rather than highlighted source (#192).
+    # Markdown rather than highlighted source (#192), with memory link
+    # resolution applied.
     if is_memory_path(write_input.file_path):
         # Escape HTML (untrusted memory content) — see format_read_output.
         body = render_user_markdown_collapsible(
             write_input.content, "write-tool-content"
         )
         return resolve_memory_body_links(body, write_input.file_path)
+    # Any other Markdown file: render the written body as Markdown too (#232).
+    # A Write always carries the file's full content, so there's no partial
+    # slice to worry about — unlike Read. No memory link resolution applies.
+    if is_markdown_path(write_input.file_path):
+        return render_user_markdown_collapsible(
+            write_input.content, "write-tool-content"
+        )
     return render_file_content_collapsible(
         write_input.content, write_input.file_path, "write-tool-content"
     )

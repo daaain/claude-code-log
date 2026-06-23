@@ -93,6 +93,23 @@ def is_memory_path(file_path: Optional[str]) -> bool:
     )
 
 
+# -- Markdown-file detection --------------------------------------------------
+# A file whose own format is Markdown. Read/Write of such a file renders the
+# body as Markdown rather than Pygments-highlighted source (issue #232).
+# Auto-memory files (always ``.md``) are a subset: ``is_memory_path`` ⊂
+# ``is_markdown_path``. The memory specialization that survives is the 🧠 title
+# (and memory's relative-link resolution + always-Markdown body); for any other
+# ``.md`` the generalization keys on this predicate instead.
+_MARKDOWN_EXTS = (".md", ".markdown")
+
+
+def is_markdown_path(file_path: Optional[str]) -> bool:
+    """True if ``file_path`` names a Markdown file (``.md`` / ``.markdown``)."""
+    return bool(file_path) and _normalize_sep(file_path).lower().endswith(
+        _MARKDOWN_EXTS
+    )
+
+
 def is_memory_tool(tool_name: Optional[str], file_path: Optional[str]) -> bool:
     """True if a tool call/result is an auto-memory interaction.
 
