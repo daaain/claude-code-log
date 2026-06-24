@@ -5,7 +5,7 @@ tetralogy. External contributor (samestep) reports; all claims verified
 against current code (line numbers below are current, not the v1.4.0
 ones in the issues).
 
-## Verified findings
+## Verified findings (state *before* this work — what each PR then fixes)
 
 | Issue | Claim | Verdict | Current location |
 |------|-------|---------|------------------|

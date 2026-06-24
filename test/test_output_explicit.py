@@ -25,6 +25,11 @@ from claude_code_log.json.renderer import JsonRenderer
 from claude_code_log.markdown.renderer import MarkdownRenderer
 
 
+_requires_mkfifo = pytest.mark.skipif(
+    not hasattr(os, "mkfifo"), reason="os.mkfifo is POSIX-only (not on Windows)"
+)
+
+
 def _user_entry(text: str, session_id: str = "s") -> dict[str, Any]:
     return {
         "type": "user",
@@ -68,11 +73,12 @@ class TestExplicitOutputAlwaysRegenerates:
         # And it did not announce a skip.
         assert "skipping regeneration" not in r2.output
 
-    def test_directory_input_cross_source_still_regenerates(self, tmp_path: Path):
-        """force_regenerate is scoped to *file* outputs, so a directory input
-        does not force. The cache's source-aware staleness must still keep the
-        cross-source case correct (no stale content) — pinning that the
-        narrowing didn't reintroduce #221 for directory inputs."""
+    def test_directory_input_to_file_output_cross_source(self, tmp_path: Path):
+        """A *directory* input exported to an explicit `-o` *file* also fixes
+        #221: `combined.html` is a file destination, so force_regenerate is
+        set and a second, different source produces fresh content rather than
+        the stale first export. Complements the file-input case above and
+        exercises the directory-mode regeneration branch."""
         dir_a = tmp_path / "proj_a"
         dir_a.mkdir()
         _write_jsonl(dir_a / "a.jsonl", "ALPHA_dir_source")
@@ -156,20 +162,43 @@ class TestIsOutdatedNonRegularFileGuard:
         assert not t.is_alive(), "is_outdated blocked on a non-regular file (hang)"
         return result["value"]
 
+    # FIFO pins the actual deadlock scenario (opening a pipe read-only blocks
+    # on readline); os.mkfifo is POSIX-only, so these skip on Windows. The
+    # directory-based tests below cover the is_file() guard cross-platform.
+    @_requires_mkfifo
     def test_markdown_is_outdated_on_fifo_returns_true(self, tmp_path: Path):
         fifo = tmp_path / "f"
         os.mkfifo(fifo)
         assert self._call_with_timeout(MarkdownRenderer().is_outdated, fifo) is True
 
+    @_requires_mkfifo
     def test_json_is_outdated_on_fifo_returns_true(self, tmp_path: Path):
         fifo = tmp_path / "f"
         os.mkfifo(fifo)
         assert self._call_with_timeout(JsonRenderer().is_outdated, fifo) is True
 
+    @_requires_mkfifo
     def test_check_html_version_on_fifo_returns_none(self, tmp_path: Path):
         fifo = tmp_path / "f"
         os.mkfifo(fifo)
         assert self._call_with_timeout(check_html_version, fifo) is None
+
+    def test_markdown_is_outdated_on_directory_returns_true(self, tmp_path: Path):
+        """Cross-platform: a directory is not a regular file → outdated,
+        without opening it (the is_file() guard, sans POSIX FIFO)."""
+        d = tmp_path / "subdir"
+        d.mkdir()
+        assert MarkdownRenderer().is_outdated(d) is True
+
+    def test_json_is_outdated_on_directory_returns_true(self, tmp_path: Path):
+        d = tmp_path / "subdir"
+        d.mkdir()
+        assert JsonRenderer().is_outdated(d) is True
+
+    def test_check_html_version_on_directory_returns_none(self, tmp_path: Path):
+        d = tmp_path / "subdir"
+        d.mkdir()
+        assert check_html_version(d) is None
 
     def test_nonexistent_path_is_outdated(self, tmp_path: Path):
         missing = tmp_path / "nope.md"
