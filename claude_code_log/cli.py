@@ -7,7 +7,7 @@ import os
 import signal
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import click
 from git import Repo, InvalidGitRepositoryError
@@ -28,6 +28,53 @@ from .cache import (
     get_cache_db_path,
     get_library_version,
 )
+
+
+# Output values that mean "stream the rendered document to stdout" (issue
+# #223): write the document to stdout, always regenerate, never consult or
+# write the cache, never open a browser, and keep status text off stdout
+# (it goes to stderr) so the stream carries only the rendered document.
+_STDOUT_TARGETS = {"-", "/dev/stdout"}
+
+
+def _is_stdout_target(output: "Optional[Path]") -> bool:
+    """Whether ``--output`` requests a stdout stream (``-`` or /dev/stdout)."""
+    return output is not None and str(output) in _STDOUT_TARGETS
+
+
+def _render_to_stdout(
+    input_path: Path, render_to_temp: "Callable[[Path], Path]"
+) -> None:
+    """Render to a throwaway temp file, then stream it to stdout (issue #223).
+
+    The temp file lets the full conversion pipeline run unchanged; we then
+    copy its bytes to stdout and discard the temp dir. ``render_to_temp``
+    receives the temp directory and returns the written file path. The
+    rendered document is the only thing written to stdout; a confirmation
+    goes to stderr so the stream stays clean for piping.
+    """
+    import contextlib
+    import io
+    import shutil
+    import tempfile
+
+    tmpdir = Path(tempfile.mkdtemp(prefix="ccl-stream-"))
+    # Capture anything the render prints to stdout (e.g. the per-file
+    # "Processing ..." progress, which generate_single_session_file emits
+    # without a silent switch) so it can't pollute the document stream;
+    # forward it to stderr instead.
+    captured = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(captured):
+            written = render_to_temp(tmpdir)
+        content = Path(written).read_text(encoding="utf-8", errors="replace")
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+    progress = captured.getvalue()
+    if progress:
+        click.echo(progress, nl=False, err=True)
+    sys.stdout.write(content)
+    click.echo(f"Successfully converted {input_path} to stdout", err=True)
 
 
 def _install_stack_dump_signal() -> None:
@@ -528,10 +575,11 @@ def _validate_git_link_template(template: str) -> None:
     "--output",
     type=click.Path(path_type=Path),
     help=(
-        "Output destination. With a recognised file suffix "
-        "(.html/.md/.markdown/.json) treated as a single output file; "
-        "otherwise treated as a directory root (and now also honoured "
-        "for --all-projects, where outputs land at "
+        "Output destination. Use '-' (or /dev/stdout) to stream the "
+        "rendered document to stdout (status goes to stderr) for piping. "
+        "With a recognised file suffix (.html/.md/.markdown/.json) treated "
+        "as a single output file; otherwise treated as a directory root "
+        "(and now also honoured for --all-projects, where outputs land at "
         "<output>/<project>/...). Pair with --expand-paths to project "
         "back to the real on-disk tree."
     ),
@@ -871,6 +919,14 @@ def main(
                     "pass only one, or make them agree."
                 )
 
+    # Streaming the rendered document to stdout (`-o -`) is a single-document
+    # mode; it can't express the multi-file --all-projects export (issue #223).
+    if _is_stdout_target(output) and will_run_all_projects:
+        raise click.UsageError(
+            "--output - (stream to stdout) is not supported with --all-projects; "
+            "pass a single transcript file, directory, or --session-id."
+        )
+
     # `--no-timestamps` is Markdown-only (#160). Warn (not error) when
     # paired with HTML/JSON so the flag is benignly ignored rather than
     # silently misapplied.
@@ -1035,6 +1091,27 @@ def main(
                     if claude_path.exists():
                         input_path = claude_path
 
+            if _is_stdout_target(output):
+                # Stream a single session to stdout (issue #223): render to a
+                # throwaway file (no cache, embedded images), copy to stdout.
+                session_input = input_path
+                _render_to_stdout(
+                    session_input,
+                    lambda tmpdir: generate_single_session_file(
+                        output_format,
+                        session_input,
+                        session_id,
+                        tmpdir / f"session.{get_file_extension(output_format)}",
+                        False,  # use_cache: one-off stream, don't touch cache
+                        "embedded",  # inline images; the temp dir is discarded
+                        detail=detail_level,
+                        compact=compact,
+                        no_timestamps=no_timestamps,
+                        no_recaps=no_recaps,
+                    ),
+                )
+                return
+
             output_path = generate_single_session_file(
                 output_format,
                 input_path,
@@ -1141,13 +1218,47 @@ def main(
         if should_convert:
             claude_path = convert_project_path_to_claude_dir(input_path, projects_dir)
             if claude_path.exists():
-                click.echo(f"Converting project path {input_path} to {claude_path}")
+                # Route to stderr when streaming so the document stream stays
+                # clean (issue #223); normal runs keep this on stdout as before.
+                click.echo(
+                    f"Converting project path {input_path} to {claude_path}",
+                    err=_is_stdout_target(output),
+                )
                 input_path = claude_path
             elif not input_path.exists():
                 # Original path doesn't exist and conversion failed
                 raise FileNotFoundError(
                     f"Neither {input_path} nor {claude_path} exists"
                 )
+
+        if _is_stdout_target(output):
+            # Stream the combined document to stdout (issue #223): render to a
+            # throwaway file (no cache so no pagination, embedded images, always
+            # regenerate, no individual session files), then copy to stdout.
+            stream_input = input_path
+            _render_to_stdout(
+                stream_input,
+                lambda tmpdir: convert_jsonl_to(
+                    output_format,
+                    stream_input,
+                    tmpdir / f"stream.{get_file_extension(output_format)}",
+                    from_date,
+                    to_date,
+                    generate_individual_sessions=False,
+                    use_cache=False,
+                    silent=True,
+                    image_export_mode="embedded",
+                    page_size=page_size,
+                    detail=detail_level,
+                    compact=compact,
+                    update_cache=False,
+                    write_combined=True,
+                    no_timestamps=no_timestamps,
+                    no_recaps=no_recaps,
+                    force_regenerate=True,
+                ),
+            )
+            return
 
         output_path = convert_jsonl_to(
             output_format,

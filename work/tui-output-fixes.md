@@ -44,10 +44,21 @@ regeneration/`is_outdated` machinery + CLI `-o`/`-f` resolution.
 - Infer `output_format` from `-o` suffix when `-f` source is `DEFAULT` (Click `ctx.get_parameter_source`); error on explicit conflict (`-o foo.md -f html`) (#222).
 - Separate commits per issue for clean `Closes #`. Smallest, highest-value, no deps → ship first.
 
-### PR 2 — "stdout streaming + stderr hygiene" (#223-part2 + `-o -`)
+### PR 2 — "stdout streaming + stderr hygiene" (#223-part2 + `-o -`) — IMPLEMENTED (branch dev/output-stdout-stream, awaiting #237 merge → rebase → PR)
 Stacks on PR 1.
-- `-o -` → stream-to-stdout: always regenerate (PR 1 force path), no cache, no browser, write doc to `sys.stdout`.
-- Status/progress/summary → stderr **only when streaming the document to stdout** (`-o -` / `/dev/stdout`). Every other invocation keeps status on stdout exactly as today (behavior-preserving; no PowerShell red-text concern for normal runs, no ~75-site unconditional sweep). Mechanism: a status sink that is `sys.stderr` in stream mode, `sys.stdout` otherwise.
+- `-o -` and `-o /dev/stdout` → stream-to-stdout. Implemented via a
+  throwaway temp file (`_render_to_stdout`): render with `use_cache=False`
+  (→ cache_manager None → no pagination, single document), `force_regenerate`,
+  `generate_individual_sessions=False`, embedded images (temp dir discarded),
+  then copy the file's bytes to `sys.stdout`. Reuses the whole pipeline
+  verbatim — no risk of divergence. Supported for the main convert path AND
+  `--session-id`; `--all-projects` + `-o -` is a clear UsageError.
+- Status hygiene (behavior-preserving, no ~75-site sweep): in stream mode the
+  converter runs `silent=True` (no progress on stdout) and the CLI prints its
+  one-line confirmation to **stderr**. Every non-stream invocation keeps status
+  on stdout exactly as today — so no PowerShell red-text concern for normal runs.
+  stdout therefore carries only the rendered document.
+- `--output` help updated to document `-`.
 
 ### PR 3 — "TUI honors `-o`/`-f`" (#220) — minimal only
 Isolated (no shared code w/ PR 1/2).
