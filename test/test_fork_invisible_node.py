@@ -206,11 +206,14 @@ def _build_fork_fixture(tmp_path: Path) -> str:
 class TestForkInvisibleNodeIntegration:
     def test_placeholder_landmark_rendered(self, tmp_path: Path):
         html = _build_fork_fixture(tmp_path)
-        # The dropped fork node now renders as a minimal system landmark.
+        # The dropped fork node now renders as a minimal system landmark whose
+        # label is the raw subtype.
         assert "(turn_duration)" in html
-        # Its uuid is present as the rendered node (debug-info shows uuid8/12).
-        assert "57e7a875" not in html  # sanity: not leaking the real fixture
-        assert "sd" in html
+        # …and it is a *real node* carrying the fork node's identity: the
+        # debug-info shows the placeholder's own uuid → its parent. The exact
+        # fragment (not a bare "sd" substring, which matches unrelated markup)
+        # proves the synthesized node rendered with the fork uuid.
+        assert "<div class='debug-info'>sd &rarr; a1</div>" in html
 
     def test_fork_box_and_anchors_resolve_to_placeholder_not_session_header(
         self, tmp_path: Path
