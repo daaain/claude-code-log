@@ -48,7 +48,7 @@ def _render_to_stdout(
     """Render to a throwaway temp file, then stream it to stdout (issue #223).
 
     The temp file lets the full conversion pipeline run unchanged; we then
-    copy its bytes to stdout and discard the temp dir. ``render_to_temp``
+    copy its raw bytes to stdout and discard the temp dir. ``render_to_temp``
     receives the temp directory and returns the written file path. The
     rendered document is the only thing written to stdout; a confirmation
     goes to stderr so the stream stays clean for piping.
@@ -67,13 +67,23 @@ def _render_to_stdout(
     try:
         with contextlib.redirect_stdout(captured):
             written = render_to_temp(tmpdir)
-        content = Path(written).read_text(encoding="utf-8", errors="replace")
+        # Read/write RAW BYTES: the document is UTF-8 (transcripts are
+        # emoji-heavy), but stdout's text encoding follows the locale and may
+        # not be UTF-8 — decoding then re-encoding via sys.stdout.write would
+        # mangle or raise on those characters. Pass the bytes through verbatim.
+        content = Path(written).read_bytes()
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
     progress = captured.getvalue()
     if progress:
         click.echo(progress, nl=False, err=True)
-    sys.stdout.write(content)
+    stdout_buffer = getattr(sys.stdout, "buffer", None)
+    if stdout_buffer is not None:
+        stdout_buffer.write(content)
+        stdout_buffer.flush()
+    else:
+        # Fallback (e.g. a text-only stdout shim): decode best-effort.
+        sys.stdout.write(content.decode("utf-8", errors="replace"))
     click.echo(f"Successfully converted {input_path} to stdout", err=True)
 
 
@@ -921,10 +931,22 @@ def main(
 
     # Streaming the rendered document to stdout (`-o -`) is a single-document
     # mode; it can't express the multi-file --all-projects export (issue #223).
-    if _is_stdout_target(output) and will_run_all_projects:
+    # `--session-id` is exempt: it's a single-session export (resolved from
+    # cache when no input path is given), which streams fine — so don't reject
+    # it just because `input_path is None` makes will_run_all_projects true.
+    if _is_stdout_target(output) and will_run_all_projects and session_id is None:
         raise click.UsageError(
             "--output - (stream to stdout) is not supported with --all-projects; "
             "pass a single transcript file, directory, or --session-id."
+        )
+
+    # `--combined no` asks to skip the combined transcript (per-session files
+    # only); stdout can carry only one document, so streaming forces the
+    # combined doc — fail fast rather than silently doing the opposite (#223).
+    if _is_stdout_target(output) and not write_combined:
+        raise click.UsageError(
+            "--combined no is incompatible with --output - (stream to stdout), "
+            "which emits a single combined document."
         )
 
     # `--no-timestamps` is Markdown-only (#160). Warn (not error) when

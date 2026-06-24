@@ -109,3 +109,46 @@ class TestStreamToStdout:
         assert "Processing" not in r.stdout
         assert "Loading" not in r.stdout
         assert "to stdout" in r.stderr
+
+    def test_unicode_document_round_trips(self, tmp_path: Path):
+        """The document is streamed as raw UTF-8 bytes, so non-ASCII content
+        (transcripts are emoji-heavy) survives regardless of stdout's locale
+        encoding — not re-encoded via sys.stdout.write (CodeRabbit)."""
+        src = _write_jsonl(tmp_path / "s.jsonl", "emoji 🎉 accent café 日本語")
+        r = self.runner.invoke(main, [str(src), "-f", "markdown", "-o", "-"])
+        assert r.exit_code == 0, r.output
+        assert "🎉" in r.stdout
+        assert "café" in r.stdout
+        assert "日本語" in r.stdout
+
+    def test_global_session_id_stream_not_rejected_by_all_projects_guard(
+        self, tmp_path: Path
+    ):
+        """`--session-id <id> -o -` with no input path (global cache lookup)
+        must NOT be rejected by the --all-projects+stream guard just because
+        input_path is None (CodeRabbit). It should reach session resolution
+        and fail there (session not in cache), not at the guard."""
+        r = self.runner.invoke(
+            main,
+            [
+                "--session-id",
+                "deadbeef",
+                "-o",
+                "-",
+                "--projects-dir",
+                str(tmp_path / "empty"),
+            ],
+        )
+        assert r.exit_code != 0
+        # Reached session resolution, not the all-projects guard.
+        assert "not supported with --all-projects" not in r.output
+        assert "not found in cache" in r.output
+
+    def test_combined_no_with_stream_errors(self, tmp_path: Path):
+        """`--combined no` (per-session only) is incompatible with streaming a
+        single document to stdout — fail fast instead of silently forcing the
+        combined doc (CodeRabbit)."""
+        src = _write_jsonl(tmp_path / "s.jsonl", "X")
+        r = self.runner.invoke(main, [str(src), "-o", "-", "--combined", "no"])
+        assert r.exit_code != 0
+        assert "--combined no is incompatible" in r.output
