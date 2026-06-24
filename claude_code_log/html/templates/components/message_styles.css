@@ -806,8 +806,11 @@ div.system-hook .header {
     box-shadow: none;
     border: none;
     border-left: 3px solid var(--branch-point-color);
+    /* Dashed top border as a connector (mirrors .fork-point), and no bottom
+       margin so the header sticks to its own branch content below. */
+    border-top: 1px dashed var(--branch-point-color);
     padding: 8px 14px;
-    margin: 2em 0 1em 0;
+    margin: 2em 0 0 0;
 }
 
 .branch-header .header {

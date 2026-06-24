@@ -125,14 +125,19 @@ a.session-backlink:hover {
     line-height: 1.3;
 }
 
-/* Fork point element — standalone structural element after a fork message */
+/* Fork point element — rendered inside the fork node's .children, so it
+   reads as hanging off the message above it. Pull it up against that
+   message (negative top margin cancels the card's 1em bottom margin) and
+   add a dashed top border as a connector, while the .children indent still
+   shows it's subordinate. */
 .fork-point {
-    margin: 8px 0 2em 0;
+    margin: -1.2em 0 2em 0;
     padding: 8px 14px;
     font-size: 0.85em;
     color: var(--text-muted, #6c757d);
     border-left: 3px solid var(--fork-point-color);
-    border-radius: 8px;
+    border-top: 1px dashed var(--fork-point-color);
+    border-radius: 0 0 8px 8px;
 }
 
 .fork-point-header {
