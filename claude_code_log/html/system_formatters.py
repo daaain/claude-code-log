@@ -244,7 +244,7 @@ def format_session_header_content(content: SessionHeaderMessage) -> str:
     """
     escaped_title = html.escape(content.title)
     badges = _team_badge(content.team_name) if content.team_name else ""
-    if content.is_branch and content.parent_message_index is not None:
+    if content.is_branch:
         # Branch header: compact with back-reference to fork point
         # Show session info for cross-session branches (different real session)
         session_info = ""
@@ -255,22 +255,25 @@ def format_session_header_content(content: SessionHeaderMessage) -> str:
                 session_info = (
                     f' <span class="branch-session">(in Session {esc_sid})</span>'
                 )
-        fork_backref = ""
+        # Fork-point back-reference. ``&#x2442;`` is the fork glyph; the
+        # optional summary suffix names the fork. When the fork point isn't
+        # resolvable to a visible message (``parent_message_index`` None —
+        # e.g. a content-less system node ghosted at reduced detail, #233),
+        # render it as plain text rather than a dangling anchor that would
+        # jump to the wrong place (previously the session header, ``#msg-d-2``).
         if content.parent_session_summary:
             escaped_fork = html.escape(content.parent_session_summary)
-            fork_backref = (
-                f'<div class="branch-from">'
-                f'from <a href="#msg-d-{content.parent_message_index}" '
-                f'class="branch-backlink">'
-                f"&#x2442; Fork point &bull; {escaped_fork}</a></div>"
+            fork_label = f"&#x2442; Fork point &bull; {escaped_fork}"
+        else:
+            fork_label = "&#x2442; Fork point"
+        if content.parent_message_index is not None:
+            inner = (
+                f'<a href="#msg-d-{content.parent_message_index}" '
+                f'class="branch-backlink">{fork_label}</a>'
             )
         else:
-            fork_backref = (
-                f'<div class="branch-from">'
-                f'from <a href="#msg-d-{content.parent_message_index}" '
-                f'class="branch-backlink">'
-                f"&#x2442; Fork point</a></div>"
-            )
+            inner = f'<span class="branch-backlink">{fork_label}</span>'
+        fork_backref = f'<div class="branch-from">from {inner}</div>'
         return f"{escaped_title}{badges}{session_info}{fork_backref}"
     if content.parent_session_id:
         parent_label = content.parent_session_summary or content.parent_session_id[:8]

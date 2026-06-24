@@ -4294,8 +4294,13 @@ def _build_branch_header(
             if msg.meta.uuid == attachment_uuid and msg.message_index is not None:
                 parent_msg_idx = msg.message_index
                 break
-    if parent_msg_idx is None and parent_sid:
-        parent_msg_idx = ctx.session_first_message.get(parent_sid)
+    # When the fork point itself isn't visible (e.g. a content-less system
+    # node ghosted at reduced detail), leave ``parent_msg_idx`` None so the
+    # branch header renders "from ⟂ Fork point" as plain text — NOT retargeted
+    # at the parent session header, which produced a misleading anchor that
+    # jumped to the wrong place (issue #233). At full detail the #233
+    # placeholder keeps the fork point visible, so this fallback is only
+    # reached in the genuinely-unresolvable case.
     original_sid = b_hier.get("original_session_id", message.sessionId)
     branch_summary = (session_summaries or {}).get(original_sid)
 
@@ -4395,6 +4400,36 @@ def _build_branch_header(
         first_uuid=b_hier.get("first_uuid") or "",
         team_name=branch_team_name,
         preview=branch_preview or None,
+    )
+
+
+def _is_unrendered_within_session_fork(uuid: str, ctx: RenderingContext) -> bool:
+    """True if ``uuid`` is a within-session fork point (≥1 branch target).
+
+    A within-session branch session id carries an ``@`` (``{line}@{uuid12}``);
+    cross-session continuations don't. Used at the system build site to decide
+    whether a content-less, about-to-be-dropped node must be kept as an
+    anchorable fork-point landmark (issue #233).
+    """
+    return any("@" in sid for sid in ctx.junction_targets.get(uuid, []))
+
+
+def _fork_placeholder_content(message: SystemTranscriptEntry) -> SystemMessage:
+    """Minimal ``SystemMessage`` landmark for a dropped fork-point node (#233).
+
+    Reuses ``SystemMessage`` rather than a bespoke type so the placeholder
+    inherits the existing CSS / emoji / timeline / filter handling, and so
+    ``_fork_point_preview`` (which already walks up *past* system hosts) treats
+    it as the expected fork host. The label is the raw ``(subtype)`` — honest
+    about what the otherwise-invisible node is, and general across subtypes.
+    ``SystemMessage.detail_visibility`` is ``FULL``, so the placeholder ghosts
+    at reduced detail just like any system entry; the fork anchor then degrades
+    to no-link (handled in ``_build_branch_header`` / the nav), not a wrong one.
+    """
+    return SystemMessage(
+        level="info",
+        text=f"({message.subtype})" if message.subtype else "(system)",
+        meta=create_meta(message),
     )
 
 
@@ -4551,6 +4586,18 @@ def _render_messages(
         # Handle system messages (already filtered in pass 1)
         if isinstance(message, SystemTranscriptEntry):
             system_content = create_system_message(message)
+            # A content-less system entry (e.g. ``turn_duration``,
+            # ``stop_hook_summary`` with no body) is normally dropped — but if
+            # it is a *within-session fork point* (issue #233), dropping it
+            # leaves the fork's nav/back-link anchors dangling (they fall back
+            # to the session header). Synthesize a minimal placeholder so the
+            # fork point is a real, anchorable landmark and the existing
+            # fork-point machinery (``_link_junction_forwards`` box,
+            # ``_build_branch_header`` back-link, nav anchor) resolves to it.
+            if system_content is None and _is_unrendered_within_session_fork(
+                message.uuid, ctx
+            ):
+                system_content = _fork_placeholder_content(message)
             if system_content:
                 system_msg = TemplateMessage(system_content)
                 if effective_session:
