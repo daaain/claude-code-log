@@ -103,7 +103,26 @@
     {%- set message_title = message.rendered_title %}
     {%- set html_content = message.rendered_html %}
     {%- set formatted_timestamp = message.rendered_timestamp %}
-    {% if is_session_header(message) %}
+    {% if message.fork_only %}
+    {# Fork-only landmark (#233 follow-up): this slot is a fork point whose own
+       message body was filtered out at the current detail level, but it is kept
+       (not ghosted) so the fork point stays visible and anchorable — like the
+       branches it connects. Render ONLY the fork-point box (no message card),
+       at the slot's original position. The anchor id lives on the box so branch
+       back-links (`from ⟂ Fork point`) and the nav fork item resolve here. #}
+    <div class='message-node'>
+    <div class='children'>{% for child in message.children %}{{ render_message(child) }}{% endfor %}{% if message.junction_forward_links %}
+        <div class='fork-point' id='msg-{{ message.message_id }}'>
+            <div class='fork-point-header'>&#x2442; Fork point{% if message.fork_point_preview %} &bull; {{ message.fork_point_preview }}{% endif %}</div>
+            <div class='fork-point-branches'>
+                {% for branch_sid, branch_idx, branch_preview in message.junction_forward_links %}
+                <a href='#msg-d-{{ branch_idx }}' class='fork-point-branch'>&#x21b3; Branch{% if branch_preview %} &bull; {{ branch_preview }}{% endif %}</a>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}</div>
+    </div>
+    {% elif is_session_header(message) %}
     {% if not message.is_branch_header %}<div class="session-divider"></div>{% endif %}
     {# Structural wrapper: the message card and its nested .children render as
        SIBLINGS here, so the card's border/background/margins frame only the

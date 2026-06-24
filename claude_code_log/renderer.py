@@ -305,6 +305,15 @@ class TemplateMessage:
         # Fork point preview text (short excerpt of fork point message content)
         self.fork_point_preview: str = ""
 
+        # Set by ``_ghost_template_by_detail`` when this slot is a fork point
+        # whose own message body is filtered out at the current detail level,
+        # but which is kept (not ghosted to None) so the fork point stays a
+        # visible, anchorable landmark. The template renders only the
+        # fork-point box for such a slot, not the message card (issue #233
+        # follow-up — fork points survive detail filtering like the branches
+        # they connect, instead of vanishing and orphaning the branches).
+        self.fork_only: bool = False
+
     # -- Properties derived from content/meta --
 
     @property
@@ -4050,7 +4059,35 @@ def _ghost_template_by_detail(
             visible = False
 
         if not visible:
-            ctx.messages[idx] = None
+            # A fork point is navigational structure, not message content: the
+            # branches it connects (session headers) always survive detail
+            # filtering, so the fork point must too — otherwise the branches
+            # render with no visible fork point above them and the back-links
+            # have nothing to anchor to (#233 follow-up). Keep the slot as a
+            # fork-only landmark (body suppressed, just the box) instead of
+            # ghosting it to None. Because the slot stays non-None, the
+            # back-link / nav anchor reactivate for free in
+            # ``_repair_stale_anchor_refs`` (which only nulls refs to None
+            # slots). The box data (``junction_forward_links`` /
+            # ``fork_point_preview``) was already populated by
+            # ``_link_junction_forwards``, which runs before this pass.
+            #
+            # Load-bearing invariant: this no-dead-anchor guarantee depends on
+            # branch session headers ALWAYS surviving detail filtering
+            # (``SessionHeaderMessage`` declares no ``detail_visibility`` →
+            # ``visible_at`` is True at every level). If a branch could be
+            # ghosted, a 2-branch fork could drop below 2 survivors →
+            # ``_repair_stale_anchor_refs`` empties ``junction_forward_links``
+            # → the template suppresses the box → this kept slot would render
+            # with no ``id='msg-d-N'`` and a still-visible sibling branch's
+            # back-link would dangle. Pinned by
+            # ``test_branch_headers_always_visible_keeps_fork_anchored`` so a
+            # future ``SessionHeaderMessage.detail_visibility`` trips a test
+            # rather than silently activating a dead anchor (monk review note).
+            if msg.junction_forward_links:
+                msg.fork_only = True
+            else:
+                ctx.messages[idx] = None
 
     _repair_stale_anchor_refs(ctx)
 

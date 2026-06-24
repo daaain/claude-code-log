@@ -138,50 +138,57 @@ def _fork_fixture(path: Path) -> Path:
 
 
 class TestGhostedForkAnchorBackrefRepair:
-    """The deleted-guard coverage monk required before Phase 2 merges.
+    """Fork-point anchor handling under detail ghosting.
 
-    `_repair_stale_anchor_refs` (called at the end of
-    `_ghost_template_by_detail`) must null any
-    ``SessionHeaderMessage.parent_message_index`` whose target slot
-    was ghosted by the detail filter — otherwise the branch header's
-    ``#msg-d-{N}`` back-link resolves to a phantom slot and renders
-    as a dead anchor.
+    Original premise (Phase 2 of the ghosting epic): when the detail
+    filter ghosted a fork anchor to ``None``, the branch back-link had
+    to be sanitized so its ``#msg-d-{N}`` href didn't dangle.
+
+    Superseded by the #233 follow-up (fork points survive detail
+    filtering): a fork anchor whose body is filtered is now KEPT as a
+    ``fork_only`` landmark (non-``None``) rather than ghosted, so its
+    body is suppressed but the fork-point box stays visible and the
+    branch back-link resolves to it — active, never dead. The deeper
+    "no dead anchor" invariant is unchanged and additionally pinned by
+    ``TestHtmlAnchorIntegrity``; the genuine-ghost sanitize path in
+    ``_repair_stale_anchor_refs`` still exists for non-fork anchors and
+    degenerate (<2-branch) forks whose box is dropped.
     """
 
-    def test_branch_backref_is_sanitized_when_anchor_ghosted(
+    def test_fork_anchor_survives_as_landmark_with_live_backref_at_user_only(
         self, tmp_path: Path
     ) -> None:
-        """Render the fork at USER_ONLY (ghosts assistant text), then
-        assert NO branch header carries a non-None
-        ``parent_message_index`` that resolves to a ghost.
-
-        The forbidden state is exactly the dead ``#msg-d-N``: a
-        non-None index whose ``ctx.get(...)`` returns None.
-        """
+        """At USER_ONLY (ghosts assistant text), the fork anchor is kept as a
+        ``fork_only`` landmark — not ghosted — and every branch header's
+        back-link resolves to it (a live slot, never a dead ``#msg-d-N``)."""
         messages = load_transcript(_fork_fixture(tmp_path / "fork.jsonl"))
         _, _, ctx = generate_template_messages(messages, detail=DetailLevel.USER_ONLY)
 
         survivors = [m for m in ctx.messages if m is not None]
 
-        # Precondition: the fork anchor MUST be ghosted at USER_ONLY,
-        # otherwise this test exercises nothing — the repair pass would be a
-        # no-op and the regression could rot silently. Assert it directly so
-        # a preserved anchor fails here instead of passing vacuously below.
-        anchor_idx = next(
-            (
-                i
-                for i, m in enumerate(ctx.messages)
-                if m is not None and m.meta.uuid == "a-anchor"
-            ),
+        # New behavior: the fork anchor is KEPT (not ghosted) as a fork-only
+        # landmark — its own body is filtered, but it stays a visible,
+        # anchorable fork point so the branches it connects aren't orphaned.
+        anchor = next(
+            (m for m in ctx.messages if m is not None and m.meta.uuid == "a-anchor"),
             None,
         )
-        assert anchor_idx is None, (
-            "expected fork-anchor assistant 'a-anchor' to be ghosted at "
-            "USER_ONLY; otherwise this test does not validate stale-anchor "
-            f"repair. anchor still present at index {anchor_idx}."
+        assert anchor is not None, (
+            "fork-anchor assistant 'a-anchor' must be KEPT at USER_ONLY (as a "
+            "fork-only landmark), not ghosted — otherwise the branches render "
+            "with no visible fork point above them (#233 follow-up)."
+        )
+        assert anchor.fork_only is True, (
+            "the kept fork anchor must be flagged fork_only so the template "
+            "renders only its fork-point box, not its (filtered) message body."
+        )
+        assert anchor.junction_forward_links, (
+            "the fork-only landmark must retain its junction_forward_links so "
+            "the fork-point box (with branch-jump links) still renders."
         )
 
-        # The actual invariant: no branch header points at a ghost slot.
+        # Deeper invariant (unchanged): no branch header points at a ghost slot.
+        # Now they resolve to the live fork-only landmark rather than to None.
         branch_headers = [
             m
             for m in survivors
@@ -195,16 +202,18 @@ class TestGhostedForkAnchorBackrefRepair:
         for bh in branch_headers:
             assert isinstance(bh.content, SessionHeaderMessage)
             parent_idx = bh.content.parent_message_index
-            if parent_idx is None:
-                continue
+            # The back-link is now ACTIVE (resolves to the kept landmark),
+            # not omitted — and never dangling.
+            assert parent_idx is not None, (
+                f"branch header session_id={bh.content.session_id!r} lost its "
+                "fork back-link (parent_message_index=None) — the fork anchor "
+                "is kept now, so the back-link should resolve to it."
+            )
             target = ctx.get(parent_idx)
-            assert target is not None, (
+            assert target is not None and target.meta.uuid == "a-anchor", (
                 f"branch header session_id={bh.content.session_id!r} "
-                f"carries parent_message_index={parent_idx} that resolves "
-                f"to a GHOST slot — this is the dead-anchor failure that "
-                f"`_repair_stale_anchor_refs` is supposed to prevent. "
-                f"Either the repair pass didn't run, the predicate is "
-                f"wrong, or `ctx.get()` semantics drifted."
+                f"parent_message_index={parent_idx} must resolve to the live "
+                f"fork-only landmark 'a-anchor', not a ghost/other slot."
             )
 
 

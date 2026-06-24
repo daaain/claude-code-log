@@ -1474,21 +1474,28 @@ class TestRenderSessionResetAcrossSessions:
                 f"template_messages will emit it as a root, not nested "
                 "under the trunk. Header order: " + str(header_order)
             )
-            # 3) Single-axis collapse (Phase 3): the fork anchor a1 is a
-            #    tool-only assistant, ghosted at MINIMAL. Pre-collapse a1 was
-            #    dropped pre-render and the branch backlink fell back to the
-            #    trunk header; now a1 is built-then-ghosted, so the branch's
-            #    parent_message_index points at a1's ghosted slot and the
-            #    anchor-repair pass correctly NULLS it — the "from #msg-d-N"
-            #    backlink is omitted (rendered as plain text via the
-            #    `is not None` guard) rather than mis-targeting the trunk
-            #    header. The D11 invariant under test — trunk header registered
-            #    BEFORE the branch (assertions 1+2) — is unaffected.
-            assert parent_msg_idx is None, (
+            # 3) The fork anchor a1 is a tool-only assistant, filtered at
+            #    MINIMAL. Since the #233 follow-up, a filtered fork anchor is
+            #    KEPT as a fork_only landmark (not ghosted to None), so the
+            #    fork point stays visible and the branch's back-link resolves
+            #    to it — active, not omitted. (Pre-#233-follow-up this asserted
+            #    parent_message_index is None.) The D11 invariant under test —
+            #    trunk header registered BEFORE the branch (assertions 1+2) —
+            #    is unaffected either way.
+            assert parent_msg_idx is not None, (
                 f"branch header {sid!r}.parent_message_index={parent_msg_idx}: "
-                "expected None because its fork anchor (tool-only assistant "
-                "'a1') is ghosted at MINIMAL, so the backlink must be omitted. "
+                "expected a live index — its fork anchor 'a1' is kept as a "
+                "fork_only landmark at MINIMAL, so the backlink resolves to it. "
                 "Header order: " + str(header_order)
+            )
+            anchor = ctx.get(parent_msg_idx)  # type: ignore[arg-type]
+            assert (
+                anchor is not None
+                and anchor.meta.uuid == "a1"
+                and anchor.fork_only is True
+            ), (
+                f"branch header {sid!r} back-link must resolve to the live "
+                f"fork_only landmark 'a1'; got {anchor!r}."
             )
 
 

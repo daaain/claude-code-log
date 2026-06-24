@@ -1519,8 +1519,15 @@ def _assert_system_messages_are_recaps(messages: list, label: str) -> None:
 
     Recaps report ``message_type == "system"`` and are the only system content
     kept below FULL; this verifies no other system subclass leaked in.
+
+    Exception: a ``fork_only`` landmark (#233 follow-up) is a fork point whose
+    own body is filtered out — the template renders only its fork-point box,
+    never the system content — so even though its content is system-typed, no
+    system *body* leaks. Skip those.
     """
     for msg in messages:
+        if getattr(msg, "fork_only", False):
+            continue
         if msg.type == "system":
             cls = type(msg.content).__name__
             assert cls == "AwaySummaryMessage", (
