@@ -211,7 +211,11 @@ def check_html_version(html_file_path: Path) -> Optional[str]:
     Returns:
         The version string if found, None if no version comment or file doesn't exist.
     """
-    if not html_file_path.exists():
+    # is_file() (not exists()) so a non-regular destination — e.g.
+    # /dev/stdout, which is a pipe when stdout is piped — is treated as
+    # "no version" rather than opened read-only, which would deadlock the
+    # version sniff on readline() (issue #223).
+    if not html_file_path.is_file():
         return None
 
     try:

@@ -187,7 +187,12 @@ A few JSON-specific touches:
 - `is_outdated(file_path)` reads the `version` field from existing
   JSON output and compares against the current library version —
   same invalidation contract as the HTML cache so re-runs skip
-  unchanged outputs.
+  unchanged outputs. It guards on `Path.is_file()` (not `exists()`)
+  so a non-regular destination like `/dev/stdout` is treated as
+  outdated rather than opened, which would deadlock the version sniff
+  (issue #223). An explicit `--output` bypasses the skip entirely
+  (`force_regenerate`, issue #221) since the version marker can't tell
+  which source produced a user-chosen file.
 - `combined_transcripts.json` per project; `session-{id}.json` for
   individual sessions. The naming respects `variant_suffix` for
   detail/compact variants.

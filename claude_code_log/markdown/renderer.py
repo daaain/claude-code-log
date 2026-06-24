@@ -2291,7 +2291,11 @@ class MarkdownRenderer(Renderer):
 
     def is_outdated(self, file_path: Path) -> bool:
         """Check if a Markdown file is outdated based on version comment."""
-        if not file_path.exists():
+        # is_file() (not exists()) so a non-regular destination — e.g.
+        # /dev/stdout, which is a pipe when stdout is piped — is treated as
+        # outdated rather than opened read-only, which would deadlock the
+        # version sniff on readline() (issue #223).
+        if not file_path.is_file():
             return True
         try:
             with open(file_path, "r", encoding="utf-8") as f:

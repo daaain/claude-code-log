@@ -1698,6 +1698,7 @@ def convert_jsonl_to(
     write_combined: bool = True,
     no_timestamps: bool = False,
     no_recaps: bool = False,
+    force_regenerate: bool = False,
 ) -> Path:
     """Convert JSONL transcript(s) to the specified format.
 
@@ -1714,6 +1715,13 @@ def convert_jsonl_to(
         page_size: Maximum messages per page for combined transcript pagination.
             If None, uses format default (embedded for HTML, referenced for Markdown).
         detail: Output detail level (full, high, low, minimal).
+        force_regenerate: Always (re)generate, bypassing the version-marker
+            staleness skip. The CLI sets this for an explicit ``--output``
+            (issue #221): the staleness heuristic only knows the embedded
+            version, not which source produced the file, so a same-version
+            file at a user-chosen path was kept even when a different
+            transcript was requested — silent stale content. The tool's own
+            managed ``combined_transcripts*`` artifacts still use the skip.
     """
     if not input_path.exists():
         raise FileNotFoundError(f"Input path not found: {input_path}")
@@ -1799,6 +1807,7 @@ def convert_jsonl_to(
             and not cache_was_updated
             and from_date is None
             and to_date is None
+            and not force_regenerate
         ):
             # Check if combined HTML is stale
             combined_stale, _ = cache_manager.is_html_stale(output_path.name, None)
@@ -1921,7 +1930,11 @@ def convert_jsonl_to(
         if cache_manager is not None and input_path.is_dir():
             is_stale, _reason = cache_manager.is_html_stale(output_path.name, None)
             should_regenerate = (
-                is_stale
+                # force_regenerate first so the is_outdated() sniff is
+                # short-circuited for an explicit --output (issue #221, and
+                # avoids touching a /dev/stdout destination for #223).
+                force_regenerate
+                or is_stale
                 or renderer.is_outdated(output_path)
                 or from_date is not None
                 or to_date is not None
@@ -1930,7 +1943,8 @@ def convert_jsonl_to(
         else:
             # Fallback: old logic for single file mode or no cache
             should_regenerate = (
-                renderer.is_outdated(output_path)
+                force_regenerate
+                or renderer.is_outdated(output_path)
                 or from_date is not None
                 or to_date is not None
                 or not output_path.exists()

@@ -639,7 +639,9 @@ def _validate_git_link_template(template: str) -> None:
     "output_format",
     type=click.Choice(["html", "md", "markdown", "json"]),
     default="html",
-    help="Output format (default: html). Supports html, md/markdown, or json.",
+    help="Output format. Supports html, md/markdown, or json. When omitted, "
+    "inferred from the --output file suffix (.md/.markdown/.html/.json); "
+    "otherwise defaults to html.",
 )
 @click.option(
     "--image-export-mode",
@@ -722,7 +724,9 @@ def _validate_git_link_template(template: str) -> None:
     default=False,
     help="Show full traceback on errors.",
 )
+@click.pass_context
 def main(
+    ctx: click.Context,
     input_path: Optional[Path],
     output: Optional[Path],
     expand_paths: bool,
@@ -841,6 +845,31 @@ def main(
             "directory (no recognised file suffix); ignoring.",
             err=True,
         )
+
+    # Infer --format from an explicit --output file suffix when -f was not
+    # given; error on an explicit conflict like `-o foo.md -f html` rather
+    # than writing mismatched content (issue #222). `.md`/`.markdown` both
+    # imply the canonical `markdown` format.
+    if output is not None and _output_path_is_file(output):
+        from .utils import format_from_output_suffix
+
+        suffix_format = format_from_output_suffix(output)
+        if suffix_format is not None:
+            format_explicit = (
+                ctx.get_parameter_source("output_format")
+                is not click.core.ParameterSource.DEFAULT
+            )
+            canonical_format = (
+                "markdown" if output_format in ("md", "markdown") else output_format
+            )
+            if not format_explicit:
+                output_format = suffix_format
+            elif canonical_format != suffix_format:
+                raise click.UsageError(
+                    f"--format {output_format} conflicts with the --output "
+                    f"suffix '{output.suffix}' (implies {suffix_format}); "
+                    "pass only one, or make them agree."
+                )
 
     # `--no-timestamps` is Markdown-only (#160). Warn (not error) when
     # paired with HTML/JSON so the flag is benignly ignored rather than
@@ -1138,6 +1167,15 @@ def main(
             write_combined=write_combined,
             no_timestamps=no_timestamps,
             no_recaps=no_recaps,
+            # An explicit `-o` *file* always regenerates: the version-marker
+            # skip only knows the embedded version, not which source produced
+            # the file, so it would keep stale content at a user-chosen path
+            # (issue #221). Scoped to file destinations — directory exports
+            # keep the cache's per-source incremental skip (is_html_stale),
+            # which already tracks the source (a different transcript to the
+            # same dir still regenerates), and `--all-projects` calls this
+            # with output=None anyway, so its skip is never forced.
+            force_regenerate=output is not None and _output_path_is_file(output),
         )
         if input_path.is_file():
             click.echo(f"Successfully converted {input_path} to {output_path}")

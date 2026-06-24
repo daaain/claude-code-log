@@ -330,9 +330,17 @@ def _peek_jsonl_for_cwd(jsonl_path: Path) -> Optional[str]:
 
 
 # Recognised output format suffixes for the `--output` dir-vs-file
-# heuristic. If a user passes ``--output /tmp/out.md`` we treat it as
-# a file; ``--output /tmp/obsidian/`` is a directory.
-_OUTPUT_FILE_SUFFIXES = frozenset({".html", ".md", ".markdown", ".json"})
+# heuristic and for format inference. If a user passes
+# ``--output /tmp/out.md`` we treat it as a file (and, when ``-f`` is
+# omitted, infer markdown); ``--output /tmp/obsidian/`` is a directory.
+# ``.md`` / ``.markdown`` both map to the canonical ``markdown`` format.
+_SUFFIX_TO_FORMAT: dict[str, str] = {
+    ".html": "html",
+    ".md": "markdown",
+    ".markdown": "markdown",
+    ".json": "json",
+}
+_OUTPUT_FILE_SUFFIXES = frozenset(_SUFFIX_TO_FORMAT)
 
 
 def output_path_is_file(output: Path) -> bool:
@@ -344,6 +352,16 @@ def output_path_is_file(output: Path) -> bool:
     inspection.
     """
     return output.suffix.lower() in _OUTPUT_FILE_SUFFIXES
+
+
+def format_from_output_suffix(output: Path) -> Optional[str]:
+    """Canonical output format implied by an ``--output`` file suffix.
+
+    Returns ``"html"`` / ``"markdown"`` / ``"json"`` for a recognised
+    suffix, or ``None`` otherwise (issue #222). ``.md`` and ``.markdown``
+    both map to ``"markdown"``.
+    """
+    return _SUFFIX_TO_FORMAT.get(output.suffix.lower())
 
 
 def project_destination(
