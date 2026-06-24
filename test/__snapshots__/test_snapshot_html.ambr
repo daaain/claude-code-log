@@ -1176,8 +1176,11 @@
       border: none;
       border-left: 3px solid var(--branch-point-color);
       /* Dashed top border as a connector (mirrors .fork-point), and no bottom
-         margin so the header sticks to its own branch content below. */
+         margin so the header sticks to its own branch content below. The bottom
+         corners are squared (mirroring .fork-point's squared top) so the left
+         rail flows cleanly into the branch content rather than rounding off. */
       border-top: 1px dashed var(--branch-point-color);
+      border-radius: 8px 8px 0 0;
       padding: 8px 14px;
       margin: 2em 0 0 0;
   }
@@ -1185,6 +1188,14 @@
   .branch-header .header {
       font-size: 1em;
       margin-bottom: 0;
+  }
+  
+  /* The header's own fold-bar sits at the bottom of the card; square its
+     bottom corners too so the squared branch-header bottom isn't undone by the
+     fold-bar's own rounded corners. Direct child only — never a fold-bar of a
+     message nested inside the branch content. */
+  .branch-header > .fold-bar {
+      border-radius: 0;
   }
   
   .branch-header .fold-bar[data-border-color="session-header"] .fold-bar-section.folded {
@@ -7601,8 +7612,11 @@
       border: none;
       border-left: 3px solid var(--branch-point-color);
       /* Dashed top border as a connector (mirrors .fork-point), and no bottom
-         margin so the header sticks to its own branch content below. */
+         margin so the header sticks to its own branch content below. The bottom
+         corners are squared (mirroring .fork-point's squared top) so the left
+         rail flows cleanly into the branch content rather than rounding off. */
       border-top: 1px dashed var(--branch-point-color);
+      border-radius: 8px 8px 0 0;
       padding: 8px 14px;
       margin: 2em 0 0 0;
   }
@@ -7610,6 +7624,14 @@
   .branch-header .header {
       font-size: 1em;
       margin-bottom: 0;
+  }
+  
+  /* The header's own fold-bar sits at the bottom of the card; square its
+     bottom corners too so the squared branch-header bottom isn't undone by the
+     fold-bar's own rounded corners. Direct child only — never a fold-bar of a
+     message nested inside the branch content. */
+  .branch-header > .fold-bar {
+      border-radius: 0;
   }
   
   .branch-header .fold-bar[data-border-color="session-header"] .fold-bar-section.folded {
@@ -16128,8 +16150,11 @@
       border: none;
       border-left: 3px solid var(--branch-point-color);
       /* Dashed top border as a connector (mirrors .fork-point), and no bottom
-         margin so the header sticks to its own branch content below. */
+         margin so the header sticks to its own branch content below. The bottom
+         corners are squared (mirroring .fork-point's squared top) so the left
+         rail flows cleanly into the branch content rather than rounding off. */
       border-top: 1px dashed var(--branch-point-color);
+      border-radius: 8px 8px 0 0;
       padding: 8px 14px;
       margin: 2em 0 0 0;
   }
@@ -16137,6 +16162,14 @@
   .branch-header .header {
       font-size: 1em;
       margin-bottom: 0;
+  }
+  
+  /* The header's own fold-bar sits at the bottom of the card; square its
+     bottom corners too so the squared branch-header bottom isn't undone by the
+     fold-bar's own rounded corners. Direct child only — never a fold-bar of a
+     message nested inside the branch content. */
+  .branch-header > .fold-bar {
+      border-radius: 0;
   }
   
   .branch-header .fold-bar[data-border-color="session-header"] .fold-bar-section.folded {
@@ -22668,8 +22701,11 @@
       border: none;
       border-left: 3px solid var(--branch-point-color);
       /* Dashed top border as a connector (mirrors .fork-point), and no bottom
-         margin so the header sticks to its own branch content below. */
+         margin so the header sticks to its own branch content below. The bottom
+         corners are squared (mirroring .fork-point's squared top) so the left
+         rail flows cleanly into the branch content rather than rounding off. */
       border-top: 1px dashed var(--branch-point-color);
+      border-radius: 8px 8px 0 0;
       padding: 8px 14px;
       margin: 2em 0 0 0;
   }
@@ -22677,6 +22713,14 @@
   .branch-header .header {
       font-size: 1em;
       margin-bottom: 0;
+  }
+  
+  /* The header's own fold-bar sits at the bottom of the card; square its
+     bottom corners too so the squared branch-header bottom isn't undone by the
+     fold-bar's own rounded corners. Direct child only — never a fold-bar of a
+     message nested inside the branch content. */
+  .branch-header > .fold-bar {
+      border-radius: 0;
   }
   
   .branch-header .fold-bar[data-border-color="session-header"] .fold-bar-section.folded {
@@ -29475,8 +29519,11 @@
       border: none;
       border-left: 3px solid var(--branch-point-color);
       /* Dashed top border as a connector (mirrors .fork-point), and no bottom
-         margin so the header sticks to its own branch content below. */
+         margin so the header sticks to its own branch content below. The bottom
+         corners are squared (mirroring .fork-point's squared top) so the left
+         rail flows cleanly into the branch content rather than rounding off. */
       border-top: 1px dashed var(--branch-point-color);
+      border-radius: 8px 8px 0 0;
       padding: 8px 14px;
       margin: 2em 0 0 0;
   }
@@ -29484,6 +29531,14 @@
   .branch-header .header {
       font-size: 1em;
       margin-bottom: 0;
+  }
+  
+  /* The header's own fold-bar sits at the bottom of the card; square its
+     bottom corners too so the squared branch-header bottom isn't undone by the
+     fold-bar's own rounded corners. Direct child only — never a fold-bar of a
+     message nested inside the branch content. */
+  .branch-header > .fold-bar {
+      border-radius: 0;
   }
   
   .branch-header .fold-bar[data-border-color="session-header"] .fold-bar-section.folded {
@@ -36245,8 +36300,11 @@
       border: none;
       border-left: 3px solid var(--branch-point-color);
       /* Dashed top border as a connector (mirrors .fork-point), and no bottom
-         margin so the header sticks to its own branch content below. */
+         margin so the header sticks to its own branch content below. The bottom
+         corners are squared (mirroring .fork-point's squared top) so the left
+         rail flows cleanly into the branch content rather than rounding off. */
       border-top: 1px dashed var(--branch-point-color);
+      border-radius: 8px 8px 0 0;
       padding: 8px 14px;
       margin: 2em 0 0 0;
   }
@@ -36254,6 +36312,14 @@
   .branch-header .header {
       font-size: 1em;
       margin-bottom: 0;
+  }
+  
+  /* The header's own fold-bar sits at the bottom of the card; square its
+     bottom corners too so the squared branch-header bottom isn't undone by the
+     fold-bar's own rounded corners. Direct child only — never a fold-bar of a
+     message nested inside the branch content. */
+  .branch-header > .fold-bar {
+      border-radius: 0;
   }
   
   .branch-header .fold-bar[data-border-color="session-header"] .fold-bar-section.folded {
@@ -42958,8 +43024,11 @@
       border: none;
       border-left: 3px solid var(--branch-point-color);
       /* Dashed top border as a connector (mirrors .fork-point), and no bottom
-         margin so the header sticks to its own branch content below. */
+         margin so the header sticks to its own branch content below. The bottom
+         corners are squared (mirroring .fork-point's squared top) so the left
+         rail flows cleanly into the branch content rather than rounding off. */
       border-top: 1px dashed var(--branch-point-color);
+      border-radius: 8px 8px 0 0;
       padding: 8px 14px;
       margin: 2em 0 0 0;
   }
@@ -42967,6 +43036,14 @@
   .branch-header .header {
       font-size: 1em;
       margin-bottom: 0;
+  }
+  
+  /* The header's own fold-bar sits at the bottom of the card; square its
+     bottom corners too so the squared branch-header bottom isn't undone by the
+     fold-bar's own rounded corners. Direct child only — never a fold-bar of a
+     message nested inside the branch content. */
+  .branch-header > .fold-bar {
+      border-radius: 0;
   }
   
   .branch-header .fold-bar[data-border-color="session-header"] .fold-bar-section.folded {
