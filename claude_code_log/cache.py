@@ -309,12 +309,14 @@ class CacheManager:
         # Initialise database and ensure project exists
         self._init_database()
         self._project_id: Optional[int] = None
+        # When inside a batch() scope this holds the single shared connection
+        # reused by every _get_connection() call; None means the default
+        # open-a-connection-per-call behaviour.
+        self._shared_conn: Optional[sqlite3.Connection] = None
         self._ensure_project_exists()
 
-    @contextmanager
-    def _get_connection(self) -> Generator[sqlite3.Connection, None, None]:
-        """Get a database connection with proper settings."""
-        conn = sqlite3.connect(self.db_path, timeout=30.0)
+    def _configure_connection(self, conn: sqlite3.Connection) -> None:
+        """Apply the standard pragmas/row factory to a fresh connection."""
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA journal_mode = WAL")
@@ -322,12 +324,62 @@ class CacheManager:
         # durability across application crashes (only a power/OS crash can lose
         # the last committed transaction) while skipping an fsync on every
         # commit. The cache is fully regenerable from the JSONL source, so that
-        # residual risk is acceptable, and on Windows the per-commit fsync was
-        # measured as ~two-thirds of cache-build time.
+        # residual risk is acceptable.
         conn.execute("PRAGMA synchronous = NORMAL")
+
+    @contextmanager
+    def _get_connection(self) -> Generator[sqlite3.Connection, None, None]:
+        """Get a database connection with proper settings.
+
+        Inside a ``batch()`` scope this yields the shared connection without
+        closing it (the batch owns its lifecycle). Otherwise it opens a fresh
+        connection and closes it on exit — the default, Windows-safe behaviour
+        (no lingering file handle on the .db/.db-wal/.db-shm files).
+        """
+        if self._shared_conn is not None:
+            yield self._shared_conn
+            return
+
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
+        self._configure_connection(conn)
         try:
             yield conn
         finally:
+            conn.close()
+
+    @contextmanager
+    def batch(self) -> Generator[None, None, None]:
+        """Reuse a single connection for every operation within the scope.
+
+        A full project build issues ~190 ``_get_connection`` calls; opening a
+        fresh SQLite connection each time dominates cache-build cost. Wrapping
+        the build in ``with cache_manager.batch():`` collapses those to one
+        connection.
+
+        Lifecycle guarantees (the risky part — see the integrity tests):
+        - The shared connection is **always closed on scope exit**, including
+          when the body raises (the ``finally``). This releases the file lock
+          on the .db/.db-wal/.db-shm files *before* any caller tears down a
+          TemporaryDirectory or runs ``clear_cache``/rmtree — critical on
+          Windows, which refuses to delete open files (WinError 32).
+        - Outside a batch, behaviour is unchanged (connection-per-call).
+        - Nesting is a no-op: an inner ``batch()`` reuses the outer connection
+          and does NOT close it, so the converter loop can't double-open or
+          close a connection still in use by an enclosing scope.
+        """
+        if self._shared_conn is not None:
+            # Already batching — reuse the existing shared connection and leave
+            # its lifecycle to the outermost batch().
+            yield
+            return
+
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
+        self._configure_connection(conn)
+        self._shared_conn = conn
+        try:
+            yield
+        finally:
+            self._shared_conn = None
             conn.close()
 
     def _init_database(self) -> None:

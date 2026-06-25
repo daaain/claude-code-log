@@ -835,11 +835,19 @@ def load_directory_transcripts(
         f for f in directory_path.glob("*.jsonl") if not f.name.startswith("agent-")
     ]
 
-    for jsonl_file in jsonl_files:
-        messages = load_transcript(
-            jsonl_file, cache_manager, from_date, to_date, silent
-        )
-        all_messages.extend(messages)
+    # Reuse one connection across all per-file cache reads/writes in this load
+    # pass. Nested under an outer batch() (e.g. ensure_fresh_cache) this is a
+    # no-op reuse; called standalone (Phase 2 reload) it opens and closes its
+    # own shared connection. nullcontext keeps the no-cache path unchanged.
+    load_batch = (
+        cache_manager.batch() if cache_manager is not None else contextlib.nullcontext()
+    )
+    with load_batch:
+        for jsonl_file in jsonl_files:
+            messages = load_transcript(
+                jsonl_file, cache_manager, from_date, to_date, silent
+            )
+            all_messages.extend(messages)
 
     # Parent agent entries and assign synthetic session IDs so they
     # form separate DAG-lines spliced at their anchor points.
@@ -2022,33 +2030,39 @@ def ensure_fresh_cache(
     if not session_jsonl_files:
         return False
 
-    # Get cached project data
-    cached_project_data = cache_manager.get_cached_project_data()
+    # Reuse one connection for the invalidation reads AND the whole populate
+    # pass (per-file load + save + the session/aggregate writes) instead of
+    # opening one per call. batch() closes the shared connection on scope exit
+    # (incl. on exception), so the cache files are unlocked before any caller
+    # tears down a temp dir.
+    with cache_manager.batch():
+        # Get cached project data
+        cached_project_data = cache_manager.get_cached_project_data()
 
-    # Check various invalidation conditions
-    modified_files = cache_manager.get_modified_files(session_jsonl_files)
-    needs_update = (
-        cached_project_data is None
-        or from_date is not None
-        or to_date is not None
-        or bool(modified_files)  # Session files changed
-        or (
-            cached_project_data.total_message_count == 0 and session_jsonl_files
-        )  # Stale cache
-    )
+        # Check various invalidation conditions
+        modified_files = cache_manager.get_modified_files(session_jsonl_files)
+        needs_update = (
+            cached_project_data is None
+            or from_date is not None
+            or to_date is not None
+            or bool(modified_files)  # Session files changed
+            or (
+                cached_project_data.total_message_count == 0 and session_jsonl_files
+            )  # Stale cache
+        )
 
-    if not needs_update:
-        return False  # Cache is already fresh
+        if not needs_update:
+            return False  # Cache is already fresh
 
-    # Load and process messages to populate cache
-    if not silent:
-        print(f"Updating cache for {project_dir.name}...")
-    messages, _tree = load_directory_transcripts(
-        project_dir, cache_manager, from_date, to_date, silent
-    )
+        # Load and process messages to populate cache
+        if not silent:
+            print(f"Updating cache for {project_dir.name}...")
+        messages, _tree = load_directory_transcripts(
+            project_dir, cache_manager, from_date, to_date, silent
+        )
 
-    # Update cache with fresh data
-    _update_cache_with_session_data(cache_manager, messages)
+        # Update cache with fresh data
+        _update_cache_with_session_data(cache_manager, messages)
     return True
 
 
@@ -2228,93 +2242,102 @@ def _generate_individual_session_files(
     )
     regenerated_count = 0
 
-    # Generate HTML file for each session
-    for session_id in session_ids:
-        # Create session-specific title using cache data if available
-        session_title = build_session_title(
-            project_title,
-            session_id,
-            session_data.get(session_id),
-        )
-
-        # Add date range if specified
-        if from_date or to_date:
-            date_range_parts: list[str] = []
-            if from_date:
-                date_range_parts.append(f"from {from_date}")
-            if to_date:
-                date_range_parts.append(f"to {to_date}")
-            date_range_str = " ".join(date_range_parts)
-            session_title += f" ({date_range_str})"
-
-        # Check if session file needs regeneration
-        session_file_name = f"session-{session_id}{suffix}.{ext}"
-        session_file_path = output_dir / session_file_name
-
-        # Use incremental regeneration: check per-session staleness via html_cache
-        if cache_manager is not None and format == "html":
-            is_stale, _reason = cache_manager.is_html_stale(
-                session_file_name, session_id
-            )
-            should_regenerate_session = (
-                is_stale
-                or renderer.is_outdated(session_file_path)
-                or from_date is not None
-                or to_date is not None
-                or not session_file_path.exists()
-            )
-        else:
-            # Fallback without cache or non-HTML formats
-            should_regenerate_session = (
-                renderer.is_outdated(session_file_path)
-                or from_date is not None
-                or to_date is not None
-                or not session_file_path.exists()
-                or cache_was_updated
-            )
-
-        if should_regenerate_session:
-            # Generate session content. Under `--combined no` the
-            # combined file is never written, so the per-session
-            # back-link would 404 — suppress it.
-            session_content = renderer.generate_session(
-                messages,
+    # Reuse one connection for every per-session staleness check + html_cache
+    # write, plus the per-session cache reads inside renderer.generate_session.
+    # Without this each session reopens the DB several times. nullcontext keeps
+    # the no-cache path unchanged; nested under an outer batch it's a no-op
+    # reuse, and the shared connection is closed on scope exit.
+    session_batch = (
+        cache_manager.batch() if cache_manager is not None else contextlib.nullcontext()
+    )
+    with session_batch:
+        # Generate HTML file for each session
+        for session_id in session_ids:
+            # Create session-specific title using cache data if available
+            session_title = build_session_title(
+                project_title,
                 session_id,
-                session_title,
-                cache_manager,
-                output_dir,
-                session_tree=session_tree,
-                suppress_combined_link=not write_combined,
+                session_data.get(session_id),
             )
-            assert session_content is not None
-            # Write session file
-            # See issue #139: errors="replace" for lone-surrogate safety.
-            session_file_path.write_text(
-                session_content, encoding="utf-8", errors="replace"
-            )
-            regenerated_count += 1
 
-            # Update html_cache to track this generation (HTML only)
+            # Add date range if specified
+            if from_date or to_date:
+                date_range_parts: list[str] = []
+                if from_date:
+                    date_range_parts.append(f"from {from_date}")
+                if to_date:
+                    date_range_parts.append(f"to {to_date}")
+                date_range_str = " ".join(date_range_parts)
+                session_title += f" ({date_range_str})"
+
+            # Check if session file needs regeneration
+            session_file_name = f"session-{session_id}{suffix}.{ext}"
+            session_file_path = output_dir / session_file_name
+
+            # Use incremental regeneration: check per-session staleness via html_cache
             if cache_manager is not None and format == "html":
-                # Use message count from cache (pre-deduplication) to match
-                # the count used in is_html_stale()
-                if session_id in session_data:
-                    session_message_count = session_data[session_id].message_count
-                else:
-                    # Fallback: count from messages list (less accurate due to dedup)
-                    session_message_count = sum(
-                        1
-                        for m in messages
-                        if hasattr(m, "sessionId")
-                        and getattr(m, "sessionId") == session_id
-                    )
-                cache_manager.update_html_cache(
-                    session_file_name, session_id, session_message_count
+                is_stale, _reason = cache_manager.is_html_stale(
+                    session_file_name, session_id
                 )
-        elif not silent:
-            print(
-                f"Session file {session_file_path.name} is current, skipping regeneration"
-            )
+                should_regenerate_session = (
+                    is_stale
+                    or renderer.is_outdated(session_file_path)
+                    or from_date is not None
+                    or to_date is not None
+                    or not session_file_path.exists()
+                )
+            else:
+                # Fallback without cache or non-HTML formats
+                should_regenerate_session = (
+                    renderer.is_outdated(session_file_path)
+                    or from_date is not None
+                    or to_date is not None
+                    or not session_file_path.exists()
+                    or cache_was_updated
+                )
+
+            if should_regenerate_session:
+                # Generate session content. Under `--combined no` the
+                # combined file is never written, so the per-session
+                # back-link would 404 — suppress it.
+                session_content = renderer.generate_session(
+                    messages,
+                    session_id,
+                    session_title,
+                    cache_manager,
+                    output_dir,
+                    session_tree=session_tree,
+                    suppress_combined_link=not write_combined,
+                )
+                assert session_content is not None
+                # Write session file
+                # See issue #139: errors="replace" for lone-surrogate safety.
+                session_file_path.write_text(
+                    session_content, encoding="utf-8", errors="replace"
+                )
+                regenerated_count += 1
+
+                # Update html_cache to track this generation (HTML only)
+                if cache_manager is not None and format == "html":
+                    # Use message count from cache (pre-deduplication) to match
+                    # the count used in is_html_stale()
+                    if session_id in session_data:
+                        session_message_count = session_data[session_id].message_count
+                    else:
+                        # Fallback: count from messages list (less accurate due to dedup)
+                        session_message_count = sum(
+                            1
+                            for m in messages
+                            if hasattr(m, "sessionId")
+                            and getattr(m, "sessionId") == session_id
+                        )
+                    cache_manager.update_html_cache(
+                        session_file_name, session_id, session_message_count
+                    )
+            elif not silent:
+                print(
+                    f"Session file {session_file_path.name} is current, skipping regeneration"
+                )
 
     return regenerated_count
 
