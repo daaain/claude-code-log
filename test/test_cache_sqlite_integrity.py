@@ -635,6 +635,20 @@ class TestWALMode:
             row = conn.execute("PRAGMA journal_mode").fetchone()
             assert row[0] == "wal"
 
+    def test_synchronous_normal(self, cache_manager):
+        """Connections run with synchronous=NORMAL (1).
+
+        Paired with WAL this skips an fsync on every commit while keeping
+        durability across application crashes (only a power/OS crash can lose
+        the last committed transaction). The cache is fully regenerable from
+        the JSONL source, so that residual risk is acceptable and gives a large
+        speedup on the per-commit fsync-bound build path (Windows especially).
+        """
+        with cache_manager._get_connection() as conn:
+            row = conn.execute("PRAGMA synchronous").fetchone()
+            # 0=OFF, 1=NORMAL, 2=FULL, 3=EXTRA
+            assert row[0] == 1, f"expected synchronous=NORMAL (1), got {row[0]}"
+
 
 class TestConcurrentAccess:
     """Tests for concurrent database access."""

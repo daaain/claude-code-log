@@ -318,6 +318,13 @@ class CacheManager:
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA journal_mode = WAL")
+        # synchronous=NORMAL is the recommended pairing for WAL: it keeps
+        # durability across application crashes (only a power/OS crash can lose
+        # the last committed transaction) while skipping an fsync on every
+        # commit. The cache is fully regenerable from the JSONL source, so that
+        # residual risk is acceptable, and on Windows the per-commit fsync was
+        # measured as ~two-thirds of cache-build time.
+        conn.execute("PRAGMA synchronous = NORMAL")
         try:
             yield conn
         finally:
