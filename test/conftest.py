@@ -37,6 +37,13 @@ def pytest_ignore_collect(collection_path: Path, config: "Config") -> Optional[b
     if not markexpr:
         return None  # no -m filter -> collect everything as usual
 
+    # Filename coupling: we can't read a module's markers without importing it
+    # (the very cost we're avoiding), so the heavy-dep modules are identified by
+    # naming convention. A browser/TUI-marked test in a differently-named file
+    # (e.g. test_index_timezone.py carries @pytest.mark.browser tests) is NOT
+    # skipped here — still correct (it's deselected on unit runs anyway), just
+    # not optimised. If such a file ever grows a *top-level* playwright/textual
+    # import, rename it to *_browser.py / test_tui_* so this hook catches it.
     name = collection_path.name
     if name.endswith("_browser.py"):
         marker = "browser"
