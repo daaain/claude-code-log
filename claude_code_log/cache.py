@@ -306,13 +306,16 @@ class CacheManager:
         else:
             self.db_path = get_cache_db_path(project_path.parent)
 
+        # When inside a batch() scope this holds the single shared connection
+        # reused by every _get_connection() call; None means the default
+        # open-a-connection-per-call behaviour. Set before _init_database() so
+        # the field always exists before any _get_connection() could run, even
+        # if migrations are ever routed through it.
+        self._shared_conn: Optional[sqlite3.Connection] = None
+
         # Initialise database and ensure project exists
         self._init_database()
         self._project_id: Optional[int] = None
-        # When inside a batch() scope this holds the single shared connection
-        # reused by every _get_connection() call; None means the default
-        # open-a-connection-per-call behaviour.
-        self._shared_conn: Optional[sqlite3.Connection] = None
         self._ensure_project_exists()
 
     def _configure_connection(self, conn: sqlite3.Connection) -> None:
