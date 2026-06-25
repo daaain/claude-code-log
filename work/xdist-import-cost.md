@@ -85,9 +85,34 @@ artifact, not the CI reality.
 > local numbers. If Windows CI is still slow after Changes 1+2, A/B `-n auto`
 > vs a fixed `-n 2`/`-n 3` *on the runner* before changing the knob.
 
-## Before/after (local, full unit suite)
+## Before/after (local measurements)
 
-<!-- filled from wall_ab measurement -->
+Box: Windows 11, 12 cores, warm caches. **Caveat:** every `uv run pytest`
+invocation carries ~3 s of `uv` env-resolution overhead, which is included in
+all wall numbers below and dilutes the measured delta. The deterministic
+per-process import costs (above) are the cleaner signal for what each fresh CI
+worker stops paying.
+
+Parallel **collect-only** wall (`pytest --co`, forces every worker to
+spawn + import + collect, no test execution), best-of-N to suppress contention:
+
+| config | wall |
+|--------|------|
+| baseline (no hook, playwright loaded), `-n auto` | 4.2 s (best-of-5) |
+| **complete change** (hook + `-p no:playwright`), `-n auto` | **3.1 s (best-of-5)** |
+| baseline, `-n4` (CI-like core count) | 3.9 s (best-of-3) |
+| after hook, `-n4` | 3.3 s (best-of-3) |
+
+~26% off collect-only wall at `-n auto` despite the fixed ~3 s `uv` floor — i.e.
+the spawn+import portion itself dropped substantially. `-p no:playwright` alone
+accounts for ~1.4 s of it (`-n auto`: 5.0 s → 3.6 s in a separate best-of-3).
+
+**Full unit-suite wall** (`-m "not (tui or browser)"`, ~2200 tests) measured
+182 s / 237 s / 295 s across runs — dominated by the slow integration tests and
+too contention-sensitive on this box to isolate a per-worker *startup* delta of
+~1–2 s. This is expected: the startup saving is a fixed offset, swamped by test
+execution. It surfaces best on the cold, fewer-core GitHub Windows runner —
+hence the "needs CI confirmation" flag.
 
 ## Validated locally vs needs CI
 
