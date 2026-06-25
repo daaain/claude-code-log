@@ -57,14 +57,16 @@ Effect: removes the per-worker `textual` import (~0.7–0.9 s/worker) from every
 unit run. Saving scales with worker count and is paid on **every** CI run
 because each Windows worker re-imports.
 
-## Change 2 — disable the unused `pytest_playwright` plugin on unit runs (PROPOSED)
+## Change 2 — disable the unused `pytest_playwright` plugin on unit runs (DONE)
 
-Add `-p no:playwright` to the unit-test invocations (justfile `test`, CI "Run
-unit tests" step). Removes ~0.97 s/worker of playwright import that unit tests
-never use. Safe because the browser fixtures in conftest are lazy — nothing
-requests `page`/`context` on a unit run (and browser modules are now skipped).
-Must NOT go in `pyproject` `addopts` (that would disable it for the browser run
-too); it belongs at the unit call sites only.
+`-p no:playwright` added to the unit-test invocations (justfile `test`,
+`test-all`, `test-cov`, and the CI "Run unit tests" step). Removes ~0.97 s/worker
+of playwright import that unit tests never use. Safe because the browser fixtures
+in conftest are lazy — nothing requests `page`/`context` on a unit run (and
+browser modules are now skipped). Deliberately NOT in `pyproject` `addopts`
+(that would disable it for the browser run too); it lives at the unit call sites
+only. Verified: full unit suite green and `-m browser` / `-m tui` runs still
+execute (smoke-tested locally).
 
 ## Change 3 — xdist worker count (RECOMMENDATION, needs CI validation)
 
