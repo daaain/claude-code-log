@@ -52,9 +52,9 @@ def pytest_ignore_collect(collection_path: Path, config: "Config") -> Optional[b
     except Exception:
         return None  # malformed expression: let pytest handle/report it
 
-    def has_marker(name: str, /, **_kwargs: "str | int | bool | None") -> bool:
+    def has_marker(tag: str, /, **_kwargs: "str | int | bool | None") -> bool:
         # Signature matches pytest's ExpressionMatcher protocol.
-        return name == marker
+        return tag == marker
 
     # If a test bearing only this marker could never be selected, the whole
     # module is dead weight for this run -> skip importing it.
