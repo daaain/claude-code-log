@@ -1,17 +1,66 @@
 """Pytest configuration and shared fixtures."""
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Generator
+from typing import TYPE_CHECKING, Generator, Optional
 
 import pytest
 
 if TYPE_CHECKING:
+    from _pytest.config import Config
     from claude_code_log.cache import CacheManager
 
 from test.snapshot_serializers import (
     NormalisedHTMLSerializer,
     NormalisedMarkdownSerializer,
 )
+
+
+# ========== Collection cost control ==========
+# Browser test modules import `playwright` and TUI modules import `textual`
+# at module top level. pytest imports every test module during collection and
+# only *then* applies `-m` marker deselection — so a plain unit run
+# (`-m "not (tui or browser)"`) still pays to import playwright + textual for
+# nothing. On Windows that tax is paid PER xdist worker, because workers spawn
+# fresh interpreters and re-import the world (Linux forks instead). Skipping
+# those modules at collection time when their marker can't be selected keeps the
+# heavy deps out of unit collection entirely. See work/xdist-import-cost.md.
+
+
+def pytest_ignore_collect(collection_path: Path, config: "Config") -> Optional[bool]:
+    """Don't import browser/TUI test modules when their marker is excluded.
+
+    Uses pytest's own marker-expression evaluator so the decision exactly
+    tracks the active ``-m`` filter (no string-matching heuristics).
+    Returns ``True`` to skip a module, ``None`` to defer to default behaviour.
+    """
+    markexpr: str = config.getoption("markexpr") or ""
+    if not markexpr:
+        return None  # no -m filter -> collect everything as usual
+
+    name = collection_path.name
+    if name.endswith("_browser.py"):
+        marker = "browser"
+    elif name == "test_tui.py" or name.startswith("test_tui_"):
+        marker = "tui"
+    else:
+        return None
+
+    from _pytest.mark.expression import Expression
+
+    try:
+        expr = Expression.compile(markexpr)
+    except Exception:
+        return None  # malformed expression: let pytest handle/report it
+
+    def has_marker(name: str, /, **_kwargs: "str | int | bool | None") -> bool:
+        # Signature matches pytest's ExpressionMatcher protocol.
+        return name == marker
+
+    # If a test bearing only this marker could never be selected, the whole
+    # module is dead weight for this run -> skip importing it.
+    if not expr.evaluate(has_marker):
+        return True
+    return None
 
 
 # ========== Cache Test Fixtures ==========

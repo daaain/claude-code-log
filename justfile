@@ -6,8 +6,11 @@ cli *ARGS:
     uv run claude-code-log {{ ARGS }}
 
 # Run unit + integration tests (excludes TUI, browser, and benchmark)
+# `-p no:playwright`: unit runs never use the browser fixtures, so skip loading
+# the pytest-playwright plugin — it imports playwright (~1s) per xdist worker on
+# Windows (spawned workers re-import). See work/xdist-import-cost.md.
 test:
-    uv run pytest -m "not (tui or browser or benchmark)" -v
+    uv run pytest -p no:playwright -m "not (tui or browser or benchmark)" -v
 
 # Run benchmark tests serially for stable measurements (outputs to GITHUB_STEP_SUMMARY in CI). DEBUG_TIMING enables coverage of renderer_timings.py
 test-benchmark:
@@ -35,7 +38,7 @@ test-all:
     set -e  # Exit on first failure
     echo "🧪 Running all tests in sequence..."
     echo "📦 Running unit tests..."
-    uv run pytest -m "not (tui or browser or integration or benchmark)" -v
+    uv run pytest -p no:playwright -m "not (tui or browser or integration or benchmark)" -v
     echo "🖥️  Running TUI tests..."
     uv run pytest -m tui -v
     echo "🌐 Running browser tests..."
@@ -52,7 +55,7 @@ test-cov:
     set -e  # Exit on first failure
     echo "📊 Running all tests with coverage..."
     echo "📦 Running unit tests with coverage..."
-    uv run pytest -m "not (tui or browser or integration or benchmark)" --cov=claude_code_log --cov-report=xml --cov-report=html --cov-report=term -v
+    uv run pytest -p no:playwright -m "not (tui or browser or integration or benchmark)" --cov=claude_code_log --cov-report=xml --cov-report=html --cov-report=term -v
     echo "🖥️  Running TUI tests with coverage append..."
     uv run pytest -m tui --cov=claude_code_log --cov-append --cov-report=xml --cov-report=html --cov-report=term -v
     echo "🌐 Running browser tests with coverage append..."
