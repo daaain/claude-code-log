@@ -125,6 +125,16 @@ cache row, the session is reparsed. The schema-version row also
 invalidates the entire HTML cache when migrations bump the version,
 since rendered output may have changed even when source data hasn't.
 
+Connections run in WAL mode with `synchronous=NORMAL` (durable across
+app crashes; only a power/OS crash can lose the last commit — fine for a
+regenerable cache). By default `_get_connection()` opens and closes a
+connection per call, so no file handle lingers to block temp-dir cleanup
+on Windows. A build issues ~190 such opens, which dominates cache-build
+cost, so the converter wraps its hotspots (`ensure_fresh_cache`, the
+per-file load loop, per-session generation) in `CacheManager.batch()`:
+one shared connection reused for the scope and closed on exit (including
+on exception). `batch()` nesting is a no-op reuse, so the wraps compose.
+
 For the operations / recovery side (archived sessions, manual
 deletion, `cleanupPeriodDays`), see
 [`docs/restoring-archived-sessions.md`](../docs/restoring-archived-sessions.md).
