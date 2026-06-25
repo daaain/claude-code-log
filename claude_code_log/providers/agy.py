@@ -1,9 +1,12 @@
 """Antigravity CLI (agy) session provider."""
 
 import json
+import logging
 import re
 from pathlib import Path
 from typing import Any, Iterator, Optional, cast
+
+logger = logging.getLogger(__name__)
 
 from claude_code_log.models import TranscriptEntry
 
@@ -54,6 +57,9 @@ class AgyProvider(BaseProvider):
     def load_session(
         self, session_id: str, max_messages: Optional[int] = None
     ) -> Iterator[TranscriptEntry]:
+        if not self._is_valid_session_id(session_id):
+            raise ValueError(f"Invalid session_id: {session_id}")
+
         data_dir = self.get_data_dir()
         if data_dir is None:
             raise ValueError("Antigravity CLI data directory not found")
@@ -71,29 +77,34 @@ class AgyProvider(BaseProvider):
                 f"Transcript for session {session_id} not found at {transcript_file}"
             )
 
-        # Entry threading: track previous UUID for parentUuid chaining
         prev_uuid: Optional[str] = None
+        message_count = 0
 
         with open(transcript_file, "r", encoding="utf-8") as f:
-            for i, line in enumerate(f):
+            for line in f:
                 line = line.strip()
                 if not line:
                     continue
 
-                raw_entry: Any = json.loads(line)
+                try:
+                    raw_entry: Any = json.loads(line)
+                except json.JSONDecodeError:
+                    logger.warning(
+                        "Skipping malformed JSON line in %s", transcript_file
+                    )
+                    continue
+
                 if isinstance(raw_entry, dict):
                     entry = cast(dict[str, Any], raw_entry)
                     for transcript_entry in self._parse_entry(
-                        entry, session_id, i, prev_uuid
+                        entry, session_id, message_count, prev_uuid
                     ):
-                        # Factory functions return UserTranscriptEntry or
-                        # AssistantTranscriptEntry — both inherit BaseTranscriptEntry
-                        # which always has uuid. Narrow for Pyright.
                         if hasattr(transcript_entry, "uuid"):
                             prev_uuid = cast(Any, transcript_entry).uuid
                         yield transcript_entry
+                        message_count += 1
 
-                if max_messages is not None and i >= max_messages:
+                if max_messages is not None and message_count >= max_messages:
                     break
 
     def _parse_entry(
@@ -323,7 +334,7 @@ class AgyProvider(BaseProvider):
     ) -> Iterator[TranscriptEntry]:
         last_uuid = parent_uuid
 
-        for tc in tool_calls:
+        for tc_index, tc in enumerate(tool_calls):
             name = str(tc.get("name", "unknown"))
             args_raw = tc.get("args", {})
             args: dict[str, Any] = (
@@ -331,7 +342,7 @@ class AgyProvider(BaseProvider):
             )
             args_str = json.dumps(args, indent=2) if args else ""
             text = f"[tool: {name}]\n{args_str}" if args_str else f"[tool: {name}]"
-            uid = f"agy-{session_id}-{index}-{name}"
+            uid = f"agy-{session_id}-{index}-{tc_index}-{name}"
             entry = make_assistant_entry(
                 session_id, uid, timestamp, "antigravity", text
             )
@@ -366,3 +377,6 @@ class AgyProvider(BaseProvider):
         if match:
             return match.group(1).strip()
         return content.strip() if content else ""
+
+    def _is_valid_session_id(self, session_id: str) -> bool:
+        return bool(re.fullmatch(r"[a-f0-9\-]+", session_id))
