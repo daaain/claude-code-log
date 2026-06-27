@@ -201,6 +201,82 @@ def test_render_user_markdown_escapes_html() -> None:
     assert "<strong>bold</strong>" in render_user_markdown("**bold**")
 
 
+def test_render_markdown_escapes_html() -> None:
+    """The shared (assistant/tool/web-authored) renderer must escape raw HTML.
+
+    Regression for the XSS where a transcript whose assistant text, tool
+    result, or fetched web content contained ``<script>``/``onerror`` got
+    rendered as live DOM — popping ``alert()`` dialogs when the HTML was
+    opened. Assistant output is NOT trusted: it routinely echoes arbitrary
+    user/file/web content (e.g. "write an E2E test that types <script>…").
+    """
+    from claude_code_log.html.utils import render_markdown
+
+    payload = '<b>bold</b><img src="x" onerror="alert(\'x\')"><script>alert(1)</script>'
+    out = render_markdown(payload)
+    # No live markup reaches the DOM (escaped tags carry a dead
+    # ``onerror=&quot;`` but never a live ``onerror="`` on a real tag).
+    assert "<script>" not in out
+    assert "<img" not in out
+    assert 'onerror="' not in out
+    assert "<b>bold</b>" not in out
+    # Escaped to entities, content preserved as readable text.
+    assert "&lt;script&gt;" in out
+    assert "alert(1)" in out
+    # Markdown features still render.
+    assert "<strong>bold</strong>" in render_markdown("**bold**")
+    assert "<code>" in render_markdown("`code`")
+
+
+def test_markdown_neutralises_dangerous_url_schemes() -> None:
+    """Markdown links/images must not emit ``javascript:``/``data:`` hrefs.
+
+    Escaping raw HTML tags (the primary fix) does nothing for this XSS class —
+    it lives in link/image URLs, not tags. mistune rewrites unsafe schemes to
+    a harmless placeholder; this guards that behaviour against a renderer-config
+    change silently dropping it. Covers both content renderers.
+    """
+    from claude_code_log.html.utils import render_markdown, render_user_markdown
+
+    for render in (render_markdown, render_user_markdown):
+        for src in (
+            "[click](javascript:alert(1))",
+            "![x](javascript:alert(1))",
+            "<javascript:alert(1)>",
+            "[x](data:text/html,<script>alert(1)</script>)",
+        ):
+            out = render(src)
+            # The scheme is dangerous only as a live href/src attribute;
+            # appearing as visible link text is harmless.
+            assert 'href="javascript:' not in out, (render.__name__, src, out)
+            assert 'src="javascript:' not in out, (render.__name__, src, out)
+            assert 'href="data:' not in out, (render.__name__, src, out)
+            assert 'src="data:' not in out, (render.__name__, src, out)
+
+
+def test_assistant_text_does_not_inject_live_html() -> None:
+    """End-to-end: assistant text with HTML must not emit live tags."""
+    from claude_code_log.html.assistant_formatters import (
+        format_assistant_text_content,
+    )
+    from claude_code_log.models import (
+        AssistantTextMessage,
+        MessageMeta,
+        TextContent,
+    )
+
+    meta = MessageMeta(
+        session_id="test-session",
+        timestamp="2024-01-01T00:00:00Z",
+        uuid="test-uuid",
+    )
+    payload = "Sure! I'll enter <script>alert(1)</script> into the field."
+    content = AssistantTextMessage(meta, items=[TextContent(type="text", text=payload)])
+    out = format_assistant_text_content(content)
+    assert "<script>" not in out
+    assert "&lt;script&gt;" in out
+
+
 if __name__ == "__main__":
     test_server_side_markdown_rendering()
     test_user_message_markdown_rendered_with_raw_preserved()

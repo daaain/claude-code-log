@@ -177,6 +177,30 @@ def format_websearch_output(output: WebSearchOutput) -> str:
     return render_markdown_collapsible(markdown_content, "websearch-results")
 ```
 
+### Escaping: all transcript content is untrusted
+
+Treat every value that comes out of a transcript as attacker-controlled.
+The assistant routinely echoes arbitrary user/file/web input verbatim — a
+prompt like *"write an E2E test that types `<script>alert(1)</script>` into
+the field"* lands that payload in assistant prose, a tool result, and a
+Write tool's file content. If it reaches the HTML unescaped it executes when
+the file is opened. There is no "trusted" source here.
+
+Two safe paths, depending on what you emit:
+
+- **Building HTML with f-strings/format** → run every interpolated value
+  through `escape_html()` first (as the input formatter above does with
+  `escape_query`). Never interpolate a raw field into markup.
+- **Rendering markdown** → use `render_markdown` / `render_markdown_collapsible`.
+  Both use mistune with `escape=True`, so raw HTML tags in the body are
+  escaped to entities and unsafe link/image schemes (`javascript:`, `data:`)
+  are neutralised, while Markdown, code fences and Pygments still render.
+
+Regression coverage lives in `test/test_markdown_rendering.py` (unit) and
+`test/test_xss_browser.py` (empirical: opens the file in a real browser and
+asserts no `alert()` dialog fires). Add a payload-bearing case for any new
+field you render.
+
 ### Update Exports
 
 Add functions to `__all__`:

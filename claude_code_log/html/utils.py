@@ -424,7 +424,24 @@ def _create_pygments_plugin() -> Any:
 
 @functools.lru_cache(maxsize=1)
 def _get_markdown_renderer() -> mistune.Markdown:
-    """Get cached Mistune markdown renderer with Pygments syntax highlighting."""
+    """Get cached Mistune markdown renderer with Pygments syntax highlighting.
+
+    Uses ``escape=True`` so raw HTML embedded in the source text
+    (``<script>``, ``<img onerror=…>``, bare ``<b>``, …) is rendered as
+    literal entity-escaped text rather than injected as live DOM.
+
+    This renderer handles assistant/tool/web-authored content (assistant
+    prose, Task/WebSearch/WebFetch results, plans, system messages,
+    teammate bodies). That content is **not** trusted: the assistant
+    routinely echoes arbitrary user/file/web input verbatim — e.g. "write
+    an E2E test that types ``<script>alert(1)</script>`` into the field" —
+    so rendering it unescaped lets that payload execute when the transcript
+    HTML is opened. The Markdown output path already neutralises raw HTML
+    from every source (see ``markdown/renderer.py::_protect_html_tags``);
+    the HTML path must match. ``escape=True`` does not affect Markdown
+    formatting, plugin output (Pygments, SHA links), or code fences — only
+    raw HTML tags in the body.
+    """
     from ..markdown_plugins import make_codespan_sha_plugin, make_sha_plugin
     from ..git_remote import resolve_sha_for_current_render
 
@@ -447,7 +464,7 @@ def _get_markdown_renderer() -> mistune.Markdown:
             # mistune's built-in rule consumes the backticks.
             make_codespan_sha_plugin(resolve_sha_for_current_render),
         ],
-        escape=False,  # Don't escape HTML since we want to render markdown properly
+        escape=True,  # Escape raw HTML: transcript content is untrusted (XSS)
         hard_wrap=True,  # Line break for newlines (checklists in Assistant messages)
     )
 
@@ -686,10 +703,11 @@ def render_markdown_collapsible(
     For long content, creates a collapsible details element with a preview.
     For short content, renders inline with the specified CSS class.
 
-    Uses the ``escape=False`` renderer — for assistant/tool-authored content
-    (Task results, WebSearch/WebFetch, plans) that may emit pre-formed HTML.
-    For untrusted content (e.g. memory files), use
-    ``render_user_markdown_collapsible`` instead.
+    Renders via the shared HTML-escaping renderer (``render_markdown``),
+    so raw HTML in assistant/tool/web-authored content (Task results,
+    WebSearch/WebFetch, plans) is neutralised — transcript content is
+    untrusted (the assistant echoes arbitrary input). Markdown formatting,
+    Pygments highlighting and code fences are unaffected.
 
     Args:
         raw_content: The raw text content to render as markdown
