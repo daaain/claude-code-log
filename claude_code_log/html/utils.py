@@ -669,8 +669,10 @@ def _markdown_collapsible(
     preview_line_count: int,
 ) -> str:
     """Shared body for the collapsible-markdown helpers, parameterized by the
-    markdown render function (escape=False for assistant/tool output vs
-    escape=True for untrusted content)."""
+    markdown render function. Both render functions escape raw HTML
+    (``escape=True``): transcript content is untrusted regardless of source —
+    assistant/tool output routinely echoes arbitrary user/file/web input — so
+    raw tags are neutralised rather than injected as live DOM (XSS)."""
     rendered_html = render_fn(raw_content)
 
     lines = raw_content.splitlines()

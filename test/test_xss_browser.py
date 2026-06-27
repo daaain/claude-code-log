@@ -129,7 +129,7 @@ class TestTranscriptXss:
             dialog.dismiss()  # type: ignore[attr-defined]
 
         page.on("dialog", _on_dialog)
-        page.goto(f"file://{html_path}")
+        page.goto(html_path.as_uri())
         # Give any onerror/script a tick to fire.
         page.wait_for_timeout(200)
 
@@ -149,7 +149,7 @@ class TestTranscriptXss:
         html_path = tmp_path / "xss.html"
         html_path.write_text(generate_html(entries, "XSS"), encoding="utf-8")
 
-        page.goto(f"file://{html_path}")
+        page.goto(html_path.as_uri())
 
         # No <img> whose src is the payload's bogus "x" was injected, and no
         # content-supplied <b> leaked as a live element.

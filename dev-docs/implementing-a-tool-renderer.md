@@ -190,7 +190,7 @@ Two safe paths, depending on what you emit:
 
 - **Building HTML with f-strings/format** → run every interpolated value
   through `escape_html()` first (as the input formatter above does with
-  `escape_query`). Never interpolate a raw field into markup.
+  `escaped_query`). Never interpolate a raw field into markup.
 - **Rendering markdown** → use `render_markdown` / `render_markdown_collapsible`.
   Both use mistune with `escape=True`, so raw HTML tags in the body are
   escaped to entities and unsafe link/image schemes (`javascript:`, `data:`)
