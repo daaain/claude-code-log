@@ -17,6 +17,12 @@ a tool result, and a Write tool's file content — because the assistant
 routinely echoes arbitrary user/file/web input verbatim (the real-world
 trigger: "write an E2E test that types <script>alert(1)</script> into the
 field"). See ``html/utils.py::_get_markdown_renderer`` for the escape policy.
+
+It is ALSO placed in a TITLE field — a generic tool_use's ``name`` (#245):
+the header title path (``{{ message_title | safe }}``) has no central
+escaping, so a tool with no specialized title method renders its raw name
+live in the header span. That channel is blind to the body-render escape and
+needs the per-field ``escape_html`` on the HTML title methods.
 """
 
 from __future__ import annotations
@@ -103,6 +109,34 @@ def _write_transcript(path: Path) -> None:
                         "type": "tool_result",
                         "tool_use_id": "t1",
                         "content": f"Wrote file containing {PAYLOAD}",
+                    }
+                ],
+            },
+        },
+        {
+            # TITLE-path vector (#245): a tool with no specialized title method
+            # falls back to its raw name in the header span. The name IS the
+            # payload — auto-firing if the title isn't escaped.
+            **_BASE,
+            "type": "assistant",
+            "uuid": "a2",
+            "parentUuid": "u2",
+            "requestId": "r2",
+            "timestamp": "2026-06-27T10:00:03.000Z",
+            "message": {
+                "role": "assistant",
+                "model": "claude",
+                "id": "m2",
+                "type": "message",
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": _USAGE,
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "t2",
+                        "name": PAYLOAD,
+                        "input": {"q": "noop"},
                     }
                 ],
             },

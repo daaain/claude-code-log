@@ -507,11 +507,13 @@ def render_markdown_inline(text: str) -> str:
 def _get_user_markdown_renderer() -> mistune.Markdown:
     """Markdown renderer for user-authored text.
 
-    Differs from the shared renderer in one critical way: ``escape=True``
-    so a user typing raw ``<script>`` or other HTML sees the literal
-    characters rendered as code, not injected into the DOM. Assistant
-    content uses ``escape=False`` deliberately (tool output renders
-    pre-formed HTML); user content must not bypass escaping.
+    Uses ``escape=True`` so raw ``<script>`` or other HTML in the source is
+    rendered as literal escaped text, not injected into the DOM. The shared
+    renderer (``_get_markdown_renderer``) was historically ``escape=False``
+    for assistant/tool output that emitted pre-formed HTML; it now also
+    escapes — transcript content is untrusted from every source (#245 XSS),
+    so both pipelines neutralise raw HTML. This one is retained for the
+    user-content call sites (``render_user_markdown``).
     """
     from ..markdown_plugins import make_codespan_sha_plugin, make_sha_plugin
     from ..git_remote import resolve_sha_for_current_render
