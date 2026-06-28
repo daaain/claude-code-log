@@ -2049,7 +2049,19 @@ class MarkdownRenderer(Renderer):
 
             if not suppress_heading:
                 heading_level = min(level, 6)  # Markdown max is h6
-                parts.append(f"{'#' * heading_level} {title}")
+                # Neutralise raw HTML in the title (#245 XSS): transcript-
+                # derived title fields (generic tool name, hook name, workflow
+                # phase/agent label, system level) reach this format-neutral
+                # heading site unescaped. Use the markdown-appropriate
+                # ``_protect_html_tags`` (entity-escapes raw tags, preserves
+                # markdown) — not ``escape_html``, which would mangle markdown.
+                # Gate on a literal ``<`` (the only char that can open a tag):
+                # the mistune round-trip in ``_protect_html_tags`` re-normalises
+                # markdown escaping (e.g. ``\*\*`` → ``\**``), so a title with
+                # no tag must pass through untouched. Covers all the title
+                # sinks symmetrically with the HtmlRenderer escaping.
+                safe_title = _protect_html_tags(title) if "<" in title else title
+                parts.append(f"{'#' * heading_level} {safe_title}")
                 # Per-message timestamp line (issue #160). Skip for
                 # session headers (they have no meaningful per-msg time)
                 # and when the heading was suppressed by `compact` mode

@@ -996,6 +996,15 @@ class HtmlRenderer(Renderer):
     ) -> str:
         return f"Agent {escape_html(content.label)}" if content.label else "Agent"
 
+    def title_SystemMessage(self, content: SystemMessage, _: TemplateMessage) -> str:
+        # ``level`` is FREE-TEXT from the transcript (``system_factory``:
+        # ``transcript.level or "info"``), not an enum — so it can carry a
+        # payload that lands in the header. Title-case the RAW level FIRST,
+        # then escape: escaping first would let ``.title()`` capitalize the
+        # entity prefixes (``&lt;`` → ``&Lt;``) and break the escaping. #245 XSS.
+        level = content.level or "unknown"
+        return f"System {escape_html(level.title())}"
+
     def title_TaskInput(self, input: TaskInput, message: TemplateMessage) -> str:
         """Title → '🔧 Task <desc> (subagent_type) [async #<id>]'.
 

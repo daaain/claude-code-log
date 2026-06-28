@@ -24,10 +24,12 @@ from pathlib import Path
 
 from claude_code_log.converter import load_transcript
 from claude_code_log.html.renderer import HtmlRenderer, generate_html
+from claude_code_log.markdown.renderer import MarkdownRenderer
 from claude_code_log.models import (
     BashInput,
     HookAttachmentMessage,
     MessageMeta,
+    SystemMessage,
     ToolUseMessage,
     WorkflowAgentMessage,
     WorkflowPhaseMessage,
@@ -117,6 +119,19 @@ class TestTitlePathEscaping:
         assert PAYLOAD not in out
         assert ESCAPED in out
 
+    def test_system_level_escaped(self):
+        # ``level`` is free-text from the transcript, not an enum. The title is
+        # ``System {level.title()}``; the title-casing folds the tag name's
+        # case (``<Img …>``) but the tag would still fire (HTML attrs are
+        # case-insensitive), so it must be escaped AFTER ``.title()``.
+        content = SystemMessage(meta=_meta(), level=PAYLOAD, text="x")
+        out = _title(content)
+        assert out.startswith("System ")
+        # No live tag at any case; the dangerous ``<`` is entity-escaped, and
+        # ``.title()`` didn't corrupt the entity (no ``&Lt;``).
+        assert "<img" not in out.lower()
+        assert "&lt;" in out and "&Lt;" not in out
+
     def test_specialized_tool_name_still_escaped_and_unbroken(self):
         # Regression guard: the specialized path (BashInput → _tool_title)
         # already escapes; a benign tool name renders normally.
@@ -129,3 +144,59 @@ class TestTitlePathEscaping:
         out = _title(content)
         assert "Bash" in out
         assert "&lt;" not in out  # nothing to escape, not mangled
+
+
+class TestMarkdownTitlePathProtected:
+    """The Markdown *output* reaches the same title fields at one
+    format-neutral heading site (markdown/renderer.py); they must be
+    neutralised there too (via ``_protect_html_tags``, markdown-appropriate)
+    so the .md heading doesn't carry a raw ``<img onerror=…>`` for a
+    downstream viewer to execute (#245)."""
+
+    def test_generic_tool_name_protected_in_markdown_heading(self, tmp_path: Path):
+        rows = [
+            {
+                "type": "user",
+                "uuid": "u0",
+                "parentUuid": None,
+                "isSidechain": False,
+                "userType": "external",
+                "cwd": "/x",
+                "sessionId": "s1",
+                "version": "1.0",
+                "timestamp": "2025-01-01T00:00:00Z",
+                "message": {"role": "user", "content": "go"},
+            },
+            {
+                "type": "assistant",
+                "uuid": "a1",
+                "parentUuid": "u0",
+                "isSidechain": False,
+                "userType": "external",
+                "cwd": "/x",
+                "sessionId": "s1",
+                "version": "1.0",
+                "timestamp": "2025-01-01T00:00:01Z",
+                "requestId": "r1",
+                "message": {
+                    "id": "m1",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude",
+                    "stop_reason": "tool_use",
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 1, "output_tokens": 1},
+                    "content": [
+                        {"type": "tool_use", "id": "t1", "name": PAYLOAD, "input": {}}
+                    ],
+                },
+            },
+        ]
+        f = tmp_path / "x.jsonl"
+        f.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
+        md = MarkdownRenderer().generate(load_transcript(f, silent=True), "x")
+        # The raw tag must not survive into the heading…
+        assert f"# {PAYLOAD}" not in md
+        assert "<img" not in md.lower()
+        # …it's entity-escaped instead.
+        assert "&lt;img" in md.lower()
