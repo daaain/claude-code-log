@@ -71,9 +71,13 @@ def _shrink_large_transcripts(projects_dir: Path) -> None:
         cut = data[:_TRUNCATE_KEEP]
         # Trim back to the last complete line so we never leave a partial JSON
         # record (which would be parsed as a malformed line, not a clean prefix).
+        # If the kept prefix has no newline (the first record alone exceeds
+        # _TRUNCATE_KEEP), leave the file untruncated rather than writing a
+        # partial record.
         last_newline = cut.rfind(b"\n")
-        if last_newline > 0:
-            cut = cut[: last_newline + 1]
+        if last_newline <= 0:
+            continue
+        cut = cut[: last_newline + 1]
         jsonl_file.write_bytes(cut)
 
 
