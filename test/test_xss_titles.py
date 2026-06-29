@@ -200,3 +200,25 @@ class TestMarkdownTitlePathProtected:
         assert "<img" not in md.lower()
         # …it's entity-escaped instead.
         assert "&lt;img" in md.lower()
+
+    def test_project_display_name_protected_in_index_heading(self):
+        # Real path (not a synthetic title arg): a project's display_name is
+        # derived from its cwd — get_project_display_name returns Path(cwd).name
+        # — so a crafted cwd lands the payload in the `##` project heading of
+        # the Markdown index. Exercise that end to end.
+        project_summaries = [
+            {
+                "name": "-home-u-proj",
+                "html_file": "proj/combined_transcripts.html",
+                "jsonl_count": 1,
+                "message_count": 1,
+                "last_modified": 1700000000.0,
+                "working_directories": [f"/home/u/{PAYLOAD}"],
+            }
+        ]
+        md = MarkdownRenderer().generate_projects_index(project_summaries)
+        # The crafted cwd basename IS the payload; the heading must neutralise
+        # it, not emit a raw tag.
+        assert "## [<img" not in md.lower()
+        assert "## <img" not in md.lower()
+        assert "&lt;img" in md.lower()
