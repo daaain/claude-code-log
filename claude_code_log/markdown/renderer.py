@@ -273,26 +273,33 @@ def _protect_html_tags(text: str) -> str:
     return str(rendered).rstrip("\n")
 
 
-def _safe_md_heading(text: str) -> str:
-    """Neutralise raw HTML in a Markdown heading's text (#245 XSS).
+def safe_markdown_inline(text: str) -> str:
+    """Neutralise raw HTML in a Markdown inline-text fragment (#245 XSS).
 
-    The single structural gate for EVERY ``#``/``##`` heading the Markdown
-    renderer emits — per-message titles AND the page/project/session page
-    headings. Transcript-reachable heading sources (generic tool names, hook /
-    workflow phase / agent labels, system ``level``, session summaries, and
-    project display names derived from ``cwd``) could otherwise carry a raw
-    ``<img onerror=…>`` into a ``.md`` heading for a downstream viewer to
-    execute. Routing every heading through one helper makes "neutralise raw
-    HTML at every heading" a structural property — one place to audit, can't be
-    forgotten when a new heading site is added — rather than a per-site
-    convention that drifts (the failure mode that produced this whole class).
+    The single structural gate for EVERY markdown surface that interpolates
+    transcript-derived text into a position a downstream viewer would render as
+    markup — ``#``/``##`` headings (per-message titles + the page/project/
+    session page headings) AND inline link labels / list items (the TOC label,
+    WebSearch result link titles, the project- and session-index link labels,
+    the expand-paths tree labels). Transcript-reachable sources (generic tool
+    names, hook / workflow phase / agent labels, system ``level``, session
+    summaries, project display names derived from ``cwd``, web result titles)
+    could otherwise carry a raw ``<img onerror=…>`` into the ``.md`` for a
+    permissive viewer to execute. Routing every such surface through ONE helper
+    makes "neutralise raw HTML from every source" a structural property — one
+    place to audit, can't be forgotten when a new surface is added — rather
+    than a per-site convention that drifts (the failure mode that produced this
+    whole class across several review rounds).
+
+    Pass only the text FRAGMENT (the label/title/heading text), not a composed
+    ``[label](url)`` — the destination is preserved by the caller.
 
     Gated on a literal ``<`` (the only char that can open a tag): the mistune
     round-trip in ``_protect_html_tags`` re-normalises markdown escaping
-    (``\\*\\*`` → ``\\**``), so a heading with no tag must pass through
+    (``\\*\\*`` → ``\\**``), so a fragment with no tag must pass through
     byte-identical (no churn, no collateral mangling). Markdown-appropriate
     (entity-escape the tag, preserve markdown) — distinct from the HTML path,
-    which escapes per-field via the ``HtmlRenderer`` title overrides.
+    which escapes per-field via ``escape_html`` in the ``HtmlRenderer``.
     """
     return _protect_html_tags(text) if "<" in text else text
 
@@ -371,7 +378,7 @@ def _render_expand_paths_tree(template_projects: list[Any]) -> list[str]:
             _emit(node[name], depth + 1)
         for label, url, ts in node.get("_links", []):
             ts_suffix = f" — *{ts}*" if ts else ""
-            lines.append(f"{indent}- [{label}]({url}){ts_suffix}")
+            lines.append(f"{indent}- [{safe_markdown_inline(label)}]({url}){ts_suffix}")
 
     _emit(root, 0)
     return lines
@@ -1549,7 +1556,7 @@ class MarkdownRenderer(Renderer):
                 parts.append("---")
                 parts.append("")
             for link in output.links:
-                parts.append(f"- [{link.title}]({link.url})")
+                parts.append(f"- [{safe_markdown_inline(link.title)}]({link.url})")
         elif not output.summary:
             # Only show "no results" if there's also no summary
             parts.append("*No results found*")
@@ -1995,7 +2002,7 @@ class MarkdownRenderer(Renderer):
                     if summary
                     else f"Session `{session_short}`"
                 )
-            lines.append(f"- [{label}](#{anchor})")
+            lines.append(f"- [{safe_markdown_inline(label)}](#{anchor})")
         lines.append("")
         return "\n".join(lines)
 
@@ -2074,8 +2081,8 @@ class MarkdownRenderer(Renderer):
             if not suppress_heading:
                 heading_level = min(level, 6)  # Markdown max is h6
                 # Neutralise raw HTML in the title via the single heading gate
-                # (#245 XSS) — see ``_safe_md_heading``.
-                parts.append(f"{'#' * heading_level} {_safe_md_heading(title)}")
+                # (#245 XSS) — see ``safe_markdown_inline``.
+                parts.append(f"{'#' * heading_level} {safe_markdown_inline(title)}")
                 # Per-message timestamp line (issue #160). Skip for
                 # session headers (they have no meaningful per-msg time)
                 # and when the heading was suppressed by `compact` mode
@@ -2168,7 +2175,7 @@ class MarkdownRenderer(Renderer):
         }
 
         parts = [f"<!-- Generated by claude-code-log v{get_library_version()} -->", ""]
-        parts.append(f"# {_safe_md_heading(title)}")
+        parts.append(f"# {safe_markdown_inline(title)}")
 
         # Table of Contents
         if session_nav:
@@ -2251,7 +2258,7 @@ class MarkdownRenderer(Renderer):
         template_projects, template_summary = prepare_projects_index(project_summaries)
 
         parts = [f"<!-- Generated by claude-code-log v{get_library_version()} -->", ""]
-        parts.append(f"# {_safe_md_heading(title)}")
+        parts.append(f"# {safe_markdown_inline(title)}")
 
         # Summary stats
         parts.append(
@@ -2278,14 +2285,14 @@ class MarkdownRenderer(Renderer):
                 # `--combined no` mode: header is a plain heading (no
                 # link to the non-existent combined file); per-session
                 # bullets link directly to `session-{id}.md` files.
-                parts.append(f"## {_safe_md_heading(project.display_name)}")
+                parts.append(f"## {safe_markdown_inline(project.display_name)}")
             else:
                 # Derive markdown link from html_file path. Neutralise only the
                 # display_name fragment (transcript-reachable via cwd) so the
                 # link target is preserved.
                 md_link = project.html_file.replace(".html", ".md")
                 parts.append(
-                    f"## [{_safe_md_heading(project.display_name)}]({md_link})"
+                    f"## [{safe_markdown_inline(project.display_name)}]({md_link})"
                 )
             # Use actual session count (filtered) like HTML does
             session_count = (
@@ -2314,7 +2321,9 @@ class MarkdownRenderer(Renderer):
                     timestamp_suffix = (
                         f" — *{timestamp_range}*" if timestamp_range else ""
                     )
-                    parts.append(f"- [{label}]({file_link}){timestamp_suffix}")
+                    parts.append(
+                        f"- [{safe_markdown_inline(label)}]({file_link}){timestamp_suffix}"
+                    )
             parts.append("")
 
         return "\n".join(parts)
