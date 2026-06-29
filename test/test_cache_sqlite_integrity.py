@@ -821,6 +821,55 @@ class TestBatchConnectionReuse:
         assert loaded is not None
         assert len(loaded) == 1
 
+    def test_failed_configure_closes_connection(self, tmp_path, monkeypatch):
+        """If a PRAGMA fails during connection setup, the just-opened handle
+        must be closed (not leaked), in BOTH the per-call and batch() paths —
+        otherwise the failed connection would lock the cache files. batch()
+        must also not publish a half-initialised handle to _shared_conn.
+        """
+        import claude_code_log.cache as cachemod
+
+        cache_dir = tmp_path / "proj"
+        cache_dir.mkdir()
+        cm = CacheManager(cache_dir, "1.0.0", db_path=tmp_path / "cache.db")
+
+        # Track every connection opened after setup so we can assert it closed.
+        opened: list[sqlite3.Connection] = []
+        real_connect = cachemod.sqlite3.connect
+
+        def tracking_connect(*args, **kwargs):
+            conn = real_connect(*args, **kwargs)
+            opened.append(conn)
+            return conn
+
+        def boom(_conn):
+            raise RuntimeError("pragma boom")
+
+        monkeypatch.setattr(cachemod.sqlite3, "connect", tracking_connect)
+        monkeypatch.setattr(cm, "_configure_connection", boom)
+
+        # Per-call path: configure fails -> connection opened then closed.
+        with pytest.raises(RuntimeError):
+            with cm._get_connection():
+                pass
+        assert opened, "expected a connection to have been opened"
+        with pytest.raises(sqlite3.ProgrammingError):
+            opened[-1].execute("SELECT 1")
+
+        # batch() path: configure fails -> connection closed AND _shared_conn
+        # never left pointing at the dead handle.
+        with pytest.raises(RuntimeError):
+            with cm.batch():
+                pass
+        assert cm._shared_conn is None
+        with pytest.raises(sqlite3.ProgrammingError):
+            opened[-1].execute("SELECT 1")
+
+        # No leaked OS handle: the cache dir is removable (Windows WinError 32).
+        monkeypatch.undo()
+        shutil.rmtree(tmp_path)
+        assert not tmp_path.exists()
+
 
 class TestLargeDatasetPerformance:
     """Tests for performance with large datasets."""

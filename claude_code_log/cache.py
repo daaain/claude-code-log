@@ -330,6 +330,22 @@ class CacheManager:
         # residual risk is acceptable.
         conn.execute("PRAGMA synchronous = NORMAL")
 
+    def _open_configured_connection(self) -> sqlite3.Connection:
+        """Open a connection and apply pragmas, closing it if setup fails.
+
+        If a PRAGMA in ``_configure_connection`` raises, the just-opened
+        handle is closed before re-raising so it can't leak and lock the
+        .db/.db-wal/.db-shm files — the exact failure mode the connection
+        lifecycle elsewhere is careful to avoid (Windows WinError 32).
+        """
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
+        try:
+            self._configure_connection(conn)
+        except BaseException:
+            conn.close()
+            raise
+        return conn
+
     @contextmanager
     def _get_connection(self) -> Generator[sqlite3.Connection, None, None]:
         """Get a database connection with proper settings.
@@ -343,8 +359,7 @@ class CacheManager:
             yield self._shared_conn
             return
 
-        conn = sqlite3.connect(self.db_path, timeout=30.0)
-        self._configure_connection(conn)
+        conn = self._open_configured_connection()
         try:
             yield conn
         finally:
@@ -376,8 +391,10 @@ class CacheManager:
             yield
             return
 
-        conn = sqlite3.connect(self.db_path, timeout=30.0)
-        self._configure_connection(conn)
+        # Open+configure first; only publish to _shared_conn once setup has
+        # succeeded, so a failed PRAGMA never leaves a half-initialised (and
+        # now-closed) handle assigned for other calls to reuse.
+        conn = self._open_configured_connection()
         self._shared_conn = conn
         try:
             yield
