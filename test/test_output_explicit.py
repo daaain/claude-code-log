@@ -205,5 +205,53 @@ class TestIsOutdatedNonRegularFileGuard:
         assert MarkdownRenderer().is_outdated(missing) is True
 
 
+class TestSingleFileStaleness:
+    """#221 follow-up: the *default* single-file output (no ``-o``, detail-
+    suffixed naming) rides the version-only skip, so a source that grows
+    between runs was wrongly kept stale. And a genuine skip printed BOTH the
+    converter's "is current, skipping" line and the CLI's "Successfully
+    converted" line. These pin the fixes for the exact CLI repro:
+    ``claude-code-log <file>.jsonl --detail low`` run, grow source, re-run."""
+
+    def test_grown_source_regenerates(self, tmp_path: Path):
+        src = _write_jsonl(tmp_path / "session.jsonl", "FIRST_turn_marker")
+        runner = CliRunner()
+
+        r1 = runner.invoke(main, [str(src), "--detail", "low"])
+        assert r1.exit_code == 0, r1.output
+        out = next(tmp_path.glob("*.low.html"))
+        assert "FIRST_turn_marker" in out.read_text(encoding="utf-8")
+        out_mtime = out.stat().st_mtime
+
+        # Source progresses (a real append, not a synthetic mtime bump), then
+        # forced strictly newer than the output so the check is robust on
+        # coarse-granularity filesystems.
+        with open(src, "a", encoding="utf-8") as f:
+            f.write(json.dumps(_user_entry("SECOND_turn_marker")) + "\n")
+        os.utime(src, (out_mtime + 2, out_mtime + 2))
+
+        r2 = runner.invoke(main, [str(src), "--detail", "low"])
+        assert r2.exit_code == 0, r2.output
+        assert "skipping regeneration" not in r2.output
+        second = out.read_text(encoding="utf-8")
+        assert "SECOND_turn_marker" in second, "stale HTML served after source grew"
+        assert out.stat().st_mtime > out_mtime
+
+    def test_unchanged_source_skips_without_success_line(self, tmp_path: Path):
+        src = _write_jsonl(tmp_path / "session.jsonl", "ONLY_turn_marker")
+        runner = CliRunner()
+
+        r1 = runner.invoke(main, [str(src), "--detail", "low"])
+        assert r1.exit_code == 0, r1.output
+        assert "Successfully converted" in r1.output
+
+        # Re-run with the source untouched: skip announced exactly once, and
+        # NOT also "Successfully converted" (the misleading double message).
+        r2 = runner.invoke(main, [str(src), "--detail", "low"])
+        assert r2.exit_code == 0, r2.output
+        assert "skipping regeneration" in r2.output
+        assert "Successfully converted" not in r2.output
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

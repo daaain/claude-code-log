@@ -1707,6 +1707,7 @@ def convert_jsonl_to(
     no_timestamps: bool = False,
     no_recaps: bool = False,
     force_regenerate: bool = False,
+    regenerated: Optional[list[bool]] = None,
 ) -> Path:
     """Convert JSONL transcript(s) to the specified format.
 
@@ -1730,6 +1731,12 @@ def convert_jsonl_to(
             file at a user-chosen path was kept even when a different
             transcript was requested — silent stale content. The tool's own
             managed ``combined_transcripts*`` artifacts still use the skip.
+        regenerated: Optional out-parameter. When a list is passed, a single
+            bool is appended reporting whether the combined output was
+            actually (re)written (True) or skipped as current (False). Lets
+            the CLI avoid printing a misleading "Successfully converted" line
+            on a skip, without changing the ``Path`` return contract that
+            ~20 callers rely on.
     """
     if not input_path.exists():
         raise FileNotFoundError(f"Input path not found: {input_path}")
@@ -1829,6 +1836,8 @@ def convert_jsonl_to(
                             f"All HTML files are current for {input_path.name}, "
                             "skipping regeneration"
                         )
+                    if regenerated is not None:
+                        regenerated.append(False)
                     return output_path
 
         # Phase 2: Load messages (will use fresh cache when available)
@@ -1894,6 +1903,9 @@ def convert_jsonl_to(
     # requested) are still produced by `_generate_individual_session_files`
     # below. The function still returns `output_path` for the caller's
     # index linking, but the file at that path is not (re-)written.
+    # Tracks whether the combined output was actually (re)written this call,
+    # reported via the `regenerated` out-parameter for the CLI's message.
+    did_regenerate = False
     if not write_combined:
         pass
     elif use_pagination:
@@ -1932,6 +1944,7 @@ def convert_jsonl_to(
             compact=compact,
             no_recaps=no_recaps,
         )
+        did_regenerate = True
     else:
         # Use single-file generation for small projects or filtered views
         # Use incremental regeneration via html_cache when available
@@ -1949,16 +1962,33 @@ def convert_jsonl_to(
                 or not output_path.exists()
             )
         else:
-            # Fallback: old logic for single file mode or no cache
+            # Fallback: old logic for single file mode or no cache.
+            #
+            # is_outdated() only compares the embedded tool version, not the
+            # source's freshness, so a single .jsonl that grows between runs
+            # (e.g. an in-progress session re-exported with the same tool
+            # version) would be wrongly skipped as "current" and serve stale
+            # HTML (issue #221 follow-up). Mirror the directory path's
+            # source-tracking intent with an mtime check: regenerate when the
+            # source file is newer than the existing output. Scoped to a file
+            # source — a directory source has no single mtime and is handled
+            # by the cache branch / `cache_was_updated` above.
+            source_is_newer = (
+                input_path.is_file()
+                and output_path.exists()
+                and input_path.stat().st_mtime > output_path.stat().st_mtime
+            )
             should_regenerate = (
                 force_regenerate
                 or renderer.is_outdated(output_path)
+                or source_is_newer
                 or from_date is not None
                 or to_date is not None
                 or not output_path.exists()
                 or (input_path.is_dir() and cache_was_updated)
             )
 
+        did_regenerate = should_regenerate
         if should_regenerate:
             # For referenced images, pass the output directory
             output_dir = output_path.parent
@@ -2002,6 +2032,9 @@ def convert_jsonl_to(
             no_timestamps=no_timestamps,
             no_recaps=no_recaps,
         )
+
+    if regenerated is not None:
+        regenerated.append(did_regenerate)
 
     return output_path
 

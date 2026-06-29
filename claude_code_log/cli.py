@@ -1299,6 +1299,10 @@ def main(
             )
             return
 
+        # Out-param: convert_jsonl_to appends whether it actually (re)wrote
+        # the combined output, so we don't print "Successfully converted" on
+        # top of its own "is current, skipping regeneration" line on a skip.
+        regenerated: list[bool] = []
         output_path = convert_jsonl_to(
             output_format,
             input_path,
@@ -1326,9 +1330,14 @@ def main(
             # same dir still regenerates), and `--all-projects` calls this
             # with output=None anyway, so its skip is never forced.
             force_regenerate=output is not None and _output_path_is_file(output),
+            regenerated=regenerated,
         )
+        # On a skip the converter already printed "is current, skipping
+        # regeneration"; suppress the redundant/misleading success line.
+        was_regenerated = regenerated != [False]
         if input_path.is_file():
-            click.echo(f"Successfully converted {input_path} to {output_path}")
+            if was_regenerated:
+                click.echo(f"Successfully converted {input_path} to {output_path}")
         else:
             jsonl_count = len(list(input_path.glob("*.jsonl")))
             if write_individual:

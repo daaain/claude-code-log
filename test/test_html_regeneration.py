@@ -300,7 +300,8 @@ class TestHtmlRegeneration:
         assert "This should force regeneration despite same version" in new_content
 
     def test_single_file_mode_regeneration_behavior(self, tmp_path):
-        """Test that single file mode doesn't use cache but still respects version checks."""
+        """Single file mode has no cache: it skips on an unchanged source
+        (version marker current) but regenerates when the source is newer."""
         # Setup: Create a single JSONL file
         test_data_dir = Path(__file__).parent / "test_data"
         jsonl_file = tmp_path / "single_test.jsonl"
@@ -327,21 +328,28 @@ class TestHtmlRegeneration:
         # Verify file wasn't regenerated (same mtime)
         assert output_file.stat().st_mtime == original_mtime
 
-        # Modify file - should NOT auto-regenerate in single file mode because there's no cache
+        # Modify the source: even without a cache, a single file that grows
+        # (e.g. an in-progress session) MUST regenerate — the output is now
+        # older than its source (issue #221 follow-up). Previously single
+        # file mode wrongly skipped on the version marker alone.
         time.sleep(0.1)
         new_message = '{"type":"user","timestamp":"2025-07-03T16:40:00Z","parentUuid":null,"isSidechain":false,"userType":"human","cwd":"/tmp","sessionId":"test_session","version":"1.0.0","uuid":"single_file_msg","message":{"role":"user","content":[{"type":"text","text":"Single file mode test."}]}}\n'
         with open(jsonl_file, "a", encoding="utf-8") as f:
             f.write(new_message)
 
-        # Single file mode doesn't have cache, so it should still skip based on version
         with patch("builtins.print") as mock_print:
             convert_jsonl_to_html(jsonl_file)
-            mock_print.assert_any_call(
-                "HTML file single_test.html is current, skipping regeneration"
-            )
+            # No "skipping" line: it regenerated because the source is newer.
+            skip_calls = [
+                c
+                for c in mock_print.call_args_list
+                if c.args and "skipping regeneration" in str(c.args[0])
+            ]
+            assert not skip_calls, f"unexpected skip after source grew: {skip_calls}"
 
-        # Verify file wasn't regenerated (this is expected behavior for single file mode)
-        assert output_file.stat().st_mtime == original_mtime
+        # The output was rewritten (newer mtime) and now contains the new message.
+        assert output_file.stat().st_mtime > original_mtime
+        assert "Single file mode test." in output_file.read_text(encoding="utf-8")
 
 
 class TestIncrementalHtmlCache:
