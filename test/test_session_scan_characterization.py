@@ -51,6 +51,27 @@ from claude_code_log.converter import (
 )
 
 
+def _symlinks_supported() -> bool:
+    """Whether the OS lets this process create symlinks.
+
+    On Windows, ``os.symlink`` raises ``OSError [WinError 1314]`` unless the
+    process is elevated or Developer Mode is on, so the symlink-based tests
+    below can't run there. Probe once at import time.
+    """
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        link = Path(td) / "probe-link"
+        try:
+            link.symlink_to(Path(td))
+        except (OSError, NotImplementedError):
+            return False
+    return True
+
+
+_SYMLINKS_SUPPORTED = _symlinks_supported()
+
+
 # ----- fixture builders ----------------------------------------------------
 
 
@@ -457,6 +478,10 @@ class TestUpdateCacheCharacterization:
 # ----- characterization: index inline-aggregate loop -----------------------
 
 
+@pytest.mark.skipif(
+    not _SYMLINKS_SUPPORTED,
+    reason="symlink creation requires privilege/Developer Mode on Windows",
+)
 class TestIndexInlineAggregateLoopCharacterization:
     """Pin the project-aggregate totals produced by the inline loop
     inside `process_projects_hierarchy` (the cache-unavailable

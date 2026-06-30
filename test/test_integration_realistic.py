@@ -36,6 +36,50 @@ from claude_code_log.cache import CacheManager, get_library_version
 # Path to realistic test data
 REAL_PROJECTS_DIR = Path(__file__).parent / "test_data" / "real_projects"
 
+# These integration tests exercise *behavior* (hierarchy processing, caching,
+# CLI flags, regeneration) rather than raw data volume, yet rendering cost
+# scales with transcript size. A couple of session files in the fixture are
+# ~5 MB each, and re-rendering them in every function-scoped copy dominates the
+# suite wall-time (especially on Windows, where the per-message render work is
+# the bottleneck). We therefore prefix-truncate the oversized session files in
+# the *copy* only — the source tree stays pristine, so the volume-sensitive
+# tests (test_performance / test_json_real_projects / test_dag*) keep the full
+# data. Truncating to a leading prefix is DAG-safe: a transcript entry's
+# parentUuid always refers to an earlier line, so dropping the tail only removes
+# leaf descendants and never dangles a parent reference.
+#
+# The 600 KB threshold sits above the largest content-sensitive fixture files
+# (JSSoundRecorder's 506 KB session, the teammates trunk at 285 KB), so those
+# projects are left intact without naming them. agent-*/subagents files are
+# skipped outright — the teammate-linking tests depend on their full content.
+_TRUNCATE_THRESHOLD = 600_000
+_TRUNCATE_KEEP = 100_000
+
+
+def _shrink_large_transcripts(projects_dir: Path) -> None:
+    """Prefix-truncate oversized standalone transcript files in a copied tree.
+
+    See the module comment above for the rationale and safety argument. Mutates
+    files in place; only call on a throwaway copy, never the source fixture.
+    """
+    for jsonl_file in projects_dir.rglob("*.jsonl"):
+        if jsonl_file.name.startswith("agent-") or "subagents" in jsonl_file.parts:
+            continue
+        if jsonl_file.stat().st_size <= _TRUNCATE_THRESHOLD:
+            continue
+        data = jsonl_file.read_bytes()
+        cut = data[:_TRUNCATE_KEEP]
+        # Trim back to the last complete line so we never leave a partial JSON
+        # record (which would be parsed as a malformed line, not a clean prefix).
+        # If the kept prefix has no newline (the first record alone exceeds
+        # _TRUNCATE_KEEP), leave the file untruncated rather than writing a
+        # partial record.
+        last_newline = cut.rfind(b"\n")
+        if last_newline <= 0:
+            continue
+        cut = cut[: last_newline + 1]
+        jsonl_file.write_bytes(cut)
+
 
 def make_valid_user_entry(
     content: str,
@@ -105,6 +149,7 @@ def temp_projects_copy(real_projects_path: Path) -> Generator[Path, None, None]:
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_projects = Path(temp_dir) / "projects"
         shutil.copytree(real_projects_path, temp_projects)
+        _shrink_large_transcripts(temp_projects)
 
         # Clean any existing cache/HTML to ensure fresh state
         for project_dir in temp_projects.iterdir():
@@ -130,6 +175,7 @@ def projects_with_cache(real_projects_path: Path) -> Generator[Path, None, None]
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_projects = Path(temp_dir) / "projects"
         shutil.copytree(real_projects_path, temp_projects)
+        _shrink_large_transcripts(temp_projects)
 
         # Clean any existing cache/HTML first
         for project_dir in temp_projects.iterdir():
