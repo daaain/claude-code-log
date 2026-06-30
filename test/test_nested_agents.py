@@ -305,6 +305,47 @@ class TestNestedVisualLayer:
         # The session header carries the main model inline on its heading.
         assert "— Model: `claude-haiku-4-5-20251001`" in md
 
+    def test_model_attribution_distinguishes_trunk_from_subagents(self) -> None:
+        """Issue #246's raison d'être: trunk and sub-agents can run on
+        DIFFERENT models. The fixture runs everything on haiku, so the
+        once-per-context tests above can't tell correct attribution from
+        cross-contamination. Retarget only the trunk's assistant entries to
+        a distinct model and pin that the session header shows IT while each
+        sub-agent keeps its own — no leakage either way (monk #3959)."""
+        from claude_code_log.html.renderer import generate_html
+        from claude_code_log.markdown.renderer import MarkdownRenderer
+        from claude_code_log.models import AssistantTranscriptEntry
+
+        trunk_model = "claude-opus-4-8"
+        sub_model = "claude-haiku-4-5-20251001"
+        entries = _load_integrated()
+        retargeted = 0
+        for entry in entries:
+            if isinstance(entry, AssistantTranscriptEntry) and not entry.isSidechain:
+                entry.message.model = trunk_model
+                retargeted += 1
+        assert retargeted, "fixture should carry trunk assistant entries"
+
+        _roots, _nav, ctx = generate_template_messages(entries)
+        msgs = [m for m in ctx.messages if m is not None]
+        headers = [
+            m.display_model for m in msgs if m.display_model and m.is_session_header
+        ]
+        assert headers == [trunk_model], "trunk model must land on the session header"
+        subs = [m for m in msgs if m.display_model and m.meta.is_sidechain]
+        assert subs and all(m.display_model == sub_model for m in subs), (
+            "sub-agents must keep their own model, not inherit the trunk's"
+        )
+
+        # Both renderers attribute correctly end-to-end.
+        html = generate_html(entries, "diff")
+        assert trunk_model in html and sub_model in html
+        md = MarkdownRenderer().generate(entries, "diff")
+        assert f"— Model: `{trunk_model}`" in md  # session header only
+        assert f"Model: `{sub_model}`" in md  # a sub-agent
+        # The trunk model never appears as a standalone sub-agent Model line.
+        assert f"\nModel: `{trunk_model}`" not in md
+
     def test_new_sidecar_invalidates_cached_trunk(self, tmp_path: Path) -> None:
         """Sidecar inputs are part of the cache key (PR #218 review).
 
