@@ -904,11 +904,28 @@ def main(
             err=True,
         )
 
+    # `--output` / `--format` are no-ops under --tui: the TUI's export
+    # actions write to a fixed per-session path and run_session_browser
+    # never receives these flags (issue #220). Warn rather than silently
+    # ignore, mirroring the --expand-paths / --filter-path cases above.
+    if tui and (
+        output is not None
+        or ctx.get_parameter_source("output_format")
+        is not click.core.ParameterSource.DEFAULT
+    ):
+        click.echo(
+            "Warning: --output / --format are ignored in --tui mode; "
+            "use the TUI's in-app export actions instead.",
+            err=True,
+        )
+
     # Infer --format from an explicit --output file suffix when -f was not
     # given; error on an explicit conflict like `-o foo.md -f html` rather
     # than writing mismatched content (issue #222). `.md`/`.markdown` both
-    # imply the canonical `markdown` format.
-    if output is not None and _output_path_is_file(output):
+    # imply the canonical `markdown` format. Skipped under --tui: both flags
+    # are no-ops there (warned above), so erroring on their conflict would
+    # contradict the warning and block the TUI from launching (#220).
+    if not tui and output is not None and _output_path_is_file(output):
         from .utils import format_from_output_suffix
 
         suffix_format = format_from_output_suffix(output)
