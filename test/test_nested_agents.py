@@ -346,6 +346,38 @@ class TestNestedVisualLayer:
         # The trunk model never appears as a standalone sub-agent Model line.
         assert f"\nModel: `{trunk_model}`" not in md
 
+    def test_sidechain_without_agent_id_never_leaks_into_header(self) -> None:
+        """A sidechain message lacking an agent_id stays unattributed — it
+        must not fall through and overwrite the session header's trunk model
+        (CodeRabbit, PR #252). Registered BEFORE the trunk message so the old
+        ``else`` fall-through would have set the header to the rogue model."""
+        from claude_code_log.models import MessageMeta, SystemMessage
+        from claude_code_log.renderer import (
+            RenderingContext,
+            _surface_agent_models,
+        )
+
+        def _sys(uuid: str, **meta_kwargs: object) -> TemplateMessage:
+            meta = MessageMeta(session_id="s", timestamp="t", uuid=uuid, **meta_kwargs)  # type: ignore[arg-type]
+            return TemplateMessage(SystemMessage(meta=meta, level="info", text=""))
+
+        ctx = RenderingContext()
+        header = _sys("h")
+        ctx.session_first_message["s"] = ctx.register(header)
+        # Rogue sidechain entry: is_sidechain but no agent_id, distinct model.
+        rogue = _sys(
+            "r", is_sidechain=True, agent_id=None, model="claude-haiku-4-5-20251001"
+        )
+        ctx.register(rogue)
+        # Real trunk model, registered after the rogue.
+        trunk = _sys("a", model="claude-opus-4-8")
+        ctx.register(trunk)
+
+        _surface_agent_models(ctx)
+
+        assert header.display_model == "claude-opus-4-8"
+        assert rogue.display_model is None
+
     def test_new_sidecar_invalidates_cached_trunk(self, tmp_path: Path) -> None:
         """Sidecar inputs are part of the cache key (PR #218 review).
 

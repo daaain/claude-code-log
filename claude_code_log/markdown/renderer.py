@@ -708,7 +708,12 @@ class MarkdownRenderer(Renderer):
     def title_SessionHeaderMessage(
         self, content: SessionHeaderMessage, message: TemplateMessage
     ) -> str:
-        """Title → '📋 Session `abc12345`: summary — Team: `t`' (or '🌿 Branch …').
+        """Title → '📋 Session `abc12345`: summary — Model: `m` — Team: `t`'
+        (or '🌿 Branch …').
+
+        The ``— Model: `…``` segment (issue #246) carries the trunk/main
+        model and appears, before any Team suffix, only on non-branch
+        session headers that have a ``display_model`` set.
 
         Branch session headers surface the ``Branch • <uuid8> • <preview>``
         shape that the renderer's ``_branch_label`` helper composes for

@@ -4875,11 +4875,16 @@ def _surface_agent_models(ctx: RenderingContext) -> None:
         model = msg.meta.model
         if not model:
             continue
-        if msg.meta.is_sidechain and msg.meta.agent_id:
-            if msg.meta.agent_id not in seen_subagents:
-                seen_subagents.add(msg.meta.agent_id)
+        if msg.meta.is_sidechain:
+            # Sub-agent context: attribute to its agent_id. A sidechain entry
+            # that somehow lacks an agent_id is left unattributed rather than
+            # leaking into the trunk header below.
+            agent_id = msg.meta.agent_id
+            if agent_id and agent_id not in seen_subagents:
+                seen_subagents.add(agent_id)
                 msg.display_model = model
         else:
+            # Trunk context: the main model goes on the session header.
             session_id = msg.meta.session_id
             if session_id and session_id not in seen_sessions:
                 seen_sessions.add(session_id)

@@ -129,7 +129,7 @@
        card itself, not the whole subtree (issue #174 nested-DOM follow-up). #}
     <div class='message-node'>
     <div class='message session-header{% if message.is_branch_header %} branch-header{% endif %}' data-message-id='{{ message.message_id }}' data-session-id='{{ message.session_id }}' id='msg-{{ message.message_id }}'{% if message.branch_depth %} style='margin-left: {{ message.branch_depth * 2 }}em'{% endif %}>
-        <div class='header'>{% if message.is_branch_header %}&#x21b3; {% else %}Session: {% endif %}{{ html_content|safe }}{% if message.display_model %} <span class='message-model' title='Main agent model'>{{ message.display_model }}</span>{% endif %}</div>
+        <div class='header'>{% if message.is_branch_header %}&#x21b3; {% else %}Session: {% endif %}{{ html_content|safe }}{% if message.display_model and not message.is_branch_header %} <span class='message-model' title='Main agent model'>{{ message.display_model }}</span>{% endif %}</div>
         {% if message.has_children %}
         <div class='fold-bar' data-message-id='{{ message.message_id }}' data-border-color='session-header'>
             {% if message.immediate_children_count == message.total_descendants_count %}
