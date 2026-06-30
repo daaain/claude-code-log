@@ -284,6 +284,14 @@ class TemplateMessage:
         # spawn that produced no transcript at all (#213 visual layer).
         self.spawns_collapsed_transcript: bool = False
 
+        # Model id to surface in this message's header (issue #246). Set by
+        # _surface_agent_models once per agent context — on the session header
+        # (the trunk/main model) and on the first message of each sub-agent
+        # (the model that sub-agent ran on) — so the id shows once rather than
+        # on every message. None elsewhere. The raw per-entry value lives on
+        # ``meta.model``; this is the render-once decision derived from it.
+        self.display_model: Optional[str] = None
+
         # Per-render annotations populated by the HTML renderer's tree walk
         # (HtmlRenderer._annotate_tree_for_render). The recursive template
         # macro reads these instead of receiving a flat (msg, title, html,
@@ -4841,7 +4849,46 @@ def _render_messages(
                     tool_msg.render_session_id = effective_session
                 ctx.register(tool_msg)
 
+    _surface_agent_models(ctx)
     return ctx
+
+
+def _surface_agent_models(ctx: RenderingContext) -> None:
+    """Mark which messages should display their model id (issue #246).
+
+    Surfaced once per agent context rather than on every message:
+    - the **session header** carries the trunk/main agent's model (the first
+      non-sidechain assistant model seen for that session);
+    - the **first message of each sub-agent** carries that sub-agent's model.
+
+    A mid-course ``/model`` switch surfaces as its own command message, so a
+    single first-seen value per context is enough. ``meta.model`` is only set
+    on assistant entries, so a truthy value already filters to assistant-origin
+    chunks (text or tool_use).
+    """
+    seen_subagents: set[str] = set()
+    seen_sessions: set[str] = set()
+    for msg in ctx.messages:
+        # ctx.messages may carry None slots (ghosted entries); skip them.
+        if msg is None:
+            continue
+        model = msg.meta.model
+        if not model:
+            continue
+        if msg.meta.is_sidechain and msg.meta.agent_id:
+            if msg.meta.agent_id not in seen_subagents:
+                seen_subagents.add(msg.meta.agent_id)
+                msg.display_model = model
+        else:
+            session_id = msg.meta.session_id
+            if session_id and session_id not in seen_sessions:
+                seen_sessions.add(session_id)
+                header_index = ctx.session_first_message.get(session_id)
+                header = (
+                    ctx.messages[header_index] if header_index is not None else None
+                )
+                if header is not None:
+                    header.display_model = model
 
 
 # -- Project Index Generation -------------------------------------------------

@@ -706,7 +706,7 @@ class MarkdownRenderer(Renderer):
         return f'<a id="{_session_anchor(content)}"></a>'
 
     def title_SessionHeaderMessage(
-        self, content: SessionHeaderMessage, _: TemplateMessage
+        self, content: SessionHeaderMessage, message: TemplateMessage
     ) -> str:
         """Title → '📋 Session `abc12345`: summary — Team: `t`' (or '🌿 Branch …').
 
@@ -739,6 +739,9 @@ class MarkdownRenderer(Renderer):
             title = f"📋 Session `{session_short}`: {content.summary}"
         else:
             title = f"📋 Session `{session_short}`"
+        # Main agent model, surfaced once on the session header (issue #246).
+        if message.display_model:
+            title = f"{title} — Model: {_inline_code(message.display_model)}"
         if content.team_name:
             # Boundary hygiene: a malformed transcript could in theory
             # carry a backtick in teamName. CommonMark code spans don't
@@ -2091,6 +2094,11 @@ class MarkdownRenderer(Renderer):
                     ts_line = self._format_message_timestamp(msg)
                     if ts_line:
                         parts.append(ts_line)
+
+            # Sub-agent model, surfaced once on its first message (issue #246).
+            # Outside the suppress-heading guard so it survives compact mode.
+            if msg.display_model and not is_session_header:
+                parts.append(f"Model: {_inline_code(msg.display_model)}")
 
             # Format content (if not already output above)
             if content:

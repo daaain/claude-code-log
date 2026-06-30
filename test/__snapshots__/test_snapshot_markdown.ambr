@@ -13,7 +13,7 @@
   
   <a id="session-eb000000"></a>
   
-  # 📋 Session `eb000000`
+  # 📋 Session `eb000000` — Model: `claude-opus-4-7`
   
   ## 🤷 User: *Spawn a coverage analysis agent in the background…*
   
@@ -53,6 +53,8 @@
   #### 🔗 Sub-assistant: *Reading the source files now...*
   
   `10:04:00`
+  
+  Model: `claude-opus-4-7`
   
   > Reading the source files now...
   
@@ -114,7 +116,7 @@
   
   <a id="session-test_ses"></a>
   
-  # 📋 Session `test_ses`
+  # 📋 Session `test_ses` — Model: `claude-3-sonnet-20240229`
   
   ## 🤷 User: *Hello Claude!*
   
@@ -255,7 +257,7 @@
   
   <a id="session-ef000000"></a>
   
-  # 📋 Session `ef000000` — Team: `test-coverage`
+  # 📋 Session `ef000000` — Model: `claude-opus-4-7` — Team: `test-coverage`
   
   ## 🤷 User: *Start a test-coverage team and dispatch two…*
   
@@ -323,6 +325,8 @@
   
   `10:02:00`
   
+  Model: `claude-opus-4-7`
+  
   > Starting relay coverage work.
   
   #### 🔗 Sub-assistant: *Relay module coverage is now 96%.*
@@ -358,6 +362,8 @@
   #### 🔗 Sub-assistant: *Starting server coverage work.*
   
   `10:02:00`
+  
+  Model: `claude-opus-4-7`
   
   > Starting server coverage work.
   
@@ -453,7 +459,7 @@
   
   <a id="session-edge_cas"></a>
   
-  # 📋 Session `edge_cas`: Tested various edge cases including markdown formatting, long text, tool errors, system messages, command outputs, special characters and emojis. All message types render correctly in the transcript viewer.
+  # 📋 Session `edge_cas`: Tested various edge cases including markdown formatting, long text, tool errors, system messages, command outputs, special characters and emojis. All message types render correctly in the transcript viewer. — Model: `claude-3-sonnet-20240229`
   
   ## 🤷 User: *Here's a message with some \*\*markdown\*\* formatting…*
   
@@ -585,7 +591,7 @@
   
   <a id="session-todowrit"></a>
   
-  # 📋 Session `todowrit`
+  # 📋 Session `todowrit` — Model: `claude-sonnet-4`
   
   ## TodoWrite
   
@@ -638,7 +644,7 @@
   
   <a id="session-session_"></a>
   
-  # 📋 Session `session_`
+  # 📋 Session `session_` — Model: `claude-3-sonnet-20240229`
   
   ## 🤷 User: *This is from a different session file to…*
   
@@ -660,7 +666,7 @@
   
   <a id="session-test_ses"></a>
   
-  # 📋 Session `test_ses`: User learned about Python decorators, including basic decorators and parameterized decorators. Created and ran examples showing how decorators work with functions. User is now ready to implement their own timing decorator.
+  # 📋 Session `test_ses`: User learned about Python decorators, including basic decorators and parameterized decorators. Created and ran examples showing how decorators work with functions. User is now ready to implement their own timing decorator. — Model: `claude-3-sonnet-20240229`
   
   ## 🤷 User: *Hello Claude!*
   
@@ -801,7 +807,7 @@
   
   <a id="session-test_ses"></a>
   
-  # 📋 Session `test_ses`: User learned about Python decorators, including basic decorators and parameterized decorators. Created and ran examples showing how decorators work with functions. User is now ready to implement their own timing decorator.
+  # 📋 Session `test_ses`: User learned about Python decorators, including basic decorators and parameterized decorators. Created and ran examples showing how decorators work with functions. User is now ready to implement their own timing decorator. — Model: `claude-3-sonnet-20240229`
   
   ## 🤷 User: *Hello Claude!*
   

@@ -262,6 +262,49 @@ class TestNestedVisualLayer:
         # The collapsed marker renders.
         assert "≡ full transcript" in html
 
+    def test_model_surfaced_once_per_subagent(self) -> None:
+        """Issue #246: each sub-agent's model id is marked for display on
+        exactly one of its messages (its first), not on every message."""
+        from collections import Counter
+
+        msgs = self._ctx_messages()
+        sub = [m for m in msgs if m.display_model and m.meta.is_sidechain]
+        per_agent = Counter(m.meta.agent_id for m in sub)
+        # Every sub-agent surfaces its model once, never twice.
+        assert set(per_agent) == set(ALL_AGENTS)
+        assert all(count == 1 for count in per_agent.values())
+        # The fixture's sub-agents all run on haiku.
+        assert all(m.display_model == "claude-haiku-4-5-20251001" for m in sub)
+
+    def test_trunk_model_surfaced_only_on_session_header(self) -> None:
+        """Issue #246: the trunk/main model shows on the session header, and
+        no trunk body message carries the pill."""
+        msgs = self._ctx_messages()
+        headers = [m for m in msgs if m.display_model and m.is_session_header]
+        assert len(headers) == 1
+        assert headers[0].display_model == "claude-haiku-4-5-20251001"
+        trunk_body = [
+            m
+            for m in msgs
+            if m.display_model and not m.meta.is_sidechain and not m.is_session_header
+        ]
+        assert trunk_body == []
+
+    def test_model_renders_in_html_and_markdown(self) -> None:
+        from claude_code_log.html.renderer import generate_html
+        from claude_code_log.markdown.renderer import MarkdownRenderer
+
+        entries = _load_integrated()
+        html = generate_html(entries, "model")
+        assert "class='message-model'" in html
+        assert "claude-haiku-4-5-20251001" in html
+
+        md = MarkdownRenderer().generate(entries, "model")
+        # First message of a sub-agent gets a standalone model line.
+        assert "Model: `claude-haiku-4-5-20251001`" in md
+        # The session header carries the main model inline on its heading.
+        assert "— Model: `claude-haiku-4-5-20251001`" in md
+
     def test_new_sidecar_invalidates_cached_trunk(self, tmp_path: Path) -> None:
         """Sidecar inputs are part of the cache key (PR #218 review).
 

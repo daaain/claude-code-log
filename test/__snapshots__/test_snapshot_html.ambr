@@ -647,6 +647,13 @@
       color: #888;
   }
   
+  /* Model id surfaced on sub-agent message headers (issue #246) */
+  .message-model {
+      font-size: 0.75em;
+      font-family: var(--font-mono, 'SFMono-Regular', Consolas, monospace);
+      color: var(--text-secondary, #888);
+  }
+  
   /* Paired message styling */
   .message.pair_first {
       margin-bottom: 0;
@@ -4599,7 +4606,7 @@
       
       <div class='message-node'>
       <div class='message session-header' data-message-id='d-0' data-session-id='eb000000-0000-4000-8000-000000000001' id='msg-d-0'>
-          <div class='header'>Session: eb000000</div>
+          <div class='header'>Session: eb000000 <span class='message-model' title='Main agent model'>claude-opus-4-7</span></div>
           
           <div class='fold-bar' data-message-id='d-0' data-border-color='session-header'>
               
@@ -4629,6 +4636,7 @@
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-04-19T10:01:00.000Z'>2026-04-19 10:01:00</span>
                   </div>
+                  
                   
               </div>
           </div>
@@ -4665,6 +4673,7 @@
                       <span class='timestamp' data-timestamp='2026-04-19T10:02:00.000Z'>2026-04-19 10:02:00</span>
                   </div>
                   
+                  
               </div>
           </div>
           <div class='debug-info'>22222222-000 &rarr; 11111111-000</div>
@@ -4686,6 +4695,7 @@
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-04-19T10:03:00.000Z' data-duration='took 1m 0s'>2026-04-19 10:03:00</span>
                   </div>
+                  
                   
               </div>
           </div>
@@ -4725,6 +4735,9 @@
                       <span class='timestamp' data-timestamp='2026-04-19T10:04:00.000Z'>2026-04-19 10:04:00</span>
                   </div>
                   
+                  
+                  <span class='message-model' title='Model used by this sub-agent'>claude-opus-4-7</span>
+                  
               </div>
           </div>
           <div class='debug-info'>cccccccc-000 &rarr; cccccccc-000</div>
@@ -4752,6 +4765,7 @@
                       <span class='timestamp' data-timestamp='2026-04-19T10:04:00.000Z'>2026-04-19 10:04:00</span>
                   </div>
                   
+                  
               </div>
           </div>
           <div class='debug-info'>22222222-000 &rarr; 11111111-000</div>
@@ -4772,6 +4786,7 @@
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-04-19T10:05:00.000Z' data-duration='took 1m 0s'>2026-04-19 10:05:00</span>
                   </div>
+                  
                   
               </div>
           </div>
@@ -4794,6 +4809,7 @@
                       <span class='timestamp' data-timestamp='2026-04-19T10:06:00.000Z'>2026-04-19 10:06:00</span>
                   </div>
                   
+                  
               </div>
           </div>
           <div class='debug-info'>11111111-000 &rarr; 11111111-000</div>
@@ -4814,6 +4830,7 @@
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-04-19T10:07:00.000Z'>2026-04-19 10:07:00</span>
                   </div>
+                  
                   
               </div>
           </div>
@@ -7081,6 +7098,13 @@
   .token-usage {
       font-size: 0.75em;
       color: #888;
+  }
+  
+  /* Model id surfaced on sub-agent message headers (issue #246) */
+  .message-model {
+      font-size: 0.75em;
+      font-family: var(--font-mono, 'SFMono-Regular', Consolas, monospace);
+      color: var(--text-secondary, #888);
   }
   
   /* Paired message styling */
@@ -11035,7 +11059,7 @@
       
       <div class='message-node'>
       <div class='message session-header' data-message-id='d-0' data-session-id='eb000000-0000-4000-8000-000000000001' id='msg-d-0'>
-          <div class='header'>Session: eb000000</div>
+          <div class='header'>Session: eb000000 <span class='message-model' title='Main agent model'>claude-opus-4-7</span></div>
           
           <div class='fold-bar' data-message-id='d-0' data-border-color='session-header'>
               
@@ -11065,6 +11089,7 @@
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-04-19T10:01:00.000Z'>2026-04-19 10:01:00</span>
                   </div>
+                  
                   
               </div>
           </div>
@@ -11097,6 +11122,7 @@
                       <span class='timestamp' data-timestamp='2026-04-19T10:02:00.000Z'>2026-04-19 10:02:00</span>
                   </div>
                   
+                  
               </div>
           </div>
           <div class='debug-info'>22222222-000 &rarr; 11111111-000</div>
@@ -11118,6 +11144,7 @@
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-04-19T10:03:00.000Z' data-duration='took 1m 0s'>2026-04-19 10:03:00</span>
                   </div>
+                  
                   
               </div>
           </div>
@@ -11149,6 +11176,7 @@
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-04-19T10:07:00.000Z'>2026-04-19 10:07:00</span>
                   </div>
+                  
                   
               </div>
           </div>
@@ -15621,6 +15649,13 @@
       color: #888;
   }
   
+  /* Model id surfaced on sub-agent message headers (issue #246) */
+  .message-model {
+      font-size: 0.75em;
+      font-family: var(--font-mono, 'SFMono-Regular', Consolas, monospace);
+      color: var(--text-secondary, #888);
+  }
+  
   /* Paired message styling */
   .message.pair_first {
       margin-bottom: 0;
@@ -19573,7 +19608,7 @@
       
       <div class='message-node'>
       <div class='message session-header' data-message-id='d-0' data-session-id='test_session' id='msg-d-0'>
-          <div class='header'>Session: test_ses</div>
+          <div class='header'>Session: test_ses <span class='message-model' title='Main agent model'>claude-3-sonnet-20240229</span></div>
           
           <div class='fold-bar' data-message-id='d-0' data-border-color='session-header'>
               
@@ -19603,6 +19638,7 @@
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2025-07-03T15:50:07.874907Z'>2025-07-03 15:50:07</span>
                   </div>
+                  
                   
               </div>
           </div>
@@ -19636,6 +19672,7 @@
                   </div>
                   
                   <span class='token-usage'>Input: 25 | Output: 120</span>
+                  
                   
               </div>
           </div>
@@ -19683,6 +19720,7 @@
                       <span class='timestamp' data-timestamp='2025-07-03T15:54:07.874907Z'>2025-07-03 15:54:07</span>
                   </div>
                   
+                  
               </div>
           </div>
           <div class='debug-info'>msg_003</div>
@@ -19714,6 +19752,7 @@
                       <span class='timestamp' data-timestamp='2025-07-03T15:56:07.874907Z'>2025-07-03 15:56:07</span>
                   </div>
                   
+                  
               </div>
           </div>
           <div class='debug-info'>msg_004</div>
@@ -19734,6 +19773,7 @@
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2025-07-03T15:58:07.874907Z' data-duration='took 2m 0s'>2025-07-03 15:58:07</span>
                   </div>
+                  
                   
               </div>
           </div>
@@ -19757,6 +19797,7 @@
                   </div>
                   
                   <span class='token-usage'>Input: 78 | Output: 95</span>
+                  
                   
               </div>
           </div>
@@ -19797,6 +19838,7 @@
                       <span class='timestamp' data-timestamp='2025-07-03T16:02:07.874907Z'>2025-07-03 16:02:07</span>
                   </div>
                   
+                  
               </div>
           </div>
           <div class='debug-info'>msg_007</div>
@@ -19828,6 +19870,7 @@
                       <span class='timestamp' data-timestamp='2025-07-03T16:04:07.874907Z'>2025-07-03 16:04:07</span>
                   </div>
                   
+                  
               </div>
           </div>
           <div class='debug-info'>msg_008</div>
@@ -19848,6 +19891,7 @@
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2025-07-03T16:06:07.874907Z' data-duration='took 2m 0s'>2025-07-03 16:06:07</span>
                   </div>
+                  
                   
               </div>
           </div>
@@ -19873,6 +19917,7 @@
                   </div>
                   
                   <span class='token-usage'>Input: 45 | Output: 110</span>
+                  
                   
               </div>
           </div>
@@ -19908,6 +19953,7 @@
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2025-07-03T16:10:07.874907Z'>2025-07-03 16:10:07</span>
                   </div>
+                  
                   
               </div>
           </div>
@@ -22170,6 +22216,13 @@
   .token-usage {
       font-size: 0.75em;
       color: #888;
+  }
+  
+  /* Model id surfaced on sub-agent message headers (issue #246) */
+  .message-model {
+      font-size: 0.75em;
+      font-family: var(--font-mono, 'SFMono-Regular', Consolas, monospace);
+      color: var(--text-secondary, #888);
   }
   
   /* Paired message styling */
@@ -26124,7 +26177,7 @@
       
       <div class='message-node'>
       <div class='message session-header' data-message-id='d-0' data-session-id='ef000000-0000-4000-8000-000000000001' id='msg-d-0'>
-          <div class='header'>Session: ef000000<span class="session-team-badge" style="--cc-color: var(--cc-purple); --cc-color-bg: var(--cc-purple-bg);"><span class="session-team-icon">👥</span>Team: test-coverage</span></div>
+          <div class='header'>Session: ef000000<span class="session-team-badge" style="--cc-color: var(--cc-purple); --cc-color-bg: var(--cc-purple-bg);"><span class="session-team-icon">👥</span>Team: test-coverage</span> <span class='message-model' title='Main agent model'>claude-opus-4-7</span></div>
           
           <div class='fold-bar' data-message-id='d-0' data-border-color='session-header'>
               
@@ -26154,6 +26207,7 @@
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-04-19T10:01:00.000Z'>2026-04-19 10:01:00</span>
                   </div>
+                  
                   
               </div>
           </div>
@@ -26190,6 +26244,7 @@
                       <span class='timestamp' data-timestamp='2026-04-19T10:02:00.000Z'>2026-04-19 10:02:00</span>
                   </div>
                   
+                  
               </div>
           </div>
           <div class='debug-info'>22222222-000 &rarr; 11111111-000</div>
@@ -26211,6 +26266,7 @@
                       <span class='timestamp' data-timestamp='2026-04-19T10:03:00.000Z' data-duration='took 1m 0s'>2026-04-19 10:03:00</span>
                   </div>
                   
+                  
               </div>
           </div>
           <div class='debug-info'>11111111-000 &rarr; 22222222-000</div>
@@ -26231,6 +26287,7 @@
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-04-19T10:04:00.000Z'>2026-04-19 10:04:00</span>
                   </div>
+                  
                   
               </div>
           </div>
@@ -26257,6 +26314,7 @@
                       <span class='timestamp' data-timestamp='2026-04-19T10:06:00.000Z'>2026-04-19 10:06:00</span>
                   </div>
                   
+                  
               </div>
           </div>
           <div class='debug-info'>22222222-000 &rarr; 11111111-000</div>
@@ -26282,6 +26340,7 @@
                       <span class='timestamp' data-timestamp='2026-04-19T10:08:00.000Z'>2026-04-19 10:08:00</span>
                   </div>
                   
+                  
               </div>
           </div>
           <div class='debug-info'>22222222-000 &rarr; 11111111-000</div>
@@ -26305,6 +26364,7 @@
                       <span class='timestamp' data-timestamp='2026-04-19T10:10:00.000Z'>2026-04-19 10:10:00</span>
                   </div>
                   
+                  
               </div>
           </div>
           <div class='debug-info'>22222222-000 &rarr; 11111111-000</div>
@@ -26326,6 +26386,7 @@
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-04-19T10:11:00.000Z' data-duration='took 1m 0s'>2026-04-19 10:11:00</span>
                   </div>
+                  
                   
               </div>
           </div>
@@ -26358,6 +26419,9 @@
                       <span class='timestamp' data-timestamp='2026-04-19T10:02:00.000Z'>2026-04-19 10:02:00</span>
                   </div>
                   
+                  
+                  <span class='message-model' title='Model used by this sub-agent'>claude-opus-4-7</span>
+                  
               </div>
           </div>
           <div class='debug-info'>aaaaaaaa-000 &rarr; aaaaaaaa-000</div>
@@ -26379,6 +26443,7 @@
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-04-19T10:03:00.000Z'>2026-04-19 10:03:00</span>
                   </div>
+                  
                   
               </div>
           </div>
@@ -26407,6 +26472,7 @@
                       <span class='timestamp' data-timestamp='2026-04-19T10:12:00.000Z'>2026-04-19 10:12:00</span>
                   </div>
                   
+                  
               </div>
           </div>
           <div class='debug-info'>22222222-000 &rarr; 11111111-000</div>
@@ -26428,6 +26494,7 @@
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-04-19T10:13:00.000Z' data-duration='took 1m 0s'>2026-04-19 10:13:00</span>
                   </div>
+                  
                   
               </div>
           </div>
@@ -26460,6 +26527,7 @@
                       <span class='timestamp' data-timestamp='2026-04-19T10:01:00.000Z'>2026-04-19 10:01:00</span>
                   </div>
                   
+                  
               </div>
           </div>
           <div class='debug-info'>bbbbbbbb-000</div>
@@ -26482,6 +26550,9 @@
                       <span class='timestamp' data-timestamp='2026-04-19T10:02:00.000Z'>2026-04-19 10:02:00</span>
                   </div>
                   
+                  
+                  <span class='message-model' title='Model used by this sub-agent'>claude-opus-4-7</span>
+                  
               </div>
           </div>
           <div class='debug-info'>bbbbbbbb-000 &rarr; bbbbbbbb-000</div>
@@ -26503,6 +26574,7 @@
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-04-19T10:03:00.000Z'>2026-04-19 10:03:00</span>
                   </div>
+                  
                   
               </div>
           </div>
@@ -26536,6 +26608,7 @@
                       <span class='timestamp' data-timestamp='2026-04-19T10:14:00.000Z'>2026-04-19 10:14:00</span>
                   </div>
                   
+                  
               </div>
           </div>
           <div class='debug-info'>11111111-000 &rarr; 11111111-000</div>
@@ -26561,6 +26634,7 @@
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-04-19T10:15:00.000Z'>2026-04-19 10:15:00</span>
                   </div>
+                  
                   
               </div>
           </div>
@@ -26595,6 +26669,7 @@
                       <span class='timestamp' data-timestamp='2026-04-19T10:16:00.000Z'>2026-04-19 10:16:00</span>
                   </div>
                   
+                  
               </div>
           </div>
           <div class='debug-info'>22222222-000 &rarr; 11111111-000</div>
@@ -26616,6 +26691,7 @@
                       <span class='timestamp' data-timestamp='2026-04-19T10:17:00.000Z' data-duration='took 1m 0s'>2026-04-19 10:17:00</span>
                   </div>
                   
+                  
               </div>
           </div>
           <div class='debug-info'>11111111-000 &rarr; 22222222-000</div>
@@ -26636,6 +26712,7 @@
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-04-19T10:18:00.000Z'>2026-04-19 10:18:00</span>
                   </div>
+                  
                   
               </div>
           </div>
@@ -26659,6 +26736,7 @@
                       <span class='timestamp' data-timestamp='2026-04-19T10:19:00.000Z' data-duration='took 1m 0s'>2026-04-19 10:19:00</span>
                   </div>
                   
+                  
               </div>
           </div>
           <div class='debug-info'>11111111-000 &rarr; 22222222-000</div>
@@ -26679,6 +26757,7 @@
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-04-19T10:20:00.000Z'>2026-04-19 10:20:00</span>
                   </div>
+                  
                   
               </div>
           </div>
@@ -26701,6 +26780,7 @@
                       <span class='timestamp' data-timestamp='2026-04-19T10:21:00.000Z' data-duration='took 1m 0s'>2026-04-19 10:21:00</span>
                   </div>
                   
+                  
               </div>
           </div>
           <div class='debug-info'>11111111-000 &rarr; 22222222-000</div>
@@ -26721,6 +26801,7 @@
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-04-19T10:22:00.000Z'>2026-04-19 10:22:00</span>
                   </div>
+                  
                   
               </div>
           </div>
@@ -28988,6 +29069,13 @@
   .token-usage {
       font-size: 0.75em;
       color: #888;
+  }
+  
+  /* Model id surfaced on sub-agent message headers (issue #246) */
+  .message-model {
+      font-size: 0.75em;
+      font-family: var(--font-mono, 'SFMono-Regular', Consolas, monospace);
+      color: var(--text-secondary, #888);
   }
   
   /* Paired message styling */
@@ -32942,7 +33030,7 @@
       
       <div class='message-node'>
       <div class='message session-header' data-message-id='d-0' data-session-id='edge_cases' id='msg-d-0'>
-          <div class='header'>Session: Tested various edge cases including markdown formatting, long text, tool errors, system messages, command outputs, special characters and emojis. All message types render correctly in the transcript viewer. • edge_cas</div>
+          <div class='header'>Session: Tested various edge cases including markdown formatting, long text, tool errors, system messages, command outputs, special characters and emojis. All message types render correctly in the transcript viewer. • edge_cas <span class='message-model' title='Main agent model'>claude-3-sonnet-20240229</span></div>
           
           <div class='fold-bar' data-message-id='d-0' data-border-color='session-header'>
               
@@ -32972,6 +33060,7 @@
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2025-06-14T11:00:00Z'>2025-06-14 11:00:00</span>
                   </div>
+                  
                   
               </div>
           </div>
@@ -33005,6 +33094,7 @@
                   </div>
                   
                   <span class='token-usage'>Input: 35 | Output: 145</span>
+                  
                   
               </div>
           </div>
@@ -33071,6 +33161,7 @@
                       <span class='timestamp' data-timestamp='2025-06-14T11:01:00Z'>2025-06-14 11:01:00</span>
                   </div>
                   
+                  
               </div>
           </div>
           <div class='debug-info'>edge_003</div>
@@ -33102,6 +33193,7 @@
                       <span class='timestamp' data-timestamp='2025-06-14T11:01:30Z'>2025-06-14 11:01:30</span>
                   </div>
                   
+                  
               </div>
           </div>
           <div class='debug-info'>edge_004</div>
@@ -33127,6 +33219,7 @@
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2025-06-14T11:01:31Z' data-duration='took 1.0s'>2025-06-14 11:01:31</span>
                   </div>
+                  
                   
               </div>
           </div>
@@ -33154,6 +33247,7 @@
                       <span class='timestamp' data-timestamp='2025-06-14T11:02:10Z'>2025-06-14 11:02:10</span>
                   </div>
                   
+                  
               </div>
           </div>
           <div class='debug-info'>edge_007</div>
@@ -33176,6 +33270,7 @@
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2025-06-14T11:02:20Z'>2025-06-14 11:02:20</span>
                   </div>
+                  
                   
               </div>
           </div>
@@ -33218,6 +33313,7 @@
                   
                   <span class='token-usage'>Input: 85 | Output: 180</span>
                   
+                  
               </div>
           </div>
           <div class='debug-info'>edge_009</div>
@@ -33248,6 +33344,7 @@
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2025-06-14T11:03:00Z'>2025-06-14 11:03:00</span>
                   </div>
+                  
                   
               </div>
           </div>
@@ -33280,6 +33377,7 @@
                       <span class='timestamp' data-timestamp='2025-06-14T11:03:30Z'>2025-06-14 11:03:30</span>
                   </div>
                   
+                  
               </div>
           </div>
           <div class='debug-info'>edge_011</div>
@@ -33302,6 +33400,7 @@
                       <span class='timestamp' data-timestamp='2025-06-14T11:03:01Z'>2025-06-14 11:03:01</span>
                   </div>
                   
+                  
               </div>
           </div>
           <div class='debug-info'>edge_010</div>
@@ -33323,7 +33422,7 @@
       
       <div class='message-node'>
       <div class='message session-header' data-message-id='d-11' data-session-id='todowrite_session' id='msg-d-11'>
-          <div class='header'>Session: todowrit</div>
+          <div class='header'>Session: todowrit <span class='message-model' title='Main agent model'>claude-sonnet-4</span></div>
           
           <div class='fold-bar' data-message-id='d-11' data-border-color='session-header'>
               
@@ -33349,6 +33448,7 @@
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2025-06-14T10:02:00Z'>2025-06-14 10:02:00</span>
                   </div>
+                  
                   
               </div>
           </div>
@@ -35769,6 +35869,13 @@
   .token-usage {
       font-size: 0.75em;
       color: #888;
+  }
+  
+  /* Model id surfaced on sub-agent message headers (issue #246) */
+  .message-model {
+      font-size: 0.75em;
+      font-family: var(--font-mono, 'SFMono-Regular', Consolas, monospace);
+      color: var(--text-secondary, #888);
   }
   
   /* Paired message styling */
@@ -39784,7 +39891,7 @@
       
       <div class='message-node'>
       <div class='message session-header' data-message-id='d-0' data-session-id='session_b' id='msg-d-0'>
-          <div class='header'>Session: session_</div>
+          <div class='header'>Session: session_ <span class='message-model' title='Main agent model'>claude-3-sonnet-20240229</span></div>
           
           <div class='fold-bar' data-message-id='d-0' data-border-color='session-header'>
               
@@ -39814,6 +39921,7 @@
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2025-07-03T15:50:07.874717Z'>2025-07-03 15:50:07</span>
                   </div>
+                  
                   
               </div>
           </div>
@@ -39848,6 +39956,7 @@
                   
                   <span class='token-usage'>Input: 20 | Output: 35</span>
                   
+                  
               </div>
           </div>
           <div class='debug-info'>session_b_00</div>
@@ -39875,6 +39984,7 @@
                       <span class='timestamp' data-timestamp='2025-07-03T15:54:07.874717Z'>2025-07-03 15:54:07</span>
                   </div>
                   
+                  
               </div>
           </div>
           <div class='debug-info'>session_b_00</div>
@@ -39896,7 +40006,7 @@
       
       <div class='message-node'>
       <div class='message session-header' data-message-id='d-4' data-session-id='test_session' id='msg-d-4'>
-          <div class='header'>Session: User learned about Python decorators, including basic decorators and parameterized decorators. Created and ran examples showing how decorators work with functions. User is now ready to implement their own timing decorator. • test_ses</div>
+          <div class='header'>Session: User learned about Python decorators, including basic decorators and parameterized decorators. Created and ran examples showing how decorators work with functions. User is now ready to implement their own timing decorator. • test_ses <span class='message-model' title='Main agent model'>claude-3-sonnet-20240229</span></div>
           
           <div class='fold-bar' data-message-id='d-4' data-border-color='session-header'>
               
@@ -39926,6 +40036,7 @@
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2025-07-03T15:50:07.874907Z'>2025-07-03 15:50:07</span>
                   </div>
+                  
                   
               </div>
           </div>
@@ -39959,6 +40070,7 @@
                   </div>
                   
                   <span class='token-usage'>Input: 25 | Output: 120</span>
+                  
                   
               </div>
           </div>
@@ -40006,6 +40118,7 @@
                       <span class='timestamp' data-timestamp='2025-07-03T15:54:07.874907Z'>2025-07-03 15:54:07</span>
                   </div>
                   
+                  
               </div>
           </div>
           <div class='debug-info'>msg_003</div>
@@ -40037,6 +40150,7 @@
                       <span class='timestamp' data-timestamp='2025-07-03T15:56:07.874907Z'>2025-07-03 15:56:07</span>
                   </div>
                   
+                  
               </div>
           </div>
           <div class='debug-info'>msg_004</div>
@@ -40057,6 +40171,7 @@
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2025-07-03T15:58:07.874907Z' data-duration='took 2m 0s'>2025-07-03 15:58:07</span>
                   </div>
+                  
                   
               </div>
           </div>
@@ -40080,6 +40195,7 @@
                   </div>
                   
                   <span class='token-usage'>Input: 78 | Output: 95</span>
+                  
                   
               </div>
           </div>
@@ -40120,6 +40236,7 @@
                       <span class='timestamp' data-timestamp='2025-07-03T16:02:07.874907Z'>2025-07-03 16:02:07</span>
                   </div>
                   
+                  
               </div>
           </div>
           <div class='debug-info'>msg_007</div>
@@ -40151,6 +40268,7 @@
                       <span class='timestamp' data-timestamp='2025-07-03T16:04:07.874907Z'>2025-07-03 16:04:07</span>
                   </div>
                   
+                  
               </div>
           </div>
           <div class='debug-info'>msg_008</div>
@@ -40171,6 +40289,7 @@
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2025-07-03T16:06:07.874907Z' data-duration='took 2m 0s'>2025-07-03 16:06:07</span>
                   </div>
+                  
                   
               </div>
           </div>
@@ -40196,6 +40315,7 @@
                   </div>
                   
                   <span class='token-usage'>Input: 45 | Output: 110</span>
+                  
                   
               </div>
           </div>
@@ -40231,6 +40351,7 @@
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2025-07-03T16:10:07.874907Z'>2025-07-03 16:10:07</span>
                   </div>
+                  
                   
               </div>
           </div>
@@ -42493,6 +42614,13 @@
   .token-usage {
       font-size: 0.75em;
       color: #888;
+  }
+  
+  /* Model id surfaced on sub-agent message headers (issue #246) */
+  .message-model {
+      font-size: 0.75em;
+      font-family: var(--font-mono, 'SFMono-Regular', Consolas, monospace);
+      color: var(--text-secondary, #888);
   }
   
   /* Paired message styling */
@@ -46447,7 +46575,7 @@
       
       <div class='message-node'>
       <div class='message session-header' data-message-id='d-0' data-session-id='test_session' id='msg-d-0'>
-          <div class='header'>Session: User learned about Python decorators, including basic decorators and parameterized decorators. Created and ran examples showing how decorators work with functions. User is now ready to implement their own timing decorator. • test_ses</div>
+          <div class='header'>Session: User learned about Python decorators, including basic decorators and parameterized decorators. Created and ran examples showing how decorators work with functions. User is now ready to implement their own timing decorator. • test_ses <span class='message-model' title='Main agent model'>claude-3-sonnet-20240229</span></div>
           
           <div class='fold-bar' data-message-id='d-0' data-border-color='session-header'>
               
@@ -46477,6 +46605,7 @@
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2025-07-03T15:50:07.874907Z'>2025-07-03 15:50:07</span>
                   </div>
+                  
                   
               </div>
           </div>
@@ -46510,6 +46639,7 @@
                   </div>
                   
                   <span class='token-usage'>Input: 25 | Output: 120</span>
+                  
                   
               </div>
           </div>
@@ -46557,6 +46687,7 @@
                       <span class='timestamp' data-timestamp='2025-07-03T15:54:07.874907Z'>2025-07-03 15:54:07</span>
                   </div>
                   
+                  
               </div>
           </div>
           <div class='debug-info'>msg_003</div>
@@ -46588,6 +46719,7 @@
                       <span class='timestamp' data-timestamp='2025-07-03T15:56:07.874907Z'>2025-07-03 15:56:07</span>
                   </div>
                   
+                  
               </div>
           </div>
           <div class='debug-info'>msg_004</div>
@@ -46608,6 +46740,7 @@
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2025-07-03T15:58:07.874907Z' data-duration='took 2m 0s'>2025-07-03 15:58:07</span>
                   </div>
+                  
                   
               </div>
           </div>
@@ -46631,6 +46764,7 @@
                   </div>
                   
                   <span class='token-usage'>Input: 78 | Output: 95</span>
+                  
                   
               </div>
           </div>
@@ -46671,6 +46805,7 @@
                       <span class='timestamp' data-timestamp='2025-07-03T16:02:07.874907Z'>2025-07-03 16:02:07</span>
                   </div>
                   
+                  
               </div>
           </div>
           <div class='debug-info'>msg_007</div>
@@ -46702,6 +46837,7 @@
                       <span class='timestamp' data-timestamp='2025-07-03T16:04:07.874907Z'>2025-07-03 16:04:07</span>
                   </div>
                   
+                  
               </div>
           </div>
           <div class='debug-info'>msg_008</div>
@@ -46722,6 +46858,7 @@
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2025-07-03T16:06:07.874907Z' data-duration='took 2m 0s'>2025-07-03 16:06:07</span>
                   </div>
+                  
                   
               </div>
           </div>
@@ -46747,6 +46884,7 @@
                   </div>
                   
                   <span class='token-usage'>Input: 45 | Output: 110</span>
+                  
                   
               </div>
           </div>
@@ -46782,6 +46920,7 @@
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2025-07-03T16:10:07.874907Z'>2025-07-03 16:10:07</span>
                   </div>
+                  
                   
               </div>
           </div>
