@@ -943,7 +943,15 @@ class HtmlRenderer(Renderer):
             content.input, AskUserQuestionInput
         ) and self._paired_answer_supersedes(message):
             return ""
-        return super().title_ToolUseMessage(content, message)
+        # Specialized tools dispatch to a title_*Input method that escapes via
+        # ``_tool_title``. Tools with NO specialized method (generic / mcp__* /
+        # ToolSearch / custom) fall back to the raw tool name — which is
+        # attacker-controllable and lands live in the header span. Escape it
+        # here rather than in the shared base ``title_ToolUseMessage`` (the
+        # Markdown renderer must not get HTML-entity-escaped titles). #245 XSS.
+        if title := self._dispatch_title(content.input, message):
+            return title
+        return escape_html(content.tool_name)
 
     def title_ToolResultMessage(
         self, content: ToolResultMessage, message: TemplateMessage
@@ -963,6 +971,39 @@ class HtmlRenderer(Renderer):
             )
             return f"{base} {marker}" if base else marker
         return base
+
+    # Title overrides that escape their transcript-derived field for the HTML
+    # header span. These titles are built on the shared base ``Renderer`` (also
+    # used by the Markdown renderer, which must NOT receive HTML-entity-escaped
+    # titles), so the escaping lives on the HTML path only — mirroring how
+    # ``_tool_title`` escapes the tool name for specialized tools. #245 XSS.
+
+    def title_HookAttachmentMessage(
+        self, content: HookAttachmentMessage, _: TemplateMessage
+    ) -> str:
+        # ``hook_name`` (e.g. "PostToolUse:TaskUpdate") is transcript-derived
+        # and lands in the header; escape it.
+        label = content.hook_name or content.hook_event or content.kind
+        return f"Hook · {escape_html(label)}"
+
+    def title_WorkflowPhaseMessage(
+        self, content: WorkflowPhaseMessage, _: TemplateMessage
+    ) -> str:
+        return f"Phase: {escape_html(content.title)}" if content.title else "Phase"
+
+    def title_WorkflowAgentMessage(
+        self, content: WorkflowAgentMessage, _: TemplateMessage
+    ) -> str:
+        return f"Agent {escape_html(content.label)}" if content.label else "Agent"
+
+    def title_SystemMessage(self, content: SystemMessage, _: TemplateMessage) -> str:
+        # ``level`` is FREE-TEXT from the transcript (``system_factory``:
+        # ``transcript.level or "info"``), not an enum — so it can carry a
+        # payload that lands in the header. Title-case the RAW level FIRST,
+        # then escape: escaping first would let ``.title()`` capitalize the
+        # entity prefixes (``&lt;`` → ``&Lt;``) and break the escaping. #245 XSS.
+        level = content.level or "unknown"
+        return f"System {escape_html(level.title())}"
 
     def title_TaskInput(self, input: TaskInput, message: TemplateMessage) -> str:
         """Title → '🔧 Task <desc> (subagent_type) [async #<id>]'.

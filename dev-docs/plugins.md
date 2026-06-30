@@ -212,6 +212,7 @@ renderer's dispatcher consults them after the renderer's own
 from dataclasses import dataclass
 from typing import ClassVar, Optional
 from claude_code_log.models import DetailLevel, ToolUseMessage
+from claude_code_log.plugins import escape_html, safe_markdown_inline
 
 @dataclass
 class MyToolMessage(ToolUseMessage):
@@ -220,23 +221,34 @@ class MyToolMessage(ToolUseMessage):
     detail_visibility: ClassVar[DetailLevel] = DetailLevel.LOW
 
     def format_markdown(self, _renderer, _message) -> str:
+        # ``action`` is transcript-derived (untrusted — see §4.2). Interpolated
+        # into Markdown SOURCE, so neutralise raw HTML with safe_markdown_inline
+        # (the Markdown-output path emits this verbatim).
         action = (self.input.input or {}).get("action", "?")
-        return f"_(my plugin) action={action}_"
+        return f"_(my plugin) action={safe_markdown_inline(action)}_"
 
     def format_html(self, _renderer, _message) -> Optional[str]:
         return None  # fall back to mistune(format_markdown)
 
     def title(self, _renderer, _message) -> Optional[str]:
-        return "✉ my plugin"
+        # A title() return goes to ``{{ message_title | safe }}`` with NO core
+        # HTML escaping — escape transcript-derived interpolation yourself
+        # (§4.2). The Markdown heading path is auto-gated by the core.
+        action = (self.input.input or {}).get("action", "?")
+        return f"✉ my plugin: {escape_html(action)}"
 ```
+
+> The constant-string forms (`"✉ my plugin"`, `"_(my plugin)_"`) need no
+> escaping — only **transcript-derived interpolation** does. See
+> [§4.2](#42-security-conscious-rendering) for the full contract.
 
 Signature contract for each method:
 
 | Method | Signature | Return | Notes |
 |---|---|---|---|
-| `format_markdown` | `(self, renderer, message) -> str` | Markdown source string. | Define this whenever your class produces meaningful Markdown. Drives both Markdown output AND HTML output (via mistune) unless `format_html` is also defined. |
-| `format_html` | `(self, renderer, message) -> str` | Raw HTML string (real string — no None sentinel). | Define this ONLY when you need HTML different from mistune-of-`format_markdown`. The dispatcher synthesizes that fallback automatically when `format_html` is absent. |
-| `title` | `(self, renderer, message) -> Optional[str]` | Heading text or `None`. | Return `None` for "headless" (inline) messages. Return `""` (empty string, not None) to suppress the heading explicitly — the dispatcher distinguishes the two. |
+| `format_markdown` | `(self, renderer, message) -> str` | Markdown source string. | Define this whenever your class produces meaningful Markdown. Drives both Markdown output AND HTML output (via mistune) unless `format_html` is also defined. **Escape transcript-derived interpolation** ([§4.2](#42-security-conscious-rendering)): the Markdown-output path emits this verbatim. |
+| `format_html` | `(self, renderer, message) -> str` | Raw HTML string (real string — no None sentinel). | Define this ONLY when you need HTML different from mistune-of-`format_markdown`. The dispatcher synthesizes that fallback automatically when `format_html` is absent. **You own escaping** — the return is injected as live DOM; `escape_html` every transcript-derived interpolation ([§4.2](#42-security-conscious-rendering)). |
+| `title` | `(self, renderer, message) -> Optional[str]` | Heading text or `None`. | Return `None` for "headless" (inline) messages. Return `""` (empty string, not None) to suppress the heading explicitly — the dispatcher distinguishes the two. **`escape_html` transcript-derived interpolation** — the title is emitted via `\| safe` with no core escaping ([§4.2](#42-security-conscious-rendering)). |
 
 **`format_html` is opt-in.** If your plugin class defines only
 `format_markdown`, the HtmlRenderer dispatcher automatically
@@ -271,22 +283,27 @@ moves to the next ancestor.
 
 ### 4.1 Plugin-facing helpers
 
-Two helpers are re-exported from `claude_code_log.plugins` for use
-in `format_html` / `format_markdown` methods. The re-export is the
-stable plugin API; the underlying implementation in
-`claude_code_log/html/utils.py` may move or be renamed.
+Four helpers are re-exported from `claude_code_log.plugins` for use
+in `format_html` / `format_markdown` / `title` methods. The re-export is
+the stable plugin API; the underlying implementation (in
+`claude_code_log/html/utils.py` and `claude_code_log/markdown/renderer.py`)
+may move or be renamed.
 
 ```python
 from claude_code_log.plugins import (
     render_markdown,
     render_markdown_collapsible,
+    escape_html,
+    safe_markdown_inline,
 )
 ```
 
 | Helper | Signature | Use when |
 |---|---|---|
-| `render_markdown(text)` | `(str) -> str` | You need Markdown→HTML inside a custom `format_html` (e.g. embedding a Markdown fragment in a richer HTML scaffold). |
-| `render_markdown_collapsible(raw_content, css_class, *, line_threshold=20, preview_line_count=5)` | `(str, str, int, int) -> str` | Long Markdown bodies (mail bodies, agent responses, multi-paragraph result text). Returns inline `<div class="{css_class} markdown">…</div>` for short content, a collapsible `<details>` with preview + full body for content exceeding `line_threshold`. |
+| `render_markdown(text)` | `(str) -> str` | You need Markdown→HTML inside a custom `format_html` (e.g. embedding a Markdown fragment in a richer HTML scaffold). Escapes raw HTML in `text` (untrusted-safe). |
+| `render_markdown_collapsible(raw_content, css_class, *, line_threshold=20, preview_line_count=5)` | `(str, str, int, int) -> str` | Long Markdown bodies (mail bodies, agent responses, multi-paragraph result text). Returns inline `<div class="{css_class} markdown">…</div>` for short content, a collapsible `<details>` with preview + full body for content exceeding `line_threshold`. Escapes raw HTML. |
+| `escape_html(text)` | `(str) -> str` | Interpolating transcript-derived text into a `format_html` raw-HTML string, OR into a `title` return (which is emitted via `\| safe`). Entity-escapes `<`, `>`, `&`, quotes. |
+| `safe_markdown_inline(text)` | `(str) -> str` | Interpolating transcript-derived text into a Markdown **inline** fragment in `format_markdown` (a link label, a list item, inline prose) — the Markdown-output path emits `format_markdown` verbatim. Entity-escapes raw HTML tags while preserving Markdown formatting. |
 
 The reference plugin's
 [`tool_communicate_result.py`](../test/_plugins/clmail/src/claude_code_log_clmail_test/transformers/tool_communicate_result.py)
@@ -296,6 +313,59 @@ threshold + preview length are both tunable per call.
 Add to `claude_code_log.plugins.__all__` only on concrete plugin-author
 demand — every entry is an API commitment. Open an issue if a helper
 you need isn't exposed.
+
+### 4.2 Security-conscious rendering
+
+**Every transcript-derived value is untrusted.** A transcript is not a
+trusted document: the assistant routinely echoes arbitrary user / file /
+web input verbatim ("write a test that types `<script>alert(1)</script>`
+into the field"), and tool names, hook names, `cwd`-derived project names,
+session summaries and the like are all attacker-influenceable. There is no
+"trusted source" — if a value came from the transcript, escape it before it
+reaches a rendered position. A plugin that interpolates transcript data into
+its render methods reproduces the exact XSS sink class that issue #245 closed
+in the core.
+
+**Helper per context** — pick by *where the value lands*, covering **both**
+output paths:
+
+| Context (where the value lands) | Helper |
+|---|---|
+| `format_html` raw-HTML f-string (text or attribute) | `escape_html(value)` |
+| `format_html` embedding a Markdown body | `render_markdown(value)` / `render_markdown_collapsible(value, …)` |
+| `format_markdown` inline fragment (link label, list item, inline prose) | `safe_markdown_inline(value)` |
+| `title()` return | `escape_html(value)` — the HTML header emits it via `\| safe` (no core escaping); the Markdown heading is auto-gated by the core |
+
+Notes:
+
+- **Don't double-escape.** Pass a value through *one* helper for its context.
+  Don't `escape_html` a value and then also feed it to `render_markdown`
+  (you'd get visible `&amp;lt;` entities). A constant string needs no helper.
+- **`format_markdown` HTML safety is automatic; Markdown safety is not.**
+  When only `format_markdown` is defined, the HTML path runs it through
+  `render_markdown` (escapes raw HTML for you). The Markdown-output path emits
+  `format_markdown` verbatim, so inline transcript interpolation there needs
+  `safe_markdown_inline`.
+
+**Sink-class self-audit checklist** — scan your render methods for:
+
+- a raw f-string interpolating transcript data into HTML (`format_html`)
+- transcript data interpolated into a `title()` return
+- transcript data in a Markdown heading or inline link/list label
+  (`format_markdown`)
+- anything you emit into a `\| safe` / non-autoescaped context
+
+**Prefer one structural gate over per-site escaping.** The #245 class took
+several review rounds precisely because each sink was individually "known" but
+no single chokepoint enforced neutralisation, so new sinks kept slipping in.
+The core now routes every Markdown heading/label through one
+`safe_markdown_inline` gate. Apply the same principle in your plugin: if you
+build several rendered strings from transcript data, funnel them through one
+helper at one place rather than remembering to escape at each call site.
+
+For the core-renderer view of this contract (the per-field escaping the host
+renderer applies, and the title/markdown gate internals), see
+[implementing-a-tool-renderer.md](implementing-a-tool-renderer.md).
 
 ---
 
@@ -573,6 +643,7 @@ own plugin should follow the same shape:
 | **2. Dispatch matrix** | Renderer-side vs class-side resolution; HTML vs Markdown output | Skip unless your plugin does something exotic with the dispatcher. |
 | **3. Transformer integration** | End-to-end: real `MessageContent` through your `transform()` and class-side render methods | Always write this. Drive your transformer with hand-built `MessageMeta.empty()` candidates; assert the replacement is an instance of your subclass and that the render methods return the expected text. |
 | **4. Text-equivalence** | If your plugin reads `UserTextMessage.items`, assert that the joined text matches what the factory's `extract_text_content` produces | Recommended for any plugin keying on user text — protects you against future core refactors that sneak normalization between extraction and the items list. |
+| **5. XSS payload** | Feed a payload (`<img src=x onerror=alert(1)>`) into every transcript-derived field your render methods interpolate, render BOTH paths, and assert the raw tag is escaped (not present verbatim) | Write this whenever your `format_html` / `format_markdown` / `title` interpolates transcript data ([§4.2](#42-security-conscious-rendering)). String-level: assert `"<img"` is absent and the escaped form is present, in both the HTML and Markdown output. |
 
 For an installable test plugin (your own or a fixture in your own
 repo), declare it as an editable dev-dependency and reset the loader

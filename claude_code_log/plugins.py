@@ -39,7 +39,12 @@ if TYPE_CHECKING:
     # Visible to static type-checkers (pyright/mypy) and to
     # ``__all__`` validation; resolved at runtime via the
     # PEP-562 ``__getattr__`` further down.
-    from .html.utils import render_markdown, render_markdown_collapsible
+    from .html.utils import (
+        escape_html,
+        render_markdown,
+        render_markdown_collapsible,
+    )
+    from .markdown.renderer import safe_markdown_inline
 
 from .models import MessageContent, MessageMeta
 
@@ -343,20 +348,34 @@ def apply_transformers(
 # documented signatures.
 
 _PUBLIC_HELPERS: frozenset[str] = frozenset(
-    {"render_markdown", "render_markdown_collapsible"}
+    {
+        "render_markdown",
+        "render_markdown_collapsible",
+        # Security helpers (#245): a plugin's ``format_html`` / ``title`` may
+        # interpolate transcript-derived (untrusted) data; without a surfaced
+        # primitive the author reproduces the title/markdown XSS sinks. See
+        # ``dev-docs/plugins.md`` §4 "Security-conscious rendering".
+        "escape_html",
+        "safe_markdown_inline",
+    }
 )
 
 
 def __getattr__(name: str) -> Any:  # PEP 562
     if name in _PUBLIC_HELPERS:
-        from .html.utils import (
-            render_markdown as _rm,
-            render_markdown_collapsible as _rmc,
-        )
+        # ``safe_markdown_inline`` (the markdown renderer's inline HTML-
+        # neutralising gate — entity-escapes raw HTML tags in an inline
+        # markdown fragment, preserving markdown) lives in
+        # ``markdown/renderer.py``; the others in ``html/utils.py``. Resolved
+        # lazily to keep package init acyclic.
+        if name == "safe_markdown_inline":
+            from .markdown.renderer import safe_markdown_inline as resolved
+        else:
+            from .html import utils as _utils
 
-        globals()["render_markdown"] = _rm
-        globals()["render_markdown_collapsible"] = _rmc
-        return globals()[name]
+            resolved = getattr(_utils, name)
+        globals()[name] = resolved
+        return resolved
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -364,8 +383,10 @@ __all__ = [
     "ENTRY_POINT_GROUP",
     "MessageTransformer",
     "apply_transformers",
+    "escape_html",
     "load_transformers",
     "render_markdown",
     "render_markdown_collapsible",
     "reset_cache",
+    "safe_markdown_inline",
 ]
