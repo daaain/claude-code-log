@@ -1732,11 +1732,14 @@ def convert_jsonl_to(
             transcript was requested — silent stale content. The tool's own
             managed ``combined_transcripts*`` artifacts still use the skip.
         regenerated: Optional out-parameter. When a list is passed, a single
-            bool is appended reporting whether the combined output was
-            actually (re)written (True) or skipped as current (False). Lets
-            the CLI avoid printing a misleading "Successfully converted" line
-            on a skip, without changing the ``Path`` return contract that
-            ~20 callers rely on.
+            bool is appended reporting whether ANY output was actually
+            (re)written — the combined transcript OR at least one individual
+            session file (True) — versus everything being current/skipped
+            (False). Lets the CLI avoid printing a misleading "Successfully
+            converted" line on a pure skip while still confirming per-session
+            work (e.g. ``--combined no``, which never writes a combined),
+            without changing the ``Path`` return contract that ~20 callers
+            rely on.
     """
     if not input_path.exists():
         raise FileNotFoundError(f"Input path not found: {input_path}")
@@ -2022,9 +2025,16 @@ def convert_jsonl_to(
                 f"{format.upper()} file {output_path.name} is current, skipping regeneration"
             )
 
-    # Generate individual session files if requested and in directory mode
+    # Generate individual session files if requested and in directory mode.
+    # Its return count feeds `regenerated` below: per-session output is an
+    # independent axis from the combined write, so a run that rewrites session
+    # files while the combined stays current (or `--combined no`, which never
+    # writes a combined) still counts as work done — otherwise the CLI would
+    # fall silent on it (the combined-only flag is what made `--combined no`
+    # print nothing despite producing every session file).
+    sessions_regenerated = 0
     if generate_individual_sessions and input_path.is_dir():
-        _generate_individual_session_files(
+        sessions_regenerated = _generate_individual_session_files(
             format,
             messages,
             effective_output_dir,
@@ -2043,7 +2053,7 @@ def convert_jsonl_to(
         )
 
     if regenerated is not None:
-        regenerated.append(did_regenerate)
+        regenerated.append(did_regenerate or sessions_regenerated > 0)
 
     return output_path
 

@@ -1332,12 +1332,13 @@ def main(
             force_regenerate=output is not None and _output_path_is_file(output),
             regenerated=regenerated,
         )
-        # On a skip the converter already printed its "... is current,
+        # On a pure skip the converter already printed its "... is current,
         # skipping regeneration" line (single-file and directory paths alike),
         # so suppress the redundant/misleading success line for BOTH. The
         # `regenerated` out-param carries exactly one bool from
-        # convert_jsonl_to (it tracks the combined-output write; a directory
-        # whose combined is current early-exits / skips, reporting False).
+        # convert_jsonl_to: True if the combined transcript OR any individual
+        # session file was (re)written (so `--combined no`, which writes only
+        # session files, still confirms its work), False when all is current.
         was_regenerated = any(regenerated)
         if not was_regenerated:
             pass

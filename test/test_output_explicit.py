@@ -270,6 +270,26 @@ class TestSingleFileStaleness:
         assert "skipping regeneration" in r2.output
         assert "Successfully combined" not in r2.output
 
+    def test_combined_no_confirms_session_generation(self, tmp_path: Path):
+        """`--combined no` writes only per-session files (no combined). The
+        success line is gated on regeneration, and that gate must count
+        per-session output too — otherwise the run falls completely silent
+        despite writing every session file. Regression guard: the first
+        version of the skip-suppression tracked only the combined write."""
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        _write_jsonl(proj / "aaaaaaaa.jsonl", "SESSION_A_marker")
+        runner = CliRunner()
+
+        r1 = runner.invoke(main, [str(proj), "--combined", "no"])
+        assert r1.exit_code == 0, r1.output
+        # Per-session files were produced...
+        assert list(proj.glob("session-*.html")), "no session files written"
+        # ...and the run confirms that work rather than printing nothing.
+        assert "individual session files" in r1.output, (
+            f"--combined no produced no confirmation; output was:\n{r1.output}"
+        )
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
