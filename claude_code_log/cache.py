@@ -306,21 +306,100 @@ class CacheManager:
         else:
             self.db_path = get_cache_db_path(project_path.parent)
 
+        # When inside a batch() scope this holds the single shared connection
+        # reused by every _get_connection() call; None means the default
+        # open-a-connection-per-call behaviour. Set before _init_database() so
+        # the field always exists before any _get_connection() could run, even
+        # if migrations are ever routed through it.
+        self._shared_conn: Optional[sqlite3.Connection] = None
+
         # Initialise database and ensure project exists
         self._init_database()
         self._project_id: Optional[int] = None
         self._ensure_project_exists()
 
-    @contextmanager
-    def _get_connection(self) -> Generator[sqlite3.Connection, None, None]:
-        """Get a database connection with proper settings."""
-        conn = sqlite3.connect(self.db_path, timeout=30.0)
+    def _configure_connection(self, conn: sqlite3.Connection) -> None:
+        """Apply the standard pragmas/row factory to a fresh connection."""
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA journal_mode = WAL")
+        # synchronous=NORMAL is the recommended pairing for WAL: it keeps
+        # durability across application crashes (only a power/OS crash can lose
+        # the last committed transaction) while skipping an fsync on every
+        # commit. The cache is fully regenerable from the JSONL source, so that
+        # residual risk is acceptable.
+        conn.execute("PRAGMA synchronous = NORMAL")
+
+    def _open_configured_connection(self) -> sqlite3.Connection:
+        """Open a connection and apply pragmas, closing it if setup fails.
+
+        If a PRAGMA in ``_configure_connection`` raises, the just-opened
+        handle is closed before re-raising so it can't leak and lock the
+        .db/.db-wal/.db-shm files — the exact failure mode the connection
+        lifecycle elsewhere is careful to avoid (Windows WinError 32).
+        """
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
+        try:
+            self._configure_connection(conn)
+        except BaseException:
+            conn.close()
+            raise
+        return conn
+
+    @contextmanager
+    def _get_connection(self) -> Generator[sqlite3.Connection, None, None]:
+        """Get a database connection with proper settings.
+
+        Inside a ``batch()`` scope this yields the shared connection without
+        closing it (the batch owns its lifecycle). Otherwise it opens a fresh
+        connection and closes it on exit — the default, Windows-safe behaviour
+        (no lingering file handle on the .db/.db-wal/.db-shm files).
+        """
+        if self._shared_conn is not None:
+            yield self._shared_conn
+            return
+
+        conn = self._open_configured_connection()
         try:
             yield conn
         finally:
+            conn.close()
+
+    @contextmanager
+    def batch(self) -> Generator[None, None, None]:
+        """Reuse a single connection for every operation within the scope.
+
+        A full project build issues ~190 ``_get_connection`` calls; opening a
+        fresh SQLite connection each time dominates cache-build cost. Wrapping
+        the build in ``with cache_manager.batch():`` collapses those to one
+        connection.
+
+        Lifecycle guarantees (the risky part — see the integrity tests):
+        - The shared connection is **always closed on scope exit**, including
+          when the body raises (the ``finally``). This releases the file lock
+          on the .db/.db-wal/.db-shm files *before* any caller tears down a
+          TemporaryDirectory or runs ``clear_cache``/rmtree — critical on
+          Windows, which refuses to delete open files (WinError 32).
+        - Outside a batch, behaviour is unchanged (connection-per-call).
+        - Nesting is a no-op: an inner ``batch()`` reuses the outer connection
+          and does NOT close it, so the converter loop can't double-open or
+          close a connection still in use by an enclosing scope.
+        """
+        if self._shared_conn is not None:
+            # Already batching — reuse the existing shared connection and leave
+            # its lifecycle to the outermost batch().
+            yield
+            return
+
+        # Open+configure first; only publish to _shared_conn once setup has
+        # succeeded, so a failed PRAGMA never leaves a half-initialised (and
+        # now-closed) handle assigned for other calls to reuse.
+        conn = self._open_configured_connection()
+        self._shared_conn = conn
+        try:
+            yield
+        finally:
+            self._shared_conn = None
             conn.close()
 
     def _init_database(self) -> None:

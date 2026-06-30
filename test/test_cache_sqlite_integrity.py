@@ -2,6 +2,7 @@
 """Comprehensive SQL-level integrity tests for SQLite cache."""
 
 import json
+import shutil
 import sqlite3
 import threading
 import time
@@ -635,6 +636,20 @@ class TestWALMode:
             row = conn.execute("PRAGMA journal_mode").fetchone()
             assert row[0] == "wal"
 
+    def test_synchronous_normal(self, cache_manager):
+        """Connections run with synchronous=NORMAL (1).
+
+        Paired with WAL this skips an fsync on every commit while keeping
+        durability across application crashes (only a power/OS crash can lose
+        the last committed transaction). The cache is fully regenerable from
+        the JSONL source, so that residual risk is acceptable and gives a large
+        speedup on the per-commit fsync-bound build path (Windows especially).
+        """
+        with cache_manager._get_connection() as conn:
+            row = conn.execute("PRAGMA synchronous").fetchone()
+            # 0=OFF, 1=NORMAL, 2=FULL, 3=EXTRA
+            assert row[0] == 1, f"expected synchronous=NORMAL (1), got {row[0]}"
+
 
 class TestConcurrentAccess:
     """Tests for concurrent database access."""
@@ -685,6 +700,175 @@ class TestConcurrentAccess:
 
         assert len(errors) == 0, f"Errors occurred: {errors}"
         assert all(results), "Not all reads succeeded"
+
+
+class TestBatchConnectionReuse:
+    """Tests for the batch() connection-reuse context manager.
+
+    batch() collapses the ~190 per-call connection opens of a full build
+    into one shared connection. The lifecycle guarantees are the risky part
+    (Windows file locks), so they are pinned here explicitly.
+    """
+
+    def _entry(self, session_id: str = "session-1") -> UserTranscriptEntry:
+        return UserTranscriptEntry(
+            type="user",
+            uuid="user-1",
+            timestamp="2024-01-01T10:00:00Z",
+            sessionId=session_id,
+            version="1.0.0",
+            parentUuid=None,
+            isSidechain=False,
+            userType="external",
+            cwd="/test",
+            message=UserMessageModel(
+                role="user", content=[TextContent(type="text", text="Test")]
+            ),
+        )
+
+    def test_default_opens_fresh_connection_per_call(self, cache_manager):
+        """Outside a batch the behaviour is unchanged: every _get_connection
+        opens (and closes) its own connection."""
+        assert cache_manager._shared_conn is None
+        with cache_manager._get_connection() as c1:
+            pass
+        with cache_manager._get_connection() as c2:
+            pass
+        assert c1 is not c2
+        # Each was closed on exit (default path).
+        with pytest.raises(sqlite3.ProgrammingError):
+            c1.execute("SELECT 1")
+        assert cache_manager._shared_conn is None
+
+    def test_batch_reuses_single_connection(self, cache_manager):
+        """Inside a batch every _get_connection yields the same connection."""
+        with cache_manager.batch():
+            shared = cache_manager._shared_conn
+            assert shared is not None
+            with cache_manager._get_connection() as c1:
+                pass
+            with cache_manager._get_connection() as c2:
+                pass
+            assert c1 is shared and c2 is shared
+            # Reused connections are NOT closed when the inner `with` exits.
+            c1.execute("SELECT 1")
+        # Closed and cleared once the batch exits.
+        assert cache_manager._shared_conn is None
+        with pytest.raises(sqlite3.ProgrammingError):
+            shared.execute("SELECT 1")
+
+    def test_batch_closes_connection_on_normal_exit_allows_rmtree(self, tmp_path):
+        """After a batch completes, the cache files are unlocked so the
+        containing directory can be removed — the Windows WinError 32 guard."""
+        cache_dir = tmp_path / "proj"
+        cache_dir.mkdir()
+        db_path = tmp_path / "cache.db"
+        cm = CacheManager(cache_dir, "1.0.0", db_path=db_path)
+
+        entry = self._entry()
+        jsonl = cache_dir / "s.jsonl"
+        jsonl.write_text(json.dumps(entry.model_dump()), encoding="utf-8")
+        with cm.batch():
+            cm.save_cached_entries(jsonl, [entry])
+
+        # No lingering open handle: deleting the tree (and the db/-wal/-shm
+        # files) must not raise. On Windows an open connection here would
+        # raise PermissionError (WinError 32).
+        shutil.rmtree(tmp_path)
+        assert not tmp_path.exists()
+
+    def test_batch_closes_connection_on_exception(self, cache_manager):
+        """A build that raises inside the batch must still release the shared
+        connection (finally), or a crashed build would leak the file lock."""
+        captured = {}
+        with pytest.raises(ValueError):
+            with cache_manager.batch():
+                captured["conn"] = cache_manager._shared_conn
+                raise ValueError("boom")
+        assert cache_manager._shared_conn is None
+        with pytest.raises(sqlite3.ProgrammingError):
+            captured["conn"].execute("SELECT 1")
+
+    def test_nested_batch_is_noop_reuse(self, cache_manager):
+        """A nested batch reuses the outer connection and does NOT close it on
+        inner exit, so the converter loop can't double-open or close a
+        connection still in use by an enclosing scope."""
+        with cache_manager.batch():
+            outer = cache_manager._shared_conn
+            assert outer is not None
+            with cache_manager.batch():
+                assert cache_manager._shared_conn is outer
+            # Inner exit must leave the outer connection open and active.
+            assert cache_manager._shared_conn is outer
+            outer.execute("SELECT 1")
+        # Only the outermost batch closes it.
+        assert cache_manager._shared_conn is None
+        with pytest.raises(sqlite3.ProgrammingError):
+            outer.execute("SELECT 1")
+
+    def test_writes_within_batch_persist(self, tmp_path):
+        """Data written through the shared connection is committed and visible
+        after the batch — reuse must not drop the writes."""
+        cache_dir = tmp_path / "proj"
+        cache_dir.mkdir()
+        cm = CacheManager(cache_dir, "1.0.0", db_path=tmp_path / "cache.db")
+        entry = self._entry()
+        jsonl = cache_dir / "s.jsonl"
+        jsonl.write_text(json.dumps(entry.model_dump()), encoding="utf-8")
+        with cm.batch():
+            cm.save_cached_entries(jsonl, [entry])
+        loaded = cm.load_cached_entries(jsonl)
+        assert loaded is not None
+        assert len(loaded) == 1
+
+    def test_failed_configure_closes_connection(self, tmp_path, monkeypatch):
+        """If a PRAGMA fails during connection setup, the just-opened handle
+        must be closed (not leaked), in BOTH the per-call and batch() paths —
+        otherwise the failed connection would lock the cache files. batch()
+        must also not publish a half-initialised handle to _shared_conn.
+        """
+        import claude_code_log.cache as cachemod
+
+        cache_dir = tmp_path / "proj"
+        cache_dir.mkdir()
+        cm = CacheManager(cache_dir, "1.0.0", db_path=tmp_path / "cache.db")
+
+        # Track every connection opened after setup so we can assert it closed.
+        opened: list[sqlite3.Connection] = []
+        real_connect = cachemod.sqlite3.connect
+
+        def tracking_connect(*args, **kwargs):
+            conn = real_connect(*args, **kwargs)
+            opened.append(conn)
+            return conn
+
+        def boom(_conn):
+            raise RuntimeError("pragma boom")
+
+        monkeypatch.setattr(cachemod.sqlite3, "connect", tracking_connect)
+        monkeypatch.setattr(cm, "_configure_connection", boom)
+
+        # Per-call path: configure fails -> connection opened then closed.
+        with pytest.raises(RuntimeError):
+            with cm._get_connection():
+                pass
+        assert opened, "expected a connection to have been opened"
+        with pytest.raises(sqlite3.ProgrammingError):
+            opened[-1].execute("SELECT 1")
+
+        # batch() path: configure fails -> connection closed AND _shared_conn
+        # never left pointing at the dead handle.
+        with pytest.raises(RuntimeError):
+            with cm.batch():
+                pass
+        assert cm._shared_conn is None
+        with pytest.raises(sqlite3.ProgrammingError):
+            opened[-1].execute("SELECT 1")
+
+        # No leaked OS handle: the cache dir is removable (Windows WinError 32).
+        monkeypatch.undo()
+        shutil.rmtree(tmp_path)
+        assert not tmp_path.exists()
 
 
 class TestLargeDatasetPerformance:
