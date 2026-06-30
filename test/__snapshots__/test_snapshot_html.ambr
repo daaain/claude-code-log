@@ -453,14 +453,11 @@
       font-size: 1.1em;
       line-height: 1;
       color: var(--fold-color);
-      /* Tighten the gap between the two glyphs in ``▼▼`` / ``▶▶`` —
-         Chrome renders default kerning much wider than Firefox does,
-         leaving an awkward gap. The pulled-in -0.2em compromise reads
-         cleanly in Chrome without crowding the glyphs in Firefox
-         (issue #73 / #153). No visible effect on single-glyph ``▼``
-         since letter-spacing only matters when two characters are
-         adjacent. */
-      letter-spacing: -.2em;
+      /* The doubled glyphs ``⏷⏷`` / ``⏵⏵`` (U+23F7 / U+23F5) sit at a
+         natural, even spacing in both Chrome and Firefox, so no kerning
+         trick is needed (the earlier ``▼▼`` / ``▶▶`` needed a -0.2em
+         letter-spacing pull-in to tame Chrome's wide default — issue
+         #73 / #153 / #247). */
   }
   
   .fold-count {
@@ -1420,9 +1417,9 @@
   }
   
   /* Fold-valued rows hoist their toggle into the KEY column: the key cell's
-     ▶/▼ button (wired in transcript.html, state derived from toggle events)
+     ⏵/⏷ button (wired in transcript.html, state derived from toggle events)
      replaces the per-fold in-summary collapse chrome, which only remained
-     useful en masse — every row showing "▼ collapse" drowned the content.
+     useful en masse — every row showing "⏷ collapse" drowned the content.
      Scoped to keyed rows: the top-level root fold has no key column and
      keeps its summary affordances (the pure-CSS ::after "collapse" hint —
      no interactive child). */
@@ -1446,7 +1443,7 @@
   /* The shared fold glyph: the BROWSER'S native disclosure marker (the same
      UA-drawn icon a <summary> shows) via display:list-item — geometrically
      symmetric open/closed, and immune to the italic style of the button
-     labels (font glyphs like ▶/▼ skew in italics; the marker icon doesn't).
+     labels (font glyphs like ⏵/⏷ skew in italics; the marker icon doesn't).
      The empty span doubles as the key-column alignment slot: every key cell
      renders one (markerless on scalar rows), so all key texts start at the
      same x. */
@@ -1463,13 +1460,13 @@
   button > .tool-param-fold-glyph {
       display: list-item;
       list-style-position: inside;
-      list-style-type: "\25B8";
+      list-style-type: "\23F5";
       list-style-type: disclosure-closed;
   }
   
   .tool-param-key-toggle[aria-expanded='true'] > .tool-param-fold-glyph,
   [data-state='expanded'] > .tool-param-fold-glyph {
-      list-style-type: "\25BE";
+      list-style-type: "\23F7";
       list-style-type: disclosure-open;
   }
   
@@ -1492,7 +1489,7 @@
       display: none;
   }
   
-  /* A keyed fold's open summary carries nothing (the key glyph shows ▼ and
+  /* A keyed fold's open summary carries nothing (the key glyph shows ⏷ and
      the rows-toggle sits in the controls strip below) — drop the line it
      would occupy. This also suppresses the generic ::after "collapse". */
   .tool-param-row-fold > .tool-param-value > details[open] > summary {
@@ -4605,11 +4602,11 @@
               
               
               <div class='fold-bar-section fold-one-level' data-action='fold-one' data-target='d-0' data-title-unfolded='Fold (all levels) all 8 descendants' data-title-folded='Unfold (1st level) 1 user' title='Fold (all levels) all 8 descendants'>
-                  <span class='fold-icon'>▼</span>
+                  <span class='fold-icon'>⏷</span>
                   <span class='fold-label'>1 user</span>
               </div>
               <div class='fold-bar-section fold-all-levels' data-action='fold-all' data-target='d-0' data-title-unfolded='Fold (to 1st level) 1 user' data-title-folded='Unfold (all levels) all 8 descendants' title='Fold (to 1st level) 1 user'>
-                  <span class='fold-icon'>▼▼</span>
+                  <span class='fold-icon'>⏷⏷</span>
                   <span class='fold-label'>3 assistants, 2 users, 4 more total</span>
               </div>
               
@@ -4640,11 +4637,11 @@
               
               
               <div class='fold-bar-section fold-one-level' data-action='fold-one' data-target='d-1' data-title-unfolded='Fold (all levels) all 7 descendants' data-title-folded='Unfold (1st level) 2 tools, 1 task_notification, 1 more' title='Fold (all levels) all 7 descendants'>
-                  <span class='fold-icon'>▼</span>
+                  <span class='fold-icon'>⏷</span>
                   <span class='fold-label'>2 tools, 1 task_notification, 1 more</span>
               </div>
               <div class='fold-bar-section fold-all-levels' data-action='fold-all' data-target='d-1' data-title-unfolded='Fold (to 1st level) 2 tools, 1 task_notification, 1 more' data-title-folded='Unfold (all levels) all 7 descendants' title='Fold (to 1st level) 2 tools, 1 task_notification, 1 more'>
-                  <span class='fold-icon'>▼▼</span>
+                  <span class='fold-icon'>⏷⏷</span>
                   <span class='fold-label'>3 assistants, 2 tools, 4 more total</span>
               </div>
               
@@ -4704,7 +4701,7 @@
               
               
               <div class='fold-bar-section fold-one-level full-width' data-action='fold-one' data-target='d-3' data-title-unfolded='Fold 2 assistants, 1 user' data-title-folded='Unfold (1st level) 2 assistants, 1 user' title='Fold 2 assistants, 1 user'>
-                  <span class='fold-icon'>▼</span>
+                  <span class='fold-icon'>⏷</span>
                   <span class='fold-label'>2 assistants, 1 user</span>
               </div>
               
@@ -5159,7 +5156,7 @@
                   const allOpen = rows.length > 0 &&
                       Array.from(rows).every(row => row.open);
                   const kind = button.dataset.kind || 'rows';
-                  // data-state drives the CSS rotation of the constant ▸ glyph;
+                  // data-state drives the CSS rotation of the constant ⏵ glyph;
                   // only the label text changes.
                   button.dataset.state = allOpen ? 'expanded' : 'collapsed';
                   const label = button.querySelector('.tool-param-fold-label');
@@ -5195,7 +5192,7 @@
                       syncExpandAll(root);
                       return;
                   }
-                  // Key-column fold toggle (▶/▼): drives the value cell's
+                  // Key-column fold toggle (⏵/⏷): drives the value cell's
                   // details from the key cell, keeping the summary free of
                   // per-fold collapse chrome. Glyph state is derived in the
                   // toggle listener below, so any other opener stays in sync.
@@ -5243,7 +5240,7 @@
                       const keyBtn = row && row.querySelector(
                           ':scope > .tool-param-key > .tool-param-key-toggle');
                       if (keyBtn) {
-                          // CSS rotates the single ▸ glyph on aria-expanded —
+                          // CSS rotates the single ⏵ glyph on aria-expanded —
                           // symmetric open/closed states by construction.
                           keyBtn.setAttribute('aria-expanded',
                               details.open ? 'true' : 'false');
@@ -5580,18 +5577,18 @@
                   const allSection = foldBar ? foldBar.querySelector('.fold-all-levels') : null;
                   if (state === 'folded') {
                       if (cc) cc.style.display = 'none';
-                      setSectionState(oneSection, true, '▶');
-                      setSectionState(allSection, true, '▶▶');
+                      setSectionState(oneSection, true, '⏵');
+                      setSectionState(allSection, true, '⏵⏵');
                   } else if (state === 'first') {
                       if (cc) cc.style.display = '';
                       getImmediateChildMessages(messageEl).forEach(child => applyFoldState(child, 'folded'));
-                      setSectionState(oneSection, false, '▼');
-                      setSectionState(allSection, true, '▶▶');
+                      setSectionState(oneSection, false, '⏷');
+                      setSectionState(allSection, true, '⏵⏵');
                   } else {  // 'open'
                       if (cc) cc.style.display = '';
                       getImmediateChildMessages(messageEl).forEach(child => applyFoldState(child, 'open'));
-                      setSectionState(oneSection, false, '▼');
-                      setSectionState(allSection, false, '▼▼');
+                      setSectionState(oneSection, false, '⏷');
+                      setSectionState(allSection, false, '⏷⏷');
                   }
               }
   
@@ -5637,15 +5634,15 @@
   
                       const cc = getChildrenContainer(msg);
                       if ((isSession || isUser) && !hasOnlyTools) {
-                          // First level visible (▼), deeper levels folded (▶▶)
+                          // First level visible (⏷), deeper levels folded (⏵⏵)
                           if (cc) cc.style.display = '';
-                          setSectionState(oneSection, false, '▼');
-                          setSectionState(allSection, true, '▶▶');
+                          setSectionState(oneSection, false, '⏷');
+                          setSectionState(allSection, true, '⏵⏵');
                       } else {
                           // Fully folded
                           if (cc) cc.style.display = 'none';
-                          setSectionState(oneSection, true, '▶');
-                          setSectionState(allSection, true, '▶▶');
+                          setSectionState(oneSection, true, '⏵');
+                          setSectionState(allSection, true, '⏵⏵');
                       }
                   });
               }
@@ -5672,8 +5669,8 @@
                           const card = wrapper ? wrapper.querySelector(':scope > .message') : null;
                           const foldBar = card ? card.querySelector(':scope > .fold-bar') : null;
                           if (foldBar) {
-                              setSectionState(foldBar.querySelector('.fold-one-level'), false, '▼');
-                              setSectionState(foldBar.querySelector('.fold-all-levels'), false, '▼▼');
+                              setSectionState(foldBar.querySelector('.fold-one-level'), false, '⏷');
+                              setSectionState(foldBar.querySelector('.fold-all-levels'), false, '⏷⏷');
                           }
                       }
                       node = node.parentElement;
@@ -6889,14 +6886,11 @@
       font-size: 1.1em;
       line-height: 1;
       color: var(--fold-color);
-      /* Tighten the gap between the two glyphs in ``▼▼`` / ``▶▶`` —
-         Chrome renders default kerning much wider than Firefox does,
-         leaving an awkward gap. The pulled-in -0.2em compromise reads
-         cleanly in Chrome without crowding the glyphs in Firefox
-         (issue #73 / #153). No visible effect on single-glyph ``▼``
-         since letter-spacing only matters when two characters are
-         adjacent. */
-      letter-spacing: -.2em;
+      /* The doubled glyphs ``⏷⏷`` / ``⏵⏵`` (U+23F7 / U+23F5) sit at a
+         natural, even spacing in both Chrome and Firefox, so no kerning
+         trick is needed (the earlier ``▼▼`` / ``▶▶`` needed a -0.2em
+         letter-spacing pull-in to tame Chrome's wide default — issue
+         #73 / #153 / #247). */
   }
   
   .fold-count {
@@ -7856,9 +7850,9 @@
   }
   
   /* Fold-valued rows hoist their toggle into the KEY column: the key cell's
-     ▶/▼ button (wired in transcript.html, state derived from toggle events)
+     ⏵/⏷ button (wired in transcript.html, state derived from toggle events)
      replaces the per-fold in-summary collapse chrome, which only remained
-     useful en masse — every row showing "▼ collapse" drowned the content.
+     useful en masse — every row showing "⏷ collapse" drowned the content.
      Scoped to keyed rows: the top-level root fold has no key column and
      keeps its summary affordances (the pure-CSS ::after "collapse" hint —
      no interactive child). */
@@ -7882,7 +7876,7 @@
   /* The shared fold glyph: the BROWSER'S native disclosure marker (the same
      UA-drawn icon a <summary> shows) via display:list-item — geometrically
      symmetric open/closed, and immune to the italic style of the button
-     labels (font glyphs like ▶/▼ skew in italics; the marker icon doesn't).
+     labels (font glyphs like ⏵/⏷ skew in italics; the marker icon doesn't).
      The empty span doubles as the key-column alignment slot: every key cell
      renders one (markerless on scalar rows), so all key texts start at the
      same x. */
@@ -7899,13 +7893,13 @@
   button > .tool-param-fold-glyph {
       display: list-item;
       list-style-position: inside;
-      list-style-type: "\25B8";
+      list-style-type: "\23F5";
       list-style-type: disclosure-closed;
   }
   
   .tool-param-key-toggle[aria-expanded='true'] > .tool-param-fold-glyph,
   [data-state='expanded'] > .tool-param-fold-glyph {
-      list-style-type: "\25BE";
+      list-style-type: "\23F7";
       list-style-type: disclosure-open;
   }
   
@@ -7928,7 +7922,7 @@
       display: none;
   }
   
-  /* A keyed fold's open summary carries nothing (the key glyph shows ▼ and
+  /* A keyed fold's open summary carries nothing (the key glyph shows ⏷ and
      the rows-toggle sits in the controls strip below) — drop the line it
      would occupy. This also suppresses the generic ::after "collapse". */
   .tool-param-row-fold > .tool-param-value > details[open] > summary {
@@ -11041,11 +11035,11 @@
               
               
               <div class='fold-bar-section fold-one-level' data-action='fold-one' data-target='d-0' data-title-unfolded='Fold (all levels) all 4 descendants' data-title-folded='Unfold (1st level) 1 user' title='Fold (all levels) all 4 descendants'>
-                  <span class='fold-icon'>▼</span>
+                  <span class='fold-icon'>⏷</span>
                   <span class='fold-label'>1 user</span>
               </div>
               <div class='fold-bar-section fold-all-levels' data-action='fold-all' data-target='d-0' data-title-unfolded='Fold (to 1st level) 1 user' data-title-folded='Unfold (all levels) all 4 descendants' title='Fold (to 1st level) 1 user'>
-                  <span class='fold-icon'>▼▼</span>
+                  <span class='fold-icon'>⏷⏷</span>
                   <span class='fold-label'>1 user, 1 tool, 2 more total</span>
               </div>
               
@@ -11076,7 +11070,7 @@
               
               
               <div class='fold-bar-section fold-one-level full-width' data-action='fold-one' data-target='d-1' data-title-unfolded='Fold 1 tool, 1 task_notification, 1 more' data-title-folded='Unfold (1st level) 1 tool, 1 task_notification, 1 more' title='Fold 1 tool, 1 task_notification, 1 more'>
-                  <span class='fold-icon'>▼</span>
+                  <span class='fold-icon'>⏷</span>
                   <span class='fold-label'>1 tool, 1 task_notification, 1 more</span>
               </div>
               
@@ -11494,7 +11488,7 @@
                   const allOpen = rows.length > 0 &&
                       Array.from(rows).every(row => row.open);
                   const kind = button.dataset.kind || 'rows';
-                  // data-state drives the CSS rotation of the constant ▸ glyph;
+                  // data-state drives the CSS rotation of the constant ⏵ glyph;
                   // only the label text changes.
                   button.dataset.state = allOpen ? 'expanded' : 'collapsed';
                   const label = button.querySelector('.tool-param-fold-label');
@@ -11530,7 +11524,7 @@
                       syncExpandAll(root);
                       return;
                   }
-                  // Key-column fold toggle (▶/▼): drives the value cell's
+                  // Key-column fold toggle (⏵/⏷): drives the value cell's
                   // details from the key cell, keeping the summary free of
                   // per-fold collapse chrome. Glyph state is derived in the
                   // toggle listener below, so any other opener stays in sync.
@@ -11578,7 +11572,7 @@
                       const keyBtn = row && row.querySelector(
                           ':scope > .tool-param-key > .tool-param-key-toggle');
                       if (keyBtn) {
-                          // CSS rotates the single ▸ glyph on aria-expanded —
+                          // CSS rotates the single ⏵ glyph on aria-expanded —
                           // symmetric open/closed states by construction.
                           keyBtn.setAttribute('aria-expanded',
                               details.open ? 'true' : 'false');
@@ -11915,18 +11909,18 @@
                   const allSection = foldBar ? foldBar.querySelector('.fold-all-levels') : null;
                   if (state === 'folded') {
                       if (cc) cc.style.display = 'none';
-                      setSectionState(oneSection, true, '▶');
-                      setSectionState(allSection, true, '▶▶');
+                      setSectionState(oneSection, true, '⏵');
+                      setSectionState(allSection, true, '⏵⏵');
                   } else if (state === 'first') {
                       if (cc) cc.style.display = '';
                       getImmediateChildMessages(messageEl).forEach(child => applyFoldState(child, 'folded'));
-                      setSectionState(oneSection, false, '▼');
-                      setSectionState(allSection, true, '▶▶');
+                      setSectionState(oneSection, false, '⏷');
+                      setSectionState(allSection, true, '⏵⏵');
                   } else {  // 'open'
                       if (cc) cc.style.display = '';
                       getImmediateChildMessages(messageEl).forEach(child => applyFoldState(child, 'open'));
-                      setSectionState(oneSection, false, '▼');
-                      setSectionState(allSection, false, '▼▼');
+                      setSectionState(oneSection, false, '⏷');
+                      setSectionState(allSection, false, '⏷⏷');
                   }
               }
   
@@ -11972,15 +11966,15 @@
   
                       const cc = getChildrenContainer(msg);
                       if ((isSession || isUser) && !hasOnlyTools) {
-                          // First level visible (▼), deeper levels folded (▶▶)
+                          // First level visible (⏷), deeper levels folded (⏵⏵)
                           if (cc) cc.style.display = '';
-                          setSectionState(oneSection, false, '▼');
-                          setSectionState(allSection, true, '▶▶');
+                          setSectionState(oneSection, false, '⏷');
+                          setSectionState(allSection, true, '⏵⏵');
                       } else {
                           // Fully folded
                           if (cc) cc.style.display = 'none';
-                          setSectionState(oneSection, true, '▶');
-                          setSectionState(allSection, true, '▶▶');
+                          setSectionState(oneSection, true, '⏵');
+                          setSectionState(allSection, true, '⏵⏵');
                       }
                   });
               }
@@ -12007,8 +12001,8 @@
                           const card = wrapper ? wrapper.querySelector(':scope > .message') : null;
                           const foldBar = card ? card.querySelector(':scope > .fold-bar') : null;
                           if (foldBar) {
-                              setSectionState(foldBar.querySelector('.fold-one-level'), false, '▼');
-                              setSectionState(foldBar.querySelector('.fold-all-levels'), false, '▼▼');
+                              setSectionState(foldBar.querySelector('.fold-one-level'), false, '⏷');
+                              setSectionState(foldBar.querySelector('.fold-all-levels'), false, '⏷⏷');
                           }
                       }
                       node = node.parentElement;
@@ -15427,14 +15421,11 @@
       font-size: 1.1em;
       line-height: 1;
       color: var(--fold-color);
-      /* Tighten the gap between the two glyphs in ``▼▼`` / ``▶▶`` —
-         Chrome renders default kerning much wider than Firefox does,
-         leaving an awkward gap. The pulled-in -0.2em compromise reads
-         cleanly in Chrome without crowding the glyphs in Firefox
-         (issue #73 / #153). No visible effect on single-glyph ``▼``
-         since letter-spacing only matters when two characters are
-         adjacent. */
-      letter-spacing: -.2em;
+      /* The doubled glyphs ``⏷⏷`` / ``⏵⏵`` (U+23F7 / U+23F5) sit at a
+         natural, even spacing in both Chrome and Firefox, so no kerning
+         trick is needed (the earlier ``▼▼`` / ``▶▶`` needed a -0.2em
+         letter-spacing pull-in to tame Chrome's wide default — issue
+         #73 / #153 / #247). */
   }
   
   .fold-count {
@@ -16394,9 +16385,9 @@
   }
   
   /* Fold-valued rows hoist their toggle into the KEY column: the key cell's
-     ▶/▼ button (wired in transcript.html, state derived from toggle events)
+     ⏵/⏷ button (wired in transcript.html, state derived from toggle events)
      replaces the per-fold in-summary collapse chrome, which only remained
-     useful en masse — every row showing "▼ collapse" drowned the content.
+     useful en masse — every row showing "⏷ collapse" drowned the content.
      Scoped to keyed rows: the top-level root fold has no key column and
      keeps its summary affordances (the pure-CSS ::after "collapse" hint —
      no interactive child). */
@@ -16420,7 +16411,7 @@
   /* The shared fold glyph: the BROWSER'S native disclosure marker (the same
      UA-drawn icon a <summary> shows) via display:list-item — geometrically
      symmetric open/closed, and immune to the italic style of the button
-     labels (font glyphs like ▶/▼ skew in italics; the marker icon doesn't).
+     labels (font glyphs like ⏵/⏷ skew in italics; the marker icon doesn't).
      The empty span doubles as the key-column alignment slot: every key cell
      renders one (markerless on scalar rows), so all key texts start at the
      same x. */
@@ -16437,13 +16428,13 @@
   button > .tool-param-fold-glyph {
       display: list-item;
       list-style-position: inside;
-      list-style-type: "\25B8";
+      list-style-type: "\23F5";
       list-style-type: disclosure-closed;
   }
   
   .tool-param-key-toggle[aria-expanded='true'] > .tool-param-fold-glyph,
   [data-state='expanded'] > .tool-param-fold-glyph {
-      list-style-type: "\25BE";
+      list-style-type: "\23F7";
       list-style-type: disclosure-open;
   }
   
@@ -16466,7 +16457,7 @@
       display: none;
   }
   
-  /* A keyed fold's open summary carries nothing (the key glyph shows ▼ and
+  /* A keyed fold's open summary carries nothing (the key glyph shows ⏷ and
      the rows-toggle sits in the controls strip below) — drop the line it
      would occupy. This also suppresses the generic ::after "collapse". */
   .tool-param-row-fold > .tool-param-value > details[open] > summary {
@@ -19579,11 +19570,11 @@
               
               
               <div class='fold-bar-section fold-one-level' data-action='fold-one' data-target='d-0' data-title-unfolded='Fold (all levels) all 9 descendants' data-title-folded='Unfold (1st level) 4 users' title='Fold (all levels) all 9 descendants'>
-                  <span class='fold-icon'>▼</span>
+                  <span class='fold-icon'>⏷</span>
                   <span class='fold-label'>4 users</span>
               </div>
               <div class='fold-bar-section fold-all-levels' data-action='fold-all' data-target='d-0' data-title-unfolded='Fold (to 1st level) 4 users' data-title-folded='Unfold (all levels) all 9 descendants' title='Fold (to 1st level) 4 users'>
-                  <span class='fold-icon'>▼▼</span>
+                  <span class='fold-icon'>⏷⏷</span>
                   <span class='fold-label'>4 users, 3 assistants, 2 more total</span>
               </div>
               
@@ -19614,7 +19605,7 @@
               
               
               <div class='fold-bar-section fold-one-level full-width' data-action='fold-one' data-target='d-1' data-title-unfolded='Fold 1 assistant' data-title-folded='Unfold (1st level) 1 assistant' title='Fold 1 assistant'>
-                  <span class='fold-icon'>▼</span>
+                  <span class='fold-icon'>⏷</span>
                   <span class='fold-label'>1 assistant</span>
               </div>
               
@@ -19693,7 +19684,7 @@
               
               
               <div class='fold-bar-section fold-one-level full-width' data-action='fold-one' data-target='d-3' data-title-unfolded='Fold 1 tool, 1 assistant' data-title-folded='Unfold (1st level) 1 tool, 1 assistant' title='Fold 1 tool, 1 assistant'>
-                  <span class='fold-icon'>▼</span>
+                  <span class='fold-icon'>⏷</span>
                   <span class='fold-label'>1 tool, 1 assistant</span>
               </div>
               
@@ -19807,7 +19798,7 @@
               
               
               <div class='fold-bar-section fold-one-level full-width' data-action='fold-one' data-target='d-7' data-title-unfolded='Fold 1 tool, 1 assistant' data-title-folded='Unfold (1st level) 1 tool, 1 assistant' title='Fold 1 tool, 1 assistant'>
-                  <span class='fold-icon'>▼</span>
+                  <span class='fold-icon'>⏷</span>
                   <span class='fold-label'>1 tool, 1 assistant</span>
               </div>
               
@@ -20248,7 +20239,7 @@
                   const allOpen = rows.length > 0 &&
                       Array.from(rows).every(row => row.open);
                   const kind = button.dataset.kind || 'rows';
-                  // data-state drives the CSS rotation of the constant ▸ glyph;
+                  // data-state drives the CSS rotation of the constant ⏵ glyph;
                   // only the label text changes.
                   button.dataset.state = allOpen ? 'expanded' : 'collapsed';
                   const label = button.querySelector('.tool-param-fold-label');
@@ -20284,7 +20275,7 @@
                       syncExpandAll(root);
                       return;
                   }
-                  // Key-column fold toggle (▶/▼): drives the value cell's
+                  // Key-column fold toggle (⏵/⏷): drives the value cell's
                   // details from the key cell, keeping the summary free of
                   // per-fold collapse chrome. Glyph state is derived in the
                   // toggle listener below, so any other opener stays in sync.
@@ -20332,7 +20323,7 @@
                       const keyBtn = row && row.querySelector(
                           ':scope > .tool-param-key > .tool-param-key-toggle');
                       if (keyBtn) {
-                          // CSS rotates the single ▸ glyph on aria-expanded —
+                          // CSS rotates the single ⏵ glyph on aria-expanded —
                           // symmetric open/closed states by construction.
                           keyBtn.setAttribute('aria-expanded',
                               details.open ? 'true' : 'false');
@@ -20669,18 +20660,18 @@
                   const allSection = foldBar ? foldBar.querySelector('.fold-all-levels') : null;
                   if (state === 'folded') {
                       if (cc) cc.style.display = 'none';
-                      setSectionState(oneSection, true, '▶');
-                      setSectionState(allSection, true, '▶▶');
+                      setSectionState(oneSection, true, '⏵');
+                      setSectionState(allSection, true, '⏵⏵');
                   } else if (state === 'first') {
                       if (cc) cc.style.display = '';
                       getImmediateChildMessages(messageEl).forEach(child => applyFoldState(child, 'folded'));
-                      setSectionState(oneSection, false, '▼');
-                      setSectionState(allSection, true, '▶▶');
+                      setSectionState(oneSection, false, '⏷');
+                      setSectionState(allSection, true, '⏵⏵');
                   } else {  // 'open'
                       if (cc) cc.style.display = '';
                       getImmediateChildMessages(messageEl).forEach(child => applyFoldState(child, 'open'));
-                      setSectionState(oneSection, false, '▼');
-                      setSectionState(allSection, false, '▼▼');
+                      setSectionState(oneSection, false, '⏷');
+                      setSectionState(allSection, false, '⏷⏷');
                   }
               }
   
@@ -20726,15 +20717,15 @@
   
                       const cc = getChildrenContainer(msg);
                       if ((isSession || isUser) && !hasOnlyTools) {
-                          // First level visible (▼), deeper levels folded (▶▶)
+                          // First level visible (⏷), deeper levels folded (⏵⏵)
                           if (cc) cc.style.display = '';
-                          setSectionState(oneSection, false, '▼');
-                          setSectionState(allSection, true, '▶▶');
+                          setSectionState(oneSection, false, '⏷');
+                          setSectionState(allSection, true, '⏵⏵');
                       } else {
                           // Fully folded
                           if (cc) cc.style.display = 'none';
-                          setSectionState(oneSection, true, '▶');
-                          setSectionState(allSection, true, '▶▶');
+                          setSectionState(oneSection, true, '⏵');
+                          setSectionState(allSection, true, '⏵⏵');
                       }
                   });
               }
@@ -20761,8 +20752,8 @@
                           const card = wrapper ? wrapper.querySelector(':scope > .message') : null;
                           const foldBar = card ? card.querySelector(':scope > .fold-bar') : null;
                           if (foldBar) {
-                              setSectionState(foldBar.querySelector('.fold-one-level'), false, '▼');
-                              setSectionState(foldBar.querySelector('.fold-all-levels'), false, '▼▼');
+                              setSectionState(foldBar.querySelector('.fold-one-level'), false, '⏷');
+                              setSectionState(foldBar.querySelector('.fold-all-levels'), false, '⏷⏷');
                           }
                       }
                       node = node.parentElement;
@@ -21978,14 +21969,11 @@
       font-size: 1.1em;
       line-height: 1;
       color: var(--fold-color);
-      /* Tighten the gap between the two glyphs in ``▼▼`` / ``▶▶`` —
-         Chrome renders default kerning much wider than Firefox does,
-         leaving an awkward gap. The pulled-in -0.2em compromise reads
-         cleanly in Chrome without crowding the glyphs in Firefox
-         (issue #73 / #153). No visible effect on single-glyph ``▼``
-         since letter-spacing only matters when two characters are
-         adjacent. */
-      letter-spacing: -.2em;
+      /* The doubled glyphs ``⏷⏷`` / ``⏵⏵`` (U+23F7 / U+23F5) sit at a
+         natural, even spacing in both Chrome and Firefox, so no kerning
+         trick is needed (the earlier ``▼▼`` / ``▶▶`` needed a -0.2em
+         letter-spacing pull-in to tame Chrome's wide default — issue
+         #73 / #153 / #247). */
   }
   
   .fold-count {
@@ -22945,9 +22933,9 @@
   }
   
   /* Fold-valued rows hoist their toggle into the KEY column: the key cell's
-     ▶/▼ button (wired in transcript.html, state derived from toggle events)
+     ⏵/⏷ button (wired in transcript.html, state derived from toggle events)
      replaces the per-fold in-summary collapse chrome, which only remained
-     useful en masse — every row showing "▼ collapse" drowned the content.
+     useful en masse — every row showing "⏷ collapse" drowned the content.
      Scoped to keyed rows: the top-level root fold has no key column and
      keeps its summary affordances (the pure-CSS ::after "collapse" hint —
      no interactive child). */
@@ -22971,7 +22959,7 @@
   /* The shared fold glyph: the BROWSER'S native disclosure marker (the same
      UA-drawn icon a <summary> shows) via display:list-item — geometrically
      symmetric open/closed, and immune to the italic style of the button
-     labels (font glyphs like ▶/▼ skew in italics; the marker icon doesn't).
+     labels (font glyphs like ⏵/⏷ skew in italics; the marker icon doesn't).
      The empty span doubles as the key-column alignment slot: every key cell
      renders one (markerless on scalar rows), so all key texts start at the
      same x. */
@@ -22988,13 +22976,13 @@
   button > .tool-param-fold-glyph {
       display: list-item;
       list-style-position: inside;
-      list-style-type: "\25B8";
+      list-style-type: "\23F5";
       list-style-type: disclosure-closed;
   }
   
   .tool-param-key-toggle[aria-expanded='true'] > .tool-param-fold-glyph,
   [data-state='expanded'] > .tool-param-fold-glyph {
-      list-style-type: "\25BE";
+      list-style-type: "\23F7";
       list-style-type: disclosure-open;
   }
   
@@ -23017,7 +23005,7 @@
       display: none;
   }
   
-  /* A keyed fold's open summary carries nothing (the key glyph shows ▼ and
+  /* A keyed fold's open summary carries nothing (the key glyph shows ⏷ and
      the rows-toggle sits in the controls strip below) — drop the line it
      would occupy. This also suppresses the generic ::after "collapse". */
   .tool-param-row-fold > .tool-param-value > details[open] > summary {
@@ -26130,11 +26118,11 @@
               
               
               <div class='fold-bar-section fold-one-level' data-action='fold-one' data-target='d-0' data-title-unfolded='Fold (all levels) all 19 descendants' data-title-folded='Unfold (1st level) 2 teammates, 1 user' title='Fold (all levels) all 19 descendants'>
-                  <span class='fold-icon'>▼</span>
+                  <span class='fold-icon'>⏷</span>
                   <span class='fold-label'>2 teammates, 1 user</span>
               </div>
               <div class='fold-bar-section fold-all-levels' data-action='fold-all' data-target='d-0' data-title-unfolded='Fold (to 1st level) 2 teammates, 1 user' data-title-folded='Unfold (all levels) all 19 descendants' title='Fold (to 1st level) 2 teammates, 1 user'>
-                  <span class='fold-icon'>▼▼</span>
+                  <span class='fold-icon'>⏷⏷</span>
                   <span class='fold-label'>9 tools, 5 assistants, 8 more total</span>
               </div>
               
@@ -26165,11 +26153,11 @@
               
               
               <div class='fold-bar-section fold-one-level' data-action='fold-one' data-target='d-1' data-title-unfolded='Fold (all levels) all 12 descendants' data-title-folded='Unfold (1st level) 6 tools' title='Fold (all levels) all 12 descendants'>
-                  <span class='fold-icon'>▼</span>
+                  <span class='fold-icon'>⏷</span>
                   <span class='fold-label'>6 tools</span>
               </div>
               <div class='fold-bar-section fold-all-levels' data-action='fold-all' data-target='d-1' data-title-unfolded='Fold (to 1st level) 6 tools' data-title-folded='Unfold (all levels) all 12 descendants' title='Fold (to 1st level) 6 tools'>
-                  <span class='fold-icon'>▼▼</span>
+                  <span class='fold-icon'>⏷⏷</span>
                   <span class='fold-label'>6 tools, 4 assistants, 5 more total</span>
               </div>
               
@@ -26337,7 +26325,7 @@
               
               
               <div class='fold-bar-section fold-one-level full-width' data-action='fold-one' data-target='d-11' data-title-unfolded='Fold 2 assistants, 1 user' data-title-folded='Unfold (1st level) 2 assistants, 1 user' title='Fold 2 assistants, 1 user'>
-                  <span class='fold-icon'>▼</span>
+                  <span class='fold-icon'>⏷</span>
                   <span class='fold-label'>2 assistants, 1 user</span>
               </div>
               
@@ -26439,7 +26427,7 @@
               
               
               <div class='fold-bar-section fold-one-level full-width' data-action='fold-one' data-target='d-16' data-title-unfolded='Fold 2 assistants, 1 teammate' data-title-folded='Unfold (1st level) 2 assistants, 1 teammate' title='Fold 2 assistants, 1 teammate'>
-                  <span class='fold-icon'>▼</span>
+                  <span class='fold-icon'>⏷</span>
                   <span class='fold-label'>2 assistants, 1 teammate</span>
               </div>
               
@@ -26574,7 +26562,7 @@
               
               
               <div class='fold-bar-section fold-one-level full-width' data-action='fold-one' data-target='d-21' data-title-unfolded='Fold 3 tools, 1 assistant' data-title-folded='Unfold (1st level) 3 tools, 1 assistant' title='Fold 3 tools, 1 assistant'>
-                  <span class='fold-icon'>▼</span>
+                  <span class='fold-icon'>⏷</span>
                   <span class='fold-label'>3 tools, 1 assistant</span>
               </div>
               
@@ -27066,7 +27054,7 @@
                   const allOpen = rows.length > 0 &&
                       Array.from(rows).every(row => row.open);
                   const kind = button.dataset.kind || 'rows';
-                  // data-state drives the CSS rotation of the constant ▸ glyph;
+                  // data-state drives the CSS rotation of the constant ⏵ glyph;
                   // only the label text changes.
                   button.dataset.state = allOpen ? 'expanded' : 'collapsed';
                   const label = button.querySelector('.tool-param-fold-label');
@@ -27102,7 +27090,7 @@
                       syncExpandAll(root);
                       return;
                   }
-                  // Key-column fold toggle (▶/▼): drives the value cell's
+                  // Key-column fold toggle (⏵/⏷): drives the value cell's
                   // details from the key cell, keeping the summary free of
                   // per-fold collapse chrome. Glyph state is derived in the
                   // toggle listener below, so any other opener stays in sync.
@@ -27150,7 +27138,7 @@
                       const keyBtn = row && row.querySelector(
                           ':scope > .tool-param-key > .tool-param-key-toggle');
                       if (keyBtn) {
-                          // CSS rotates the single ▸ glyph on aria-expanded —
+                          // CSS rotates the single ⏵ glyph on aria-expanded —
                           // symmetric open/closed states by construction.
                           keyBtn.setAttribute('aria-expanded',
                               details.open ? 'true' : 'false');
@@ -27487,18 +27475,18 @@
                   const allSection = foldBar ? foldBar.querySelector('.fold-all-levels') : null;
                   if (state === 'folded') {
                       if (cc) cc.style.display = 'none';
-                      setSectionState(oneSection, true, '▶');
-                      setSectionState(allSection, true, '▶▶');
+                      setSectionState(oneSection, true, '⏵');
+                      setSectionState(allSection, true, '⏵⏵');
                   } else if (state === 'first') {
                       if (cc) cc.style.display = '';
                       getImmediateChildMessages(messageEl).forEach(child => applyFoldState(child, 'folded'));
-                      setSectionState(oneSection, false, '▼');
-                      setSectionState(allSection, true, '▶▶');
+                      setSectionState(oneSection, false, '⏷');
+                      setSectionState(allSection, true, '⏵⏵');
                   } else {  // 'open'
                       if (cc) cc.style.display = '';
                       getImmediateChildMessages(messageEl).forEach(child => applyFoldState(child, 'open'));
-                      setSectionState(oneSection, false, '▼');
-                      setSectionState(allSection, false, '▼▼');
+                      setSectionState(oneSection, false, '⏷');
+                      setSectionState(allSection, false, '⏷⏷');
                   }
               }
   
@@ -27544,15 +27532,15 @@
   
                       const cc = getChildrenContainer(msg);
                       if ((isSession || isUser) && !hasOnlyTools) {
-                          // First level visible (▼), deeper levels folded (▶▶)
+                          // First level visible (⏷), deeper levels folded (⏵⏵)
                           if (cc) cc.style.display = '';
-                          setSectionState(oneSection, false, '▼');
-                          setSectionState(allSection, true, '▶▶');
+                          setSectionState(oneSection, false, '⏷');
+                          setSectionState(allSection, true, '⏵⏵');
                       } else {
                           // Fully folded
                           if (cc) cc.style.display = 'none';
-                          setSectionState(oneSection, true, '▶');
-                          setSectionState(allSection, true, '▶▶');
+                          setSectionState(oneSection, true, '⏵');
+                          setSectionState(allSection, true, '⏵⏵');
                       }
                   });
               }
@@ -27579,8 +27567,8 @@
                           const card = wrapper ? wrapper.querySelector(':scope > .message') : null;
                           const foldBar = card ? card.querySelector(':scope > .fold-bar') : null;
                           if (foldBar) {
-                              setSectionState(foldBar.querySelector('.fold-one-level'), false, '▼');
-                              setSectionState(foldBar.querySelector('.fold-all-levels'), false, '▼▼');
+                              setSectionState(foldBar.querySelector('.fold-one-level'), false, '⏷');
+                              setSectionState(foldBar.querySelector('.fold-all-levels'), false, '⏷⏷');
                           }
                       }
                       node = node.parentElement;
@@ -28796,14 +28784,11 @@
       font-size: 1.1em;
       line-height: 1;
       color: var(--fold-color);
-      /* Tighten the gap between the two glyphs in ``▼▼`` / ``▶▶`` —
-         Chrome renders default kerning much wider than Firefox does,
-         leaving an awkward gap. The pulled-in -0.2em compromise reads
-         cleanly in Chrome without crowding the glyphs in Firefox
-         (issue #73 / #153). No visible effect on single-glyph ``▼``
-         since letter-spacing only matters when two characters are
-         adjacent. */
-      letter-spacing: -.2em;
+      /* The doubled glyphs ``⏷⏷`` / ``⏵⏵`` (U+23F7 / U+23F5) sit at a
+         natural, even spacing in both Chrome and Firefox, so no kerning
+         trick is needed (the earlier ``▼▼`` / ``▶▶`` needed a -0.2em
+         letter-spacing pull-in to tame Chrome's wide default — issue
+         #73 / #153 / #247). */
   }
   
   .fold-count {
@@ -29763,9 +29748,9 @@
   }
   
   /* Fold-valued rows hoist their toggle into the KEY column: the key cell's
-     ▶/▼ button (wired in transcript.html, state derived from toggle events)
+     ⏵/⏷ button (wired in transcript.html, state derived from toggle events)
      replaces the per-fold in-summary collapse chrome, which only remained
-     useful en masse — every row showing "▼ collapse" drowned the content.
+     useful en masse — every row showing "⏷ collapse" drowned the content.
      Scoped to keyed rows: the top-level root fold has no key column and
      keeps its summary affordances (the pure-CSS ::after "collapse" hint —
      no interactive child). */
@@ -29789,7 +29774,7 @@
   /* The shared fold glyph: the BROWSER'S native disclosure marker (the same
      UA-drawn icon a <summary> shows) via display:list-item — geometrically
      symmetric open/closed, and immune to the italic style of the button
-     labels (font glyphs like ▶/▼ skew in italics; the marker icon doesn't).
+     labels (font glyphs like ⏵/⏷ skew in italics; the marker icon doesn't).
      The empty span doubles as the key-column alignment slot: every key cell
      renders one (markerless on scalar rows), so all key texts start at the
      same x. */
@@ -29806,13 +29791,13 @@
   button > .tool-param-fold-glyph {
       display: list-item;
       list-style-position: inside;
-      list-style-type: "\25B8";
+      list-style-type: "\23F5";
       list-style-type: disclosure-closed;
   }
   
   .tool-param-key-toggle[aria-expanded='true'] > .tool-param-fold-glyph,
   [data-state='expanded'] > .tool-param-fold-glyph {
-      list-style-type: "\25BE";
+      list-style-type: "\23F7";
       list-style-type: disclosure-open;
   }
   
@@ -29835,7 +29820,7 @@
       display: none;
   }
   
-  /* A keyed fold's open summary carries nothing (the key glyph shows ▼ and
+  /* A keyed fold's open summary carries nothing (the key glyph shows ⏷ and
      the rows-toggle sits in the controls strip below) — drop the line it
      would occupy. This also suppresses the generic ::after "collapse". */
   .tool-param-row-fold > .tool-param-value > details[open] > summary {
@@ -32948,11 +32933,11 @@
               
               
               <div class='fold-bar-section fold-one-level' data-action='fold-one' data-target='d-0' data-title-unfolded='Fold (all levels) all 9 descendants' data-title-folded='Unfold (1st level) 5 users' title='Fold (all levels) all 9 descendants'>
-                  <span class='fold-icon'>▼</span>
+                  <span class='fold-icon'>⏷</span>
                   <span class='fold-label'>5 users</span>
               </div>
               <div class='fold-bar-section fold-all-levels' data-action='fold-all' data-target='d-0' data-title-unfolded='Fold (to 1st level) 5 users' data-title-folded='Unfold (all levels) all 9 descendants' title='Fold (to 1st level) 5 users'>
-                  <span class='fold-icon'>▼▼</span>
+                  <span class='fold-icon'>⏷⏷</span>
                   <span class='fold-label'>5 users, 2 assistants, 2 more total</span>
               </div>
               
@@ -32983,7 +32968,7 @@
               
               
               <div class='fold-bar-section fold-one-level full-width' data-action='fold-one' data-target='d-1' data-title-unfolded='Fold 1 assistant' data-title-folded='Unfold (1st level) 1 assistant' title='Fold 1 assistant'>
-                  <span class='fold-icon'>▼</span>
+                  <span class='fold-icon'>⏷</span>
                   <span class='fold-label'>1 assistant</span>
               </div>
               
@@ -33081,7 +33066,7 @@
               
               
               <div class='fold-bar-section fold-one-level full-width' data-action='fold-one' data-target='d-3' data-title-unfolded='Fold 1 tool' data-title-folded='Unfold (1st level) 1 tool' title='Fold 1 tool'>
-                  <span class='fold-icon'>▼</span>
+                  <span class='fold-icon'>⏷</span>
                   <span class='fold-label'>1 tool</span>
               </div>
               
@@ -33191,11 +33176,11 @@
               
               
               <div class='fold-bar-section fold-one-level' data-action='fold-one' data-target='d-7' data-title-unfolded='Fold (all levels) all 2 descendants' data-title-folded='Unfold (1st level) 1 assistant' title='Fold (all levels) all 2 descendants'>
-                  <span class='fold-icon'>▼</span>
+                  <span class='fold-icon'>⏷</span>
                   <span class='fold-label'>1 assistant</span>
               </div>
               <div class='fold-bar-section fold-all-levels' data-action='fold-all' data-target='d-7' data-title-unfolded='Fold (to 1st level) 1 assistant' data-title-folded='Unfold (all levels) all 2 descendants' title='Fold (to 1st level) 1 assistant'>
-                  <span class='fold-icon'>▼▼</span>
+                  <span class='fold-icon'>⏷⏷</span>
                   <span class='fold-label'>1 assistant, 1 tool total</span>
               </div>
               
@@ -33228,7 +33213,7 @@
               
               
               <div class='fold-bar-section fold-one-level full-width' data-action='fold-one' data-target='d-8' data-title-unfolded='Fold 1 tool' data-title-folded='Unfold (1st level) 1 tool' title='Fold 1 tool'>
-                  <span class='fold-icon'>▼</span>
+                  <span class='fold-icon'>⏷</span>
                   <span class='fold-label'>1 tool</span>
               </div>
               
@@ -33329,7 +33314,7 @@
               
               
               <div class='fold-bar-section fold-one-level full-width' data-action='fold-one' data-target='d-11' data-title-unfolded='Fold 1 tool' data-title-folded='Unfold (1st level) 1 tool' title='Fold 1 tool'>
-                  <span class='fold-icon'>▼</span>
+                  <span class='fold-icon'>⏷</span>
                   <span class='fold-label'>1 tool</span>
               </div>
               
@@ -33847,7 +33832,7 @@
                   const allOpen = rows.length > 0 &&
                       Array.from(rows).every(row => row.open);
                   const kind = button.dataset.kind || 'rows';
-                  // data-state drives the CSS rotation of the constant ▸ glyph;
+                  // data-state drives the CSS rotation of the constant ⏵ glyph;
                   // only the label text changes.
                   button.dataset.state = allOpen ? 'expanded' : 'collapsed';
                   const label = button.querySelector('.tool-param-fold-label');
@@ -33883,7 +33868,7 @@
                       syncExpandAll(root);
                       return;
                   }
-                  // Key-column fold toggle (▶/▼): drives the value cell's
+                  // Key-column fold toggle (⏵/⏷): drives the value cell's
                   // details from the key cell, keeping the summary free of
                   // per-fold collapse chrome. Glyph state is derived in the
                   // toggle listener below, so any other opener stays in sync.
@@ -33931,7 +33916,7 @@
                       const keyBtn = row && row.querySelector(
                           ':scope > .tool-param-key > .tool-param-key-toggle');
                       if (keyBtn) {
-                          // CSS rotates the single ▸ glyph on aria-expanded —
+                          // CSS rotates the single ⏵ glyph on aria-expanded —
                           // symmetric open/closed states by construction.
                           keyBtn.setAttribute('aria-expanded',
                               details.open ? 'true' : 'false');
@@ -34268,18 +34253,18 @@
                   const allSection = foldBar ? foldBar.querySelector('.fold-all-levels') : null;
                   if (state === 'folded') {
                       if (cc) cc.style.display = 'none';
-                      setSectionState(oneSection, true, '▶');
-                      setSectionState(allSection, true, '▶▶');
+                      setSectionState(oneSection, true, '⏵');
+                      setSectionState(allSection, true, '⏵⏵');
                   } else if (state === 'first') {
                       if (cc) cc.style.display = '';
                       getImmediateChildMessages(messageEl).forEach(child => applyFoldState(child, 'folded'));
-                      setSectionState(oneSection, false, '▼');
-                      setSectionState(allSection, true, '▶▶');
+                      setSectionState(oneSection, false, '⏷');
+                      setSectionState(allSection, true, '⏵⏵');
                   } else {  // 'open'
                       if (cc) cc.style.display = '';
                       getImmediateChildMessages(messageEl).forEach(child => applyFoldState(child, 'open'));
-                      setSectionState(oneSection, false, '▼');
-                      setSectionState(allSection, false, '▼▼');
+                      setSectionState(oneSection, false, '⏷');
+                      setSectionState(allSection, false, '⏷⏷');
                   }
               }
   
@@ -34325,15 +34310,15 @@
   
                       const cc = getChildrenContainer(msg);
                       if ((isSession || isUser) && !hasOnlyTools) {
-                          // First level visible (▼), deeper levels folded (▶▶)
+                          // First level visible (⏷), deeper levels folded (⏵⏵)
                           if (cc) cc.style.display = '';
-                          setSectionState(oneSection, false, '▼');
-                          setSectionState(allSection, true, '▶▶');
+                          setSectionState(oneSection, false, '⏷');
+                          setSectionState(allSection, true, '⏵⏵');
                       } else {
                           // Fully folded
                           if (cc) cc.style.display = 'none';
-                          setSectionState(oneSection, true, '▶');
-                          setSectionState(allSection, true, '▶▶');
+                          setSectionState(oneSection, true, '⏵');
+                          setSectionState(allSection, true, '⏵⏵');
                       }
                   });
               }
@@ -34360,8 +34345,8 @@
                           const card = wrapper ? wrapper.querySelector(':scope > .message') : null;
                           const foldBar = card ? card.querySelector(':scope > .fold-bar') : null;
                           if (foldBar) {
-                              setSectionState(foldBar.querySelector('.fold-one-level'), false, '▼');
-                              setSectionState(foldBar.querySelector('.fold-all-levels'), false, '▼▼');
+                              setSectionState(foldBar.querySelector('.fold-one-level'), false, '⏷');
+                              setSectionState(foldBar.querySelector('.fold-all-levels'), false, '⏷⏷');
                           }
                       }
                       node = node.parentElement;
@@ -35577,14 +35562,11 @@
       font-size: 1.1em;
       line-height: 1;
       color: var(--fold-color);
-      /* Tighten the gap between the two glyphs in ``▼▼`` / ``▶▶`` —
-         Chrome renders default kerning much wider than Firefox does,
-         leaving an awkward gap. The pulled-in -0.2em compromise reads
-         cleanly in Chrome without crowding the glyphs in Firefox
-         (issue #73 / #153). No visible effect on single-glyph ``▼``
-         since letter-spacing only matters when two characters are
-         adjacent. */
-      letter-spacing: -.2em;
+      /* The doubled glyphs ``⏷⏷`` / ``⏵⏵`` (U+23F7 / U+23F5) sit at a
+         natural, even spacing in both Chrome and Firefox, so no kerning
+         trick is needed (the earlier ``▼▼`` / ``▶▶`` needed a -0.2em
+         letter-spacing pull-in to tame Chrome's wide default — issue
+         #73 / #153 / #247). */
   }
   
   .fold-count {
@@ -36544,9 +36526,9 @@
   }
   
   /* Fold-valued rows hoist their toggle into the KEY column: the key cell's
-     ▶/▼ button (wired in transcript.html, state derived from toggle events)
+     ⏵/⏷ button (wired in transcript.html, state derived from toggle events)
      replaces the per-fold in-summary collapse chrome, which only remained
-     useful en masse — every row showing "▼ collapse" drowned the content.
+     useful en masse — every row showing "⏷ collapse" drowned the content.
      Scoped to keyed rows: the top-level root fold has no key column and
      keeps its summary affordances (the pure-CSS ::after "collapse" hint —
      no interactive child). */
@@ -36570,7 +36552,7 @@
   /* The shared fold glyph: the BROWSER'S native disclosure marker (the same
      UA-drawn icon a <summary> shows) via display:list-item — geometrically
      symmetric open/closed, and immune to the italic style of the button
-     labels (font glyphs like ▶/▼ skew in italics; the marker icon doesn't).
+     labels (font glyphs like ⏵/⏷ skew in italics; the marker icon doesn't).
      The empty span doubles as the key-column alignment slot: every key cell
      renders one (markerless on scalar rows), so all key texts start at the
      same x. */
@@ -36587,13 +36569,13 @@
   button > .tool-param-fold-glyph {
       display: list-item;
       list-style-position: inside;
-      list-style-type: "\25B8";
+      list-style-type: "\23F5";
       list-style-type: disclosure-closed;
   }
   
   .tool-param-key-toggle[aria-expanded='true'] > .tool-param-fold-glyph,
   [data-state='expanded'] > .tool-param-fold-glyph {
-      list-style-type: "\25BE";
+      list-style-type: "\23F7";
       list-style-type: disclosure-open;
   }
   
@@ -36616,7 +36598,7 @@
       display: none;
   }
   
-  /* A keyed fold's open summary carries nothing (the key glyph shows ▼ and
+  /* A keyed fold's open summary carries nothing (the key glyph shows ⏷ and
      the rows-toggle sits in the controls strip below) — drop the line it
      would occupy. This also suppresses the generic ::after "collapse". */
   .tool-param-row-fold > .tool-param-value > details[open] > summary {
@@ -39790,11 +39772,11 @@
               
               
               <div class='fold-bar-section fold-one-level' data-action='fold-one' data-target='d-0' data-title-unfolded='Fold (all levels) all 3 descendants' data-title-folded='Unfold (1st level) 2 users' title='Fold (all levels) all 3 descendants'>
-                  <span class='fold-icon'>▼</span>
+                  <span class='fold-icon'>⏷</span>
                   <span class='fold-label'>2 users</span>
               </div>
               <div class='fold-bar-section fold-all-levels' data-action='fold-all' data-target='d-0' data-title-unfolded='Fold (to 1st level) 2 users' data-title-folded='Unfold (all levels) all 3 descendants' title='Fold (to 1st level) 2 users'>
-                  <span class='fold-icon'>▼▼</span>
+                  <span class='fold-icon'>⏷⏷</span>
                   <span class='fold-label'>2 users, 1 assistant total</span>
               </div>
               
@@ -39825,7 +39807,7 @@
               
               
               <div class='fold-bar-section fold-one-level full-width' data-action='fold-one' data-target='d-1' data-title-unfolded='Fold 1 assistant' data-title-folded='Unfold (1st level) 1 assistant' title='Fold 1 assistant'>
-                  <span class='fold-icon'>▼</span>
+                  <span class='fold-icon'>⏷</span>
                   <span class='fold-label'>1 assistant</span>
               </div>
               
@@ -39902,11 +39884,11 @@
               
               
               <div class='fold-bar-section fold-one-level' data-action='fold-one' data-target='d-4' data-title-unfolded='Fold (all levels) all 9 descendants' data-title-folded='Unfold (1st level) 4 users' title='Fold (all levels) all 9 descendants'>
-                  <span class='fold-icon'>▼</span>
+                  <span class='fold-icon'>⏷</span>
                   <span class='fold-label'>4 users</span>
               </div>
               <div class='fold-bar-section fold-all-levels' data-action='fold-all' data-target='d-4' data-title-unfolded='Fold (to 1st level) 4 users' data-title-folded='Unfold (all levels) all 9 descendants' title='Fold (to 1st level) 4 users'>
-                  <span class='fold-icon'>▼▼</span>
+                  <span class='fold-icon'>⏷⏷</span>
                   <span class='fold-label'>4 users, 3 assistants, 2 more total</span>
               </div>
               
@@ -39937,7 +39919,7 @@
               
               
               <div class='fold-bar-section fold-one-level full-width' data-action='fold-one' data-target='d-5' data-title-unfolded='Fold 1 assistant' data-title-folded='Unfold (1st level) 1 assistant' title='Fold 1 assistant'>
-                  <span class='fold-icon'>▼</span>
+                  <span class='fold-icon'>⏷</span>
                   <span class='fold-label'>1 assistant</span>
               </div>
               
@@ -40016,7 +39998,7 @@
               
               
               <div class='fold-bar-section fold-one-level full-width' data-action='fold-one' data-target='d-7' data-title-unfolded='Fold 1 tool, 1 assistant' data-title-folded='Unfold (1st level) 1 tool, 1 assistant' title='Fold 1 tool, 1 assistant'>
-                  <span class='fold-icon'>▼</span>
+                  <span class='fold-icon'>⏷</span>
                   <span class='fold-label'>1 tool, 1 assistant</span>
               </div>
               
@@ -40130,7 +40112,7 @@
               
               
               <div class='fold-bar-section fold-one-level full-width' data-action='fold-one' data-target='d-11' data-title-unfolded='Fold 1 tool, 1 assistant' data-title-folded='Unfold (1st level) 1 tool, 1 assistant' title='Fold 1 tool, 1 assistant'>
-                  <span class='fold-icon'>▼</span>
+                  <span class='fold-icon'>⏷</span>
                   <span class='fold-label'>1 tool, 1 assistant</span>
               </div>
               
@@ -40571,7 +40553,7 @@
                   const allOpen = rows.length > 0 &&
                       Array.from(rows).every(row => row.open);
                   const kind = button.dataset.kind || 'rows';
-                  // data-state drives the CSS rotation of the constant ▸ glyph;
+                  // data-state drives the CSS rotation of the constant ⏵ glyph;
                   // only the label text changes.
                   button.dataset.state = allOpen ? 'expanded' : 'collapsed';
                   const label = button.querySelector('.tool-param-fold-label');
@@ -40607,7 +40589,7 @@
                       syncExpandAll(root);
                       return;
                   }
-                  // Key-column fold toggle (▶/▼): drives the value cell's
+                  // Key-column fold toggle (⏵/⏷): drives the value cell's
                   // details from the key cell, keeping the summary free of
                   // per-fold collapse chrome. Glyph state is derived in the
                   // toggle listener below, so any other opener stays in sync.
@@ -40655,7 +40637,7 @@
                       const keyBtn = row && row.querySelector(
                           ':scope > .tool-param-key > .tool-param-key-toggle');
                       if (keyBtn) {
-                          // CSS rotates the single ▸ glyph on aria-expanded —
+                          // CSS rotates the single ⏵ glyph on aria-expanded —
                           // symmetric open/closed states by construction.
                           keyBtn.setAttribute('aria-expanded',
                               details.open ? 'true' : 'false');
@@ -40992,18 +40974,18 @@
                   const allSection = foldBar ? foldBar.querySelector('.fold-all-levels') : null;
                   if (state === 'folded') {
                       if (cc) cc.style.display = 'none';
-                      setSectionState(oneSection, true, '▶');
-                      setSectionState(allSection, true, '▶▶');
+                      setSectionState(oneSection, true, '⏵');
+                      setSectionState(allSection, true, '⏵⏵');
                   } else if (state === 'first') {
                       if (cc) cc.style.display = '';
                       getImmediateChildMessages(messageEl).forEach(child => applyFoldState(child, 'folded'));
-                      setSectionState(oneSection, false, '▼');
-                      setSectionState(allSection, true, '▶▶');
+                      setSectionState(oneSection, false, '⏷');
+                      setSectionState(allSection, true, '⏵⏵');
                   } else {  // 'open'
                       if (cc) cc.style.display = '';
                       getImmediateChildMessages(messageEl).forEach(child => applyFoldState(child, 'open'));
-                      setSectionState(oneSection, false, '▼');
-                      setSectionState(allSection, false, '▼▼');
+                      setSectionState(oneSection, false, '⏷');
+                      setSectionState(allSection, false, '⏷⏷');
                   }
               }
   
@@ -41049,15 +41031,15 @@
   
                       const cc = getChildrenContainer(msg);
                       if ((isSession || isUser) && !hasOnlyTools) {
-                          // First level visible (▼), deeper levels folded (▶▶)
+                          // First level visible (⏷), deeper levels folded (⏵⏵)
                           if (cc) cc.style.display = '';
-                          setSectionState(oneSection, false, '▼');
-                          setSectionState(allSection, true, '▶▶');
+                          setSectionState(oneSection, false, '⏷');
+                          setSectionState(allSection, true, '⏵⏵');
                       } else {
                           // Fully folded
                           if (cc) cc.style.display = 'none';
-                          setSectionState(oneSection, true, '▶');
-                          setSectionState(allSection, true, '▶▶');
+                          setSectionState(oneSection, true, '⏵');
+                          setSectionState(allSection, true, '⏵⏵');
                       }
                   });
               }
@@ -41084,8 +41066,8 @@
                           const card = wrapper ? wrapper.querySelector(':scope > .message') : null;
                           const foldBar = card ? card.querySelector(':scope > .fold-bar') : null;
                           if (foldBar) {
-                              setSectionState(foldBar.querySelector('.fold-one-level'), false, '▼');
-                              setSectionState(foldBar.querySelector('.fold-all-levels'), false, '▼▼');
+                              setSectionState(foldBar.querySelector('.fold-one-level'), false, '⏷');
+                              setSectionState(foldBar.querySelector('.fold-all-levels'), false, '⏷⏷');
                           }
                       }
                       node = node.parentElement;
@@ -42301,14 +42283,11 @@
       font-size: 1.1em;
       line-height: 1;
       color: var(--fold-color);
-      /* Tighten the gap between the two glyphs in ``▼▼`` / ``▶▶`` —
-         Chrome renders default kerning much wider than Firefox does,
-         leaving an awkward gap. The pulled-in -0.2em compromise reads
-         cleanly in Chrome without crowding the glyphs in Firefox
-         (issue #73 / #153). No visible effect on single-glyph ``▼``
-         since letter-spacing only matters when two characters are
-         adjacent. */
-      letter-spacing: -.2em;
+      /* The doubled glyphs ``⏷⏷`` / ``⏵⏵`` (U+23F7 / U+23F5) sit at a
+         natural, even spacing in both Chrome and Firefox, so no kerning
+         trick is needed (the earlier ``▼▼`` / ``▶▶`` needed a -0.2em
+         letter-spacing pull-in to tame Chrome's wide default — issue
+         #73 / #153 / #247). */
   }
   
   .fold-count {
@@ -43268,9 +43247,9 @@
   }
   
   /* Fold-valued rows hoist their toggle into the KEY column: the key cell's
-     ▶/▼ button (wired in transcript.html, state derived from toggle events)
+     ⏵/⏷ button (wired in transcript.html, state derived from toggle events)
      replaces the per-fold in-summary collapse chrome, which only remained
-     useful en masse — every row showing "▼ collapse" drowned the content.
+     useful en masse — every row showing "⏷ collapse" drowned the content.
      Scoped to keyed rows: the top-level root fold has no key column and
      keeps its summary affordances (the pure-CSS ::after "collapse" hint —
      no interactive child). */
@@ -43294,7 +43273,7 @@
   /* The shared fold glyph: the BROWSER'S native disclosure marker (the same
      UA-drawn icon a <summary> shows) via display:list-item — geometrically
      symmetric open/closed, and immune to the italic style of the button
-     labels (font glyphs like ▶/▼ skew in italics; the marker icon doesn't).
+     labels (font glyphs like ⏵/⏷ skew in italics; the marker icon doesn't).
      The empty span doubles as the key-column alignment slot: every key cell
      renders one (markerless on scalar rows), so all key texts start at the
      same x. */
@@ -43311,13 +43290,13 @@
   button > .tool-param-fold-glyph {
       display: list-item;
       list-style-position: inside;
-      list-style-type: "\25B8";
+      list-style-type: "\23F5";
       list-style-type: disclosure-closed;
   }
   
   .tool-param-key-toggle[aria-expanded='true'] > .tool-param-fold-glyph,
   [data-state='expanded'] > .tool-param-fold-glyph {
-      list-style-type: "\25BE";
+      list-style-type: "\23F7";
       list-style-type: disclosure-open;
   }
   
@@ -43340,7 +43319,7 @@
       display: none;
   }
   
-  /* A keyed fold's open summary carries nothing (the key glyph shows ▼ and
+  /* A keyed fold's open summary carries nothing (the key glyph shows ⏷ and
      the rows-toggle sits in the controls strip below) — drop the line it
      would occupy. This also suppresses the generic ::after "collapse". */
   .tool-param-row-fold > .tool-param-value > details[open] > summary {
@@ -46453,11 +46432,11 @@
               
               
               <div class='fold-bar-section fold-one-level' data-action='fold-one' data-target='d-0' data-title-unfolded='Fold (all levels) all 9 descendants' data-title-folded='Unfold (1st level) 4 users' title='Fold (all levels) all 9 descendants'>
-                  <span class='fold-icon'>▼</span>
+                  <span class='fold-icon'>⏷</span>
                   <span class='fold-label'>4 users</span>
               </div>
               <div class='fold-bar-section fold-all-levels' data-action='fold-all' data-target='d-0' data-title-unfolded='Fold (to 1st level) 4 users' data-title-folded='Unfold (all levels) all 9 descendants' title='Fold (to 1st level) 4 users'>
-                  <span class='fold-icon'>▼▼</span>
+                  <span class='fold-icon'>⏷⏷</span>
                   <span class='fold-label'>4 users, 3 assistants, 2 more total</span>
               </div>
               
@@ -46488,7 +46467,7 @@
               
               
               <div class='fold-bar-section fold-one-level full-width' data-action='fold-one' data-target='d-1' data-title-unfolded='Fold 1 assistant' data-title-folded='Unfold (1st level) 1 assistant' title='Fold 1 assistant'>
-                  <span class='fold-icon'>▼</span>
+                  <span class='fold-icon'>⏷</span>
                   <span class='fold-label'>1 assistant</span>
               </div>
               
@@ -46567,7 +46546,7 @@
               
               
               <div class='fold-bar-section fold-one-level full-width' data-action='fold-one' data-target='d-3' data-title-unfolded='Fold 1 tool, 1 assistant' data-title-folded='Unfold (1st level) 1 tool, 1 assistant' title='Fold 1 tool, 1 assistant'>
-                  <span class='fold-icon'>▼</span>
+                  <span class='fold-icon'>⏷</span>
                   <span class='fold-label'>1 tool, 1 assistant</span>
               </div>
               
@@ -46681,7 +46660,7 @@
               
               
               <div class='fold-bar-section fold-one-level full-width' data-action='fold-one' data-target='d-7' data-title-unfolded='Fold 1 tool, 1 assistant' data-title-folded='Unfold (1st level) 1 tool, 1 assistant' title='Fold 1 tool, 1 assistant'>
-                  <span class='fold-icon'>▼</span>
+                  <span class='fold-icon'>⏷</span>
                   <span class='fold-label'>1 tool, 1 assistant</span>
               </div>
               
@@ -47122,7 +47101,7 @@
                   const allOpen = rows.length > 0 &&
                       Array.from(rows).every(row => row.open);
                   const kind = button.dataset.kind || 'rows';
-                  // data-state drives the CSS rotation of the constant ▸ glyph;
+                  // data-state drives the CSS rotation of the constant ⏵ glyph;
                   // only the label text changes.
                   button.dataset.state = allOpen ? 'expanded' : 'collapsed';
                   const label = button.querySelector('.tool-param-fold-label');
@@ -47158,7 +47137,7 @@
                       syncExpandAll(root);
                       return;
                   }
-                  // Key-column fold toggle (▶/▼): drives the value cell's
+                  // Key-column fold toggle (⏵/⏷): drives the value cell's
                   // details from the key cell, keeping the summary free of
                   // per-fold collapse chrome. Glyph state is derived in the
                   // toggle listener below, so any other opener stays in sync.
@@ -47206,7 +47185,7 @@
                       const keyBtn = row && row.querySelector(
                           ':scope > .tool-param-key > .tool-param-key-toggle');
                       if (keyBtn) {
-                          // CSS rotates the single ▸ glyph on aria-expanded —
+                          // CSS rotates the single ⏵ glyph on aria-expanded —
                           // symmetric open/closed states by construction.
                           keyBtn.setAttribute('aria-expanded',
                               details.open ? 'true' : 'false');
@@ -47543,18 +47522,18 @@
                   const allSection = foldBar ? foldBar.querySelector('.fold-all-levels') : null;
                   if (state === 'folded') {
                       if (cc) cc.style.display = 'none';
-                      setSectionState(oneSection, true, '▶');
-                      setSectionState(allSection, true, '▶▶');
+                      setSectionState(oneSection, true, '⏵');
+                      setSectionState(allSection, true, '⏵⏵');
                   } else if (state === 'first') {
                       if (cc) cc.style.display = '';
                       getImmediateChildMessages(messageEl).forEach(child => applyFoldState(child, 'folded'));
-                      setSectionState(oneSection, false, '▼');
-                      setSectionState(allSection, true, '▶▶');
+                      setSectionState(oneSection, false, '⏷');
+                      setSectionState(allSection, true, '⏵⏵');
                   } else {  // 'open'
                       if (cc) cc.style.display = '';
                       getImmediateChildMessages(messageEl).forEach(child => applyFoldState(child, 'open'));
-                      setSectionState(oneSection, false, '▼');
-                      setSectionState(allSection, false, '▼▼');
+                      setSectionState(oneSection, false, '⏷');
+                      setSectionState(allSection, false, '⏷⏷');
                   }
               }
   
@@ -47600,15 +47579,15 @@
   
                       const cc = getChildrenContainer(msg);
                       if ((isSession || isUser) && !hasOnlyTools) {
-                          // First level visible (▼), deeper levels folded (▶▶)
+                          // First level visible (⏷), deeper levels folded (⏵⏵)
                           if (cc) cc.style.display = '';
-                          setSectionState(oneSection, false, '▼');
-                          setSectionState(allSection, true, '▶▶');
+                          setSectionState(oneSection, false, '⏷');
+                          setSectionState(allSection, true, '⏵⏵');
                       } else {
                           // Fully folded
                           if (cc) cc.style.display = 'none';
-                          setSectionState(oneSection, true, '▶');
-                          setSectionState(allSection, true, '▶▶');
+                          setSectionState(oneSection, true, '⏵');
+                          setSectionState(allSection, true, '⏵⏵');
                       }
                   });
               }
@@ -47635,8 +47614,8 @@
                           const card = wrapper ? wrapper.querySelector(':scope > .message') : null;
                           const foldBar = card ? card.querySelector(':scope > .fold-bar') : null;
                           if (foldBar) {
-                              setSectionState(foldBar.querySelector('.fold-one-level'), false, '▼');
-                              setSectionState(foldBar.querySelector('.fold-all-levels'), false, '▼▼');
+                              setSectionState(foldBar.querySelector('.fold-one-level'), false, '⏷');
+                              setSectionState(foldBar.querySelector('.fold-all-levels'), false, '⏷⏷');
                           }
                       }
                       node = node.parentElement;

@@ -1222,7 +1222,7 @@ def _param_value_html(value: Any, depth: int) -> str:
 def _params_table_html(items: "Iterable[tuple[Any, Any]]", depth: int) -> str:
     """Build one key/value table; nested levels get a marker class.
 
-    A fold-valued row hoists its ▶/▼ toggle into the KEY column (wired in
+    A fold-valued row hoists its ⏵/⏷ toggle into the KEY column (wired in
     transcript.html), so the value summary stays free of per-fold collapse
     chrome — only the previews (closed) and the rows-toggle buttons (open)
     remain there. The ``<details`` probe is exact: every fold helper emits

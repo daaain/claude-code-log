@@ -1,11 +1,11 @@
 """Playwright tests for the params-table fold controls.
 
-An open structured-value fold shows "▶ expand all rows" in a controls
+An open structured-value fold shows "⏵ expand all rows" in a controls
 strip after the summary (never inside it — interactive elements within
 <summary> are an accessibility violation); pressing it opens every
-row-level fold of that table and turns into "▼ collapse all rows";
+row-level fold of that table and turns into "⏷ collapse all rows";
 closing the outer fold restores the initial state. Fold-valued rows
-carry their ▶/▼ toggle in the KEY column, derived from the actual open
+carry their ⏵/⏷ toggle in the KEY column, derived from the actual open
 state.
 """
 
@@ -148,7 +148,7 @@ class TestParamsRowsToggleBrowser:
         assert all(outer.evaluate(ROW_DETAILS_JS))
 
         # Close the outer fold via its key-column toggle (the open summary
-        # is hidden for keyed rows — the ▼ in the key cell is the collapse
+        # is hidden for keyed rows — the ⏷ in the key cell is the collapse
         # control), then reopen the same way.
         key_toggle = page.locator(
             "tr.tool-param-row-fold > td.tool-param-key > .tool-param-key-toggle"

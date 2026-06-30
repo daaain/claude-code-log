@@ -135,17 +135,17 @@
             {% if message.immediate_children_count == message.total_descendants_count %}
             {# Same count = only one level, show single full-width button #}
             <div class='fold-bar-section fold-one-level full-width' data-action='fold-one' data-target='{{ message.message_id }}' data-title-unfolded='Fold {{ message.get_immediate_children_label() }}' data-title-folded='Unfold (1st level) {{ message.get_immediate_children_label() }}' title='Fold {{ message.get_immediate_children_label() }}'>
-                <span class='fold-icon'>▼</span>
+                <span class='fold-icon'>⏷</span>
                 <span class='fold-label'>{{ message.get_immediate_children_label() }}</span>
             </div>
             {% else %}
             {# Multiple levels, show both buttons #}
             <div class='fold-bar-section fold-one-level' data-action='fold-one' data-target='{{ message.message_id }}' data-title-unfolded='Fold (all levels) all {{ message.total_descendants_count }} descendants' data-title-folded='Unfold (1st level) {{ message.get_immediate_children_label() }}' title='Fold (all levels) all {{ message.total_descendants_count }} descendants'>
-                <span class='fold-icon'>▼</span>
+                <span class='fold-icon'>⏷</span>
                 <span class='fold-label'>{{ message.get_immediate_children_label() }}</span>
             </div>
             <div class='fold-bar-section fold-all-levels' data-action='fold-all' data-target='{{ message.message_id }}' data-title-unfolded='Fold (to 1st level) {{ message.get_immediate_children_label() }}' data-title-folded='Unfold (all levels) all {{ message.total_descendants_count }} descendants' title='Fold (to 1st level) {{ message.get_immediate_children_label() }}'>
-                <span class='fold-icon'>▼▼</span>
+                <span class='fold-icon'>⏷⏷</span>
                 <span class='fold-label'>{{ message.get_total_descendants_label() }} total</span>
             </div>
             {% endif %}
@@ -197,17 +197,17 @@
             {% if message.immediate_children_count == message.total_descendants_count %}
             {# Same count = only one level, show single full-width button #}
             <div class='fold-bar-section fold-one-level full-width' data-action='fold-one' data-target='{{ message.message_id }}' data-title-unfolded='Fold {{ message.get_immediate_children_label() }}' data-title-folded='Unfold (1st level) {{ message.get_immediate_children_label() }}' title='Fold {{ message.get_immediate_children_label() }}'>
-                <span class='fold-icon'>▼</span>
+                <span class='fold-icon'>⏷</span>
                 <span class='fold-label'>{{ message.get_immediate_children_label() }}</span>
             </div>
             {% else %}
             {# Multiple levels, show both buttons #}
             <div class='fold-bar-section fold-one-level' data-action='fold-one' data-target='{{ message.message_id }}' data-title-unfolded='Fold (all levels) all {{ message.total_descendants_count }} descendants' data-title-folded='Unfold (1st level) {{ message.get_immediate_children_label() }}' title='Fold (all levels) all {{ message.total_descendants_count }} descendants'>
-                <span class='fold-icon'>▼</span>
+                <span class='fold-icon'>⏷</span>
                 <span class='fold-label'>{{ message.get_immediate_children_label() }}</span>
             </div>
             <div class='fold-bar-section fold-all-levels' data-action='fold-all' data-target='{{ message.message_id }}' data-title-unfolded='Fold (to 1st level) {{ message.get_immediate_children_label() }}' data-title-folded='Unfold (all levels) all {{ message.total_descendants_count }} descendants' title='Fold (to 1st level) {{ message.get_immediate_children_label() }}'>
-                <span class='fold-icon'>▼▼</span>
+                <span class='fold-icon'>⏷⏷</span>
                 <span class='fold-label'>{{ message.get_total_descendants_label() }} total</span>
             </div>
             {% endif %}
@@ -446,7 +446,7 @@
                 const allOpen = rows.length > 0 &&
                     Array.from(rows).every(row => row.open);
                 const kind = button.dataset.kind || 'rows';
-                // data-state drives the CSS rotation of the constant ▸ glyph;
+                // data-state drives the CSS rotation of the constant ⏵ glyph;
                 // only the label text changes.
                 button.dataset.state = allOpen ? 'expanded' : 'collapsed';
                 const label = button.querySelector('.tool-param-fold-label');
@@ -482,7 +482,7 @@
                     syncExpandAll(root);
                     return;
                 }
-                // Key-column fold toggle (▶/▼): drives the value cell's
+                // Key-column fold toggle (⏵/⏷): drives the value cell's
                 // details from the key cell, keeping the summary free of
                 // per-fold collapse chrome. Glyph state is derived in the
                 // toggle listener below, so any other opener stays in sync.
@@ -530,7 +530,7 @@
                     const keyBtn = row && row.querySelector(
                         ':scope > .tool-param-key > .tool-param-key-toggle');
                     if (keyBtn) {
-                        // CSS rotates the single ▸ glyph on aria-expanded —
+                        // CSS rotates the single ⏵ glyph on aria-expanded —
                         // symmetric open/closed states by construction.
                         keyBtn.setAttribute('aria-expanded',
                             details.open ? 'true' : 'false');
@@ -867,18 +867,18 @@
                 const allSection = foldBar ? foldBar.querySelector('.fold-all-levels') : null;
                 if (state === 'folded') {
                     if (cc) cc.style.display = 'none';
-                    setSectionState(oneSection, true, '▶');
-                    setSectionState(allSection, true, '▶▶');
+                    setSectionState(oneSection, true, '⏵');
+                    setSectionState(allSection, true, '⏵⏵');
                 } else if (state === 'first') {
                     if (cc) cc.style.display = '';
                     getImmediateChildMessages(messageEl).forEach(child => applyFoldState(child, 'folded'));
-                    setSectionState(oneSection, false, '▼');
-                    setSectionState(allSection, true, '▶▶');
+                    setSectionState(oneSection, false, '⏷');
+                    setSectionState(allSection, true, '⏵⏵');
                 } else {  // 'open'
                     if (cc) cc.style.display = '';
                     getImmediateChildMessages(messageEl).forEach(child => applyFoldState(child, 'open'));
-                    setSectionState(oneSection, false, '▼');
-                    setSectionState(allSection, false, '▼▼');
+                    setSectionState(oneSection, false, '⏷');
+                    setSectionState(allSection, false, '⏷⏷');
                 }
             }
 
@@ -924,15 +924,15 @@
 
                     const cc = getChildrenContainer(msg);
                     if ((isSession || isUser) && !hasOnlyTools) {
-                        // First level visible (▼), deeper levels folded (▶▶)
+                        // First level visible (⏷), deeper levels folded (⏵⏵)
                         if (cc) cc.style.display = '';
-                        setSectionState(oneSection, false, '▼');
-                        setSectionState(allSection, true, '▶▶');
+                        setSectionState(oneSection, false, '⏷');
+                        setSectionState(allSection, true, '⏵⏵');
                     } else {
                         // Fully folded
                         if (cc) cc.style.display = 'none';
-                        setSectionState(oneSection, true, '▶');
-                        setSectionState(allSection, true, '▶▶');
+                        setSectionState(oneSection, true, '⏵');
+                        setSectionState(allSection, true, '⏵⏵');
                     }
                 });
             }
@@ -959,8 +959,8 @@
                         const card = wrapper ? wrapper.querySelector(':scope > .message') : null;
                         const foldBar = card ? card.querySelector(':scope > .fold-bar') : null;
                         if (foldBar) {
-                            setSectionState(foldBar.querySelector('.fold-one-level'), false, '▼');
-                            setSectionState(foldBar.querySelector('.fold-all-levels'), false, '▼▼');
+                            setSectionState(foldBar.querySelector('.fold-one-level'), false, '⏷');
+                            setSectionState(foldBar.querySelector('.fold-all-levels'), false, '⏷⏷');
                         }
                     }
                     node = node.parentElement;
