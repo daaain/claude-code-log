@@ -1973,6 +1973,15 @@ def convert_jsonl_to(
             # source file is newer than the existing output. Scoped to a file
             # source — a directory source has no single mtime and is handled
             # by the cache branch / `cache_was_updated` above.
+            #
+            # The directory cache persists the *source* mtime in its DB to
+            # detect change; single-file mode has no DB, so the *output* file's
+            # own mtime is the natural, persistence-free basis. It is sufficient
+            # because the output is always written after its source is read, so
+            # `output.mtime >= source.mtime` holds post-write; a later append
+            # bumps the source past it. Both approaches share the same
+            # filesystem-mtime granularity limit (a sub-tick append racing the
+            # prior write resolves on the next run) — no worse than the cache.
             source_is_newer = (
                 input_path.is_file()
                 and output_path.exists()

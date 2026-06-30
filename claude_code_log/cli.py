@@ -1332,12 +1332,17 @@ def main(
             force_regenerate=output is not None and _output_path_is_file(output),
             regenerated=regenerated,
         )
-        # On a skip the converter already printed "is current, skipping
-        # regeneration"; suppress the redundant/misleading success line.
-        was_regenerated = regenerated != [False]
-        if input_path.is_file():
-            if was_regenerated:
-                click.echo(f"Successfully converted {input_path} to {output_path}")
+        # On a skip the converter already printed its "... is current,
+        # skipping regeneration" line (single-file and directory paths alike),
+        # so suppress the redundant/misleading success line for BOTH. The
+        # `regenerated` out-param carries exactly one bool from
+        # convert_jsonl_to (it tracks the combined-output write; a directory
+        # whose combined is current early-exits / skips, reporting False).
+        was_regenerated = any(regenerated)
+        if not was_regenerated:
+            pass
+        elif input_path.is_file():
+            click.echo(f"Successfully converted {input_path} to {output_path}")
         else:
             jsonl_count = len(list(input_path.glob("*.jsonl")))
             if write_individual:

@@ -252,6 +252,24 @@ class TestSingleFileStaleness:
         assert "skipping regeneration" in r2.output
         assert "Successfully converted" not in r2.output
 
+    def test_directory_skip_suppresses_success_line(self, tmp_path: Path):
+        """Directory symmetry: a no-op directory re-run early-exits with a
+        skip line and must NOT also print 'Successfully combined ...' (the
+        same double-message fix applied to the directory branch)."""
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        _write_jsonl(proj / "s.jsonl", "DIR_turn_marker")
+        runner = CliRunner()
+
+        r1 = runner.invoke(main, [str(proj)])
+        assert r1.exit_code == 0, r1.output
+        assert "Successfully combined" in r1.output
+
+        r2 = runner.invoke(main, [str(proj)])
+        assert r2.exit_code == 0, r2.output
+        assert "skipping regeneration" in r2.output
+        assert "Successfully combined" not in r2.output
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
