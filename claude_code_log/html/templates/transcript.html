@@ -188,9 +188,6 @@
                 {% if message.token_usage %}
                 <span class='token-usage'>{{ message.token_usage }}</span>
                 {% endif %}
-                {% if message.display_model %}
-                <span class='message-model' title='Model used by this sub-agent'>{{ message.display_model }}</span>
-                {% endif %}
             </div>
         </div>
         {% if message.meta %}<div class='debug-info'>{{ message.meta.uuid[:12] }}{% if message.meta.parent_uuid %} &rarr; {{ message.meta.parent_uuid[:12] }}{% endif %}</div>{% endif %}

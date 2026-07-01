@@ -262,19 +262,24 @@ class TestNestedVisualLayer:
         # The collapsed marker renders.
         assert "≡ full transcript" in html
 
-    def test_model_surfaced_once_per_subagent(self) -> None:
-        """Issue #246: each sub-agent's model id is marked for display on
-        exactly one of its messages (its first), not on every message."""
-        from collections import Counter
+    def test_model_surfaced_on_spawn_cards(self) -> None:
+        """Issue #246: a sub-agent's model is stamped on its spawn card (the
+        Task/Agent tool_use that opens it) so it stays visible when the
+        sub-agent transcript is folded — never on the sub-agent's own body
+        messages. The only other carrier is the session header (trunk model)."""
+        from claude_code_log.models import ToolUseMessage
 
         msgs = self._ctx_messages()
-        sub = [m for m in msgs if m.display_model and m.meta.is_sidechain]
-        per_agent = Counter(m.meta.agent_id for m in sub)
-        # Every sub-agent surfaces its model once, never twice.
-        assert set(per_agent) == set(ALL_AGENTS)
-        assert all(count == 1 for count in per_agent.values())
+        pill_bearers = [m for m in msgs if m.display_model]
+        # Every pill lives on a spawn card (tool_use) or the session header.
+        assert all(
+            isinstance(m.content, ToolUseMessage) or m.is_session_header
+            for m in pill_bearers
+        )
+        spawn_pills = [m for m in pill_bearers if isinstance(m.content, ToolUseMessage)]
+        assert spawn_pills, "sub-agent spawns should carry the model"
         # The fixture's sub-agents all run on haiku.
-        assert all(m.display_model == "claude-haiku-4-5-20251001" for m in sub)
+        assert all(m.display_model == "claude-haiku-4-5-20251001" for m in spawn_pills)
 
     def test_trunk_model_surfaced_only_on_session_header(self) -> None:
         """Issue #246: the trunk/main model shows on the session header, and
@@ -288,7 +293,10 @@ class TestNestedVisualLayer:
             for m in msgs
             if m.display_model and not m.meta.is_sidechain and not m.is_session_header
         ]
-        assert trunk_body == []
+        # Trunk-level spawn cards are the only non-header trunk carriers.
+        from claude_code_log.models import ToolUseMessage
+
+        assert all(isinstance(m.content, ToolUseMessage) for m in trunk_body)
 
     def test_model_renders_in_html_and_markdown(self) -> None:
         from claude_code_log.html.renderer import generate_html
@@ -296,25 +304,27 @@ class TestNestedVisualLayer:
 
         entries = _load_integrated()
         html = generate_html(entries, "model")
-        assert "class='message-model'" in html
+        # Spawn-card model badge (visible even when the sub-agent is folded).
+        assert "title='Model this sub-agent ran on'" in html
         assert "claude-haiku-4-5-20251001" in html
 
         md = MarkdownRenderer().generate(entries, "model")
-        # First message of a sub-agent gets a standalone model line.
-        assert "Model: `claude-haiku-4-5-20251001`" in md
+        # Spawn card (Task title) carries the model inline.
+        assert "· `claude-haiku-4-5-20251001`" in md
         # The session header carries the main model inline on its heading.
         assert "— Model: `claude-haiku-4-5-20251001`" in md
 
     def test_model_attribution_distinguishes_trunk_from_subagents(self) -> None:
         """Issue #246's raison d'être: trunk and sub-agents can run on
         DIFFERENT models. The fixture runs everything on haiku, so the
-        once-per-context tests above can't tell correct attribution from
-        cross-contamination. Retarget only the trunk's assistant entries to
-        a distinct model and pin that the session header shows IT while each
-        sub-agent keeps its own — no leakage either way (monk #3959)."""
+        placement tests above can't tell correct attribution from cross-
+        contamination. Retarget only the trunk's assistant entries to a
+        distinct model and pin that the session header shows IT while each
+        spawn card shows its sub-agent's model — no leakage either way
+        (monk #3959)."""
         from claude_code_log.html.renderer import generate_html
         from claude_code_log.markdown.renderer import MarkdownRenderer
-        from claude_code_log.models import AssistantTranscriptEntry
+        from claude_code_log.models import AssistantTranscriptEntry, ToolUseMessage
 
         trunk_model = "claude-opus-4-8"
         sub_model = "claude-haiku-4-5-20251001"
@@ -332,9 +342,11 @@ class TestNestedVisualLayer:
             m.display_model for m in msgs if m.display_model and m.is_session_header
         ]
         assert headers == [trunk_model], "trunk model must land on the session header"
-        subs = [m for m in msgs if m.display_model and m.meta.is_sidechain]
-        assert subs and all(m.display_model == sub_model for m in subs), (
-            "sub-agents must keep their own model, not inherit the trunk's"
+        spawn_pills = [
+            m for m in msgs if m.display_model and isinstance(m.content, ToolUseMessage)
+        ]
+        assert spawn_pills and all(m.display_model == sub_model for m in spawn_pills), (
+            "spawn cards must show their sub-agent's model, not the trunk's"
         )
 
         # Both renderers attribute correctly end-to-end.
@@ -342,9 +354,9 @@ class TestNestedVisualLayer:
         assert trunk_model in html and sub_model in html
         md = MarkdownRenderer().generate(entries, "diff")
         assert f"— Model: `{trunk_model}`" in md  # session header only
-        assert f"Model: `{sub_model}`" in md  # a sub-agent
-        # The trunk model never appears as a standalone sub-agent Model line.
-        assert f"\nModel: `{trunk_model}`" not in md
+        assert f"· `{sub_model}`" in md  # a spawn card
+        # The trunk model never appears as a spawn-card model suffix.
+        assert f"· `{trunk_model}`" not in md
 
     def test_sidechain_without_agent_id_never_leaks_into_header(self) -> None:
         """A sidechain message lacking an agent_id stays unattributed — it

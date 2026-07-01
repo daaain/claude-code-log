@@ -899,6 +899,12 @@ def generate_template_messages(
     with log_timing("Link async notifications", t_start):
         _link_async_notifications(ctx, detail)
 
+    # Surface the model each agent ran on (issue #246). Runs here — after
+    # pairing and async linking — so a spawn card can reach its paired
+    # tool_result and its hoisted ``minted_agent_id`` to resolve the sub-agent.
+    with log_timing("Surface agent models", t_start):
+        _surface_agent_models(ctx)
+
     # Link parsed dynamic-workflow runs to their Workflow tool_use by taskId
     # (#174 PR3) so the formatter can render snapshot-first meta (and step 3
     # can splice the phase/agent tree).
@@ -4849,24 +4855,33 @@ def _render_messages(
                     tool_msg.render_session_id = effective_session
                 ctx.register(tool_msg)
 
-    _surface_agent_models(ctx)
     return ctx
 
 
 def _surface_agent_models(ctx: RenderingContext) -> None:
     """Mark which messages should display their model id (issue #246).
 
-    Surfaced once per agent context rather than on every message:
+    Surfaced once per agent context rather than on every message, and on a
+    node that stays visible when the agent's transcript is folded:
     - the **session header** carries the trunk/main agent's model (the first
       non-sidechain assistant model seen for that session);
-    - the **first message of each sub-agent** carries that sub-agent's model.
+    - each **spawn card** (the Task/Agent ``tool_use`` that opens a sub-agent)
+      carries the model that sub-agent ran on — looked up from the sub-agent's
+      own first assistant model via ``spawned_agent_id``. The spawn card sits
+      at the *parent's* depth and stays on screen even when the sub-agent's
+      transcript collapses, so the model shows exactly where the reader looks
+      for it (issue #246 follow-up).
 
     A mid-course ``/model`` switch surfaces as its own command message, so a
     single first-seen value per context is enough. ``meta.model`` is only set
     on assistant entries, so a truthy value already filters to assistant-origin
     chunks (text or tool_use).
     """
-    seen_subagents: set[str] = set()
+    from .models import TaskInput, ToolUseMessage
+
+    # Pass 1: collect each sub-agent's model (first-seen) and stamp the
+    # trunk/main model onto each session header.
+    agent_model: dict[str, str] = {}
     seen_sessions: set[str] = set()
     for msg in ctx.messages:
         # ctx.messages may carry None slots (ghosted entries); skip them.
@@ -4876,15 +4891,10 @@ def _surface_agent_models(ctx: RenderingContext) -> None:
         if not model:
             continue
         if msg.meta.is_sidechain:
-            # Sub-agent context: attribute to its agent_id. A sidechain entry
-            # that somehow lacks an agent_id is left unattributed rather than
-            # leaking into the trunk header below.
             agent_id = msg.meta.agent_id
-            if agent_id and agent_id not in seen_subagents:
-                seen_subagents.add(agent_id)
-                msg.display_model = model
+            if agent_id and agent_id not in agent_model:
+                agent_model[agent_id] = model
         else:
-            # Trunk context: the main model goes on the session header.
             session_id = msg.meta.session_id
             if session_id and session_id not in seen_sessions:
                 seen_sessions.add(session_id)
@@ -4894,6 +4904,27 @@ def _surface_agent_models(ctx: RenderingContext) -> None:
                 )
                 if header is not None:
                     header.display_model = model
+
+    # Pass 2: stamp each sub-agent's model onto its spawn card — the Task/Agent
+    # ``tool_use`` that opens it, which carries the depth badge and stays visible
+    # when the sub-agent's transcript folds. Gated strictly to ``TaskInput`` so a
+    # regular tool inside a sub-agent never picks up the model. The spawned
+    # agent id is resolved from whichever linkage the transcript carries: the
+    # async ``minted_agent_id`` on the input, else the paired tool_result's
+    # ``spawned_agent_id`` (#213) or ``agent_id`` (async #90 ``toolUseResult``).
+    for msg in ctx.messages:
+        if msg is None or not isinstance(msg.content, ToolUseMessage):
+            continue
+        task_input = msg.content.input
+        if not isinstance(task_input, TaskInput):
+            continue
+        spawned = task_input.minted_agent_id
+        if not spawned and msg.pair_last is not None:
+            result = ctx.messages[msg.pair_last]
+            if result is not None:
+                spawned = result.meta.spawned_agent_id or result.meta.agent_id
+        if spawned and spawned in agent_model:
+            msg.display_model = agent_model[spawned]
 
 
 # -- Project Index Generation -------------------------------------------------

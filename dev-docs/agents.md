@@ -334,16 +334,27 @@ Three card-level annotations complete the layer:
   sub-agents keep their pre-#213 rendering.
 - **Model id** (`TemplateMessage.display_model`, set by
   `_surface_agent_models` in `renderer.py`; issue #246): the model an
-  agent ran on, surfaced **once per agent context** rather than on
-  every message — on the session header (the trunk/main model, from the
-  first non-sidechain assistant entry) and on the first message of each
-  sub-agent (that sub-agent's model). A mid-course `/model` switch
-  surfaces as its own command message, so a single first-seen value per
-  context suffices. The raw per-entry value is `MessageMeta.model`
-  (only assistant entries carry it); `display_model` is the render-once
-  decision derived from it. HTML renders a muted `.message-model` pill
-  in the header (beside the timestamp / on the session line); Markdown
-  emits a `Model: ` `` `…` `` line / inline `— Model:` heading suffix.
+  agent ran on, surfaced **once per agent context** and on a node that
+  stays visible when the agent's transcript folds — on the session
+  header (the trunk/main model, from the first non-sidechain assistant
+  entry) and on each **spawn card** (the Task/Agent `tool_use` that
+  opens a sub-agent). The sub-agent's model comes from its own first
+  assistant entry, joined back to the spawn card via `tool_use_id`
+  (`spawned_agent_id` lands on the tool_result; the two-pass helper maps
+  agent→model, then stamps the paired tool_use — pairing indices aren't
+  assigned yet, so it uses the id join, not `pair_first`). The spawn
+  card sits at the parent's depth and stays on screen even when the
+  sub-agent collapses, so the model shows where the reader looks — and
+  co-locates with the depth badge. A mid-course `/model` switch surfaces
+  as its own command message, so a single first-seen value per context
+  suffices. The raw per-entry value is `MessageMeta.model` (only
+  assistant entries carry it); `display_model` is the render-once
+  decision. HTML renders a muted `.message-model` pill — in the spawn
+  card title (`_agent_model_badge`, beside the depth badge) and inline
+  on the session-header line; Markdown appends `` · `…` `` to the Task
+  title and an inline `— Model:` on the session heading. Unlike the
+  depth badge it is **not** suppressed at depth 1 (the top-level
+  Explore/Task spawn is the common case a reader wants).
 
 ### 5.5 Fixture
 

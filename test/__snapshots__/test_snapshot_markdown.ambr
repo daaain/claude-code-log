@@ -21,7 +21,7 @@
   
   Spawn a coverage analysis agent in the background and wait for the result.
   
-  ### 🤖 Task (Explore): *Coverage analysis* *[async `#cccc333`]*
+  ### 🤖 Task (Explore): *Coverage analysis* *[async `#cccc333`]* · `claude-opus-4-7`
   
   `10:02:00`
   
@@ -53,8 +53,6 @@
   #### 🔗 Sub-assistant: *Reading the source files now...*
   
   `10:04:00`
-  
-  Model: `claude-opus-4-7`
   
   > Reading the source files now...
   
@@ -305,7 +303,7 @@
   
   ✓ Updated `#1` — `owner`, `status`
   
-  ### 🤖 Task (general-purpose): *Run alice's test work*
+  ### 🤖 Task (general-purpose): *Run alice's test work* · `claude-opus-4-7`
   
   `10:10:00`
   
@@ -325,8 +323,6 @@
   
   `10:02:00`
   
-  Model: `claude-opus-4-7`
-  
   > Starting relay coverage work.
   
   #### 🔗 Sub-assistant: *Relay module coverage is now 96%.*
@@ -335,7 +331,7 @@
   
   > Relay module coverage is now 96%.
   
-  ### 🤖 Task (general-purpose): *Run bob's test work*
+  ### 🤖 Task (general-purpose): *Run bob's test work* · `claude-opus-4-7`
   
   `10:12:00`
   
@@ -362,8 +358,6 @@
   #### 🔗 Sub-assistant: *Starting server coverage work.*
   
   `10:02:00`
-  
-  Model: `claude-opus-4-7`
   
   > Starting server coverage work.
   

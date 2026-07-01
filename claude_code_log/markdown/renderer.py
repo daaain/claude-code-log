@@ -1804,12 +1804,14 @@ class MarkdownRenderer(Renderer):
         base = f"🔎 Grep `{input.pattern}`"
         return f"{base} in `{input.path}`" if input.path else base
 
-    def title_TaskInput(self, input: TaskInput, _: TemplateMessage) -> str:
-        """Title → '🤖 Task (subagent): *description* [async #<id>]'.
+    def title_TaskInput(self, input: TaskInput, message: TemplateMessage) -> str:
+        """Title → '🤖 Task (subagent): *description* [async #<id>] · `model`'.
 
         ``[async]`` muted hint when ``run_in_background=True``; once the
         launch confirmation has been parsed, the minted ``#<agent_id>``
         is appended (PR #158 follow-up, parallels the Bash spawn shape).
+        The trailing `` · `model` `` is the model the spawned sub-agent ran
+        on (issue #246), stamped on the spawn card by ``_surface_agent_models``.
         """
         subagent = f" ({input.subagent_type})" if input.subagent_type else ""
         async_hint = (
@@ -1817,9 +1819,15 @@ class MarkdownRenderer(Renderer):
             if input.run_in_background
             else ""
         )
+        model_hint = (
+            f" · {_inline_code(message.display_model)}" if message.display_model else ""
+        )
         if desc := input.description:
-            return f"🤖 Task{subagent}: *{self._escape_stars(desc)}*{async_hint}"
-        return f"🤖 Task{subagent}{async_hint}"
+            return (
+                f"🤖 Task{subagent}: *{self._escape_stars(desc)}*"
+                f"{async_hint}{model_hint}"
+            )
+        return f"🤖 Task{subagent}{async_hint}{model_hint}"
 
     @staticmethod
     def _async_id_hint(minted_id: Optional[str]) -> str:
@@ -2099,11 +2107,6 @@ class MarkdownRenderer(Renderer):
                     ts_line = self._format_message_timestamp(msg)
                     if ts_line:
                         parts.append(ts_line)
-
-            # Sub-agent model, surfaced once on its first message (issue #246).
-            # Outside the suppress-heading guard so it survives compact mode.
-            if msg.display_model and not is_session_header:
-                parts.append(f"Model: {_inline_code(msg.display_model)}")
 
             # Format content (if not already output above)
             if content:
