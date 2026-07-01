@@ -358,6 +358,41 @@ class TestNestedVisualLayer:
         # The trunk model never appears as a spawn-card model suffix.
         assert f"· `{trunk_model}`" not in md
 
+    def test_each_spawn_card_shows_its_own_subagents_model(self) -> None:
+        """Issue #246: with the all-haiku fixture, the placement tests can't
+        catch a spawn card resolving to the WRONG sub-agent (parent/child
+        collapse in the nested chain, or an async-fallback mixup). Give every
+        sub-agent a distinct model and pin the bijection: each spawn card
+        carries exactly its own spawned child's model — no duplicates, no
+        leakage — including the 3-deep chain (monk #3990)."""
+        from claude_code_log.models import AssistantTranscriptEntry, ToolUseMessage
+
+        entries = _load_integrated()
+        for entry in entries:
+            if (
+                isinstance(entry, AssistantTranscriptEntry)
+                and entry.isSidechain
+                and entry.agentId
+            ):
+                entry.message.model = f"model-{entry.agentId}"
+
+        _roots, _nav, ctx = generate_template_messages(entries)
+        msgs = [m for m in ctx.messages if m is not None]
+        spawn_models = [
+            m.display_model
+            for m in msgs
+            if m.display_model and isinstance(m.content, ToolUseMessage)
+        ]
+        # Bijection: one distinct model per spawn card, each its own sub-agent's.
+        assert len(spawn_models) == len(set(spawn_models)), (
+            "a spawn card reused another agent's model (parent/child collapse)"
+        )
+        assert set(spawn_models) == {f"model-{agent}" for agent in ALL_AGENTS}
+        # The nested chain must each carry their OWN distinct model.
+        assert {f"model-{CHAIN1}", f"model-{CHAIN2}", f"model-{CHAIN3}"} <= set(
+            spawn_models
+        )
+
     def test_sidechain_without_agent_id_never_leaks_into_header(self) -> None:
         """A sidechain message lacking an agent_id stays unattributed — it
         must not fall through and overwrite the session header's trunk model
