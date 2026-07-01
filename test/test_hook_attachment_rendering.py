@@ -461,7 +461,7 @@ class TestHookAttachmentHierarchy:
         ``stop_hook_summary`` whose ``parentUuid`` is a hook attachment
         used to pair with the hook via ``_try_pair_by_index`` because
         both share ``type == "system"``. That made every hook render
-        with a spurious "▼ 1 system" fold-bar in transcripts where
+        with a spurious "⏷ 1 system" fold-bar in transcripts where
         plugins fire on every turn (issue #128 follow-up).
         """
         from claude_code_log.renderer import generate_template_messages

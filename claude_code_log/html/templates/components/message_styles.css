@@ -84,14 +84,11 @@
     font-size: 1.1em;
     line-height: 1;
     color: var(--fold-color);
-    /* Tighten the gap between the two glyphs in ``▼▼`` / ``▶▶`` —
-       Chrome renders default kerning much wider than Firefox does,
-       leaving an awkward gap. The pulled-in -0.2em compromise reads
-       cleanly in Chrome without crowding the glyphs in Firefox
-       (issue #73 / #153). No visible effect on single-glyph ``▼``
-       since letter-spacing only matters when two characters are
-       adjacent. */
-    letter-spacing: -.2em;
+    /* The doubled glyphs ``⏷⏷`` / ``⏵⏵`` (U+23F7 / U+23F5) sit at a
+       natural, even spacing in both Chrome and Firefox, so no kerning
+       trick is needed (the earlier ``▼▼`` / ``▶▶`` needed a -0.2em
+       letter-spacing pull-in to tame Chrome's wide default — issue
+       #73 / #153 / #247). */
 }
 
 .fold-count {
@@ -1051,9 +1048,9 @@ pre > code {
 }
 
 /* Fold-valued rows hoist their toggle into the KEY column: the key cell's
-   ▶/▼ button (wired in transcript.html, state derived from toggle events)
+   ⏵/⏷ button (wired in transcript.html, state derived from toggle events)
    replaces the per-fold in-summary collapse chrome, which only remained
-   useful en masse — every row showing "▼ collapse" drowned the content.
+   useful en masse — every row showing "⏷ collapse" drowned the content.
    Scoped to keyed rows: the top-level root fold has no key column and
    keeps its summary affordances (the pure-CSS ::after "collapse" hint —
    no interactive child). */
@@ -1077,7 +1074,7 @@ pre > code {
 /* The shared fold glyph: the BROWSER'S native disclosure marker (the same
    UA-drawn icon a <summary> shows) via display:list-item — geometrically
    symmetric open/closed, and immune to the italic style of the button
-   labels (font glyphs like ▶/▼ skew in italics; the marker icon doesn't).
+   labels (font glyphs like ⏵/⏷ skew in italics; the marker icon doesn't).
    The empty span doubles as the key-column alignment slot: every key cell
    renders one (markerless on scalar rows), so all key texts start at the
    same x. */
@@ -1094,13 +1091,13 @@ pre > code {
 button > .tool-param-fold-glyph {
     display: list-item;
     list-style-position: inside;
-    list-style-type: "\25B8";
+    list-style-type: "\23F5";
     list-style-type: disclosure-closed;
 }
 
 .tool-param-key-toggle[aria-expanded='true'] > .tool-param-fold-glyph,
 [data-state='expanded'] > .tool-param-fold-glyph {
-    list-style-type: "\25BE";
+    list-style-type: "\23F7";
     list-style-type: disclosure-open;
 }
 
@@ -1123,7 +1120,7 @@ button > .tool-param-fold-glyph {
     display: none;
 }
 
-/* A keyed fold's open summary carries nothing (the key glyph shows ▼ and
+/* A keyed fold's open summary carries nothing (the key glyph shows ⏷ and
    the rows-toggle sits in the controls strip below) — drop the line it
    would occupy. This also suppresses the generic ::after "collapse". */
 .tool-param-row-fold > .tool-param-value > details[open] > summary {

@@ -1782,7 +1782,7 @@ def _build_pairing_indices(messages: list[TemplateMessage]) -> PairingIndices:
         # Indexing them here would let a chained system entry (e.g. a
         # ``stop_hook_summary`` whose ``parentUuid`` is the hook
         # attachment) pair the hook as its parent — visible as a
-        # spurious "▼ 1 system" fold-bar on every hook in dense
+        # spurious "⏷ 1 system" fold-bar on every hook in dense
         # transcripts (e.g. ClMail bursts).
         if (
             msg.meta.uuid
