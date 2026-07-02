@@ -294,6 +294,43 @@ class TestSingleFileStaleness:
         assert "Successfully processed" in r1.output
         assert "Successfully combined" not in r1.output
 
+    def test_combined_current_but_session_regenerated_says_processed(
+        self, tmp_path: Path
+    ):
+        """When the combined transcript is current but a session file is
+        regenerated (e.g. a deleted session HTML), the CLI must NOT claim
+        'Successfully combined … to combined_transcripts.html' — the combined
+        was skipped. It should report the per-session work as 'processed'
+        instead, so it never contradicts the converter's 'combined … is
+        current, skipping regeneration' line. The combined-write and
+        session-write signals are tracked separately for exactly this."""
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        _write_jsonl(proj / "aaaaaaaa.jsonl", "SESSION_A_marker")
+        runner = CliRunner()
+
+        r1 = runner.invoke(main, [str(proj)])  # default --combined yes: full run
+        assert r1.exit_code == 0, r1.output
+        assert "Successfully combined" in r1.output
+        session_htmls = list(proj.glob("session-*.html"))
+        assert session_htmls, "no session HTML produced on first run"
+        session_html = session_htmls[0]
+
+        # Remove just the session HTML; the combined stays current.
+        session_html.unlink()
+        r2 = runner.invoke(main, [str(proj)])
+        assert r2.exit_code == 0, r2.output
+        # The session was regenerated...
+        assert session_html.exists(), "session HTML not regenerated"
+        assert "individual session files" in r2.output
+        # ...the combined was skipped (converter says so)...
+        assert "skipping regeneration" in r2.output
+        # ...and the CLI does NOT falsely claim to have combined it.
+        assert "Successfully combined" not in r2.output, (
+            f"claimed 'combined' when combined was skipped; output:\n{r2.output}"
+        )
+        assert "Successfully processed" in r2.output
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

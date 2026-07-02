@@ -13,6 +13,7 @@ import click
 from git import Repo, InvalidGitRepositoryError
 
 from .converter import (
+    RegenerationReport,
     convert_jsonl_to,
     convert_jsonl_to_html,
     ensure_fresh_cache,
@@ -1299,10 +1300,12 @@ def main(
             )
             return
 
-        # Out-param: convert_jsonl_to appends whether it actually (re)wrote
-        # the combined output, so we don't print "Successfully converted" on
-        # top of its own "is current, skipping regeneration" line on a skip.
-        regenerated: list[bool] = []
+        # Out-param: convert_jsonl_to reports what it actually (re)wrote —
+        # the combined output and/or how many session files — so we don't
+        # print a success line on top of its own "is current, skipping
+        # regeneration" line, and don't claim to have "combined" anything
+        # when only session files were written.
+        report = RegenerationReport()
         output_path = convert_jsonl_to(
             output_format,
             input_path,
@@ -1330,38 +1333,37 @@ def main(
             # same dir still regenerates), and `--all-projects` calls this
             # with output=None anyway, so its skip is never forced.
             force_regenerate=output is not None and _output_path_is_file(output),
-            regenerated=regenerated,
+            report=report,
         )
-        # On a pure skip the converter already printed its "... is current,
-        # skipping regeneration" line (single-file and directory paths alike),
-        # so suppress the redundant/misleading success line for BOTH. The
-        # `regenerated` out-param carries exactly one bool from
-        # convert_jsonl_to: True if the combined transcript OR any individual
-        # session file was (re)written (so `--combined no`, which writes only
-        # session files, still confirms its work), False when all is current.
-        was_regenerated = any(regenerated)
-        if not was_regenerated:
+        # Report only work actually done this run. On a pure skip the converter
+        # already printed its "... is current, skipping regeneration" line, so
+        # print nothing more. Otherwise gate the wording on WHICH output was
+        # (re)written: "combined" only when the combined transcript itself was,
+        # and the per-session count only for sessions rewritten this run — so
+        # we never claim to have combined something we skipped.
+        combined_written = report.combined_regenerated
+        sessions_written = report.sessions_regenerated
+        if not combined_written and not sessions_written:
             pass
         elif input_path.is_file():
             click.echo(f"Successfully converted {input_path} to {output_path}")
         else:
             jsonl_count = len(list(input_path.glob("*.jsonl")))
-            session_suffix = ""
-            if write_individual:
-                ext = get_file_extension(output_format)
-                session_files = list(input_path.glob(f"session-*.{ext}"))
-                session_suffix = (
-                    f" and generated {len(session_files)} individual session files"
-                )
-            if write_combined:
+            session_suffix = (
+                f" and generated {sessions_written} individual session files"
+                if sessions_written
+                else ""
+            )
+            if combined_written:
                 click.echo(
                     f"Successfully combined {jsonl_count} transcript files "
                     f"from {input_path} to {output_path}{session_suffix}"
                 )
             else:
-                # `--combined no`: only per-session files were written. Don't
-                # claim to have "combined" anything, nor name a combined file
-                # that wasn't produced — report the per-session work instead.
+                # The combined transcript was skipped as current (or never
+                # requested, e.g. `--combined no`); only per-session files were
+                # written. Don't claim to have "combined" anything or name a
+                # combined file that wasn't produced this run.
                 click.echo(
                     f"Successfully processed {jsonl_count} transcript files "
                     f"from {input_path}{session_suffix}"
