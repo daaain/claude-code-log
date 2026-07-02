@@ -1990,28 +1990,44 @@ def convert_jsonl_to(
             # Fallback: old logic for single file mode or no cache.
             #
             # is_outdated() only compares the embedded tool version, not the
-            # source's freshness, so a single .jsonl that grows between runs
-            # (e.g. an in-progress session re-exported with the same tool
-            # version) would be wrongly skipped as "current" and serve stale
-            # HTML (issue #221 follow-up). Mirror the directory path's
-            # source-tracking intent with an mtime check: regenerate when the
-            # source file is newer than the existing output. Scoped to a file
-            # source — a directory source has no single mtime and is handled
-            # by the cache branch / `cache_was_updated` above.
+            # source's freshness, so a source that grows between runs (e.g. an
+            # in-progress session re-exported with the same tool version) would
+            # be wrongly skipped as "current" and serve stale HTML (issues #221,
+            # #254). Mirror the cached directory path's source-tracking intent
+            # with an mtime check: regenerate when a source is newer than the
+            # existing output.
             #
-            # The directory cache persists the *source* mtime in its DB to
-            # detect change; single-file mode has no DB, so the *output* file's
-            # own mtime is the natural, persistence-free basis. It is sufficient
-            # because the output is always written after its source is read, so
-            # `output.mtime >= source.mtime` holds post-write; a later append
-            # bumps the source past it. Both approaches share the same
-            # filesystem-mtime granularity limit (a sub-tick append racing the
-            # prior write resolves on the next run) — no worse than the cache.
-            source_is_newer = (
-                input_path.is_file()
-                and output_path.exists()
-                and input_path.stat().st_mtime > output_path.stat().st_mtime
-            )
+            # This branch is taken for a single file (which never has a cache)
+            # and for a directory run WITHOUT a cache (e.g. --no-cache); the
+            # cached directory path handles freshness via `is_html_stale`
+            # above and doesn't reach here. There's no DB tracking per-source
+            # mtimes, so the *output* file's own mtime is the natural,
+            # persistence-free basis:
+            #   - single file  → the source file's own mtime;
+            #   - directory     → the NEWEST source .jsonl in the directory
+            #                     (the directory analogue; non-recursive, like
+            #                     how directory mode discovers sessions).
+            # This is sufficient because the output is always written after its
+            # sources are read, so `output.mtime >= source.mtime` holds
+            # post-write; a later append bumps the source past it. It shares the
+            # cache's filesystem-mtime granularity limit (a sub-tick append
+            # racing the prior write resolves on the next run) and, for a
+            # directory, the same non-recursive scope — a subagent transcript
+            # under `<stem>/subagents/` growing without its top-level parent
+            # .jsonl being touched isn't caught (rare: the parent session
+            # records the spawning tool_use and usually grows too).
+            source_is_newer = False
+            if output_path.exists():
+                output_mtime = output_path.stat().st_mtime
+                if input_path.is_file():
+                    source_is_newer = input_path.stat().st_mtime > output_mtime
+                elif input_path.is_dir():
+                    source_mtimes = [
+                        f.stat().st_mtime for f in input_path.glob("*.jsonl")
+                    ]
+                    source_is_newer = bool(source_mtimes) and (
+                        max(source_mtimes) > output_mtime
+                    )
             should_regenerate = (
                 force_regenerate
                 or renderer.is_outdated(output_path)
