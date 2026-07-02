@@ -1106,6 +1106,11 @@ class MarkdownRenderer(Renderer):
         # workflow name/description/phase. (The script body itself is fenced.)
         if name:
             header_bits.append(f"**{_protect_html_tags(name)}**")
+        # Non-completed terminal status (e.g. `failed`) — a failed run may
+        # have launched no agents, so this can be the only failure signal.
+        status = getattr(input.workflow_run, "status", "") or ""
+        if status and status != "completed":
+            header_bits.append(f"`{_protect_html_tags(status)}`")
         if description:
             header_bits.append(_protect_html_tags(description))
         header = " — ".join(header_bits)
@@ -1132,6 +1137,9 @@ class MarkdownRenderer(Renderer):
         if input.args is not None:
             args_json = json.dumps(input.args, indent=2, ensure_ascii=False)
             parts.append(f"**args:**\n\n{self._code_fence(args_json, 'json')}")
+        error = getattr(input.workflow_run, "error", "") or ""
+        if error:
+            parts.append(f"**error:**\n\n{self._code_fence(error)}")
 
         if script.strip():
             parts.append(self._code_fence(script, "js"))

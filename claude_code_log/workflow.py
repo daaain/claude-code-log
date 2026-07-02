@@ -372,13 +372,20 @@ def parse_workflow_run(
     """Parse one workflow run from its ``subagents/workflows/<runId>/`` dir.
 
     ``snapshot_path`` is the optional ``<runId>.json`` terminal snapshot.
-    Returns ``None`` if there is no ``journal.jsonl`` (not a workflow run).
+    A run that failed before launching any agent leaves a snapshot but NO
+    run dir/journal — that still parses (as a snapshot-only run with an
+    empty ``agents`` list), so the failure stays visible at the tool_use.
+    Returns ``None`` when there is neither a journal nor a snapshot (not a
+    workflow run).
     """
     journal = run_dir / "journal.jsonl"
-    if not journal.is_file():
+    has_journal = journal.is_file()
+    order: list[str] = []
+    results: dict[str, Any] = {}
+    if has_journal:
+        order, results = _parse_journal(journal)
+    elif snapshot_path is None or not snapshot_path.is_file():
         return None
-
-    order, results = _parse_journal(journal)
 
     run_id = run_dir.name
     task_id = workflow_name = status = ""
@@ -412,6 +419,10 @@ def parse_workflow_run(
             default_model = _as_str(raw.get("defaultModel"))
             duration_ms = _as_int(raw.get("durationMs"))
             total_tool_calls = _as_int(raw.get("totalToolCalls"))
+
+    if not has_journal and not has_snapshot:
+        # A snapshot file that failed to load — nothing to build a run from.
+        return None
 
     # Union of journal order with any snapshot-only agent ids (defensive).
     all_ids = list(order)
@@ -514,16 +525,29 @@ def discover_workflow_runs(session_dir: Path) -> list[tuple[Path, Optional[Path]
     ``run_dir`` is ``<session_dir>/subagents/workflows/<runId>/`` (must
     contain ``journal.jsonl``); ``snapshot_path`` is the matching
     ``<session_dir>/workflows/<runId>.json`` if present, else ``None``.
+
+    Also surfaces *snapshot-only* runs: a workflow that died before
+    launching any agent (e.g. a script error on the first line) leaves a
+    ``<session_dir>/workflows/<runId>.json`` but no run dir at all. These
+    yield a (non-existent) ``run_dir`` path alongside their snapshot, which
+    :func:`parse_workflow_run` accepts.
     """
     base = session_dir / "subagents" / "workflows"
-    if not base.is_dir():
-        return []
+    snapshots_dir = session_dir / "workflows"
     runs: list[tuple[Path, Optional[Path]]] = []
-    for run_dir in sorted(base.iterdir()):
-        if not run_dir.is_dir() or not (run_dir / "journal.jsonl").is_file():
-            continue
-        snapshot = session_dir / "workflows" / f"{run_dir.name}.json"
-        runs.append((run_dir, snapshot if snapshot.is_file() else None))
+    seen: set[str] = set()
+    if base.is_dir():
+        for run_dir in sorted(base.iterdir()):
+            if not run_dir.is_dir() or not (run_dir / "journal.jsonl").is_file():
+                continue
+            seen.add(run_dir.name)
+            snapshot = snapshots_dir / f"{run_dir.name}.json"
+            runs.append((run_dir, snapshot if snapshot.is_file() else None))
+    if snapshots_dir.is_dir():
+        for snapshot in sorted(snapshots_dir.glob("*.json")):
+            run_id = snapshot.stem
+            if run_id not in seen:
+                runs.append((base / run_id, snapshot))
     return runs
 
 

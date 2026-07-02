@@ -1487,6 +1487,15 @@ def format_workflow_input(workflow_input: WorkflowToolInput) -> str:
     header_parts: list[str] = []
     if name:
         header_parts.append(f"<span class='workflow-name'>{escape_html(name)}</span>")
+    # Non-completed terminal status (e.g. `failed`) is worth a chip right next
+    # to the name — a failed run may have launched no agents at all, so the
+    # spliced tree below can be empty and this is the only failure signal.
+    status = getattr(run, "status", "") or ""
+    if status and status != "completed":
+        header_parts.append(
+            f"<span class='workflow-status workflow-status-{escape_html(status)}'>"
+            f"{escape_html(status)}</span>"
+        )
     if description:
         header_parts.append(
             f"<span class='workflow-description'>{escape_html(description)}</span>"
@@ -1546,7 +1555,19 @@ def format_workflow_input(workflow_input: WorkflowToolInput) -> str:
     if workflow_input.args is not None:
         args_html = render_params_table({"args": workflow_input.args})
 
-    prefix = f"{header}{invocation}{args_html}"
+    # The run's error (snapshot `error`) — typically a JS stack trace, so
+    # collapsed by default.
+    error_html = ""
+    error = getattr(run, "error", "") or ""
+    if error:
+        error_html = (
+            "<details class='workflow-error'>"
+            "<summary>error</summary>"
+            f"<pre>{escape_html(error)}</pre>"
+            "</details>"
+        )
+
+    prefix = f"{header}{invocation}{args_html}{error_html}"
 
     if not script.strip():
         return prefix

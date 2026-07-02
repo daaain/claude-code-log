@@ -1,0 +1,23 @@
+{
+  "runId": "wf_fail01",
+  "taskId": "task_fail01",
+  "status": "failed",
+  "workflowName": "docs-sweep-broken",
+  "timestamp": "2026-06-28T09:05:00.000Z",
+  "durationMs": 12,
+  "agentCount": 0,
+  "totalTokens": 0,
+  "totalToolCalls": 0,
+  "defaultModel": "claude-sonnet-4-6",
+  "script": "export const meta = {\n  name: 'docs-sweep-broken',\n  description: 'Sweep variant that dies before launching agents',\n  phases: [\n    { title: 'Sweep', detail: 'never reached' },\n  ],\n}\nconst batches = args.batches\nawait parallel(batches.map(b => () => agent('sweep ' + b)))\n",
+  "scriptPath": "/home/u/sweeps/docs-sweep-broken.workflow.js",
+  "summary": "Sweep variant that dies before launching agents",
+  "error": "Error: undefined is not an object (evaluating 'batches.map')\n    at <anonymous> (workflow.js:9:10)",
+  "phases": [
+    {
+      "title": "Sweep",
+      "detail": "never reached"
+    }
+  ],
+  "workflowProgress": []
+}

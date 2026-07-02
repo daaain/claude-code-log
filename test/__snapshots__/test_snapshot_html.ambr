@@ -1872,6 +1872,37 @@
       color: var(--text-secondary);
   }
   
+  /* Non-completed terminal status chip (failed / killed / ...) — for a run
+     that launched no agents this is the only failure signal on the page. */
+  .workflow-status {
+      font-size: 0.78em;
+      padding: 1px 8px;
+      border-radius: 10px;
+      border: 1px solid var(--error-dimmed);
+      color: var(--system-error-color);
+      background-color: var(--error-semi);
+  }
+  
+  /* The run's snapshot `error` — typically a JS stack trace, collapsed. */
+  .workflow-error {
+      margin-bottom: 8px;
+  }
+  
+  .workflow-error > summary {
+      cursor: pointer;
+      font-size: 0.85em;
+      color: var(--system-error-color);
+  }
+  
+  .workflow-error > pre {
+      margin: 4px 0 0;
+      padding: 6px 8px;
+      background-color: var(--error-semi);
+      border-left: 3px solid var(--system-error-color);
+      overflow-x: auto;
+      font-size: 0.85em;
+  }
+  
   /* Invocation line — how the workflow was launched, for the non-inline
      shapes (saved-workflow name / scriptPath reference / resumed run). */
   .workflow-invocation {
@@ -8321,6 +8352,37 @@
       background-color: var(--highlight-dimmed);
       border: 1px solid #00000011;
       color: var(--text-secondary);
+  }
+  
+  /* Non-completed terminal status chip (failed / killed / ...) — for a run
+     that launched no agents this is the only failure signal on the page. */
+  .workflow-status {
+      font-size: 0.78em;
+      padding: 1px 8px;
+      border-radius: 10px;
+      border: 1px solid var(--error-dimmed);
+      color: var(--system-error-color);
+      background-color: var(--error-semi);
+  }
+  
+  /* The run's snapshot `error` — typically a JS stack trace, collapsed. */
+  .workflow-error {
+      margin-bottom: 8px;
+  }
+  
+  .workflow-error > summary {
+      cursor: pointer;
+      font-size: 0.85em;
+      color: var(--system-error-color);
+  }
+  
+  .workflow-error > pre {
+      margin: 4px 0 0;
+      padding: 6px 8px;
+      background-color: var(--error-semi);
+      border-left: 3px solid var(--system-error-color);
+      overflow-x: auto;
+      font-size: 0.85em;
   }
   
   /* Invocation line — how the workflow was launched, for the non-inline
@@ -16876,6 +16938,37 @@
       color: var(--text-secondary);
   }
   
+  /* Non-completed terminal status chip (failed / killed / ...) — for a run
+     that launched no agents this is the only failure signal on the page. */
+  .workflow-status {
+      font-size: 0.78em;
+      padding: 1px 8px;
+      border-radius: 10px;
+      border: 1px solid var(--error-dimmed);
+      color: var(--system-error-color);
+      background-color: var(--error-semi);
+  }
+  
+  /* The run's snapshot `error` — typically a JS stack trace, collapsed. */
+  .workflow-error {
+      margin-bottom: 8px;
+  }
+  
+  .workflow-error > summary {
+      cursor: pointer;
+      font-size: 0.85em;
+      color: var(--system-error-color);
+  }
+  
+  .workflow-error > pre {
+      margin: 4px 0 0;
+      padding: 6px 8px;
+      background-color: var(--error-semi);
+      border-left: 3px solid var(--system-error-color);
+      overflow-x: auto;
+      font-size: 0.85em;
+  }
+  
   /* Invocation line — how the workflow was launched, for the non-inline
      shapes (saved-workflow name / scriptPath reference / resumed run). */
   .workflow-invocation {
@@ -23440,6 +23533,37 @@
       background-color: var(--highlight-dimmed);
       border: 1px solid #00000011;
       color: var(--text-secondary);
+  }
+  
+  /* Non-completed terminal status chip (failed / killed / ...) — for a run
+     that launched no agents this is the only failure signal on the page. */
+  .workflow-status {
+      font-size: 0.78em;
+      padding: 1px 8px;
+      border-radius: 10px;
+      border: 1px solid var(--error-dimmed);
+      color: var(--system-error-color);
+      background-color: var(--error-semi);
+  }
+  
+  /* The run's snapshot `error` — typically a JS stack trace, collapsed. */
+  .workflow-error {
+      margin-bottom: 8px;
+  }
+  
+  .workflow-error > summary {
+      cursor: pointer;
+      font-size: 0.85em;
+      color: var(--system-error-color);
+  }
+  
+  .workflow-error > pre {
+      margin: 4px 0 0;
+      padding: 6px 8px;
+      background-color: var(--error-semi);
+      border-left: 3px solid var(--system-error-color);
+      overflow-x: auto;
+      font-size: 0.85em;
   }
   
   /* Invocation line — how the workflow was launched, for the non-inline
@@ -30275,6 +30399,37 @@
       color: var(--text-secondary);
   }
   
+  /* Non-completed terminal status chip (failed / killed / ...) — for a run
+     that launched no agents this is the only failure signal on the page. */
+  .workflow-status {
+      font-size: 0.78em;
+      padding: 1px 8px;
+      border-radius: 10px;
+      border: 1px solid var(--error-dimmed);
+      color: var(--system-error-color);
+      background-color: var(--error-semi);
+  }
+  
+  /* The run's snapshot `error` — typically a JS stack trace, collapsed. */
+  .workflow-error {
+      margin-bottom: 8px;
+  }
+  
+  .workflow-error > summary {
+      cursor: pointer;
+      font-size: 0.85em;
+      color: var(--system-error-color);
+  }
+  
+  .workflow-error > pre {
+      margin: 4px 0 0;
+      padding: 6px 8px;
+      background-color: var(--error-semi);
+      border-left: 3px solid var(--system-error-color);
+      overflow-x: auto;
+      font-size: 0.85em;
+  }
+  
   /* Invocation line — how the workflow was launched, for the non-inline
      shapes (saved-workflow name / scriptPath reference / resumed run). */
   .workflow-invocation {
@@ -37071,6 +37226,37 @@
       color: var(--text-secondary);
   }
   
+  /* Non-completed terminal status chip (failed / killed / ...) — for a run
+     that launched no agents this is the only failure signal on the page. */
+  .workflow-status {
+      font-size: 0.78em;
+      padding: 1px 8px;
+      border-radius: 10px;
+      border: 1px solid var(--error-dimmed);
+      color: var(--system-error-color);
+      background-color: var(--error-semi);
+  }
+  
+  /* The run's snapshot `error` — typically a JS stack trace, collapsed. */
+  .workflow-error {
+      margin-bottom: 8px;
+  }
+  
+  .workflow-error > summary {
+      cursor: pointer;
+      font-size: 0.85em;
+      color: var(--system-error-color);
+  }
+  
+  .workflow-error > pre {
+      margin: 4px 0 0;
+      padding: 6px 8px;
+      background-color: var(--error-semi);
+      border-left: 3px solid var(--system-error-color);
+      overflow-x: auto;
+      font-size: 0.85em;
+  }
+  
   /* Invocation line — how the workflow was launched, for the non-inline
      shapes (saved-workflow name / scriptPath reference / resumed run). */
   .workflow-invocation {
@@ -43808,6 +43994,37 @@
       background-color: var(--highlight-dimmed);
       border: 1px solid #00000011;
       color: var(--text-secondary);
+  }
+  
+  /* Non-completed terminal status chip (failed / killed / ...) — for a run
+     that launched no agents this is the only failure signal on the page. */
+  .workflow-status {
+      font-size: 0.78em;
+      padding: 1px 8px;
+      border-radius: 10px;
+      border: 1px solid var(--error-dimmed);
+      color: var(--system-error-color);
+      background-color: var(--error-semi);
+  }
+  
+  /* The run's snapshot `error` — typically a JS stack trace, collapsed. */
+  .workflow-error {
+      margin-bottom: 8px;
+  }
+  
+  .workflow-error > summary {
+      cursor: pointer;
+      font-size: 0.85em;
+      color: var(--system-error-color);
+  }
+  
+  .workflow-error > pre {
+      margin: 4px 0 0;
+      padding: 6px 8px;
+      background-color: var(--error-semi);
+      border-left: 3px solid var(--system-error-color);
+      overflow-x: auto;
+      font-size: 0.85em;
   }
   
   /* Invocation line — how the workflow was launched, for the non-inline

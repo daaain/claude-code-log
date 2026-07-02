@@ -702,6 +702,71 @@ class TestScriptPathInvocationRendering:
         assert not any("may have drifted" in r.message for r in caplog.records)
 
 
+class TestSnapshotOnlyFailedRun:
+    """A workflow that dies before launching any agent (script error on an
+    early line) leaves a <runId>.json snapshot but NO run dir/journal.
+    Journal-led discovery used to skip it entirely — the tool_use rendered
+    bare, with the status and error invisible."""
+
+    def _html(self) -> str:
+        from claude_code_log.converter import load_directory_transcripts
+
+        msgs, tree = load_directory_transcripts(SCRIPTPATH_TRUNK.parent, silent=True)
+        return generate_html(msgs, session_tree=tree)
+
+    def test_snapshot_only_run_discovered(self) -> None:
+        from claude_code_log.workflow import load_session_workflow_runs
+
+        runs = load_session_workflow_runs(SCRIPTPATH_TRUNK, silent=True)
+        by_id = {r.run_id: r for r in runs}
+        assert set(by_id) == {"wf_sp01", "wf_fail01"}
+        failed = by_id["wf_fail01"]
+        assert failed.has_snapshot
+        assert failed.status == "failed"
+        assert failed.agents == []
+        assert "batches.map" in failed.error
+
+    def test_missing_journal_and_snapshot_still_returns_none(
+        self, tmp_path: Path
+    ) -> None:
+        from claude_code_log.workflow import parse_workflow_run
+
+        assert parse_workflow_run(tmp_path / "wf_nope") is None
+        # unparseable snapshot alone doesn't fabricate a run either
+        bad = tmp_path / "wf_bad.json"
+        bad.write_text("not json", encoding="utf-8")
+        assert parse_workflow_run(tmp_path / "wf_bad", bad) is None
+
+    def test_failed_status_and_error_rendered_html(self) -> None:
+        html = self._html()
+        # status chip next to the workflow name
+        i = html.find("class='workflow-status workflow-status-failed'")
+        assert i != -1
+        assert ">failed<" in html[i : i + 120]
+        assert "docs-sweep-broken" in html
+        # error fold with the stack trace, HTML-escaped
+        j = html.find("class='workflow-error'")
+        assert j != -1
+        assert "batches.map" in html[j : j + 600]
+        # the snapshot-stored script still renders for the failed run
+        assert "never reached" in html
+
+    def test_completed_run_shows_no_status_chip(self) -> None:
+        html = self._html()
+        # exactly one failed chip (wf_fail01); wf_sp01 is completed → none
+        assert html.count("workflow-status-failed") == 1
+        assert "workflow-status-completed" not in html
+
+    def test_failed_status_and_error_rendered_markdown(self) -> None:
+        from claude_code_log.converter import load_directory_transcripts
+
+        msgs, tree = load_directory_transcripts(SCRIPTPATH_TRUNK.parent, silent=True)
+        md = MarkdownRenderer().generate(msgs, session_tree=tree)
+        assert "`failed`" in md
+        assert "**error:**" in md
+        assert "batches.map" in md
+
+
 class TestInvocationChromeUnit:
     """Direct formatter coverage for the saved-name / resume shapes (no
     fixture needed — these carry no run at all)."""
