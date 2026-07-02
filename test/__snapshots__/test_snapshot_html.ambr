@@ -644,6 +644,13 @@
       color: #888;
   }
   
+  /* Model id surfaced on sub-agent message headers (issue #246) */
+  .message-model {
+      font-size: 0.75em;
+      font-family: var(--font-mono, 'SFMono-Regular', Consolas, monospace);
+      color: var(--text-secondary, #888);
+  }
+  
   /* Paired message styling */
   .message.pair_first {
       margin-bottom: 0;
@@ -4596,7 +4603,7 @@
       
       <div class='message-node'>
       <div class='message session-header' data-message-id='d-0' data-session-id='eb000000-0000-4000-8000-000000000001' id='msg-d-0'>
-          <div class='header'>Session: eb000000</div>
+          <div class='header'>Session: eb000000 <span class='message-model' title='Main agent model'>claude-opus-4-7</span></div>
           
           <div class='fold-bar' data-message-id='d-0' data-border-color='session-header'>
               
@@ -4656,7 +4663,7 @@
       <div class='message-node'>
       <div class='message tool_use pair_first' data-message-id='d-2' id='msg-d-2'>
           <div class='header'>
-              <span title="ID: tu_Task_async_001">🔧 Task <span class='tool-summary'>Coverage analysis</span> <span class='tool-subagent'>(Explore)</span> <span class='task-async-hint'>[async <a class='task-id-forward-link' href='#msg-d-7'><code>#cccc333</code></a>]</span></span>
+              <span title="ID: tu_Task_async_001">🔧 Task <span class='tool-summary'>Coverage analysis</span> <span class='tool-subagent'>(Explore)</span> <span class='task-async-hint'>[async <a class='task-id-forward-link' href='#msg-d-7'><code>#cccc333</code></a>]</span> <span class='message-model' title='Model this sub-agent ran on'>claude-opus-4-7</span></span>
               <div class='header-info'>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-04-19T10:02:00.000Z'>2026-04-19 10:02:00</span>
@@ -7075,6 +7082,13 @@
   .token-usage {
       font-size: 0.75em;
       color: #888;
+  }
+  
+  /* Model id surfaced on sub-agent message headers (issue #246) */
+  .message-model {
+      font-size: 0.75em;
+      font-family: var(--font-mono, 'SFMono-Regular', Consolas, monospace);
+      color: var(--text-secondary, #888);
   }
   
   /* Paired message styling */
@@ -11029,7 +11043,7 @@
       
       <div class='message-node'>
       <div class='message session-header' data-message-id='d-0' data-session-id='eb000000-0000-4000-8000-000000000001' id='msg-d-0'>
-          <div class='header'>Session: eb000000</div>
+          <div class='header'>Session: eb000000 <span class='message-model' title='Main agent model'>claude-opus-4-7</span></div>
           
           <div class='fold-bar' data-message-id='d-0' data-border-color='session-header'>
               
@@ -15612,6 +15626,13 @@
       color: #888;
   }
   
+  /* Model id surfaced on sub-agent message headers (issue #246) */
+  .message-model {
+      font-size: 0.75em;
+      font-family: var(--font-mono, 'SFMono-Regular', Consolas, monospace);
+      color: var(--text-secondary, #888);
+  }
+  
   /* Paired message styling */
   .message.pair_first {
       margin-bottom: 0;
@@ -19564,7 +19585,7 @@
       
       <div class='message-node'>
       <div class='message session-header' data-message-id='d-0' data-session-id='test_session' id='msg-d-0'>
-          <div class='header'>Session: test_ses</div>
+          <div class='header'>Session: test_ses <span class='message-model' title='Main agent model'>claude-3-sonnet-20240229</span></div>
           
           <div class='fold-bar' data-message-id='d-0' data-border-color='session-header'>
               
@@ -22158,6 +22179,13 @@
   .token-usage {
       font-size: 0.75em;
       color: #888;
+  }
+  
+  /* Model id surfaced on sub-agent message headers (issue #246) */
+  .message-model {
+      font-size: 0.75em;
+      font-family: var(--font-mono, 'SFMono-Regular', Consolas, monospace);
+      color: var(--text-secondary, #888);
   }
   
   /* Paired message styling */
@@ -26112,7 +26140,7 @@
       
       <div class='message-node'>
       <div class='message session-header' data-message-id='d-0' data-session-id='ef000000-0000-4000-8000-000000000001' id='msg-d-0'>
-          <div class='header'>Session: ef000000<span class="session-team-badge" style="--cc-color: var(--cc-purple); --cc-color-bg: var(--cc-purple-bg);"><span class="session-team-icon">👥</span>Team: test-coverage</span></div>
+          <div class='header'>Session: ef000000<span class="session-team-badge" style="--cc-color: var(--cc-purple); --cc-color-bg: var(--cc-purple-bg);"><span class="session-team-icon">👥</span>Team: test-coverage</span> <span class='message-model' title='Main agent model'>claude-opus-4-7</span></div>
           
           <div class='fold-bar' data-message-id='d-0' data-border-color='session-header'>
               
@@ -26287,7 +26315,7 @@
       <div class='message-node'>
       <div class='message tool_use pair_first' data-message-id='d-10' id='msg-d-10'>
           <div class='header'>
-              <span title="ID: tu_Task_alice">🔧 Task <span class='tool-summary'>Run alice&#x27;s test work</span> <span class='tool-subagent'>(general-purpose)</span></span>
+              <span title="ID: tu_Task_alice">🔧 Task <span class='tool-summary'>Run alice&#x27;s test work</span> <span class='tool-subagent'>(general-purpose)</span> <span class='message-model' title='Model this sub-agent ran on'>claude-opus-4-7</span></span>
               <div class='header-info'>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-04-19T10:10:00.000Z'>2026-04-19 10:10:00</span>
@@ -26389,7 +26417,7 @@
       <div class='message-node'>
       <div class='message tool_use pair_first' data-message-id='d-15' id='msg-d-15'>
           <div class='header'>
-              <span title="ID: tu_Task_bob">🔧 Task <span class='tool-summary'>Run bob&#x27;s test work</span> <span class='tool-subagent'>(general-purpose)</span></span>
+              <span title="ID: tu_Task_bob">🔧 Task <span class='tool-summary'>Run bob&#x27;s test work</span> <span class='tool-subagent'>(general-purpose)</span> <span class='message-model' title='Model this sub-agent ran on'>claude-opus-4-7</span></span>
               <div class='header-info'>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-04-19T10:12:00.000Z'>2026-04-19 10:12:00</span>
@@ -28973,6 +29001,13 @@
   .token-usage {
       font-size: 0.75em;
       color: #888;
+  }
+  
+  /* Model id surfaced on sub-agent message headers (issue #246) */
+  .message-model {
+      font-size: 0.75em;
+      font-family: var(--font-mono, 'SFMono-Regular', Consolas, monospace);
+      color: var(--text-secondary, #888);
   }
   
   /* Paired message styling */
@@ -32927,7 +32962,7 @@
       
       <div class='message-node'>
       <div class='message session-header' data-message-id='d-0' data-session-id='edge_cases' id='msg-d-0'>
-          <div class='header'>Session: Tested various edge cases including markdown formatting, long text, tool errors, system messages, command outputs, special characters and emojis. All message types render correctly in the transcript viewer. • edge_cas</div>
+          <div class='header'>Session: Tested various edge cases including markdown formatting, long text, tool errors, system messages, command outputs, special characters and emojis. All message types render correctly in the transcript viewer. • edge_cas <span class='message-model' title='Main agent model'>claude-3-sonnet-20240229</span></div>
           
           <div class='fold-bar' data-message-id='d-0' data-border-color='session-header'>
               
@@ -33308,7 +33343,7 @@
       
       <div class='message-node'>
       <div class='message session-header' data-message-id='d-11' data-session-id='todowrite_session' id='msg-d-11'>
-          <div class='header'>Session: todowrit</div>
+          <div class='header'>Session: todowrit <span class='message-model' title='Main agent model'>claude-sonnet-4</span></div>
           
           <div class='fold-bar' data-message-id='d-11' data-border-color='session-header'>
               
@@ -35751,6 +35786,13 @@
   .token-usage {
       font-size: 0.75em;
       color: #888;
+  }
+  
+  /* Model id surfaced on sub-agent message headers (issue #246) */
+  .message-model {
+      font-size: 0.75em;
+      font-family: var(--font-mono, 'SFMono-Regular', Consolas, monospace);
+      color: var(--text-secondary, #888);
   }
   
   /* Paired message styling */
@@ -39766,7 +39808,7 @@
       
       <div class='message-node'>
       <div class='message session-header' data-message-id='d-0' data-session-id='session_b' id='msg-d-0'>
-          <div class='header'>Session: session_</div>
+          <div class='header'>Session: session_ <span class='message-model' title='Main agent model'>claude-3-sonnet-20240229</span></div>
           
           <div class='fold-bar' data-message-id='d-0' data-border-color='session-header'>
               
@@ -39878,7 +39920,7 @@
       
       <div class='message-node'>
       <div class='message session-header' data-message-id='d-4' data-session-id='test_session' id='msg-d-4'>
-          <div class='header'>Session: User learned about Python decorators, including basic decorators and parameterized decorators. Created and ran examples showing how decorators work with functions. User is now ready to implement their own timing decorator. • test_ses</div>
+          <div class='header'>Session: User learned about Python decorators, including basic decorators and parameterized decorators. Created and ran examples showing how decorators work with functions. User is now ready to implement their own timing decorator. • test_ses <span class='message-model' title='Main agent model'>claude-3-sonnet-20240229</span></div>
           
           <div class='fold-bar' data-message-id='d-4' data-border-color='session-header'>
               
@@ -42472,6 +42514,13 @@
   .token-usage {
       font-size: 0.75em;
       color: #888;
+  }
+  
+  /* Model id surfaced on sub-agent message headers (issue #246) */
+  .message-model {
+      font-size: 0.75em;
+      font-family: var(--font-mono, 'SFMono-Regular', Consolas, monospace);
+      color: var(--text-secondary, #888);
   }
   
   /* Paired message styling */
@@ -46426,7 +46475,7 @@
       
       <div class='message-node'>
       <div class='message session-header' data-message-id='d-0' data-session-id='test_session' id='msg-d-0'>
-          <div class='header'>Session: User learned about Python decorators, including basic decorators and parameterized decorators. Created and ran examples showing how decorators work with functions. User is now ready to implement their own timing decorator. • test_ses</div>
+          <div class='header'>Session: User learned about Python decorators, including basic decorators and parameterized decorators. Created and ran examples showing how decorators work with functions. User is now ready to implement their own timing decorator. • test_ses <span class='message-model' title='Main agent model'>claude-3-sonnet-20240229</span></div>
           
           <div class='fold-bar' data-message-id='d-0' data-border-color='session-header'>
               

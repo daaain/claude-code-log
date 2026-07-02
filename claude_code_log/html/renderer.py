@@ -1032,7 +1032,11 @@ class HtmlRenderer(Renderer):
             if input.run_in_background
             else ""
         )
-        suffix = async_hint + self._agent_depth_badge(message)
+        suffix = (
+            async_hint
+            + self._agent_depth_badge(message)
+            + self._agent_model_badge(message)
+        )
         if input.description and input.subagent_type:
             escaped_desc = escape_html(input.description)
             return (
@@ -1067,6 +1071,21 @@ class HtmlRenderer(Renderer):
             f" <span class='agent-depth-badge agent-ring-{ring}'"
             f" title='Opens a depth-{spawned_depth} sub-agent transcript'>"
             f"Depth {spawned_depth}</span>"
+        )
+
+    def _agent_model_badge(self, message: TemplateMessage) -> str:
+        """Model badge for a spawn card (#246): the model the spawned
+        sub-agent ran on, stamped on the always-visible Task/Agent launch
+        card by ``_surface_agent_models`` (``display_model``). Shown for
+        every spawn depth — unlike the depth badge, it isn't suppressed at
+        depth 1, since the top-level Explore/Task spawn is the common case a
+        reader wants to see. Empty when no model was resolved (e.g. an
+        interrupted spawn whose sub-agent produced no assistant turn)."""
+        if not message.display_model:
+            return ""
+        return (
+            f" <span class='message-model' title='Model this sub-agent ran on'>"
+            f"{escape_html(message.display_model)}</span>"
         )
 
     def _async_id_suffix(

@@ -275,6 +275,13 @@
     color: #888;
 }
 
+/* Model id surfaced on sub-agent message headers (issue #246) */
+.message-model {
+    font-size: 0.75em;
+    font-family: var(--font-mono, 'SFMono-Regular', Consolas, monospace);
+    color: var(--text-secondary, #888);
+}
+
 /* Paired message styling */
 .message.pair_first {
     margin-bottom: 0;

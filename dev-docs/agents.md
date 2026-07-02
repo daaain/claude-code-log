@@ -318,7 +318,7 @@ transcript:
   0.5em) so very deep chains (79 levels seen in the wild) stay
   on-screen — depth is carried by the badge + colour, not the indent.
 
-Two card-level annotations complete the layer:
+Three card-level annotations complete the layer:
 
 - **Depth badge** (`_agent_depth_badge`, `html/renderer.py`): a "Depth
   N" pill on a spawn card showing the depth of the sub-agent it *opens*
@@ -332,6 +332,29 @@ Two card-level annotations complete the layer:
   shown is its whole transcript, distinct from a spawn that produced
   none. Nested-only (`agent_depth >= 1`); trunk-level direct
   sub-agents keep their pre-#213 rendering.
+- **Model id** (`TemplateMessage.display_model`, set by
+  `_surface_agent_models` in `renderer.py`; issue #246): the model an
+  agent ran on, surfaced **once per agent context** and on a node that
+  stays visible when the agent's transcript folds — on the session
+  header (the trunk/main model, from the first non-sidechain assistant
+  entry) and on each **spawn card** (the Task/Agent `tool_use` that
+  opens a sub-agent). The sub-agent's model comes from its own first
+  assistant entry, joined back to the spawn card via `tool_use_id`
+  (`spawned_agent_id` lands on the tool_result; the two-pass helper maps
+  agent→model, then stamps the paired tool_use — pairing indices aren't
+  assigned yet, so it uses the id join, not `pair_first`). The spawn
+  card sits at the parent's depth and stays on screen even when the
+  sub-agent collapses, so the model shows where the reader looks — and
+  co-locates with the depth badge. A mid-course `/model` switch surfaces
+  as its own command message, so a single first-seen value per context
+  suffices. The raw per-entry value is `MessageMeta.model` (only
+  assistant entries carry it); `display_model` is the render-once
+  decision. HTML renders a muted `.message-model` pill — in the spawn
+  card title (`_agent_model_badge`, beside the depth badge) and inline
+  on the session-header line; Markdown appends `` · `…` `` to the Task
+  title and an inline `— Model:` on the session heading. Unlike the
+  depth badge it is **not** suppressed at depth 1 (the top-level
+  Explore/Task spawn is the common case a reader wants).
 
 ### 5.5 Fixture
 

@@ -706,9 +706,14 @@ class MarkdownRenderer(Renderer):
         return f'<a id="{_session_anchor(content)}"></a>'
 
     def title_SessionHeaderMessage(
-        self, content: SessionHeaderMessage, _: TemplateMessage
+        self, content: SessionHeaderMessage, message: TemplateMessage
     ) -> str:
-        """Title → '📋 Session `abc12345`: summary — Team: `t`' (or '🌿 Branch …').
+        """Title → '📋 Session `abc12345`: summary — Model: `m` — Team: `t`'
+        (or '🌿 Branch …').
+
+        The ``— Model: `…``` segment (issue #246) carries the trunk/main
+        model and appears, before any Team suffix, only on non-branch
+        session headers that have a ``display_model`` set.
 
         Branch session headers surface the ``Branch • <uuid8> • <preview>``
         shape that the renderer's ``_branch_label`` helper composes for
@@ -739,6 +744,9 @@ class MarkdownRenderer(Renderer):
             title = f"📋 Session `{session_short}`: {content.summary}"
         else:
             title = f"📋 Session `{session_short}`"
+        # Main agent model, surfaced once on the session header (issue #246).
+        if message.display_model:
+            title = f"{title} — Model: {_inline_code(message.display_model)}"
         if content.team_name:
             # Boundary hygiene: a malformed transcript could in theory
             # carry a backtick in teamName. CommonMark code spans don't
@@ -1796,12 +1804,14 @@ class MarkdownRenderer(Renderer):
         base = f"🔎 Grep `{input.pattern}`"
         return f"{base} in `{input.path}`" if input.path else base
 
-    def title_TaskInput(self, input: TaskInput, _: TemplateMessage) -> str:
-        """Title → '🤖 Task (subagent): *description* [async #<id>]'.
+    def title_TaskInput(self, input: TaskInput, message: TemplateMessage) -> str:
+        """Title → '🤖 Task (subagent): *description* [async #<id>] · `model`'.
 
         ``[async]`` muted hint when ``run_in_background=True``; once the
         launch confirmation has been parsed, the minted ``#<agent_id>``
         is appended (PR #158 follow-up, parallels the Bash spawn shape).
+        The trailing `` · `model` `` is the model the spawned sub-agent ran
+        on (issue #246), stamped on the spawn card by ``_surface_agent_models``.
         """
         subagent = f" ({input.subagent_type})" if input.subagent_type else ""
         async_hint = (
@@ -1809,9 +1819,15 @@ class MarkdownRenderer(Renderer):
             if input.run_in_background
             else ""
         )
+        model_hint = (
+            f" · {_inline_code(message.display_model)}" if message.display_model else ""
+        )
         if desc := input.description:
-            return f"🤖 Task{subagent}: *{self._escape_stars(desc)}*{async_hint}"
-        return f"🤖 Task{subagent}{async_hint}"
+            return (
+                f"🤖 Task{subagent}: *{self._escape_stars(desc)}*"
+                f"{async_hint}{model_hint}"
+            )
+        return f"🤖 Task{subagent}{async_hint}{model_hint}"
 
     @staticmethod
     def _async_id_hint(minted_id: Optional[str]) -> str:

@@ -412,6 +412,11 @@ class MessageMeta:
     cwd: str = ""
     git_branch: Optional[str] = None
     team_name: Optional[str] = None  # Active team name (teammates feature)
+    # The model id the assistant entry ran on (AssistantMessageModel.model),
+    # e.g. ``claude-opus-4-8``. Only assistant entries carry it; None elsewhere.
+    # Surfaced on sub-agent message headers so a reader can see which model a
+    # spawned agent used (issue #246).
+    model: Optional[str] = None
 
     @classmethod
     def empty(cls, uuid: str = "") -> "MessageMeta":

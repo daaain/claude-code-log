@@ -262,6 +262,169 @@ class TestNestedVisualLayer:
         # The collapsed marker renders.
         assert "≡ full transcript" in html
 
+    def test_model_surfaced_on_spawn_cards(self) -> None:
+        """Issue #246: a sub-agent's model is stamped on its spawn card (the
+        Task/Agent tool_use that opens it) so it stays visible when the
+        sub-agent transcript is folded — never on the sub-agent's own body
+        messages. The only other carrier is the session header (trunk model)."""
+        from claude_code_log.models import ToolUseMessage
+
+        msgs = self._ctx_messages()
+        pill_bearers = [m for m in msgs if m.display_model]
+        # Every pill lives on a spawn card (tool_use) or the session header.
+        assert all(
+            isinstance(m.content, ToolUseMessage) or m.is_session_header
+            for m in pill_bearers
+        )
+        spawn_pills = [m for m in pill_bearers if isinstance(m.content, ToolUseMessage)]
+        assert spawn_pills, "sub-agent spawns should carry the model"
+        # The fixture's sub-agents all run on haiku.
+        assert all(m.display_model == "claude-haiku-4-5-20251001" for m in spawn_pills)
+
+    def test_trunk_model_surfaced_only_on_session_header(self) -> None:
+        """Issue #246: the trunk/main model shows on the session header, and
+        no trunk body message carries the pill."""
+        msgs = self._ctx_messages()
+        headers = [m for m in msgs if m.display_model and m.is_session_header]
+        assert len(headers) == 1
+        assert headers[0].display_model == "claude-haiku-4-5-20251001"
+        trunk_body = [
+            m
+            for m in msgs
+            if m.display_model and not m.meta.is_sidechain and not m.is_session_header
+        ]
+        # Trunk-level spawn cards are the only non-header trunk carriers.
+        from claude_code_log.models import ToolUseMessage
+
+        assert all(isinstance(m.content, ToolUseMessage) for m in trunk_body)
+
+    def test_model_renders_in_html_and_markdown(self) -> None:
+        from claude_code_log.html.renderer import generate_html
+        from claude_code_log.markdown.renderer import MarkdownRenderer
+
+        entries = _load_integrated()
+        html = generate_html(entries, "model")
+        # Spawn-card model badge (visible even when the sub-agent is folded).
+        assert "title='Model this sub-agent ran on'" in html
+        assert "claude-haiku-4-5-20251001" in html
+
+        md = MarkdownRenderer().generate(entries, "model")
+        # Spawn card (Task title) carries the model inline.
+        assert "· `claude-haiku-4-5-20251001`" in md
+        # The session header carries the main model inline on its heading.
+        assert "— Model: `claude-haiku-4-5-20251001`" in md
+
+    def test_model_attribution_distinguishes_trunk_from_subagents(self) -> None:
+        """Issue #246's raison d'être: trunk and sub-agents can run on
+        DIFFERENT models. The fixture runs everything on haiku, so the
+        placement tests above can't tell correct attribution from cross-
+        contamination. Retarget only the trunk's assistant entries to a
+        distinct model and pin that the session header shows IT while each
+        spawn card shows its sub-agent's model — no leakage either way
+        (monk #3959)."""
+        from claude_code_log.html.renderer import generate_html
+        from claude_code_log.markdown.renderer import MarkdownRenderer
+        from claude_code_log.models import AssistantTranscriptEntry, ToolUseMessage
+
+        trunk_model = "claude-opus-4-8"
+        sub_model = "claude-haiku-4-5-20251001"
+        entries = _load_integrated()
+        retargeted = 0
+        for entry in entries:
+            if isinstance(entry, AssistantTranscriptEntry) and not entry.isSidechain:
+                entry.message.model = trunk_model
+                retargeted += 1
+        assert retargeted, "fixture should carry trunk assistant entries"
+
+        _roots, _nav, ctx = generate_template_messages(entries)
+        msgs = [m for m in ctx.messages if m is not None]
+        headers = [
+            m.display_model for m in msgs if m.display_model and m.is_session_header
+        ]
+        assert headers == [trunk_model], "trunk model must land on the session header"
+        spawn_pills = [
+            m for m in msgs if m.display_model and isinstance(m.content, ToolUseMessage)
+        ]
+        assert spawn_pills and all(m.display_model == sub_model for m in spawn_pills), (
+            "spawn cards must show their sub-agent's model, not the trunk's"
+        )
+
+        # Both renderers attribute correctly end-to-end.
+        html = generate_html(entries, "diff")
+        assert trunk_model in html and sub_model in html
+        md = MarkdownRenderer().generate(entries, "diff")
+        assert f"— Model: `{trunk_model}`" in md  # session header only
+        assert f"· `{sub_model}`" in md  # a spawn card
+        # The trunk model never appears as a spawn-card model suffix.
+        assert f"· `{trunk_model}`" not in md
+
+    def test_each_spawn_card_shows_its_own_subagents_model(self) -> None:
+        """Issue #246: with the all-haiku fixture, the placement tests can't
+        catch a spawn card resolving to the WRONG sub-agent (parent/child
+        collapse in the nested chain, or an async-fallback mixup). Give every
+        sub-agent a distinct model and pin the bijection: each spawn card
+        carries exactly its own spawned child's model — no duplicates, no
+        leakage — including the 3-deep chain (monk #3990)."""
+        from claude_code_log.models import AssistantTranscriptEntry, ToolUseMessage
+
+        entries = _load_integrated()
+        for entry in entries:
+            if (
+                isinstance(entry, AssistantTranscriptEntry)
+                and entry.isSidechain
+                and entry.agentId
+            ):
+                entry.message.model = f"model-{entry.agentId}"
+
+        _roots, _nav, ctx = generate_template_messages(entries)
+        msgs = [m for m in ctx.messages if m is not None]
+        spawn_models = [
+            m.display_model
+            for m in msgs
+            if m.display_model and isinstance(m.content, ToolUseMessage)
+        ]
+        # Bijection: one distinct model per spawn card, each its own sub-agent's.
+        assert len(spawn_models) == len(set(spawn_models)), (
+            "a spawn card reused another agent's model (parent/child collapse)"
+        )
+        assert set(spawn_models) == {f"model-{agent}" for agent in ALL_AGENTS}
+        # The nested chain must each carry their OWN distinct model.
+        assert {f"model-{CHAIN1}", f"model-{CHAIN2}", f"model-{CHAIN3}"} <= set(
+            spawn_models
+        )
+
+    def test_sidechain_without_agent_id_never_leaks_into_header(self) -> None:
+        """A sidechain message lacking an agent_id stays unattributed — it
+        must not fall through and overwrite the session header's trunk model
+        (CodeRabbit, PR #252). Registered BEFORE the trunk message so the old
+        ``else`` fall-through would have set the header to the rogue model."""
+        from claude_code_log.models import MessageMeta, SystemMessage
+        from claude_code_log.renderer import (
+            RenderingContext,
+            _surface_agent_models,
+        )
+
+        def _sys(uuid: str, **meta_kwargs: object) -> TemplateMessage:
+            meta = MessageMeta(session_id="s", timestamp="t", uuid=uuid, **meta_kwargs)  # type: ignore[arg-type]
+            return TemplateMessage(SystemMessage(meta=meta, level="info", text=""))
+
+        ctx = RenderingContext()
+        header = _sys("h")
+        ctx.session_first_message["s"] = ctx.register(header)
+        # Rogue sidechain entry: is_sidechain but no agent_id, distinct model.
+        rogue = _sys(
+            "r", is_sidechain=True, agent_id=None, model="claude-haiku-4-5-20251001"
+        )
+        ctx.register(rogue)
+        # Real trunk model, registered after the rogue.
+        trunk = _sys("a", model="claude-opus-4-8")
+        ctx.register(trunk)
+
+        _surface_agent_models(ctx)
+
+        assert header.display_model == "claude-opus-4-8"
+        assert rogue.display_model is None
+
     def test_new_sidecar_invalidates_cached_trunk(self, tmp_path: Path) -> None:
         """Sidecar inputs are part of the cache key (PR #218 review).
 
