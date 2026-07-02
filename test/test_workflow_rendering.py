@@ -134,6 +134,35 @@ class TestWorkflowMetaParsing:
     def test_no_meta_block_returns_empty(self) -> None:
         assert parse_workflow_meta("const x = 1\nawait agent('hi')\n") == ("", "", [])
 
+    def test_escaped_quote_in_string_does_not_truncate(self) -> None:
+        # Observed in real meta blocks ('SAM\'s ...'): the old [^'\"]* pattern
+        # cut the description at the escaped quote.
+        script = (
+            "export const meta = {\n"
+            "  name: 'sweep',\n"
+            "  description: 'Stress-test SAM\\'s operative layer',\n"
+            "  phases: [{ title: 'The \\'inner\\' pass' }],\n"
+            "}\n"
+        )
+        name, desc, phases = parse_workflow_meta(script)
+        assert name == "sweep"
+        assert desc == "Stress-test SAM's operative layer"
+        assert phases == ["The 'inner' pass"]
+
+    def test_backtick_and_double_quote_strings(self) -> None:
+        script = (
+            "export const meta = {\n"
+            "  name: `tick-name`,\n"
+            '  description: "double quoted",\n'
+            "  phases: [{ title: `Scan` }],\n"
+            "}\n"
+        )
+        assert parse_workflow_meta(script) == (
+            "tick-name",
+            "double quoted",
+            ["Scan"],
+        )
+
 
 _JS_META = (
     "export const meta = {\n"
@@ -191,6 +220,162 @@ class TestSnapshotFirstHeader:
             # snapshot has name+phases, but the script has no `export const meta`
             resolve_workflow_header(self._run(), "const x = 1\n")
         assert any("may have drifted" in r.message for r in caplog.records)
+
+
+class TestSnapshotScriptFallback:
+    """Shape variety (#174 follow-up): the tool_use input carries a script only
+    in the inline-``script`` invocation shape. For ``scriptPath`` / ``name`` /
+    ``resumeFromRunId`` shapes the header must fall back to the snapshot's
+    stored ``script`` — and an absent script is NOT meta-format drift, so the
+    warning must stay quiet."""
+
+    def _run(self, **kw):
+        from claude_code_log.workflow import WorkflowPhase, WorkflowRun
+
+        return WorkflowRun(
+            run_id="r",
+            workflow_name=kw.get("name", "SNAP-NAME"),
+            has_snapshot=True,
+            phases=kw.get("phases", [WorkflowPhase(index=0, title="Alpha")]),
+            script=kw.get("script", ""),
+            summary=kw.get("summary", ""),
+        )
+
+    def test_resolve_workflow_script_prefers_input_then_snapshot(self) -> None:
+        from claude_code_log.workflow import resolve_workflow_script
+
+        run = self._run(script="// from snapshot")
+        assert resolve_workflow_script(run, "// inline") == "// inline"
+        assert resolve_workflow_script(run, "") == "// from snapshot"
+        assert resolve_workflow_script(None, "") == ""
+
+    def test_empty_input_script_parses_snapshot_script_no_warning(self, caplog) -> None:
+        import logging
+
+        from claude_code_log.workflow import resolve_workflow_header
+
+        with caplog.at_level(logging.WARNING, logger="claude_code_log.workflow"):
+            name, desc, phases = resolve_workflow_header(self._run(script=_JS_META), "")
+        # description recovered from the snapshot-stored script's meta block
+        assert desc == "js-desc"
+        assert name == "SNAP-NAME"  # snapshot-first name still wins
+        assert phases == ["Alpha"]
+        assert not caplog.records  # a parseable snapshot script → nothing drifted
+
+    def test_no_script_anywhere_is_not_drift(self, caplog) -> None:
+        import logging
+
+        from claude_code_log.workflow import resolve_workflow_header
+
+        with caplog.at_level(logging.WARNING, logger="claude_code_log.workflow"):
+            name, desc, phases = resolve_workflow_header(self._run(), "")
+        assert name == "SNAP-NAME" and phases == ["Alpha"]
+        assert not caplog.records  # no source text at all → no drift warning
+
+    def test_description_falls_back_to_snapshot_summary(self) -> None:
+        from claude_code_log.workflow import resolve_workflow_header
+
+        _, desc, _ = resolve_workflow_header(
+            self._run(summary="digest of the description"), ""
+        )
+        assert desc == "digest of the description"
+
+
+class TestWorkflowToolInputShapes:
+    """WorkflowToolInput declares the full invocation-shape union — scriptPath /
+    name / args / resumeFromRunId no longer vanish into `extra=\"allow\"`."""
+
+    def test_scriptpath_shape_with_args(self) -> None:
+        from claude_code_log.models import WorkflowToolInput
+
+        inp = WorkflowToolInput.model_validate(
+            {
+                "scriptPath": "/home/u/sweep.workflow.js",
+                "args": {"batches": [1, 2]},
+            }
+        )
+        assert inp.script == ""
+        assert inp.script_path == "/home/u/sweep.workflow.js"
+        assert inp.args == {"batches": [1, 2]}
+
+    def test_saved_name_and_resume_shape(self) -> None:
+        from claude_code_log.models import WorkflowToolInput
+
+        inp = WorkflowToolInput.model_validate(
+            {"name": "review-changes", "resumeFromRunId": "wf_abc123-def"}
+        )
+        assert inp.name == "review-changes"
+        assert inp.resume_from_run_id == "wf_abc123-def"
+
+
+class TestSnapshotEnrichmentParsing:
+    """The <runId>.json snapshot carries far more than phases/agent metadata —
+    script, scriptPath, args, summary, error, defaultModel, durationMs,
+    totalToolCalls all surface on WorkflowRun."""
+
+    def test_enrichment_fields_parsed(self, tmp_path: Path) -> None:
+        import json
+
+        from claude_code_log.workflow import parse_workflow_run
+
+        run_dir = tmp_path / "subagents" / "workflows" / "wf_enrich1"
+        run_dir.mkdir(parents=True)
+        (run_dir / "journal.jsonl").write_text(
+            '{"type": "result", "agentId": "ag1", "result": "ok"}\n',
+            encoding="utf-8",
+        )
+        snapshot = tmp_path / "wf_enrich1.json"
+        snapshot.write_text(
+            json.dumps(
+                {
+                    "runId": "wf_enrich1",
+                    "taskId": "task_e1",
+                    "workflowName": "enriched",
+                    "status": "completed",
+                    "script": "export const meta = {\n}\n",
+                    "scriptPath": "/somewhere/enriched.workflow.js",
+                    "args": {"target": "docs/"},
+                    "summary": "the digest",
+                    "defaultModel": "claude-sonnet-4-6",
+                    "durationMs": 1234,
+                    "totalToolCalls": 7,
+                    "phases": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        run = parse_workflow_run(run_dir, snapshot)
+        assert run is not None
+        assert run.script.startswith("export const meta")
+        assert run.script_path == "/somewhere/enriched.workflow.js"
+        assert run.args == {"target": "docs/"}
+        assert run.summary == "the digest"
+        assert run.error == ""
+        assert run.default_model == "claude-sonnet-4-6"
+        assert run.duration_ms == 1234
+        assert run.total_tool_calls == 7
+
+    def test_non_string_enrichment_values_coerced_to_empty(
+        self, tmp_path: Path
+    ) -> None:
+        import json
+
+        from claude_code_log.workflow import parse_workflow_run
+
+        run_dir = tmp_path / "subagents" / "workflows" / "wf_enrich2"
+        run_dir.mkdir(parents=True)
+        (run_dir / "journal.jsonl").write_text(
+            '{"type": "result", "agentId": "ag1", "result": "ok"}\n',
+            encoding="utf-8",
+        )
+        snapshot = tmp_path / "wf_enrich2.json"
+        snapshot.write_text(
+            json.dumps({"runId": "wf_enrich2", "script": 42, "error": ["x"]}),
+            encoding="utf-8",
+        )
+        run = parse_workflow_run(run_dir, snapshot)
+        assert run is not None
+        assert run.script == "" and run.error == ""
 
 
 class TestWorkflowRunLinkage:
@@ -437,6 +622,190 @@ class TestWorkflowRunSplice:
         types = {tm.type for tm in ctx.messages if tm is not None}
         assert "workflow_phase" not in types
         assert "workflow_agent" not in types
+
+
+SCRIPTPATH_TRUNK = (
+    Path(__file__).parent
+    / "test_data"
+    / "workflow_scriptpath"
+    / "22220000-0000-4000-8000-000000000002.jsonl"
+)
+
+
+class TestScriptPathInvocationRendering:
+    """Shape variety (#174 follow-up): a `scriptPath` + `args` invocation
+    carries no inline source — the renderer recovers the script from the
+    run's terminal snapshot and surfaces the invocation itself (script file
+    reference + args)."""
+
+    def _html(self) -> str:
+        from claude_code_log.converter import load_directory_transcripts
+
+        msgs, tree = load_directory_transcripts(SCRIPTPATH_TRUNK.parent, silent=True)
+        return generate_html(msgs, session_tree=tree)
+
+    def _md(self) -> str:
+        from claude_code_log.converter import load_directory_transcripts
+
+        msgs, tree = load_directory_transcripts(SCRIPTPATH_TRUNK.parent, silent=True)
+        return MarkdownRenderer().generate(msgs, session_tree=tree)
+
+    def test_header_fully_populated_from_snapshot_script(self) -> None:
+        html = self._html()
+        assert "workflow-name" in html and "docs-sweep" in html
+        # description comes from the snapshot-stored script's meta block —
+        # the JS escape (\') is unescaped, then HTML-escaped for display
+        assert "Sweep the team&#x27;s docs tree in batches" in html
+        assert "workflow-phase-pill" in html and "Sweep" in html
+
+    def test_snapshot_script_body_rendered(self) -> None:
+        html = self._html()
+        idx = html.find("class='workflow-script'")
+        assert idx != -1, "snapshot-recovered script should render as the body"
+        assert "highlight" in html[idx : idx + 600]
+
+    def test_invocation_line_shows_script_path(self) -> None:
+        html = self._html()
+        idx = html.find("class='workflow-invocation'")
+        assert idx != -1
+        assert "/home/u/sweeps/docs-sweep.workflow.js" in html[idx : idx + 400]
+
+    def test_args_rendered_as_params_table(self) -> None:
+        html = self._html()
+        # args render via the hybrid params table, wrapped under an "args" key.
+        # Target the rendered div, not the `.workflow-invocation` CSS rule.
+        tool_use_at = html.find("class='workflow-invocation'")
+        assert tool_use_at != -1
+        segment = html[tool_use_at : tool_use_at + 4000]
+        assert "tool-params-table" in segment
+        assert "args" in segment and "docs/" in segment
+
+    def test_run_tree_still_spliced(self) -> None:
+        html = self._html()
+        assert "Phase: Sweep" in html
+        assert "sweep:a" in html
+        assert "stale pages flagged" in html  # agent result surfaced
+
+    def test_markdown_parity(self) -> None:
+        md = self._md()
+        assert "docs-sweep" in md
+        assert "Sweep the team's docs tree in batches" in md
+        assert "script: `/home/u/sweeps/docs-sweep.workflow.js`" in md
+        assert "**args:**" in md and '"target": "docs/"' in md
+        assert "```js" in md and "export const meta" in md  # snapshot script
+
+    def test_no_drift_warnings_emitted(self, caplog) -> None:
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="claude_code_log.workflow"):
+            self._html()
+        assert not any("may have drifted" in r.message for r in caplog.records)
+
+
+class TestSnapshotOnlyFailedRun:
+    """A workflow that dies before launching any agent (script error on an
+    early line) leaves a <runId>.json snapshot but NO run dir/journal.
+    Journal-led discovery used to skip it entirely — the tool_use rendered
+    bare, with the status and error invisible."""
+
+    def _html(self) -> str:
+        from claude_code_log.converter import load_directory_transcripts
+
+        msgs, tree = load_directory_transcripts(SCRIPTPATH_TRUNK.parent, silent=True)
+        return generate_html(msgs, session_tree=tree)
+
+    def test_snapshot_only_run_discovered(self) -> None:
+        from claude_code_log.workflow import load_session_workflow_runs
+
+        runs = load_session_workflow_runs(SCRIPTPATH_TRUNK, silent=True)
+        by_id = {r.run_id: r for r in runs}
+        assert set(by_id) == {"wf_sp01", "wf_fail01"}
+        failed = by_id["wf_fail01"]
+        assert failed.has_snapshot
+        assert failed.status == "failed"
+        assert failed.agents == []
+        assert "batches.map" in failed.error
+
+    def test_missing_journal_and_snapshot_still_returns_none(
+        self, tmp_path: Path
+    ) -> None:
+        from claude_code_log.workflow import parse_workflow_run
+
+        assert parse_workflow_run(tmp_path / "wf_nope") is None
+        # unparseable snapshot alone doesn't fabricate a run either
+        bad = tmp_path / "wf_bad.json"
+        bad.write_text("not json", encoding="utf-8")
+        assert parse_workflow_run(tmp_path / "wf_bad", bad) is None
+
+    def test_failed_status_and_error_rendered_html(self) -> None:
+        html = self._html()
+        # status chip next to the workflow name
+        i = html.find("class='workflow-status workflow-status-failed'")
+        assert i != -1
+        assert ">failed<" in html[i : i + 120]
+        assert "docs-sweep-broken" in html
+        # error fold with the stack trace, HTML-escaped
+        j = html.find("class='workflow-error'")
+        assert j != -1
+        assert "batches.map" in html[j : j + 600]
+        # the snapshot-stored script still renders for the failed run
+        assert "never reached" in html
+
+    def test_completed_run_shows_no_status_chip(self) -> None:
+        html = self._html()
+        # exactly one failed chip (wf_fail01); wf_sp01 is completed → none
+        assert html.count("workflow-status-failed") == 1
+        assert "workflow-status-completed" not in html
+
+    def test_failed_status_and_error_rendered_markdown(self) -> None:
+        from claude_code_log.converter import load_directory_transcripts
+
+        msgs, tree = load_directory_transcripts(SCRIPTPATH_TRUNK.parent, silent=True)
+        md = MarkdownRenderer().generate(msgs, session_tree=tree)
+        assert "`failed`" in md
+        assert "**error:**" in md
+        assert "batches.map" in md
+
+
+class TestInvocationChromeUnit:
+    """Direct formatter coverage for the saved-name / resume shapes (no
+    fixture needed — these carry no run at all)."""
+
+    def test_saved_name_and_resume_html(self) -> None:
+        from claude_code_log.html.tool_formatters import format_workflow_input
+        from claude_code_log.models import WorkflowToolInput
+
+        out = format_workflow_input(
+            WorkflowToolInput.model_validate(
+                {"name": "review-changes", "resumeFromRunId": "wf_prev01-abc"}
+            )
+        )
+        assert "saved workflow:" in out and "review-changes" in out
+        assert "resumes:" in out and "wf_prev01-abc" in out
+
+    def test_saved_name_and_resume_markdown(self) -> None:
+        from claude_code_log.models import WorkflowToolInput
+
+        out = MarkdownRenderer().format_WorkflowToolInput(
+            WorkflowToolInput.model_validate(
+                {"name": "review-changes", "resumeFromRunId": "wf_prev01-abc"}
+            ),
+            None,  # type: ignore[arg-type]  # message unused by this formatter
+        )
+        assert "saved workflow: `review-changes`" in out
+        assert "resumes: `wf_prev01-abc`" in out
+
+    def test_html_chrome_escapes_html(self) -> None:
+        from claude_code_log.html.tool_formatters import format_workflow_input
+        from claude_code_log.models import WorkflowToolInput
+
+        out = format_workflow_input(
+            WorkflowToolInput.model_validate(
+                {"scriptPath": "/tmp/<script>alert(1)</script>.js"}
+            )
+        )
+        assert "<script>" not in out
+        assert "&lt;script&gt;" in out
 
 
 def _has_workflow_tool_use(entry) -> bool:
