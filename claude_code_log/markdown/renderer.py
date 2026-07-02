@@ -1078,18 +1078,25 @@ class MarkdownRenderer(Renderer):
     def format_WorkflowToolInput(
         self, input: WorkflowToolInput, _: TemplateMessage
     ) -> str:
-        """Format → optional one-line meta header + the JS script in a fenced
-        ```js block (issue #174).
+        """Format → optional one-line meta header + invocation line (saved
+        name / scriptPath / resume / args) + the effective JS script in a
+        fenced ```js block (issue #174).
 
         Registering ``Workflow`` in TOOL_INPUT_MODELS is format-neutral, so
         this method is required for parity — without it the Markdown renderer
         would emit nothing for the script (a regression from the pre-PR
         ToolUseContent ``**script:**`` fallback).
-        """
-        from ..workflow import resolve_workflow_header
 
-        script = input.script or ""
-        name, description, phases = resolve_workflow_header(input.workflow_run, script)
+        Mirrors the HTML formatter's shape handling: the script shown is the
+        inline input when present, else the snapshot-stored copy (the
+        ``scriptPath`` / ``name`` invocation shapes carry no source inline).
+        """
+        from ..workflow import resolve_workflow_header, resolve_workflow_script
+
+        script = resolve_workflow_script(input.workflow_run, input.script)
+        name, description, phases = resolve_workflow_header(
+            input.workflow_run, input.script
+        )
 
         parts: list[str] = []
         header_bits: list[str] = []
@@ -1108,6 +1115,24 @@ class MarkdownRenderer(Renderer):
             header = f"{header} {phase_text}" if header else phase_text
         if header:
             parts.append(header)
+
+        invocation_bits: list[str] = []
+        if input.name:
+            invocation_bits.append(
+                f"saved workflow: `{_protect_html_tags(input.name)}`"
+            )
+        if input.script_path:
+            invocation_bits.append(f"script: `{_protect_html_tags(input.script_path)}`")
+        if input.resume_from_run_id:
+            invocation_bits.append(
+                f"resumes: `{_protect_html_tags(input.resume_from_run_id)}`"
+            )
+        if invocation_bits:
+            parts.append("_" + " · ".join(invocation_bits) + "_")
+        if input.args is not None:
+            args_json = json.dumps(input.args, indent=2, ensure_ascii=False)
+            parts.append(f"**args:**\n\n{self._code_fence(args_json, 'json')}")
+
         if script.strip():
             parts.append(self._code_fence(script, "js"))
         return "\n\n".join(parts)

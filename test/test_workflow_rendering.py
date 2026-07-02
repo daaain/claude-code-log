@@ -624,6 +624,125 @@ class TestWorkflowRunSplice:
         assert "workflow_agent" not in types
 
 
+SCRIPTPATH_TRUNK = (
+    Path(__file__).parent
+    / "test_data"
+    / "workflow_scriptpath"
+    / "22220000-0000-4000-8000-000000000002.jsonl"
+)
+
+
+class TestScriptPathInvocationRendering:
+    """Shape variety (#174 follow-up): a `scriptPath` + `args` invocation
+    carries no inline source — the renderer recovers the script from the
+    run's terminal snapshot and surfaces the invocation itself (script file
+    reference + args)."""
+
+    def _html(self) -> str:
+        from claude_code_log.converter import load_directory_transcripts
+
+        msgs, tree = load_directory_transcripts(SCRIPTPATH_TRUNK.parent, silent=True)
+        return generate_html(msgs, session_tree=tree)
+
+    def _md(self) -> str:
+        from claude_code_log.converter import load_directory_transcripts
+
+        msgs, tree = load_directory_transcripts(SCRIPTPATH_TRUNK.parent, silent=True)
+        return MarkdownRenderer().generate(msgs, session_tree=tree)
+
+    def test_header_fully_populated_from_snapshot_script(self) -> None:
+        html = self._html()
+        assert "workflow-name" in html and "docs-sweep" in html
+        # description comes from the snapshot-stored script's meta block —
+        # the JS escape (\') is unescaped, then HTML-escaped for display
+        assert "Sweep the team&#x27;s docs tree in batches" in html
+        assert "workflow-phase-pill" in html and "Sweep" in html
+
+    def test_snapshot_script_body_rendered(self) -> None:
+        html = self._html()
+        idx = html.find("class='workflow-script'")
+        assert idx != -1, "snapshot-recovered script should render as the body"
+        assert "highlight" in html[idx : idx + 600]
+
+    def test_invocation_line_shows_script_path(self) -> None:
+        html = self._html()
+        idx = html.find("class='workflow-invocation'")
+        assert idx != -1
+        assert "/home/u/sweeps/docs-sweep.workflow.js" in html[idx : idx + 400]
+
+    def test_args_rendered_as_params_table(self) -> None:
+        html = self._html()
+        # args render via the hybrid params table, wrapped under an "args" key.
+        # Target the rendered div, not the `.workflow-invocation` CSS rule.
+        tool_use_at = html.find("class='workflow-invocation'")
+        assert tool_use_at != -1
+        segment = html[tool_use_at : tool_use_at + 4000]
+        assert "tool-params-table" in segment
+        assert "args" in segment and "docs/" in segment
+
+    def test_run_tree_still_spliced(self) -> None:
+        html = self._html()
+        assert "Phase: Sweep" in html
+        assert "sweep:a" in html
+        assert "stale pages flagged" in html  # agent result surfaced
+
+    def test_markdown_parity(self) -> None:
+        md = self._md()
+        assert "docs-sweep" in md
+        assert "Sweep the team's docs tree in batches" in md
+        assert "script: `/home/u/sweeps/docs-sweep.workflow.js`" in md
+        assert "**args:**" in md and '"target": "docs/"' in md
+        assert "```js" in md and "export const meta" in md  # snapshot script
+
+    def test_no_drift_warnings_emitted(self, caplog) -> None:
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="claude_code_log.workflow"):
+            self._html()
+        assert not any("may have drifted" in r.message for r in caplog.records)
+
+
+class TestInvocationChromeUnit:
+    """Direct formatter coverage for the saved-name / resume shapes (no
+    fixture needed — these carry no run at all)."""
+
+    def test_saved_name_and_resume_html(self) -> None:
+        from claude_code_log.html.tool_formatters import format_workflow_input
+        from claude_code_log.models import WorkflowToolInput
+
+        out = format_workflow_input(
+            WorkflowToolInput.model_validate(
+                {"name": "review-changes", "resumeFromRunId": "wf_prev01-abc"}
+            )
+        )
+        assert "saved workflow:" in out and "review-changes" in out
+        assert "resumes:" in out and "wf_prev01-abc" in out
+
+    def test_saved_name_and_resume_markdown(self) -> None:
+        from claude_code_log.models import WorkflowToolInput
+
+        out = MarkdownRenderer().format_WorkflowToolInput(
+            WorkflowToolInput.model_validate(
+                {"name": "review-changes", "resumeFromRunId": "wf_prev01-abc"}
+            ),
+            None,  # type: ignore[arg-type]  # message unused by this formatter
+        )
+        assert "saved workflow: `review-changes`" in out
+        assert "resumes: `wf_prev01-abc`" in out
+
+    def test_html_chrome_escapes_html(self) -> None:
+        from claude_code_log.html.tool_formatters import format_workflow_input
+        from claude_code_log.models import WorkflowToolInput
+
+        out = format_workflow_input(
+            WorkflowToolInput.model_validate(
+                {"scriptPath": "/tmp/<script>alert(1)</script>.js"}
+            )
+        )
+        assert "<script>" not in out
+        assert "&lt;script&gt;" in out
+
+
 def _has_workflow_tool_use(entry) -> bool:
     content = getattr(getattr(entry, "message", None), "content", None)
     return isinstance(content, list) and any(

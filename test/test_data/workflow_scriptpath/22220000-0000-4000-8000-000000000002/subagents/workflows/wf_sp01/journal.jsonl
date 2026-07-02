@@ -1,0 +1,2 @@
+{"type": "started", "key": "v2:hsp0", "agentId": "agsp0001"}
+{"type": "result", "key": "v2:hsp0", "agentId": "agsp0001", "result": "Batch a and b swept; 2 stale pages flagged."}

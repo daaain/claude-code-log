@@ -1,0 +1,50 @@
+{
+  "runId": "wf_sp01",
+  "taskId": "task_sp01",
+  "status": "completed",
+  "workflowName": "docs-sweep",
+  "timestamp": "2026-06-28T09:00:00.000Z",
+  "durationMs": 2000,
+  "agentCount": 1,
+  "totalTokens": 101,
+  "totalToolCalls": 2,
+  "defaultModel": "claude-sonnet-4-6",
+  "script": "export const meta = {\n  name: 'docs-sweep',\n  description: 'Sweep the team\\'s docs tree in batches',\n  phases: [\n    { title: 'Sweep', detail: 'one worker per batch' },\n  ],\n}\nphase('Sweep')\nreturn await agent('Sweep docs: ' + JSON.stringify(args))\n",
+  "scriptPath": "/home/u/sweeps/docs-sweep.workflow.js",
+  "args": {
+    "target": "docs/",
+    "batches": [
+      "a",
+      "b"
+    ]
+  },
+  "summary": "Sweep the team's docs tree in batches",
+  "phases": [
+    {
+      "title": "Sweep",
+      "detail": "one worker per batch"
+    }
+  ],
+  "workflowProgress": [
+    {
+      "type": "workflow_phase",
+      "index": 1,
+      "title": "Sweep"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 0,
+      "label": "sweep:a",
+      "phaseIndex": 1,
+      "phaseTitle": "Sweep",
+      "agentId": "agsp0001",
+      "model": "claude-sonnet-4-6",
+      "state": "done",
+      "attempt": 1,
+      "tokens": 101,
+      "toolCalls": 2,
+      "durationMs": 900,
+      "resultPreview": "Batch a and b swept"
+    }
+  ]
+}

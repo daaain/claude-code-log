@@ -35,7 +35,7 @@ from .utils import (
     resolve_memory_body_links,
 )
 from ..utils import strip_error_tags
-from ..workflow import resolve_workflow_header
+from ..workflow import resolve_workflow_header, resolve_workflow_script
 from ..models import (
     AskUserQuestionInput,
     AskUserQuestionItem,
@@ -1471,13 +1471,18 @@ def format_tool_result_content_raw(tool_result: ToolResultContent) -> str:
 
 
 def format_workflow_input(workflow_input: WorkflowToolInput) -> str:
-    """Format a ``Workflow`` tool_use (issue #174): a header from the script's
-    ``meta`` block (name / description / phase pills) above the JavaScript
-    orchestrator source, syntax-highlighted and collapsible when long."""
-    script = workflow_input.script or ""
-    name, description, phases = resolve_workflow_header(
-        workflow_input.workflow_run, script
-    )
+    """Format a ``Workflow`` tool_use (issue #174): a header from the effective
+    script's ``meta`` block (name / description / phase pills), an invocation
+    line for the non-inline shapes (saved-workflow name / scriptPath / resume,
+    plus an ``args`` table), then the JavaScript orchestrator source,
+    syntax-highlighted and collapsible when long.
+
+    The source shown is the *effective* script: the inline ``script`` input
+    when present, else the copy stored in the run's terminal snapshot (the
+    ``scriptPath`` / ``name`` shapes carry no source in the input)."""
+    run = workflow_input.workflow_run
+    script = resolve_workflow_script(run, workflow_input.script)
+    name, description, phases = resolve_workflow_header(run, workflow_input.script)
 
     header_parts: list[str] = []
     if name:
@@ -1510,8 +1515,41 @@ def format_workflow_input(workflow_input: WorkflowToolInput) -> str:
         else ""
     )
 
+    # Invocation line — how the workflow was launched, for the non-inline
+    # shapes: saved-workflow name, script file reference, resumed run.
+    invocation_parts: list[str] = []
+    if workflow_input.name:
+        invocation_parts.append(
+            "<span class='workflow-invocation-item'>saved workflow: "
+            f"<code>{escape_html(workflow_input.name)}</code></span>"
+        )
+    if workflow_input.script_path:
+        invocation_parts.append(
+            "<span class='workflow-invocation-item'>script: "
+            f"<code>{escape_html(workflow_input.script_path)}</code></span>"
+        )
+    if workflow_input.resume_from_run_id:
+        invocation_parts.append(
+            "<span class='workflow-invocation-item'>resumes: "
+            f"<code>{escape_html(workflow_input.resume_from_run_id)}</code></span>"
+        )
+    invocation = (
+        f"<div class='workflow-invocation'>{''.join(invocation_parts)}</div>"
+        if invocation_parts
+        else ""
+    )
+
+    # The script's input value, rendered by the same hybrid params table as
+    # tool parameters (wrapped under an explicit "args" key so it can't read
+    # as the tool's own parameters).
+    args_html = ""
+    if workflow_input.args is not None:
+        args_html = render_params_table({"args": workflow_input.args})
+
+    prefix = f"{header}{invocation}{args_html}"
+
     if not script.strip():
-        return header
+        return prefix
 
     body = render_file_content_collapsible(
         script,
@@ -1520,7 +1558,7 @@ def format_workflow_input(workflow_input: WorkflowToolInput) -> str:
         line_threshold=12,
         preview_line_count=6,
     )
-    return f"{header}{body}"
+    return f"{prefix}{body}"
 
 
 # -- Workflow run tree: phase + agent cards (issue #174 PR3) -------------------

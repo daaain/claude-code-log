@@ -1503,6 +1503,17 @@ details summary {
     color: var(--text-secondary);
 }
 
+/* Invocation line — how the workflow was launched, for the non-inline
+   shapes (saved-workflow name / scriptPath reference / resumed run). */
+.workflow-invocation {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    margin-bottom: 8px;
+    font-size: 0.85em;
+    color: var(--text-muted);
+}
+
 .workflow-script {
     margin-top: 4px;
 }
