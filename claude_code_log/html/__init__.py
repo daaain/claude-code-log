@@ -17,6 +17,7 @@ from .utils import (
 )
 from .tool_formatters import (
     # Tool input formatters (called by HtmlRenderer.format_{InputClass})
+    format_artifact_input,
     format_askuserquestion_input,
     format_bash_input,
     format_edit_input,
@@ -28,6 +29,7 @@ from .tool_formatters import (
     format_webfetch_input,
     format_write_input,
     # Tool output formatters (called by HtmlRenderer.format_{OutputClass})
+    format_artifact_output,
     format_askuserquestion_output,
     format_bash_output,
     format_edit_output,
@@ -110,6 +112,8 @@ __all__ = [
     "format_read_input",
     "format_task_input",
     "format_todowrite_input",
+    "format_artifact_input",
+    "format_artifact_output",
     "format_webfetch_input",
     "format_write_input",
     # tool_formatters (output) - called by HtmlRenderer.format_{OutputClass}

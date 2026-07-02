@@ -977,6 +977,7 @@ Sub-agent messages (from `Task` tool):
 |------|------------|---------------|-------------|--------------|
 | WebFetch | [tool_use](messages/tools/WebFetch-tool_use.json) | [tool_result](messages/tools/WebFetch-tool_result.json) | — | — |
 | WebSearch | [tool_use](messages/tools/WebSearch-tool_use.json) | [tool_result](messages/tools/WebSearch-tool_result.json) | — | — |
+| Artifact *(deploy HTML/MD page, CC 2.1.172+)* | [tool_use](messages/tools/Artifact-tool_use.json) | [tool_result](messages/tools/Artifact-tool_result.json) | `ArtifactInput` | `ArtifactOutput` |
 
 ---
 

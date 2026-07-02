@@ -1,0 +1,24 @@
+{
+  "parentUuid": "21fba4a4-f5e6-4420-a4e8-be64383362f9",
+  "isSidechain": false,
+  "type": "user",
+  "message": {
+    "role": "user",
+    "content": [
+      {
+        "tool_use_id": "toolu_01KFHHG1ptbGeZQK3epbQxhX",
+        "type": "tool_result",
+        "content": "Published /workspace/demo/artifact-shape-probe.html at https://claude.ai/code/artifact/e897407d-f44d-4654-b436-69973ce1964a"
+      }
+    ]
+  },
+  "uuid": "6e66c413-4156-4759-a807-bd371fd7ebeb",
+  "timestamp": "2026-07-02T17:09:30.242Z",
+  "toolUseResult": {
+    "url": "https://claude.ai/code/artifact/e897407d-f44d-4654-b436-69973ce1964a",
+    "path": "/workspace/demo/artifact-shape-probe.html",
+    "title": "Artifact shape probe"
+  },
+  "sessionId": "cfa88393-fc66-480f-8762-fa85a33d1d9f",
+  "version": "2.1.198"
+}

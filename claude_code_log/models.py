@@ -1482,6 +1482,26 @@ class WebFetchInput(BaseModel):
     prompt: str
 
 
+class ArtifactInput(BaseModel):
+    """Input parameters for the Artifact tool.
+
+    Deploys a self-contained HTML or Markdown file as a (default-private)
+    claude.ai web page. Only ``file_path`` and ``favicon`` are required in
+    the current schema; keep the rest optional and tolerate unknown fields
+    so schema tweaks across Claude Code versions don't drop the message to
+    the generic params table.
+    """
+
+    file_path: str
+    favicon: str = ""
+    description: Optional[str] = None
+    label: Optional[str] = None
+    url: Optional[str] = None  # Existing artifact URL to redeploy to
+    force: Optional[bool] = None
+
+    model_config = {"extra": "allow"}
+
+
 class SkillInput(BaseModel):
     """Input parameters for the Skill tool."""
 
@@ -1666,6 +1686,7 @@ ToolInput = Union[
     ExitPlanModeInput,
     WebSearchInput,
     WebFetchInput,
+    ArtifactInput,
     MonitorInput,
     ScheduleWakeupInput,
     CronCreateInput,
@@ -2037,6 +2058,22 @@ class WebFetchOutput:
     duration_ms: Optional[int] = None  # Time taken in milliseconds
 
 
+@dataclass
+class ArtifactOutput:
+    """Parsed Artifact tool output.
+
+    Symmetric with ArtifactInput for tool_use → tool_result pairing.
+    Wire format (observed on Claude Code 2.1.198): text content
+    ``Published <path> at <url>`` plus a structured toolUseResult
+    ``{url, path, title}`` where ``title`` is extracted from the page.
+    """
+
+    url: Optional[str] = None  # Deployed page URL
+    path: Optional[str] = None  # Source file that was published
+    title: Optional[str] = None  # Page title extracted by the harness
+    raw_text: Optional[str] = None  # Fallback text when structured data absent
+
+
 # =============================================================================
 # Teammates feature tool outputs
 # =============================================================================
@@ -2176,6 +2213,7 @@ ToolOutput = Union[
     ExitPlanModeOutput,
     WebSearchOutput,
     WebFetchOutput,
+    ArtifactOutput,
     MonitorOutput,
     ScheduleWakeupOutput,
     CronCreateOutput,

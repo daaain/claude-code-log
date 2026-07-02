@@ -1,0 +1,27 @@
+{
+  "type": "assistant",
+  "sessionId": "cfa88393-fc66-480f-8762-fa85a33d1d9f",
+  "timestamp": "2026-07-02T16:57:43.795Z",
+  "uuid": "21fba4a4-f5e6-4420-a4e8-be64383362f9",
+  "parentUuid": "6998eedd-1e25-4ad0-9325-bd2554ac4255",
+  "isSidechain": false,
+  "message": {
+    "role": "assistant",
+    "type": "message",
+    "model": "claude-fable-5",
+    "id": "msg_01UgmX8QWNGApwj8gFAK3EbW",
+    "content": [
+      {
+        "type": "tool_use",
+        "id": "toolu_01KFHHG1ptbGeZQK3epbQxhX",
+        "name": "Artifact",
+        "input": {
+          "file_path": "/workspace/demo/artifact-shape-probe.html",
+          "favicon": "🔬",
+          "description": "Throwaway probe to capture the Artifact tool's JSONL wire format (issue #257).",
+          "label": "shape-probe"
+        }
+      }
+    ]
+  }
+}
