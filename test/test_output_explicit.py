@@ -289,6 +289,10 @@ class TestSingleFileStaleness:
         assert "individual session files" in r1.output, (
             f"--combined no produced no confirmation; output was:\n{r1.output}"
         )
+        # ...and it does NOT claim to have "combined" anything (no combined
+        # file is written under --combined no); it reports "processed" instead.
+        assert "Successfully processed" in r1.output
+        assert "Successfully combined" not in r1.output
 
 
 if __name__ == "__main__":

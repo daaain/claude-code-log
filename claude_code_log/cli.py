@@ -1346,15 +1346,25 @@ def main(
             click.echo(f"Successfully converted {input_path} to {output_path}")
         else:
             jsonl_count = len(list(input_path.glob("*.jsonl")))
+            session_suffix = ""
             if write_individual:
                 ext = get_file_extension(output_format)
                 session_files = list(input_path.glob(f"session-*.{ext}"))
+                session_suffix = (
+                    f" and generated {len(session_files)} individual session files"
+                )
+            if write_combined:
                 click.echo(
-                    f"Successfully combined {jsonl_count} transcript files from {input_path} to {output_path} and generated {len(session_files)} individual session files"
+                    f"Successfully combined {jsonl_count} transcript files "
+                    f"from {input_path} to {output_path}{session_suffix}"
                 )
             else:
+                # `--combined no`: only per-session files were written. Don't
+                # claim to have "combined" anything, nor name a combined file
+                # that wasn't produced — report the per-session work instead.
                 click.echo(
-                    f"Successfully combined {jsonl_count} transcript files from {input_path} to {output_path}"
+                    f"Successfully processed {jsonl_count} transcript files "
+                    f"from {input_path}{session_suffix}"
                 )
 
         if open_browser:

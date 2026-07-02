@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Tests for HTML regeneration when JSONL files change."""
 
+import os
 import time
 from pathlib import Path
 from unittest.mock import patch
@@ -332,10 +333,13 @@ class TestHtmlRegeneration:
         # (e.g. an in-progress session) MUST regenerate — the output is now
         # older than its source (issue #221 follow-up). Previously single
         # file mode wrongly skipped on the version marker alone.
-        time.sleep(0.1)
         new_message = '{"type":"user","timestamp":"2025-07-03T16:40:00Z","parentUuid":null,"isSidechain":false,"userType":"human","cwd":"/tmp","sessionId":"test_session","version":"1.0.0","uuid":"single_file_msg","message":{"role":"user","content":[{"type":"text","text":"Single file mode test."}]}}\n'
         with open(jsonl_file, "a", encoding="utf-8") as f:
             f.write(new_message)
+        # The regeneration hinges on source.mtime > output.mtime; a wall-clock
+        # sleep is unreliable on coarse-granularity filesystems, so force the
+        # source strictly newer than the output rather than racing the clock.
+        os.utime(jsonl_file, (original_mtime + 2, original_mtime + 2))
 
         with patch("builtins.print") as mock_print:
             convert_jsonl_to_html(jsonl_file)
