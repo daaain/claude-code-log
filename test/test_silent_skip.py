@@ -189,11 +189,11 @@ class TestUnrecognizedTypesWarn:
         _write_jsonl(
             jsonl,
             [
-                {"type": "mode", "payload": 1},
+                {"type": "not-yet-known", "payload": 1},
                 {"type": "pr-link", "url": "x"},
-                {"type": "mode", "payload": 2},
+                {"type": "not-yet-known", "payload": 2},
                 {"type": "pr-link", "url": "y"},
-                {"type": "mode", "payload": 3},
+                {"type": "not-yet-known", "payload": 3},
             ],
         )
 
@@ -203,7 +203,7 @@ class TestUnrecognizedTypesWarn:
         assert messages == []
         # One warning per distinct type, not per occurrence.
         assert captured.out.count("unrecognized message type") == 2
-        assert captured.out.count("'mode'") == 1
+        assert captured.out.count("'not-yet-known'") == 1
         assert captured.out.count("'pr-link'") == 1
 
     def test_silent_mode_suppresses_warning(

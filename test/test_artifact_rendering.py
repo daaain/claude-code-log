@@ -366,6 +366,15 @@ class TestArtifactEndToEnd:
         assert "🖼️" in html
         assert "🛠️ 🖼️" not in html
 
+    def test_frame_link_entry_skipped_silently(self, capsys):
+        """The ``frame-link`` entry Claude Code writes alongside a
+        successful publish is bookkeeping (path → deployed URL, no uuid,
+        redundant with the tool_result) — it must be skipped without an
+        'unrecognized message type' warning."""
+        load_transcript(self.FIXTURE)
+        captured = capsys.readouterr()
+        assert "unrecognized message type" not in captured.out
+
     def test_html_end_to_end_xss(self):
         """The hostile entry's payloads must never survive unescaped."""
         messages = load_transcript(self.FIXTURE)
