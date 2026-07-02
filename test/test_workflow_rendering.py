@@ -134,6 +134,35 @@ class TestWorkflowMetaParsing:
     def test_no_meta_block_returns_empty(self) -> None:
         assert parse_workflow_meta("const x = 1\nawait agent('hi')\n") == ("", "", [])
 
+    def test_escaped_quote_in_string_does_not_truncate(self) -> None:
+        # Observed in real meta blocks ('SAM\'s ...'): the old [^'\"]* pattern
+        # cut the description at the escaped quote.
+        script = (
+            "export const meta = {\n"
+            "  name: 'sweep',\n"
+            "  description: 'Stress-test SAM\\'s operative layer',\n"
+            "  phases: [{ title: 'The \\'inner\\' pass' }],\n"
+            "}\n"
+        )
+        name, desc, phases = parse_workflow_meta(script)
+        assert name == "sweep"
+        assert desc == "Stress-test SAM's operative layer"
+        assert phases == ["The 'inner' pass"]
+
+    def test_backtick_and_double_quote_strings(self) -> None:
+        script = (
+            "export const meta = {\n"
+            "  name: `tick-name`,\n"
+            '  description: "double quoted",\n'
+            "  phases: [{ title: `Scan` }],\n"
+            "}\n"
+        )
+        assert parse_workflow_meta(script) == (
+            "tick-name",
+            "double quoted",
+            ["Scan"],
+        )
+
 
 _JS_META = (
     "export const meta = {\n"
@@ -191,6 +220,135 @@ class TestSnapshotFirstHeader:
             # snapshot has name+phases, but the script has no `export const meta`
             resolve_workflow_header(self._run(), "const x = 1\n")
         assert any("may have drifted" in r.message for r in caplog.records)
+
+
+class TestSnapshotScriptFallback:
+    """Shape variety (#174 follow-up): the tool_use input carries a script only
+    in the inline-``script`` invocation shape. For ``scriptPath`` / ``name`` /
+    ``resumeFromRunId`` shapes the header must fall back to the snapshot's
+    stored ``script`` — and an absent script is NOT meta-format drift, so the
+    warning must stay quiet."""
+
+    def _run(self, **kw):
+        from claude_code_log.workflow import WorkflowPhase, WorkflowRun
+
+        return WorkflowRun(
+            run_id="r",
+            workflow_name=kw.get("name", "SNAP-NAME"),
+            has_snapshot=True,
+            phases=kw.get("phases", [WorkflowPhase(index=0, title="Alpha")]),
+            script=kw.get("script", ""),
+            summary=kw.get("summary", ""),
+        )
+
+    def test_resolve_workflow_script_prefers_input_then_snapshot(self) -> None:
+        from claude_code_log.workflow import resolve_workflow_script
+
+        run = self._run(script="// from snapshot")
+        assert resolve_workflow_script(run, "// inline") == "// inline"
+        assert resolve_workflow_script(run, "") == "// from snapshot"
+        assert resolve_workflow_script(None, "") == ""
+
+    def test_empty_input_script_parses_snapshot_script_no_warning(self, caplog) -> None:
+        import logging
+
+        from claude_code_log.workflow import resolve_workflow_header
+
+        with caplog.at_level(logging.WARNING, logger="claude_code_log.workflow"):
+            name, desc, phases = resolve_workflow_header(self._run(script=_JS_META), "")
+        # description recovered from the snapshot-stored script's meta block
+        assert desc == "js-desc"
+        assert name == "SNAP-NAME"  # snapshot-first name still wins
+        assert phases == ["Alpha"]
+        assert not caplog.records  # a parseable snapshot script → nothing drifted
+
+    def test_no_script_anywhere_is_not_drift(self, caplog) -> None:
+        import logging
+
+        from claude_code_log.workflow import resolve_workflow_header
+
+        with caplog.at_level(logging.WARNING, logger="claude_code_log.workflow"):
+            name, desc, phases = resolve_workflow_header(self._run(), "")
+        assert name == "SNAP-NAME" and phases == ["Alpha"]
+        assert not caplog.records  # no source text at all → no drift warning
+
+    def test_description_falls_back_to_snapshot_summary(self) -> None:
+        from claude_code_log.workflow import resolve_workflow_header
+
+        _, desc, _ = resolve_workflow_header(
+            self._run(summary="digest of the description"), ""
+        )
+        assert desc == "digest of the description"
+
+
+class TestSnapshotEnrichmentParsing:
+    """The <runId>.json snapshot carries far more than phases/agent metadata —
+    script, scriptPath, args, summary, error, defaultModel, durationMs,
+    totalToolCalls all surface on WorkflowRun."""
+
+    def test_enrichment_fields_parsed(self, tmp_path: Path) -> None:
+        import json
+
+        from claude_code_log.workflow import parse_workflow_run
+
+        run_dir = tmp_path / "subagents" / "workflows" / "wf_enrich1"
+        run_dir.mkdir(parents=True)
+        (run_dir / "journal.jsonl").write_text(
+            '{"type": "result", "agentId": "ag1", "result": "ok"}\n',
+            encoding="utf-8",
+        )
+        snapshot = tmp_path / "wf_enrich1.json"
+        snapshot.write_text(
+            json.dumps(
+                {
+                    "runId": "wf_enrich1",
+                    "taskId": "task_e1",
+                    "workflowName": "enriched",
+                    "status": "completed",
+                    "script": "export const meta = {\n}\n",
+                    "scriptPath": "/somewhere/enriched.workflow.js",
+                    "args": {"target": "docs/"},
+                    "summary": "the digest",
+                    "defaultModel": "claude-sonnet-4-6",
+                    "durationMs": 1234,
+                    "totalToolCalls": 7,
+                    "phases": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        run = parse_workflow_run(run_dir, snapshot)
+        assert run is not None
+        assert run.script.startswith("export const meta")
+        assert run.script_path == "/somewhere/enriched.workflow.js"
+        assert run.args == {"target": "docs/"}
+        assert run.summary == "the digest"
+        assert run.error == ""
+        assert run.default_model == "claude-sonnet-4-6"
+        assert run.duration_ms == 1234
+        assert run.total_tool_calls == 7
+
+    def test_non_string_enrichment_values_coerced_to_empty(
+        self, tmp_path: Path
+    ) -> None:
+        import json
+
+        from claude_code_log.workflow import parse_workflow_run
+
+        run_dir = tmp_path / "subagents" / "workflows" / "wf_enrich2"
+        run_dir.mkdir(parents=True)
+        (run_dir / "journal.jsonl").write_text(
+            '{"type": "result", "agentId": "ag1", "result": "ok"}\n',
+            encoding="utf-8",
+        )
+        snapshot = tmp_path / "wf_enrich2.json"
+        snapshot.write_text(
+            json.dumps({"runId": "wf_enrich2", "script": 42, "error": ["x"]}),
+            encoding="utf-8",
+        )
+        run = parse_workflow_run(run_dir, snapshot)
+        assert run is not None
+        assert run.script == "" and run.error == ""
 
 
 class TestWorkflowRunLinkage:

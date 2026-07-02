@@ -9,6 +9,8 @@ side-channel sub-agents. On disk (see ``work/dynamic-workflow-support.md``
         agent-<agentId>.jsonl         per-agent side-channel transcript
         agent-<agentId>.meta.json     {"agentType": "workflow-subagent"}
     <sid>/workflows/<runId>.json      terminal snapshot: phases + per-agent metadata
+                                      + the script that ran (+ args, summary,
+                                      error, run totals)
 
 This module turns that into a :class:`WorkflowRun`. Strategy (D1):
 journal-led, ``<runId>.json``-enriched — ``journal.jsonl`` is the
@@ -37,10 +39,27 @@ logger = logging.getLogger(__name__)
 _WF_META_RE = re.compile(
     r"export\s+(?:const|let|var)\s+meta\s*=\s*\{(.*?)\n\}", re.DOTALL
 )
-_WF_NAME_RE = re.compile(r"\bname\s*:\s*['\"]([^'\"]*)['\"]")
-_WF_DESC_RE = re.compile(r"\bdescription\s*:\s*['\"]([^'\"]*)['\"]")
+# A JS string literal in any of the three quote styles, with backslash-escape
+# support — real meta descriptions contain escaped quotes ('SAM\'s ...'),
+# which a naive [^'\"]* would truncate at.
+_WF_JS_STRING = (
+    r"(?:'((?:[^'\\]|\\.)*)'"
+    r'|"((?:[^"\\]|\\.)*)"'
+    r"|`((?:[^`\\]|\\.)*)`)"
+)
+_WF_NAME_RE = re.compile(r"\bname\s*:\s*" + _WF_JS_STRING)
+_WF_DESC_RE = re.compile(r"\bdescription\s*:\s*" + _WF_JS_STRING)
 _WF_PHASES_KEY_RE = re.compile(r"\bphases\s*:")
-_WF_TITLE_RE = re.compile(r"title\s*:\s*['\"]([^'\"]+)['\"]")
+_WF_TITLE_RE = re.compile(r"title\s*:\s*" + _WF_JS_STRING)
+
+
+def _js_string_value(m: "re.Match[str]") -> str:
+    """Extract + unescape the string from a ``_WF_JS_STRING`` match (exactly
+    one of its three alternation groups is non-None). Unescaping is the
+    best-effort ``\\x`` → ``x`` — right for the quotes/backslashes that occur
+    in display strings, and never worse than the truncation it replaces."""
+    value = next((g for g in m.groups()[-3:] if g is not None), "")
+    return re.sub(r"\\(.)", r"\1", value)
 
 
 def parse_workflow_meta(script: str) -> tuple[str, str, list[str]]:
@@ -56,7 +75,10 @@ def parse_workflow_meta(script: str) -> tuple[str, str, list[str]]:
     matched block, so they can't pick up ``name:``/``title:`` elsewhere in
     the body. Phase titles are collected from every ``title:`` *after* the
     ``phases:`` key, so a ``detail`` string containing ``]`` doesn't truncate
-    the list. Returns empty values when the block or a field isn't found.
+    the list. String values may use any JS quote style (``'``/``"``/backtick)
+    and may contain backslash-escaped quotes (``'SAM\\'s sweep'`` — observed
+    in real meta blocks). Returns empty values when the block or a field
+    isn't found.
     """
     block_m = _WF_META_RE.search(script)
     if not block_m:
@@ -67,12 +89,33 @@ def parse_workflow_meta(script: str) -> tuple[str, str, list[str]]:
     phases: list[str] = []
     phases_key = _WF_PHASES_KEY_RE.search(block)
     if phases_key:
-        phases = _WF_TITLE_RE.findall(block[phases_key.end() :])
+        phases = [
+            title
+            for m in _WF_TITLE_RE.finditer(block[phases_key.end() :])
+            if (title := _js_string_value(m))
+        ]
     return (
-        name_m.group(1) if name_m else "",
-        desc_m.group(1) if desc_m else "",
+        _js_string_value(name_m) if name_m else "",
+        _js_string_value(desc_m) if desc_m else "",
         phases,
     )
+
+
+def resolve_workflow_script(run: "Optional[WorkflowRun]", script: str) -> str:
+    """Resolve the *effective* orchestrator source for a Workflow tool_use.
+
+    A Workflow invocation carries the script inline only in the ``script``
+    input shape; the ``scriptPath`` / ``name`` / ``resumeFromRunId`` shapes
+    carry no source at all. The terminal ``<runId>.json`` snapshot, however,
+    stores the full text that actually ran (its ``script`` field) — so fall
+    back to that. Empty when neither is available (e.g. a still-running
+    ``scriptPath`` invocation with no snapshot yet).
+    """
+    if script:
+        return script
+    if run is not None:
+        return run.script
+    return ""
 
 
 def resolve_workflow_header(
@@ -85,28 +128,38 @@ def resolve_workflow_header(
     ``run.phases`` titles) when a snapshot is present, effectively *back-filling*
     the header from the JSON. Falls back to the best-effort JS-``meta`` regex
     (:func:`parse_workflow_meta`) for a running workflow with no snapshot.
-    ``description`` always comes from the JS meta — the snapshot carries no
-    description field.
 
-    When a snapshot IS present but the JS-``meta`` parse missed a field the
-    snapshot supplies, emit a warning so JS-format drift is noticeable (we can
-    then adapt the regex).
+    ``script`` is the tool_use's inline source, empty for the ``scriptPath`` /
+    ``name`` invocation shapes — the meta parse then runs on the snapshot's
+    stored ``script`` (:func:`resolve_workflow_script`), which is where
+    ``description`` usually comes from for those shapes. When even that yields
+    no description, the snapshot's ``summary`` (the tool's own digest of the
+    description) fills in.
+
+    When a snapshot IS present and a *non-empty* script failed the JS-``meta``
+    parse for a field the snapshot supplies, emit a warning so genuine
+    JS-format drift stays noticeable (we can then adapt the regex). No script
+    text at all is NOT drift — no warning.
     """
-    name_js, description, phases_js = parse_workflow_meta(script)
+    effective_script = resolve_workflow_script(run, script)
+    name_js, description, phases_js = parse_workflow_meta(effective_script)
 
     if run is not None and getattr(run, "has_snapshot", False):
-        if run.workflow_name and not name_js:
-            logger.warning(
-                "Workflow meta: JS `name` not parsed but snapshot has "
-                "workflowName=%r — the script's `meta` format may have drifted.",
-                run.workflow_name,
-            )
-        if run.phases and not phases_js:
-            logger.warning(
-                "Workflow meta: JS `phases` not parsed but snapshot has %d "
-                "phase(s) — the script's `meta` format may have drifted.",
-                len(run.phases),
-            )
+        if not description:
+            description = run.summary
+        if effective_script:
+            if run.workflow_name and not name_js:
+                logger.warning(
+                    "Workflow meta: JS `name` not parsed but snapshot has "
+                    "workflowName=%r — the script's `meta` format may have drifted.",
+                    run.workflow_name,
+                )
+            if run.phases and not phases_js:
+                logger.warning(
+                    "Workflow meta: JS `phases` not parsed but snapshot has %d "
+                    "phase(s) — the script's `meta` format may have drifted.",
+                    len(run.phases),
+                )
         name = run.workflow_name or name_js
         phase_titles = [p.title for p in run.phases] or phases_js
         return name, description, phase_titles
@@ -167,6 +220,15 @@ class WorkflowRun:
     the snapshot counts only those that produced a result (retried/abandoned
     agents appear in ``agents`` but not in ``agent_count`` — e.g. 42 vs 40 on
     the §1 reference run).
+
+    ``script`` is the snapshot's stored copy of the orchestrator source that
+    actually ran — the recovery route for the ``scriptPath`` / ``name``
+    invocation shapes, whose tool_use input carries no source. ``script_path``
+    is where that source lived (the caller's file for a ``scriptPath``
+    invocation, the session-dir persisted copy for an inline one). ``summary``
+    is the tool's digest of the meta description; ``error`` is set for a
+    ``failed`` run (possibly one that died before launching any agent — such a
+    run has a snapshot but no journal, so ``agents`` is empty).
     """
 
     run_id: str
@@ -179,6 +241,14 @@ class WorkflowRun:
     total_tokens: Optional[int] = None
     agent_count: Optional[int] = None
     has_snapshot: bool = False
+    script: str = ""
+    script_path: str = ""
+    args: Any = None
+    summary: str = ""
+    error: str = ""
+    default_model: str = ""
+    duration_ms: Optional[int] = None
+    total_tool_calls: Optional[int] = None
 
 
 def _read_jsonl(path: Path) -> list[Any]:
@@ -218,6 +288,15 @@ def _as_int(value: Any) -> Optional[int]:
         except ValueError:
             return None
     return None
+
+
+def _as_str(value: Any) -> str:
+    """Coerce a snapshot value to ``str`` defensively, else ``""``.
+
+    Same posture as :func:`_as_int`: snapshot fields come straight from JSON,
+    so a variant payload could carry a non-string where we expect text.
+    """
+    return value if isinstance(value, str) else ""
 
 
 def _parse_journal(path: Path) -> tuple[list[str], dict[str, Any]]:
@@ -309,6 +388,10 @@ def parse_workflow_run(
     phases_meta: list[dict[str, Any]] = []
     agent_meta: dict[str, dict[str, Any]] = {}
     has_snapshot = False
+    script = script_path = summary = error = default_model = ""
+    run_args: Any = None
+    duration_ms: Optional[int] = None
+    total_tool_calls: Optional[int] = None
 
     if snapshot_path is not None and snapshot_path.is_file():
         raw, phases_meta, agent_meta = _load_snapshot(snapshot_path)
@@ -321,6 +404,14 @@ def parse_workflow_run(
             total_tokens = _as_int(raw.get("totalTokens"))
             agent_count = _as_int(raw.get("agentCount"))
             run_result = raw.get("result")
+            script = _as_str(raw.get("script"))
+            script_path = _as_str(raw.get("scriptPath"))
+            run_args = raw.get("args")
+            summary = _as_str(raw.get("summary"))
+            error = _as_str(raw.get("error"))
+            default_model = _as_str(raw.get("defaultModel"))
+            duration_ms = _as_int(raw.get("durationMs"))
+            total_tool_calls = _as_int(raw.get("totalToolCalls"))
 
     # Union of journal order with any snapshot-only agent ids (defensive).
     all_ids = list(order)
@@ -369,6 +460,14 @@ def parse_workflow_run(
         total_tokens=total_tokens,
         agent_count=agent_count,
         has_snapshot=has_snapshot,
+        script=script,
+        script_path=script_path,
+        args=run_args,
+        summary=summary,
+        error=error,
+        default_model=default_model,
+        duration_ms=duration_ms,
+        total_tool_calls=total_tool_calls,
     )
 
 
