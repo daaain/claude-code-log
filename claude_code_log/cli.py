@@ -13,6 +13,7 @@ import click
 from git import Repo, InvalidGitRepositoryError
 
 from .converter import (
+    RegenerationReport,
     convert_jsonl_to,
     convert_jsonl_to_html,
     ensure_fresh_cache,
@@ -1299,6 +1300,12 @@ def main(
             )
             return
 
+        # Out-param: convert_jsonl_to reports what it actually (re)wrote —
+        # the combined output and/or how many session files — so we don't
+        # print a success line on top of its own "is current, skipping
+        # regeneration" line, and don't claim to have "combined" anything
+        # when only session files were written.
+        report = RegenerationReport()
         output_path = convert_jsonl_to(
             output_format,
             input_path,
@@ -1326,20 +1333,40 @@ def main(
             # same dir still regenerates), and `--all-projects` calls this
             # with output=None anyway, so its skip is never forced.
             force_regenerate=output is not None and _output_path_is_file(output),
+            report=report,
         )
-        if input_path.is_file():
+        # Report only work actually done this run. On a pure skip the converter
+        # already printed its "... is current, skipping regeneration" line, so
+        # print nothing more. Otherwise gate the wording on WHICH output was
+        # (re)written: "combined" only when the combined transcript itself was,
+        # and the per-session count only for sessions rewritten this run — so
+        # we never claim to have combined something we skipped.
+        combined_written = report.combined_regenerated
+        sessions_written = report.sessions_regenerated
+        if not combined_written and not sessions_written:
+            pass
+        elif input_path.is_file():
             click.echo(f"Successfully converted {input_path} to {output_path}")
         else:
             jsonl_count = len(list(input_path.glob("*.jsonl")))
-            if write_individual:
-                ext = get_file_extension(output_format)
-                session_files = list(input_path.glob(f"session-*.{ext}"))
+            session_suffix = (
+                f" and generated {sessions_written} individual session files"
+                if sessions_written
+                else ""
+            )
+            if combined_written:
                 click.echo(
-                    f"Successfully combined {jsonl_count} transcript files from {input_path} to {output_path} and generated {len(session_files)} individual session files"
+                    f"Successfully combined {jsonl_count} transcript files "
+                    f"from {input_path} to {output_path}{session_suffix}"
                 )
             else:
+                # The combined transcript was skipped as current (or never
+                # requested, e.g. `--combined no`); only per-session files were
+                # written. Don't claim to have "combined" anything or name a
+                # combined file that wasn't produced this run.
                 click.echo(
-                    f"Successfully combined {jsonl_count} transcript files from {input_path} to {output_path}"
+                    f"Successfully processed {jsonl_count} transcript files "
+                    f"from {input_path}{session_suffix}"
                 )
 
         if open_browser:

@@ -205,5 +205,132 @@ class TestIsOutdatedNonRegularFileGuard:
         assert MarkdownRenderer().is_outdated(missing) is True
 
 
+class TestSingleFileStaleness:
+    """#221 follow-up: the *default* single-file output (no ``-o``, detail-
+    suffixed naming) rides the version-only skip, so a source that grows
+    between runs was wrongly kept stale. And a genuine skip printed BOTH the
+    converter's "is current, skipping" line and the CLI's "Successfully
+    converted" line. These pin the fixes for the exact CLI repro:
+    ``claude-code-log <file>.jsonl --detail low`` run, grow source, re-run."""
+
+    def test_grown_source_regenerates(self, tmp_path: Path):
+        src = _write_jsonl(tmp_path / "session.jsonl", "FIRST_turn_marker")
+        runner = CliRunner()
+
+        r1 = runner.invoke(main, [str(src), "--detail", "low"])
+        assert r1.exit_code == 0, r1.output
+        out = next(tmp_path.glob("*.low.html"))
+        assert "FIRST_turn_marker" in out.read_text(encoding="utf-8")
+        out_mtime = out.stat().st_mtime
+
+        # Source progresses (a real append, not a synthetic mtime bump), then
+        # forced strictly newer than the output so the check is robust on
+        # coarse-granularity filesystems.
+        with open(src, "a", encoding="utf-8") as f:
+            f.write(json.dumps(_user_entry("SECOND_turn_marker")) + "\n")
+        os.utime(src, (out_mtime + 2, out_mtime + 2))
+
+        r2 = runner.invoke(main, [str(src), "--detail", "low"])
+        assert r2.exit_code == 0, r2.output
+        assert "skipping regeneration" not in r2.output
+        second = out.read_text(encoding="utf-8")
+        assert "SECOND_turn_marker" in second, "stale HTML served after source grew"
+        assert out.stat().st_mtime > out_mtime
+
+    def test_unchanged_source_skips_without_success_line(self, tmp_path: Path):
+        src = _write_jsonl(tmp_path / "session.jsonl", "ONLY_turn_marker")
+        runner = CliRunner()
+
+        r1 = runner.invoke(main, [str(src), "--detail", "low"])
+        assert r1.exit_code == 0, r1.output
+        assert "Successfully converted" in r1.output
+
+        # Re-run with the source untouched: skip announced exactly once, and
+        # NOT also "Successfully converted" (the misleading double message).
+        r2 = runner.invoke(main, [str(src), "--detail", "low"])
+        assert r2.exit_code == 0, r2.output
+        assert "skipping regeneration" in r2.output
+        assert "Successfully converted" not in r2.output
+
+    def test_directory_skip_suppresses_success_line(self, tmp_path: Path):
+        """Directory symmetry: a no-op directory re-run early-exits with a
+        skip line and must NOT also print 'Successfully combined ...' (the
+        same double-message fix applied to the directory branch)."""
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        _write_jsonl(proj / "s.jsonl", "DIR_turn_marker")
+        runner = CliRunner()
+
+        r1 = runner.invoke(main, [str(proj)])
+        assert r1.exit_code == 0, r1.output
+        assert "Successfully combined" in r1.output
+
+        r2 = runner.invoke(main, [str(proj)])
+        assert r2.exit_code == 0, r2.output
+        assert "skipping regeneration" in r2.output
+        assert "Successfully combined" not in r2.output
+
+    def test_combined_no_confirms_session_generation(self, tmp_path: Path):
+        """`--combined no` writes only per-session files (no combined). The
+        success line is gated on regeneration, and that gate must count
+        per-session output too — otherwise the run falls completely silent
+        despite writing every session file. Regression guard: the first
+        version of the skip-suppression tracked only the combined write."""
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        _write_jsonl(proj / "aaaaaaaa.jsonl", "SESSION_A_marker")
+        runner = CliRunner()
+
+        r1 = runner.invoke(main, [str(proj), "--combined", "no"])
+        assert r1.exit_code == 0, r1.output
+        # Per-session files were produced...
+        assert list(proj.glob("session-*.html")), "no session files written"
+        # ...and the run confirms that work rather than printing nothing.
+        assert "individual session files" in r1.output, (
+            f"--combined no produced no confirmation; output was:\n{r1.output}"
+        )
+        # ...and it does NOT claim to have "combined" anything (no combined
+        # file is written under --combined no); it reports "processed" instead.
+        assert "Successfully processed" in r1.output
+        assert "Successfully combined" not in r1.output
+
+    def test_combined_current_but_session_regenerated_says_processed(
+        self, tmp_path: Path
+    ):
+        """When the combined transcript is current but a session file is
+        regenerated (e.g. a deleted session HTML), the CLI must NOT claim
+        'Successfully combined … to combined_transcripts.html' — the combined
+        was skipped. It should report the per-session work as 'processed'
+        instead, so it never contradicts the converter's 'combined … is
+        current, skipping regeneration' line. The combined-write and
+        session-write signals are tracked separately for exactly this."""
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        _write_jsonl(proj / "aaaaaaaa.jsonl", "SESSION_A_marker")
+        runner = CliRunner()
+
+        r1 = runner.invoke(main, [str(proj)])  # default --combined yes: full run
+        assert r1.exit_code == 0, r1.output
+        assert "Successfully combined" in r1.output
+        session_htmls = list(proj.glob("session-*.html"))
+        assert session_htmls, "no session HTML produced on first run"
+        session_html = session_htmls[0]
+
+        # Remove just the session HTML; the combined stays current.
+        session_html.unlink()
+        r2 = runner.invoke(main, [str(proj)])
+        assert r2.exit_code == 0, r2.output
+        # The session was regenerated...
+        assert session_html.exists(), "session HTML not regenerated"
+        assert "individual session files" in r2.output
+        # ...the combined was skipped (converter says so)...
+        assert "skipping regeneration" in r2.output
+        # ...and the CLI does NOT falsely claim to have combined it.
+        assert "Successfully combined" not in r2.output, (
+            f"claimed 'combined' when combined was skipped; output:\n{r2.output}"
+        )
+        assert "Successfully processed" in r2.output
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

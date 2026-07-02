@@ -1083,6 +1083,21 @@ class GenerationStats:
         return "\n".join(parts)
 
 
+@dataclass
+class RegenerationReport:
+    """What ``convert_jsonl_to`` actually (re)wrote on a call.
+
+    Combined output and per-session files are independent axes, so the CLI
+    needs both to report accurately — e.g. it must not claim to have
+    "combined" anything when only session files were rewritten and the
+    combined transcript was skipped as current. Passed in by the caller and
+    populated in place (the ``Path`` return contract is unchanged).
+    """
+
+    combined_regenerated: bool = False
+    sessions_regenerated: int = 0
+
+
 def _get_page_html_path(page_number: int, variant_suffix: str = "") -> str:
     """Get the HTML filename for a given page number.
 
@@ -1465,7 +1480,7 @@ def _generate_paginated_html(
     detail: DetailLevel = DetailLevel.FULL,
     compact: bool = False,
     no_recaps: bool = False,
-) -> Path:
+) -> tuple[Path, bool]:
     """Generate paginated HTML files for combined transcript.
 
     Args:
@@ -1479,7 +1494,10 @@ def _generate_paginated_html(
         silent: Suppress verbose output
 
     Returns:
-        Path to the first page (combined_transcripts.html)
+        ``(first_page_path, wrote_any)`` — the path to the first page
+        (combined_transcripts.html) and whether at least one page was
+        actually (re)written (False when every page was current/skipped), so
+        the caller can report regeneration accurately.
     """
     from .html.renderer import HtmlRenderer
     from .utils import format_timestamp, variant_suffix as _variant_suffix
@@ -1529,6 +1547,10 @@ def _generate_paginated_html(
             messages_by_session[key].append(msg)
 
     first_page_path = output_dir / _get_page_html_path(1, suffix)
+
+    # Track whether any page was actually (re)written this call — pages that
+    # are current are skipped individually, so a run can write nothing.
+    wrote_any = False
 
     # Generate each page
     for page_num, page_session_ids in enumerate(pages, start=1):
@@ -1641,6 +1663,7 @@ def _generate_paginated_html(
         # encoding crashes here. Replace with U+FFFD so output stays
         # valid UTF-8.
         page_file.write_text(html_content, encoding="utf-8", errors="replace")
+        wrote_any = True
 
         # Update cache
         cache_manager.update_page_cache(
@@ -1658,7 +1681,7 @@ def _generate_paginated_html(
             variant_suffix=suffix,
         )
 
-    return first_page_path
+    return first_page_path, wrote_any
 
 
 def convert_jsonl_to_html(
@@ -1707,6 +1730,7 @@ def convert_jsonl_to(
     no_timestamps: bool = False,
     no_recaps: bool = False,
     force_regenerate: bool = False,
+    report: Optional["RegenerationReport"] = None,
 ) -> Path:
     """Convert JSONL transcript(s) to the specified format.
 
@@ -1730,6 +1754,16 @@ def convert_jsonl_to(
             file at a user-chosen path was kept even when a different
             transcript was requested — silent stale content. The tool's own
             managed ``combined_transcripts*`` artifacts still use the skip.
+        report: Optional out-parameter (a ``RegenerationReport``). When
+            provided, it is populated in place with what was actually
+            (re)written: ``combined_regenerated`` (the combined transcript /
+            paginated pages) and ``sessions_regenerated`` (count of individual
+            session files). Kept separate so the CLI can report accurately —
+            it must gate the word "combined" on ``combined_regenerated`` and
+            not claim to have combined anything when only session files were
+            written (e.g. ``--combined no``, or a current combined alongside a
+            regenerated session). Leaves the ``Path`` return contract (that
+            ~20 callers rely on) unchanged.
     """
     if not input_path.exists():
         raise FileNotFoundError(f"Input path not found: {input_path}")
@@ -1829,6 +1863,7 @@ def convert_jsonl_to(
                             f"All HTML files are current for {input_path.name}, "
                             "skipping regeneration"
                         )
+                    # Nothing regenerated: report defaults (False / 0) stand.
                     return output_path
 
         # Phase 2: Load messages (will use fresh cache when available)
@@ -1894,6 +1929,9 @@ def convert_jsonl_to(
     # requested) are still produced by `_generate_individual_session_files`
     # below. The function still returns `output_path` for the caller's
     # index linking, but the file at that path is not (re-)written.
+    # Tracks whether the combined output was actually (re)written this call,
+    # reported via the `report` out-parameter for the CLI's message.
+    did_regenerate = False
     if not write_combined:
         pass
     elif use_pagination:
@@ -1918,7 +1956,7 @@ def convert_jsonl_to(
             }
         else:
             session_data = _build_session_data_from_messages(messages)
-        output_path = _generate_paginated_html(
+        output_path, did_regenerate = _generate_paginated_html(
             messages,
             effective_output_dir,
             title,
@@ -1949,16 +1987,42 @@ def convert_jsonl_to(
                 or not output_path.exists()
             )
         else:
-            # Fallback: old logic for single file mode or no cache
+            # Fallback: old logic for single file mode or no cache.
+            #
+            # is_outdated() only compares the embedded tool version, not the
+            # source's freshness, so a single .jsonl that grows between runs
+            # (e.g. an in-progress session re-exported with the same tool
+            # version) would be wrongly skipped as "current" and serve stale
+            # HTML (issue #221 follow-up). Mirror the directory path's
+            # source-tracking intent with an mtime check: regenerate when the
+            # source file is newer than the existing output. Scoped to a file
+            # source — a directory source has no single mtime and is handled
+            # by the cache branch / `cache_was_updated` above.
+            #
+            # The directory cache persists the *source* mtime in its DB to
+            # detect change; single-file mode has no DB, so the *output* file's
+            # own mtime is the natural, persistence-free basis. It is sufficient
+            # because the output is always written after its source is read, so
+            # `output.mtime >= source.mtime` holds post-write; a later append
+            # bumps the source past it. Both approaches share the same
+            # filesystem-mtime granularity limit (a sub-tick append racing the
+            # prior write resolves on the next run) — no worse than the cache.
+            source_is_newer = (
+                input_path.is_file()
+                and output_path.exists()
+                and input_path.stat().st_mtime > output_path.stat().st_mtime
+            )
             should_regenerate = (
                 force_regenerate
                 or renderer.is_outdated(output_path)
+                or source_is_newer
                 or from_date is not None
                 or to_date is not None
                 or not output_path.exists()
                 or (input_path.is_dir() and cache_was_updated)
             )
 
+        did_regenerate = should_regenerate
         if should_regenerate:
             # For referenced images, pass the output directory
             output_dir = output_path.parent
@@ -1983,9 +2047,16 @@ def convert_jsonl_to(
                 f"{format.upper()} file {output_path.name} is current, skipping regeneration"
             )
 
-    # Generate individual session files if requested and in directory mode
+    # Generate individual session files if requested and in directory mode.
+    # Its return count feeds the `report` below: per-session output is an
+    # independent axis from the combined write, so a run that rewrites session
+    # files while the combined stays current (or `--combined no`, which never
+    # writes a combined) still counts as work done — otherwise the CLI would
+    # fall silent on it. Kept separate from `did_regenerate` so the CLI can
+    # confirm session work without falsely claiming to have "combined".
+    sessions_regenerated = 0
     if generate_individual_sessions and input_path.is_dir():
-        _generate_individual_session_files(
+        sessions_regenerated = _generate_individual_session_files(
             format,
             messages,
             effective_output_dir,
@@ -2002,6 +2073,10 @@ def convert_jsonl_to(
             no_timestamps=no_timestamps,
             no_recaps=no_recaps,
         )
+
+    if report is not None:
+        report.combined_regenerated = did_regenerate
+        report.sessions_regenerated = sessions_regenerated
 
     return output_path
 
