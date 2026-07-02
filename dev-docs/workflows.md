@@ -3,7 +3,9 @@
 > See [application_model.md](application_model.md) for the system overview.
 > Issue [#174](https://github.com/daaain/claude-code-log/issues/174); landed
 > as PR #191 (nested DOM), #203 (parsing), #205 (tool-input rendering),
-> #210 (tree rendering) plus visual-polish follow-ups.
+> #210 (tree rendering) plus visual-polish follow-ups, then the
+> invocation-shape-variety follow-up (scriptPath/name/args/resume shapes,
+> snapshot script recovery, failed-run surfacing).
 
 A **dynamic workflow** is Claude Code's `Workflow` tool: the assistant
 submits a JavaScript orchestrator script that fans out into many
@@ -44,6 +46,8 @@ A run under a trunk session `<sid>.jsonl` leaves:
     agent-<agentId>.jsonl         per-agent side-channel transcript
     agent-<agentId>.meta.json     {"agentType": "workflow-subagent"}
 <sid>/workflows/<runId>.json      terminal snapshot: phases + per-agent metadata
+                                  + the script that ran, scriptPath, args,
+                                  summary, error, run totals
 <sid>/workflows/scripts/<name>-<runId>.js   the JS orchestrator source
 ```
 
@@ -52,13 +56,27 @@ per-agent results; `<runId>.json` appears only on completion. A running
 workflow therefore parses with agents in journal order and **no phase
 grouping** (`has_snapshot=False`).
 
+The **invocation** comes in several shapes: inline `script`, `scriptPath`
+(source in a file — the tool_use input carries NO source at all), or a
+saved-workflow `name`, optionally with `args` and `resumeFromRunId`. Only
+the inline shape embeds the orchestrator in the transcript; for the others
+the snapshot's `script` field is the recovery route (never the
+`scriptPath` file itself — it may have been edited or deleted since).
+
+A run that fails **before launching any agent** (script error on an early
+line) leaves a snapshot (`status: failed` + `error`) but no run
+dir/journal — a *snapshot-only* run.
+
 ## 2. Parse model ([`workflow.py`](../claude_code_log/workflow.py))
 
 `parse_workflow_run` is **journal-led, snapshot-enriched**:
 
 - `WorkflowRun` — `run_id`, `task_id`, `workflow_name`, `status`,
   `phases`, flat `agents` (journal launch order), run `result`, token
-  totals, `has_snapshot`.
+  totals, `has_snapshot`, plus the snapshot enrichment: `script` (the
+  source that ran), `script_path`, `args`, `summary` (the tool's digest
+  of the meta description), `error`, `default_model`, `duration_ms`,
+  `total_tool_calls`.
 - `WorkflowPhase` — `index`, `title`, `detail`, member `agents` (the
   same `WorkflowAgent` objects as the flat list).
 - `WorkflowAgent` — `agent_id`, `label`, phase membership, `model`,
@@ -78,6 +96,12 @@ Two real-data quirks the parser absorbs:
   produced a result; the journal lists every launched agent
   (retries/abandoned included), so `len(run.agents)` can exceed
   `run.agent_count`.
+
+Discovery (`discover_workflow_runs`) is run-dir-led but also yields
+**snapshot-only** runs: any `<sid>/workflows/<runId>.json` with no
+matching run dir (the failed-before-launch case). `parse_workflow_run`
+accepts a missing journal when the snapshot loads, producing a run with
+an empty `agents` list — so the failure stays linkable to its tool_use.
 
 `load_workflow_runs(directory)` walks every session dir under a project;
 `load_session_workflow_runs(<sid>.jsonl)` derives the sibling
@@ -112,14 +136,34 @@ them **only when runs exist**, so a no-workflow single-file render keeps
 ## 4. The Workflow tool_use header (snapshot-first)
 
 `format_workflow_input` renders a meta header (name, description, phase
-pills) above the syntax-highlighted JS orchestrator.
-`resolve_workflow_header` sources it **snapshot-first**: when the linked
-run has a snapshot, `workflowName` and the snapshot phase titles win
-over the best-effort `export const meta = {...}` regex
+pills), an invocation line, then the syntax-highlighted JS orchestrator.
+
+The script shown is the **effective script**
+(`resolve_workflow_script`): the inline `script` input when present,
+else the snapshot's stored copy — so `scriptPath`/`name` invocations
+still show their orchestrator once the run completes. The invocation
+line (`workflow-invocation`) surfaces the non-inline shapes: the
+saved-workflow name, the `scriptPath` reference, and `resumeFromRunId`;
+`args` renders through the hybrid params table (HTML) / a fenced JSON
+block (Markdown), wrapped under an explicit `args` key.
+
+`resolve_workflow_header` sources the header **snapshot-first**: when
+the linked run has a snapshot, `workflowName` and the snapshot phase
+titles win over the best-effort `export const meta = {...}` regex
 (`parse_workflow_meta`), which remains the fallback for a running
-workflow. The description always comes from the JS meta (the snapshot
-has no description field). When the snapshot has a name/phases but the
-JS parse missed them, a warning flags probable script-format drift.
+workflow. The meta parse runs on the effective script; the description
+comes from it (the snapshot has no description field), falling back to
+the snapshot `summary`. The meta string regexes accept any JS quote
+style (`'`/`"`/backtick) with backslash-escape support — real
+descriptions contain `\'`. A drift warning fires only when a
+**non-empty** script fails a parse the snapshot can answer; an absent
+script (the non-inline shapes pre-snapshot) is not drift.
+
+Failure surfacing: a non-`completed` terminal `status` renders as a
+chip next to the workflow name (`workflow-status-<status>`), and the
+snapshot `error` (typically a JS stack trace) as a collapsed
+`workflow-error` fold — a snapshot-only failed run launched no agents,
+so the tree below is empty and this chrome is the only failure signal.
 
 Each phase pill is an **anchor link** to its spliced phase card: the
 splice records the phase cards' `message_index` values on
@@ -290,3 +334,8 @@ under a fold.
   `test/test_workflow_rendering.py` (parse, linkage, splice, rendering,
   single-file, pagination boundary) and `test/test_workflow_browser.py`
   (Playwright fold).
+- Fixture: `test/test_data/workflow_scriptpath/` (generated by
+  `scripts/gen_workflow_scriptpath_fixture.py`) — the non-inline
+  invocation shapes: `wf_sp01`, a `scriptPath`+`args` run whose snapshot
+  carries the script (meta description with an escaped quote), and
+  `wf_fail01`, a snapshot-only `failed` run with no run dir.
