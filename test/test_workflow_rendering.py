@@ -281,6 +281,33 @@ class TestSnapshotScriptFallback:
         assert desc == "digest of the description"
 
 
+class TestWorkflowToolInputShapes:
+    """WorkflowToolInput declares the full invocation-shape union — scriptPath /
+    name / args / resumeFromRunId no longer vanish into `extra=\"allow\"`."""
+
+    def test_scriptpath_shape_with_args(self) -> None:
+        from claude_code_log.models import WorkflowToolInput
+
+        inp = WorkflowToolInput.model_validate(
+            {
+                "scriptPath": "/home/u/sweep.workflow.js",
+                "args": {"batches": [1, 2]},
+            }
+        )
+        assert inp.script == ""
+        assert inp.script_path == "/home/u/sweep.workflow.js"
+        assert inp.args == {"batches": [1, 2]}
+
+    def test_saved_name_and_resume_shape(self) -> None:
+        from claude_code_log.models import WorkflowToolInput
+
+        inp = WorkflowToolInput.model_validate(
+            {"name": "review-changes", "resumeFromRunId": "wf_abc123-def"}
+        )
+        assert inp.name == "review-changes"
+        assert inp.resume_from_run_id == "wf_abc123-def"
+
+
 class TestSnapshotEnrichmentParsing:
     """The <runId>.json snapshot carries far more than phases/agent metadata —
     script, scriptPath, args, summary, error, defaultModel, durationMs,

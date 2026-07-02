@@ -1617,13 +1617,23 @@ class TaskStopInput(BaseModel):
 class WorkflowToolInput(BaseModel):
     """Input parameters for the dynamic ``Workflow`` tool (issue #174).
 
-    A Workflow tool_use carries a single field: ``script``, the JavaScript
-    orchestrator source. Its ``export const meta = {...}`` block (name /
-    description / phases) is surfaced as a header and the script body is
-    syntax-highlighted as JavaScript by the formatter.
+    A Workflow tool_use comes in several invocation shapes: inline ``script``
+    (the JavaScript orchestrator source), ``scriptPath`` (source in a file on
+    disk — no source in the input at all), or ``name`` (a saved workflow),
+    optionally combined with ``args`` (the script's input value) and
+    ``resumeFromRunId`` (resume a prior run). Only the inline shape carries
+    the source; for the other shapes the renderer falls back to the script
+    stored in the run's terminal snapshot. The effective script's
+    ``export const meta = {...}`` block (name / description / phases) is
+    surfaced as a header and the script body is syntax-highlighted as
+    JavaScript by the formatter.
     """
 
     script: str = ""
+    script_path: str = Field(default="", alias="scriptPath")
+    name: str = ""
+    args: Optional[Any] = None
+    resume_from_run_id: str = Field(default="", alias="resumeFromRunId")
 
     # Renderer-set (issue #174 PR3): the parsed WorkflowRun linked to this
     # tool_use by taskId, when its <runId>.json snapshot was found on disk.
