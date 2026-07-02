@@ -332,5 +332,42 @@ class TestSingleFileStaleness:
         assert "Successfully processed" in r2.output
 
 
+class TestDirectoryNoCacheStaleness:
+    """#254: a ``--no-cache`` DIRECTORY run has no cache to track per-source
+    mtimes, so it must fall back to a directory-wide freshness check (newest
+    source ``.jsonl`` vs the combined output). Otherwise a grown session
+    serves stale ``combined_transcripts.html`` — the directory analogue of the
+    single-file #221 bug. The CACHED directory path (no ``--no-cache``) tracks
+    this via ``is_html_stale`` and is unaffected."""
+
+    def test_grown_session_regenerates_without_cache(self, tmp_path: Path):
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        src = _write_jsonl(proj / "aaaaaaaa.jsonl", "FIRST_dir_marker")
+        runner = CliRunner()
+
+        r1 = runner.invoke(main, [str(proj), "--no-cache"])
+        assert r1.exit_code == 0, r1.output
+        combined = proj / "combined_transcripts.html"
+        assert combined.exists()
+        assert "FIRST_dir_marker" in combined.read_text(encoding="utf-8")
+        out_mtime = combined.stat().st_mtime
+
+        # The session progresses; force the source strictly newer than the
+        # output so the check is robust on coarse-granularity filesystems.
+        with open(src, "a", encoding="utf-8") as f:
+            f.write(json.dumps(_user_entry("SECOND_dir_marker")) + "\n")
+        os.utime(src, (out_mtime + 2, out_mtime + 2))
+
+        r2 = runner.invoke(main, [str(proj), "--no-cache"])
+        assert r2.exit_code == 0, r2.output
+        assert "skipping regeneration" not in r2.output
+        second = combined.read_text(encoding="utf-8")
+        assert "SECOND_dir_marker" in second, (
+            "stale combined HTML served on a --no-cache directory re-run"
+        )
+        assert combined.stat().st_mtime > out_mtime
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
