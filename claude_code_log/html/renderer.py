@@ -58,6 +58,7 @@ from ..models import (
     ToolUseContent,
     SkillInput,
     WebSearchInput,
+    ArtifactInput,
     WebFetchInput,
     WorkflowToolInput,
     MonitorInput,
@@ -88,6 +89,7 @@ from ..models import (
     TeamDeleteOutput,
     ToolResultContent,
     WebSearchOutput,
+    ArtifactOutput,
     WebFetchOutput,
     WriteOutput,
 )
@@ -171,6 +173,8 @@ from .tool_formatters import (
     format_grep_input,
     format_websearch_input,
     format_websearch_output,
+    format_artifact_input,
+    format_artifact_output,
     format_webfetch_input,
     format_workflow_input,
     format_workflow_phase_content,
@@ -853,6 +857,14 @@ class HtmlRenderer(Renderer):
         """Format → collapsible markdown with metadata badge."""
         return format_webfetch_output(output)
 
+    def format_ArtifactInput(self, input: ArtifactInput, _: TemplateMessage) -> str:
+        """Format → description + favicon/label/redeploy meta line."""
+        return format_artifact_input(input)
+
+    def format_ArtifactOutput(self, output: ArtifactOutput, _: TemplateMessage) -> str:
+        """Format → 'Published <title> → <url>' with scheme-guarded link."""
+        return format_artifact_output(output)
+
     def format_MonitorInput(self, input: MonitorInput, _: TemplateMessage) -> str:
         """Format → 4-row params table with collapsible command."""
         return format_monitor_input(input)
@@ -1211,6 +1223,13 @@ class HtmlRenderer(Renderer):
     ) -> str:
         """Title → '🌐 WebFetch <url>'."""
         return self._tool_title(message, "🌐", input.url)
+
+    def title_ArtifactInput(
+        self, input: ArtifactInput, message: TemplateMessage
+    ) -> str:
+        """Title → '🖼️ Artifact <file_path>' (same full-path recipe as
+        Read/Write — the deployed page is identified by its source file)."""
+        return self._tool_title(message, "🖼️", input.file_path)
 
     def title_MonitorInput(self, input: MonitorInput, message: TemplateMessage) -> str:
         """Title → '🔭 Monitor <description>'."""

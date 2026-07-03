@@ -19,7 +19,12 @@ from ..html.utils import (
     memory_short_path,
     render_user_markdown,
 )
-from ..utils import format_timestamp, generate_unified_diff, strip_error_tags
+from ..utils import (
+    format_timestamp,
+    generate_unified_diff,
+    is_safe_web_url,
+    strip_error_tags,
+)
 from ..models import (
     AssistantTextMessage,
     AwaySummaryMessage,
@@ -68,6 +73,7 @@ from ..models import (
     ToolUseContent,
     SkillInput,
     WebSearchInput,
+    ArtifactInput,
     WebFetchInput,
     WorkflowAgentMessage,
     WorkflowPhaseMessage,
@@ -100,6 +106,7 @@ from ..models import (
     TeamDeleteOutput,
     ToolResultContent,
     WebSearchOutput,
+    ArtifactOutput,
     WebFetchOutput,
     WriteOutput,
 )
@@ -302,6 +309,22 @@ def safe_markdown_inline(text: str) -> str:
     which escapes per-field via ``escape_html`` in the ``HtmlRenderer``.
     """
     return _protect_html_tags(text) if "<" in text else text
+
+
+def _markdown_safe_url(url: str) -> str:
+    """Render a transcript-derived URL as a Markdown link, or inline code.
+
+    Only URLs passing the shared ``is_safe_web_url`` scheme gate become
+    clickable — escaping alone doesn't neutralise a hostile scheme
+    (``javascript:`` would survive into a live link once a downstream
+    viewer converts the Markdown to HTML). The link target gets its
+    parentheses percent-encoded so it can't break out of the ``(url)``
+    destination syntax.
+    """
+    if is_safe_web_url(url):
+        target = url.replace("(", "%28").replace(")", "%29")
+        return f"[{safe_markdown_inline(url)}]({target})"
+    return _inline_code(url)
 
 
 def _render_expand_paths_tree(template_projects: list[Any]) -> list[str]:
@@ -1075,6 +1098,29 @@ class MarkdownRenderer(Renderer):
             return self._code_fence(input.prompt)
         return ""
 
+    def format_ArtifactInput(self, input: ArtifactInput, _: TemplateMessage) -> str:
+        """Format → description + favicon/label/redeploy meta lines.
+
+        The page content never reaches the transcript (the tool takes a
+        file path), so the body only carries the optional metadata; the
+        strings are inert as Markdown via ``safe_markdown_inline``.
+        """
+        parts: list[str] = []
+        if input.description:
+            parts.append(f"*{safe_markdown_inline(input.description)}*")
+        meta_parts: list[str] = []
+        if input.favicon:
+            meta_parts.append(safe_markdown_inline(input.favicon))
+        if input.label:
+            meta_parts.append(safe_markdown_inline(input.label))
+        if input.url:
+            meta_parts.append(f"redeploys {_markdown_safe_url(input.url)}")
+        if input.force:
+            meta_parts.append("force")
+        if meta_parts:
+            parts.append(" · ".join(meta_parts))
+        return "\n\n".join(parts)
+
     def format_WorkflowToolInput(
         self, input: WorkflowToolInput, _: TemplateMessage
     ) -> str:
@@ -1629,6 +1675,21 @@ class MarkdownRenderer(Renderer):
         meta_line = f"*{' · '.join(meta_parts)}*\n\n" if meta_parts else ""
         return meta_line + self._quote(output.result)
 
+    def format_ArtifactOutput(self, output: ArtifactOutput, _: TemplateMessage) -> str:
+        """Format → 'Published <title> → <link>', or quoted raw text.
+
+        The raw-text branch carries error/denial messages (no structured
+        toolUseResult); quote it like other verbatim harness output.
+        """
+        if output.url:
+            title_part = (
+                f"**{safe_markdown_inline(output.title)}** → " if output.title else ""
+            )
+            return f"Published {title_part}{_markdown_safe_url(output.url)}"
+        if output.raw_text:
+            return self._quote(output.raw_text)
+        return ""
+
     # --- Teammate-feature tool outputs -------------------------------------
 
     def format_TeamCreateOutput(
@@ -1932,6 +1993,10 @@ class MarkdownRenderer(Renderer):
         """Title → '🌐 WebFetch `url`' (truncated if > 60 chars)."""
         url = input.url[:60] + "…" if len(input.url) > 60 else input.url
         return f"🌐 WebFetch `{url}`"
+
+    def title_ArtifactInput(self, input: ArtifactInput, _: TemplateMessage) -> str:
+        """Title → '🖼️ Artifact `file_path`'."""
+        return f"🖼️ Artifact {_inline_code(input.file_path)}"
 
     def title_MonitorInput(self, input: MonitorInput, _: TemplateMessage) -> str:
         """Title → '🔭 Monitor `<description>`'.

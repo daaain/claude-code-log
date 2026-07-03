@@ -34,7 +34,7 @@ from .utils import (
     render_user_markdown_collapsible,
     resolve_memory_body_links,
 )
-from ..utils import strip_error_tags
+from ..utils import is_safe_web_url, strip_error_tags
 from ..workflow import resolve_workflow_header, resolve_workflow_script
 from ..models import (
     AskUserQuestionInput,
@@ -69,6 +69,8 @@ from ..models import (
     ToolResultContent,
     WebSearchInput,
     WebSearchOutput,
+    ArtifactInput,
+    ArtifactOutput,
     WebFetchInput,
     WebFetchOutput,
     WorkflowAgentMessage,
@@ -855,6 +857,78 @@ def format_webfetch_output(output: WebFetchOutput) -> str:
     content_html = render_markdown_collapsible(output.result, "webfetch-result")
 
     return f"{badge_html}{content_html}"
+
+
+# -- Artifact Tool ------------------------------------------------------------
+
+
+def _artifact_link(url: str) -> str:
+    """Render an artifact URL as a link, or as escaped text for odd schemes.
+
+    The URL is transcript-derived and thus attacker-controllable; the
+    shared ``is_safe_web_url`` scheme gate decides link-worthiness
+    (escaping alone doesn't neutralise a hostile ``javascript:`` scheme).
+    """
+    escaped = escape_html(url)
+    if is_safe_web_url(url):
+        return f'<a href="{escaped}">{escaped}</a>'
+    return escaped
+
+
+def format_artifact_input(artifact_input: ArtifactInput) -> str:
+    """Format Artifact tool use content.
+
+    The source file path is shown in the title; the body carries the
+    optional metadata (description, favicon, version label, redeploy
+    target) when present. The page content itself never appears in the
+    transcript — the tool takes a file path — so there is nothing to
+    render live; every field is escaped.
+    """
+    rows: list[str] = []
+    if artifact_input.description:
+        rows.append(
+            f'<div class="artifact-description">'
+            f"{escape_html(artifact_input.description)}</div>"
+        )
+    meta_parts: list[str] = []
+    if artifact_input.favicon:
+        meta_parts.append(
+            f'<span class="artifact-favicon">{escape_html(artifact_input.favicon)}</span>'
+        )
+    if artifact_input.label:
+        meta_parts.append(
+            f'<span class="artifact-label">{escape_html(artifact_input.label)}</span>'
+        )
+    if artifact_input.url:
+        meta_parts.append(
+            f'<span class="artifact-redeploy">redeploys {_artifact_link(artifact_input.url)}</span>'
+        )
+    if artifact_input.force:
+        meta_parts.append('<span class="artifact-force">force</span>')
+    if meta_parts:
+        rows.append(f'<div class="artifact-meta">{" · ".join(meta_parts)}</div>')
+    return "".join(rows)
+
+
+def format_artifact_output(output: ArtifactOutput) -> str:
+    """Format Artifact tool result — published page title + link.
+
+    Falls back to the escaped raw text for error/denial results that
+    carry no structured data.
+    """
+    if output.url:
+        title_html = (
+            f'<span class="artifact-title">{escape_html(output.title)}</span> → '
+            if output.title
+            else ""
+        )
+        return (
+            f'<div class="artifact-output">Published '
+            f"{title_html}{_artifact_link(output.url)}</div>"
+        )
+    if output.raw_text:
+        return f'<div class="artifact-output">{escape_html(output.raw_text)}</div>'
+    return ""
 
 
 # -- Monitor Tool -------------------------------------------------------------
@@ -1683,6 +1757,8 @@ __all__ = [
     "format_taskstop_input",
     "format_grep_input",
     "format_websearch_input",
+    "format_artifact_input",
+    "format_artifact_output",
     "format_webfetch_input",
     "format_workflow_input",
     "format_workflow_phase_content",

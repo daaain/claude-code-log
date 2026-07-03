@@ -95,9 +95,15 @@ SILENT_SKIP_TYPES: frozenset[str] = frozenset(
         # transcript; see #94 for the wider "propagate this state to
         # surrounding messages" follow-up.
         "permission-mode",  # {permissionMode: 'acceptEdits'|...}
+        "mode",  # {mode: 'normal'|...}
         "custom-title",  # {customTitle: <str>}
         "agent-name",  # {agentName: <str>}
         "agent-color",  # {agentColor: <str>}
+        # Written alongside a successful Artifact publish (#257):
+        # {path, frameUrl, timestamp} maps the source file to the deployed
+        # claude.ai page. No uuid; fully redundant with the Artifact
+        # tool_result (same path and URL), which is rendered.
+        "frame-link",
     }
 )
 

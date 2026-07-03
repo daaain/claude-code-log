@@ -62,6 +62,7 @@ from ..models import (
     SkillInput,
     WebSearchInput,
     WebFetchInput,
+    ArtifactInput,
     WriteInput,
     # Tool output models
     AskUserQuestionAnswer,
@@ -85,6 +86,7 @@ from ..models import (
     WebSearchLink,
     WebSearchOutput,
     WebFetchOutput,
+    ArtifactOutput,
     WriteOutput,
 )
 
@@ -115,6 +117,9 @@ TOOL_INPUT_MODELS: dict[str, type[BaseModel]] = {
     "ExitPlanMode": ExitPlanModeInput,
     "WebSearch": WebSearchInput,
     "WebFetch": WebFetchInput,
+    # Deploys a self-contained HTML/Markdown file as a claude.ai page
+    # (Claude Code 2.1.172+, issue #257).
+    "Artifact": ArtifactInput,
     "Monitor": MonitorInput,
     "ScheduleWakeup": ScheduleWakeupInput,
     "CronCreate": CronCreateInput,
@@ -918,6 +923,59 @@ def parse_webfetch_output(
     return None
 
 
+# Text form of a successful Artifact deploy: ``Published <path> at <url>``.
+# Fallback for entries that lack the structured toolUseResult.
+_ARTIFACT_PUBLISHED_RE = re.compile(
+    r"^Published (?P<path>.+) at (?P<url>https?://\S+)$"
+)
+
+
+def parse_artifact_output(
+    tool_result: ToolResultContent,
+    file_path: Optional[str],
+    tool_use_result: Optional[ToolUseResult] = None,
+) -> Optional[ArtifactOutput]:
+    """Parse Artifact tool result from structured toolUseResult or text.
+
+    Wire format (observed on Claude Code 2.1.198):
+
+    - toolUseResult: ``{url, path, title}`` — ``title`` is the page's
+      ``<title>`` for HTML sources, the file basename for Markdown ones.
+    - text content: ``Published <path> at <url>`` on success; a plain
+      error message (``is_error: true``, no toolUseResult) on denial.
+
+    Args:
+        tool_result: The tool result content (used as fallback)
+        file_path: Unused for the Artifact tool
+        tool_use_result: Structured result with url/path/title
+
+    Returns:
+        ArtifactOutput if parsing succeeds, None otherwise
+    """
+    del file_path  # Unused
+
+    if isinstance(tool_use_result, dict):
+        url = tool_use_result.get("url")
+        if isinstance(url, str) and url:
+            path = tool_use_result.get("path")
+            title = tool_use_result.get("title")
+            return ArtifactOutput(
+                url=url,
+                path=path if isinstance(path, str) else None,
+                title=title if isinstance(title, str) else None,
+            )
+
+    # Fallback: text content — the success line, or an error/denial message.
+    text = _extract_tool_result_text(tool_result)
+    if text:
+        match = _ARTIFACT_PUBLISHED_RE.match(text.strip())
+        if match:
+            return ArtifactOutput(url=match.group("url"), path=match.group("path"))
+        return ArtifactOutput(raw_text=text)
+
+    return None
+
+
 # Match ``Monitor started (task <id>, …)`` so the task id is available
 # to downstream consumers without re-parsing the full body. The id is
 # the short alphanumeric form (e.g. ``b07h5t4ng``) the harness echoes
@@ -1421,6 +1479,7 @@ TOOL_OUTPUT_PARSERS: dict[str, ToolOutputParser] = {
     "ExitPlanMode": parse_exitplanmode_output,
     "WebSearch": parse_websearch_output,
     "WebFetch": parse_webfetch_output,
+    "Artifact": parse_artifact_output,
     "Monitor": parse_monitor_output,
     "ScheduleWakeup": parse_schedulewakeup_output,
     "CronCreate": parse_croncreate_output,
@@ -1443,6 +1502,7 @@ TOOL_OUTPUT_PARSERS: dict[str, ToolOutputParser] = {
 PARSERS_WITH_TOOL_USE_RESULT: set[str] = {
     "WebSearch",
     "WebFetch",
+    "Artifact",
     "Bash",
     "TaskStop",
     "Read",
