@@ -283,11 +283,11 @@ moves to the next ancestor.
 
 ### 4.1 Plugin-facing helpers
 
-Four helpers are re-exported from `claude_code_log.plugins` for use
+Five helpers are re-exported from `claude_code_log.plugins` for use
 in `format_html` / `format_markdown` / `title` methods. The re-export is
 the stable plugin API; the underlying implementation (in
-`claude_code_log/html/utils.py` and `claude_code_log/markdown/renderer.py`)
-may move or be renamed.
+`claude_code_log/html/utils.py`, `claude_code_log/markdown/renderer.py`
+and `claude_code_log/utils.py`) may move or be renamed.
 
 ```python
 from claude_code_log.plugins import (
@@ -295,6 +295,7 @@ from claude_code_log.plugins import (
     render_markdown_collapsible,
     escape_html,
     safe_markdown_inline,
+    is_safe_web_url,
 )
 ```
 
@@ -304,6 +305,7 @@ from claude_code_log.plugins import (
 | `render_markdown_collapsible(raw_content, css_class, *, line_threshold=20, preview_line_count=5)` | `(str, str, int, int) -> str` | Long Markdown bodies (mail bodies, agent responses, multi-paragraph result text). Returns inline `<div class="{css_class} markdown">…</div>` for short content, a collapsible `<details>` with preview + full body for content exceeding `line_threshold`. Escapes raw HTML. |
 | `escape_html(text)` | `(str) -> str` | Interpolating transcript-derived text into a `format_html` raw-HTML string, OR into a `title` return (which is emitted via `\| safe`). Entity-escapes `<`, `>`, `&`, quotes. |
 | `safe_markdown_inline(text)` | `(str) -> str` | Interpolating transcript-derived text into a Markdown **inline** fragment in `format_markdown` (a link label, a list item, inline prose) — the Markdown-output path emits `format_markdown` verbatim. Entity-escapes raw HTML tags while preserving Markdown formatting. |
+| `is_safe_web_url(url)` | `(str) -> bool` | Gating a transcript-derived URL before making it clickable — an `href` in `format_html` or a `[text](target)` destination in `format_markdown`. Escaping cannot neutralise a hostile scheme (`javascript:alert(1)` survives `escape_html` intact), so emit the link only when this returns True and degrade to inert escaped text otherwise. http(s) whitelist, fails closed. |
 
 The reference plugin's
 [`tool_communicate_result.py`](../test/_plugins/clmail/src/claude_code_log_clmail_test/transformers/tool_communicate_result.py)
@@ -335,6 +337,7 @@ output paths:
 | `format_html` embedding a Markdown body | `render_markdown(value)` / `render_markdown_collapsible(value, …)` |
 | `format_markdown` inline fragment (link label, list item, inline prose) | `safe_markdown_inline(value)` |
 | `title()` return | `escape_html(value)` — the HTML header emits it via `\| safe` (no core escaping); the Markdown heading is auto-gated by the core |
+| URL made clickable (`href` attribute, Markdown link target) | gate on `is_safe_web_url(url)` first, **then** `escape_html(url)` for the attribute text — the scheme check and the escaping guard different attacks |
 
 Notes:
 

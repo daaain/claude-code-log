@@ -19,7 +19,12 @@ from ..html.utils import (
     memory_short_path,
     render_user_markdown,
 )
-from ..utils import format_timestamp, generate_unified_diff, strip_error_tags
+from ..utils import (
+    format_timestamp,
+    generate_unified_diff,
+    is_safe_web_url,
+    strip_error_tags,
+)
 from ..models import (
     AssistantTextMessage,
     AwaySummaryMessage,
@@ -309,13 +314,14 @@ def safe_markdown_inline(text: str) -> str:
 def _markdown_safe_url(url: str) -> str:
     """Render a transcript-derived URL as a Markdown link, or inline code.
 
-    Only http(s) URLs become clickable — escaping alone doesn't neutralise
-    a hostile scheme (``javascript:`` would survive into a live link once a
-    downstream viewer converts the Markdown to HTML). The link target gets
-    its parentheses percent-encoded so it can't break out of the ``(url)``
+    Only URLs passing the shared ``is_safe_web_url`` scheme gate become
+    clickable — escaping alone doesn't neutralise a hostile scheme
+    (``javascript:`` would survive into a live link once a downstream
+    viewer converts the Markdown to HTML). The link target gets its
+    parentheses percent-encoded so it can't break out of the ``(url)``
     destination syntax.
     """
-    if url.startswith(("https://", "http://")):
+    if is_safe_web_url(url):
         target = url.replace("(", "%28").replace(")", "%29")
         return f"[{safe_markdown_inline(url)}]({target})"
     return _inline_code(url)

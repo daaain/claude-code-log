@@ -34,6 +34,7 @@ class TestPluginApiReExports:
             "render_markdown_collapsible",
             "escape_html",
             "safe_markdown_inline",
+            "is_safe_web_url",
         ):
             assert hasattr(plugins, name), name
             assert name in plugins.__all__, name
@@ -45,6 +46,19 @@ class TestPluginApiReExports:
         assert safe_markdown_inline(PAYLOAD) == "&lt;img src=x onerror=alert(1)&gt;"
         # Tag-free text passes through unchanged (no markdown re-normalisation).
         assert safe_markdown_inline("a **bold** label") == "a **bold** label"
+
+    def test_is_safe_web_url_behaviour(self):
+        from claude_code_log.plugins import is_safe_web_url
+
+        assert is_safe_web_url("https://example.com/page")
+        assert is_safe_web_url("http://example.com")
+        # Hostile or odd schemes fail closed — including case variants.
+        assert not is_safe_web_url("javascript:alert(1)")
+        assert not is_safe_web_url("JAVASCRIPT:alert(1)")
+        assert not is_safe_web_url("data:text/html,<script>alert(1)</script>")
+        assert not is_safe_web_url("file:///etc/passwd")
+        assert not is_safe_web_url("HTTP://example.com")  # fails closed, by design
+        assert not is_safe_web_url("")
 
 
 # ----------------------------- plugin-author contract ------------------------

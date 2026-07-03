@@ -692,6 +692,23 @@ def get_warmup_session_ids(messages: list[TranscriptEntry]) -> set[str]:
     return warmup_sessions
 
 
+def is_safe_web_url(url: str) -> bool:
+    """True if ``url`` is a plain-web (http/https) URL safe to emit as a link.
+
+    The single scheme policy for every renderer surface that turns a
+    transcript-derived URL into something clickable (an HTML ``href`` or a
+    Markdown ``[text](target)`` destination). Escaping alone doesn't
+    neutralise a hostile scheme — ``javascript:alert(1)`` survives
+    entity-escaping intact — so callers must gate on this whitelist and
+    degrade anything it rejects to inert text.
+
+    Deliberately case-sensitive: wire URLs are lowercase, and an unmatched
+    ``HTTP://`` merely fails closed (not clickable), which is the right
+    direction for a security gate.
+    """
+    return url.startswith(("https://", "http://"))
+
+
 def strip_error_tags(text: str) -> str:
     """Strip <tool_use_error>...</tool_use_error> tags, keeping content.
 

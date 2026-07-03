@@ -34,7 +34,7 @@ from .utils import (
     render_user_markdown_collapsible,
     resolve_memory_body_links,
 )
-from ..utils import strip_error_tags
+from ..utils import is_safe_web_url, strip_error_tags
 from ..workflow import resolve_workflow_header, resolve_workflow_script
 from ..models import (
     AskUserQuestionInput,
@@ -865,12 +865,12 @@ def format_webfetch_output(output: WebFetchOutput) -> str:
 def _artifact_link(url: str) -> str:
     """Render an artifact URL as a link, or as escaped text for odd schemes.
 
-    The URL is transcript-derived and thus attacker-controllable; escaping
-    alone doesn't neutralise a hostile scheme (``javascript:`` survives
-    ``escape_html`` intact), so only emit an ``href`` for http(s) URLs.
+    The URL is transcript-derived and thus attacker-controllable; the
+    shared ``is_safe_web_url`` scheme gate decides link-worthiness
+    (escaping alone doesn't neutralise a hostile ``javascript:`` scheme).
     """
     escaped = escape_html(url)
-    if url.startswith(("https://", "http://")):
+    if is_safe_web_url(url):
         return f'<a href="{escaped}">{escaped}</a>'
     return escaped
 

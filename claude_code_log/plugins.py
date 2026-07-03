@@ -45,6 +45,7 @@ if TYPE_CHECKING:
         render_markdown_collapsible,
     )
     from .markdown.renderer import safe_markdown_inline
+    from .utils import is_safe_web_url
 
 from .models import MessageContent, MessageMeta
 
@@ -357,6 +358,11 @@ _PUBLIC_HELPERS: frozenset[str] = frozenset(
         # ``dev-docs/plugins.md`` §4 "Security-conscious rendering".
         "escape_html",
         "safe_markdown_inline",
+        # Scheme gate for emitting transcript-derived URLs as links (#257):
+        # escaping can't neutralise a hostile ``javascript:`` scheme, so a
+        # plugin building an ``href`` / Markdown link target needs the same
+        # http(s) whitelist the core renderers use.
+        "is_safe_web_url",
     }
 )
 
@@ -370,6 +376,9 @@ def __getattr__(name: str) -> Any:  # PEP 562
         # lazily to keep package init acyclic.
         if name == "safe_markdown_inline":
             from .markdown.renderer import safe_markdown_inline as resolved
+        elif name == "is_safe_web_url":
+            # Format-neutral (shared by both renderers) → top-level utils.
+            from .utils import is_safe_web_url as resolved
         else:
             from .html import utils as _utils
 
@@ -384,6 +393,7 @@ __all__ = [
     "MessageTransformer",
     "apply_transformers",
     "escape_html",
+    "is_safe_web_url",
     "load_transformers",
     "render_markdown",
     "render_markdown_collapsible",

@@ -1486,10 +1486,11 @@ class ArtifactInput(BaseModel):
     """Input parameters for the Artifact tool.
 
     Deploys a self-contained HTML or Markdown file as a (default-private)
-    claude.ai web page. Only ``file_path`` and ``favicon`` are required in
-    the current schema; keep the rest optional and tolerate unknown fields
-    so schema tweaks across Claude Code versions don't drop the message to
-    the generic params table.
+    claude.ai web page. Only ``file_path`` is required here — the live tool
+    schema also requires ``favicon``, but it's defaulted so variant
+    transcripts still parse. Keep the rest optional and tolerate unknown
+    fields so schema tweaks across Claude Code versions don't drop the
+    message to the generic params table.
     """
 
     file_path: str
