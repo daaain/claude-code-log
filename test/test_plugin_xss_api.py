@@ -74,6 +74,12 @@ class TestPluginApiReExports:
         assert safe_markdown_link_target("https://x/a(b)'c<d>") == (
             "https://x/a%28b%29%27c%3Cd%3E"
         )
+        # ASCII control characters also terminate an un-bracketed CommonMark
+        # destination — the full range (U+0000-U+001F, U+007F) is encoded.
+        assert (
+            safe_markdown_link_target("https://x/a\nb\tc\rd\x00e\x7ff")
+            == "https://x/a%0Ab%09c%0Dd%00e%7Ff"
+        )
         # A clean URL passes through unchanged.
         assert (
             safe_markdown_link_target("https://example.com/page?q=1&r=2")

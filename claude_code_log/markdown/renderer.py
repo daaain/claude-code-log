@@ -328,7 +328,10 @@ def safe_markdown_link_target(url: str) -> str:
 
     Parentheses break the destination syntax itself; quotes/angle
     brackets could smuggle attributes or tags through a downstream
-    Markdown→HTML converter; a space terminates the destination early.
+    Markdown→HTML converter; a space — or, per CommonMark, any ASCII
+    control character (U+0000-U+001F, U+007F) — terminates an
+    un-bracketed destination early, letting trailing text escape the
+    link.
 
     Plugin-facing (re-exported from ``claude_code_log.plugins``): any
     plugin emitting a transcript-derived URL as a Markdown link/image
@@ -338,7 +341,10 @@ def safe_markdown_link_target(url: str) -> str:
     """
     for char, encoded in _MARKDOWN_TARGET_ENCODINGS:
         url = url.replace(char, encoded)
-    return url
+    return "".join(
+        f"%{ord(char):02X}" if ord(char) <= 0x1F or ord(char) == 0x7F else char
+        for char in url
+    )
 
 
 def _markdown_safe_url(url: str, text: Optional[str] = None) -> str:
