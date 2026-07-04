@@ -311,19 +311,49 @@ def safe_markdown_inline(text: str) -> str:
     return _protect_html_tags(text) if "<" in text else text
 
 
-def _markdown_safe_url(url: str) -> str:
+_MARKDOWN_TARGET_ENCODINGS = (
+    ("(", "%28"),  # destination-syntax breakout
+    (")", "%29"),
+    ('"', "%22"),  # attribute breakout after Markdown→HTML conversion
+    ("'", "%27"),
+    ("<", "%3C"),
+    (">", "%3E"),
+    (" ", "%20"),  # terminates the destination early
+)
+
+
+def safe_markdown_link_target(url: str) -> str:
+    """Percent-encode characters that could escape a ``(target)`` slot.
+
+    Parentheses break the destination syntax itself; quotes/angle
+    brackets could smuggle attributes or tags through a downstream
+    Markdown→HTML converter; a space terminates the destination early.
+
+    Plugin-facing (re-exported from ``claude_code_log.plugins``): any
+    plugin emitting a transcript-derived URL as a Markdown link/image
+    destination needs this in ADDITION to the ``is_safe_web_url`` scheme
+    gate — the gate rejects hostile schemes, this neutralises breakout
+    characters inside an accepted URL.
+    """
+    for char, encoded in _MARKDOWN_TARGET_ENCODINGS:
+        url = url.replace(char, encoded)
+    return url
+
+
+def _markdown_safe_url(url: str, text: Optional[str] = None) -> str:
     """Render a transcript-derived URL as a Markdown link, or inline code.
 
     Only URLs passing the shared ``is_safe_web_url`` scheme gate become
     clickable — escaping alone doesn't neutralise a hostile scheme
     (``javascript:`` would survive into a live link once a downstream
-    viewer converts the Markdown to HTML). The link target gets its
-    parentheses percent-encoded so it can't break out of the ``(url)``
-    destination syntax.
+    viewer converts the Markdown to HTML). The link target is
+    percent-encoded against destination breakout. ``text`` labels the
+    link instead of the URL itself; a hostile-scheme URL falls back to
+    inline code regardless, so the hostile string stays visible rather
+    than hidden behind a label.
     """
     if is_safe_web_url(url):
-        target = url.replace("(", "%28").replace(")", "%29")
-        return f"[{safe_markdown_inline(url)}]({target})"
+        return f"[{safe_markdown_inline(text if text else url)}]({safe_markdown_link_target(url)})"
     return _inline_code(url)
 
 
@@ -1099,24 +1129,24 @@ class MarkdownRenderer(Renderer):
         return ""
 
     def format_ArtifactInput(self, input: ArtifactInput, _: TemplateMessage) -> str:
-        """Format → description + favicon/label/redeploy meta lines.
+        """Format → description + redeploy meta line.
 
-        The page content never reaches the transcript (the tool takes a
-        file path), so the body only carries the optional metadata; the
-        strings are inert as Markdown via ``safe_markdown_inline``.
+        The favicon and version label belong to the published page, so
+        the tool result line carries them (issue #262); the meta line
+        keeps only the redeploy addendum — target URL and the ``force``
+        flag (= overwrite without the concurrent-edit conflict check).
+        The strings are inert as Markdown via ``safe_markdown_inline``.
         """
         parts: list[str] = []
         if input.description:
             parts.append(f"*{safe_markdown_inline(input.description)}*")
         meta_parts: list[str] = []
-        if input.favicon:
-            meta_parts.append(safe_markdown_inline(input.favicon))
-        if input.label:
-            meta_parts.append(safe_markdown_inline(input.label))
         if input.url:
-            meta_parts.append(f"redeploys {_markdown_safe_url(input.url)}")
+            meta_parts.append(
+                f"redeploys {_markdown_safe_url(input.url, text='existing artifact')}"
+            )
         if input.force:
-            meta_parts.append("force")
+            meta_parts.append("force: overwrite without conflict check")
         if meta_parts:
             parts.append(" · ".join(meta_parts))
         return "\n\n".join(parts)
@@ -1676,18 +1706,48 @@ class MarkdownRenderer(Renderer):
         return meta_line + self._quote(output.result)
 
     def format_ArtifactOutput(self, output: ArtifactOutput, _: TemplateMessage) -> str:
-        """Format → 'Published <title> → <link>', or quoted raw text.
+        """Format → 'Published artifact (favicon) (label link)', or quoted
+        raw text.
 
-        The raw-text branch carries error/denial messages (no structured
+        Mirrors the HTML renderer (issue #262): the label (falling back
+        to title, then source basename) is the link text, keeping the
+        full URL out of the visible line; an http(s) favicon value
+        becomes a Markdown image, an emoji one stays inline text. The
+        raw-text branch carries error/denial messages (no structured
         toolUseResult); quote it like other verbatim harness output.
         """
         if output.url:
-            title_part = (
-                f"**{safe_markdown_inline(output.title)}** → " if output.title else ""
+            parts: list[str] = ["Published artifact"]
+            if output.favicon:
+                favicon_md = self._artifact_favicon_md(output.favicon)
+                if favicon_md:
+                    parts.append(favicon_md)
+            link_text = (
+                output.label
+                or output.title
+                or (output.path.rsplit("/", 1)[-1] if output.path else "")
+                or None
             )
-            return f"Published {title_part}{_markdown_safe_url(output.url)}"
+            parts.append(_markdown_safe_url(output.url, text=link_text))
+            return " ".join(parts)
         if output.raw_text:
             return self._quote(output.raw_text)
+        return ""
+
+    @staticmethod
+    def _artifact_favicon_md(favicon: str) -> str:
+        """Favicon for the published-artifact line — image or inline text.
+
+        Same gate as the HTML renderer: only an ``is_safe_web_url``
+        http(s) value may become an image source (a hostile scheme would
+        go live once a downstream viewer converts the Markdown); emoji
+        values render as inert inline text, over-long non-URL values are
+        dropped.
+        """
+        if is_safe_web_url(favicon):
+            return f"![]({safe_markdown_link_target(favicon)})"
+        if len(favicon) <= 16:
+            return safe_markdown_inline(favicon)
         return ""
 
     # --- Teammate-feature tool outputs -------------------------------------

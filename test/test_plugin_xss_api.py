@@ -35,6 +35,7 @@ class TestPluginApiReExports:
             "escape_html",
             "safe_markdown_inline",
             "is_safe_web_url",
+            "safe_markdown_link_target",
         ):
             assert hasattr(plugins, name), name
             assert name in plugins.__all__, name
@@ -59,6 +60,25 @@ class TestPluginApiReExports:
         assert not is_safe_web_url("file:///etc/passwd")
         assert not is_safe_web_url("HTTP://example.com")  # fails closed, by design
         assert not is_safe_web_url("")
+
+    def test_safe_markdown_link_target_behaviour(self):
+        from claude_code_log.plugins import safe_markdown_link_target
+
+        # Breakout characters are percent-encoded so an accepted URL cannot
+        # escape a Markdown (target) slot or smuggle attributes through a
+        # downstream Markdown→HTML conversion (#262).
+        assert (
+            safe_markdown_link_target('https://x/f.png" onerror="alert(1)')
+            == "https://x/f.png%22%20onerror=%22alert%281%29"
+        )
+        assert safe_markdown_link_target("https://x/a(b)'c<d>") == (
+            "https://x/a%28b%29%27c%3Cd%3E"
+        )
+        # A clean URL passes through unchanged.
+        assert (
+            safe_markdown_link_target("https://example.com/page?q=1&r=2")
+            == "https://example.com/page?q=1&r=2"
+        )
 
 
 # ----------------------------- plugin-author contract ------------------------

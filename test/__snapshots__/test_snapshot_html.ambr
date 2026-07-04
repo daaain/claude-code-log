@@ -2163,6 +2163,15 @@
       color: var(--text-muted);
       font-family: var(--font-monospace);
   }
+  
+  /* Artifact tool result (issue #262): "Published artifact (favicon) (label)".
+     The favicon is usually an emoji span; when it is a real image URL it
+     renders as an inline <img> sized to the text line. */
+  img.artifact-favicon {
+      height: 1em;
+      width: 1em;
+      vertical-align: -0.125em;
+  }
   /* Session navigation styles */
   .navigation {
       background-color: var(--bg-neutral);
@@ -8644,6 +8653,15 @@
   .embedded-json-hint {
       color: var(--text-muted);
       font-family: var(--font-monospace);
+  }
+  
+  /* Artifact tool result (issue #262): "Published artifact (favicon) (label)".
+     The favicon is usually an emoji span; when it is a real image URL it
+     renders as an inline <img> sized to the text line. */
+  img.artifact-favicon {
+      height: 1em;
+      width: 1em;
+      vertical-align: -0.125em;
   }
   /* Session navigation styles */
   .navigation {
@@ -17229,6 +17247,15 @@
       color: var(--text-muted);
       font-family: var(--font-monospace);
   }
+  
+  /* Artifact tool result (issue #262): "Published artifact (favicon) (label)".
+     The favicon is usually an emoji span; when it is a real image URL it
+     renders as an inline <img> sized to the text line. */
+  img.artifact-favicon {
+      height: 1em;
+      width: 1em;
+      vertical-align: -0.125em;
+  }
   /* Session navigation styles */
   .navigation {
       background-color: var(--bg-neutral);
@@ -23825,6 +23852,15 @@
   .embedded-json-hint {
       color: var(--text-muted);
       font-family: var(--font-monospace);
+  }
+  
+  /* Artifact tool result (issue #262): "Published artifact (favicon) (label)".
+     The favicon is usually an emoji span; when it is a real image URL it
+     renders as an inline <img> sized to the text line. */
+  img.artifact-favicon {
+      height: 1em;
+      width: 1em;
+      vertical-align: -0.125em;
   }
   /* Session navigation styles */
   .navigation {
@@ -30690,6 +30726,15 @@
       color: var(--text-muted);
       font-family: var(--font-monospace);
   }
+  
+  /* Artifact tool result (issue #262): "Published artifact (favicon) (label)".
+     The favicon is usually an emoji span; when it is a real image URL it
+     renders as an inline <img> sized to the text line. */
+  img.artifact-favicon {
+      height: 1em;
+      width: 1em;
+      vertical-align: -0.125em;
+  }
   /* Session navigation styles */
   .navigation {
       background-color: var(--bg-neutral);
@@ -37517,6 +37562,15 @@
       color: var(--text-muted);
       font-family: var(--font-monospace);
   }
+  
+  /* Artifact tool result (issue #262): "Published artifact (favicon) (label)".
+     The favicon is usually an emoji span; when it is a real image URL it
+     renders as an inline <img> sized to the text line. */
+  img.artifact-favicon {
+      height: 1em;
+      width: 1em;
+      vertical-align: -0.125em;
+  }
   /* Session navigation styles */
   .navigation {
       background-color: var(--bg-neutral);
@@ -44286,6 +44340,15 @@
   .embedded-json-hint {
       color: var(--text-muted);
       font-family: var(--font-monospace);
+  }
+  
+  /* Artifact tool result (issue #262): "Published artifact (favicon) (label)".
+     The favicon is usually an emoji span; when it is a real image URL it
+     renders as an inline <img> sized to the text line. */
+  img.artifact-favicon {
+      height: 1em;
+      width: 1em;
+      vertical-align: -0.125em;
   }
   /* Session navigation styles */
   .navigation {

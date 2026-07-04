@@ -862,27 +862,37 @@ def format_webfetch_output(output: WebFetchOutput) -> str:
 # -- Artifact Tool ------------------------------------------------------------
 
 
-def _artifact_link(url: str) -> str:
-    """Render an artifact URL as a link, or as escaped text for odd schemes.
+def _artifact_labeled_link(url: str, text: str) -> str:
+    """Link ``text`` to ``url``, keeping the URL in href + hover only.
 
     The URL is transcript-derived and thus attacker-controllable; the
     shared ``is_safe_web_url`` scheme gate decides link-worthiness
-    (escaping alone doesn't neutralise a hostile ``javascript:`` scheme).
+    (escaping alone doesn't neutralise a hostile ``javascript:``
+    scheme). A rejected URL degrades to the escaped URL itself, not the
+    label — hiding it would mask what the transcript contains (#262).
     """
-    escaped = escape_html(url)
     if is_safe_web_url(url):
-        return f'<a href="{escaped}">{escaped}</a>'
-    return escaped
+        escaped_url = escape_html(url)
+        return (
+            f'<a class="artifact-link" href="{escaped_url}"'
+            f' title="{escaped_url}">{escape_html(text)}</a>'
+        )
+    return escape_html(url)
 
 
 def format_artifact_input(artifact_input: ArtifactInput) -> str:
-    """Format Artifact tool use content.
+    """Format Artifact tool use content — description + redeploy meta.
 
-    The source file path is shown in the title; the body carries the
-    optional metadata (description, favicon, version label, redeploy
-    target) when present. The page content itself never appears in the
-    transcript — the tool takes a file path — so there is nothing to
-    render live; every field is escaped.
+    The source file path is shown in the title. The favicon and version
+    label belong to the published page, so the tool result line carries
+    them (issue #262); the description stays primary, with a meta row
+    only for the redeploy addendum: the target URL and the ``force``
+    flag. ``force`` means "overwrite without a conflict check" — a
+    normal redeploy sends the artifact's base version so a concurrent
+    write from another session fails instead of being silently
+    clobbered; ``force`` skips that check. The page content itself never
+    appears in the transcript — the tool takes a file path — so there is
+    nothing to render live; every field is escaped.
     """
     rows: list[str] = []
     if artifact_input.description:
@@ -891,41 +901,72 @@ def format_artifact_input(artifact_input: ArtifactInput) -> str:
             f"{escape_html(artifact_input.description)}</div>"
         )
     meta_parts: list[str] = []
-    if artifact_input.favicon:
-        meta_parts.append(
-            f'<span class="artifact-favicon">{escape_html(artifact_input.favicon)}</span>'
-        )
-    if artifact_input.label:
-        meta_parts.append(
-            f'<span class="artifact-label">{escape_html(artifact_input.label)}</span>'
-        )
     if artifact_input.url:
         meta_parts.append(
-            f'<span class="artifact-redeploy">redeploys {_artifact_link(artifact_input.url)}</span>'
+            f'<span class="artifact-redeploy">redeploys '
+            f"{_artifact_labeled_link(artifact_input.url, 'existing artifact')}</span>"
         )
     if artifact_input.force:
-        meta_parts.append('<span class="artifact-force">force</span>')
+        meta_parts.append(
+            '<span class="artifact-force" title="A normal redeploy fails on a'
+            " concurrent edit from another session; force overwrites it"
+            '">force: overwrite without conflict check</span>'
+        )
     if meta_parts:
         rows.append(f'<div class="artifact-meta">{" · ".join(meta_parts)}</div>')
     return "".join(rows)
 
 
-def format_artifact_output(output: ArtifactOutput) -> str:
-    """Format Artifact tool result — published page title + link.
+# Emoji favicons are 1-2 emoji (ZWJ sequences can span ~a dozen code
+# points); anything longer is malformed input not worth echoing inline.
+_ARTIFACT_FAVICON_TEXT_MAX = 16
 
-    Falls back to the escaped raw text for error/denial results that
-    carry no structured data.
+
+def _artifact_favicon(favicon: str) -> str:
+    """Render the artifact favicon — a real image when one exists.
+
+    The value is transcript-derived and thus attacker-controllable: only
+    an ``is_safe_web_url`` http(s) URL may become an ``<img src>`` (a
+    ``data:``/``javascript:`` src or an attribute breakout is an XSS
+    vector — the src is escaped and the scheme gated). Anything else is
+    treated as the usual emoji favicon and rendered as escaped text;
+    over-long non-URL values are dropped rather than echoed.
+    ``referrerpolicy="no-referrer"`` keeps the local transcript page out
+    of the remote host's logs.
+    """
+    if is_safe_web_url(favicon):
+        return (
+            f'<img class="artifact-favicon" src="{escape_html(favicon)}"'
+            f' alt="" referrerpolicy="no-referrer">'
+        )
+    if len(favicon) <= _ARTIFACT_FAVICON_TEXT_MAX:
+        return f'<span class="artifact-favicon">{escape_html(favicon)}</span>'
+    return ""
+
+
+def format_artifact_output(output: ArtifactOutput) -> str:
+    """Format Artifact tool result — 'Published artifact (favicon) (label)'.
+
+    The label (falling back to the page title, then the source file
+    basename) is the clickable link; the full URL stays in ``href`` and
+    the hover ``title`` instead of the visible text (issue #262). Falls
+    back to the escaped raw text for error/denial results that carry no
+    structured data.
     """
     if output.url:
-        title_html = (
-            f'<span class="artifact-title">{escape_html(output.title)}</span> → '
-            if output.title
-            else ""
+        parts: list[str] = ["Published artifact"]
+        if output.favicon:
+            favicon_html = _artifact_favicon(output.favicon)
+            if favicon_html:
+                parts.append(favicon_html)
+        link_text = (
+            output.label
+            or output.title
+            or (output.path.rsplit("/", 1)[-1] if output.path else "")
+            or output.url
         )
-        return (
-            f'<div class="artifact-output">Published '
-            f"{title_html}{_artifact_link(output.url)}</div>"
-        )
+        parts.append(_artifact_labeled_link(output.url, link_text))
+        return f'<div class="artifact-output">{" ".join(parts)}</div>'
     if output.raw_text:
         return f'<div class="artifact-output">{escape_html(output.raw_text)}</div>'
     return ""

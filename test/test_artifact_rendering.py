@@ -83,6 +83,8 @@ class TestArtifactInput:
         assert isinstance(parsed, ArtifactInput)
 
     def test_format_input_metadata(self):
+        """The use side keeps only the description — favicon and label
+        belong to the published page and move to the result line (#262)."""
         html = format_artifact_input(
             ArtifactInput(
                 file_path="/workspace/page.html",
@@ -92,10 +94,13 @@ class TestArtifactInput:
             )
         )
         assert "A dashboard" in html
-        assert "📊" in html
-        assert "v2" in html
+        assert "📊" not in html
+        assert "v2" not in html
 
-    def test_format_input_redeploy_link(self):
+    def test_format_input_redeploy_meta(self):
+        """The redeploy addendum keeps a meta row: labeled target link
+        (URL in href/hover only) + the force flag spelled out as
+        'overwrite without conflict check' (#262)."""
         html = format_artifact_input(
             ArtifactInput(
                 file_path="/workspace/page.html",
@@ -104,8 +109,10 @@ class TestArtifactInput:
                 force=True,
             )
         )
-        assert '<a href="https://claude.ai/code/artifact/abc">' in html
-        assert "force" in html
+        assert 'href="https://claude.ai/code/artifact/abc"' in html
+        assert ">existing artifact</a>" in html
+        assert ">https://claude.ai/code/artifact/abc</a>" not in html
+        assert "force: overwrite without conflict check" in html
 
     def test_format_input_escapes_html(self):
         """XSS guard: hostile description/label render escaped, never live."""
@@ -122,7 +129,8 @@ class TestArtifactInput:
         assert "<b>" not in html
 
     def test_format_input_javascript_url_not_linked(self):
-        """A hostile scheme must not become a clickable redeploy link."""
+        """A hostile scheme must not become a clickable redeploy link —
+        it degrades to visible escaped text."""
         html = format_artifact_input(
             ArtifactInput(
                 file_path="/workspace/page.html",
@@ -202,9 +210,32 @@ class TestArtifactParser:
 
 
 class TestArtifactOutputFormatting:
-    """Test Artifact output HTML formatting."""
+    """Test Artifact output HTML formatting.
 
-    def test_format_output_full(self):
+    Issue #262 shape: 'Published artifact (favicon) (label)' — the label
+    (→ title → source basename) is the link text; the full URL lives only
+    in href and the hover title.
+    """
+
+    def test_format_output_label_is_link_text(self):
+        html = format_artifact_output(
+            ArtifactOutput(
+                url="https://claude.ai/code/artifact/abc",
+                path="/workspace/page.html",
+                title="My page",
+                favicon="📊",
+                label="first-sweep",
+            )
+        )
+        assert "Published artifact" in html
+        assert '<span class="artifact-favicon">📊</span>' in html
+        assert 'href="https://claude.ai/code/artifact/abc"' in html
+        assert ">first-sweep</a>" in html
+        # The URL is not visible text — only href + hover title carry it.
+        assert 'title="https://claude.ai/code/artifact/abc"' in html
+        assert ">https://claude.ai/code/artifact/abc</a>" not in html
+
+    def test_format_output_falls_back_to_title(self):
         html = format_artifact_output(
             ArtifactOutput(
                 url="https://claude.ai/code/artifact/abc",
@@ -212,16 +243,71 @@ class TestArtifactOutputFormatting:
                 title="My page",
             )
         )
-        assert "Published" in html
-        assert "My page" in html
-        assert '<a href="https://claude.ai/code/artifact/abc">' in html
+        assert ">My page</a>" in html
 
-    def test_format_output_no_title(self):
+    def test_format_output_falls_back_to_basename_then_url(self):
+        html = format_artifact_output(
+            ArtifactOutput(
+                url="https://claude.ai/code/artifact/abc",
+                path="/workspace/page.html",
+            )
+        )
+        assert ">page.html</a>" in html
         html = format_artifact_output(
             ArtifactOutput(url="https://claude.ai/code/artifact/abc")
         )
-        assert "Published" in html
-        assert '<a href="https://claude.ai/code/artifact/abc">' in html
+        assert ">https://claude.ai/code/artifact/abc</a>" in html
+
+    def test_format_output_favicon_image_url(self):
+        """A real http(s) favicon URL renders as an actual <img>."""
+        html = format_artifact_output(
+            ArtifactOutput(
+                url="https://claude.ai/code/artifact/abc",
+                favicon="https://claude.ai/fav.png",
+                label="v2",
+            )
+        )
+        assert '<img class="artifact-favicon" src="https://claude.ai/fav.png"' in html
+        assert 'referrerpolicy="no-referrer"' in html
+
+    def test_format_output_favicon_hostile_scheme_not_img(self):
+        """A javascript:/data: favicon must never become an <img src>."""
+        for hostile in ("javascript:alert(1)", "data:text/html,<script>x</script>"):
+            html = format_artifact_output(
+                ArtifactOutput(
+                    url="https://claude.ai/code/artifact/abc",
+                    favicon=hostile,
+                    label="v2",
+                )
+            )
+            assert "<img" not in html, hostile
+            assert "src=" not in html, hostile
+
+    def test_format_output_favicon_attribute_breakout_escaped(self):
+        """An https favicon passes the scheme gate — quote injection in the
+        src attribute must be neutralised by escaping."""
+        html = format_artifact_output(
+            ArtifactOutput(
+                url="https://claude.ai/code/artifact/abc",
+                favicon='https://evil.example/f.png" onerror="alert(2)',
+                label="v2",
+            )
+        )
+        assert 'onerror="alert(2)"' not in html
+        assert "&quot; onerror=&quot;" in html
+
+    def test_format_output_overlong_favicon_dropped(self):
+        """A non-URL favicon longer than any emoji sequence is dropped, not
+        echoed."""
+        html = format_artifact_output(
+            ArtifactOutput(
+                url="https://claude.ai/code/artifact/abc",
+                favicon="x" * 40,
+                label="v2",
+            )
+        )
+        assert "x" * 17 not in html
+        assert "artifact-favicon" not in html
 
     def test_format_output_raw_text(self):
         html = format_artifact_output(ArtifactOutput(raw_text="Denied by policy"))
@@ -300,6 +386,8 @@ class TestArtifactMarkdownRenderer:
         assert title == "🖼️ Artifact `/workspace/dashboard.html`"
 
     def test_format_input(self):
+        """Use side keeps only the description (#262) — favicon/label move
+        to the result line."""
         renderer = MarkdownRenderer()
         artifact_input = ArtifactInput(
             file_path="/workspace/dashboard.html",
@@ -311,16 +399,67 @@ class TestArtifactMarkdownRenderer:
             artifact_input, _input_message(artifact_input)
         )
         assert "*A dashboard*" in md
-        assert "📊 · v2" in md
+        assert "📊" not in md
+        assert "v2" not in md
+
+    def test_format_input_redeploy_meta(self):
+        renderer = MarkdownRenderer()
+        artifact_input = ArtifactInput(
+            file_path="/workspace/dashboard.html",
+            favicon="📊",
+            url="https://claude.ai/code/artifact/abc",
+            force=True,
+        )
+        md = renderer.format_ArtifactInput(
+            artifact_input, _input_message(artifact_input)
+        )
+        assert (
+            "redeploys [existing artifact](https://claude.ai/code/artifact/abc)" in md
+        )
+        assert "force: overwrite without conflict check" in md
 
     def test_format_output_link(self):
+        """Label (→ title) is the link text; the URL is only the target."""
+        renderer = MarkdownRenderer()
+        output = ArtifactOutput(
+            url="https://claude.ai/code/artifact/abc",
+            title="My page",
+            favicon="📊",
+            label="first-sweep",
+        )
+        md = renderer.format_ArtifactOutput(output, _output_message(output))
+        assert "Published artifact 📊 " in md
+        assert "[first-sweep](https://claude.ai/code/artifact/abc)" in md
+
+    def test_format_output_title_fallback(self):
         renderer = MarkdownRenderer()
         output = ArtifactOutput(
             url="https://claude.ai/code/artifact/abc", title="My page"
         )
         md = renderer.format_ArtifactOutput(output, _output_message(output))
-        assert "**My page**" in md
-        assert "(https://claude.ai/code/artifact/abc)" in md
+        assert "[My page](https://claude.ai/code/artifact/abc)" in md
+
+    def test_format_output_favicon_image_url(self):
+        renderer = MarkdownRenderer()
+        output = ArtifactOutput(
+            url="https://claude.ai/code/artifact/abc",
+            favicon="https://claude.ai/fav.png",
+            label="v2",
+        )
+        md = renderer.format_ArtifactOutput(output, _output_message(output))
+        assert "![](https://claude.ai/fav.png)" in md
+
+    def test_format_output_hostile_favicon_not_image(self):
+        """A hostile-scheme favicon must not become a Markdown image
+        target (it would go live once converted to HTML)."""
+        renderer = MarkdownRenderer()
+        output = ArtifactOutput(
+            url="https://claude.ai/code/artifact/abc",
+            favicon="javascript:alert(1)",
+            label="v2",
+        )
+        md = renderer.format_ArtifactOutput(output, _output_message(output))
+        assert "![](javascript:" not in md
 
     def test_format_output_javascript_url_not_linked(self):
         """A hostile scheme must render as inline code, not a Markdown link."""
@@ -353,13 +492,30 @@ class TestArtifactEndToEnd:
         messages = load_transcript(self.FIXTURE)
         html = generate_html(messages, "Artifact Test")
 
-        # Success + redeploy + markdown variants all render with links
-        assert "Flaky tests report" in html
+        # Result lines: 'Published artifact (favicon) (label link)' — the
+        # label comes from the paired tool_use input, the URL stays in
+        # href/hover only (#262).
+        assert "Published artifact" in html
         assert (
-            '<a href="https://claude.ai/code/artifact/11111111-2222-3333-4444-555555555555">'
+            'href="https://claude.ai/code/artifact/11111111-2222-3333-4444-555555555555"'
             in html
         )
-        assert "notes.md" in html
+        assert ">first-sweep</a>" in html
+        assert ">after-fixes</a>" in html
+        assert '<span class="artifact-favicon">📊</span>' in html
+        # No label on the markdown variant → page title is the link text
+        assert ">notes.md</a>" in html
+        # The URL never appears as visible link text
+        assert (
+            ">https://claude.ai/code/artifact/11111111-2222-3333-4444-555555555555</a>"
+            not in html
+        )
+        # Use side: favicon/label dropped, description kept, redeploy
+        # addendum as a labeled link + spelled-out force flag
+        assert "Dashboard of flaky tests found in the CI sweep." in html
+        assert '<span class="artifact-label">' not in html
+        assert ">existing artifact</a>" in html
+        assert "force: overwrite without conflict check" in html
         # Denied variant renders its text
         assert "denied by the Claude Code auto mode classifier" in html
         # Title icon suppresses the default wrench (no double icon)
@@ -384,6 +540,10 @@ class TestArtifactEndToEnd:
         assert "<img src=x onerror=alert(1)>" not in html
         assert 'href="javascript:' not in html
         assert "href='javascript:" not in html
+        # The hostile favicon passes the https scheme gate but its quote
+        # injection must be neutralised in the img src attribute (#262).
+        assert 'onerror="alert(2)"' not in html
+        assert "&quot; onerror=&quot;alert(2)" in html
 
     def test_markdown_end_to_end_xss(self):
         messages = load_transcript(self.FIXTURE)
@@ -398,5 +558,12 @@ class TestArtifactEndToEnd:
         # carrier; a Markdown converter escapes their content itself.
         assert "<img" not in md.lower()
         assert "&lt;img" in md.lower()
-        assert "<script>alert(1)</script> hostile title" not in md
-        assert "&lt;script&gt;alert(1)&lt;/script&gt; hostile title" in md
+        # The hostile title no longer renders at all (#262: the result
+        # line shows the label link, and this entry's URL is unsafe so
+        # even that degrades to inline code).
+        assert "hostile title" not in md
+        # The hostile favicon passes the https scheme gate but its quote
+        # injection is percent-encoded inside the image target, so no
+        # attribute can survive a Markdown→HTML conversion.
+        assert "![](https://evil.example/f.png%22%20onerror=%22alert%282%29)" in md
+        assert 'f.png" onerror=' not in md

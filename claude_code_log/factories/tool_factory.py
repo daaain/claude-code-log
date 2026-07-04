@@ -1646,6 +1646,18 @@ def create_tool_result_message(
         tool_use_result,
     )
 
+    # The Artifact result line shows the favicon and version label, but the
+    # wire result carries only {url, path, title} — carry both over from the
+    # paired tool_use input (issue #262). Missing pairing degrades to the
+    # title/url fallbacks in the formatters.
+    if isinstance(parsed_output, ArtifactOutput):
+        artifact_use = tool_use_context.get(tool_result.tool_use_id)
+        if artifact_use is not None:
+            favicon = artifact_use.input.get("favicon")
+            label = artifact_use.input.get("label")
+            parsed_output.favicon = favicon if isinstance(favicon, str) else None
+            parsed_output.label = label if isinstance(label, str) else None
+
     # An AskUserQuestion "clarify" rejection arrives as an ``is_error`` result,
     # but we re-present it as a normal answered card (questions + the user's
     # free-form reply), so drop the error framing (#180).

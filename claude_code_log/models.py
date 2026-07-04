@@ -2073,6 +2073,10 @@ class ArtifactOutput:
     path: Optional[str] = None  # Source file that was published
     title: Optional[str] = None  # Page title extracted by the harness
     raw_text: Optional[str] = None  # Fallback text when structured data absent
+    # Carried over from the paired tool_use input (the wire result has no
+    # favicon/label) so the result line can show them (issue #262).
+    favicon: Optional[str] = None
+    label: Optional[str] = None
 
 
 # =============================================================================
