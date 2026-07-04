@@ -18,6 +18,18 @@ jobs:
             python-version: "3.12"
             is-primary: true
 
+    env:
+      # Collect coverage only on the primary job: it is the only one that
+      # uploads the reports and feeds the PR comment, while --cov costs
+      # ~65% extra pytest wall time (worst on Windows). Windows-only
+      # covered lines measured at 5 (diffing covered lines per file,
+      # Windows vs the primary artifact): the SIGUSR1 no-op return and the
+      # drive-letter branch of convert_project_path_to_claude_dir, both in
+      # cli.py. Those were never in the published report (non-primary
+      # coverage was computed and discarded), so this changes nothing.
+      COV: ${{ matrix.is-primary && '--cov=claude_code_log --cov-report=xml --cov-report=html --cov-report=term' || '' }}
+      COV_APPEND: ${{ matrix.is-primary && '--cov=claude_code_log --cov-append --cov-report=xml --cov-report=html --cov-report=term' || '' }}
+
     steps:
     - uses: actions/checkout@v4
       with:
@@ -38,23 +50,23 @@ jobs:
     - name: Install dependencies
       run: uv sync --all-extras --dev && uv run playwright install chromium
 
-    - name: Run unit tests with coverage
+    - name: Run unit tests (coverage on primary only)
       # -p no:playwright: unit tests don't use the browser fixtures; skipping the
       # plugin avoids a ~1s playwright import per xdist worker, which Windows pays
       # per spawned worker. See work/xdist-import-cost.md.
-      run: uv run pytest -p no:playwright -m "not (tui or browser or benchmark)" --cov=claude_code_log --cov-report=xml --cov-report=html --cov-report=term
+      run: uv run pytest -p no:playwright -m "not (tui or browser or benchmark)" ${{ env.COV }}
 
-    - name: Run TUI tests with coverage append
-      run: uv run pytest -m tui --cov=claude_code_log --cov-append --cov-report=xml --cov-report=html --cov-report=term
+    - name: Run TUI tests (coverage append on primary only)
+      run: uv run pytest -m tui ${{ env.COV_APPEND }}
 
-    - name: Run browser tests with coverage append
-      run: uv run pytest -m browser --cov=claude_code_log --cov-append --cov-report=xml --cov-report=html --cov-report=term
+    - name: Run browser tests (coverage append on primary only)
+      run: uv run pytest -m browser ${{ env.COV_APPEND }}
 
     - name: Run benchmark tests with coverage append (primary only)
       if: matrix.is-primary
       env:
         CLAUDE_CODE_LOG_DEBUG_TIMING: "1"
-      run: uv run pytest -m benchmark --cov=claude_code_log --cov-append --cov-report=xml --cov-report=html --cov-report=term -v
+      run: uv run pytest -m benchmark ${{ env.COV_APPEND }} -v
 
     - name: Upload coverage HTML report as artifact
       uses: actions/upload-artifact@v4
