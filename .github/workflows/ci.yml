@@ -39,6 +39,21 @@ jobs:
         # only and needs the commits in the object DB).
         fetch-depth: 0
 
+    - name: Move TEMP to the workspace disk (Windows)
+      # On windows runners TMP/TEMP default to the C: OS disk, whose
+      # throttled I/O dominates this tmp-heavy suite; RUNNER_TEMP lives on
+      # the same disk as the workspace (D:). Measured via A/B experiment
+      # (run 28715118956): this redirect alone took the unit selection from
+      # 555s mean to 150s — parity with ubuntu (~161s). Defender is NOT the
+      # culprit: real-time protection is already off on current images
+      # (exclusions/disable measured as no-ops), and a ReFS dev drive
+      # (~296s) was dominated by this redirect. Details: work/win-io.md
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        "TMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+        "TEMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+
     - name: Install uv
       uses: astral-sh/setup-uv@v4
       with:
