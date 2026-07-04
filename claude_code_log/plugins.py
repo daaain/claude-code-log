@@ -44,7 +44,7 @@ if TYPE_CHECKING:
         render_markdown,
         render_markdown_collapsible,
     )
-    from .markdown.renderer import safe_markdown_inline
+    from .markdown.renderer import safe_markdown_inline, safe_markdown_link_target
     from .utils import is_safe_web_url
 
 from .models import MessageContent, MessageMeta
@@ -363,19 +363,25 @@ _PUBLIC_HELPERS: frozenset[str] = frozenset(
         # plugin building an ``href`` / Markdown link target needs the same
         # http(s) whitelist the core renderers use.
         "is_safe_web_url",
+        # Companion to the scheme gate for Markdown destinations (#262): an
+        # ACCEPTED http(s) URL can still carry quotes/angle-brackets/spaces
+        # that break out of the ``(target)`` slot or smuggle attributes
+        # through a downstream Markdown->HTML conversion.
+        "safe_markdown_link_target",
     }
 )
 
 
 def __getattr__(name: str) -> Any:  # PEP 562
     if name in _PUBLIC_HELPERS:
-        # ``safe_markdown_inline`` (the markdown renderer's inline HTML-
-        # neutralising gate — entity-escapes raw HTML tags in an inline
-        # markdown fragment, preserving markdown) lives in
-        # ``markdown/renderer.py``; the others in ``html/utils.py``. Resolved
-        # lazily to keep package init acyclic.
+        # The ``safe_markdown_*`` pair (inline HTML-neutralising gate +
+        # link-target percent-encoder) lives in ``markdown/renderer.py``;
+        # ``is_safe_web_url`` in top-level ``utils.py``; the others in
+        # ``html/utils.py``. Resolved lazily to keep package init acyclic.
         if name == "safe_markdown_inline":
             from .markdown.renderer import safe_markdown_inline as resolved
+        elif name == "safe_markdown_link_target":
+            from .markdown.renderer import safe_markdown_link_target as resolved
         elif name == "is_safe_web_url":
             # Format-neutral (shared by both renderers) → top-level utils.
             from .utils import is_safe_web_url as resolved
@@ -399,4 +405,5 @@ __all__ = [
     "render_markdown_collapsible",
     "reset_cache",
     "safe_markdown_inline",
+    "safe_markdown_link_target",
 ]

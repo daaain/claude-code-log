@@ -692,6 +692,12 @@ def get_warmup_session_ids(messages: list[TranscriptEntry]) -> set[str]:
     return warmup_sessions
 
 
+# Artifact favicons are 1-2 emoji (ZWJ sequences can span ~a dozen code
+# points); anything longer is malformed input not worth echoing inline.
+# Shared by the HTML and Markdown renderers so the cap can't drift.
+ARTIFACT_FAVICON_TEXT_MAX = 16
+
+
 def is_safe_web_url(url: str) -> bool:
     """True if ``url`` is a plain-web (http/https) URL safe to emit as a link.
 
