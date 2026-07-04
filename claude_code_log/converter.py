@@ -46,6 +46,7 @@ from .models import (
     QueueOperationTranscriptEntry,
     SummaryTranscriptEntry,
     SystemTranscriptEntry,
+    ThinkingContent,
     UserTranscriptEntry,
     ToolResultContent,
     ToolUseContent,
@@ -910,6 +911,33 @@ def load_directory_transcripts(
 # =============================================================================
 
 
+def _is_empty_thinking(entry: TranscriptEntry) -> bool:
+    """True for assistant entries whose content is only empty thinking blocks.
+
+    Interleaved-thinking streaming (Claude 5 family) routinely emits these
+    signature-only entries; they carry nothing renderable.
+    """
+    if not isinstance(entry, AssistantTranscriptEntry):
+        return False
+    content = entry.message.content
+    return bool(content) and all(
+        isinstance(c, ThinkingContent) and not c.thinking.strip() for c in content
+    )
+
+
+def _resolve_survivor(uuid: str, remap: dict[str, str]) -> str:
+    """Follow a dropped→survivor chain to its live end.
+
+    Chains are at most a few hops (a run member remapped to a head that was
+    itself a stutter survivor); the visited guard is a cheap cycle backstop.
+    """
+    visited: set[str] = set()
+    while uuid in remap and uuid not in visited:
+        visited.add(uuid)
+        uuid = remap[uuid]
+    return uuid
+
+
 def deduplicate_messages(messages: list[TranscriptEntry]) -> list[TranscriptEntry]:
     """Remove duplicate messages based on (type, timestamp, sessionId, content_key).
 
@@ -924,16 +952,30 @@ def deduplicate_messages(messages: list[TranscriptEntry]) -> list[TranscriptEntr
     3. User text messages with same timestamp but different UUIDs (branch switch artifacts)
        -> Same timestamp, no tool_use_id -> SHOULD deduplicate, keep the one with most content
 
+    A dropped entry can be a distinct DAG node whose children reference it by
+    parentUuid (issue #259: consecutive empty-thinking entries within the same
+    millisecond share the assistant dedup key). Dropping is recorded in a
+    dropped→survivor map and dangling parentUuid/leafUuid references are
+    rewritten to the survivor, so children re-parent instead of orphaning.
+    Consecutive empty-thinking entries are additionally merged even across
+    distinct timestamps — they render nothing and essentially never become
+    fork points a posteriori.
+
     Args:
         messages: List of transcript entries to deduplicate
 
     Returns:
         List of deduplicated messages, preserving order (first occurrence kept,
-        but replaced in-place if a better version is found later)
+        but replaced in-place if a better version is found later). Entries
+        whose parent was dropped are mutated in place to point at the survivor.
     """
     # Track seen dedup_key -> index in deduplicated list (for in-place replacement)
     seen: dict[tuple[str, str, bool, str, str], int] = {}
     deduplicated: list[TranscriptEntry] = []
+    # dropped uuid -> surviving uuid, for re-parenting children of dropped
+    # entries (issue #259). Replacement cases (user text, ai-title) never
+    # land here: their content_key is the uuid itself (or they have none).
+    dropped_to_survivor: dict[str, str] = {}
 
     for message in messages:
         # Get basic message type
@@ -1013,12 +1055,71 @@ def deduplicate_messages(messages: list[TranscriptEntry]) -> list[TranscriptEntr
                 # Always keep the most recent ai-title per session — Claude
                 # Code may refine the curated title across the session.
                 deduplicated[seen[dedup_key]] = message
-            # Otherwise skip duplicate
+            else:
+                # Skip duplicate — but remember which entry survived so
+                # children of the dropped copy can be re-parented.
+                dropped_uuid = getattr(message, "uuid", None)
+                survivor_uuid = getattr(deduplicated[seen[dedup_key]], "uuid", None)
+                if dropped_uuid and survivor_uuid and dropped_uuid != survivor_uuid:
+                    dropped_to_survivor[dropped_uuid] = survivor_uuid
         else:
             seen[dedup_key] = len(deduplicated)
             deduplicated.append(message)
 
+    deduplicated = _merge_empty_thinking_runs(deduplicated, dropped_to_survivor)
+
+    if dropped_to_survivor:
+        for entry in deduplicated:
+            parent_uuid = getattr(entry, "parentUuid", None)
+            if parent_uuid in dropped_to_survivor:
+                # Safe cast: only BaseTranscriptEntry subclasses have parentUuid
+                entry.parentUuid = _resolve_survivor(  # type: ignore[union-attr]
+                    parent_uuid, dropped_to_survivor
+                )
+            elif (
+                isinstance(entry, SummaryTranscriptEntry)
+                and entry.leafUuid in dropped_to_survivor
+            ):
+                entry.leafUuid = _resolve_survivor(entry.leafUuid, dropped_to_survivor)
+
     return deduplicated
+
+
+def _merge_empty_thinking_runs(
+    entries: list[TranscriptEntry], dropped_to_survivor: dict[str, str]
+) -> list[TranscriptEntry]:
+    """Collapse consecutive empty-thinking entries onto the run's head.
+
+    An empty-thinking entry whose (survivor-resolved) parent is another
+    surviving empty-thinking entry in the same session is dropped, its uuid
+    remapped to that parent, so children re-parent to the run head (issue
+    #259 follow-up). Session boundaries block the merge — a cross-session
+    parent link is a fork attachment point that must stay addressable.
+    """
+    surviving_by_uuid: dict[str, TranscriptEntry] = {}
+    merged: list[TranscriptEntry] = []
+    for entry in entries:
+        if _is_empty_thinking(entry):
+            assert isinstance(entry, AssistantTranscriptEntry)
+            parent_uuid = (
+                _resolve_survivor(entry.parentUuid, dropped_to_survivor)
+                if entry.parentUuid
+                else None
+            )
+            parent = surviving_by_uuid.get(parent_uuid) if parent_uuid else None
+            if (
+                parent is not None
+                and _is_empty_thinking(parent)
+                and getattr(parent, "sessionId", None) == entry.sessionId
+            ):
+                assert parent_uuid is not None
+                dropped_to_survivor[entry.uuid] = parent_uuid
+                continue
+        merged.append(entry)
+        uuid = getattr(entry, "uuid", None)
+        if uuid:
+            surviving_by_uuid[uuid] = entry
+    return merged
 
 
 @dataclass
