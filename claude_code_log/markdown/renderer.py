@@ -20,6 +20,7 @@ from ..html.utils import (
     render_user_markdown,
 )
 from ..utils import (
+    ARTIFACT_FAVICON_TEXT_MAX,
     format_timestamp,
     generate_unified_diff,
     is_safe_web_url,
@@ -1746,7 +1747,7 @@ class MarkdownRenderer(Renderer):
         """
         if is_safe_web_url(favicon):
             return f"![]({safe_markdown_link_target(favicon)})"
-        if len(favicon) <= 16:
+        if len(favicon) <= ARTIFACT_FAVICON_TEXT_MAX:
             return safe_markdown_inline(favicon)
         return ""
 

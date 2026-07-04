@@ -34,7 +34,7 @@ from .utils import (
     render_user_markdown_collapsible,
     resolve_memory_body_links,
 )
-from ..utils import is_safe_web_url, strip_error_tags
+from ..utils import ARTIFACT_FAVICON_TEXT_MAX, is_safe_web_url, strip_error_tags
 from ..workflow import resolve_workflow_header, resolve_workflow_script
 from ..models import (
     AskUserQuestionInput,
@@ -917,11 +917,6 @@ def format_artifact_input(artifact_input: ArtifactInput) -> str:
     return "".join(rows)
 
 
-# Emoji favicons are 1-2 emoji (ZWJ sequences can span ~a dozen code
-# points); anything longer is malformed input not worth echoing inline.
-_ARTIFACT_FAVICON_TEXT_MAX = 16
-
-
 def _artifact_favicon(favicon: str) -> str:
     """Render the artifact favicon — a real image when one exists.
 
@@ -939,7 +934,7 @@ def _artifact_favicon(favicon: str) -> str:
             f'<img class="artifact-favicon" src="{escape_html(favicon)}"'
             f' alt="" referrerpolicy="no-referrer">'
         )
-    if len(favicon) <= _ARTIFACT_FAVICON_TEXT_MAX:
+    if len(favicon) <= ARTIFACT_FAVICON_TEXT_MAX:
         return f'<span class="artifact-favicon">{escape_html(favicon)}</span>'
     return ""
 
