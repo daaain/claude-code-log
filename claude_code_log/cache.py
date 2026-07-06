@@ -39,7 +39,6 @@ class CachedFileInfo(BaseModel):
     source_mtime: float
     cached_mtime: float
     message_count: int
-    session_ids: list[str]
 
 
 class SessionCacheData(BaseModel):
@@ -280,6 +279,16 @@ def get_cache_db_path(projects_dir: Path) -> Path:
 # ========== Cache Manager ==========
 
 
+# Process-level memo of cache DBs whose migrations have already been
+# checked. CacheManager is constructed per project (the TUI project
+# selector builds one per table row, on every resize), so without the
+# memo every instance re-pays the migration check: a connection plus
+# version-table and migration-directory reads, ~2ms each (issue #12).
+# The exists() guard in _init_database covers --clear-cache deleting
+# the DB file mid-process.
+_migrated_db_paths: set[str] = set()
+
+
 class CacheManager:
     """SQLite-based cache manager for Claude Code Log."""
 
@@ -404,8 +413,11 @@ class CacheManager:
 
     def _init_database(self) -> None:
         """Create schema if needed using migration runner."""
-        # Run any pending migrations
+        key = str(self.db_path)
+        if key in _migrated_db_paths and self.db_path.exists():
+            return
         run_migrations(self.db_path)
+        _migrated_db_paths.add(key)
 
     def _ensure_project_exists(self) -> None:
         """Ensure project record exists and get its ID."""
@@ -887,20 +899,95 @@ class CacheManager:
             return []
 
         with self._get_connection() as conn:
-            rows = conn.execute(
-                "SELECT DISTINCT cwd FROM sessions WHERE project_id = ? AND cwd IS NOT NULL",
-                (self._project_id,),
-            ).fetchall()
+            return self._get_working_directories(conn)
 
+    def _get_working_directories(self, conn: sqlite3.Connection) -> List[str]:
+        """get_working_directories() on an already-open connection."""
+        rows = conn.execute(
+            "SELECT DISTINCT cwd FROM sessions WHERE project_id = ? AND cwd IS NOT NULL",
+            (self._project_id,),
+        ).fetchall()
         return [row["cwd"] for row in rows]
 
     def get_modified_files(self, jsonl_files: List[Path]) -> List[Path]:
-        """Get list of JSONL files that need to be reprocessed."""
-        return [
-            jsonl_file
-            for jsonl_file in jsonl_files
-            if not self.is_file_cached(jsonl_file)
-        ]
+        """Get list of JSONL files that need to be reprocessed.
+
+        Batched equivalent of calling is_file_cached() per file: one SQL
+        query fetches every cached row (one connection open instead of
+        one per file), and one scandir per parent directory rules out
+        subagent-sidecar fingerprints, replacing the per-file query +
+        directory probes that dominated freshness-check time on large
+        archives (issue #12).
+        """
+        if not jsonl_files:
+            return []
+        if self._project_id is None:
+            return list(jsonl_files)
+
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                "SELECT file_name, source_mtime, subagents_fingerprint"
+                " FROM cached_files WHERE project_id = ?",
+                (self._project_id,),
+            ).fetchall()
+        cached = {row["file_name"]: row for row in rows}
+
+        # A session file's sidecars live under <parent>/<stem>/subagents,
+        # so one scandir of the parent tells us which files can have a
+        # non-empty fingerprint without any per-file stat probes.
+        subdir_names: Dict[Path, set[str]] = {}
+
+        modified: List[Path] = []
+        for jsonl_file in jsonl_files:
+            row = cached.get(jsonl_file.name)
+            if row is None:
+                modified.append(jsonl_file)
+                continue
+
+            try:
+                source_mtime = jsonl_file.stat().st_mtime
+            except OSError:
+                # Missing file: same outcome as is_file_cached()'s
+                # exists() check returning False.
+                modified.append(jsonl_file)
+                continue
+
+            # Cache is valid if modification times match (within 1 second
+            # tolerance)
+            if abs(source_mtime - row["source_mtime"]) >= 1.0:
+                modified.append(jsonl_file)
+                continue
+
+            parent = jsonl_file.parent
+            if parent.name == "subagents":
+                # Agent file in a subagents dir: its sidecars sit next to
+                # it, so the full fingerprint scan is required.
+                current_fp = subagents_fingerprint(jsonl_file)
+            else:
+                names = subdir_names.get(parent)
+                if names is None:
+                    try:
+                        with os.scandir(parent) as entries:
+                            names = {e.name for e in entries if e.is_dir()}
+                    except OSError:
+                        names = set()
+                    subdir_names[parent] = names
+                current_fp = (
+                    subagents_fingerprint(jsonl_file)
+                    if jsonl_file.stem in names
+                    else ""
+                )
+
+            # Same NULL-fingerprint rule as is_file_cached(): pre-007
+            # rows are accepted only while the file has no sidecars.
+            cached_fp = row["subagents_fingerprint"]
+            if cached_fp is None:
+                if current_fp != "":
+                    modified.append(jsonl_file)
+            elif cached_fp != current_fp:
+                modified.append(jsonl_file)
+
+        return modified
 
     def get_cached_project_data(self) -> Optional[ProjectCache]:
         """Get the cached project data if available."""
@@ -923,19 +1010,11 @@ class CacheManager:
 
             cached_files: Dict[str, CachedFileInfo] = {}
             for row in file_rows:
-                # Get session IDs for this file from messages
-                session_rows = conn.execute(
-                    "SELECT DISTINCT session_id FROM messages WHERE file_id = ? AND session_id IS NOT NULL",
-                    (row["id"],),
-                ).fetchall()
-                session_ids = [r["session_id"] for r in session_rows]
-
                 cached_files[row["file_name"]] = CachedFileInfo(
                     file_path=row["file_path"],
                     source_mtime=row["source_mtime"],
                     cached_mtime=row["cached_mtime"],
                     message_count=row["message_count"],
-                    session_ids=session_ids,
                 )
 
             # Get sessions
@@ -961,6 +1040,10 @@ class CacheManager:
                     team_name=row["team_name"] if "team_name" in row.keys() else None,
                 )
 
+            # On the same connection: calling the public method here
+            # would open a second connection per call.
+            working_directories = self._get_working_directories(conn)
+
         return ProjectCache(
             version=project_row["version"],
             cache_created=project_row["cache_created"],
@@ -973,7 +1056,7 @@ class CacheManager:
             total_cache_creation_tokens=project_row["total_cache_creation_tokens"],
             total_cache_read_tokens=project_row["total_cache_read_tokens"],
             sessions=sessions,
-            working_directories=self.get_working_directories(),
+            working_directories=working_directories,
             earliest_timestamp=project_row["earliest_timestamp"],
             latest_timestamp=project_row["latest_timestamp"],
         )
