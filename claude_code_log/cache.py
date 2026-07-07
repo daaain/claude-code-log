@@ -970,7 +970,7 @@ class CacheManager:
                         with os.scandir(parent) as entries:
                             names = {e.name for e in entries if e.is_dir()}
                     except OSError:
-                        names = set()
+                        names = set[str]()
                     subdir_names[parent] = names
                 current_fp = (
                     subagents_fingerprint(jsonl_file)
