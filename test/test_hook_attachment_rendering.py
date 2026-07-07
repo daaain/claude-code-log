@@ -397,7 +397,9 @@ class TestEndToEndDetailLevels:
         del roots, _nav  # only inspect ctx.messages
 
         attachments = [
-            m for m in ctx.messages if isinstance(m.content, HookAttachmentMessage)
+            m
+            for m in ctx.messages
+            if m is not None and isinstance(m.content, HookAttachmentMessage)
         ]
         assert len(attachments) == 1
         msg = attachments[0]
@@ -507,7 +509,9 @@ class TestHookAttachmentHierarchy:
         del _roots, _nav
 
         hook = next(
-            m for m in ctx.messages if isinstance(m.content, HookAttachmentMessage)
+            m
+            for m in ctx.messages
+            if m is not None and isinstance(m.content, HookAttachmentMessage)
         )
         # No pair links on either side — the hook stands alone.
         assert hook.pair_first is None
@@ -549,14 +553,20 @@ class TestHookAttachmentHierarchy:
         del _roots, _nav
 
         hook = next(
-            m for m in ctx.messages if isinstance(m.content, HookAttachmentMessage)
+            m
+            for m in ctx.messages
+            if m is not None and isinstance(m.content, HookAttachmentMessage)
         )
         # Filter to user-content SystemMessages (the "/color" + "Session
         # color set" entries) — exclude SessionHeaderMessage which also
         # carries msg_type "system".
         from claude_code_log.models import SystemMessage
 
-        system_infos = [m for m in ctx.messages if isinstance(m.content, SystemMessage)]
+        system_infos = [
+            m
+            for m in ctx.messages
+            if m is not None and isinstance(m.content, SystemMessage)
+        ]
 
         # Hook should NOT have any system_info as immediate child.
         assert hook.immediate_children_count == 0, (

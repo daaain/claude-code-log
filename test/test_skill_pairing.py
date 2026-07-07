@@ -759,21 +759,21 @@ class TestSkillFoldOnFork:
         # long as the fork anchor itself wasn't ghosted (it wasn't —
         # the trunk-side anchor is never a Skill-fold target).
         branch_headers = [
-            m
+            m.content
             for m in survivors
             if isinstance(m.content, SessionHeaderMessage) and m.content.is_branch
         ]
         # The Skill-bearing branch is the one rooted at 'a-skill'.
         # (Branch sids are ``{trunk}@{first_uuid12}`` per dag.py.)
         skill_branches = [
-            m for m in branch_headers if m.content.session_id.endswith("@a-skill")
+            h for h in branch_headers if h.session_id.endswith("@a-skill")
         ]
         assert len(skill_branches) == 1, (
             f"expected exactly one branch header rooted at 'a-skill'; got "
-            f"{[m.content.session_id for m in branch_headers]}"
+            f"{[h.session_id for h in branch_headers]}"
         )
         skill_branch = skill_branches[0]
-        parent_idx = skill_branch.content.parent_message_index
+        parent_idx = skill_branch.parent_message_index
         assert parent_idx is not None, (
             "skill-bearing branch header's parent_message_index is None — "
             "expected it to resolve to the fork anchor 'c'."

@@ -856,7 +856,7 @@ class TestAgentDagIntegration:
         header_session_ids = {
             m.content.session_id
             for m in context.messages
-            if isinstance(m.content, SessionHeaderMessage)
+            if m is not None and isinstance(m.content, SessionHeaderMessage)
         }
         assert header_session_ids == {"s1"}
 
@@ -1025,7 +1025,9 @@ class TestAgentDagIntegration:
 
         # Verify message ordering: agent messages should be in the branch
         # block (after b1_u anchor, before branch 2's b2_u)
-        msg_uuids = {m.meta.uuid: m.message_index for m in context.messages}
+        msg_uuids = {
+            m.meta.uuid: m.message_index for m in context.messages if m is not None
+        }
         assert "ag1" in msg_uuids
         assert "b1_u" in msg_uuids
         assert "b2_u" in msg_uuids
@@ -1154,7 +1156,9 @@ class TestRenderSessionResetAcrossSessions:
         _, _, ctx = generate_template_messages(messages, session_tree=session_tree)
 
         # Find messages from session s2 by UUID
-        s2_msgs = [m for m in ctx.messages if m.meta.uuid in ("u3", "a3")]
+        s2_msgs = [
+            m for m in ctx.messages if m is not None and m.meta.uuid in ("u3", "a3")
+        ]
         assert len(s2_msgs) == 2, f"Expected 2 s2 messages, got {len(s2_msgs)}"
 
         for msg in s2_msgs:
@@ -1579,7 +1583,9 @@ class TestPassthroughDagChain:
         _, _, ctx = generate_template_messages(messages, session_tree=session_tree)
 
         # No message should have uuid "att1"
-        rendered_uuids = [m.meta.uuid for m in ctx.messages if m.meta.uuid]
+        rendered_uuids = [
+            m.meta.uuid for m in ctx.messages if m is not None and m.meta.uuid
+        ]
         assert "att1" not in rendered_uuids
         # But user and assistant should be rendered
         assert "u1" in rendered_uuids
