@@ -135,6 +135,13 @@ per-file load loop, per-session generation) in `CacheManager.batch()`:
 one shared connection reused for the scope and closed on exit (including
 on exception). `batch()` nesting is a no-op reuse, so the wraps compose.
 
+Freshness checks are batched too (issue #12): `get_modified_files()`
+fetches every cached row for the project in one query (one connection
+open, or zero extra inside a `batch()` scope) and rules out
+subagent-sidecar fingerprints with one scandir per parent directory,
+instead of a per-file query + `is_dir()` probes. This is what makes
+TUI startup near-instant on multi-thousand-file archives.
+
 For the operations / recovery side (archived sessions, manual
 deletion, `cleanupPeriodDays`), see
 [`docs/restoring-archived-sessions.md`](../docs/restoring-archived-sessions.md).
@@ -145,8 +152,9 @@ deletion, `cleanupPeriodDays`), see
 small migration system. Each migration is a `NNN_description.sql` file
 applied in numeric order by `migrations/runner.py`. The schema-version
 table tracks which migrations have run; `cache.py` invokes the runner
-on every connection open, so a fresh checkout running against an old
-cache DB transparently upgrades.
+the first time a given cache DB is opened in a process (memoised per
+DB path, re-checked if the file disappears), so a fresh checkout
+running against an old cache DB transparently upgrades.
 
 Current migrations:
 
