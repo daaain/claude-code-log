@@ -18,6 +18,8 @@ if TYPE_CHECKING:
     from .cache import CacheManager
 
 from .utils import (
+    coalesce_trunk_session_id,
+    collect_trunk_session_ids,
     format_timestamp_range,
     get_parent_session_id,
     get_project_display_name,
@@ -1431,8 +1433,8 @@ def compute_session_data(
         ):
             continue
 
-        session_id = get_parent_session_id(getattr(message, "sessionId", ""))
-        if not session_id or session_id in warmup:
+        session_id = coalesce_trunk_session_id(message, warmup)
+        if not session_id:
             continue
 
         if session_id not in result:
@@ -2055,19 +2057,9 @@ def convert_jsonl_to(
         assert cache_manager is not None  # Ensured by use_pagination condition
         # Use cached session data if available, otherwise build from messages
         if cached_data is not None:
-            warmup_session_ids = get_warmup_session_ids(messages)
-            # Coalesce agent sessionIds to their trunk (same rule as
-            # compute_session_data and _generate_individual_session_files):
-            # a fork session surviving only through its agent sidechains
-            # must still claim its page slot, or its messages are grouped
-            # under a session no page owns and vanish from the output.
-            current_session_ids: set[str] = set()
-            for message in messages:
-                session_id = getattr(message, "sessionId", "")
-                if session_id:
-                    session_id = get_parent_session_id(session_id)
-                if session_id and session_id not in warmup_session_ids:
-                    current_session_ids.add(session_id)
+            current_session_ids = collect_trunk_session_ids(
+                messages, get_warmup_session_ids(messages)
+            )
             session_data = {
                 session_id: session_cache
                 for session_id, session_cache in cached_data.sessions.items()
@@ -2410,27 +2402,14 @@ def _generate_individual_session_files(
 
     ext = get_file_extension(format)
     suffix = _variant_suffix(detail, compact, format, no_timestamps, no_recaps)
-    # Pre-compute warmup sessions to exclude them
-    warmup_session_ids = get_warmup_session_ids(messages)
-
-    # Find all unique session IDs (excluding warmup sessions). Agent
-    # sessionIds ({trunk}#agent-{id}) coalesce to their trunk rather
-    # than being dropped: compute_session_data() coalesces the same
-    # way when it writes the sessions table, and a fork session whose
-    # own messages were all deduplicated into the original session can
-    # survive ONLY through its agent sidechains. Dropping those left
-    # such a session in the sessions table but never rendered, so
-    # get_stale_sessions() flagged it "not_cached" on every run —
+    # Find all unique session IDs, excluding warmup sessions and
+    # coalescing agent sessionIds to their trunk — same rule as
+    # compute_session_data() when it writes the sessions table.
+    # Dropping (rather than coalescing) agent ids left agent-sidechain-
+    # only sessions in the sessions table but never rendered, so
+    # get_stale_sessions() flagged them "not_cached" on every run —
     # regenerating the project forever without ever writing the file.
-    session_ids: set[str] = set()
-    for message in messages:
-        if hasattr(message, "sessionId"):
-            raw_session_id: str = getattr(message, "sessionId")
-            if not raw_session_id:
-                continue
-            session_id = get_parent_session_id(raw_session_id)
-            if session_id and session_id not in warmup_session_ids:
-                session_ids.add(session_id)
+    session_ids = collect_trunk_session_ids(messages, get_warmup_session_ids(messages))
 
     # Get session data from cache for better titles
     session_data: dict[str, Any] = {}
@@ -3173,10 +3152,8 @@ def process_projects_hierarchy(
                     ),
                 ):
                     continue
-                if not hasattr(_msg, "sessionId"):
-                    continue
-                _sid = get_parent_session_id(getattr(_msg, "sessionId", ""))
-                if not _sid or _sid in warmup_for_teams:
+                _sid = coalesce_trunk_session_id(_msg, warmup_for_teams)
+                if not _sid:
                     continue
                 _tn = getattr(_msg, "teamName", None)
                 if _tn and _sid not in team_name_per_session:
