@@ -1689,10 +1689,19 @@ def _generate_paginated_html(
         total_output_tokens = 0
         total_cache_creation_tokens = 0
         total_cache_read_tokens = 0
+        # The cached count must be the sessions-table sum, because
+        # is_page_stale() compares it against SUM(sessions.message_count)
+        # on the next run. len(page_messages) counts what's rendered
+        # (including Summary/AiTitle/Attachment entries that
+        # compute_session_data skips), so caching it left any page where
+        # the two rules diverge permanently "message_count_changed" —
+        # regenerating on every single run.
+        page_sessions_message_count = 0
 
         for session_id in page_session_ids:
             if session_id in session_data:
                 s = session_data[session_id]
+                page_sessions_message_count += s.message_count
                 if s.first_timestamp and (
                     first_timestamp is None or s.first_timestamp < first_timestamp
                 ):
@@ -1778,7 +1787,7 @@ def _generate_paginated_html(
             html_path=html_path,
             page_size_config=page_size,
             session_ids=page_session_ids,
-            message_count=page_message_count,
+            message_count=page_sessions_message_count,
             first_timestamp=first_timestamp,
             last_timestamp=last_timestamp,
             total_input_tokens=total_input_tokens,
@@ -2047,14 +2056,17 @@ def convert_jsonl_to(
         # Use cached session data if available, otherwise build from messages
         if cached_data is not None:
             warmup_session_ids = get_warmup_session_ids(messages)
+            # Coalesce agent sessionIds to their trunk (same rule as
+            # compute_session_data and _generate_individual_session_files):
+            # a fork session surviving only through its agent sidechains
+            # must still claim its page slot, or its messages are grouped
+            # under a session no page owns and vanish from the output.
             current_session_ids: set[str] = set()
             for message in messages:
                 session_id = getattr(message, "sessionId", "")
-                if (
-                    session_id
-                    and session_id not in warmup_session_ids
-                    and not is_agent_session(session_id)
-                ):
+                if session_id:
+                    session_id = get_parent_session_id(session_id)
+                if session_id and session_id not in warmup_session_ids:
                     current_session_ids.add(session_id)
             session_data = {
                 session_id: session_cache
@@ -2401,16 +2413,23 @@ def _generate_individual_session_files(
     # Pre-compute warmup sessions to exclude them
     warmup_session_ids = get_warmup_session_ids(messages)
 
-    # Find all unique session IDs (excluding warmup and agent sessions)
+    # Find all unique session IDs (excluding warmup sessions). Agent
+    # sessionIds ({trunk}#agent-{id}) coalesce to their trunk rather
+    # than being dropped: compute_session_data() coalesces the same
+    # way when it writes the sessions table, and a fork session whose
+    # own messages were all deduplicated into the original session can
+    # survive ONLY through its agent sidechains. Dropping those left
+    # such a session in the sessions table but never rendered, so
+    # get_stale_sessions() flagged it "not_cached" on every run —
+    # regenerating the project forever without ever writing the file.
     session_ids: set[str] = set()
     for message in messages:
         if hasattr(message, "sessionId"):
-            session_id: str = getattr(message, "sessionId")
-            if (
-                session_id
-                and session_id not in warmup_session_ids
-                and not is_agent_session(session_id)
-            ):
+            raw_session_id: str = getattr(message, "sessionId")
+            if not raw_session_id:
+                continue
+            session_id = get_parent_session_id(raw_session_id)
+            if session_id and session_id not in warmup_session_ids:
                 session_ids.add(session_id)
 
     # Get session data from cache for better titles
