@@ -10,7 +10,7 @@ import zlib
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Generator, List, Optional
+from typing import Any, Callable, Dict, Generator, List, Optional
 
 from packaging import version
 from pydantic import BaseModel
@@ -257,6 +257,32 @@ def subagents_fingerprint(jsonl_path: Path) -> str:
         # check re-reads (an always-mismatching fingerprint is safe).
         return f"{len(metas)}:unstable"
     return f"{len(metas)}:{newest}"
+
+
+def _cache_row_is_fresh(
+    row: sqlite3.Row, source_mtime: float, current_fp: Callable[[], str]
+) -> bool:
+    """Decide whether a cached_files row is still fresh.
+
+    Single source of truth for the freshness rule shared by
+    is_file_cached() and get_modified_files(). current_fp is a callable
+    so callers only pay for the sidecar fingerprint scan when the mtime
+    check passes (and get_modified_files() can plug in its
+    scandir-optimized variant).
+
+    Cache is valid if modification times match (within 1 second
+    tolerance) and the sidecar inputs of spawn discovery (#213) match
+    too — new agent-*.meta.json files appear without touching the
+    source jsonl. Pre-007 rows carry NULL: accept those only when the
+    file has no sidecars today (nothing to miss), so legacy caches
+    don't mass-invalidate while sessions WITH sidecars reparse once.
+    """
+    if abs(source_mtime - row["source_mtime"]) >= 1.0:
+        return False
+    cached_fp = row["subagents_fingerprint"]
+    if cached_fp is None:
+        return current_fp() == ""
+    return cached_fp == current_fp()
 
 
 def get_cache_db_path(projects_dir: Path) -> Path:
@@ -610,23 +636,11 @@ class CacheManager:
         if not row:
             return False
 
-        source_mtime = jsonl_path.stat().st_mtime
-        cached_mtime = row["source_mtime"]
-
-        # Cache is valid if modification times match (within 1 second tolerance)
-        if abs(source_mtime - cached_mtime) >= 1.0:
-            return False
-
-        # The sidecar inputs of spawn discovery (#213) must match too —
-        # new agent-*.meta.json files appear without touching the source
-        # jsonl. Pre-007 rows carry NULL: accept those only when the file
-        # has no sidecars today (nothing to miss), so legacy caches don't
-        # mass-invalidate while sessions WITH sidecars reparse once.
-        cached_fp = row["subagents_fingerprint"]
-        current_fp = subagents_fingerprint(jsonl_path)
-        if cached_fp is None:
-            return current_fp == ""
-        return cached_fp == current_fp
+        return _cache_row_is_fresh(
+            row,
+            jsonl_path.stat().st_mtime,
+            lambda: subagents_fingerprint(jsonl_path),
+        )
 
     def load_cached_entries(self, jsonl_path: Path) -> Optional[List[TranscriptEntry]]:
         """Load cached transcript entries for a JSONL file."""
@@ -937,6 +951,22 @@ class CacheManager:
         # non-empty fingerprint without any per-file stat probes.
         subdir_names: Dict[Path, set[str]] = {}
 
+        def current_fp(jsonl_file: Path) -> str:
+            parent = jsonl_file.parent
+            if parent.name == "subagents":
+                # Agent file in a subagents dir: its sidecars sit next to
+                # it, so the full fingerprint scan is required.
+                return subagents_fingerprint(jsonl_file)
+            names = subdir_names.get(parent)
+            if names is None:
+                try:
+                    with os.scandir(parent) as entries:
+                        names = {e.name for e in entries if e.is_dir()}
+                except OSError:
+                    names = set[str]()
+                subdir_names[parent] = names
+            return subagents_fingerprint(jsonl_file) if jsonl_file.stem in names else ""
+
         modified: List[Path] = []
         for jsonl_file in jsonl_files:
             row = cached.get(jsonl_file.name)
@@ -952,39 +982,9 @@ class CacheManager:
                 modified.append(jsonl_file)
                 continue
 
-            # Cache is valid if modification times match (within 1 second
-            # tolerance)
-            if abs(source_mtime - row["source_mtime"]) >= 1.0:
-                modified.append(jsonl_file)
-                continue
-
-            parent = jsonl_file.parent
-            if parent.name == "subagents":
-                # Agent file in a subagents dir: its sidecars sit next to
-                # it, so the full fingerprint scan is required.
-                current_fp = subagents_fingerprint(jsonl_file)
-            else:
-                names = subdir_names.get(parent)
-                if names is None:
-                    try:
-                        with os.scandir(parent) as entries:
-                            names = {e.name for e in entries if e.is_dir()}
-                    except OSError:
-                        names = set[str]()
-                    subdir_names[parent] = names
-                current_fp = (
-                    subagents_fingerprint(jsonl_file)
-                    if jsonl_file.stem in names
-                    else ""
-                )
-
-            # Same NULL-fingerprint rule as is_file_cached(): pre-007
-            # rows are accepted only while the file has no sidecars.
-            cached_fp = row["subagents_fingerprint"]
-            if cached_fp is None:
-                if current_fp != "":
-                    modified.append(jsonl_file)
-            elif cached_fp != current_fp:
+            if not _cache_row_is_fresh(
+                row, source_mtime, lambda file=jsonl_file: current_fp(file)
+            ):
                 modified.append(jsonl_file)
 
         return modified
