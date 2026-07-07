@@ -692,6 +692,45 @@ def get_warmup_session_ids(messages: list[TranscriptEntry]) -> set[str]:
     return warmup_sessions
 
 
+def coalesce_trunk_session_id(
+    message: TranscriptEntry, warmup_session_ids: set[str]
+) -> str:
+    """Return ``message``'s sessionId coalesced to its trunk, or ``""``.
+
+    The shared normalization every session-collection site must agree
+    on: agent synthetic sessionIds (``{trunk}#agent-{id}``) coalesce to
+    their trunk via ``get_parent_session_id``, and warmup-only sessions
+    are excluded. Returns ``""`` for entries without a sessionId (e.g.
+    ``SummaryTranscriptEntry``) or whose trunk is a warmup session.
+    """
+    session_id = getattr(message, "sessionId", "") or ""
+    if session_id:
+        session_id = get_parent_session_id(session_id)
+    if session_id in warmup_session_ids:
+        return ""
+    return session_id
+
+
+def collect_trunk_session_ids(
+    messages: list[TranscriptEntry], warmup_session_ids: set[str]
+) -> set[str]:
+    """Collect the distinct trunk sessionIds present in ``messages``.
+
+    Coalescing (rather than dropping) agent sessionIds matters: a fork
+    session whose own messages were all deduplicated into the original
+    session can survive ONLY through its agent sidechains, and it must
+    still claim its page/file slot or its messages are grouped under a
+    session no output owns and vanish (regenerating forever — see
+    ``_generate_individual_session_files``).
+    """
+    session_ids: set[str] = set()
+    for message in messages:
+        session_id = coalesce_trunk_session_id(message, warmup_session_ids)
+        if session_id:
+            session_ids.add(session_id)
+    return session_ids
+
+
 # Artifact favicons are 1-2 emoji (ZWJ sequences can span ~a dozen code
 # points); anything longer is malformed input not worth echoing inline.
 # Shared by the HTML and Markdown renderers so the cap can't drift.
