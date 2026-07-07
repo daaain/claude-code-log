@@ -1086,6 +1086,11 @@ class CacheManager:
             # JSONLs are re-ingested, so the project index keeps showing
             # the old session-id title until the cache is rebuilt.
             "1.2.0": "1.3.0",
+            # 1.4.1 filters <local-command-caveat>-wrapped caveat messages
+            # (Claude Code ≥ ~2.1) from session previews: caches built
+            # earlier have the caveat text baked into first_user_message
+            # for affected sessions.
+            "1.4.0": "1.4.1",
         }
 
         cache_ver = version.parse(cache_version)
