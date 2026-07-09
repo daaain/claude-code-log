@@ -6,6 +6,66 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [1.5.0] - 2026-07-09
+
+### Changed
+
+- **Filter <local-command-caveat>-wrapped caveat messages (Claude Code ≥ ~2.1) (#269)**
+- **Fix perpetual re-regeneration of projects with up-to-date caches (#268)**
+- **Fix ty possibly-missing-attribute warnings in tests (#267)**
+- **Speed up cache freshness checks on large archives (#266)**
+- **ci: move TMP/TEMP to the workspace disk on Windows runners**
+- **perf(cov): use sys.monitoring coverage core (COVERAGE_CORE=sysmon equivalent)**
+- **ci: collect coverage only on the primary matrix job**
+- **Improve Artifact tool look&feel: label-linked result, lean tool use (#262) (#263)**
+- **Remap dangling parent refs when dedup drops a distinct DAG node (#259) (#261)**
+- **Render the Artifact tool (deploy HTML/MD page → claude.ai URL) (#257) (#260)**
+- **Handle the full variety of Workflow invocation shapes (#174 follow-up) (#258)**
+- **Regenerate a --no-cache directory when a source .jsonl grows (#254) (#256)**
+- **Regenerate single-file output when its source grows; fix success-message accuracy (#221 follow-up) (#253)**
+- **Surface the model each agent ran on, once per agent context (#246) (#252)**
+- **feat: use nicer glyphs for fold/unfold controls (#247) (#255)**
+- **Escape raw HTML in assistant/tool content to fix XSS  (#245)**
+- **Warn that --output / --format are ignored under --tui (#220) (#241)**
+- **Speed up the SQLite metadata-cache build (connection reuse + synchronous=NORMAL) (#251)**
+- **Cut pytest-xdist per-worker import cost on Windows unit runs (#250)**
+- **Speed up integration-test fixtures on Windows (shrink copied transcripts; skip symlink tests when unavailable) (#249)**
+- **Stream output to stdout: support -o - / /dev/stdout (#223 part 2) (#239)**
+- **Keep fork points visible when their host message is detail-filtered (#233 follow-up) (#240)**
+- **Explicit --output: always regenerate, infer format from suffix, fix stdout hang (#221, #222, #223 part 1) (#237)**
+- **Connect fork-point and branch headers to their anchor message (#238)**
+- **Anchor fork points whose node is an unrendered system message (#236)**
+- **Render Read/Write of any Markdown file as Markdown, not Pygments (#232) (#234)**
+- **Generic tool results: render structured content items (#227) (#235)**
+- **Nested agent hierarchies: visual layer (#213, part 2 — WIP) (#219)**
+- **Render nested sub-agent hierarchies (#213) (#218)**
+- **Build(deps): bump pygments from 2.19.2 to 2.20.0 (#228)**
+- **Build(deps): bump requests from 2.32.5 to 2.33.0 (#229)**
+- **Build(deps-dev): bump pytest from 9.0.1 to 9.0.3 (#230)**
+- **Build(deps): bump idna from 3.11 to 3.15 (#231)**
+- **Side-channel prompt rendering + params-fold UX and accessibility (#174 follow-up) (#217)**
+- **Polish the workflow run tree + dev-docs sync (#174 follow-up) (#215)**
+- **Hybrid JSON/Markdown rendering for tool params tables (#216)**
+- **Linearize assistant-continuation tool-flow forks instead of branching (#214)**
+- **Enrich fork-point and branch nav labels with message summaries (#179 follow-up) (#212)**
+- **Render dynamic-workflow run tree on the nested DOM (#174 PR3) (#210)**
+- **Keep recaps visible at all detail levels; add --no-recaps (#179) (#209)**
+- **Dedupe "unrecognized message type" warnings per file (#211)**
+- **work/: delete the completed converter/renderer simplification plans (#208)**
+- **Flag auto-memory interactions: 🧠 titles + memory filter (#192) (#204)**
+- **Phase 3: single-axis collapse — delete pre-render _filter_by_detail (#206)**
+- **Render Workflow tool-input (JS) + async-result JSON bodies (#174 PR2) (#205)**
+- **Phase 2 of ghosting epic: detail-filter ghosts in place; drop _reindex_filtered_context (#194)**
+- **Parse dynamic-Workflow runs into WorkflowRun models (#174 PR1) (#203)**
+- **Bump mistune from 3.1.4 to 3.2.1 (#202)**
+- **Bump gitpython from 3.1.45 to 3.1.50 (#200)**
+- **Exclude docs/ from ty type-checking (#201)**
+- **Render message tree as nested DOM (PR0 for #174) (#191)**
+- **Bump urllib3 from 2.5.0 to 2.7.0 (#199)**
+- **Ghost-aware ctx.messages; skill-fold uses None slots (ghosting epic Phase 1) (#193)**
+- **Merge pull request #198 from daaain/fix-linux-release**
+
+
 ## [1.4.0] - 2026-06-03
 
 ### Changed

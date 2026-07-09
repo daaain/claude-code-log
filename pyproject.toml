@@ -1,6 +1,6 @@
 [project]
 name = "claude-code-log"
-version = "1.4.0"
+version = "1.5.0"
 description = "Convert Claude Code transcript JSONL files to HTML"
 readme = "README.md"
 requires-python = ">=3.10"
