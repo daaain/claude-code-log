@@ -1973,7 +1973,7 @@ def convert_jsonl_to(
             # produced at all (`--combined no`), in which case its
             # absence must not veto the early exit.
             if write_combined:
-                combined_stale, _ = cache_manager.is_html_stale(
+                combined_stale, _ = cache_manager.is_transcript_stale(
                     output_path.name, None, output_dir=effective_output_dir
                 )
                 combined_stale = combined_stale or is_html_outdated(output_path)
@@ -2095,7 +2095,7 @@ def convert_jsonl_to(
         # Use single-file generation for small projects or filtered views
         # Use incremental regeneration via html_cache when available
         if cache_manager is not None and input_path.is_dir():
-            is_stale, _reason = cache_manager.is_html_stale(
+            is_stale, _reason = cache_manager.is_transcript_stale(
                 output_path.name, None, output_dir=output_path.parent
             )
             should_regenerate = (
@@ -2122,7 +2122,7 @@ def convert_jsonl_to(
             #
             # This branch is taken for a single file (which never has a cache)
             # and for a directory run WITHOUT a cache (e.g. --no-cache); the
-            # cached directory path handles freshness via `is_html_stale`
+            # cached directory path handles freshness via `is_transcript_stale`
             # above and doesn't reach here. There's no DB tracking per-source
             # mtimes, so the *output* file's own mtime is the natural,
             # persistence-free basis:
@@ -2491,7 +2491,7 @@ def _generate_individual_session_files(
             # non-HTML or --output run "not_cached" forever, re-rendering
             # each session on every invocation).
             if cache_manager is not None:
-                is_stale, _reason = cache_manager.is_html_stale(
+                is_stale, _reason = cache_manager.is_transcript_stale(
                     session_file_name, session_id, output_dir=output_dir
                 )
                 should_regenerate_session = (
@@ -2535,7 +2535,7 @@ def _generate_individual_session_files(
                 # Update html_cache to track this generation (all formats)
                 if cache_manager is not None:
                     # Use message count from cache (pre-deduplication) to match
-                    # the count used in is_html_stale()
+                    # the count used in is_transcript_stale()
                     if session_id in session_data:
                         session_message_count = session_data[session_id].message_count
                     else:
@@ -2956,7 +2956,7 @@ def process_projects_hierarchy(
                     # variant-specific filename (e.g.
                     # `combined_transcripts.low.compact.md`), not the
                     # default `combined_transcripts.html`.
-                    combined_stale = cache_manager.is_html_stale(
+                    combined_stale = cache_manager.is_transcript_stale(
                         output_path.name, None, output_dir=dest_dir
                     )[0]
             else:

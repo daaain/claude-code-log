@@ -338,7 +338,7 @@ class TestDirectoryNoCacheStaleness:
     source ``.jsonl`` vs the combined output). Otherwise a grown session
     serves stale ``combined_transcripts.html`` — the directory analogue of the
     single-file #221 bug. The CACHED directory path (no ``--no-cache``) tracks
-    this via ``is_html_stale`` and is unaffected."""
+    this via ``is_transcript_stale`` and is unaffected."""
 
     def test_grown_session_regenerates_without_cache(self, tmp_path: Path):
         proj = tmp_path / "proj"

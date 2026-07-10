@@ -493,13 +493,17 @@ class TestIncrementalHtmlCache:
             cache_manager = CacheManager(project_dir, "999.999.998")
 
             # Check staleness with same version
-            is_stale, reason = cache_manager.is_html_stale("combined_transcripts.html")
+            is_stale, reason = cache_manager.is_transcript_stale(
+                "combined_transcripts.html"
+            )
             assert not is_stale
             assert reason == "up_to_date"
 
         # Create new cache manager with a higher (but still post-rule) version
         cache_manager_new = CacheManager(project_dir, "999.999.999")
-        is_stale, reason = cache_manager_new.is_html_stale("combined_transcripts.html")
+        is_stale, reason = cache_manager_new.is_transcript_stale(
+            "combined_transcripts.html"
+        )
         assert is_stale
         assert reason == "version_mismatch"
 
@@ -523,7 +527,7 @@ class TestIncrementalHtmlCache:
         cache_manager = CacheManager(project_dir, get_library_version())
 
         # Check session is not stale
-        is_stale, reason = cache_manager.is_html_stale(
+        is_stale, reason = cache_manager.is_transcript_stale(
             "session-test_session.html", "test_session"
         )
         assert not is_stale
@@ -543,7 +547,7 @@ class TestIncrementalHtmlCache:
         ensure_fresh_cache(project_dir, cache_manager)
 
         # Now session should be stale (message count changed)
-        is_stale, reason = cache_manager.is_html_stale(
+        is_stale, reason = cache_manager.is_transcript_stale(
             "session-test_session.html", "test_session"
         )
         assert is_stale

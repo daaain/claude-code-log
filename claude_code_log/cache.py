@@ -1201,7 +1201,7 @@ class CacheManager:
             )
             conn.commit()
 
-    def is_html_stale(
+    def is_transcript_stale(
         self,
         html_path: str,
         session_id: Optional[str] = None,
@@ -1326,7 +1326,7 @@ class CacheManager:
 
                 html_path = f"session-{session_id}{variant}.{ext}"
 
-                is_stale, reason = self.is_html_stale(
+                is_stale, reason = self.is_transcript_stale(
                     html_path, session_id, output_dir=output_dir
                 )
                 if is_stale:
