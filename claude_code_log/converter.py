@@ -1961,7 +1961,7 @@ def convert_jsonl_to(
         )
 
         # Phase 1b: Early exit if nothing needs regeneration
-        # Skip expensive message loading if all HTML is up to date
+        # Skip expensive message loading if all output files are up to date
         if (
             cache_manager is not None
             and not cache_was_updated
@@ -1969,11 +1969,21 @@ def convert_jsonl_to(
             and to_date is None
             and not force_regenerate
         ):
-            # Check if combined HTML is stale
-            combined_stale, _ = cache_manager.is_html_stale(output_path.name, None)
-            if not combined_stale and not is_html_outdated(output_path):
-                # Check if any session HTML is stale
-                stale_sessions = cache_manager.get_stale_sessions()
+            # Check if the combined output is stale — unless it isn't
+            # produced at all (`--combined no`), in which case its
+            # absence must not veto the early exit.
+            if write_combined:
+                combined_stale, _ = cache_manager.is_html_stale(
+                    output_path.name, None, output_dir=effective_output_dir
+                )
+                combined_stale = combined_stale or is_html_outdated(output_path)
+            else:
+                combined_stale = False
+            if not combined_stale:
+                # Check if any session file of this variant is stale
+                stale_sessions = cache_manager.get_stale_sessions(
+                    variant=suffix, ext=ext, output_dir=effective_output_dir
+                )
                 if not stale_sessions or not generate_individual_sessions:
                     # Nothing needs regeneration - skip loading
                     if not silent:
@@ -2085,7 +2095,9 @@ def convert_jsonl_to(
         # Use single-file generation for small projects or filtered views
         # Use incremental regeneration via html_cache when available
         if cache_manager is not None and input_path.is_dir():
-            is_stale, _reason = cache_manager.is_html_stale(output_path.name, None)
+            is_stale, _reason = cache_manager.is_html_stale(
+                output_path.name, None, output_dir=output_path.parent
+            )
             should_regenerate = (
                 # force_regenerate first so the is_outdated() sniff is
                 # short-circuited for an explicit --output (issue #221, and
@@ -2160,12 +2172,13 @@ def convert_jsonl_to(
             # See issue #139: errors="replace" for lone-surrogate safety.
             output_path.write_text(content, encoding="utf-8", errors="replace")
 
-            # Update html_cache for combined transcript (HTML only).
+            # Update html_cache for the combined transcript (any format —
+            # rows are keyed by the variant-specific filename).
             # Skip when the caller explicitly disabled cache writes — the
             # CLI does this for `-o custom.html` exports so a user's
             # one-off destination doesn't occupy a cache slot keyed by
             # their arbitrary path.
-            if format == "html" and cache_manager is not None and update_cache:
+            if cache_manager is not None and update_cache:
                 cache_manager.update_html_cache(
                     output_path.name, None, total_message_count
                 )
@@ -2470,10 +2483,16 @@ def _generate_individual_session_files(
             session_file_name = f"session-{session_id}{suffix}.{ext}"
             session_file_path = output_dir / session_file_name
 
-            # Use incremental regeneration: check per-session staleness via html_cache
-            if cache_manager is not None and format == "html":
+            # Use incremental regeneration: check per-session staleness via
+            # html_cache. Works for every format — rows are keyed by the
+            # variant-specific filename (session_file_name) and the check
+            # compares against the file's real location (issue: keying on
+            # the default "session-{id}.html" name / source dir made every
+            # non-HTML or --output run "not_cached" forever, re-rendering
+            # each session on every invocation).
+            if cache_manager is not None:
                 is_stale, _reason = cache_manager.is_html_stale(
-                    session_file_name, session_id
+                    session_file_name, session_id, output_dir=output_dir
                 )
                 should_regenerate_session = (
                     is_stale
@@ -2483,7 +2502,7 @@ def _generate_individual_session_files(
                     or not session_file_path.exists()
                 )
             else:
-                # Fallback without cache or non-HTML formats
+                # Fallback without cache
                 should_regenerate_session = (
                     renderer.is_outdated(session_file_path)
                     or from_date is not None
@@ -2513,8 +2532,8 @@ def _generate_individual_session_files(
                 )
                 regenerated_count += 1
 
-                # Update html_cache to track this generation (HTML only)
-                if cache_manager is not None and format == "html":
+                # Update html_cache to track this generation (all formats)
+                if cache_manager is not None:
                     # Use message count from cache (pre-deduplication) to match
                     # the count used in is_html_stale()
                     if session_id in session_data:
@@ -2893,9 +2912,18 @@ def process_projects_hierarchy(
             modified_files = (
                 cache_manager.get_modified_files(jsonl_files) if cache_manager else []
             )
-            # Pass valid_session_ids to skip archived sessions (JSONL deleted)
+            # Pass valid_session_ids to skip archived sessions (JSONL
+            # deleted). The variant/ext/output_dir must mirror what
+            # _generate_individual_session_files writes, or every
+            # session reads as "not_cached" and the project takes the
+            # slow path on every run.
             stale_sessions = (
-                cache_manager.get_stale_sessions(valid_session_ids)
+                cache_manager.get_stale_sessions(
+                    valid_session_ids,
+                    variant=variant,
+                    ext=combined_ext,
+                    output_dir=dest_dir,
+                )
                 if cache_manager
                 else []
             )
@@ -2929,7 +2957,7 @@ def process_projects_hierarchy(
                     # `combined_transcripts.low.compact.md`), not the
                     # default `combined_transcripts.html`.
                     combined_stale = cache_manager.is_html_stale(
-                        output_path.name, None
+                        output_path.name, None, output_dir=dest_dir
                     )[0]
             else:
                 combined_stale = True
