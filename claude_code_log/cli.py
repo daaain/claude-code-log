@@ -1328,7 +1328,7 @@ def main(
             # skip only knows the embedded version, not which source produced
             # the file, so it would keep stale content at a user-chosen path
             # (issue #221). Scoped to file destinations — directory exports
-            # keep the cache's per-source incremental skip (is_html_stale),
+            # keep the cache's per-source incremental skip (is_transcript_stale),
             # which already tracks the source (a different transcript to the
             # same dir still regenerates), and `--all-projects` calls this
             # with output=None anyway, so its skip is never forced.
