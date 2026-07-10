@@ -242,10 +242,19 @@ def build_dag(
     # become cyclic child links — and downstream walks via
     # children_uuids would loop forever. Each cycle is broken by nulling
     # the parent_uuid of the first revisited node, promoting it to root.
+    #
+    # `acyclic` memoizes nodes whose chain is already known to reach a
+    # root: every walk stops at the first memoized ancestor, so each
+    # node is walked once overall (amortized O(n)) instead of each walk
+    # re-traversing the full chain (O(n·depth) — minutes on 30k-entry
+    # sessions). Every exit below leaves the visited chain acyclic:
+    # reaching a root / memoized ancestor is proof, and the cycle
+    # branch cuts the chain at `current`, turning it into a root.
+    acyclic: set[str] = set()
     for node in nodes.values():
         visited: set[str] = set()
         current: Optional[str] = node.uuid
-        while current is not None:
+        while current is not None and current not in acyclic:
             if current in visited:
                 logger.warning("Cycle detected in parent chain at uuid %s", current)
                 nodes[current].parent_uuid = None
@@ -255,6 +264,7 @@ def build_dag(
             if parent is None:
                 break
             current = parent.parent_uuid
+        acyclic.update(visited)
 
     # Step 3: build parent→children links from the now-acyclic parent
     # pointers. Defensive guards: skip self-edges and skip duplicates so

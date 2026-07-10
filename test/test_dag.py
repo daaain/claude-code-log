@@ -1,6 +1,7 @@
 """Tests for the DAG-based message ordering module."""
 
 import json
+import logging
 from pathlib import Path
 from typing import Callable, Optional, TypeVar
 
@@ -766,6 +767,121 @@ class TestCyclicParentChain:
         assert sessions is not None
         assert "s1" in sessions
         assert set(sessions["s1"].uuids) == {"a", "b"}
+
+
+# =============================================================================
+# Test: build_dag cycle-check memoization (guard-transformation pin)
+# =============================================================================
+
+
+class TestCycleCheckMemoization:
+    """Pin the ``acyclic`` memoization in ``build_dag``'s step-2 cycle check.
+
+    The check memoizes nodes already known to reach a root so each node's
+    ancestor chain is walked once overall (amortized O(n)) instead of
+    re-walking the full chain per node (O(n·depth)). This is a *guard*
+    transformation: memoizing must not weaken cycle detection nor the
+    exactly-once cut. These tests fail if the memoization ever lets a
+    cycle go uncut, cuts one more than once, re-cuts on a second chain
+    entering an already-broken cycle, or disturbs the acyclic parent
+    pointers on long shared-prefix chains.
+    """
+
+    _make = staticmethod(TestCyclicParentChain._make_entry)
+    _assert_no_child_cycle = staticmethod(TestCyclicParentChain._assert_no_child_cycle)
+
+    @staticmethod
+    def _cycle_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+        return [r.message for r in caplog.records if "Cycle detected" in r.message]
+
+    def test_three_cycle_cut_exactly_once_with_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A→B→C→A is broken by nulling exactly one parent, with one warning."""
+        a = self._make("a", parent_uuid="c", i=0)
+        b = self._make("b", parent_uuid="a", i=1)
+        c = self._make("c", parent_uuid="b", i=2)
+        nodes = build_message_index([a, b, c])
+        with caplog.at_level(logging.WARNING, logger="claude_code_log.dag"):
+            build_dag(nodes)
+        assert len(self._cycle_warnings(caplog)) == 1
+        # Exactly one of the three cycle members had its parent nulled —
+        # the memo set must not cause a second member to also be cut.
+        nulled = [u for u in ("a", "b", "c") if nodes[u].parent_uuid is None]
+        assert len(nulled) == 1
+        self._assert_no_child_cycle(nodes)
+
+    def test_chain_into_cut_cycle_does_not_recut(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A chain feeding into an already-broken cycle terminates, one cut only.
+
+        The cycle a→b→c→a is cut once; the extra chain e→d→c enters it via
+        the already-memoized ``c``. Without the memo (or with a broken one)
+        the second walk could re-detect and re-cut the cycle; it must not.
+        """
+        a = self._make("a", parent_uuid="c", i=0)
+        b = self._make("b", parent_uuid="a", i=1)
+        c = self._make("c", parent_uuid="b", i=2)
+        d = self._make("d", parent_uuid="c", i=3)
+        e = self._make("e", parent_uuid="d", i=4)
+        nodes = build_message_index([a, b, c, d, e])
+        with caplog.at_level(logging.WARNING, logger="claude_code_log.dag"):
+            build_dag(nodes)
+        assert len(self._cycle_warnings(caplog)) == 1
+        # The feeder chain keeps its (genuinely acyclic) parent pointers;
+        # only the cycle's entry node was promoted to root.
+        assert nodes["d"].parent_uuid == "c"
+        assert nodes["e"].parent_uuid == "d"
+        self._assert_no_child_cycle(nodes)
+
+    def test_shared_prefix_chains_stay_acyclic_and_linked(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Many leaves over one long ancestor prefix: no warning, links intact.
+
+        This is the case the memo optimizes: r←a←b←c shared by five leaves.
+        Each leaf's walk must stop at the first already-memoized ancestor,
+        leave every parent pointer untouched, and yield correct child links.
+        """
+        r = self._make("r", parent_uuid=None, i=0)
+        a = self._make("a", parent_uuid="r", i=1)
+        b = self._make("b", parent_uuid="a", i=2)
+        c = self._make("c", parent_uuid="b", i=3)
+        leaves = [self._make(f"L{n}", parent_uuid="c", i=4 + n) for n in range(5)]
+        nodes = build_message_index([r, a, b, c, *leaves])
+        with caplog.at_level(logging.WARNING, logger="claude_code_log.dag"):
+            build_dag(nodes)
+        assert not self._cycle_warnings(caplog)
+        # Parent pointers on a genuinely acyclic graph are never disturbed.
+        assert nodes["a"].parent_uuid == "r"
+        for n in range(5):
+            assert nodes[f"L{n}"].parent_uuid == "c"
+        # Child links reflect the shared prefix (insertion order preserved).
+        assert nodes["r"].children_uuids == ["a"]
+        assert nodes["a"].children_uuids == ["b"]
+        assert nodes["b"].children_uuids == ["c"]
+        assert nodes["c"].children_uuids == [f"L{n}" for n in range(5)]
+        self._assert_no_child_cycle(nodes)
+
+    def test_self_loop_cut_in_step2_with_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A self-loop (b→b) is broken with a warning; step-3 belt stays clean.
+
+        Step 2 detects b re-appearing on its own one-node chain and nulls
+        its parent, so the step-3 ``parent_uuid == uuid`` belt never fires.
+        Either way b must not list itself as a child.
+        """
+        a = self._make("a", parent_uuid=None, i=0)
+        b = self._make("b", parent_uuid="b", i=1)
+        nodes = build_message_index([a, b])
+        with caplog.at_level(logging.WARNING, logger="claude_code_log.dag"):
+            build_dag(nodes)
+        assert len(self._cycle_warnings(caplog)) == 1
+        assert nodes["b"].parent_uuid is None
+        assert "b" not in nodes["b"].children_uuids
+        self._assert_no_child_cycle(nodes)
 
 
 # =============================================================================
