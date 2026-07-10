@@ -56,7 +56,6 @@ from .models import (
 from .dag import SessionTree, build_dag_from_entries, traverse_session_tree
 from .renderer import (
     get_renderer,
-    is_html_outdated,
     prepare_session_ai_titles,
     prepare_session_summaries,
 )
@@ -1680,8 +1679,11 @@ def _generate_paginated_html(
         html_path = _get_page_html_path(page_num, suffix)
         page_file = output_dir / html_path
 
-        # Check if page is stale
-        is_stale, reason = cache_manager.is_page_stale(page_num, page_size, suffix)
+        # Check if page is stale (resolve against the real output_dir so an
+        # --output run doesn't report file_missing on every page forever).
+        is_stale, reason = cache_manager.is_page_stale(
+            page_num, page_size, suffix, output_dir=output_dir
+        )
 
         if not is_stale and page_file.exists():
             if not silent:
@@ -1985,12 +1987,13 @@ def convert_jsonl_to(
         ):
             # Check if the combined output is stale — unless it isn't
             # produced at all (`--combined no`), in which case its
-            # absence must not veto the early exit.
+            # absence must not veto the early exit. `is_transcript_stale`
+            # already runs the version-marker sniff on the same resolved
+            # file, so no separate `is_html_outdated(output_path)` is needed.
             if write_combined:
                 combined_stale, _ = cache_manager.is_transcript_stale(
                     output_path.name, None, output_dir=effective_output_dir
                 )
-                combined_stale = combined_stale or is_html_outdated(output_path)
             else:
                 combined_stale = False
             if not combined_stale:
@@ -2971,10 +2974,12 @@ def process_projects_hierarchy(
                 existing_page_count = cache_manager.get_page_count(variant)
                 if existing_page_count > 0:
                     # Paginated project: check page 1 staleness for the
-                    # current --format/--detail/--compact variant.
-                    combined_stale = cache_manager.is_page_stale(1, page_size, variant)[
-                        0
-                    ]
+                    # current --format/--detail/--compact variant, resolving
+                    # the page file against dest_dir (--output) like the
+                    # non-paginated branch below.
+                    combined_stale = cache_manager.is_page_stale(
+                        1, page_size, variant, output_dir=dest_dir
+                    )[0]
                 else:
                     # Non-paginated project: check html_cache for the
                     # variant-specific filename (e.g.

@@ -161,6 +161,59 @@ def test_combined_no_does_not_veto_early_exit(tmp_path: Path):
     assert not second.combined_regenerated
 
 
+def _make_multi_session_project(tmp_path: Path, n_sessions: int = 3) -> Path:
+    """Project with several single-message sessions (to force pagination)."""
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    lines: list[str] = []
+    for s in range(n_sessions):
+        first = _entry("first message", f"sess-{s}", None)
+        second = _entry("second message", f"sess-{s}", first["uuid"])
+        lines.append(json.dumps(first))
+        lines.append(json.dumps(second))
+    (project_dir / "transcript.jsonl").write_text(
+        "\n".join(lines) + "\n", encoding="utf-8"
+    )
+    return project_dir
+
+
+def test_paginated_combined_output_dir_takes_fast_path(tmp_path: Path):
+    """A *paginated* combined transcript exported with ``--output`` skips a
+    quiescent second run.
+
+    ``is_page_stale`` resolved the page file against the source project dir,
+    so a paginated project projected to a different tree reported
+    ``file_missing`` and re-rendered every page every run — the paginated
+    analogue of the ``is_transcript_stale`` output_dir fix.
+    """
+    project_dir = _make_multi_session_project(tmp_path, n_sessions=3)
+    dest = tmp_path / "out"
+
+    def run() -> RegenerationReport:
+        report = RegenerationReport()
+        convert_jsonl_to(
+            "html",
+            project_dir,
+            output_root=dest,
+            page_size=1,  # force pagination across the sessions
+            generate_individual_sessions=True,
+            silent=True,
+            report=report,
+        )
+        return report
+
+    first = run()
+    # Sanity: the run actually paginated (more than one combined page).
+    pages = list(dest.glob("combined_transcripts*.html"))
+    assert len(pages) > 1, f"expected pagination, got {[p.name for p in pages]}"
+    assert first.combined_regenerated
+
+    second = run()
+    # The paginated combined output is resolved in dest and skipped.
+    assert not second.combined_regenerated
+    assert second.sessions_regenerated == 0
+
+
 def test_is_transcript_stale_honors_output_dir(tmp_path: Path):
     """``is_transcript_stale`` resolves the file against the given
     ``output_dir``; against the source project dir the artifact is missing.

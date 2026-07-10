@@ -1674,6 +1674,7 @@ class CacheManager:
         page_number: int,
         page_size_config: int,
         variant_suffix: str = "",
+        output_dir: Optional[Path] = None,
     ) -> tuple[bool, str]:
         """Check if a page needs regeneration.
 
@@ -1682,6 +1683,11 @@ class CacheManager:
             page_size_config: The current page size configuration.
             variant_suffix: Detail/compact variant infix; each variant's
                 cache is checked independently.
+            output_dir: Directory the rendered page lives in. Defaults to
+                the source project directory (legacy in-place layout);
+                ``--output`` runs must pass their destination or the file
+                check reports ``file_missing`` forever (mirrors
+                ``is_transcript_stale``).
 
         Returns:
             Tuple of (is_stale: bool, reason: str)
@@ -1704,7 +1710,7 @@ class CacheManager:
             return True, "version_mismatch"
 
         # Check if HTML file exists and has correct version
-        actual_file = self.project_path / page_data.html_path
+        actual_file = (output_dir or self.project_path) / page_data.html_path
         if not actual_file.exists():
             return True, "file_missing"
         if is_html_outdated(actual_file):
