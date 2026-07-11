@@ -2729,6 +2729,44 @@ def generate_single_session_file(
     return output_file
 
 
+def render_normalized_session_file(
+    messages: list[TranscriptEntry],
+    session_id: str,
+    output: Path,
+    format: str = "html",
+    title: Optional[str] = None,
+    image_export_mode: Optional[str] = None,
+    detail: DetailLevel = DetailLevel.FULL,
+    compact: bool = False,
+    no_timestamps: bool = False,
+    no_recaps: bool = False,
+) -> Path:
+    """Render already-normalized provider entries to one output file.
+
+    Unlike :func:`generate_single_session_file`, this helper has no Claude
+    project-directory or cache assumptions. Providers own discovery and
+    normalization; the shared renderer only needs transcript entries.
+    """
+    renderer = get_renderer(
+        format,
+        image_export_mode,
+        detail=detail,
+        compact=compact,
+        no_timestamps=no_timestamps,
+        no_recaps=no_recaps,
+    )
+    content = renderer.generate_session(
+        messages,
+        session_id,
+        title or f"Session {session_id[:8]}",
+        cache_manager=None,
+        output_dir=output.parent,
+    )
+    assert content is not None
+    output.write_text(content, encoding="utf-8", errors="replace")
+    return output
+
+
 def _get_cleanup_period_days() -> Optional[int]:
     """Read cleanupPeriodDays from Claude Code settings.
 
