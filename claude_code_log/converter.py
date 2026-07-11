@@ -2763,6 +2763,7 @@ def render_normalized_session_file(
         output_dir=output.parent,
     )
     assert content is not None
+    output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(content, encoding="utf-8", errors="replace")
     return output
 

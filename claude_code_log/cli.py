@@ -1100,9 +1100,13 @@ def main(
                 )
                 return
 
-            destination = output or (
-                Path.cwd() / f"session-{matched_id}.{get_file_extension(output_format)}"
-            )
+            filename = f"session-{matched_id}.{get_file_extension(output_format)}"
+            if output is None:
+                destination = Path.cwd() / filename
+            elif _output_path_is_file(output):
+                destination = output
+            else:
+                destination = output / filename
             output_path = render_provider(destination)
             click.echo(f"Successfully exported {provider} session to {output_path}")
             if open_browser:

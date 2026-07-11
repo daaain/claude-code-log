@@ -99,6 +99,30 @@ def test_provider_unique_prefix_and_output_suffix_inference(
     assert "# Codex test" in output.read_text()
 
 
+def test_provider_directory_output_creates_nested_destination(
+    provider: FakeProvider, tmp_path: Path
+) -> None:
+    output_root = tmp_path / "nested" / "exports"
+    result = CliRunner().invoke(
+        main,
+        [
+            "--provider",
+            "codex",
+            "--session-id",
+            "0123",
+            "-o",
+            str(output_root),
+            "-f",
+            "md",
+        ],
+    )
+
+    destination = output_root / "session-01234567-89ab-cdef.md"
+    assert result.exit_code == 0, result.output
+    assert destination.exists()
+    assert "hello provider" in destination.read_text()
+
+
 @pytest.mark.parametrize(
     ("args", "message"),
     [
