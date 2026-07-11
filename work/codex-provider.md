@@ -259,10 +259,13 @@ Create new worktrees only after the coordination contract is present in their
 common base commit. Use the required `codex-` prefix, for example:
 
 ```text
-codex-provider-core   dev/codex/provider-core
-codex-cli-rendering   dev/codex/cli-rendering
-codex-fixtures-docs   dev/codex/fixtures-docs
+codex-provider-core   dev/codex-provider-core
+codex-cli-rendering   dev/codex-cli-rendering
+codex-fixtures-docs   dev/codex-fixtures-docs
 ```
+
+The branches use sibling names because Git cannot create a ref below
+`dev/codex/` while the `dev/codex` branch itself exists.
 
 The current `codex` worktree remains the integration worktree. Each agent
 commits only on its assigned branch; the coordinator reviews and integrates
