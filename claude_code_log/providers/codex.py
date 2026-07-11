@@ -61,6 +61,7 @@ class CodexSessionIdentity:
     forked_from_id: Optional[str] = None
     source_kind: Optional[str] = None
     spawn_call_id: Optional[str] = None
+    inherited_prefix_records: int = 0
 
 
 @dataclass
@@ -99,7 +100,7 @@ class CodexProvider(BaseProvider):
             else Path.home() / ".codex"
         )
         sessions_dir = codex_home / "sessions"
-        return sessions_dir if sessions_dir.is_dir() else None
+        return codex_home if sessions_dir.is_dir() else None
 
     def discover_sessions(self) -> Iterator[SessionInfo]:
         data_dir = self.get_data_dir()
@@ -110,6 +111,7 @@ class CodexProvider(BaseProvider):
         # useful and deterministic by retaining the lexicographically first
         # path; loading that id reports the ambiguity instead of guessing.
         identities: dict[str, CodexSessionIdentity] = {}
+        index = self._session_index(data_dir)
         for path in self._rollout_paths(data_dir):
             identity = self._read_identity(path)
             if identity.thread_id in identities:
@@ -118,7 +120,9 @@ class CodexProvider(BaseProvider):
                     identity.thread_id,
                 )
                 continue
-            identities[identity.thread_id] = identity
+            identities[identity.thread_id] = self._with_inherited_prefix(
+                identity, index
+            )
 
         for identity in identities.values():
             yield CodexSessionInfo(
@@ -131,6 +135,7 @@ class CodexProvider(BaseProvider):
                 forked_from_id=identity.forked_from_id,
                 spawn_call_id=identity.spawn_call_id,
                 source_kind=identity.source_kind,
+                inherited_prefix_records=identity.inherited_prefix_records,
             )
 
     def load_session(
@@ -146,34 +151,26 @@ class CodexProvider(BaseProvider):
             raise ValueError("Codex data directory not found")
 
         index = self._session_index(data_dir)
-        matching_ids = (
-            [session_id]
-            if session_id in index
-            else sorted(
-                thread_id for thread_id in index if thread_id.startswith(session_id)
-            )
-        )
-        if not matching_ids:
+        if session_id not in index:
             raise FileNotFoundError(f"Codex session {session_id} not found")
-        if len(matching_ids) != 1:
-            raise ValueError(
-                f"Ambiguous Codex session prefix {session_id!r}: "
-                + ", ".join(matching_ids)
-            )
-
-        thread_id = matching_ids[0]
-        paths = index[thread_id]
+        paths = index[session_id]
         if len(paths) != 1:
-            raise ValueError(f"Multiple Codex rollouts have thread id {thread_id}")
+            raise ValueError(f"Multiple Codex rollouts have thread id {session_id}")
 
-        identity = self._read_identity(paths[0])
+        identity = self._with_inherited_prefix(self._read_identity(paths[0]), index)
         records = list(self._decode_records(identity.path))
+        records = self._without_inherited_prefix(
+            records, identity.inherited_prefix_records
+        )
         yield from self._normalize_records(identity, records, max_messages)
 
     def _rollout_paths(self, data_dir: Path) -> list[Path]:
         # Recursive discovery supports both current date shards and old flat
         # layouts.  archived_sessions is deliberately outside this v1 root.
-        return sorted(path for path in data_dir.rglob(_ROLLOUT_GLOB) if path.is_file())
+        sessions_dir = data_dir / "sessions"
+        return sorted(
+            path for path in sessions_dir.rglob(_ROLLOUT_GLOB) if path.is_file()
+        )
 
     def _session_index(self, data_dir: Path) -> dict[str, list[Path]]:
         index: dict[str, list[Path]] = {}
@@ -181,6 +178,89 @@ class CodexProvider(BaseProvider):
             identity = self._read_identity(path)
             index.setdefault(identity.thread_id, []).append(path)
         return index
+
+    def _with_inherited_prefix(
+        self,
+        identity: CodexSessionIdentity,
+        index: dict[str, list[Path]],
+    ) -> CodexSessionIdentity:
+        parent_id = identity.parent_thread_id
+        parent_paths = index.get(parent_id, []) if parent_id else []
+        if len(parent_paths) != 1:
+            return identity
+        child_records = self._prefix_candidates(
+            list(self._decode_records(identity.path))
+        )
+        parent_records = self._prefix_candidates(
+            list(self._decode_records(parent_paths[0]))
+        )
+        prefix_length = self._contiguous_prefix_length(child_records, parent_records)
+        if prefix_length == 0:
+            return identity
+        return CodexSessionIdentity(
+            thread_id=identity.thread_id,
+            path=identity.path,
+            created_at=identity.created_at,
+            cwd=identity.cwd,
+            model=identity.model,
+            version=identity.version,
+            parent_thread_id=identity.parent_thread_id,
+            forked_from_id=identity.forked_from_id,
+            source_kind=identity.source_kind,
+            spawn_call_id=identity.spawn_call_id,
+            inherited_prefix_records=prefix_length,
+        )
+
+    def _prefix_candidates(self, records: list[_DecodedRecord]) -> list[_DecodedRecord]:
+        """Exclude thread-local metadata when comparing copied history."""
+        return [
+            record
+            for record in records
+            if record.kind not in {"session_meta", "turn_context"}
+        ]
+
+    def _contiguous_prefix_length(
+        self,
+        child_records: list[_DecodedRecord],
+        parent_records: list[_DecodedRecord],
+    ) -> int:
+        """Find the longest leading child sequence occurring in its parent."""
+        best = 0
+        for start in range(len(parent_records)):
+            length = 0
+            while (
+                length < len(child_records)
+                and start + length < len(parent_records)
+                and self._same_semantic_record(
+                    child_records[length], parent_records[start + length]
+                )
+            ):
+                length += 1
+            best = max(best, length)
+        return best
+
+    def _same_semantic_record(
+        self, left: _DecodedRecord, right: _DecodedRecord
+    ) -> bool:
+        # Envelope timestamps may be rewritten while copying a rollout; the
+        # semantic family and payload identify the inherited record.
+        return left.kind == right.kind and left.payload == right.payload
+
+    def _without_inherited_prefix(
+        self, records: list[_DecodedRecord], prefix_length: int
+    ) -> list[_DecodedRecord]:
+        if prefix_length <= 0:
+            return records
+        remaining = prefix_length
+        result: list[_DecodedRecord] = []
+        for record in records:
+            if record.kind in {"session_meta", "turn_context"}:
+                result.append(record)
+            elif remaining:
+                remaining -= 1
+            else:
+                result.append(record)
+        return result
 
     def _read_identity(self, path: Path) -> CodexSessionIdentity:
         fallback_id = self._filename_thread_id(path)
@@ -538,9 +618,10 @@ class CodexProvider(BaseProvider):
             spawn = subagent_dict.get("thread_spawn")
             if isinstance(spawn, dict):
                 spawn_dict = cast(dict[str, Any], spawn)
-                kind = "subagent.thread_spawn"
+                kind = "subagent"
                 spawn_call_id = (
-                    self._nonempty_string(spawn_dict.get("call_id"))
+                    self._nonempty_string(spawn_dict.get("spawn_call_id"))
+                    or self._nonempty_string(spawn_dict.get("call_id"))
                     or self._nonempty_string(spawn_dict.get("item_id"))
                     or spawn_call_id
                 )
