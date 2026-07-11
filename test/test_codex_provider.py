@@ -9,11 +9,19 @@ from __future__ import annotations
 import json
 import logging
 import shutil
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
 
-from claude_code_log.models import ThinkingContent, ToolResultContent, ToolUseContent
+from claude_code_log.models import (
+    AssistantTranscriptEntry,
+    ThinkingContent,
+    ToolResultContent,
+    ToolUseContent,
+    TranscriptEntry,
+    UserTranscriptEntry,
+)
 from claude_code_log.providers.codex import CodexProvider
 
 
@@ -32,11 +40,16 @@ def provider(monkeypatch: pytest.MonkeyPatch) -> CodexProvider:
     return CodexProvider()
 
 
-def _content(entries: list[object]) -> list[object]:
-    return [item for entry in entries for item in entry.message.content]  # type: ignore[attr-defined]
+def _content(entries: Sequence[TranscriptEntry]) -> list[object]:
+    return [
+        item
+        for entry in entries
+        if isinstance(entry, (UserTranscriptEntry, AssistantTranscriptEntry))
+        for item in entry.message.content
+    ]
 
 
-def _visible_text(entries: list[object]) -> list[str]:
+def _visible_text(entries: Sequence[TranscriptEntry]) -> list[str]:
     return [
         text
         for item in _content(entries)
@@ -66,15 +79,21 @@ def test_load_deduplicates_visible_messages_and_preserves_order(
     provider: CodexProvider,
 ) -> None:
     entries = list(provider.load_session(ROOT_ID))
+    base_entries = [
+        entry
+        for entry in entries
+        if isinstance(entry, (UserTranscriptEntry, AssistantTranscriptEntry))
+    ]
+    assert len(base_entries) == len(entries)
     visible = _visible_text(entries)
     assert visible.count("List the synthetic files.") == 1
     assert visible.count("The synthetic files are alpha.txt and beta.txt.") == 1
     assert visible.index("List the synthetic files.") < visible.index(
         "The synthetic files are alpha.txt and beta.txt."
     )
-    assert [entry.parentUuid for entry in entries] == [
+    assert [entry.parentUuid for entry in base_entries] == [
         None,
-        *[entry.uuid for entry in entries[:-1]],
+        *[entry.uuid for entry in base_entries[:-1]],
     ]
 
 
