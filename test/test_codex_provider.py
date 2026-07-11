@@ -148,6 +148,14 @@ def test_session_lookup_is_exact_and_rejects_invalid_ids(
         list(provider.load_session("../synthetic"))
 
 
+def test_flat_legacy_rollout_is_normalized(provider: CodexProvider) -> None:
+    entries = list(provider.load_session(LEGACY_ID))
+    assert _visible_text(entries) == [
+        "Open the synthetic legacy session.",
+        "The synthetic legacy session is open.",
+    ]
+
+
 def test_child_metadata_retains_lineage_and_inherited_prefix(
     provider: CodexProvider,
 ) -> None:

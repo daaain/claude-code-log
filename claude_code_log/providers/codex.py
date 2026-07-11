@@ -330,6 +330,22 @@ class CodexProvider(BaseProvider):
                 raw_dict = cast(dict[str, Any], raw)
                 kind = self._nonempty_string(raw_dict.get("type"))
                 payload_raw = raw_dict.get("payload")
+                # Early Codex rollouts used a flat header followed by flat
+                # response items. Normalize that small legacy family into the
+                # modern envelope before applying the shared decoder rules.
+                if kind is None and self._nonempty_string(raw_dict.get("id")):
+                    kind = "session_meta"
+                    payload_raw = raw_dict
+                elif kind in {
+                    "message",
+                    "reasoning",
+                    "function_call",
+                    "function_call_output",
+                    "custom_tool_call",
+                    "custom_tool_call_output",
+                } and not isinstance(payload_raw, dict):
+                    kind = "response_item"
+                    payload_raw = raw_dict
                 if not kind or not isinstance(payload_raw, dict):
                     logger.warning(
                         "Malformed record in Codex rollout %s line %d", path, line_no
