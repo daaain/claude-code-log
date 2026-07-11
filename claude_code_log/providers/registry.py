@@ -86,9 +86,11 @@ def discover_providers() -> ProviderRegistry:
 
     from .claude import ClaudeProvider
     from .agy import AgyProvider
+    from .codex import CodexProvider
 
     registry.register_class("claude", ClaudeProvider)
     registry.register_class("agy", AgyProvider)
+    registry.register_class("codex", CodexProvider)
 
     registry.instantiate_registered()
 

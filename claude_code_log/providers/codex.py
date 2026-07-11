@@ -1,0 +1,567 @@
+"""Codex CLI rollout session provider.
+
+The rollout format is an implementation detail of Codex rather than a stable
+file-format API.  Parsing here is deliberately tolerant: the provider keeps
+the raw-record decoder small, ignores unknown records, and normalizes only
+shapes for which it has useful semantics.
+"""
+
+from __future__ import annotations
+
+from collections import Counter
+from dataclasses import dataclass
+import json
+import logging
+import os
+from pathlib import Path
+import re
+from typing import Any, Iterator, Optional, TypeAlias, cast
+
+from claude_code_log.models import (
+    AssistantTranscriptEntry,
+    ToolResultContent,
+    TranscriptEntry,
+    UserMessageModel,
+    UserTranscriptEntry,
+)
+
+from .base import (
+    BaseProvider,
+    SessionInfo,
+    file_mtime_iso,
+    make_assistant_entry,
+    make_thinking_entry,
+    make_tool_use_entry,
+    make_user_entry,
+)
+
+logger = logging.getLogger(__name__)
+
+_CodexEntry: TypeAlias = UserTranscriptEntry | AssistantTranscriptEntry
+
+_ROLLOUT_GLOB = "rollout-*.jsonl"
+_SESSION_ID_RE = re.compile(r"[A-Za-z0-9_-]+")
+_FILENAME_UUID_RE = re.compile(
+    r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$"
+)
+
+
+@dataclass(frozen=True)
+class CodexSessionIdentity:
+    """Identity and lineage retained from the first session metadata record."""
+
+    thread_id: str
+    path: Path
+    created_at: Optional[str] = None
+    cwd: Optional[Path] = None
+    model: str = "codex"
+    version: str = ""
+    parent_thread_id: Optional[str] = None
+    forked_from_id: Optional[str] = None
+    source_kind: Optional[str] = None
+    spawn_call_id: Optional[str] = None
+
+
+@dataclass
+class CodexSessionInfo(SessionInfo):
+    """Discovered Codex session with retained cross-thread lineage."""
+
+    parent_thread_id: Optional[str] = None
+    forked_from_id: Optional[str] = None
+    spawn_call_id: Optional[str] = None
+    source_kind: Optional[str] = None
+    inherited_prefix_records: int = 0
+
+
+@dataclass(frozen=True)
+class _DecodedRecord:
+    line_no: int
+    timestamp: str
+    kind: str
+    payload: dict[str, Any]
+
+
+class CodexProvider(BaseProvider):
+    """Read active Codex rollout files from ``$CODEX_HOME/sessions``."""
+
+    def get_provider_name(self) -> str:
+        return "codex"
+
+    def get_session_format(self) -> str:
+        return "jsonl"
+
+    def get_data_dir(self) -> Optional[Path]:
+        configured_home = os.environ.get("CODEX_HOME")
+        codex_home = (
+            Path(configured_home).expanduser()
+            if configured_home
+            else Path.home() / ".codex"
+        )
+        sessions_dir = codex_home / "sessions"
+        return sessions_dir if sessions_dir.is_dir() else None
+
+    def discover_sessions(self) -> Iterator[SessionInfo]:
+        data_dir = self.get_data_dir()
+        if data_dir is None:
+            return
+
+        # A duplicated thread id is corrupt/ambiguous.  Discovery remains
+        # useful and deterministic by retaining the lexicographically first
+        # path; loading that id reports the ambiguity instead of guessing.
+        identities: dict[str, CodexSessionIdentity] = {}
+        for path in self._rollout_paths(data_dir):
+            identity = self._read_identity(path)
+            if identity.thread_id in identities:
+                logger.warning(
+                    "Duplicate Codex thread id %s; retaining first discovered rollout",
+                    identity.thread_id,
+                )
+                continue
+            identities[identity.thread_id] = identity
+
+        for identity in identities.values():
+            yield CodexSessionInfo(
+                provider="codex",
+                session_id=identity.thread_id,
+                created_at=identity.created_at or file_mtime_iso(identity.path),
+                updated_at=file_mtime_iso(identity.path),
+                project_path=identity.cwd,
+                parent_thread_id=identity.parent_thread_id,
+                forked_from_id=identity.forked_from_id,
+                spawn_call_id=identity.spawn_call_id,
+                source_kind=identity.source_kind,
+            )
+
+    def load_session(
+        self, session_id: str, max_messages: Optional[int] = None
+    ) -> Iterator[TranscriptEntry]:
+        if not session_id or _SESSION_ID_RE.fullmatch(session_id) is None:
+            raise ValueError(f"Invalid session_id: {session_id}")
+        if max_messages is not None and max_messages <= 0:
+            return
+
+        data_dir = self.get_data_dir()
+        if data_dir is None:
+            raise ValueError("Codex data directory not found")
+
+        index = self._session_index(data_dir)
+        matching_ids = (
+            [session_id]
+            if session_id in index
+            else sorted(
+                thread_id for thread_id in index if thread_id.startswith(session_id)
+            )
+        )
+        if not matching_ids:
+            raise FileNotFoundError(f"Codex session {session_id} not found")
+        if len(matching_ids) != 1:
+            raise ValueError(
+                f"Ambiguous Codex session prefix {session_id!r}: "
+                + ", ".join(matching_ids)
+            )
+
+        thread_id = matching_ids[0]
+        paths = index[thread_id]
+        if len(paths) != 1:
+            raise ValueError(f"Multiple Codex rollouts have thread id {thread_id}")
+
+        identity = self._read_identity(paths[0])
+        records = list(self._decode_records(identity.path))
+        yield from self._normalize_records(identity, records, max_messages)
+
+    def _rollout_paths(self, data_dir: Path) -> list[Path]:
+        # Recursive discovery supports both current date shards and old flat
+        # layouts.  archived_sessions is deliberately outside this v1 root.
+        return sorted(path for path in data_dir.rglob(_ROLLOUT_GLOB) if path.is_file())
+
+    def _session_index(self, data_dir: Path) -> dict[str, list[Path]]:
+        index: dict[str, list[Path]] = {}
+        for path in self._rollout_paths(data_dir):
+            identity = self._read_identity(path)
+            index.setdefault(identity.thread_id, []).append(path)
+        return index
+
+    def _read_identity(self, path: Path) -> CodexSessionIdentity:
+        fallback_id = self._filename_thread_id(path)
+        for record in self._decode_records(path):
+            if record.kind != "session_meta":
+                continue
+            payload = record.payload
+            thread_id = self._nonempty_string(payload.get("id")) or fallback_id
+            cwd_text = self._nonempty_string(payload.get("cwd"))
+            source = payload.get("source")
+            source_dict = (
+                cast(dict[str, Any], source) if isinstance(source, dict) else {}
+            )
+            source_kind, spawn_call_id = self._source_metadata(source_dict)
+            return CodexSessionIdentity(
+                thread_id=thread_id,
+                path=path,
+                created_at=record.timestamp
+                or self._nonempty_string(payload.get("timestamp")),
+                cwd=Path(cwd_text) if cwd_text else None,
+                model=self._nonempty_string(payload.get("model")) or "codex",
+                version=(
+                    self._nonempty_string(payload.get("cli_version"))
+                    or self._nonempty_string(payload.get("version"))
+                    or ""
+                ),
+                parent_thread_id=(
+                    self._nonempty_string(payload.get("parent_thread_id"))
+                    or self._source_string(source_dict, "parent_thread_id")
+                ),
+                forked_from_id=(
+                    self._nonempty_string(payload.get("forked_from_id"))
+                    or self._source_string(source_dict, "forked_from_id")
+                ),
+                source_kind=source_kind,
+                spawn_call_id=spawn_call_id,
+            )
+        return CodexSessionIdentity(thread_id=fallback_id, path=path)
+
+    def _filename_thread_id(self, path: Path) -> str:
+        match = _FILENAME_UUID_RE.search(path.stem)
+        return match.group(1) if match else path.stem.removeprefix("rollout-")
+
+    def _decode_records(self, path: Path) -> Iterator[_DecodedRecord]:
+        try:
+            stream = path.open("r", encoding="utf-8", errors="replace")
+        except OSError as exc:
+            logger.warning("Unable to read Codex rollout %s: %s", path, exc)
+            return
+
+        with stream:
+            for line_no, line in enumerate(stream, 1):
+                if not line.strip():
+                    continue
+                try:
+                    raw: Any = json.loads(line)
+                except json.JSONDecodeError:
+                    logger.warning(
+                        "Malformed JSON in Codex rollout %s line %d", path, line_no
+                    )
+                    continue
+                if not isinstance(raw, dict):
+                    logger.warning(
+                        "Non-object record in Codex rollout %s line %d", path, line_no
+                    )
+                    continue
+                raw_dict = cast(dict[str, Any], raw)
+                kind = self._nonempty_string(raw_dict.get("type"))
+                payload_raw = raw_dict.get("payload")
+                if not kind or not isinstance(payload_raw, dict):
+                    logger.warning(
+                        "Malformed record in Codex rollout %s line %d", path, line_no
+                    )
+                    continue
+                yield _DecodedRecord(
+                    line_no=line_no,
+                    timestamp=self._nonempty_string(raw_dict.get("timestamp")) or "",
+                    kind=kind,
+                    payload=cast(dict[str, Any], payload_raw),
+                )
+
+    def _normalize_records(
+        self,
+        identity: CodexSessionIdentity,
+        records: list[_DecodedRecord],
+        max_messages: Optional[int],
+    ) -> Iterator[_CodexEntry]:
+        preferred = Counter(
+            fingerprint
+            for record in records
+            if record.kind == "event_msg"
+            for fingerprint in [self._event_message_fingerprint(record.payload)]
+            if fingerprint is not None
+        )
+        suppressed = Counter[tuple[str, str]]()
+        model = identity.model
+        cwd = str(identity.cwd) if identity.cwd else ""
+        version = identity.version
+        parent_uuid: Optional[str] = None
+        emitted = 0
+
+        for record in records:
+            if record.kind == "turn_context":
+                model = self._nonempty_string(record.payload.get("model")) or model
+                cwd = self._nonempty_string(record.payload.get("cwd")) or cwd
+                continue
+            if record.kind == "session_meta":
+                # Only context fields may evolve; identity/lineage always comes
+                # from the first metadata record read above.
+                model = self._nonempty_string(record.payload.get("model")) or model
+                cwd = self._nonempty_string(record.payload.get("cwd")) or cwd
+                version = (
+                    self._nonempty_string(record.payload.get("cli_version")) or version
+                )
+                continue
+
+            candidates = self._normalize_record(
+                identity.thread_id, record, model, preferred, suppressed
+            )
+            for subindex, entry in enumerate(candidates):
+                if max_messages is not None and emitted >= max_messages:
+                    return
+                entry.uuid = self._entry_uuid(
+                    identity.thread_id, record.line_no, subindex
+                )
+                entry.parentUuid = parent_uuid
+                entry.cwd = cwd
+                entry.version = version
+                entry.sessionId = identity.thread_id
+                if hasattr(entry, "message") and entry.type == "assistant":
+                    entry.message.id = entry.uuid
+                    entry.message.model = model
+                parent_uuid = entry.uuid
+                emitted += 1
+                yield entry
+
+    def _normalize_record(
+        self,
+        thread_id: str,
+        record: _DecodedRecord,
+        model: str,
+        preferred: Counter[tuple[str, str]],
+        suppressed: Counter[tuple[str, str]],
+    ) -> list[_CodexEntry]:
+        if record.kind == "event_msg":
+            return self._normalize_event(thread_id, record, model)
+        if record.kind == "response_item":
+            return self._normalize_response(
+                thread_id, record, model, preferred, suppressed
+            )
+        return []
+
+    def _normalize_event(
+        self, thread_id: str, record: _DecodedRecord, model: str
+    ) -> list[_CodexEntry]:
+        payload_type = self._nonempty_string(record.payload.get("type")) or ""
+        text = self._event_text(record.payload)
+        uuid = self._entry_uuid(thread_id, record.line_no, 0)
+        if payload_type == "user_message" and text:
+            return [make_user_entry(thread_id, uuid, record.timestamp, text)]
+        if payload_type == "agent_message" and text:
+            return [
+                make_assistant_entry(thread_id, uuid, record.timestamp, model, text)
+            ]
+        if payload_type in {"agent_reasoning", "reasoning"} and text:
+            return [make_thinking_entry(thread_id, uuid, record.timestamp, model, text)]
+        return []
+
+    def _normalize_response(
+        self,
+        thread_id: str,
+        record: _DecodedRecord,
+        model: str,
+        preferred: Counter[tuple[str, str]],
+        suppressed: Counter[tuple[str, str]],
+    ) -> list[_CodexEntry]:
+        payload = record.payload
+        payload_type = self._nonempty_string(payload.get("type")) or ""
+        uuid = self._entry_uuid(thread_id, record.line_no, 0)
+
+        if payload_type == "message":
+            role = self._nonempty_string(payload.get("role")) or ""
+            text = self._message_text(payload.get("content"))
+            normalized_role = (
+                "user" if role == "user" else "assistant" if role == "assistant" else ""
+            )
+            fingerprint = (normalized_role, text)
+            if (
+                normalized_role
+                and text
+                and suppressed[fingerprint] < preferred[fingerprint]
+            ):
+                suppressed[fingerprint] += 1
+                return []
+            if normalized_role == "user" and text:
+                return [make_user_entry(thread_id, uuid, record.timestamp, text)]
+            if normalized_role == "assistant" and text:
+                return [
+                    make_assistant_entry(thread_id, uuid, record.timestamp, model, text)
+                ]
+            # Developer/system messages are context, not model reasoning.
+            return []
+
+        if payload_type == "reasoning":
+            summary = self._reasoning_summary(payload)
+            if summary:
+                return [
+                    make_thinking_entry(
+                        thread_id, uuid, record.timestamp, model, summary
+                    )
+                ]
+            return []
+
+        if payload_type in {"function_call", "custom_tool_call"}:
+            call_id = self._nonempty_string(payload.get("call_id")) or uuid
+            name = self._nonempty_string(payload.get("name")) or payload_type
+            raw_input = (
+                payload.get("arguments")
+                if payload_type == "function_call"
+                else payload.get("input")
+            )
+            tool_input = self._tool_input(raw_input)
+            return [
+                make_tool_use_entry(
+                    thread_id,
+                    uuid,
+                    record.timestamp,
+                    model,
+                    call_id,
+                    name,
+                    tool_input,
+                )
+            ]
+
+        if payload_type in {"function_call_output", "custom_tool_call_output"}:
+            call_id = self._nonempty_string(payload.get("call_id")) or uuid
+            output = self._tool_output(payload.get("output", ""))
+            return [
+                UserTranscriptEntry(
+                    type="user",
+                    parentUuid=None,
+                    isSidechain=False,
+                    userType="external",
+                    cwd="",
+                    sessionId=thread_id,
+                    version="",
+                    uuid=uuid,
+                    timestamp=record.timestamp,
+                    message=UserMessageModel(
+                        role="user",
+                        content=[
+                            ToolResultContent(
+                                type="tool_result",
+                                tool_use_id=call_id,
+                                content=output,
+                            )
+                        ],
+                    ),
+                )
+            ]
+        return []
+
+    def _event_message_fingerprint(
+        self, payload: dict[str, Any]
+    ) -> Optional[tuple[str, str]]:
+        payload_type = self._nonempty_string(payload.get("type"))
+        role = (
+            "user"
+            if payload_type == "user_message"
+            else "assistant"
+            if payload_type == "agent_message"
+            else None
+        )
+        text = self._event_text(payload)
+        return (role, text) if role and text else None
+
+    def _event_text(self, payload: dict[str, Any]) -> str:
+        value = payload.get("message", payload.get("text", ""))
+        return value if isinstance(value, str) else self._message_text(value)
+
+    def _message_text(self, content: Any) -> str:
+        if isinstance(content, str):
+            return content
+        if not isinstance(content, list):
+            return ""
+        parts: list[str] = []
+        for raw_item in cast(list[Any], content):
+            if isinstance(raw_item, str):
+                parts.append(raw_item)
+            elif isinstance(raw_item, dict):
+                item = cast(dict[str, Any], raw_item)
+                item_type = item.get("type")
+                if item_type in {"input_text", "output_text", "text"}:
+                    text = item.get("text")
+                    if isinstance(text, str):
+                        parts.append(text)
+        return "\n".join(parts)
+
+    def _reasoning_summary(self, payload: dict[str, Any]) -> str:
+        # encrypted_content is intentionally never inspected or emitted.
+        summary = payload.get("summary")
+        if isinstance(summary, str):
+            return summary
+        if not isinstance(summary, list):
+            return ""
+        parts: list[str] = []
+        for raw_item in cast(list[Any], summary):
+            if isinstance(raw_item, str):
+                parts.append(raw_item)
+            elif isinstance(raw_item, dict):
+                text = cast(dict[str, Any], raw_item).get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+        return "\n".join(parts)
+
+    def _tool_input(self, value: Any) -> dict[str, Any]:
+        if isinstance(value, dict):
+            return cast(dict[str, Any], value)
+        if isinstance(value, str):
+            try:
+                parsed: Any = json.loads(value)
+            except json.JSONDecodeError:
+                return {"raw": value}
+            if isinstance(parsed, dict):
+                return cast(dict[str, Any], parsed)
+            return {"input": parsed}
+        return {"input": value}
+
+    def _tool_output(self, value: Any) -> str | list[dict[str, Any]]:
+        if isinstance(value, str):
+            return value
+        if isinstance(value, list):
+            items = cast(list[Any], value)
+            if all(isinstance(item, dict) for item in items):
+                return cast(list[dict[str, Any]], items)
+        try:
+            return json.dumps(cast(Any, value), ensure_ascii=False)
+        except (TypeError, ValueError):
+            return repr(cast(object, value))
+
+    def _source_metadata(
+        self, source: dict[str, Any]
+    ) -> tuple[Optional[str], Optional[str]]:
+        # Source has appeared both as {"subagent": {"thread_spawn": ...}}
+        # and as a shallow tagged mapping. Retain the kind and spawning item
+        # without making lineage recognition depend on one exact version.
+        if not source:
+            return None, None
+        kind = self._nonempty_string(source.get("type"))
+        spawn_call_id = self._nonempty_string(source.get("spawn_call_id"))
+        subagent = source.get("subagent")
+        if isinstance(subagent, dict):
+            subagent_dict = cast(dict[str, Any], subagent)
+            kind = kind or "subagent"
+            spawn = subagent_dict.get("thread_spawn")
+            if isinstance(spawn, dict):
+                spawn_dict = cast(dict[str, Any], spawn)
+                kind = "subagent.thread_spawn"
+                spawn_call_id = (
+                    self._nonempty_string(spawn_dict.get("call_id"))
+                    or self._nonempty_string(spawn_dict.get("item_id"))
+                    or spawn_call_id
+                )
+        if kind is None and len(source) == 1:
+            kind = str(next(iter(source)))
+        return kind, spawn_call_id
+
+    def _source_string(self, source: dict[str, Any], key: str) -> Optional[str]:
+        """Find a lineage field in the small nested source-tag structure."""
+        direct = self._nonempty_string(source.get(key))
+        if direct:
+            return direct
+        for value in source.values():
+            if isinstance(value, dict):
+                found = self._source_string(cast(dict[str, Any], value), key)
+                if found:
+                    return found
+        return None
+
+    def _entry_uuid(self, thread_id: str, line_no: int, subindex: int) -> str:
+        return f"codex-{thread_id}-{line_no}-{subindex}"
+
+    def _nonempty_string(self, value: Any) -> Optional[str]:
+        return value if isinstance(value, str) and value else None
