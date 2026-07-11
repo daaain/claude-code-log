@@ -1,0 +1,15 @@
+{
+  "type": "session_meta",
+  "payload": {
+    "id": "33333333-3333-4333-8333-333333333333",
+    "source": {
+      "subagent": {
+        "thread_spawn": {
+          "parent_thread_id": "22222222-2222-4222-8222-222222222222",
+          "forked_from_id": "fork-item-001",
+          "spawn_call_id": "call-spawn-001"
+        }
+      }
+    }
+  }
+}

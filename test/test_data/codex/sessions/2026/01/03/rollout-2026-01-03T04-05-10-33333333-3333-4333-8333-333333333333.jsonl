@@ -1,0 +1,5 @@
+{"timestamp":"2026-01-03T04:05:10.000Z","type":"session_meta","payload":{"id":"33333333-3333-4333-8333-333333333333","timestamp":"2026-01-03T04:05:10.000Z","cwd":"/workspace/synthetic-project","originator":"codex_cli_rs","cli_version":"0.0.0-test","source":{"subagent":{"thread_spawn":{"parent_thread_id":"22222222-2222-4222-8222-222222222222","forked_from_id":"fork-item-001","spawn_call_id":"call-spawn-001"}}}}}
+{"timestamp":"2026-01-03T04:05:07.000Z","type":"event_msg","payload":{"type":"user_message","message":"Spawn a synthetic researcher."}}
+{"timestamp":"2026-01-03T04:05:08.000Z","type":"response_item","payload":{"type":"function_call","name":"spawn_agent","arguments":"{\"task_name\":\"synthetic_researcher\",\"message\":\"Inspect fixtures.\"}","call_id":"call-spawn-001"}}
+{"timestamp":"2026-01-03T04:05:11.000Z","type":"event_msg","payload":{"type":"user_message","message":"Inspect fixtures."}}
+{"timestamp":"2026-01-03T04:05:12.000Z","type":"event_msg","payload":{"type":"agent_message","message":"The fixtures are fully synthetic."}}
