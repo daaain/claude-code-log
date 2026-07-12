@@ -175,7 +175,11 @@
     {%- set msg_css_class = css_class_from_message(message) %}
     {% set markdown = message.content.has_markdown if message.content else false %}
     <div class='message-node'>
-    <div class='message {{ msg_css_class }}{% if message.is_paired %} {{ message.pair_role }}{% endif %}' data-message-id='{{ message.message_id }}' id='msg-{{ message.message_id }}'>
+    {# data-uuid: the message's transcript UUID — stable across re-renders,
+       unlike the positional msg-d-N slot ids (see work/archive-search-server.md,
+       "The anchor problem"). Search uses it to keep the current match pinned
+       when re-filtering; archive search / annotations can deep-link on it. #}
+    <div class='message {{ msg_css_class }}{% if message.is_paired %} {{ message.pair_role }}{% endif %}' data-message-id='{{ message.message_id }}'{% if message.meta and message.meta.uuid %} data-uuid='{{ message.meta.uuid }}'{% endif %} id='msg-{{ message.message_id }}'>
         <div class='header'>
             {% set msg_emoji = get_message_emoji(message) -%}
             <span{% if message.title_hint %} title="{{ message.title_hint }}"{% endif %}>{% if message_title %}{%
@@ -239,7 +243,7 @@
     {% for root in roots %}{{ render_message(root) }}{% endfor %}
 
     <button class="timeline-toggle floating-btn" id="toggleTimeline" title="Show timeline">📆</button>
-    <button class="filter-messages floating-btn" id="filterMessages" title="Search & Filter">🔍</button>
+    <button class="filter-messages floating-btn" id="filterMessages" title="Search & Filter (/)">🔍</button>
     <button class="toggle-details floating-btn" id="toggleDetails" title="Toggle all details">📋</button>
     <button class="debug-toggle floating-btn" id="toggleDebug" title="Show UUIDs">uuid</button>
     <button class="user-view-global floating-btn" id="toggleUserView" title="Show user messages as raw text">md</button>
@@ -549,7 +553,7 @@
                 if (isVisible) {
                     filterToolbar.classList.remove('visible');
                     filterButton.classList.remove('active');
-                    filterButton.title = 'Search & Filter';
+                    filterButton.title = 'Search & Filter (/)';
                 } else {
                     filterToolbar.classList.add('visible');
                     filterButton.classList.add('active');

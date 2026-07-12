@@ -3073,6 +3073,14 @@
       cursor: not-allowed;
   }
   
+  /* Keyboard shortcut labels inside the prev/next buttons */
+  .search-nav-btn .search-kbd {
+      font-family: inherit;
+      font-size: 0.85em;
+      color: var(--text-muted);
+      margin-left: 2px;
+  }
+  
   /* Search-as-filter (transcript pages): messages that don't match an active
      search are hidden; ancestors of matches ("Show context" mode) stay visible
      but dimmed so the matches themselves stand out. */
@@ -4667,8 +4675,8 @@
       <div id="searchResultsInfo" class="search-results-info">
           <div class="search-navigation">
               <span id="searchResultCount">No results</span>
-              <button id="searchPrev" class="search-nav-btn" disabled title="Previous match (Shift+F3)">↑</button>
-              <button id="searchNext" class="search-nav-btn" disabled title="Next match (F3)">↓</button>
+              <button id="searchPrev" class="search-nav-btn" disabled title="Previous match (Shift+Enter / Shift+F3)">↑ <kbd class="search-kbd">Shift+Enter</kbd></button>
+              <button id="searchNext" class="search-nav-btn" disabled title="Next match (Enter / F3)">↓ <kbd class="search-kbd">Enter/F3</kbd></button>
           </div>
       </div>
   </div>
@@ -4731,7 +4739,8 @@
       
       
       <div class='message-node'>
-      <div class='message user' data-message-id='d-1' id='msg-d-1'>
+      
+      <div class='message user' data-message-id='d-1' data-uuid='11111111-0000-4000-8000-000000000001' id='msg-d-1'>
           <div class='header'>
               <span>🤷 User</span>
               <div class='header-info'>
@@ -4766,7 +4775,8 @@
       
       
       <div class='message-node'>
-      <div class='message tool_use pair_first' data-message-id='d-2' id='msg-d-2'>
+      
+      <div class='message tool_use pair_first' data-message-id='d-2' data-uuid='22222222-0000-4000-8000-000000000002' id='msg-d-2'>
           <div class='header'>
               <span title="ID: tu_Task_async_001">🔧 Task <span class='tool-summary'>Coverage analysis</span> <span class='tool-subagent'>(Explore)</span> <span class='task-async-hint'>[async <a class='task-id-forward-link' href='#msg-d-7'><code>#cccc333</code></a>]</span> <span class='message-model' title='Model this sub-agent ran on'>claude-opus-4-7</span></span>
               <div class='header-info'>
@@ -4788,7 +4798,8 @@
       
       
       <div class='message-node'>
-      <div class='message tool_result pair_last' data-message-id='d-3' id='msg-d-3'>
+      
+      <div class='message tool_result pair_last' data-message-id='d-3' data-uuid='11111111-0000-4000-8000-000000000003' id='msg-d-3'>
           <div class='header'>
               <span title="ID: tu_Task_async_001"></span>
               <div class='header-info'>
@@ -4826,7 +4837,8 @@
       
       
       <div class='message-node'>
-      <div class='message assistant sidechain' data-message-id='d-5' id='msg-d-5'>
+      
+      <div class='message assistant sidechain' data-message-id='d-5' data-uuid='cccccccc-0000-4000-8000-000000000002' id='msg-d-5'>
           <div class='header'>
               <span>🔗 Sub-assistant</span>
               <div class='header-info'>
@@ -4853,7 +4865,8 @@
       
       
       <div class='message-node'>
-      <div class='message tool_use pair_first' data-message-id='d-7' id='msg-d-7'>
+      
+      <div class='message tool_use pair_first' data-message-id='d-7' data-uuid='22222222-0000-4000-8000-000000000004' id='msg-d-7'>
           <div class='header'>
               <span title="ID: tu_TaskOutput_001">🔍 TaskOutput <a class='task-id-backlink' href='#msg-d-2'><code>#cccc333</code></a></span>
               <div class='header-info'>
@@ -4874,7 +4887,8 @@
       
       
       <div class='message-node'>
-      <div class='message tool_result pair_last' data-message-id='d-8' id='msg-d-8'>
+      
+      <div class='message tool_result pair_last' data-message-id='d-8' data-uuid='11111111-0000-4000-8000-000000000005' id='msg-d-8'>
           <div class='header'>
               <span title="ID: tu_TaskOutput_001"></span>
               <div class='header-info'>
@@ -4895,7 +4909,8 @@
       
       
       <div class='message-node'>
-      <div class='message user task-notification' data-message-id='d-9' id='msg-d-9'>
+      
+      <div class='message user task-notification' data-message-id='d-9' data-uuid='11111111-0000-4000-8000-000000000006' id='msg-d-9'>
           <div class='header'>
               <span>🔄 Async result <span class='tool-summary'>Agent &quot;Coverage analysis&quot; completed</span></span>
               <div class='header-info'>
@@ -4916,7 +4931,8 @@
       
       
       <div class='message-node'>
-      <div class='message assistant' data-message-id='d-10' id='msg-d-10'>
+      
+      <div class='message assistant' data-message-id='d-10' data-uuid='22222222-0000-4000-8000-000000000007' id='msg-d-10'>
           <div class='header'>
               <span>🤖 Assistant</span>
               <div class='header-info'>
@@ -4947,7 +4963,7 @@
       
   
       <button class="timeline-toggle floating-btn" id="toggleTimeline" title="Show timeline">📆</button>
-      <button class="filter-messages floating-btn" id="filterMessages" title="Search & Filter">🔍</button>
+      <button class="filter-messages floating-btn" id="filterMessages" title="Search & Filter (/)">🔍</button>
       <button class="toggle-details floating-btn" id="toggleDetails" title="Toggle all details">📋</button>
       <button class="debug-toggle floating-btn" id="toggleDebug" title="Show UUIDs">uuid</button>
       <button class="user-view-global floating-btn" id="toggleUserView" title="Show user messages as raw text">md</button>
@@ -5371,7 +5387,7 @@
                   if (isVisible) {
                       filterToolbar.classList.remove('visible');
                       filterButton.classList.remove('active');
-                      filterButton.title = 'Search & Filter';
+                      filterButton.title = 'Search & Filter (/)';
                   } else {
                       filterToolbar.classList.add('visible');
                       filterButton.classList.add('active');
@@ -6088,20 +6104,20 @@
           searchRegex.addEventListener('change', () => {
               searchState.useRegex = searchRegex.checked;
               saveSearchState();
-              if (searchState.query) performSearch(searchState.query);
+              if (searchState.query) performSearch(searchState.query, { preserveCurrent: true });
           });
   
           searchInFiltered.addEventListener('change', () => {
               searchState.searchInFiltered = searchInFiltered.checked;
               saveSearchState();
-              if (searchState.query) performSearch(searchState.query);
+              if (searchState.query) performSearch(searchState.query, { preserveCurrent: true });
           });
   
           if (searchShowContext) {
               searchShowContext.addEventListener('change', () => {
                   searchState.showContext = searchShowContext.checked;
                   saveSearchState();
-                  if (searchState.query) performSearch(searchState.query);
+                  if (searchState.query) performSearch(searchState.query, { preserveCurrent: true });
               });
           }
   
@@ -6120,12 +6136,27 @@
           document.addEventListener('keydown', handleKeyboardShortcuts);
       }
   
-      // Perform search
+      // Stable identity of a matched message: the transcript UUID survives
+      // re-renders and re-searches; the positional data-message-id is only a
+      // fallback (synthesized messages without a UUID).
+      function matchAnchor(element) {
+          return element.dataset.uuid || element.dataset.messageId || null;
+      }
+  
+      // Perform search. options.preserveCurrent keeps the current match (found
+      // again by its stable anchor) instead of resetting to the first match —
+      // used when re-running the same query after an option/filter change so
+      // the view stays put instead of jumping back to match 1.
       let isSearching = false;
-      function performSearch(query) {
+      function performSearch(query, options = {}) {
           // Prevent concurrent searches
           if (isSearching) return;
           isSearching = true;
+  
+          const currentMatch = searchState.matches[searchState.currentMatchIndex];
+          const preserveAnchor = options.preserveCurrent && !searchState.isIndexPage && currentMatch
+              ? matchAnchor(currentMatch.element)
+              : null;
   
           searchState.query = query;
           searchClear.classList.toggle('visible', query.length > 0);
@@ -6215,6 +6246,14 @@
           searchState.totalMatchCount = totalMatchCount;
   
           searchState.currentMatchIndex = searchState.matches.length > 0 ? 0 : -1;
+          if (preserveAnchor && searchState.currentMatchIndex === 0) {
+              const preservedIndex = searchState.matches.findIndex(
+                  m => matchAnchor(m.element) === preserveAnchor
+              );
+              if (preservedIndex >= 0) {
+                  searchState.currentMatchIndex = preservedIndex;
+              }
+          }
   
           // On transcript pages, search acts as a filter: non-matching messages
           // are hidden, matches are revealed (unfolded) and highlighted.
@@ -6229,9 +6268,11 @@
               displayIndexSearchResults();
           }
   
-          // Navigate to first match
+          // Navigate to the current match — the first one for a fresh query,
+          // or the preserved one after an option/filter re-search (the layout
+          // may have shifted, so re-scrolling to it keeps it in view).
           if (searchState.matches.length > 0 && !searchState.isIndexPage) {
-              navigateToMatch(0);
+              navigateToMatch(searchState.currentMatchIndex);
           }
   
           // Reset searching flag
@@ -6269,6 +6310,22 @@
           if (window.claudeLogRevealMessage) {
               matched.forEach(el => window.claudeLogRevealMessage(el));
           }
+  
+          // A highlight inside a collapsed <details> (tool output, collapsible
+          // code, structured params) stays invisible even after the message
+          // itself is revealed — open every details on the path from each
+          // highlight up to its message card.
+          matched.forEach(el => {
+              el.querySelectorAll('.search-highlight').forEach(highlight => {
+                  let details = highlight.closest('details');
+                  while (details && el.contains(details)) {
+                      details.open = true;
+                      details = details.parentElement
+                          ? details.parentElement.closest('details')
+                          : null;
+                  }
+              });
+          });
   
           syncTimelineWithSearch();
       }
@@ -6383,10 +6440,14 @@
           });
   
           const match = searchState.matches[index];
-          const highlights = match.element.querySelectorAll('.search-highlight');
-          if (highlights.length > 0) {
-              highlights[0].classList.add('current');
-              highlights[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
+          const highlights = Array.from(match.element.querySelectorAll('.search-highlight'));
+          // Prefer a rendered highlight: the first one in DOM order can be the
+          // duplicate inside a .preview-content summary, which is display:none
+          // once its <details> has been auto-opened.
+          const target = highlights.find(h => h.offsetParent !== null) || highlights[0];
+          if (target) {
+              target.classList.add('current');
+              target.scrollIntoView({ behavior: 'smooth', block: 'center' });
           } else {
               match.element.scrollIntoView({ behavior: 'smooth', block: 'center' });
           }
@@ -6566,10 +6627,12 @@
               return;
           }
   
-          // F3 - Next match
+          // F3 - open search when idle (like `/`), otherwise next/previous match
           if (e.key === 'F3') {
               e.preventDefault();
-              if (e.shiftKey) {
+              if (!searchState.query) {
+                  openSearch();
+              } else if (e.shiftKey) {
                   navigateMatch(-1);
               } else {
                   navigateMatch(1);
@@ -6667,7 +6730,7 @@
                   isUpdatingFilters = true;
                   setTimeout(() => {
                       buildSearchIndex();
-                      performSearch(searchState.query);
+                      performSearch(searchState.query, { preserveCurrent: true });
                       isUpdatingFilters = false;
                   }, 100);
               }
@@ -9768,6 +9831,14 @@
       cursor: not-allowed;
   }
   
+  /* Keyboard shortcut labels inside the prev/next buttons */
+  .search-nav-btn .search-kbd {
+      font-family: inherit;
+      font-size: 0.85em;
+      color: var(--text-muted);
+      margin-left: 2px;
+  }
+  
   /* Search-as-filter (transcript pages): messages that don't match an active
      search are hidden; ancestors of matches ("Show context" mode) stay visible
      but dimmed so the matches themselves stand out. */
@@ -11362,8 +11433,8 @@
       <div id="searchResultsInfo" class="search-results-info">
           <div class="search-navigation">
               <span id="searchResultCount">No results</span>
-              <button id="searchPrev" class="search-nav-btn" disabled title="Previous match (Shift+F3)">↑</button>
-              <button id="searchNext" class="search-nav-btn" disabled title="Next match (F3)">↓</button>
+              <button id="searchPrev" class="search-nav-btn" disabled title="Previous match (Shift+Enter / Shift+F3)">↑ <kbd class="search-kbd">Shift+Enter</kbd></button>
+              <button id="searchNext" class="search-nav-btn" disabled title="Next match (Enter / F3)">↓ <kbd class="search-kbd">Enter/F3</kbd></button>
           </div>
       </div>
   </div>
@@ -11426,7 +11497,8 @@
       
       
       <div class='message-node'>
-      <div class='message user' data-message-id='d-1' id='msg-d-1'>
+      
+      <div class='message user' data-message-id='d-1' data-uuid='11111111-0000-4000-8000-000000000001' id='msg-d-1'>
           <div class='header'>
               <span>🤷 User</span>
               <div class='header-info'>
@@ -11457,7 +11529,8 @@
       
       
       <div class='message-node'>
-      <div class='message tool_use pair_first' data-message-id='d-2' id='msg-d-2'>
+      
+      <div class='message tool_use pair_first' data-message-id='d-2' data-uuid='22222222-0000-4000-8000-000000000002' id='msg-d-2'>
           <div class='header'>
               <span title="ID: tu_Task_async_001">🔧 Task <span class='tool-summary'>Coverage analysis</span> <span class='tool-subagent'>(Explore)</span> <span class='task-async-hint'>[async <code>#cccc333</code>]</span></span>
               <div class='header-info'>
@@ -11479,7 +11552,8 @@
       
       
       <div class='message-node'>
-      <div class='message tool_result pair_last' data-message-id='d-3' id='msg-d-3'>
+      
+      <div class='message tool_result pair_last' data-message-id='d-3' data-uuid='11111111-0000-4000-8000-000000000003' id='msg-d-3'>
           <div class='header'>
               <span title="ID: tu_Task_async_001"></span>
               <div class='header-info'>
@@ -11510,7 +11584,8 @@
       
       
       <div class='message-node'>
-      <div class='message assistant' data-message-id='d-10' id='msg-d-10'>
+      
+      <div class='message assistant' data-message-id='d-10' data-uuid='22222222-0000-4000-8000-000000000007' id='msg-d-10'>
           <div class='header'>
               <span>🤖 Assistant</span>
               <div class='header-info'>
@@ -11541,7 +11616,7 @@
       
   
       <button class="timeline-toggle floating-btn" id="toggleTimeline" title="Show timeline">📆</button>
-      <button class="filter-messages floating-btn" id="filterMessages" title="Search & Filter">🔍</button>
+      <button class="filter-messages floating-btn" id="filterMessages" title="Search & Filter (/)">🔍</button>
       <button class="toggle-details floating-btn" id="toggleDetails" title="Toggle all details">📋</button>
       <button class="debug-toggle floating-btn" id="toggleDebug" title="Show UUIDs">uuid</button>
       <button class="user-view-global floating-btn" id="toggleUserView" title="Show user messages as raw text">md</button>
@@ -11965,7 +12040,7 @@
                   if (isVisible) {
                       filterToolbar.classList.remove('visible');
                       filterButton.classList.remove('active');
-                      filterButton.title = 'Search & Filter';
+                      filterButton.title = 'Search & Filter (/)';
                   } else {
                       filterToolbar.classList.add('visible');
                       filterButton.classList.add('active');
@@ -12682,20 +12757,20 @@
           searchRegex.addEventListener('change', () => {
               searchState.useRegex = searchRegex.checked;
               saveSearchState();
-              if (searchState.query) performSearch(searchState.query);
+              if (searchState.query) performSearch(searchState.query, { preserveCurrent: true });
           });
   
           searchInFiltered.addEventListener('change', () => {
               searchState.searchInFiltered = searchInFiltered.checked;
               saveSearchState();
-              if (searchState.query) performSearch(searchState.query);
+              if (searchState.query) performSearch(searchState.query, { preserveCurrent: true });
           });
   
           if (searchShowContext) {
               searchShowContext.addEventListener('change', () => {
                   searchState.showContext = searchShowContext.checked;
                   saveSearchState();
-                  if (searchState.query) performSearch(searchState.query);
+                  if (searchState.query) performSearch(searchState.query, { preserveCurrent: true });
               });
           }
   
@@ -12714,12 +12789,27 @@
           document.addEventListener('keydown', handleKeyboardShortcuts);
       }
   
-      // Perform search
+      // Stable identity of a matched message: the transcript UUID survives
+      // re-renders and re-searches; the positional data-message-id is only a
+      // fallback (synthesized messages without a UUID).
+      function matchAnchor(element) {
+          return element.dataset.uuid || element.dataset.messageId || null;
+      }
+  
+      // Perform search. options.preserveCurrent keeps the current match (found
+      // again by its stable anchor) instead of resetting to the first match —
+      // used when re-running the same query after an option/filter change so
+      // the view stays put instead of jumping back to match 1.
       let isSearching = false;
-      function performSearch(query) {
+      function performSearch(query, options = {}) {
           // Prevent concurrent searches
           if (isSearching) return;
           isSearching = true;
+  
+          const currentMatch = searchState.matches[searchState.currentMatchIndex];
+          const preserveAnchor = options.preserveCurrent && !searchState.isIndexPage && currentMatch
+              ? matchAnchor(currentMatch.element)
+              : null;
   
           searchState.query = query;
           searchClear.classList.toggle('visible', query.length > 0);
@@ -12809,6 +12899,14 @@
           searchState.totalMatchCount = totalMatchCount;
   
           searchState.currentMatchIndex = searchState.matches.length > 0 ? 0 : -1;
+          if (preserveAnchor && searchState.currentMatchIndex === 0) {
+              const preservedIndex = searchState.matches.findIndex(
+                  m => matchAnchor(m.element) === preserveAnchor
+              );
+              if (preservedIndex >= 0) {
+                  searchState.currentMatchIndex = preservedIndex;
+              }
+          }
   
           // On transcript pages, search acts as a filter: non-matching messages
           // are hidden, matches are revealed (unfolded) and highlighted.
@@ -12823,9 +12921,11 @@
               displayIndexSearchResults();
           }
   
-          // Navigate to first match
+          // Navigate to the current match — the first one for a fresh query,
+          // or the preserved one after an option/filter re-search (the layout
+          // may have shifted, so re-scrolling to it keeps it in view).
           if (searchState.matches.length > 0 && !searchState.isIndexPage) {
-              navigateToMatch(0);
+              navigateToMatch(searchState.currentMatchIndex);
           }
   
           // Reset searching flag
@@ -12863,6 +12963,22 @@
           if (window.claudeLogRevealMessage) {
               matched.forEach(el => window.claudeLogRevealMessage(el));
           }
+  
+          // A highlight inside a collapsed <details> (tool output, collapsible
+          // code, structured params) stays invisible even after the message
+          // itself is revealed — open every details on the path from each
+          // highlight up to its message card.
+          matched.forEach(el => {
+              el.querySelectorAll('.search-highlight').forEach(highlight => {
+                  let details = highlight.closest('details');
+                  while (details && el.contains(details)) {
+                      details.open = true;
+                      details = details.parentElement
+                          ? details.parentElement.closest('details')
+                          : null;
+                  }
+              });
+          });
   
           syncTimelineWithSearch();
       }
@@ -12977,10 +13093,14 @@
           });
   
           const match = searchState.matches[index];
-          const highlights = match.element.querySelectorAll('.search-highlight');
-          if (highlights.length > 0) {
-              highlights[0].classList.add('current');
-              highlights[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
+          const highlights = Array.from(match.element.querySelectorAll('.search-highlight'));
+          // Prefer a rendered highlight: the first one in DOM order can be the
+          // duplicate inside a .preview-content summary, which is display:none
+          // once its <details> has been auto-opened.
+          const target = highlights.find(h => h.offsetParent !== null) || highlights[0];
+          if (target) {
+              target.classList.add('current');
+              target.scrollIntoView({ behavior: 'smooth', block: 'center' });
           } else {
               match.element.scrollIntoView({ behavior: 'smooth', block: 'center' });
           }
@@ -13160,10 +13280,12 @@
               return;
           }
   
-          // F3 - Next match
+          // F3 - open search when idle (like `/`), otherwise next/previous match
           if (e.key === 'F3') {
               e.preventDefault();
-              if (e.shiftKey) {
+              if (!searchState.query) {
+                  openSearch();
+              } else if (e.shiftKey) {
                   navigateMatch(-1);
               } else {
                   navigateMatch(1);
@@ -13261,7 +13383,7 @@
                   isUpdatingFilters = true;
                   setTimeout(() => {
                       buildSearchIndex();
-                      performSearch(searchState.query);
+                      performSearch(searchState.query, { preserveCurrent: true });
                       isUpdatingFilters = false;
                   }, 100);
               }
@@ -14223,6 +14345,14 @@
       cursor: not-allowed;
   }
   
+  /* Keyboard shortcut labels inside the prev/next buttons */
+  .search-nav-btn .search-kbd {
+      font-family: inherit;
+      font-size: 0.85em;
+      color: var(--text-muted);
+      margin-left: 2px;
+  }
+  
   /* Search-as-filter (transcript pages): messages that don't match an active
      search are hidden; ancestors of matches ("Show context" mode) stay visible
      but dimmed so the matches themselves stand out. */
@@ -14481,8 +14611,8 @@
       <div id="searchResultsInfo" class="search-results-info">
           <div class="search-navigation">
               <span id="searchResultCount">No results</span>
-              <button id="searchPrev" class="search-nav-btn" disabled title="Previous match (Shift+F3)">↑</button>
-              <button id="searchNext" class="search-nav-btn" disabled title="Next match (F3)">↓</button>
+              <button id="searchPrev" class="search-nav-btn" disabled title="Previous match (Shift+Enter / Shift+F3)">↑ <kbd class="search-kbd">Shift+Enter</kbd></button>
+              <button id="searchNext" class="search-nav-btn" disabled title="Next match (Enter / F3)">↓ <kbd class="search-kbd">Enter/F3</kbd></button>
           </div>
       </div>
   
@@ -14783,20 +14913,20 @@
           searchRegex.addEventListener('change', () => {
               searchState.useRegex = searchRegex.checked;
               saveSearchState();
-              if (searchState.query) performSearch(searchState.query);
+              if (searchState.query) performSearch(searchState.query, { preserveCurrent: true });
           });
   
           searchInFiltered.addEventListener('change', () => {
               searchState.searchInFiltered = searchInFiltered.checked;
               saveSearchState();
-              if (searchState.query) performSearch(searchState.query);
+              if (searchState.query) performSearch(searchState.query, { preserveCurrent: true });
           });
   
           if (searchShowContext) {
               searchShowContext.addEventListener('change', () => {
                   searchState.showContext = searchShowContext.checked;
                   saveSearchState();
-                  if (searchState.query) performSearch(searchState.query);
+                  if (searchState.query) performSearch(searchState.query, { preserveCurrent: true });
               });
           }
   
@@ -14815,12 +14945,27 @@
           document.addEventListener('keydown', handleKeyboardShortcuts);
       }
   
-      // Perform search
+      // Stable identity of a matched message: the transcript UUID survives
+      // re-renders and re-searches; the positional data-message-id is only a
+      // fallback (synthesized messages without a UUID).
+      function matchAnchor(element) {
+          return element.dataset.uuid || element.dataset.messageId || null;
+      }
+  
+      // Perform search. options.preserveCurrent keeps the current match (found
+      // again by its stable anchor) instead of resetting to the first match —
+      // used when re-running the same query after an option/filter change so
+      // the view stays put instead of jumping back to match 1.
       let isSearching = false;
-      function performSearch(query) {
+      function performSearch(query, options = {}) {
           // Prevent concurrent searches
           if (isSearching) return;
           isSearching = true;
+  
+          const currentMatch = searchState.matches[searchState.currentMatchIndex];
+          const preserveAnchor = options.preserveCurrent && !searchState.isIndexPage && currentMatch
+              ? matchAnchor(currentMatch.element)
+              : null;
   
           searchState.query = query;
           searchClear.classList.toggle('visible', query.length > 0);
@@ -14910,6 +15055,14 @@
           searchState.totalMatchCount = totalMatchCount;
   
           searchState.currentMatchIndex = searchState.matches.length > 0 ? 0 : -1;
+          if (preserveAnchor && searchState.currentMatchIndex === 0) {
+              const preservedIndex = searchState.matches.findIndex(
+                  m => matchAnchor(m.element) === preserveAnchor
+              );
+              if (preservedIndex >= 0) {
+                  searchState.currentMatchIndex = preservedIndex;
+              }
+          }
   
           // On transcript pages, search acts as a filter: non-matching messages
           // are hidden, matches are revealed (unfolded) and highlighted.
@@ -14924,9 +15077,11 @@
               displayIndexSearchResults();
           }
   
-          // Navigate to first match
+          // Navigate to the current match — the first one for a fresh query,
+          // or the preserved one after an option/filter re-search (the layout
+          // may have shifted, so re-scrolling to it keeps it in view).
           if (searchState.matches.length > 0 && !searchState.isIndexPage) {
-              navigateToMatch(0);
+              navigateToMatch(searchState.currentMatchIndex);
           }
   
           // Reset searching flag
@@ -14964,6 +15119,22 @@
           if (window.claudeLogRevealMessage) {
               matched.forEach(el => window.claudeLogRevealMessage(el));
           }
+  
+          // A highlight inside a collapsed <details> (tool output, collapsible
+          // code, structured params) stays invisible even after the message
+          // itself is revealed — open every details on the path from each
+          // highlight up to its message card.
+          matched.forEach(el => {
+              el.querySelectorAll('.search-highlight').forEach(highlight => {
+                  let details = highlight.closest('details');
+                  while (details && el.contains(details)) {
+                      details.open = true;
+                      details = details.parentElement
+                          ? details.parentElement.closest('details')
+                          : null;
+                  }
+              });
+          });
   
           syncTimelineWithSearch();
       }
@@ -15078,10 +15249,14 @@
           });
   
           const match = searchState.matches[index];
-          const highlights = match.element.querySelectorAll('.search-highlight');
-          if (highlights.length > 0) {
-              highlights[0].classList.add('current');
-              highlights[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
+          const highlights = Array.from(match.element.querySelectorAll('.search-highlight'));
+          // Prefer a rendered highlight: the first one in DOM order can be the
+          // duplicate inside a .preview-content summary, which is display:none
+          // once its <details> has been auto-opened.
+          const target = highlights.find(h => h.offsetParent !== null) || highlights[0];
+          if (target) {
+              target.classList.add('current');
+              target.scrollIntoView({ behavior: 'smooth', block: 'center' });
           } else {
               match.element.scrollIntoView({ behavior: 'smooth', block: 'center' });
           }
@@ -15261,10 +15436,12 @@
               return;
           }
   
-          // F3 - Next match
+          // F3 - open search when idle (like `/`), otherwise next/previous match
           if (e.key === 'F3') {
               e.preventDefault();
-              if (e.shiftKey) {
+              if (!searchState.query) {
+                  openSearch();
+              } else if (e.shiftKey) {
                   navigateMatch(-1);
               } else {
                   navigateMatch(1);
@@ -15362,7 +15539,7 @@
                   isUpdatingFilters = true;
                   setTimeout(() => {
                       buildSearchIndex();
-                      performSearch(searchState.query);
+                      performSearch(searchState.query, { preserveCurrent: true });
                       isUpdatingFilters = false;
                   }, 100);
               }
@@ -18719,6 +18896,14 @@
       cursor: not-allowed;
   }
   
+  /* Keyboard shortcut labels inside the prev/next buttons */
+  .search-nav-btn .search-kbd {
+      font-family: inherit;
+      font-size: 0.85em;
+      color: var(--text-muted);
+      margin-left: 2px;
+  }
+  
   /* Search-as-filter (transcript pages): messages that don't match an active
      search are hidden; ancestors of matches ("Show context" mode) stay visible
      but dimmed so the matches themselves stand out. */
@@ -20313,8 +20498,8 @@
       <div id="searchResultsInfo" class="search-results-info">
           <div class="search-navigation">
               <span id="searchResultCount">No results</span>
-              <button id="searchPrev" class="search-nav-btn" disabled title="Previous match (Shift+F3)">↑</button>
-              <button id="searchNext" class="search-nav-btn" disabled title="Next match (F3)">↓</button>
+              <button id="searchPrev" class="search-nav-btn" disabled title="Previous match (Shift+Enter / Shift+F3)">↑ <kbd class="search-kbd">Shift+Enter</kbd></button>
+              <button id="searchNext" class="search-nav-btn" disabled title="Next match (Enter / F3)">↓ <kbd class="search-kbd">Enter/F3</kbd></button>
           </div>
       </div>
   </div>
@@ -20377,7 +20562,8 @@
       
       
       <div class='message-node'>
-      <div class='message user' data-message-id='d-1' id='msg-d-1'>
+      
+      <div class='message user' data-message-id='d-1' data-uuid='msg_001' id='msg-d-1'>
           <div class='header'>
               <span>🤷 User</span>
               <div class='header-info'>
@@ -20408,7 +20594,8 @@
       
       
       <div class='message-node'>
-      <div class='message assistant' data-message-id='d-2' id='msg-d-2'>
+      
+      <div class='message assistant' data-message-id='d-2' data-uuid='msg_002' id='msg-d-2'>
           <div class='header'>
               <span>🤖 Assistant</span>
               <div class='header-info'>
@@ -20456,7 +20643,8 @@
       
       
       <div class='message-node'>
-      <div class='message user' data-message-id='d-3' id='msg-d-3'>
+      
+      <div class='message user' data-message-id='d-3' data-uuid='msg_003' id='msg-d-3'>
           <div class='header'>
               <span>🤷 User</span>
               <div class='header-info'>
@@ -20487,7 +20675,8 @@
       
       
       <div class='message-node'>
-      <div class='message tool_use pair_first' data-message-id='d-4' id='msg-d-4'>
+      
+      <div class='message tool_use pair_first' data-message-id='d-4' data-uuid='msg_004' id='msg-d-4'>
           <div class='header'>
               <span title="ID: tool_001">📝 Edit <span class='tool-summary'>/tmp/decorator_example.py</span></span>
               <div class='header-info'>
@@ -20508,7 +20697,8 @@
       
       
       <div class='message-node'>
-      <div class='message tool_result pair_last' data-message-id='d-5' id='msg-d-5'>
+      
+      <div class='message tool_result pair_last' data-message-id='d-5' data-uuid='msg_005' id='msg-d-5'>
           <div class='header'>
               <span title="ID: tool_001"></span>
               <div class='header-info'>
@@ -20529,7 +20719,8 @@
       
       
       <div class='message-node'>
-      <div class='message assistant' data-message-id='d-6' id='msg-d-6'>
+      
+      <div class='message assistant' data-message-id='d-6' data-uuid='msg_006' id='msg-d-6'>
           <div class='header'>
               <span>🤖 Assistant</span>
               <div class='header-info'>
@@ -20570,7 +20761,8 @@
       
       
       <div class='message-node'>
-      <div class='message user' data-message-id='d-7' id='msg-d-7'>
+      
+      <div class='message user' data-message-id='d-7' data-uuid='msg_007' id='msg-d-7'>
           <div class='header'>
               <span>🤷 User</span>
               <div class='header-info'>
@@ -20601,7 +20793,8 @@
       
       
       <div class='message-node'>
-      <div class='message tool_use pair_first' data-message-id='d-8' id='msg-d-8'>
+      
+      <div class='message tool_use pair_first' data-message-id='d-8' data-uuid='msg_008' id='msg-d-8'>
           <div class='header'>
               <span title="ID: tool_002">💻 Bash <span class='tool-summary'>Run the decorator example to show output</span></span>
               <div class='header-info'>
@@ -20622,7 +20815,8 @@
       
       
       <div class='message-node'>
-      <div class='message tool_result pair_last' data-message-id='d-9' id='msg-d-9'>
+      
+      <div class='message tool_result pair_last' data-message-id='d-9' data-uuid='msg_009' id='msg-d-9'>
           <div class='header'>
               <span title="ID: tool_002"></span>
               <div class='header-info'>
@@ -20645,7 +20839,8 @@
       
       
       <div class='message-node'>
-      <div class='message assistant' data-message-id='d-10' id='msg-d-10'>
+      
+      <div class='message assistant' data-message-id='d-10' data-uuid='msg_010' id='msg-d-10'>
           <div class='header'>
               <span>🤖 Assistant</span>
               <div class='header-info'>
@@ -20682,7 +20877,8 @@
       
       
       <div class='message-node'>
-      <div class='message user' data-message-id='d-11' id='msg-d-11'>
+      
+      <div class='message user' data-message-id='d-11' data-uuid='msg_011' id='msg-d-11'>
           <div class='header'>
               <span>🤷 User</span>
               <div class='header-info'>
@@ -20708,7 +20904,7 @@
       
   
       <button class="timeline-toggle floating-btn" id="toggleTimeline" title="Show timeline">📆</button>
-      <button class="filter-messages floating-btn" id="filterMessages" title="Search & Filter">🔍</button>
+      <button class="filter-messages floating-btn" id="filterMessages" title="Search & Filter (/)">🔍</button>
       <button class="toggle-details floating-btn" id="toggleDetails" title="Toggle all details">📋</button>
       <button class="debug-toggle floating-btn" id="toggleDebug" title="Show UUIDs">uuid</button>
       <button class="user-view-global floating-btn" id="toggleUserView" title="Show user messages as raw text">md</button>
@@ -21132,7 +21328,7 @@
                   if (isVisible) {
                       filterToolbar.classList.remove('visible');
                       filterButton.classList.remove('active');
-                      filterButton.title = 'Search & Filter';
+                      filterButton.title = 'Search & Filter (/)';
                   } else {
                       filterToolbar.classList.add('visible');
                       filterButton.classList.add('active');
@@ -21849,20 +22045,20 @@
           searchRegex.addEventListener('change', () => {
               searchState.useRegex = searchRegex.checked;
               saveSearchState();
-              if (searchState.query) performSearch(searchState.query);
+              if (searchState.query) performSearch(searchState.query, { preserveCurrent: true });
           });
   
           searchInFiltered.addEventListener('change', () => {
               searchState.searchInFiltered = searchInFiltered.checked;
               saveSearchState();
-              if (searchState.query) performSearch(searchState.query);
+              if (searchState.query) performSearch(searchState.query, { preserveCurrent: true });
           });
   
           if (searchShowContext) {
               searchShowContext.addEventListener('change', () => {
                   searchState.showContext = searchShowContext.checked;
                   saveSearchState();
-                  if (searchState.query) performSearch(searchState.query);
+                  if (searchState.query) performSearch(searchState.query, { preserveCurrent: true });
               });
           }
   
@@ -21881,12 +22077,27 @@
           document.addEventListener('keydown', handleKeyboardShortcuts);
       }
   
-      // Perform search
+      // Stable identity of a matched message: the transcript UUID survives
+      // re-renders and re-searches; the positional data-message-id is only a
+      // fallback (synthesized messages without a UUID).
+      function matchAnchor(element) {
+          return element.dataset.uuid || element.dataset.messageId || null;
+      }
+  
+      // Perform search. options.preserveCurrent keeps the current match (found
+      // again by its stable anchor) instead of resetting to the first match —
+      // used when re-running the same query after an option/filter change so
+      // the view stays put instead of jumping back to match 1.
       let isSearching = false;
-      function performSearch(query) {
+      function performSearch(query, options = {}) {
           // Prevent concurrent searches
           if (isSearching) return;
           isSearching = true;
+  
+          const currentMatch = searchState.matches[searchState.currentMatchIndex];
+          const preserveAnchor = options.preserveCurrent && !searchState.isIndexPage && currentMatch
+              ? matchAnchor(currentMatch.element)
+              : null;
   
           searchState.query = query;
           searchClear.classList.toggle('visible', query.length > 0);
@@ -21976,6 +22187,14 @@
           searchState.totalMatchCount = totalMatchCount;
   
           searchState.currentMatchIndex = searchState.matches.length > 0 ? 0 : -1;
+          if (preserveAnchor && searchState.currentMatchIndex === 0) {
+              const preservedIndex = searchState.matches.findIndex(
+                  m => matchAnchor(m.element) === preserveAnchor
+              );
+              if (preservedIndex >= 0) {
+                  searchState.currentMatchIndex = preservedIndex;
+              }
+          }
   
           // On transcript pages, search acts as a filter: non-matching messages
           // are hidden, matches are revealed (unfolded) and highlighted.
@@ -21990,9 +22209,11 @@
               displayIndexSearchResults();
           }
   
-          // Navigate to first match
+          // Navigate to the current match — the first one for a fresh query,
+          // or the preserved one after an option/filter re-search (the layout
+          // may have shifted, so re-scrolling to it keeps it in view).
           if (searchState.matches.length > 0 && !searchState.isIndexPage) {
-              navigateToMatch(0);
+              navigateToMatch(searchState.currentMatchIndex);
           }
   
           // Reset searching flag
@@ -22030,6 +22251,22 @@
           if (window.claudeLogRevealMessage) {
               matched.forEach(el => window.claudeLogRevealMessage(el));
           }
+  
+          // A highlight inside a collapsed <details> (tool output, collapsible
+          // code, structured params) stays invisible even after the message
+          // itself is revealed — open every details on the path from each
+          // highlight up to its message card.
+          matched.forEach(el => {
+              el.querySelectorAll('.search-highlight').forEach(highlight => {
+                  let details = highlight.closest('details');
+                  while (details && el.contains(details)) {
+                      details.open = true;
+                      details = details.parentElement
+                          ? details.parentElement.closest('details')
+                          : null;
+                  }
+              });
+          });
   
           syncTimelineWithSearch();
       }
@@ -22144,10 +22381,14 @@
           });
   
           const match = searchState.matches[index];
-          const highlights = match.element.querySelectorAll('.search-highlight');
-          if (highlights.length > 0) {
-              highlights[0].classList.add('current');
-              highlights[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
+          const highlights = Array.from(match.element.querySelectorAll('.search-highlight'));
+          // Prefer a rendered highlight: the first one in DOM order can be the
+          // duplicate inside a .preview-content summary, which is display:none
+          // once its <details> has been auto-opened.
+          const target = highlights.find(h => h.offsetParent !== null) || highlights[0];
+          if (target) {
+              target.classList.add('current');
+              target.scrollIntoView({ behavior: 'smooth', block: 'center' });
           } else {
               match.element.scrollIntoView({ behavior: 'smooth', block: 'center' });
           }
@@ -22327,10 +22568,12 @@
               return;
           }
   
-          // F3 - Next match
+          // F3 - open search when idle (like `/`), otherwise next/previous match
           if (e.key === 'F3') {
               e.preventDefault();
-              if (e.shiftKey) {
+              if (!searchState.query) {
+                  openSearch();
+              } else if (e.shiftKey) {
                   navigateMatch(-1);
               } else {
                   navigateMatch(1);
@@ -22428,7 +22671,7 @@
                   isUpdatingFilters = true;
                   setTimeout(() => {
                       buildSearchIndex();
-                      performSearch(searchState.query);
+                      performSearch(searchState.query, { preserveCurrent: true });
                       isUpdatingFilters = false;
                   }, 100);
               }
@@ -25529,6 +25772,14 @@
       cursor: not-allowed;
   }
   
+  /* Keyboard shortcut labels inside the prev/next buttons */
+  .search-nav-btn .search-kbd {
+      font-family: inherit;
+      font-size: 0.85em;
+      color: var(--text-muted);
+      margin-left: 2px;
+  }
+  
   /* Search-as-filter (transcript pages): messages that don't match an active
      search are hidden; ancestors of matches ("Show context" mode) stay visible
      but dimmed so the matches themselves stand out. */
@@ -27123,8 +27374,8 @@
       <div id="searchResultsInfo" class="search-results-info">
           <div class="search-navigation">
               <span id="searchResultCount">No results</span>
-              <button id="searchPrev" class="search-nav-btn" disabled title="Previous match (Shift+F3)">↑</button>
-              <button id="searchNext" class="search-nav-btn" disabled title="Next match (F3)">↓</button>
+              <button id="searchPrev" class="search-nav-btn" disabled title="Previous match (Shift+Enter / Shift+F3)">↑ <kbd class="search-kbd">Shift+Enter</kbd></button>
+              <button id="searchNext" class="search-nav-btn" disabled title="Next match (Enter / F3)">↓ <kbd class="search-kbd">Enter/F3</kbd></button>
           </div>
       </div>
   </div>
@@ -27187,7 +27438,8 @@
       
       
       <div class='message-node'>
-      <div class='message user' data-message-id='d-1' id='msg-d-1'>
+      
+      <div class='message user' data-message-id='d-1' data-uuid='11111111-0000-4000-8000-000000000001' id='msg-d-1'>
           <div class='header'>
               <span>🤷 User</span>
               <div class='header-info'>
@@ -27222,7 +27474,8 @@
       
       
       <div class='message-node'>
-      <div class='message tool_use pair_first' data-message-id='d-2' id='msg-d-2'>
+      
+      <div class='message tool_use pair_first' data-message-id='d-2' data-uuid='22222222-0000-4000-8000-000000000002' id='msg-d-2'>
           <div class='header'>
               <span title="ID: tu_TeamCreate_001">🛠️ TeamCreate</span>
               <div class='header-info'>
@@ -27243,7 +27496,8 @@
       
       
       <div class='message-node'>
-      <div class='message tool_result pair_last' data-message-id='d-3' id='msg-d-3'>
+      
+      <div class='message tool_result pair_last' data-message-id='d-3' data-uuid='11111111-0000-4000-8000-000000000003' id='msg-d-3'>
           <div class='header'>
               <span title="ID: tu_TeamCreate_001"></span>
               <div class='header-info'>
@@ -27264,7 +27518,8 @@
       
       
       <div class='message-node'>
-      <div class='message tool_use' data-message-id='d-4' id='msg-d-4'>
+      
+      <div class='message tool_use' data-message-id='d-4' data-uuid='22222222-0000-4000-8000-000000000004' id='msg-d-4'>
           <div class='header'>
               <span title="ID: tu_TaskCreate_alice">🛠️ Task <code>#1</code> <span class='tool-summary'>Add relay tests</span> <span class='task-action'>[created]</span></span>
               <div class='header-info'>
@@ -27289,7 +27544,8 @@
       
       
       <div class='message-node'>
-      <div class='message tool_use' data-message-id='d-6' id='msg-d-6'>
+      
+      <div class='message tool_use' data-message-id='d-6' data-uuid='22222222-0000-4000-8000-000000000006' id='msg-d-6'>
           <div class='header'>
               <span title="ID: tu_TaskCreate_bob">🛠️ Task <code>#2</code> <span class='tool-summary'>Add server tests</span> <span class='task-action'>[created]</span></span>
               <div class='header-info'>
@@ -27314,7 +27570,8 @@
       
       
       <div class='message-node'>
-      <div class='message tool_use' data-message-id='d-8' id='msg-d-8'>
+      
+      <div class='message tool_use' data-message-id='d-8' data-uuid='22222222-0000-4000-8000-000000000008' id='msg-d-8'>
           <div class='header'>
               <span title="ID: tu_TaskUpdate_001">🛠️ Task <a class='task-id-backlink' href='#msg-d-4'><code>#1</code></a> <span class='tool-summary'>Add relay tests</span> <span class='task-action'>[updated]</span></span>
               <div class='header-info'>
@@ -27337,7 +27594,8 @@
       
       
       <div class='message-node'>
-      <div class='message tool_use pair_first' data-message-id='d-10' id='msg-d-10'>
+      
+      <div class='message tool_use pair_first' data-message-id='d-10' data-uuid='22222222-0000-4000-8000-000000000010' id='msg-d-10'>
           <div class='header'>
               <span title="ID: tu_Task_alice">🔧 Task <span class='tool-summary'>Run alice&#x27;s test work</span> <span class='tool-subagent'>(general-purpose)</span> <span class='message-model' title='Model this sub-agent ran on'>claude-opus-4-7</span></span>
               <div class='header-info'>
@@ -27359,7 +27617,8 @@
       
       
       <div class='message-node'>
-      <div class='message tool_result pair_last' data-message-id='d-11' id='msg-d-11'>
+      
+      <div class='message tool_result pair_last' data-message-id='d-11' data-uuid='11111111-0000-4000-8000-000000000011' id='msg-d-11'>
           <div class='header'>
               <span title="ID: tu_Task_alice"></span>
               <div class='header-info'>
@@ -27390,7 +27649,8 @@
       
       
       <div class='message-node'>
-      <div class='message assistant sidechain' data-message-id='d-13' id='msg-d-13'>
+      
+      <div class='message assistant sidechain' data-message-id='d-13' data-uuid='aaaaaaaa-0000-4000-8000-000000000002' id='msg-d-13'>
           <div class='header'>
               <span>🔗 Sub-assistant</span>
               <div class='header-info'>
@@ -27412,7 +27672,8 @@
       
       
       <div class='message-node'>
-      <div class='message assistant sidechain' data-message-id='d-14' id='msg-d-14'>
+      
+      <div class='message assistant sidechain' data-message-id='d-14' data-uuid='aaaaaaaa-0000-4000-8000-000000000003' id='msg-d-14'>
           <div class='header'>
               <span>🔗 Sub-assistant</span>
               <div class='header-info'>
@@ -27439,7 +27700,8 @@
       
       
       <div class='message-node'>
-      <div class='message tool_use pair_first' data-message-id='d-15' id='msg-d-15'>
+      
+      <div class='message tool_use pair_first' data-message-id='d-15' data-uuid='22222222-0000-4000-8000-000000000012' id='msg-d-15'>
           <div class='header'>
               <span title="ID: tu_Task_bob">🔧 Task <span class='tool-summary'>Run bob&#x27;s test work</span> <span class='tool-subagent'>(general-purpose)</span> <span class='message-model' title='Model this sub-agent ran on'>claude-opus-4-7</span></span>
               <div class='header-info'>
@@ -27461,7 +27723,8 @@
       
       
       <div class='message-node'>
-      <div class='message tool_result pair_last' data-message-id='d-16' id='msg-d-16'>
+      
+      <div class='message tool_result pair_last' data-message-id='d-16' data-uuid='11111111-0000-4000-8000-000000000013' id='msg-d-16'>
           <div class='header'>
               <span title="ID: tu_Task_bob"></span>
               <div class='header-info'>
@@ -27492,7 +27755,8 @@
       
       
       <div class='message-node'>
-      <div class='message user teammate sidechain' data-message-id='d-17' id='msg-d-17'>
+      
+      <div class='message user teammate sidechain' data-message-id='d-17' data-uuid='bbbbbbbb-0000-4000-8000-000000000001' id='msg-d-17'>
           <div class='header'>
               <span>Teammate</span>
               <div class='header-info'>
@@ -27514,7 +27778,8 @@
       
       
       <div class='message-node'>
-      <div class='message assistant sidechain' data-message-id='d-18' id='msg-d-18'>
+      
+      <div class='message assistant sidechain' data-message-id='d-18' data-uuid='bbbbbbbb-0000-4000-8000-000000000002' id='msg-d-18'>
           <div class='header'>
               <span>🔗 Sub-assistant</span>
               <div class='header-info'>
@@ -27536,7 +27801,8 @@
       
       
       <div class='message-node'>
-      <div class='message assistant sidechain' data-message-id='d-19' id='msg-d-19'>
+      
+      <div class='message assistant sidechain' data-message-id='d-19' data-uuid='bbbbbbbb-0000-4000-8000-000000000003' id='msg-d-19'>
           <div class='header'>
               <span>🔗 Sub-assistant</span>
               <div class='header-info'>
@@ -27568,7 +27834,8 @@
       
       
       <div class='message-node'>
-      <div class='message user teammate' data-message-id='d-20' id='msg-d-20'>
+      
+      <div class='message user teammate' data-message-id='d-20' data-uuid='11111111-0000-4000-8000-000000000014' id='msg-d-20'>
           <div class='header'>
               <span>Teammate</span>
               <div class='header-info'>
@@ -27594,7 +27861,8 @@
       
       
       <div class='message-node'>
-      <div class='message user teammate' data-message-id='d-21' id='msg-d-21'>
+      
+      <div class='message user teammate' data-message-id='d-21' data-uuid='11111111-0000-4000-8000-000000000015' id='msg-d-21'>
           <div class='header'>
               <span>Teammate</span>
               <div class='header-info'>
@@ -27627,7 +27895,8 @@
       
       
       <div class='message-node'>
-      <div class='message tool_use pair_first' data-message-id='d-22' id='msg-d-22'>
+      
+      <div class='message tool_use pair_first' data-message-id='d-22' data-uuid='22222222-0000-4000-8000-000000000016' id='msg-d-22'>
           <div class='header'>
               <span title="ID: tu_TaskList_001">🛠️ TaskList</span>
               <div class='header-info'>
@@ -27648,7 +27917,8 @@
       
       
       <div class='message-node'>
-      <div class='message tool_result pair_last' data-message-id='d-23' id='msg-d-23'>
+      
+      <div class='message tool_result pair_last' data-message-id='d-23' data-uuid='11111111-0000-4000-8000-000000000017' id='msg-d-23'>
           <div class='header'>
               <span title="ID: tu_TaskList_001"></span>
               <div class='header-info'>
@@ -27669,7 +27939,8 @@
       
       
       <div class='message-node'>
-      <div class='message tool_use pair_first' data-message-id='d-24' id='msg-d-24'>
+      
+      <div class='message tool_use pair_first' data-message-id='d-24' data-uuid='22222222-0000-4000-8000-000000000018' id='msg-d-24'>
           <div class='header'>
               <span title="ID: tu_SendMessage_001">✉️ SendMessage <span class='tool-summary'>to <span class="teammate-badge" style="--cc-color: var(--cc-blue); --cc-color-bg: var(--cc-blue-bg);"><span class="teammate-icon">▎</span>alice</span></span></span>
               <div class='header-info'>
@@ -27691,7 +27962,8 @@
       
       
       <div class='message-node'>
-      <div class='message tool_result pair_last' data-message-id='d-25' id='msg-d-25'>
+      
+      <div class='message tool_result pair_last' data-message-id='d-25' data-uuid='11111111-0000-4000-8000-000000000019' id='msg-d-25'>
           <div class='header'>
               <span title="ID: tu_SendMessage_001"></span>
               <div class='header-info'>
@@ -27712,7 +27984,8 @@
       
       
       <div class='message-node'>
-      <div class='message tool_use pair_first' data-message-id='d-26' id='msg-d-26'>
+      
+      <div class='message tool_use pair_first' data-message-id='d-26' data-uuid='22222222-0000-4000-8000-000000000020' id='msg-d-26'>
           <div class='header'>
               <span title="ID: tu_TeamDelete_001">🛠️ TeamDelete</span>
               <div class='header-info'>
@@ -27733,7 +28006,8 @@
       
       
       <div class='message-node'>
-      <div class='message tool_result pair_last' data-message-id='d-27' id='msg-d-27'>
+      
+      <div class='message tool_result pair_last' data-message-id='d-27' data-uuid='11111111-0000-4000-8000-000000000021' id='msg-d-27'>
           <div class='header'>
               <span title="ID: tu_TeamDelete_001"></span>
               <div class='header-info'>
@@ -27754,7 +28028,8 @@
       
       
       <div class='message-node'>
-      <div class='message assistant' data-message-id='d-28' id='msg-d-28'>
+      
+      <div class='message assistant' data-message-id='d-28' data-uuid='22222222-0000-4000-8000-000000000022' id='msg-d-28'>
           <div class='header'>
               <span>🤖 Assistant</span>
               <div class='header-info'>
@@ -27785,7 +28060,7 @@
       
   
       <button class="timeline-toggle floating-btn" id="toggleTimeline" title="Show timeline">📆</button>
-      <button class="filter-messages floating-btn" id="filterMessages" title="Search & Filter">🔍</button>
+      <button class="filter-messages floating-btn" id="filterMessages" title="Search & Filter (/)">🔍</button>
       <button class="toggle-details floating-btn" id="toggleDetails" title="Toggle all details">📋</button>
       <button class="debug-toggle floating-btn" id="toggleDebug" title="Show UUIDs">uuid</button>
       <button class="user-view-global floating-btn" id="toggleUserView" title="Show user messages as raw text">md</button>
@@ -28209,7 +28484,7 @@
                   if (isVisible) {
                       filterToolbar.classList.remove('visible');
                       filterButton.classList.remove('active');
-                      filterButton.title = 'Search & Filter';
+                      filterButton.title = 'Search & Filter (/)';
                   } else {
                       filterToolbar.classList.add('visible');
                       filterButton.classList.add('active');
@@ -28926,20 +29201,20 @@
           searchRegex.addEventListener('change', () => {
               searchState.useRegex = searchRegex.checked;
               saveSearchState();
-              if (searchState.query) performSearch(searchState.query);
+              if (searchState.query) performSearch(searchState.query, { preserveCurrent: true });
           });
   
           searchInFiltered.addEventListener('change', () => {
               searchState.searchInFiltered = searchInFiltered.checked;
               saveSearchState();
-              if (searchState.query) performSearch(searchState.query);
+              if (searchState.query) performSearch(searchState.query, { preserveCurrent: true });
           });
   
           if (searchShowContext) {
               searchShowContext.addEventListener('change', () => {
                   searchState.showContext = searchShowContext.checked;
                   saveSearchState();
-                  if (searchState.query) performSearch(searchState.query);
+                  if (searchState.query) performSearch(searchState.query, { preserveCurrent: true });
               });
           }
   
@@ -28958,12 +29233,27 @@
           document.addEventListener('keydown', handleKeyboardShortcuts);
       }
   
-      // Perform search
+      // Stable identity of a matched message: the transcript UUID survives
+      // re-renders and re-searches; the positional data-message-id is only a
+      // fallback (synthesized messages without a UUID).
+      function matchAnchor(element) {
+          return element.dataset.uuid || element.dataset.messageId || null;
+      }
+  
+      // Perform search. options.preserveCurrent keeps the current match (found
+      // again by its stable anchor) instead of resetting to the first match —
+      // used when re-running the same query after an option/filter change so
+      // the view stays put instead of jumping back to match 1.
       let isSearching = false;
-      function performSearch(query) {
+      function performSearch(query, options = {}) {
           // Prevent concurrent searches
           if (isSearching) return;
           isSearching = true;
+  
+          const currentMatch = searchState.matches[searchState.currentMatchIndex];
+          const preserveAnchor = options.preserveCurrent && !searchState.isIndexPage && currentMatch
+              ? matchAnchor(currentMatch.element)
+              : null;
   
           searchState.query = query;
           searchClear.classList.toggle('visible', query.length > 0);
@@ -29053,6 +29343,14 @@
           searchState.totalMatchCount = totalMatchCount;
   
           searchState.currentMatchIndex = searchState.matches.length > 0 ? 0 : -1;
+          if (preserveAnchor && searchState.currentMatchIndex === 0) {
+              const preservedIndex = searchState.matches.findIndex(
+                  m => matchAnchor(m.element) === preserveAnchor
+              );
+              if (preservedIndex >= 0) {
+                  searchState.currentMatchIndex = preservedIndex;
+              }
+          }
   
           // On transcript pages, search acts as a filter: non-matching messages
           // are hidden, matches are revealed (unfolded) and highlighted.
@@ -29067,9 +29365,11 @@
               displayIndexSearchResults();
           }
   
-          // Navigate to first match
+          // Navigate to the current match — the first one for a fresh query,
+          // or the preserved one after an option/filter re-search (the layout
+          // may have shifted, so re-scrolling to it keeps it in view).
           if (searchState.matches.length > 0 && !searchState.isIndexPage) {
-              navigateToMatch(0);
+              navigateToMatch(searchState.currentMatchIndex);
           }
   
           // Reset searching flag
@@ -29107,6 +29407,22 @@
           if (window.claudeLogRevealMessage) {
               matched.forEach(el => window.claudeLogRevealMessage(el));
           }
+  
+          // A highlight inside a collapsed <details> (tool output, collapsible
+          // code, structured params) stays invisible even after the message
+          // itself is revealed — open every details on the path from each
+          // highlight up to its message card.
+          matched.forEach(el => {
+              el.querySelectorAll('.search-highlight').forEach(highlight => {
+                  let details = highlight.closest('details');
+                  while (details && el.contains(details)) {
+                      details.open = true;
+                      details = details.parentElement
+                          ? details.parentElement.closest('details')
+                          : null;
+                  }
+              });
+          });
   
           syncTimelineWithSearch();
       }
@@ -29221,10 +29537,14 @@
           });
   
           const match = searchState.matches[index];
-          const highlights = match.element.querySelectorAll('.search-highlight');
-          if (highlights.length > 0) {
-              highlights[0].classList.add('current');
-              highlights[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
+          const highlights = Array.from(match.element.querySelectorAll('.search-highlight'));
+          // Prefer a rendered highlight: the first one in DOM order can be the
+          // duplicate inside a .preview-content summary, which is display:none
+          // once its <details> has been auto-opened.
+          const target = highlights.find(h => h.offsetParent !== null) || highlights[0];
+          if (target) {
+              target.classList.add('current');
+              target.scrollIntoView({ behavior: 'smooth', block: 'center' });
           } else {
               match.element.scrollIntoView({ behavior: 'smooth', block: 'center' });
           }
@@ -29404,10 +29724,12 @@
               return;
           }
   
-          // F3 - Next match
+          // F3 - open search when idle (like `/`), otherwise next/previous match
           if (e.key === 'F3') {
               e.preventDefault();
-              if (e.shiftKey) {
+              if (!searchState.query) {
+                  openSearch();
+              } else if (e.shiftKey) {
                   navigateMatch(-1);
               } else {
                   navigateMatch(1);
@@ -29505,7 +29827,7 @@
                   isUpdatingFilters = true;
                   setTimeout(() => {
                       buildSearchIndex();
-                      performSearch(searchState.query);
+                      performSearch(searchState.query, { preserveCurrent: true });
                       isUpdatingFilters = false;
                   }, 100);
               }
@@ -32606,6 +32928,14 @@
       cursor: not-allowed;
   }
   
+  /* Keyboard shortcut labels inside the prev/next buttons */
+  .search-nav-btn .search-kbd {
+      font-family: inherit;
+      font-size: 0.85em;
+      color: var(--text-muted);
+      margin-left: 2px;
+  }
+  
   /* Search-as-filter (transcript pages): messages that don't match an active
      search are hidden; ancestors of matches ("Show context" mode) stay visible
      but dimmed so the matches themselves stand out. */
@@ -34200,8 +34530,8 @@
       <div id="searchResultsInfo" class="search-results-info">
           <div class="search-navigation">
               <span id="searchResultCount">No results</span>
-              <button id="searchPrev" class="search-nav-btn" disabled title="Previous match (Shift+F3)">↑</button>
-              <button id="searchNext" class="search-nav-btn" disabled title="Next match (F3)">↓</button>
+              <button id="searchPrev" class="search-nav-btn" disabled title="Previous match (Shift+Enter / Shift+F3)">↑ <kbd class="search-kbd">Shift+Enter</kbd></button>
+              <button id="searchNext" class="search-nav-btn" disabled title="Next match (Enter / F3)">↓ <kbd class="search-kbd">Enter/F3</kbd></button>
           </div>
       </div>
   </div>
@@ -34264,7 +34594,8 @@
       
       
       <div class='message-node'>
-      <div class='message user' data-message-id='d-1' id='msg-d-1'>
+      
+      <div class='message user' data-message-id='d-1' data-uuid='edge_001' id='msg-d-1'>
           <div class='header'>
               <span>🤷 User</span>
               <div class='header-info'>
@@ -34295,7 +34626,8 @@
       
       
       <div class='message-node'>
-      <div class='message assistant' data-message-id='d-2' id='msg-d-2'>
+      
+      <div class='message assistant' data-message-id='d-2' data-uuid='edge_002' id='msg-d-2'>
           <div class='header'>
               <span>🤖 Assistant</span>
               <div class='header-info'>
@@ -34362,7 +34694,8 @@
       
       
       <div class='message-node'>
-      <div class='message user' data-message-id='d-3' id='msg-d-3'>
+      
+      <div class='message user' data-message-id='d-3' data-uuid='edge_003' id='msg-d-3'>
           <div class='header'>
               <span>🤷 User</span>
               <div class='header-info'>
@@ -34393,7 +34726,8 @@
       
       
       <div class='message-node'>
-      <div class='message tool_use pair_first' data-message-id='d-4' id='msg-d-4'>
+      
+      <div class='message tool_use pair_first' data-message-id='d-4' data-uuid='edge_004' id='msg-d-4'>
           <div class='header'>
               <span title="ID: tool_edge_001">🛠️ FailingTool</span>
               <div class='header-info'>
@@ -34419,7 +34753,8 @@
       
       
       <div class='message-node'>
-      <div class='message tool_result error pair_last' data-message-id='d-5' id='msg-d-5'>
+      
+      <div class='message tool_result error pair_last' data-message-id='d-5' data-uuid='edge_005' id='msg-d-5'>
           <div class='header'>
               <span title="ID: tool_edge_001">🚨 Error</span>
               <div class='header-info'>
@@ -34445,7 +34780,8 @@
       
       
       <div class='message-node'>
-      <div class='message user slash-command pair_first' data-message-id='d-6' id='msg-d-6'>
+      
+      <div class='message user slash-command pair_first' data-message-id='d-6' data-uuid='edge_007' id='msg-d-6'>
           <div class='header'>
               <span>🤷 Slash Command</span>
               <div class='header-info'>
@@ -34468,7 +34804,8 @@
       
       
       <div class='message-node'>
-      <div class='message user command-output pair_last' data-message-id='d-7' id='msg-d-7'>
+      
+      <div class='message user command-output pair_last' data-message-id='d-7' data-uuid='edge_008' id='msg-d-7'>
           <div class='header'>
               <span></span>
               <div class='header-info'>
@@ -34507,7 +34844,8 @@
       
       
       <div class='message-node'>
-      <div class='message assistant' data-message-id='d-8' id='msg-d-8'>
+      
+      <div class='message assistant' data-message-id='d-8' data-uuid='edge_009' id='msg-d-8'>
           <div class='header'>
               <span>🤖 Assistant</span>
               <div class='header-info'>
@@ -34540,7 +34878,8 @@
       
       
       <div class='message-node'>
-      <div class='message tool_use' data-message-id='d-9' id='msg-d-9'>
+      
+      <div class='message tool_use' data-message-id='d-9' data-uuid='edge_009' id='msg-d-9'>
           <div class='header'>
               <span title="ID: tool_edge_002">🛠️ MultiEdit</span>
               <div class='header-info'>
@@ -34571,7 +34910,8 @@
       
       
       <div class='message-node'>
-      <div class='message user' data-message-id='d-10' id='msg-d-10'>
+      
+      <div class='message user' data-message-id='d-10' data-uuid='edge_011' id='msg-d-10'>
           <div class='header'>
               <span>🤷 User</span>
               <div class='header-info'>
@@ -34593,7 +34933,8 @@
       
       
       <div class='message-node'>
-      <div class='message user' data-message-id='d-13' id='msg-d-13'>
+      
+      <div class='message user' data-message-id='d-13' data-uuid='edge_010' id='msg-d-13'>
           <div class='header'>
               <span>🤷 User</span>
               <div class='header-info'>
@@ -34641,7 +34982,8 @@
       
       
       <div class='message-node'>
-      <div class='message tool_use' data-message-id='d-12' id='msg-d-12'>
+      
+      <div class='message tool_use' data-message-id='d-12' data-uuid='assistant_004' id='msg-d-12'>
           <div class='header'>
               <span title="ID: toolu_todowrite_002">🛠️ TodoWrite</span>
               <div class='header-info'>
@@ -34825,7 +35167,7 @@
       
   
       <button class="timeline-toggle floating-btn" id="toggleTimeline" title="Show timeline">📆</button>
-      <button class="filter-messages floating-btn" id="filterMessages" title="Search & Filter">🔍</button>
+      <button class="filter-messages floating-btn" id="filterMessages" title="Search & Filter (/)">🔍</button>
       <button class="toggle-details floating-btn" id="toggleDetails" title="Toggle all details">📋</button>
       <button class="debug-toggle floating-btn" id="toggleDebug" title="Show UUIDs">uuid</button>
       <button class="user-view-global floating-btn" id="toggleUserView" title="Show user messages as raw text">md</button>
@@ -35249,7 +35591,7 @@
                   if (isVisible) {
                       filterToolbar.classList.remove('visible');
                       filterButton.classList.remove('active');
-                      filterButton.title = 'Search & Filter';
+                      filterButton.title = 'Search & Filter (/)';
                   } else {
                       filterToolbar.classList.add('visible');
                       filterButton.classList.add('active');
@@ -35966,20 +36308,20 @@
           searchRegex.addEventListener('change', () => {
               searchState.useRegex = searchRegex.checked;
               saveSearchState();
-              if (searchState.query) performSearch(searchState.query);
+              if (searchState.query) performSearch(searchState.query, { preserveCurrent: true });
           });
   
           searchInFiltered.addEventListener('change', () => {
               searchState.searchInFiltered = searchInFiltered.checked;
               saveSearchState();
-              if (searchState.query) performSearch(searchState.query);
+              if (searchState.query) performSearch(searchState.query, { preserveCurrent: true });
           });
   
           if (searchShowContext) {
               searchShowContext.addEventListener('change', () => {
                   searchState.showContext = searchShowContext.checked;
                   saveSearchState();
-                  if (searchState.query) performSearch(searchState.query);
+                  if (searchState.query) performSearch(searchState.query, { preserveCurrent: true });
               });
           }
   
@@ -35998,12 +36340,27 @@
           document.addEventListener('keydown', handleKeyboardShortcuts);
       }
   
-      // Perform search
+      // Stable identity of a matched message: the transcript UUID survives
+      // re-renders and re-searches; the positional data-message-id is only a
+      // fallback (synthesized messages without a UUID).
+      function matchAnchor(element) {
+          return element.dataset.uuid || element.dataset.messageId || null;
+      }
+  
+      // Perform search. options.preserveCurrent keeps the current match (found
+      // again by its stable anchor) instead of resetting to the first match —
+      // used when re-running the same query after an option/filter change so
+      // the view stays put instead of jumping back to match 1.
       let isSearching = false;
-      function performSearch(query) {
+      function performSearch(query, options = {}) {
           // Prevent concurrent searches
           if (isSearching) return;
           isSearching = true;
+  
+          const currentMatch = searchState.matches[searchState.currentMatchIndex];
+          const preserveAnchor = options.preserveCurrent && !searchState.isIndexPage && currentMatch
+              ? matchAnchor(currentMatch.element)
+              : null;
   
           searchState.query = query;
           searchClear.classList.toggle('visible', query.length > 0);
@@ -36093,6 +36450,14 @@
           searchState.totalMatchCount = totalMatchCount;
   
           searchState.currentMatchIndex = searchState.matches.length > 0 ? 0 : -1;
+          if (preserveAnchor && searchState.currentMatchIndex === 0) {
+              const preservedIndex = searchState.matches.findIndex(
+                  m => matchAnchor(m.element) === preserveAnchor
+              );
+              if (preservedIndex >= 0) {
+                  searchState.currentMatchIndex = preservedIndex;
+              }
+          }
   
           // On transcript pages, search acts as a filter: non-matching messages
           // are hidden, matches are revealed (unfolded) and highlighted.
@@ -36107,9 +36472,11 @@
               displayIndexSearchResults();
           }
   
-          // Navigate to first match
+          // Navigate to the current match — the first one for a fresh query,
+          // or the preserved one after an option/filter re-search (the layout
+          // may have shifted, so re-scrolling to it keeps it in view).
           if (searchState.matches.length > 0 && !searchState.isIndexPage) {
-              navigateToMatch(0);
+              navigateToMatch(searchState.currentMatchIndex);
           }
   
           // Reset searching flag
@@ -36147,6 +36514,22 @@
           if (window.claudeLogRevealMessage) {
               matched.forEach(el => window.claudeLogRevealMessage(el));
           }
+  
+          // A highlight inside a collapsed <details> (tool output, collapsible
+          // code, structured params) stays invisible even after the message
+          // itself is revealed — open every details on the path from each
+          // highlight up to its message card.
+          matched.forEach(el => {
+              el.querySelectorAll('.search-highlight').forEach(highlight => {
+                  let details = highlight.closest('details');
+                  while (details && el.contains(details)) {
+                      details.open = true;
+                      details = details.parentElement
+                          ? details.parentElement.closest('details')
+                          : null;
+                  }
+              });
+          });
   
           syncTimelineWithSearch();
       }
@@ -36261,10 +36644,14 @@
           });
   
           const match = searchState.matches[index];
-          const highlights = match.element.querySelectorAll('.search-highlight');
-          if (highlights.length > 0) {
-              highlights[0].classList.add('current');
-              highlights[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
+          const highlights = Array.from(match.element.querySelectorAll('.search-highlight'));
+          // Prefer a rendered highlight: the first one in DOM order can be the
+          // duplicate inside a .preview-content summary, which is display:none
+          // once its <details> has been auto-opened.
+          const target = highlights.find(h => h.offsetParent !== null) || highlights[0];
+          if (target) {
+              target.classList.add('current');
+              target.scrollIntoView({ behavior: 'smooth', block: 'center' });
           } else {
               match.element.scrollIntoView({ behavior: 'smooth', block: 'center' });
           }
@@ -36444,10 +36831,12 @@
               return;
           }
   
-          // F3 - Next match
+          // F3 - open search when idle (like `/`), otherwise next/previous match
           if (e.key === 'F3') {
               e.preventDefault();
-              if (e.shiftKey) {
+              if (!searchState.query) {
+                  openSearch();
+              } else if (e.shiftKey) {
                   navigateMatch(-1);
               } else {
                   navigateMatch(1);
@@ -36545,7 +36934,7 @@
                   isUpdatingFilters = true;
                   setTimeout(() => {
                       buildSearchIndex();
-                      performSearch(searchState.query);
+                      performSearch(searchState.query, { preserveCurrent: true });
                       isUpdatingFilters = false;
                   }, 100);
               }
@@ -39646,6 +40035,14 @@
       cursor: not-allowed;
   }
   
+  /* Keyboard shortcut labels inside the prev/next buttons */
+  .search-nav-btn .search-kbd {
+      font-family: inherit;
+      font-size: 0.85em;
+      color: var(--text-muted);
+      margin-left: 2px;
+  }
+  
   /* Search-as-filter (transcript pages): messages that don't match an active
      search are hidden; ancestors of matches ("Show context" mode) stay visible
      but dimmed so the matches themselves stand out. */
@@ -41240,8 +41637,8 @@
       <div id="searchResultsInfo" class="search-results-info">
           <div class="search-navigation">
               <span id="searchResultCount">No results</span>
-              <button id="searchPrev" class="search-nav-btn" disabled title="Previous match (Shift+F3)">↑</button>
-              <button id="searchNext" class="search-nav-btn" disabled title="Next match (F3)">↓</button>
+              <button id="searchPrev" class="search-nav-btn" disabled title="Previous match (Shift+Enter / Shift+F3)">↑ <kbd class="search-kbd">Shift+Enter</kbd></button>
+              <button id="searchNext" class="search-nav-btn" disabled title="Next match (Enter / F3)">↓ <kbd class="search-kbd">Enter/F3</kbd></button>
           </div>
       </div>
   </div>
@@ -41365,7 +41762,8 @@
       
       
       <div class='message-node'>
-      <div class='message user' data-message-id='d-1' id='msg-d-1'>
+      
+      <div class='message user' data-message-id='d-1' data-uuid='session_b_001' id='msg-d-1'>
           <div class='header'>
               <span>🤷 User</span>
               <div class='header-info'>
@@ -41396,7 +41794,8 @@
       
       
       <div class='message-node'>
-      <div class='message assistant' data-message-id='d-2' id='msg-d-2'>
+      
+      <div class='message assistant' data-message-id='d-2' data-uuid='session_b_002' id='msg-d-2'>
           <div class='header'>
               <span>🤖 Assistant</span>
               <div class='header-info'>
@@ -41425,7 +41824,8 @@
       
       
       <div class='message-node'>
-      <div class='message user' data-message-id='d-3' id='msg-d-3'>
+      
+      <div class='message user' data-message-id='d-3' data-uuid='session_b_003' id='msg-d-3'>
           <div class='header'>
               <span>🤷 User</span>
               <div class='header-info'>
@@ -41477,7 +41877,8 @@
       
       
       <div class='message-node'>
-      <div class='message user' data-message-id='d-5' id='msg-d-5'>
+      
+      <div class='message user' data-message-id='d-5' data-uuid='msg_001' id='msg-d-5'>
           <div class='header'>
               <span>🤷 User</span>
               <div class='header-info'>
@@ -41508,7 +41909,8 @@
       
       
       <div class='message-node'>
-      <div class='message assistant' data-message-id='d-6' id='msg-d-6'>
+      
+      <div class='message assistant' data-message-id='d-6' data-uuid='msg_002' id='msg-d-6'>
           <div class='header'>
               <span>🤖 Assistant</span>
               <div class='header-info'>
@@ -41556,7 +41958,8 @@
       
       
       <div class='message-node'>
-      <div class='message user' data-message-id='d-7' id='msg-d-7'>
+      
+      <div class='message user' data-message-id='d-7' data-uuid='msg_003' id='msg-d-7'>
           <div class='header'>
               <span>🤷 User</span>
               <div class='header-info'>
@@ -41587,7 +41990,8 @@
       
       
       <div class='message-node'>
-      <div class='message tool_use pair_first' data-message-id='d-8' id='msg-d-8'>
+      
+      <div class='message tool_use pair_first' data-message-id='d-8' data-uuid='msg_004' id='msg-d-8'>
           <div class='header'>
               <span title="ID: tool_001">📝 Edit <span class='tool-summary'>/tmp/decorator_example.py</span></span>
               <div class='header-info'>
@@ -41608,7 +42012,8 @@
       
       
       <div class='message-node'>
-      <div class='message tool_result pair_last' data-message-id='d-9' id='msg-d-9'>
+      
+      <div class='message tool_result pair_last' data-message-id='d-9' data-uuid='msg_005' id='msg-d-9'>
           <div class='header'>
               <span title="ID: tool_001"></span>
               <div class='header-info'>
@@ -41629,7 +42034,8 @@
       
       
       <div class='message-node'>
-      <div class='message assistant' data-message-id='d-10' id='msg-d-10'>
+      
+      <div class='message assistant' data-message-id='d-10' data-uuid='msg_006' id='msg-d-10'>
           <div class='header'>
               <span>🤖 Assistant</span>
               <div class='header-info'>
@@ -41670,7 +42076,8 @@
       
       
       <div class='message-node'>
-      <div class='message user' data-message-id='d-11' id='msg-d-11'>
+      
+      <div class='message user' data-message-id='d-11' data-uuid='msg_007' id='msg-d-11'>
           <div class='header'>
               <span>🤷 User</span>
               <div class='header-info'>
@@ -41701,7 +42108,8 @@
       
       
       <div class='message-node'>
-      <div class='message tool_use pair_first' data-message-id='d-12' id='msg-d-12'>
+      
+      <div class='message tool_use pair_first' data-message-id='d-12' data-uuid='msg_008' id='msg-d-12'>
           <div class='header'>
               <span title="ID: tool_002">💻 Bash <span class='tool-summary'>Run the decorator example to show output</span></span>
               <div class='header-info'>
@@ -41722,7 +42130,8 @@
       
       
       <div class='message-node'>
-      <div class='message tool_result pair_last' data-message-id='d-13' id='msg-d-13'>
+      
+      <div class='message tool_result pair_last' data-message-id='d-13' data-uuid='msg_009' id='msg-d-13'>
           <div class='header'>
               <span title="ID: tool_002"></span>
               <div class='header-info'>
@@ -41745,7 +42154,8 @@
       
       
       <div class='message-node'>
-      <div class='message assistant' data-message-id='d-14' id='msg-d-14'>
+      
+      <div class='message assistant' data-message-id='d-14' data-uuid='msg_010' id='msg-d-14'>
           <div class='header'>
               <span>🤖 Assistant</span>
               <div class='header-info'>
@@ -41782,7 +42192,8 @@
       
       
       <div class='message-node'>
-      <div class='message user' data-message-id='d-15' id='msg-d-15'>
+      
+      <div class='message user' data-message-id='d-15' data-uuid='msg_011' id='msg-d-15'>
           <div class='header'>
               <span>🤷 User</span>
               <div class='header-info'>
@@ -41808,7 +42219,7 @@
       
   
       <button class="timeline-toggle floating-btn" id="toggleTimeline" title="Show timeline">📆</button>
-      <button class="filter-messages floating-btn" id="filterMessages" title="Search & Filter">🔍</button>
+      <button class="filter-messages floating-btn" id="filterMessages" title="Search & Filter (/)">🔍</button>
       <button class="toggle-details floating-btn" id="toggleDetails" title="Toggle all details">📋</button>
       <button class="debug-toggle floating-btn" id="toggleDebug" title="Show UUIDs">uuid</button>
       <button class="user-view-global floating-btn" id="toggleUserView" title="Show user messages as raw text">md</button>
@@ -42232,7 +42643,7 @@
                   if (isVisible) {
                       filterToolbar.classList.remove('visible');
                       filterButton.classList.remove('active');
-                      filterButton.title = 'Search & Filter';
+                      filterButton.title = 'Search & Filter (/)';
                   } else {
                       filterToolbar.classList.add('visible');
                       filterButton.classList.add('active');
@@ -42949,20 +43360,20 @@
           searchRegex.addEventListener('change', () => {
               searchState.useRegex = searchRegex.checked;
               saveSearchState();
-              if (searchState.query) performSearch(searchState.query);
+              if (searchState.query) performSearch(searchState.query, { preserveCurrent: true });
           });
   
           searchInFiltered.addEventListener('change', () => {
               searchState.searchInFiltered = searchInFiltered.checked;
               saveSearchState();
-              if (searchState.query) performSearch(searchState.query);
+              if (searchState.query) performSearch(searchState.query, { preserveCurrent: true });
           });
   
           if (searchShowContext) {
               searchShowContext.addEventListener('change', () => {
                   searchState.showContext = searchShowContext.checked;
                   saveSearchState();
-                  if (searchState.query) performSearch(searchState.query);
+                  if (searchState.query) performSearch(searchState.query, { preserveCurrent: true });
               });
           }
   
@@ -42981,12 +43392,27 @@
           document.addEventListener('keydown', handleKeyboardShortcuts);
       }
   
-      // Perform search
+      // Stable identity of a matched message: the transcript UUID survives
+      // re-renders and re-searches; the positional data-message-id is only a
+      // fallback (synthesized messages without a UUID).
+      function matchAnchor(element) {
+          return element.dataset.uuid || element.dataset.messageId || null;
+      }
+  
+      // Perform search. options.preserveCurrent keeps the current match (found
+      // again by its stable anchor) instead of resetting to the first match —
+      // used when re-running the same query after an option/filter change so
+      // the view stays put instead of jumping back to match 1.
       let isSearching = false;
-      function performSearch(query) {
+      function performSearch(query, options = {}) {
           // Prevent concurrent searches
           if (isSearching) return;
           isSearching = true;
+  
+          const currentMatch = searchState.matches[searchState.currentMatchIndex];
+          const preserveAnchor = options.preserveCurrent && !searchState.isIndexPage && currentMatch
+              ? matchAnchor(currentMatch.element)
+              : null;
   
           searchState.query = query;
           searchClear.classList.toggle('visible', query.length > 0);
@@ -43076,6 +43502,14 @@
           searchState.totalMatchCount = totalMatchCount;
   
           searchState.currentMatchIndex = searchState.matches.length > 0 ? 0 : -1;
+          if (preserveAnchor && searchState.currentMatchIndex === 0) {
+              const preservedIndex = searchState.matches.findIndex(
+                  m => matchAnchor(m.element) === preserveAnchor
+              );
+              if (preservedIndex >= 0) {
+                  searchState.currentMatchIndex = preservedIndex;
+              }
+          }
   
           // On transcript pages, search acts as a filter: non-matching messages
           // are hidden, matches are revealed (unfolded) and highlighted.
@@ -43090,9 +43524,11 @@
               displayIndexSearchResults();
           }
   
-          // Navigate to first match
+          // Navigate to the current match — the first one for a fresh query,
+          // or the preserved one after an option/filter re-search (the layout
+          // may have shifted, so re-scrolling to it keeps it in view).
           if (searchState.matches.length > 0 && !searchState.isIndexPage) {
-              navigateToMatch(0);
+              navigateToMatch(searchState.currentMatchIndex);
           }
   
           // Reset searching flag
@@ -43130,6 +43566,22 @@
           if (window.claudeLogRevealMessage) {
               matched.forEach(el => window.claudeLogRevealMessage(el));
           }
+  
+          // A highlight inside a collapsed <details> (tool output, collapsible
+          // code, structured params) stays invisible even after the message
+          // itself is revealed — open every details on the path from each
+          // highlight up to its message card.
+          matched.forEach(el => {
+              el.querySelectorAll('.search-highlight').forEach(highlight => {
+                  let details = highlight.closest('details');
+                  while (details && el.contains(details)) {
+                      details.open = true;
+                      details = details.parentElement
+                          ? details.parentElement.closest('details')
+                          : null;
+                  }
+              });
+          });
   
           syncTimelineWithSearch();
       }
@@ -43244,10 +43696,14 @@
           });
   
           const match = searchState.matches[index];
-          const highlights = match.element.querySelectorAll('.search-highlight');
-          if (highlights.length > 0) {
-              highlights[0].classList.add('current');
-              highlights[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
+          const highlights = Array.from(match.element.querySelectorAll('.search-highlight'));
+          // Prefer a rendered highlight: the first one in DOM order can be the
+          // duplicate inside a .preview-content summary, which is display:none
+          // once its <details> has been auto-opened.
+          const target = highlights.find(h => h.offsetParent !== null) || highlights[0];
+          if (target) {
+              target.classList.add('current');
+              target.scrollIntoView({ behavior: 'smooth', block: 'center' });
           } else {
               match.element.scrollIntoView({ behavior: 'smooth', block: 'center' });
           }
@@ -43427,10 +43883,12 @@
               return;
           }
   
-          // F3 - Next match
+          // F3 - open search when idle (like `/`), otherwise next/previous match
           if (e.key === 'F3') {
               e.preventDefault();
-              if (e.shiftKey) {
+              if (!searchState.query) {
+                  openSearch();
+              } else if (e.shiftKey) {
                   navigateMatch(-1);
               } else {
                   navigateMatch(1);
@@ -43528,7 +43986,7 @@
                   isUpdatingFilters = true;
                   setTimeout(() => {
                       buildSearchIndex();
-                      performSearch(searchState.query);
+                      performSearch(searchState.query, { preserveCurrent: true });
                       isUpdatingFilters = false;
                   }, 100);
               }
@@ -46629,6 +47087,14 @@
       cursor: not-allowed;
   }
   
+  /* Keyboard shortcut labels inside the prev/next buttons */
+  .search-nav-btn .search-kbd {
+      font-family: inherit;
+      font-size: 0.85em;
+      color: var(--text-muted);
+      margin-left: 2px;
+  }
+  
   /* Search-as-filter (transcript pages): messages that don't match an active
      search are hidden; ancestors of matches ("Show context" mode) stay visible
      but dimmed so the matches themselves stand out. */
@@ -48223,8 +48689,8 @@
       <div id="searchResultsInfo" class="search-results-info">
           <div class="search-navigation">
               <span id="searchResultCount">No results</span>
-              <button id="searchPrev" class="search-nav-btn" disabled title="Previous match (Shift+F3)">↑</button>
-              <button id="searchNext" class="search-nav-btn" disabled title="Next match (F3)">↓</button>
+              <button id="searchPrev" class="search-nav-btn" disabled title="Previous match (Shift+Enter / Shift+F3)">↑ <kbd class="search-kbd">Shift+Enter</kbd></button>
+              <button id="searchNext" class="search-nav-btn" disabled title="Next match (Enter / F3)">↓ <kbd class="search-kbd">Enter/F3</kbd></button>
           </div>
       </div>
   </div>
@@ -48287,7 +48753,8 @@
       
       
       <div class='message-node'>
-      <div class='message user' data-message-id='d-1' id='msg-d-1'>
+      
+      <div class='message user' data-message-id='d-1' data-uuid='msg_001' id='msg-d-1'>
           <div class='header'>
               <span>🤷 User</span>
               <div class='header-info'>
@@ -48318,7 +48785,8 @@
       
       
       <div class='message-node'>
-      <div class='message assistant' data-message-id='d-2' id='msg-d-2'>
+      
+      <div class='message assistant' data-message-id='d-2' data-uuid='msg_002' id='msg-d-2'>
           <div class='header'>
               <span>🤖 Assistant</span>
               <div class='header-info'>
@@ -48366,7 +48834,8 @@
       
       
       <div class='message-node'>
-      <div class='message user' data-message-id='d-3' id='msg-d-3'>
+      
+      <div class='message user' data-message-id='d-3' data-uuid='msg_003' id='msg-d-3'>
           <div class='header'>
               <span>🤷 User</span>
               <div class='header-info'>
@@ -48397,7 +48866,8 @@
       
       
       <div class='message-node'>
-      <div class='message tool_use pair_first' data-message-id='d-4' id='msg-d-4'>
+      
+      <div class='message tool_use pair_first' data-message-id='d-4' data-uuid='msg_004' id='msg-d-4'>
           <div class='header'>
               <span title="ID: tool_001">📝 Edit <span class='tool-summary'>/tmp/decorator_example.py</span></span>
               <div class='header-info'>
@@ -48418,7 +48888,8 @@
       
       
       <div class='message-node'>
-      <div class='message tool_result pair_last' data-message-id='d-5' id='msg-d-5'>
+      
+      <div class='message tool_result pair_last' data-message-id='d-5' data-uuid='msg_005' id='msg-d-5'>
           <div class='header'>
               <span title="ID: tool_001"></span>
               <div class='header-info'>
@@ -48439,7 +48910,8 @@
       
       
       <div class='message-node'>
-      <div class='message assistant' data-message-id='d-6' id='msg-d-6'>
+      
+      <div class='message assistant' data-message-id='d-6' data-uuid='msg_006' id='msg-d-6'>
           <div class='header'>
               <span>🤖 Assistant</span>
               <div class='header-info'>
@@ -48480,7 +48952,8 @@
       
       
       <div class='message-node'>
-      <div class='message user' data-message-id='d-7' id='msg-d-7'>
+      
+      <div class='message user' data-message-id='d-7' data-uuid='msg_007' id='msg-d-7'>
           <div class='header'>
               <span>🤷 User</span>
               <div class='header-info'>
@@ -48511,7 +48984,8 @@
       
       
       <div class='message-node'>
-      <div class='message tool_use pair_first' data-message-id='d-8' id='msg-d-8'>
+      
+      <div class='message tool_use pair_first' data-message-id='d-8' data-uuid='msg_008' id='msg-d-8'>
           <div class='header'>
               <span title="ID: tool_002">💻 Bash <span class='tool-summary'>Run the decorator example to show output</span></span>
               <div class='header-info'>
@@ -48532,7 +49006,8 @@
       
       
       <div class='message-node'>
-      <div class='message tool_result pair_last' data-message-id='d-9' id='msg-d-9'>
+      
+      <div class='message tool_result pair_last' data-message-id='d-9' data-uuid='msg_009' id='msg-d-9'>
           <div class='header'>
               <span title="ID: tool_002"></span>
               <div class='header-info'>
@@ -48555,7 +49030,8 @@
       
       
       <div class='message-node'>
-      <div class='message assistant' data-message-id='d-10' id='msg-d-10'>
+      
+      <div class='message assistant' data-message-id='d-10' data-uuid='msg_010' id='msg-d-10'>
           <div class='header'>
               <span>🤖 Assistant</span>
               <div class='header-info'>
@@ -48592,7 +49068,8 @@
       
       
       <div class='message-node'>
-      <div class='message user' data-message-id='d-11' id='msg-d-11'>
+      
+      <div class='message user' data-message-id='d-11' data-uuid='msg_011' id='msg-d-11'>
           <div class='header'>
               <span>🤷 User</span>
               <div class='header-info'>
@@ -48618,7 +49095,7 @@
       
   
       <button class="timeline-toggle floating-btn" id="toggleTimeline" title="Show timeline">📆</button>
-      <button class="filter-messages floating-btn" id="filterMessages" title="Search & Filter">🔍</button>
+      <button class="filter-messages floating-btn" id="filterMessages" title="Search & Filter (/)">🔍</button>
       <button class="toggle-details floating-btn" id="toggleDetails" title="Toggle all details">📋</button>
       <button class="debug-toggle floating-btn" id="toggleDebug" title="Show UUIDs">uuid</button>
       <button class="user-view-global floating-btn" id="toggleUserView" title="Show user messages as raw text">md</button>
@@ -49042,7 +49519,7 @@
                   if (isVisible) {
                       filterToolbar.classList.remove('visible');
                       filterButton.classList.remove('active');
-                      filterButton.title = 'Search & Filter';
+                      filterButton.title = 'Search & Filter (/)';
                   } else {
                       filterToolbar.classList.add('visible');
                       filterButton.classList.add('active');
@@ -49759,20 +50236,20 @@
           searchRegex.addEventListener('change', () => {
               searchState.useRegex = searchRegex.checked;
               saveSearchState();
-              if (searchState.query) performSearch(searchState.query);
+              if (searchState.query) performSearch(searchState.query, { preserveCurrent: true });
           });
   
           searchInFiltered.addEventListener('change', () => {
               searchState.searchInFiltered = searchInFiltered.checked;
               saveSearchState();
-              if (searchState.query) performSearch(searchState.query);
+              if (searchState.query) performSearch(searchState.query, { preserveCurrent: true });
           });
   
           if (searchShowContext) {
               searchShowContext.addEventListener('change', () => {
                   searchState.showContext = searchShowContext.checked;
                   saveSearchState();
-                  if (searchState.query) performSearch(searchState.query);
+                  if (searchState.query) performSearch(searchState.query, { preserveCurrent: true });
               });
           }
   
@@ -49791,12 +50268,27 @@
           document.addEventListener('keydown', handleKeyboardShortcuts);
       }
   
-      // Perform search
+      // Stable identity of a matched message: the transcript UUID survives
+      // re-renders and re-searches; the positional data-message-id is only a
+      // fallback (synthesized messages without a UUID).
+      function matchAnchor(element) {
+          return element.dataset.uuid || element.dataset.messageId || null;
+      }
+  
+      // Perform search. options.preserveCurrent keeps the current match (found
+      // again by its stable anchor) instead of resetting to the first match —
+      // used when re-running the same query after an option/filter change so
+      // the view stays put instead of jumping back to match 1.
       let isSearching = false;
-      function performSearch(query) {
+      function performSearch(query, options = {}) {
           // Prevent concurrent searches
           if (isSearching) return;
           isSearching = true;
+  
+          const currentMatch = searchState.matches[searchState.currentMatchIndex];
+          const preserveAnchor = options.preserveCurrent && !searchState.isIndexPage && currentMatch
+              ? matchAnchor(currentMatch.element)
+              : null;
   
           searchState.query = query;
           searchClear.classList.toggle('visible', query.length > 0);
@@ -49886,6 +50378,14 @@
           searchState.totalMatchCount = totalMatchCount;
   
           searchState.currentMatchIndex = searchState.matches.length > 0 ? 0 : -1;
+          if (preserveAnchor && searchState.currentMatchIndex === 0) {
+              const preservedIndex = searchState.matches.findIndex(
+                  m => matchAnchor(m.element) === preserveAnchor
+              );
+              if (preservedIndex >= 0) {
+                  searchState.currentMatchIndex = preservedIndex;
+              }
+          }
   
           // On transcript pages, search acts as a filter: non-matching messages
           // are hidden, matches are revealed (unfolded) and highlighted.
@@ -49900,9 +50400,11 @@
               displayIndexSearchResults();
           }
   
-          // Navigate to first match
+          // Navigate to the current match — the first one for a fresh query,
+          // or the preserved one after an option/filter re-search (the layout
+          // may have shifted, so re-scrolling to it keeps it in view).
           if (searchState.matches.length > 0 && !searchState.isIndexPage) {
-              navigateToMatch(0);
+              navigateToMatch(searchState.currentMatchIndex);
           }
   
           // Reset searching flag
@@ -49940,6 +50442,22 @@
           if (window.claudeLogRevealMessage) {
               matched.forEach(el => window.claudeLogRevealMessage(el));
           }
+  
+          // A highlight inside a collapsed <details> (tool output, collapsible
+          // code, structured params) stays invisible even after the message
+          // itself is revealed — open every details on the path from each
+          // highlight up to its message card.
+          matched.forEach(el => {
+              el.querySelectorAll('.search-highlight').forEach(highlight => {
+                  let details = highlight.closest('details');
+                  while (details && el.contains(details)) {
+                      details.open = true;
+                      details = details.parentElement
+                          ? details.parentElement.closest('details')
+                          : null;
+                  }
+              });
+          });
   
           syncTimelineWithSearch();
       }
@@ -50054,10 +50572,14 @@
           });
   
           const match = searchState.matches[index];
-          const highlights = match.element.querySelectorAll('.search-highlight');
-          if (highlights.length > 0) {
-              highlights[0].classList.add('current');
-              highlights[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
+          const highlights = Array.from(match.element.querySelectorAll('.search-highlight'));
+          // Prefer a rendered highlight: the first one in DOM order can be the
+          // duplicate inside a .preview-content summary, which is display:none
+          // once its <details> has been auto-opened.
+          const target = highlights.find(h => h.offsetParent !== null) || highlights[0];
+          if (target) {
+              target.classList.add('current');
+              target.scrollIntoView({ behavior: 'smooth', block: 'center' });
           } else {
               match.element.scrollIntoView({ behavior: 'smooth', block: 'center' });
           }
@@ -50237,10 +50759,12 @@
               return;
           }
   
-          // F3 - Next match
+          // F3 - open search when idle (like `/`), otherwise next/previous match
           if (e.key === 'F3') {
               e.preventDefault();
-              if (e.shiftKey) {
+              if (!searchState.query) {
+                  openSearch();
+              } else if (e.shiftKey) {
                   navigateMatch(-1);
               } else {
                   navigateMatch(1);
@@ -50338,7 +50862,7 @@
                   isUpdatingFilters = true;
                   setTimeout(() => {
                       buildSearchIndex();
-                      performSearch(searchState.query);
+                      performSearch(searchState.query, { preserveCurrent: true });
                       isUpdatingFilters = false;
                   }, 100);
               }

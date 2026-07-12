@@ -99,6 +99,19 @@ class TestSearchBrowser:
         expect(search_input).to_have_value("a/b")
 
     @pytest.mark.browser
+    def test_f3_opens_search_when_idle(self, page: Page):
+        """F3 with no active query behaves like `/`: opens and focuses search."""
+        self._open_transcript(page, "Search F3 Open Test")
+
+        toolbar = page.locator(".filter-toolbar")
+        expect(toolbar).not_to_have_class(re.compile(r"\bvisible\b"))
+
+        page.keyboard.press("F3")
+
+        expect(toolbar).to_have_class(re.compile(r"\bvisible\b"))
+        expect(page.locator("#searchInput")).to_be_focused()
+
+    @pytest.mark.browser
     def test_ctrl_f_left_to_browser(self, page: Page):
         """Ctrl+F is no longer hijacked: toolbar stays closed, input unfocused."""
         self._open_transcript(page, "Search Ctrl+F Test")
@@ -178,6 +191,62 @@ class TestSearchBrowser:
         # Toggling back off returns to strict filtering
         page.locator("#searchShowContext").uncheck()
         expect(page.locator(".message.search-context")).to_have_count(0)
+
+    @pytest.mark.browser
+    def test_search_opens_collapsed_details_around_highlights(self, page: Page):
+        """A match inside collapsed <details> is revealed by opening them."""
+        self._open_transcript(page, "Search Details Test", data_file="sidechain")
+
+        # This term only occurs inside collapsed (and nested) <details> blocks
+        # of tool params/results — without the auto-open it would match but
+        # show no visible highlight.
+        self._search_for(page, "AssistantTranscriptEntry")
+
+        # Every highlight must be visible — except the duplicates inside
+        # .preview-content summaries, which hide by design once their
+        # <details> is opened (the full copy in .details-content shows).
+        highlights = page.locator(
+            ".message.search-match .search-highlight:not(.preview-content *)"
+        )
+        expect(highlights.first).to_be_visible()
+        count = highlights.count()
+        assert count >= 2, f"Expected several highlights, got {count}"
+        for i in range(count):
+            expect(highlights.nth(i)).to_be_visible()
+
+        # The current-match marker must sit on a visible highlight, not on a
+        # hidden preview duplicate.
+        expect(page.locator(".search-highlight.current")).to_be_visible()
+
+    @pytest.mark.browser
+    def test_show_context_toggle_keeps_current_match(self, page: Page):
+        """Re-running the search after an option toggle stays on the same
+        match (found again via its stable data-uuid anchor) instead of
+        jumping back to match 1."""
+        self._open_transcript(page, "Search Context Position Test")
+
+        self._search_for(page, "decorator")
+        counter = page.locator("#searchResultCount")
+        expect(counter).to_have_text(re.compile(r"1 of \d+ matches"))
+
+        page.locator("#searchNext").click()
+        expect(counter).to_have_text(re.compile(r"2 of (\d+) matches"))
+        match_count = int(
+            re.search(r"of (\d+)", counter.inner_text()).group(1)  # type: ignore[union-attr]
+        )
+        current_uuid = page.locator(".search-highlight.current").first.evaluate(
+            "el => el.closest('.message').dataset.uuid"
+        )
+        assert current_uuid, "message cards should carry stable data-uuid anchors"
+
+        page.locator("#searchShowContext").check()
+
+        # Same position, same match set, same message under the cursor
+        expect(counter).to_have_text(re.compile(rf"2 of {match_count} matches"))
+        preserved_uuid = page.locator(".search-highlight.current").first.evaluate(
+            "el => el.closest('.message').dataset.uuid"
+        )
+        assert preserved_uuid == current_uuid
 
     @pytest.mark.browser
     def test_escape_clears_search(self, page: Page):

@@ -15,8 +15,8 @@
     <div id="searchResultsInfo" class="search-results-info">
         <div class="search-navigation">
             <span id="searchResultCount">No results</span>
-            <button id="searchPrev" class="search-nav-btn" disabled title="Previous match (Shift+F3)">↑</button>
-            <button id="searchNext" class="search-nav-btn" disabled title="Next match (F3)">↓</button>
+            <button id="searchPrev" class="search-nav-btn" disabled title="Previous match (Shift+Enter / Shift+F3)">↑ <kbd class="search-kbd">Shift+Enter</kbd></button>
+            <button id="searchNext" class="search-nav-btn" disabled title="Next match (Enter / F3)">↓ <kbd class="search-kbd">Enter/F3</kbd></button>
         </div>
     </div>
 
@@ -317,20 +317,20 @@
         searchRegex.addEventListener('change', () => {
             searchState.useRegex = searchRegex.checked;
             saveSearchState();
-            if (searchState.query) performSearch(searchState.query);
+            if (searchState.query) performSearch(searchState.query, { preserveCurrent: true });
         });
 
         searchInFiltered.addEventListener('change', () => {
             searchState.searchInFiltered = searchInFiltered.checked;
             saveSearchState();
-            if (searchState.query) performSearch(searchState.query);
+            if (searchState.query) performSearch(searchState.query, { preserveCurrent: true });
         });
 
         if (searchShowContext) {
             searchShowContext.addEventListener('change', () => {
                 searchState.showContext = searchShowContext.checked;
                 saveSearchState();
-                if (searchState.query) performSearch(searchState.query);
+                if (searchState.query) performSearch(searchState.query, { preserveCurrent: true });
             });
         }
 
@@ -349,12 +349,27 @@
         document.addEventListener('keydown', handleKeyboardShortcuts);
     }
 
-    // Perform search
+    // Stable identity of a matched message: the transcript UUID survives
+    // re-renders and re-searches; the positional data-message-id is only a
+    // fallback (synthesized messages without a UUID).
+    function matchAnchor(element) {
+        return element.dataset.uuid || element.dataset.messageId || null;
+    }
+
+    // Perform search. options.preserveCurrent keeps the current match (found
+    // again by its stable anchor) instead of resetting to the first match —
+    // used when re-running the same query after an option/filter change so
+    // the view stays put instead of jumping back to match 1.
     let isSearching = false;
-    function performSearch(query) {
+    function performSearch(query, options = {}) {
         // Prevent concurrent searches
         if (isSearching) return;
         isSearching = true;
+
+        const currentMatch = searchState.matches[searchState.currentMatchIndex];
+        const preserveAnchor = options.preserveCurrent && !searchState.isIndexPage && currentMatch
+            ? matchAnchor(currentMatch.element)
+            : null;
 
         searchState.query = query;
         searchClear.classList.toggle('visible', query.length > 0);
@@ -444,6 +459,14 @@
         searchState.totalMatchCount = totalMatchCount;
 
         searchState.currentMatchIndex = searchState.matches.length > 0 ? 0 : -1;
+        if (preserveAnchor && searchState.currentMatchIndex === 0) {
+            const preservedIndex = searchState.matches.findIndex(
+                m => matchAnchor(m.element) === preserveAnchor
+            );
+            if (preservedIndex >= 0) {
+                searchState.currentMatchIndex = preservedIndex;
+            }
+        }
 
         // On transcript pages, search acts as a filter: non-matching messages
         // are hidden, matches are revealed (unfolded) and highlighted.
@@ -458,9 +481,11 @@
             displayIndexSearchResults();
         }
 
-        // Navigate to first match
+        // Navigate to the current match — the first one for a fresh query,
+        // or the preserved one after an option/filter re-search (the layout
+        // may have shifted, so re-scrolling to it keeps it in view).
         if (searchState.matches.length > 0 && !searchState.isIndexPage) {
-            navigateToMatch(0);
+            navigateToMatch(searchState.currentMatchIndex);
         }
 
         // Reset searching flag
@@ -498,6 +523,22 @@
         if (window.claudeLogRevealMessage) {
             matched.forEach(el => window.claudeLogRevealMessage(el));
         }
+
+        // A highlight inside a collapsed <details> (tool output, collapsible
+        // code, structured params) stays invisible even after the message
+        // itself is revealed — open every details on the path from each
+        // highlight up to its message card.
+        matched.forEach(el => {
+            el.querySelectorAll('.search-highlight').forEach(highlight => {
+                let details = highlight.closest('details');
+                while (details && el.contains(details)) {
+                    details.open = true;
+                    details = details.parentElement
+                        ? details.parentElement.closest('details')
+                        : null;
+                }
+            });
+        });
 
         syncTimelineWithSearch();
     }
@@ -612,10 +653,14 @@
         });
 
         const match = searchState.matches[index];
-        const highlights = match.element.querySelectorAll('.search-highlight');
-        if (highlights.length > 0) {
-            highlights[0].classList.add('current');
-            highlights[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
+        const highlights = Array.from(match.element.querySelectorAll('.search-highlight'));
+        // Prefer a rendered highlight: the first one in DOM order can be the
+        // duplicate inside a .preview-content summary, which is display:none
+        // once its <details> has been auto-opened.
+        const target = highlights.find(h => h.offsetParent !== null) || highlights[0];
+        if (target) {
+            target.classList.add('current');
+            target.scrollIntoView({ behavior: 'smooth', block: 'center' });
         } else {
             match.element.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }
@@ -795,10 +840,12 @@
             return;
         }
 
-        // F3 - Next match
+        // F3 - open search when idle (like `/`), otherwise next/previous match
         if (e.key === 'F3') {
             e.preventDefault();
-            if (e.shiftKey) {
+            if (!searchState.query) {
+                openSearch();
+            } else if (e.shiftKey) {
                 navigateMatch(-1);
             } else {
                 navigateMatch(1);
@@ -896,7 +943,7 @@
                 isUpdatingFilters = true;
                 setTimeout(() => {
                     buildSearchIndex();
-                    performSearch(searchState.query);
+                    performSearch(searchState.query, { preserveCurrent: true });
                     isUpdatingFilters = false;
                 }, 100);
             }

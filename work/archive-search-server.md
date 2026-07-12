@@ -210,7 +210,13 @@ the exact message, pick one:
 3. **Link to session page + client-side find** — pass `?highlight=<term>`
    and let the in-page search locate it; imprecise with repeated terms.
 
-Option 1 is the clean one, and it benefits annotations independently.
+**Option 1 is implemented** (`transcript.html` emits `data-uuid` on every
+message card that has a transcript UUID): the in-page search already uses it
+to keep the current match pinned across option/filter re-searches. Deep links
+from the server would resolve it client-side
+(`document.querySelector('[data-uuid="…"]')` → scroll + reveal), since
+`data-uuid` is an attribute, not an `id` — or we add a second `id` if plain
+fragment URLs turn out to matter.
 
 ## Part 4: Extensibility for tagging / notes / comments
 
@@ -286,9 +292,10 @@ visit *can* fire cross-origin POSTs at `localhost` otherwise.
 3. **Search semantics parity:** in-page search is substring + optional regex;
    FTS5 is token/prefix-based. Accept the difference (documented), or add the
    slow Python-scan `regex=true` path in Phase 1 rather than later?
-4. **UUID anchors:** agree to emit them at render time (HTML size cost ~30
+4. ~~**UUID anchors:** agree to emit them at render time (HTML size cost ~30
    bytes/message) — decides the deep-link story for both search and
-   annotations.
+   annotations.~~ **Decided & done:** `data-uuid` is emitted on message cards
+   (see "The anchor problem" above).
 5. **Staleness policy while serving:** convert once at startup only, or check
    `html_cache` freshness on each page request and regenerate on demand?
    (Watchers/inotify feel out of scope for stdlib-only.)

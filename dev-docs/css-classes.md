@@ -70,9 +70,14 @@ These never appear in the generated HTML; they are toggled at runtime on `.messa
 | Class | Applied By | Description |
 |-------|------------|-------------|
 | `filtered-hidden` | type filter toggles (`transcript.html`) | Message hidden by the Search & Filter type toggles. The timeline mirrors this per-lane (group visibility). |
-| `search-match` | search (`components/search.html`) | Message matches the active search query; contains `.search-highlight` spans. |
+| `search-match` | search (`components/search.html`) | Message matches the active search query; contains `.search-highlight` spans. Folded ancestors are unfolded and collapsed `<details>` around each highlight are opened, so every highlight is actually visible. |
 | `search-context` | search | Ancestor of a match, kept visible-but-dimmed when "Show context" is on. |
 | `search-hidden` | search | Message hidden by search-as-filter (strict mode hides everything that isn't a match or context). The timeline mirrors this per-item via `timeline-filtered-hidden`. |
+
+Message cards also carry a `data-uuid` attribute (the transcript UUID — stable
+across re-renders, unlike the positional `msg-d-N`/`data-message-id` slot ids).
+Search uses it to keep the current match pinned when the same query is re-run
+after an option or filter change.
 
 ---
 
