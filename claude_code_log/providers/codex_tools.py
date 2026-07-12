@@ -106,12 +106,13 @@ def _canonicalize(name: str, input_data: dict[str, Any]) -> AdaptedToolCall:
         target = input_data.get("target")
         message = input_data.get("message")
         if isinstance(target, str) and isinstance(message, str):
+            visible_message = "" if _FERNET_TOKEN.fullmatch(message) else message
             return AdaptedToolCall(
                 "SendMessage",
                 {
                     "type": "followup" if name == "followup_task" else "message",
                     "recipient": target,
-                    "content": message,
+                    "content": visible_message,
                 },
             )
 

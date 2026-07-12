@@ -109,6 +109,30 @@ def test_ordinary_long_spawn_prompt_is_preserved() -> None:
     assert spawn.input["prompt"] == prompt
 
 
+def test_fernet_shaped_agent_message_payload_is_not_rendered() -> None:
+    token = "gAAAAA" + "A" * 100
+
+    message = adapt_codex_tool_call(
+        "send_message", {"target": "/root/research", "message": token}
+    )
+    followup = adapt_codex_tool_call(
+        "followup_task", {"target": "/root/research", "message": token}
+    )
+
+    assert message.name == followup.name == "SendMessage"
+    assert message.input["content"] == ""
+    assert followup.input["content"] == ""
+
+
+def test_ordinary_agent_message_is_preserved() -> None:
+    message = "Report the synthetic findings. " * 20
+    call = adapt_codex_tool_call(
+        "send_message", {"target": "/root/research", "message": message}
+    )
+
+    assert call.input["content"] == message
+
+
 def test_plan_and_search_reuse_specialized_renderers() -> None:
     plan = adapt_codex_tool_call(
         "update_plan",
