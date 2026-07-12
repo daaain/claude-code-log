@@ -715,6 +715,17 @@ def _validate_git_link_template(template: str) -> None:
     help="Maximum messages per page for combined transcript (default: 2000). Sessions are never split across pages.",
 )
 @click.option(
+    "--jobs",
+    "-j",
+    type=int,
+    default=None,
+    help=(
+        "Worker processes for converting projects in --all-projects mode "
+        "(default: CPU count; 1 disables parallelism). Peak memory scales "
+        "with jobs × the largest stale project."
+    ),
+)
+@click.option(
     "--session-id",
     default=None,
     help="Export a single session by ID (full ID or prefix). Project path is optional — looks up the session globally via cache.",
@@ -804,6 +815,7 @@ def main(
     output_format: str,
     image_export_mode: Optional[str],
     page_size: int,
+    jobs: Optional[int],
     session_id: Optional[str],
     detail: str,
     compact: bool,
@@ -1224,6 +1236,7 @@ def main(
                 write_combined=write_combined,
                 no_timestamps=no_timestamps,
                 no_recaps=no_recaps,
+                jobs=jobs,
             )
 
             # Count processed projects
