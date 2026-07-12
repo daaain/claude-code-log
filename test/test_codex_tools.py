@@ -1,7 +1,12 @@
 """Codex-to-shared tool adapter contract."""
 
-from claude_code_log.factories.tool_factory import create_tool_input
-from claude_code_log.models import BashInput, SendMessageInput, TaskInput
+from claude_code_log.factories.tool_factory import create_tool_input, create_tool_output
+from claude_code_log.models import (
+    BashInput,
+    SendMessageInput,
+    TaskInput,
+    ToolResultContent,
+)
 from claude_code_log.providers.codex_tools import adapt_codex_tool_call
 
 
@@ -91,3 +96,31 @@ def test_tool_like_text_inside_string_is_not_unwrapped() -> None:
 def test_adapted_exec_selects_existing_bash_model() -> None:
     call = adapt_codex_tool_call("exec_command", {"cmd": "git status"})
     assert isinstance(create_tool_input(call.name, call.input), BashInput)
+
+
+def test_codex_todo_success_result_hides_exec_transport() -> None:
+    raw = ToolResultContent(
+        type="tool_result",
+        tool_use_id="call-plan",
+        content=[
+            {
+                "type": "input_text",
+                "text": "Script completed\nWall time: 0.0 seconds\nOutput:\n",
+            },
+            {"type": "input_text", "text": "{}"},
+        ],
+    )
+
+    output = create_tool_output("TodoWrite", raw)
+
+    assert isinstance(output, ToolResultContent)
+    assert output.content == "Todo list updated."
+
+
+def test_unfamiliar_todo_result_stays_generic() -> None:
+    raw = ToolResultContent(
+        type="tool_result",
+        tool_use_id="call-plan",
+        content=[{"type": "text", "text": "A future result shape"}],
+    )
+    assert create_tool_output("TodoWrite", raw) is raw

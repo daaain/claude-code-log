@@ -1422,6 +1422,53 @@ def parse_taskoutput_output(
     )
 
 
+def parse_todowrite_output(
+    tool_result: ToolResultContent, file_path: Optional[str]
+) -> Optional[ToolResultContent]:
+    """Collapse a successful Codex ``update_plan`` transport result.
+
+    Codex persists the result of the canonicalized TodoWrite call as a short
+    ``Script completed`` status item followed by an ``input_text`` item whose
+    text is the empty JSON object returned by ``update_plan``. Rendering that
+    structured transport array exposes implementation noise below an otherwise
+    useful Todo card. Recognize only this narrow success shape; Claude results,
+    errors, and future unfamiliar Codex payloads retain the generic fallback.
+    """
+    del file_path
+    if tool_result.is_error or isinstance(tool_result.content, str):
+        return None
+
+    texts: list[str] = []
+    for item in tool_result.content:
+        if item.get("type") not in {"input_text", "output_text", "text"}:
+            return None
+        text = item.get("text")
+        if not isinstance(text, str):
+            return None
+        texts.append(text)
+
+    has_completed_status = any(text.startswith("Script completed") for text in texts)
+    has_empty_result = False
+    for text in texts:
+        try:
+            decoded: Any = json.loads(text)
+        except json.JSONDecodeError:
+            continue
+        if decoded == {}:
+            has_empty_result = True
+            break
+    if not (has_completed_status and has_empty_result):
+        return None
+
+    return ToolResultContent(
+        type="tool_result",
+        tool_use_id=tool_result.tool_use_id,
+        content="Todo list updated.",
+        is_error=False,
+        agentId=tool_result.agentId,
+    )
+
+
 _TASKSTOP_SUCCESS_RE = re.compile(r"successfully stopped task", re.IGNORECASE)
 
 
@@ -1473,6 +1520,7 @@ TOOL_OUTPUT_PARSERS: dict[str, ToolOutputParser] = {
     "Edit": parse_edit_output,
     "Write": parse_write_output,
     "Bash": parse_bash_output,
+    "TodoWrite": parse_todowrite_output,
     "Task": parse_task_output,
     "Agent": parse_task_output,  # Teammates spawn tool — same parse shape
     "AskUserQuestion": parse_askuserquestion_output,
