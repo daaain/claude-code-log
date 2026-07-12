@@ -100,6 +100,13 @@ def test_plan_and_search_reuse_specialized_renderers() -> None:
     assert search.input == {"query": "synthetic query"}
 
 
+def test_list_agents_reuses_task_list_renderer() -> None:
+    call = adapt_codex_tool_call("list_agents", {"path_prefix": "/root"})
+
+    assert call.name == "TaskList"
+    assert call.input == {"path_prefix": "/root"}
+
+
 def test_unknown_tool_stays_generic() -> None:
     call = adapt_codex_tool_call("future_tool", {"value": 1})
     assert call.name == "future_tool"

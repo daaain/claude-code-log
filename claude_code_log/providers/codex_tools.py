@@ -107,6 +107,9 @@ def _canonicalize(name: str, input_data: dict[str, Any]) -> AdaptedToolCall:
                 )
             return AdaptedToolCall("TodoWrite", {"todos": todos})
 
+    if name == "list_agents":
+        return AdaptedToolCall("TaskList", input_data)
+
     if name == "web__run":
         queries = input_data.get("search_query")
         other_actions = set(input_data) - {"search_query", "response_length"}
