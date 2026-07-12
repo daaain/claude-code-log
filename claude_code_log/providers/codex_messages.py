@@ -2,8 +2,55 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import xml.etree.ElementTree as ElementTree
 import re
+
+
+@dataclass(frozen=True)
+class CodexUserShellCommand:
+    command: str
+    output: str
+    exit_code: int
+    duration: str
+
+
+_USER_SHELL_RESULT = re.compile(
+    r"\A\s*Exit code:\s*(?P<exit>-?\d+)\s*\r?\n"
+    r"Duration:\s*(?P<duration>[^\r\n]+)\s*\r?\n"
+    r"Output:\s*\r?\n?(?P<output>.*)\Z",
+    re.DOTALL,
+)
+
+
+def parse_codex_user_shell_command(text: str) -> CodexUserShellCommand | None:
+    """Decode a complete Codex user-shell envelope without executing it."""
+    stripped = text.strip()
+    if not stripped.startswith("<user_shell_command"):
+        return None
+    try:
+        root = ElementTree.fromstring(stripped)
+    except ElementTree.ParseError:
+        return None
+    if root.tag != "user_shell_command":
+        return None
+    command = root.findtext("command")
+    result = root.findtext("result")
+    if command is None or result is None:
+        return None
+    command = command.strip()
+    match = _USER_SHELL_RESULT.match(result)
+    if not command or match is None:
+        return None
+    output = match.group("output").rstrip("\r\n")
+    if "</bash-input>" in command or "</bash-stdout>" in output:
+        return None
+    return CodexUserShellCommand(
+        command=command,
+        output=output,
+        exit_code=int(match.group("exit")),
+        duration=match.group("duration").strip(),
+    )
 
 
 def format_codex_user_message(text: str) -> str:
