@@ -46,6 +46,7 @@ _FILENAME_UUID_RE = re.compile(
     r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$"
 )
+_RUNNING_CELL_RE = re.compile(r"Script running with cell ID ([^\s]+)")
 
 
 @dataclass(frozen=True)
@@ -365,6 +366,7 @@ class CodexProvider(BaseProvider):
         records: list[_DecodedRecord],
         max_messages: Optional[int],
     ) -> Iterator[_CodexEntry]:
+        records = self._coalesce_command_sessions(records)
         preferred = Counter(
             fingerprint
             for record in records
@@ -413,6 +415,141 @@ class CodexProvider(BaseProvider):
                 parent_uuid = entry.uuid
                 emitted += 1
                 yield entry
+
+    def _coalesce_command_sessions(
+        self, records: list[_DecodedRecord]
+    ) -> list[_DecodedRecord]:
+        """Fold adjacent terminal polling calls into their spawning Bash result.
+
+        A long-running ``exec_command`` first returns a cell id.  Codex then
+        emits ``wait(cell_id=...)`` and usually ``write_stdin(session_id=...)``
+        as separate tools.  They are transport details of one command, not
+        independent transcript actions.  Coalesce only consecutive visible
+        tool events whose identifiers form that exact chain; otherwise retain
+        every record unchanged.
+        """
+        tool_records = [
+            index
+            for index, record in enumerate(records)
+            if record.kind == "response_item"
+            and self._nonempty_string(record.payload.get("type"))
+            in {
+                "function_call",
+                "custom_tool_call",
+                "function_call_output",
+                "custom_tool_call_output",
+            }
+        ]
+        suppressed: set[int] = set()
+        replacements: dict[int, _DecodedRecord] = {}
+        position = 0
+        while position + 3 < len(tool_records):
+            call_index, result_index = tool_records[position : position + 2]
+            call = self._adapted_call(records[call_index])
+            result = records[result_index]
+            if call is None or call[1].name != "Bash":
+                position += 1
+                continue
+            call_id = call[0]
+            if not self._is_call_output(result, call_id):
+                position += 1
+                continue
+            initial_output = result.payload.get("output")
+            match = (
+                _RUNNING_CELL_RE.search(initial_output)
+                if isinstance(initial_output, str)
+                else None
+            )
+            if match is None:
+                position += 1
+                continue
+
+            cell_id = match.group(1)
+            cursor = position + 2
+            chunks: list[str] = []
+            continuation_indices: list[int] = []
+            session_id: Optional[int] = None
+            while cursor + 1 < len(tool_records):
+                next_call_index = tool_records[cursor]
+                next_result_index = tool_records[cursor + 1]
+                next_call = self._adapted_call(records[next_call_index])
+                if next_call is None or not self._is_call_output(
+                    records[next_result_index], next_call[0]
+                ):
+                    break
+                name, input_data = next_call[1].name, next_call[1].input
+                matches_wait = name == "wait" and str(input_data.get("cell_id")) == cell_id
+                matches_write = (
+                    name == "write_stdin"
+                    and session_id is not None
+                    and input_data.get("session_id") == session_id
+                )
+                if not (matches_wait or matches_write):
+                    break
+                envelope = self._command_result(
+                    records[next_result_index].payload.get("output")
+                )
+                if envelope is None:
+                    break
+                output = envelope.get("output")
+                if isinstance(output, str) and output:
+                    chunks.append(output)
+                raw_session_id = envelope.get("session_id")
+                if isinstance(raw_session_id, int):
+                    session_id = raw_session_id
+                continuation_indices.extend([next_call_index, next_result_index])
+                cursor += 2
+                if isinstance(envelope.get("exit_code"), int):
+                    break
+
+            if chunks and continuation_indices:
+                payload = dict(result.payload)
+                payload["output"] = "".join(chunks)
+                replacements[result_index] = _DecodedRecord(
+                    line_no=result.line_no,
+                    timestamp=result.timestamp,
+                    kind=result.kind,
+                    payload=payload,
+                )
+                suppressed.update(continuation_indices)
+                position = cursor
+            else:
+                position += 1
+
+        return [
+            replacements.get(index, record)
+            for index, record in enumerate(records)
+            if index not in suppressed
+        ]
+
+    def _adapted_call(
+        self, record: _DecodedRecord
+    ) -> Optional[tuple[str, Any]]:
+        payload_type = self._nonempty_string(record.payload.get("type"))
+        if payload_type not in {"function_call", "custom_tool_call"}:
+            return None
+        call_id = self._nonempty_string(record.payload.get("call_id"))
+        if call_id is None:
+            return None
+        name = self._nonempty_string(record.payload.get("name")) or payload_type
+        raw_input = (
+            record.payload.get("arguments")
+            if payload_type == "function_call"
+            else record.payload.get("input")
+        )
+        return (
+            call_id,
+            adapt_codex_tool_call(
+                name, self._tool_input(raw_input), raw_input=raw_input
+            ),
+        )
+
+    def _is_call_output(self, record: _DecodedRecord, call_id: str) -> bool:
+        return (
+            self._nonempty_string(record.payload.get("type"))
+            in {"function_call_output", "custom_tool_call_output"}
+            and record.payload.get("call_id") == call_id
+        )
 
     def _normalize_record(
         self,
@@ -617,11 +754,65 @@ class CodexProvider(BaseProvider):
         if isinstance(value, list):
             items = cast(list[Any], value)
             if all(isinstance(item, dict) for item in items):
-                return cast(list[dict[str, Any]], items)
+                structured = cast(list[dict[str, Any]], items)
+                command_output = self._command_output(structured)
+                if command_output is not None:
+                    return command_output
+                return structured
         try:
             return json.dumps(cast(Any, value), ensure_ascii=False)
         except (TypeError, ValueError):
             return repr(cast(object, value))
+
+    def _command_output(self, items: list[dict[str, Any]]) -> Optional[str]:
+        """Unwrap the Codex ``exec_command`` result envelope.
+
+        Unified command results are persisted as a short status item followed
+        by an ``input_text`` item whose text is a JSON object.  Keeping that
+        transport wrapper makes the shared renderer treat a Bash result as a
+        generic structured value.  Recognize only the characteristic command
+        envelope and return its stdout/stderr payload; other structured tool
+        results retain their original representation.
+        """
+        result = self._command_result(items)
+        output = result.get("output") if result is not None else None
+        return output if isinstance(output, str) else None
+
+    def _command_result(self, value: Any) -> Optional[dict[str, Any]]:
+        if not isinstance(value, list):
+            return None
+        items = cast(list[Any], value)
+        for raw_item in reversed(items):
+            if not isinstance(raw_item, dict):
+                continue
+            item = cast(dict[str, Any], raw_item)
+            if item.get("type") not in {"input_text", "output_text", "text"}:
+                continue
+            text = item.get("text")
+            if not isinstance(text, str):
+                continue
+            try:
+                decoded: Any = json.loads(text)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(decoded, dict):
+                continue
+            result = cast(dict[str, Any], decoded)
+            output = result.get("output")
+            if (
+                isinstance(output, str)
+                and (
+                    isinstance(result.get("exit_code"), int)
+                    or isinstance(result.get("session_id"), int)
+                )
+                and (
+                    "wall_time_seconds" in result
+                    or "original_token_count" in result
+                    or "chunk_id" in result
+                )
+            ):
+                return result
+        return None
 
     def _source_metadata(
         self, source: dict[str, Any]

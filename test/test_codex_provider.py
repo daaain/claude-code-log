@@ -16,12 +16,14 @@ import pytest
 
 from claude_code_log.models import (
     AssistantTranscriptEntry,
+    BashOutput,
     ThinkingContent,
     ToolResultContent,
     ToolUseContent,
     TranscriptEntry,
     UserTranscriptEntry,
 )
+from claude_code_log.factories.tool_factory import create_tool_output
 from claude_code_log.providers.codex import CodexProvider
 
 
@@ -124,11 +126,21 @@ def test_structured_custom_and_open_ended_tools_are_correlated(
         "call-structured-001",
         "call-custom-001",
         "call-mcp-001",
+        "call-async-001",
     }
     assert uses["call-structured-001"].name == "Bash"
     assert uses["call-custom-001"].name == "apply_patch"
     assert uses["call-mcp-001"].name == "mcp__synthetic__lookup"
-    assert "alpha.txt" in str(results["call-structured-001"].content)
+    assert results["call-structured-001"].content == "./alpha.txt\n./beta.txt"
+    bash_output = create_tool_output(
+        "Bash", results["call-structured-001"], file_path=None
+    )
+    assert isinstance(bash_output, BashOutput)
+    assert bash_output.content == "./alpha.txt\n./beta.txt"
+    assert uses["call-async-001"].name == "Bash"
+    assert results["call-async-001"].content == "tests running...\n2 passed\n"
+    assert "call-wait-001" not in uses
+    assert "call-write-001" not in uses
     assert "Done!" in str(results["call-custom-001"].content)
 
 
