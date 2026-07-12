@@ -35,6 +35,7 @@ from .base import (
     make_user_entry,
 )
 from .codex_tools import adapt_codex_tool_call
+from .codex_messages import format_codex_user_message
 
 logger = logging.getLogger(__name__)
 
@@ -574,7 +575,14 @@ class CodexProvider(BaseProvider):
         text = self._event_text(record.payload)
         uuid = self._entry_uuid(thread_id, record.line_no, 0)
         if payload_type == "user_message" and text:
-            return [make_user_entry(thread_id, uuid, record.timestamp, text)]
+            return [
+                make_user_entry(
+                    thread_id,
+                    uuid,
+                    record.timestamp,
+                    format_codex_user_message(text),
+                )
+            ]
         if payload_type == "agent_message" and text:
             return [
                 make_assistant_entry(thread_id, uuid, record.timestamp, model, text)
@@ -610,7 +618,14 @@ class CodexProvider(BaseProvider):
                 suppressed[fingerprint] += 1
                 return []
             if normalized_role == "user" and text:
-                return [make_user_entry(thread_id, uuid, record.timestamp, text)]
+                return [
+                    make_user_entry(
+                        thread_id,
+                        uuid,
+                        record.timestamp,
+                        format_codex_user_message(text),
+                    )
+                ]
             if normalized_role == "assistant" and text:
                 return [
                     make_assistant_entry(thread_id, uuid, record.timestamp, model, text)
