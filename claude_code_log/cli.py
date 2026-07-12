@@ -717,7 +717,7 @@ def _validate_git_link_template(template: str) -> None:
 @click.option(
     "--jobs",
     "-j",
-    type=int,
+    type=click.IntRange(min=1),
     default=None,
     help=(
         "Worker processes for converting projects in --all-projects mode "
