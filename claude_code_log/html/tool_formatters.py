@@ -275,18 +275,16 @@ def format_grep_input(grep_input: GrepInput) -> str:
 
 
 def format_websearch_input(search_input: WebSearchInput) -> str:
-    """Format WebSearch tool use content showing the search query.
+    """Omit the WebSearch body because the complete query is in its title.
 
     Args:
         search_input: Typed WebSearchInput with query parameter.
 
-    Only shows the query if it exceeds 100 chars (truncated in title).
-    Otherwise returns empty since the full query is already in the title.
+    Keeping a second copy below the title makes long multi-query searches
+    particularly noisy. Both HTML and Markdown titles retain the full query.
     """
-    if len(search_input.query) <= 100:
-        return ""  # Full query shown in title
-    escaped_query = escape_html(search_input.query)
-    return f'<div class="websearch-query">{escaped_query}</div>'
+    del search_input
+    return ""
 
 
 def _websearch_as_markdown(output: WebSearchOutput) -> str:

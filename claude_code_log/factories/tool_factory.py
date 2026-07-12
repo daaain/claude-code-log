@@ -890,7 +890,18 @@ def parse_websearch_output(
     # Fallback: parse from text content (agent progress entries)
     text = _extract_tool_result_text(tool_result)
     if text:
-        return _parse_websearch_from_text(text)
+        parsed = _parse_websearch_from_text(text)
+        if parsed is not None:
+            return parsed
+        # Codex web__run results are already Markdown but do not carry
+        # Claude's "Web search results for query" wrapper. The paired input
+        # supplies the query in the card title; treat the result body as the
+        # summary so the specialized WebSearch renderer handles its links,
+        # headings, and lists instead of showing a generic code block.
+        if not tool_result.is_error:
+            return WebSearchOutput(
+                query="", links=[], preamble=None, summary=text
+            )
 
     return None
 

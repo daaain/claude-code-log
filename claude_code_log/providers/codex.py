@@ -795,7 +795,7 @@ class CodexProvider(BaseProvider):
             items = cast(list[Any], value)
             if all(isinstance(item, dict) for item in items):
                 structured = cast(list[dict[str, Any]], items)
-                if tool_name == "Bash":
+                if tool_name in {"Bash", "WebSearch"}:
                     command_output = self._command_output(structured)
                     if command_output is not None:
                         return command_output
