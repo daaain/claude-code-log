@@ -125,7 +125,7 @@ def test_structured_custom_and_open_ended_tools_are_correlated(
         "call-custom-001",
         "call-mcp-001",
     }
-    assert uses["call-structured-001"].name == "exec_command"
+    assert uses["call-structured-001"].name == "Bash"
     assert uses["call-custom-001"].name == "apply_patch"
     assert uses["call-mcp-001"].name == "mcp__synthetic__lookup"
     assert "alpha.txt" in str(results["call-structured-001"].content)

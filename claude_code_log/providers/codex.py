@@ -34,6 +34,7 @@ from .base import (
     make_tool_use_entry,
     make_user_entry,
 )
+from .codex_tools import adapt_codex_tool_call
 
 logger = logging.getLogger(__name__)
 
@@ -499,6 +500,11 @@ class CodexProvider(BaseProvider):
                 else payload.get("input")
             )
             tool_input = self._tool_input(raw_input)
+            adapted = adapt_codex_tool_call(
+                name,
+                tool_input,
+                raw_input=raw_input,
+            )
             return [
                 make_tool_use_entry(
                     thread_id,
@@ -506,8 +512,8 @@ class CodexProvider(BaseProvider):
                     record.timestamp,
                     model,
                     call_id,
-                    name,
-                    tool_input,
+                    adapted.name,
+                    adapted.input,
                 )
             ]
 
