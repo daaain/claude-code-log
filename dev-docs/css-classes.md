@@ -63,6 +63,17 @@ This document provides a comprehensive reference for CSS class combinations used
 | `workflow_phase` | `tool_use` | Spliced dynamic-workflow phase card (#174). The `tool_use` base keeps it under the "Tool Use" filter toggle; the modifier drives the depth-driven indent + dark-green card/group border, the 🧩 title, and a dedicated timeline lane. |
 | `workflow_agent` | `tool_use` | Spliced dynamic-workflow agent card (#174). Same pattern as `workflow_phase` (grey card/group border, 🤖 title, own timeline lane). Its `.children` container indents the agent's grafted side-channel transcript one level further. |
 
+### Runtime State Classes (applied by JavaScript)
+
+These never appear in the generated HTML; they are toggled at runtime on `.message` elements:
+
+| Class | Applied By | Description |
+|-------|------------|-------------|
+| `filtered-hidden` | type filter toggles (`transcript.html`) | Message hidden by the Search & Filter type toggles. The timeline mirrors this per-lane (group visibility). |
+| `search-match` | search (`components/search.html`) | Message matches the active search query; contains `.search-highlight` spans. |
+| `search-context` | search | Ancestor of a match, kept visible-but-dimmed when "Show context" is on. |
+| `search-hidden` | search | Message hidden by search-as-filter (strict mode hides everything that isn't a match or context). The timeline mirrors this per-item via `timeline-filtered-hidden`. |
+
 ---
 
 ## Pairing Behavior

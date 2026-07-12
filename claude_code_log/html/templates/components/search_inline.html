@@ -4,9 +4,26 @@
         <input type="text"
                id="searchInput"
                class="search-input"
-               placeholder="Search conversations... (Ctrl+F)"
+               placeholder="Search messages... (press /)"
                autocomplete="off">
         <button id="searchClear" class="search-clear" title="Clear search">✕</button>
+    </div>
+
+    <!-- Options stay visible even before the first match so regex /
+         context can be configured up front -->
+    <div class="search-options-inline">
+        <label class="search-option-inline">
+            <input type="checkbox" id="searchRegex">
+            <span>Regex</span>
+        </label>
+        <label class="search-option-inline">
+            <input type="checkbox" id="searchInFiltered" checked>
+            <span>Visible only</span>
+        </label>
+        <label class="search-option-inline" title="Also show the ancestors of matching messages">
+            <input type="checkbox" id="searchShowContext">
+            <span>Show context</span>
+        </label>
     </div>
 
     <div id="searchResultsInfo" class="search-results-info">
@@ -14,16 +31,6 @@
             <span id="searchResultCount">No results</span>
             <button id="searchPrev" class="search-nav-btn" disabled title="Previous match (Shift+F3)">↑</button>
             <button id="searchNext" class="search-nav-btn" disabled title="Next match (F3)">↓</button>
-        </div>
-        <div class="search-options-inline">
-            <label class="search-option-inline">
-                <input type="checkbox" id="searchRegex">
-                <span>Regex</span>
-            </label>
-            <label class="search-option-inline">
-                <input type="checkbox" id="searchInFiltered" checked>
-                <span>Visible only</span>
-            </label>
         </div>
     </div>
 </div>

@@ -946,9 +946,7 @@
             // .children wrappers, NOT the parent .message cards — so walk up
             // and reveal each hidden .children container, syncing the
             // controlling card's fold bar (its sibling within the node).
-            function unfoldAncestorsOf(hash) {
-                if (!hash || !hash.startsWith('#msg-')) return;
-                const target = document.getElementById(hash.slice(1));
+            function revealMessage(target) {
                 if (!target) return;
                 let node = target.parentElement;
                 while (node) {
@@ -965,6 +963,16 @@
                     }
                     node = node.parentElement;
                 }
+            }
+            // The search component unfolds matches through this hook — fold
+            // state (setSectionState, fold-bar icons) lives in this closure.
+            window.claudeLogRevealMessage = revealMessage;
+
+            function unfoldAncestorsOf(hash) {
+                if (!hash || !hash.startsWith('#msg-')) return;
+                const target = document.getElementById(hash.slice(1));
+                if (!target) return;
+                revealMessage(target);
                 // Re-trigger the browser's scroll-to-anchor now that
                 // the target is no longer display:none.
                 if (target.scrollIntoView) {

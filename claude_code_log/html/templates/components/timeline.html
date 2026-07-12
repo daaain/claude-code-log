@@ -15,6 +15,7 @@
     (function () {
         let timeline = null;
         let items = null;
+        let itemsDataSet = null;
         let groups = null;
         let isTimelineLoaded = false;
         let timelineIdToElement = new Map(); // Map timeline IDs to DOM elements
@@ -248,6 +249,37 @@
             timeline.setGroups(updatedGroups);
         }
 
+        // Hide/show individual timeline items to mirror the search filter.
+        // The search component tags non-matching messages with .search-hidden;
+        // group-level type filtering above can't express per-item state, so
+        // this toggles the timeline-filtered-hidden class on each item.
+        function applySearchFilter() {
+            if (!timeline || !itemsDataSet) return;
+
+            const updates = [];
+            timelineIdToElement.forEach((messageEl, id) => {
+                const item = itemsDataSet.get(id);
+                if (!item) return;
+
+                const hidden = messageEl.classList.contains('search-hidden');
+                const baseClassName = (item.className || '')
+                    .split(/\s+/)
+                    .filter(cls => cls && cls !== 'timeline-filtered-hidden')
+                    .join(' ');
+                const className = hidden
+                    ? baseClassName + ' timeline-filtered-hidden'
+                    : baseClassName;
+
+                if (className !== item.className) {
+                    updates.push({ id, className });
+                }
+            });
+
+            if (updates.length > 0) {
+                itemsDataSet.update(updates);
+            }
+        }
+
         // Handle timeline item click - scroll to corresponding message
         function onTimelineSelect(event) {
             const selection = timeline.getSelection();
@@ -325,7 +357,8 @@
             };
 
             // Create timeline
-            timeline = new vis.Timeline(container, new vis.DataSet(items), new vis.DataSet(groups), options);
+            itemsDataSet = new vis.DataSet(items);
+            timeline = new vis.Timeline(container, itemsDataSet, new vis.DataSet(groups), options);
 
             // Make timeline available globally for debugging
             window.timeline = timeline;
@@ -333,8 +366,9 @@
             // Add event listeners
             timeline.on('select', onTimelineSelect);
 
-            // Apply current filters
+            // Apply current filters (type toggles + any active search)
             applyFilters();
+            applySearchFilter();
 
             console.log('Timeline initialized with', items.length, 'items and', groups.length, 'groups');
         }
@@ -486,6 +520,7 @@
         // Export functions to global scope
         window.toggleTimeline = toggleTimeline;
         window.applyTimelineFilters = applyFilters;
+        window.applyTimelineSearchFilter = applySearchFilter;
         window.updateTimelinePosition = updateTimelinePosition;
 
         // Hook into existing systems
