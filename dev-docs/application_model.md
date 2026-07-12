@@ -78,6 +78,8 @@ single transcript or directory. Major flags:
   output, packing whole sessions into pages of up to N messages each
   (sessions are never split across pages, so individual pages may
   overflow). Per-session HTML files are not paginated.
+- `--jobs N` / `-j N` — worker processes for the all-projects
+  conversion phase (default: CPU count; `1` disables parallelism).
 
 CLI orchestration delegates to `converter.py` (which owns the
 high-level "load + render + write" flow) and never touches `renderer.py`
@@ -85,6 +87,21 @@ directly. Output paths follow a stable convention so the cache and
 re-renders can find existing files: `combined_transcripts.html`,
 `session-{id}.html`, `index.html`, with `--detail` and `--compact`
 adding suffixes per `utils.variant_suffix`.
+
+For the all-projects invocation, `process_projects_hierarchy` runs in
+three phases: **plan** (sequential, cheap — per-project staleness via
+cache mtimes, also ensures DB schema/migrations exist), **execute**
+(stale projects fan out over a `ProcessPoolExecutor` with the `spawn`
+start method, largest-first; rendering is CPU-bound pure Python and
+projects are independent, so this scales near-linearly with cores),
+and **collect** (sequential — per-project index data is read back from
+the cache and the cross-project `index.html` is written last). Workers
+run silent; the parent prints one progress line per project as results
+arrive. All workers share the WAL-mode SQLite cache DB — each writes
+only its own project's rows, and WAL serialises the short write
+transactions. A pool-level failure (e.g. a library caller without the
+`if __name__ == "__main__"` guard `spawn` needs) degrades to inline
+sequential processing with a warning rather than aborting.
 
 ### 2.2 TUI
 

@@ -5,8 +5,12 @@ import contextlib
 import itertools
 import json
 import logging
+import multiprocessing
+import os
 import re
+import time
 from collections.abc import Iterator
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 import traceback
@@ -2768,6 +2772,212 @@ def _print_archived_sessions_note(total_archived: int) -> None:
     )
 
 
+@dataclass
+class _ProjectPlan:
+    """Work plan for one project, computed by the sequential planning pass.
+
+    Splitting plan (staleness check) from execute (conversion) lets the
+    execute phase run in a process pool: the plan carries everything the
+    parent needs to report progress and build the index afterwards, while
+    workers re-derive their own state from the project path alone.
+    """
+
+    project_dir: Path
+    dest_dir: Path
+    cache_manager: Optional["CacheManager"]
+    output_path: Path
+    needs_work: bool
+    archived_count: int
+    stats: GenerationStats
+    source_bytes: int
+    error: Optional[str] = None
+
+
+def _plan_project(
+    project_dir: Path,
+    *,
+    use_cache: bool,
+    library_version: str,
+    variant: str,
+    combined_ext: str,
+    combined_name: str,
+    output_dir: Optional[Path],
+    expand_paths: bool,
+    filter_path: Optional[str],
+    write_combined: bool,
+    page_size: int,
+) -> Optional[_ProjectPlan]:
+    """Resolve destination and staleness for one project (no rendering).
+
+    Returns None when ``--filter-path`` excludes the project. Runs in
+    the parent before any pool worker starts, which also guarantees the
+    shared cache DB's schema/migrations and this project's row exist
+    before concurrent workers touch the DB.
+    """
+    from .utils import project_destination
+
+    plan_start = time.time()
+    stats = GenerationStats()
+    cache_manager: Optional[CacheManager] = None
+    if use_cache:
+        try:
+            cache_manager = CacheManager(project_dir, library_version)
+        except Exception as e:
+            stats.add_warning(f"Failed to initialize cache: {e}")
+
+    # Per-project destination (#151). When `output_dir` /
+    # `expand_paths` / `filter_path` are unset this returns
+    # `project_dir` (legacy in-place behaviour). When the
+    # filter excludes this project, returns None.
+    cached_working_dirs: Optional[list[str]] = None
+    if cache_manager is not None:
+        try:
+            cached_working_dirs = cache_manager.get_working_directories()
+        except Exception:
+            cached_working_dirs = None
+    dest_dir = project_destination(
+        project_dir,
+        output_dir=output_dir,
+        expand_paths=expand_paths,
+        filter_path=filter_path,
+        cached_working_directories=cached_working_dirs,
+    )
+    if dest_dir is None:
+        return None
+
+    # Fast staleness check (mtime comparison only). Exclude agent
+    # files - they are loaded via session references, not directly.
+    jsonl_files = [
+        f for f in project_dir.glob("*.jsonl") if not f.name.startswith("agent-")
+    ]
+    # Valid session IDs are from existing JSONL files (file stem = session ID)
+    valid_session_ids = {f.stem for f in jsonl_files}
+    modified_files = (
+        cache_manager.get_modified_files(jsonl_files) if cache_manager else []
+    )
+    # Pass valid_session_ids to skip archived sessions (JSONL
+    # deleted). The variant/ext/output_dir must mirror what
+    # _generate_individual_session_files writes, or every
+    # session reads as "not_cached" and the project takes the
+    # slow path on every run.
+    stale_sessions = (
+        cache_manager.get_stale_sessions(
+            valid_session_ids,
+            variant=variant,
+            ext=combined_ext,
+            output_dir=dest_dir,
+        )
+        if cache_manager
+        else []
+    )
+    # Count archived sessions (cached but JSONL deleted)
+    archived_count = (
+        cache_manager.get_archived_session_count(valid_session_ids)
+        if cache_manager
+        else 0
+    )
+    output_path = dest_dir / combined_name
+    # Check combined_stale using the appropriate cache:
+    # - Paginated projects store data in html_pages table (via save_page_cache)
+    # - Non-paginated projects store data in html_cache table (via update_html_cache)
+    if cache_manager is not None:
+        existing_page_count = cache_manager.get_page_count(variant)
+        if existing_page_count > 0:
+            # Paginated project: check page 1 staleness for the
+            # current --format/--detail/--compact variant, resolving
+            # the page file against dest_dir (--output) like the
+            # non-paginated branch below.
+            combined_stale = cache_manager.is_page_stale(
+                1, page_size, variant, output_dir=dest_dir
+            )[0]
+        else:
+            # Non-paginated project: check html_cache for the
+            # variant-specific filename (e.g.
+            # `combined_transcripts.low.compact.md`), not the
+            # default `combined_transcripts.html`.
+            combined_stale = cache_manager.is_transcript_stale(
+                output_path.name, None, output_dir=dest_dir
+            )[0]
+    else:
+        combined_stale = True
+
+    # Determine if we need to do any work. With
+    # `write_combined=False`, the combined-transcript file
+    # isn't produced — its staleness / on-disk presence is
+    # irrelevant; only modified sources / stale per-session
+    # files matter.
+    if write_combined:
+        needs_work = (
+            bool(modified_files)
+            or bool(stale_sessions)
+            or combined_stale
+            or not output_path.exists()
+        )
+    else:
+        needs_work = bool(modified_files) or bool(stale_sessions)
+
+    if needs_work:
+        stats.files_updated = len(modified_files) if modified_files else 0
+        stats.files_loaded_from_cache = len(jsonl_files) - stats.files_updated
+        stats.sessions_regenerated = len(stale_sessions)
+    else:
+        # Fast path: nothing to do, just collect stats for index
+        stats.files_loaded_from_cache = len(jsonl_files)
+    stats.total_time = time.time() - plan_start
+
+    return _ProjectPlan(
+        project_dir=project_dir,
+        dest_dir=dest_dir,
+        cache_manager=cache_manager,
+        output_path=output_path,
+        needs_work=needs_work,
+        archived_count=archived_count,
+        stats=stats,
+        source_bytes=sum(f.stat().st_size for f in jsonl_files),
+    )
+
+
+def _convert_project_worker(
+    worker_args: Dict[str, Any],
+) -> "tuple[str, float, Optional[str]]":
+    """Convert one project inside a pool worker process.
+
+    Module-level, with dict-of-picklables in and primitives out, so it
+    works under the ``spawn`` start method. Failures are returned as a
+    formatted traceback instead of raised so the parent can attribute
+    them to the right project and keep processing the rest.
+    """
+    start = time.time()
+    error: Optional[str] = None
+    try:
+        convert_jsonl_to(
+            worker_args["format"],
+            Path(worker_args["project_dir"]),
+            None,
+            worker_args["from_date"],
+            worker_args["to_date"],
+            worker_args["generate_individual_sessions"],
+            worker_args["use_cache"],
+            # Workers always run silent: per-file progress lines from N
+            # concurrent processes would interleave illegibly. The
+            # parent prints one line per project as results arrive.
+            silent=True,
+            image_export_mode=worker_args["image_export_mode"],
+            page_size=worker_args["page_size"],
+            detail=worker_args["detail"],
+            compact=worker_args["compact"],
+            output_root=(
+                Path(worker_args["output_root"]) if worker_args["output_root"] else None
+            ),
+            write_combined=worker_args["write_combined"],
+            no_timestamps=worker_args["no_timestamps"],
+            no_recaps=worker_args["no_recaps"],
+        )
+    except Exception:
+        error = traceback.format_exc()
+    return (worker_args["project_dir"], time.time() - start, error)
+
+
 def process_projects_hierarchy(
     projects_path: Path,
     from_date: Optional[str] = None,
@@ -2786,6 +2996,7 @@ def process_projects_hierarchy(
     write_combined: bool = True,
     no_timestamps: bool = False,
     no_recaps: bool = False,
+    jobs: Optional[int] = None,
 ) -> Path:
     """Process the entire ~/.claude/projects/ hierarchy and create linked output files.
 
@@ -2807,6 +3018,13 @@ def process_projects_hierarchy(
             under ``output_dir``.
         filter_path: When set, restrict to projects matching the prefix.
             See ``utils.project_destination`` for the matching semantics.
+        jobs: Worker processes for the per-project conversion phase.
+            ``None`` (default) uses the CPU count; ``1`` processes
+            projects inline in this process (historical behaviour).
+            Parallel workers run silent — the parent prints one
+            progress line per project as results arrive. Peak memory
+            scales with roughly ``jobs ×`` the largest stale project,
+            so lower it on memory-constrained machines.
     """
     import time
 
@@ -2891,178 +3109,199 @@ def process_projects_hierarchy(
             rel = p
         return rel.as_posix()
 
+    # ---- Phase 1 (plan): sequential, cheap staleness/destination pass.
+    # Runs in the parent so the shared cache DB's schema/migrations and
+    # every project row exist before any pool worker opens the DB.
+    plans: list[_ProjectPlan] = []
     for project_dir in sorted(project_dirs):
-        project_start_time = time.time()
-        stats = GenerationStats()
-
         try:
-            # Initialize cache manager for this project
-            cache_manager = None
-            if use_cache:
-                try:
-                    cache_manager = CacheManager(project_dir, library_version)
-                except Exception as e:
-                    stats.add_warning(f"Failed to initialize cache: {e}")
-
-            # Per-project destination (#151). When `output_dir` /
-            # `expand_paths` / `filter_path` are unset this returns
-            # `project_dir` (legacy in-place behaviour). When the
-            # filter excludes this project, returns None.
-            cached_working_dirs: Optional[list[str]] = None
-            if cache_manager is not None:
-                try:
-                    cached_working_dirs = cache_manager.get_working_directories()
-                except Exception:
-                    cached_working_dirs = None
-            dest_dir = project_destination(
+            plan = _plan_project(
                 project_dir,
+                use_cache=use_cache,
+                library_version=library_version,
+                variant=variant,
+                combined_ext=combined_ext,
+                combined_name=combined_name,
                 output_dir=output_dir,
                 expand_paths=expand_paths,
                 filter_path=filter_path,
-                cached_working_directories=cached_working_dirs,
+                write_combined=write_combined,
+                page_size=page_size,
             )
-            if dest_dir is None:
-                # Filter-out: don't process this project at all.
-                if not silent:
-                    print(f"  {project_dir.name}: skipped (filter)")
-                continue
+        except Exception as e:
+            stats = GenerationStats()
+            stats.add_error(str(e))
+            project_stats.append((project_dir.name, stats))
+            print(
+                f"Warning: Failed to process {project_dir}: {e}\n"
+                f"{traceback.format_exc()}"
+            )
+            continue
+        if plan is None:
+            # Filter-out: don't process this project at all.
+            if not silent:
+                print(f"  {project_dir.name}: skipped (filter)")
+            continue
+        total_archived += plan.archived_count
+        plans.append(plan)
 
-            # Phase 1: Fast check if anything needs updating (mtime comparison only)
-            # Exclude agent files - they are loaded via session references, not directly
-            jsonl_files = [
-                f
-                for f in project_dir.glob("*.jsonl")
-                if not f.name.startswith("agent-")
-            ]
-            # Valid session IDs are from existing JSONL files (file stem = session ID)
-            valid_session_ids = {f.stem for f in jsonl_files}
-            modified_files = (
-                cache_manager.get_modified_files(jsonl_files) if cache_manager else []
-            )
-            # Pass valid_session_ids to skip archived sessions (JSONL
-            # deleted). The variant/ext/output_dir must mirror what
-            # _generate_individual_session_files writes, or every
-            # session reads as "not_cached" and the project takes the
-            # slow path on every run.
-            stale_sessions = (
-                cache_manager.get_stale_sessions(
-                    valid_session_ids,
-                    variant=variant,
-                    ext=combined_ext,
-                    output_dir=dest_dir,
-                )
-                if cache_manager
-                else []
-            )
-            # Count archived sessions (cached but JSONL deleted)
-            archived_count = (
-                cache_manager.get_archived_session_count(valid_session_ids)
-                if cache_manager
-                else 0
-            )
-            total_archived += archived_count
-            # Output destination — `dest_dir` for #151's `--output` /
-            # `--expand-paths` / `--filter-path`, falling back to the
-            # source project_dir for legacy in-place behaviour. Filename
-            # uses the same {variant}.{ext} convention as
-            # `convert_jsonl_to`.
-            output_path = dest_dir / combined_name
-            # Check combined_stale using the appropriate cache:
-            # - Paginated projects store data in html_pages table (via save_page_cache)
-            # - Non-paginated projects store data in html_cache table (via update_html_cache)
-            if cache_manager is not None:
-                existing_page_count = cache_manager.get_page_count(variant)
-                if existing_page_count > 0:
-                    # Paginated project: check page 1 staleness for the
-                    # current --format/--detail/--compact variant, resolving
-                    # the page file against dest_dir (--output) like the
-                    # non-paginated branch below.
-                    combined_stale = cache_manager.is_page_stale(
-                        1, page_size, variant, output_dir=dest_dir
-                    )[0]
-                else:
-                    # Non-paginated project: check html_cache for the
-                    # variant-specific filename (e.g.
-                    # `combined_transcripts.low.compact.md`), not the
-                    # default `combined_transcripts.html`.
-                    combined_stale = cache_manager.is_transcript_stale(
-                        output_path.name, None, output_dir=dest_dir
-                    )[0]
-            else:
-                combined_stale = True
+    to_convert = [p for p in plans if p.needs_work]
+    projects_with_updates = sum(1 for p in to_convert if p.stats.files_updated > 0)
 
-            # Determine if we need to do any work. With
-            # `write_combined=False`, the combined-transcript file
-            # isn't produced — its staleness / on-disk presence is
-            # irrelevant; only modified sources / stale per-session
-            # files matter.
-            if write_combined:
-                needs_work = (
-                    bool(modified_files)
-                    or bool(stale_sessions)
-                    or combined_stale
-                    or not output_path.exists()
-                )
-            else:
-                needs_work = bool(modified_files) or bool(stale_sessions)
+    def _archived_suffix(plan: _ProjectPlan) -> str:
+        return f", {plan.archived_count} archived" if plan.archived_count > 0 else ""
 
-            # Build archived suffix for output (shown on both cached and work paths)
-            archived_suffix = (
-                f", {archived_count} archived" if archived_count > 0 else ""
+    def _print_project_done(plan: _ProjectPlan, elapsed: float) -> None:
+        plan.stats.total_time = elapsed
+        progress_parts: List[str] = []
+        if plan.stats.files_updated > 0:
+            progress_parts.append(f"{plan.stats.files_updated} files updated")
+        if plan.stats.sessions_regenerated > 0:
+            progress_parts.append(f"{plan.stats.sessions_regenerated} sessions")
+        progress_detail = ", ".join(progress_parts) if progress_parts else "regenerated"
+        print(
+            f"  {plan.project_dir.name}: {progress_detail}{_archived_suffix(plan)} ({elapsed:.1f}s)"
+        )
+
+    def _print_project_failed(plan: _ProjectPlan, error: str) -> None:
+        plan.error = error
+        last_line = error.strip().splitlines()[-1] if error.strip() else error
+        plan.stats.add_error(last_line)
+        print(f"Warning: Failed to process {plan.project_dir}:\n{error}")
+
+    # Cached (no-work) projects are reported first, in stable
+    # alphabetical order; regenerated projects follow as they finish.
+    for plan in plans:
+        if not plan.needs_work:
+            print(
+                f"  {plan.project_dir.name}: cached{_archived_suffix(plan)} "
+                f"({plan.stats.total_time:.1f}s)"
             )
 
-            if not needs_work:
-                # Fast path: nothing to do, just collect stats for index
-                stats.files_loaded_from_cache = len(jsonl_files)
-                stats.total_time = time.time() - project_start_time
-                # Show progress
-                print(
-                    f"  {project_dir.name}: cached{archived_suffix} ({stats.total_time:.1f}s)"
-                )
-            else:
-                # Slow path: update cache and regenerate output
-                stats.files_updated = len(modified_files) if modified_files else 0
-                stats.files_loaded_from_cache = len(jsonl_files) - stats.files_updated
-                stats.sessions_regenerated = len(stale_sessions)
+    # ---- Phase 2 (execute): (re)generate stale projects. Rendering is
+    # CPU-bound pure Python and projects are independent — each
+    # conversion touches only its own project dir and its own rows in
+    # the (WAL-mode) cache DB — so stale projects fan out over a
+    # process pool. `jobs=1` keeps the historical inline path.
+    resolved_jobs = jobs if jobs is not None and jobs > 0 else (os.cpu_count() or 1)
+    resolved_jobs = max(1, min(resolved_jobs, len(to_convert)))
 
-                if modified_files:
-                    projects_with_updates += 1
+    def _convert_plan_inline(plan: _ProjectPlan) -> None:
+        """Convert one project in this process, reporting progress/failure."""
+        project_start_time = time.time()
+        try:
+            # Generate output for this project (handles cache updates internally)
+            convert_jsonl_to(
+                output_format,
+                plan.project_dir,
+                None,
+                from_date,
+                to_date,
+                generate_individual_sessions,
+                use_cache,
+                silent=silent,
+                image_export_mode=image_export_mode,
+                page_size=page_size,
+                detail=detail,
+                compact=compact,
+                output_root=(
+                    plan.dest_dir if plan.dest_dir != plan.project_dir else None
+                ),
+                write_combined=write_combined,
+                no_timestamps=no_timestamps,
+                no_recaps=no_recaps,
+            )
+        except Exception:
+            _print_project_failed(plan, traceback.format_exc())
+            return
+        _print_project_done(plan, time.time() - project_start_time)
 
-                # Generate output for this project (handles cache updates internally)
-                output_path = convert_jsonl_to(
-                    output_format,
-                    project_dir,
-                    None,
-                    from_date,
-                    to_date,
-                    generate_individual_sessions,
-                    use_cache,
-                    silent=silent,
-                    image_export_mode=image_export_mode,
-                    page_size=page_size,
-                    detail=detail,
-                    compact=compact,
-                    output_root=(dest_dir if dest_dir != project_dir else None),
-                    write_combined=write_combined,
-                    no_timestamps=no_timestamps,
-                    no_recaps=no_recaps,
-                )
+    if resolved_jobs <= 1:
+        for plan in to_convert:
+            _convert_plan_inline(plan)
+    elif to_convert:
+        # Largest projects first: with N workers the wall clock is
+        # bounded by the biggest single project, so don't leave it
+        # queued behind small ones at the tail.
+        by_size = sorted(to_convert, key=lambda p: p.source_bytes, reverse=True)
+        settled: set[int] = set()
+        try:
+            # `spawn` on every platform: fork is officially unsafe with
+            # threads and inherits arbitrary parent state; macOS/Windows
+            # default to spawn already. Workers re-import the package once
+            # each and are reused across projects, so the overhead is a
+            # one-off ~1s per worker.
+            ctx = multiprocessing.get_context("spawn")
+            with ProcessPoolExecutor(max_workers=resolved_jobs, mp_context=ctx) as pool:
+                future_to_plan = {
+                    pool.submit(
+                        _convert_project_worker,
+                        {
+                            "format": output_format,
+                            "project_dir": str(plan.project_dir),
+                            "from_date": from_date,
+                            "to_date": to_date,
+                            "generate_individual_sessions": generate_individual_sessions,
+                            "use_cache": use_cache,
+                            "image_export_mode": image_export_mode,
+                            "page_size": page_size,
+                            "detail": detail,
+                            "compact": compact,
+                            "output_root": (
+                                str(plan.dest_dir)
+                                if plan.dest_dir != plan.project_dir
+                                else None
+                            ),
+                            "write_combined": write_combined,
+                            "no_timestamps": no_timestamps,
+                            "no_recaps": no_recaps,
+                        },
+                    ): plan
+                    for plan in by_size
+                }
+                for future in as_completed(future_to_plan):
+                    plan = future_to_plan[future]
+                    _dir, elapsed, error = future.result()
+                    settled.add(id(plan))
+                    if error is not None:
+                        _print_project_failed(plan, error)
+                    else:
+                        _print_project_done(plan, elapsed)
+        except Exception as e:
+            # Pool-level failure — e.g. BrokenProcessPool when workers
+            # can't bootstrap because a library caller's script lacks the
+            # `if __name__ == "__main__"` guard `spawn` requires. The
+            # conversions are idempotent (staleness is re-derived from
+            # the cache), so degrade to inline processing of whatever
+            # hasn't completed rather than aborting the whole run.
+            print(
+                f"Warning: parallel processing failed ({e.__class__.__name__}: {e}); "
+                f"falling back to sequential processing. If you are calling "
+                f"this as a library, run it under `if __name__ == '__main__':` "
+                f"or pass jobs=1."
+            )
+            for plan in to_convert:
+                if id(plan) not in settled:
+                    _convert_plan_inline(plan)
 
-                # Track timing
-                stats.total_time = time.time() - project_start_time
-                # Show progress
-                progress_parts: List[str] = []
-                if stats.files_updated > 0:
-                    progress_parts.append(f"{stats.files_updated} files updated")
-                if stats.sessions_regenerated > 0:
-                    progress_parts.append(f"{stats.sessions_regenerated} sessions")
-                progress_detail = (
-                    ", ".join(progress_parts) if progress_parts else "regenerated"
-                )
-                print(
-                    f"  {project_dir.name}: {progress_detail}{archived_suffix} ({stats.total_time:.1f}s)"
-                )
+    # ---- Phase 3 (collect): aggregate per-project index data from the
+    # now-fresh cache. Sequential — cheap cache reads (the no-cache
+    # fallback is the rare exception) — and iteration order follows the
+    # sorted `plans` list, so the index and summary output don't depend
+    # on worker completion order.
+    for plan in plans:
+        if plan.error is not None:
+            # Conversion failed (already reported). Match the historical
+            # behaviour: record stats, leave the project out of the index.
+            project_stats.append((plan.project_dir.name, plan.stats))
+            continue
+        project_dir = plan.project_dir
+        cache_manager = plan.cache_manager
+        dest_dir = plan.dest_dir
+        output_path = plan.output_path
+        stats = plan.stats
 
+        try:
             # Get project info for index - use cached data if available
             # Exclude agent files (they are loaded via session references)
             jsonl_files = [
