@@ -32,6 +32,9 @@ _IDENTIFIER = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*")
 _OBJECT_KEY = re.compile(r'([,{]\s*)([A-Za-z_$][A-Za-z0-9_$]*)(\s*:)' )
 _TRAILING_COMMA = re.compile(r",(\s*[}\]])")
 _FERNET_TOKEN = re.compile(r"\AgAAAAA[A-Za-z0-9_-]{80,}={0,2}\Z")
+_OUTPUT_EMISSION = re.compile(
+    r"\b(?:text|image|generatedImage)\s*\((.*?)\)\s*;", re.DOTALL
+)
 
 
 def adapt_codex_tool_call(
@@ -45,11 +48,33 @@ def adapt_codex_tool_call(
         calls = _find_static_tool_calls(raw_input)
         if len(calls) != 1:
             return AdaptedToolCall("Workflow", {"script": raw_input})
+        if not _is_simple_result_forwarder(raw_input, calls[0]):
+            return AdaptedToolCall("Workflow", {"script": raw_input})
         decoded = _decode_object_literal(calls[0].argument)
         if decoded is None:
             return AdaptedToolCall("Workflow", {"script": raw_input})
         return _canonicalize(calls[0].name, decoded)
     return _canonicalize(name, input_data)
+
+
+def _is_simple_result_forwarder(source: str, call: _StaticCall) -> bool:
+    """Reject compound exec programs even when they contain one tools.* call."""
+    if re.search(r"\bALL_TOOLS\b", source):
+        return False
+    assignment = re.search(
+        r"\b(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*"
+        r"await\s+tools\."
+        + re.escape(call.name)
+        + r"\s*\(",
+        source,
+    )
+    if assignment is None:
+        return False
+    emissions = _OUTPUT_EMISSION.findall(source)
+    if len(emissions) != 1:
+        return False
+    result_name = assignment.group(1)
+    return re.search(r"\b" + re.escape(result_name) + r"\b", emissions[0]) is not None
 
 
 def _canonicalize(name: str, input_data: dict[str, Any]) -> AdaptedToolCall:

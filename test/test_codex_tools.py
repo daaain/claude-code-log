@@ -43,6 +43,30 @@ def test_multi_call_exec_remains_visible_as_workflow() -> None:
     assert call.input == {"script": source}
 
 
+def test_all_tools_plus_one_command_is_compound_workflow() -> None:
+    source = (
+        "const matches = ALL_TOOLS.filter(x => x.name.includes('git')); "
+        'const git = await tools.exec_command({cmd: "git status"}); '
+        "text(JSON.stringify(matches, null, 2)); text(git.output);"
+    )
+
+    call = adapt_codex_tool_call("exec", {"raw": source}, raw_input=source)
+
+    assert call.name == "Workflow"
+    assert call.input == {"script": source}
+
+
+def test_one_tool_with_multiple_output_emissions_is_workflow() -> None:
+    source = (
+        'const result = await tools.exec_command({cmd: "git status"}); '
+        'text("prefix"); text(result.output);'
+    )
+
+    assert adapt_codex_tool_call("exec", {"raw": source}, raw_input=source).name == (
+        "Workflow"
+    )
+
+
 def test_dynamic_exec_falls_back_to_workflow() -> None:
     source = "const args = getArgs(); const r = await tools.exec_command(args); text(r);"
     call = adapt_codex_tool_call("exec", {"raw": source}, raw_input=source)
