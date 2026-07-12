@@ -579,7 +579,9 @@ def format_task_output(output: TaskOutput) -> str:
     Returns:
         HTML string with markdown rendered in collapsible section
     """
-    parts: list[str] = [render_markdown_collapsible(output.result, "task-result")]
+    parts: list[str] = []
+    if output.result:
+        parts.append(render_markdown_collapsible(output.result, "task-result"))
     if output.async_final_answer:
         parts.append(
             '<div class="task-async-answer-label">'

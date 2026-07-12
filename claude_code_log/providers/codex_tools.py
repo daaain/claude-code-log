@@ -31,6 +31,7 @@ class _StaticCall:
 _IDENTIFIER = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*")
 _OBJECT_KEY = re.compile(r'([,{]\s*)([A-Za-z_$][A-Za-z0-9_$]*)(\s*:)' )
 _TRAILING_COMMA = re.compile(r",(\s*[}\]])")
+_FERNET_TOKEN = re.compile(r"\AgAAAAA[A-Za-z0-9_-]{80,}={0,2}\Z")
 
 
 def adapt_codex_tool_call(
@@ -65,10 +66,11 @@ def _canonicalize(name: str, input_data: dict[str, Any]) -> AdaptedToolCall:
         prompt = input_data.get("message")
         task_name = input_data.get("task_name")
         if isinstance(prompt, str) and isinstance(task_name, str):
+            visible_prompt = "" if _FERNET_TOKEN.fullmatch(prompt) else prompt
             return AdaptedToolCall(
                 "Task",
                 {
-                    "prompt": prompt,
+                    "prompt": visible_prompt,
                     "subagent_type": "codex",
                     "description": task_name,
                     "name": task_name,

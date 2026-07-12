@@ -1644,7 +1644,9 @@ class MarkdownRenderer(Renderer):
         ``_link_async_notifications``; emit it as a second collapsible
         block so the spawn carries the actual agent answer.
         """
-        parts: list[str] = [self._collapsible("Report", self._quote(output.result))]
+        parts: list[str] = []
+        if output.result:
+            parts.append(self._collapsible("Report", self._quote(output.result)))
         if output.async_final_answer:
             parts.append(
                 self._collapsible(

@@ -460,6 +460,30 @@ def parse_task_output(
     del file_path  # Unused
     if not (content := _extract_tool_result_text(tool_result)):
         return None
+    # Codex spawn acknowledgements repeat the task name already displayed in
+    # the Task card title. Remove that redundant field; preserve any future
+    # additional fields as literal JSON rather than interpreting them as
+    # Markdown. An acknowledgement containing only task_name has no body.
+    try:
+        acknowledgement: Any = json.loads(content)
+    except json.JSONDecodeError:
+        acknowledgement = None
+    acknowledgement_dict = (
+        cast(dict[str, Any], acknowledgement)
+        if isinstance(acknowledgement, dict)
+        else None
+    )
+    if acknowledgement_dict is not None and isinstance(
+        acknowledgement_dict.get("task_name"), str
+    ):
+        remainder = dict(acknowledgement_dict)
+        remainder.pop("task_name", None)
+        result = (
+            "```json\n" + json.dumps(remainder, indent=2, ensure_ascii=False) + "\n```"
+            if remainder
+            else ""
+        )
+        return TaskOutput(result=result)
     body, metadata = parse_agent_result_metadata(content)
     return TaskOutput(result=body, metadata=metadata)
 

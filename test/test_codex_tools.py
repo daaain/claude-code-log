@@ -66,6 +66,25 @@ def test_collaboration_calls_reuse_task_and_message_renderers() -> None:
     )
 
 
+def test_fernet_shaped_spawn_payload_is_not_rendered_as_task_prompt() -> None:
+    token = "gAAAAA" + "A" * 100
+    spawn = adapt_codex_tool_call(
+        "spawn_agent", {"task_name": "research", "message": token}
+    )
+
+    assert spawn.name == "Task"
+    assert spawn.input["prompt"] == ""
+
+
+def test_ordinary_long_spawn_prompt_is_preserved() -> None:
+    prompt = "Inspect the synthetic fixtures. " * 20
+    spawn = adapt_codex_tool_call(
+        "spawn_agent", {"task_name": "research", "message": prompt}
+    )
+
+    assert spawn.input["prompt"] == prompt
+
+
 def test_plan_and_search_reuse_specialized_renderers() -> None:
     plan = adapt_codex_tool_call(
         "update_plan",
