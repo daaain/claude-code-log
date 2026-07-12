@@ -31,6 +31,7 @@ from .base import (
     file_mtime_iso,
     make_assistant_entry,
     make_thinking_entry,
+    make_tool_result_entry,
     make_tool_use_entry,
     make_user_entry,
 )
@@ -87,6 +88,13 @@ class _DecodedRecord:
     timestamp: str
     kind: str
     payload: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class _WebOpenItem:
+    ref_id: str
+    result: str
+    result_timestamp: str
 
 
 class CodexProvider(BaseProvider):
@@ -372,6 +380,7 @@ class CodexProvider(BaseProvider):
     ) -> Iterator[_CodexEntry]:
         records = self._coalesce_command_sessions(records)
         tool_names = self._adapted_tool_names(records)
+        web_open_batches = self._web_open_batches(records)
         preferred = Counter(
             fingerprint
             for record in records
@@ -408,6 +417,7 @@ class CodexProvider(BaseProvider):
                 preferred,
                 suppressed,
                 tool_names,
+                web_open_batches,
             )
             for subindex, entry in enumerate(candidates):
                 if max_messages is not None and emitted >= max_messages:
@@ -570,6 +580,70 @@ class CodexProvider(BaseProvider):
                 names[adapted[0]] = adapted[1].name
         return names
 
+    def _web_open_batches(
+        self, records: list[_DecodedRecord]
+    ) -> dict[str, list[_WebOpenItem]]:
+        """Find open-only web batches whose results split without guessing."""
+        requests: dict[str, list[str]] = {}
+        outputs: dict[str, tuple[str, str]] = {}
+        for record in records:
+            adapted = self._adapted_call(record)
+            if adapted is not None and adapted[1].name == "web__run":
+                call_id, call = adapted
+                other_actions = set(call.input) - {"open", "response_length"}
+                raw_open = call.input.get("open")
+                if other_actions or not isinstance(raw_open, list):
+                    continue
+                open_items = cast(list[Any], raw_open)
+                refs: list[str] = []
+                for raw_item in open_items:
+                    if not isinstance(raw_item, dict):
+                        break
+                    ref_id = cast(dict[str, Any], raw_item).get("ref_id")
+                    if not isinstance(ref_id, str):
+                        break
+                    refs.append(ref_id)
+                if refs and len(refs) == len(open_items):
+                    requests[call_id] = refs
+                continue
+
+            payload_type = self._nonempty_string(record.payload.get("type"))
+            call_id = self._nonempty_string(record.payload.get("call_id"))
+            if (
+                call_id is None
+                or payload_type
+                not in {"function_call_output", "custom_tool_call_output"}
+            ):
+                continue
+            value = record.payload.get("output")
+            if isinstance(value, str):
+                outputs[call_id] = (value, record.timestamp)
+            elif isinstance(value, list) and all(
+                isinstance(item, dict) for item in cast(list[Any], value)
+            ):
+                text = self._command_output(cast(list[dict[str, Any]], value))
+                if text is not None:
+                    outputs[call_id] = (text, record.timestamp)
+
+        batches: dict[str, list[_WebOpenItem]] = {}
+        for call_id, refs in requests.items():
+            output = outputs.get(call_id)
+            if output is None:
+                continue
+            text, timestamp = output
+            chunks = re.split(r"\r?\n-{40,}\r?\n", text)
+            if len(chunks) != len(refs):
+                continue
+            batches[call_id] = [
+                _WebOpenItem(
+                    ref_id=ref_id,
+                    result=chunk.strip("\r\n"),
+                    result_timestamp=timestamp,
+                )
+                for ref_id, chunk in zip(refs, chunks)
+            ]
+        return batches
+
     def _normalize_record(
         self,
         thread_id: str,
@@ -578,12 +652,19 @@ class CodexProvider(BaseProvider):
         preferred: Counter[tuple[str, str]],
         suppressed: Counter[tuple[str, str]],
         tool_names: dict[str, str],
+        web_open_batches: dict[str, list[_WebOpenItem]],
     ) -> list[_CodexEntry]:
         if record.kind == "event_msg":
             return self._normalize_event(thread_id, record, model)
         if record.kind == "response_item":
             return self._normalize_response(
-                thread_id, record, model, preferred, suppressed, tool_names
+                thread_id,
+                record,
+                model,
+                preferred,
+                suppressed,
+                tool_names,
+                web_open_batches,
             )
         return []
 
@@ -618,6 +699,7 @@ class CodexProvider(BaseProvider):
         preferred: Counter[tuple[str, str]],
         suppressed: Counter[tuple[str, str]],
         tool_names: dict[str, str],
+        web_open_batches: dict[str, list[_WebOpenItem]],
     ) -> list[_CodexEntry]:
         payload = record.payload
         payload_type = self._nonempty_string(payload.get("type")) or ""
@@ -665,6 +747,32 @@ class CodexProvider(BaseProvider):
 
         if payload_type in {"function_call", "custom_tool_call"}:
             call_id = self._nonempty_string(payload.get("call_id")) or uuid
+            batch = web_open_batches.get(call_id)
+            if batch is not None:
+                expanded: list[_CodexEntry] = []
+                for index, item in enumerate(batch):
+                    derived_id = f"{call_id}:open:{index}"
+                    expanded.append(
+                        make_tool_use_entry(
+                            thread_id,
+                            uuid,
+                            record.timestamp,
+                            model,
+                            derived_id,
+                            "WebFetch",
+                            {"url": item.ref_id, "prompt": ""},
+                        )
+                    )
+                    expanded.append(
+                        make_tool_result_entry(
+                            thread_id,
+                            uuid,
+                            item.result_timestamp,
+                            derived_id,
+                            item.result,
+                        )
+                    )
+                return expanded
             name = self._nonempty_string(payload.get("name")) or payload_type
             raw_input = (
                 payload.get("arguments")
@@ -691,6 +799,8 @@ class CodexProvider(BaseProvider):
 
         if payload_type in {"function_call_output", "custom_tool_call_output"}:
             call_id = self._nonempty_string(payload.get("call_id")) or uuid
+            if call_id in web_open_batches:
+                return []
             output = self._tool_output(
                 payload.get("output", ""),
                 tool_name=tool_names.get(call_id),
