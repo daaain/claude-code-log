@@ -349,17 +349,13 @@
         document.addEventListener('keydown', handleKeyboardShortcuts);
     }
 
-    // Stable identity of a matched message: the transcript UUID survives
-    // re-renders and re-searches; the positional data-message-id is only a
-    // fallback (synthesized messages without a UUID).
-    function matchAnchor(element) {
-        return element.dataset.uuid || element.dataset.messageId || null;
-    }
-
-    // Perform search. options.preserveCurrent keeps the current match (found
-    // again by its stable anchor) instead of resetting to the first match —
-    // used when re-running the same query after an option/filter change so
-    // the view stays put instead of jumping back to match 1.
+    // Perform search. options.preserveCurrent keeps the current match instead
+    // of resetting to the first match — used when re-running the same query
+    // after an option/filter change so the view stays put instead of jumping
+    // back to match 1. Matching is by element identity: message cards are
+    // never recreated within a page load (re-search only re-queries the same
+    // DOM nodes), and data-uuid is NOT unique per card — cards split from one
+    // transcript entry (text + tool_use) share the entry's UUID.
     let isSearching = false;
     function performSearch(query, options = {}) {
         // Prevent concurrent searches
@@ -367,8 +363,8 @@
         isSearching = true;
 
         const currentMatch = searchState.matches[searchState.currentMatchIndex];
-        const preserveAnchor = options.preserveCurrent && !searchState.isIndexPage && currentMatch
-            ? matchAnchor(currentMatch.element)
+        const preserveElement = options.preserveCurrent && !searchState.isIndexPage && currentMatch
+            ? currentMatch.element
             : null;
 
         searchState.query = query;
@@ -459,9 +455,9 @@
         searchState.totalMatchCount = totalMatchCount;
 
         searchState.currentMatchIndex = searchState.matches.length > 0 ? 0 : -1;
-        if (preserveAnchor && searchState.currentMatchIndex === 0) {
+        if (preserveElement && searchState.currentMatchIndex === 0) {
             const preservedIndex = searchState.matches.findIndex(
-                m => matchAnchor(m.element) === preserveAnchor
+                m => m.element === preserveElement
             );
             if (preservedIndex >= 0) {
                 searchState.currentMatchIndex = preservedIndex;
@@ -702,7 +698,7 @@
             html += `
                 <div class="search-result-group">
                     <div class="search-result-group-title">
-                        ${projectName}
+                        ${escapeHtml(projectName)}
                         <span class="search-result-count">${totalMatchCount} matches in ${totalMatches.length} items</span>
                     </div>
             `;
@@ -711,14 +707,14 @@
             groups.projects.forEach(match => {
                 html += `
                     <div class="search-result-item">
-                        <a href="${match.link}">
+                        <a href="${escapeHtml(match.link)}">
                             <div class="search-result-session">📁 Project Overview</div>
                             <div class="search-result-excerpt">
                                 ${highlightText(match.excerpt, searchState.query)}
                             </div>
                             <div class="search-result-meta">
                                 <span>${match.matchCount} matches</span>
-                                <span>${match.stats}</span>
+                                <span>${escapeHtml(match.stats)}</span>
                             </div>
                         </a>
                     </div>
@@ -730,14 +726,14 @@
                 const sessionId = match.link.split('/').pop().replace('session-', '').replace('.html', '').substring(0, 8);
                 html += `
                     <div class="search-result-item">
-                        <a href="${match.link}">
-                            <div class="search-result-session">💬 Session ${sessionId}</div>
+                        <a href="${escapeHtml(match.link)}">
+                            <div class="search-result-session">💬 Session ${escapeHtml(sessionId)}</div>
                             <div class="search-result-excerpt">
                                 ${highlightText(match.excerpt, searchState.query)}
                             </div>
                             <div class="search-result-meta">
                                 <span>${match.matchCount} matches</span>
-                                <span>${match.sessionMeta}</span>
+                                <span>${escapeHtml(match.sessionMeta)}</span>
                             </div>
                         </a>
                     </div>
@@ -750,15 +746,39 @@
         searchResultsContent.innerHTML = html;
     }
 
-    // Highlight text in search results (always case-insensitive)
+    // Escape text for interpolation into innerHTML-backed markup — the
+    // indexed content is arbitrary conversation text.
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text ?? '';
+        return div.innerHTML;
+    }
+
+    // Highlight text in search results (always case-insensitive). Matches
+    // run against the raw text; the output is escaped segment by segment so
+    // only the highlight spans themselves are markup.
     function highlightText(text, query) {
-        if (!query) return text;
+        if (!text) return '';
+        if (!query) return escapeHtml(text);
 
-        const pattern = searchState.useRegex ?
-            new RegExp(query, 'gi') :
-            new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+        let pattern;
+        try {
+            pattern = searchState.useRegex ?
+                new RegExp(query, 'gi') :
+                new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+        } catch (e) {
+            return escapeHtml(text);
+        }
 
-        return text.replace(pattern, match => `<span class="search-highlight">${match}</span>`);
+        let html = '';
+        let lastIndex = 0;
+        for (const match of text.matchAll(pattern)) {
+            html += escapeHtml(text.substring(lastIndex, match.index));
+            html += `<span class="search-highlight">${escapeHtml(match[0])}</span>`;
+            lastIndex = match.index + match[0].length;
+        }
+        html += escapeHtml(text.substring(lastIndex));
+        return html;
     }
 
     // Update search UI

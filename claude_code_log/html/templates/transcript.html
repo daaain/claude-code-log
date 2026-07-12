@@ -177,8 +177,10 @@
     <div class='message-node'>
     {# data-uuid: the message's transcript UUID — stable across re-renders,
        unlike the positional msg-d-N slot ids (see work/archive-search-server.md,
-       "The anchor problem"). Search uses it to keep the current match pinned
-       when re-filtering; archive search / annotations can deep-link on it. #}
+       "The anchor problem"). Archive search / annotations can deep-link on it.
+       NOT unique per card: sibling cards split from one entry (text + tool_use)
+       share the entry's UUID, so anything needing per-card identity within a
+       page must use data-message-id or element identity instead. #}
     <div class='message {{ msg_css_class }}{% if message.is_paired %} {{ message.pair_role }}{% endif %}' data-message-id='{{ message.message_id }}'{% if message.meta and message.meta.uuid %} data-uuid='{{ message.meta.uuid }}'{% endif %} id='msg-{{ message.message_id }}'>
         <div class='header'>
             {% set msg_emoji = get_message_emoji(message) -%}
