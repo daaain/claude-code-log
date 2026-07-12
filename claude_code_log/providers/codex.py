@@ -48,6 +48,9 @@ _FILENAME_UUID_RE = re.compile(
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$"
 )
 _RUNNING_CELL_RE = re.compile(r"Script running with cell ID ([^\s]+)")
+_COMPLETED_COMMAND_RE = re.compile(
+    r"\AScript completed\r?\nWall time:? [^\r\n]+\r?\nOutput:\r?\n?\Z"
+)
 
 
 @dataclass(frozen=True)
@@ -368,6 +371,7 @@ class CodexProvider(BaseProvider):
         max_messages: Optional[int],
     ) -> Iterator[_CodexEntry]:
         records = self._coalesce_command_sessions(records)
+        tool_names = self._adapted_tool_names(records)
         preferred = Counter(
             fingerprint
             for record in records
@@ -398,7 +402,12 @@ class CodexProvider(BaseProvider):
                 continue
 
             candidates = self._normalize_record(
-                identity.thread_id, record, model, preferred, suppressed
+                identity.thread_id,
+                record,
+                model,
+                preferred,
+                suppressed,
+                tool_names,
             )
             for subindex, entry in enumerate(candidates):
                 if max_messages is not None and emitted >= max_messages:
@@ -552,6 +561,15 @@ class CodexProvider(BaseProvider):
             and record.payload.get("call_id") == call_id
         )
 
+    def _adapted_tool_names(self, records: list[_DecodedRecord]) -> dict[str, str]:
+        """Index canonical tool names for result-side normalization."""
+        names: dict[str, str] = {}
+        for record in records:
+            adapted = self._adapted_call(record)
+            if adapted is not None:
+                names[adapted[0]] = adapted[1].name
+        return names
+
     def _normalize_record(
         self,
         thread_id: str,
@@ -559,12 +577,13 @@ class CodexProvider(BaseProvider):
         model: str,
         preferred: Counter[tuple[str, str]],
         suppressed: Counter[tuple[str, str]],
+        tool_names: dict[str, str],
     ) -> list[_CodexEntry]:
         if record.kind == "event_msg":
             return self._normalize_event(thread_id, record, model)
         if record.kind == "response_item":
             return self._normalize_response(
-                thread_id, record, model, preferred, suppressed
+                thread_id, record, model, preferred, suppressed, tool_names
             )
         return []
 
@@ -598,6 +617,7 @@ class CodexProvider(BaseProvider):
         model: str,
         preferred: Counter[tuple[str, str]],
         suppressed: Counter[tuple[str, str]],
+        tool_names: dict[str, str],
     ) -> list[_CodexEntry]:
         payload = record.payload
         payload_type = self._nonempty_string(payload.get("type")) or ""
@@ -671,7 +691,10 @@ class CodexProvider(BaseProvider):
 
         if payload_type in {"function_call_output", "custom_tool_call_output"}:
             call_id = self._nonempty_string(payload.get("call_id")) or uuid
-            output = self._tool_output(payload.get("output", ""))
+            output = self._tool_output(
+                payload.get("output", ""),
+                tool_name=tool_names.get(call_id),
+            )
             return [
                 UserTranscriptEntry(
                     type="user",
@@ -763,16 +786,19 @@ class CodexProvider(BaseProvider):
             return {"input": parsed}
         return {"input": value}
 
-    def _tool_output(self, value: Any) -> str | list[dict[str, Any]]:
+    def _tool_output(
+        self, value: Any, *, tool_name: Optional[str] = None
+    ) -> str | list[dict[str, Any]]:
         if isinstance(value, str):
             return value
         if isinstance(value, list):
             items = cast(list[Any], value)
             if all(isinstance(item, dict) for item in items):
                 structured = cast(list[dict[str, Any]], items)
-                command_output = self._command_output(structured)
-                if command_output is not None:
-                    return command_output
+                if tool_name == "Bash":
+                    command_output = self._command_output(structured)
+                    if command_output is not None:
+                        return command_output
                 return structured
         try:
             return json.dumps(cast(Any, value), ensure_ascii=False)
@@ -791,7 +817,31 @@ class CodexProvider(BaseProvider):
         """
         result = self._command_result(items)
         output = result.get("output") if result is not None else None
-        return output if isinstance(output, str) else None
+        if isinstance(output, str):
+            return output
+
+        if not items:
+            return None
+        status = items[0]
+        status_text = status.get("text")
+        if (
+            status.get("type") not in {"input_text", "output_text", "text"}
+            or not isinstance(status_text, str)
+            or _COMPLETED_COMMAND_RE.fullmatch(status_text) is None
+        ):
+            return None
+
+        chunks: list[str] = []
+        for item in items[1:]:
+            if item.get("type") not in {"input_text", "output_text", "text"}:
+                return None
+            text = item.get("text")
+            if not isinstance(text, str):
+                return None
+            if chunks and chunks[-1] and not chunks[-1].endswith("\n") and text:
+                chunks.append("\n")
+            chunks.append(text)
+        return "".join(chunks)
 
     def _command_result(self, value: Any) -> Optional[dict[str, Any]]:
         if not isinstance(value, list):
