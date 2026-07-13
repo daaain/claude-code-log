@@ -5982,20 +5982,27 @@
           return ancestors;
       }
   
+      // Build the case-insensitive global search pattern for `query`, honoring
+      // the regex/literal toggle (literal queries are escaped). Returns null
+      // when useRegex is on and the query is not yet a valid regex — each caller
+      // supplies its own fallback so invalid-regex handling stays per-caller.
+      function buildSearchPattern(query) {
+          try {
+              const source = searchState.useRegex
+                  ? query
+                  : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              return new RegExp(source, 'gi');
+          } catch (e) {
+              return null;
+          }
+      }
+  
       // Create excerpt with context around matches
       function createExcerpt(text, query, contextLength = 50) {
           if (!text || !query) return '';
   
-          // Create search pattern (always case-insensitive)
-          let pattern;
-          try {
-              if (searchState.useRegex) {
-                  pattern = new RegExp(query, 'gi');
-              } else {
-                  const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                  pattern = new RegExp(escapedQuery, 'gi');
-              }
-          } catch (e) {
+          const pattern = buildSearchPattern(query);
+          if (!pattern) {
               return text.substring(0, 100) + (text.length > 100 ? '...' : '');
           }
   
@@ -6048,20 +6055,11 @@
       function countMatches(text, query) {
           if (!text || !query) return 0;
   
-          try {
-              let pattern;
-              if (searchState.useRegex) {
-                  pattern = new RegExp(query, 'gi');
-              } else {
-                  const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                  pattern = new RegExp(escapedQuery, 'gi');
-              }
+          const pattern = buildSearchPattern(query);
+          if (!pattern) return 0;
   
-              const matches = text.match(pattern);
-              return matches ? matches.length : 0;
-          } catch (e) {
-              return 0;
-          }
+          const matches = text.match(pattern);
+          return matches ? matches.length : 0;
       }
   
       // Toggle search hint and clear button visibility based on input content
@@ -6175,15 +6173,8 @@
           saveSearchState();
   
           // Create search pattern (always case-insensitive)
-          let searchPattern;
-          try {
-              if (searchState.useRegex) {
-                  searchPattern = new RegExp(query, 'gi');
-              } else {
-                  const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                  searchPattern = new RegExp(escapedQuery, 'gi');
-              }
-          } catch (e) {
+          const searchPattern = buildSearchPattern(query);
+          if (!searchPattern) {
               // Invalid regex: show everything rather than filtering on a
               // pattern the user is still typing
               searchState.matches = [];
@@ -6548,14 +6539,8 @@
           if (!text) return '';
           if (!query) return escapeHtml(text);
   
-          let pattern;
-          try {
-              pattern = searchState.useRegex ?
-                  new RegExp(query, 'gi') :
-                  new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
-          } catch (e) {
-              return escapeHtml(text);
-          }
+          const pattern = buildSearchPattern(query);
+          if (!pattern) return escapeHtml(text);
   
           let html = '';
           let lastIndex = 0;
@@ -12655,20 +12640,27 @@
           return ancestors;
       }
   
+      // Build the case-insensitive global search pattern for `query`, honoring
+      // the regex/literal toggle (literal queries are escaped). Returns null
+      // when useRegex is on and the query is not yet a valid regex — each caller
+      // supplies its own fallback so invalid-regex handling stays per-caller.
+      function buildSearchPattern(query) {
+          try {
+              const source = searchState.useRegex
+                  ? query
+                  : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              return new RegExp(source, 'gi');
+          } catch (e) {
+              return null;
+          }
+      }
+  
       // Create excerpt with context around matches
       function createExcerpt(text, query, contextLength = 50) {
           if (!text || !query) return '';
   
-          // Create search pattern (always case-insensitive)
-          let pattern;
-          try {
-              if (searchState.useRegex) {
-                  pattern = new RegExp(query, 'gi');
-              } else {
-                  const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                  pattern = new RegExp(escapedQuery, 'gi');
-              }
-          } catch (e) {
+          const pattern = buildSearchPattern(query);
+          if (!pattern) {
               return text.substring(0, 100) + (text.length > 100 ? '...' : '');
           }
   
@@ -12721,20 +12713,11 @@
       function countMatches(text, query) {
           if (!text || !query) return 0;
   
-          try {
-              let pattern;
-              if (searchState.useRegex) {
-                  pattern = new RegExp(query, 'gi');
-              } else {
-                  const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                  pattern = new RegExp(escapedQuery, 'gi');
-              }
+          const pattern = buildSearchPattern(query);
+          if (!pattern) return 0;
   
-              const matches = text.match(pattern);
-              return matches ? matches.length : 0;
-          } catch (e) {
-              return 0;
-          }
+          const matches = text.match(pattern);
+          return matches ? matches.length : 0;
       }
   
       // Toggle search hint and clear button visibility based on input content
@@ -12848,15 +12831,8 @@
           saveSearchState();
   
           // Create search pattern (always case-insensitive)
-          let searchPattern;
-          try {
-              if (searchState.useRegex) {
-                  searchPattern = new RegExp(query, 'gi');
-              } else {
-                  const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                  searchPattern = new RegExp(escapedQuery, 'gi');
-              }
-          } catch (e) {
+          const searchPattern = buildSearchPattern(query);
+          if (!searchPattern) {
               // Invalid regex: show everything rather than filtering on a
               // pattern the user is still typing
               searchState.matches = [];
@@ -13221,14 +13197,8 @@
           if (!text) return '';
           if (!query) return escapeHtml(text);
   
-          let pattern;
-          try {
-              pattern = searchState.useRegex ?
-                  new RegExp(query, 'gi') :
-                  new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
-          } catch (e) {
-              return escapeHtml(text);
-          }
+          const pattern = buildSearchPattern(query);
+          if (!pattern) return escapeHtml(text);
   
           let html = '';
           let lastIndex = 0;
@@ -14651,7 +14621,7 @@
       <div id="searchResultsInfo" class="search-results-info">
           <div class="search-navigation">
               <span id="searchResultCount">No results</span>
-              <button id="searchPrev" class="search-nav-btn" disabled title="Previous match (Shift+Enter / Shift+F3)">↑ <kbd class="search-kbd">Shift+Enter</kbd></button>
+              <button id="searchPrev" class="search-nav-btn" disabled title="Previous match (Shift+Enter / Shift+F3)">↑ <kbd class="search-kbd">Shift+Enter/F3</kbd></button>
               <button id="searchNext" class="search-nav-btn" disabled title="Next match (Enter / F3)">↓ <kbd class="search-kbd">Enter/F3</kbd></button>
           </div>
       </div>
@@ -14831,20 +14801,27 @@
           return ancestors;
       }
   
+      // Build the case-insensitive global search pattern for `query`, honoring
+      // the regex/literal toggle (literal queries are escaped). Returns null
+      // when useRegex is on and the query is not yet a valid regex — each caller
+      // supplies its own fallback so invalid-regex handling stays per-caller.
+      function buildSearchPattern(query) {
+          try {
+              const source = searchState.useRegex
+                  ? query
+                  : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              return new RegExp(source, 'gi');
+          } catch (e) {
+              return null;
+          }
+      }
+  
       // Create excerpt with context around matches
       function createExcerpt(text, query, contextLength = 50) {
           if (!text || !query) return '';
   
-          // Create search pattern (always case-insensitive)
-          let pattern;
-          try {
-              if (searchState.useRegex) {
-                  pattern = new RegExp(query, 'gi');
-              } else {
-                  const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                  pattern = new RegExp(escapedQuery, 'gi');
-              }
-          } catch (e) {
+          const pattern = buildSearchPattern(query);
+          if (!pattern) {
               return text.substring(0, 100) + (text.length > 100 ? '...' : '');
           }
   
@@ -14897,20 +14874,11 @@
       function countMatches(text, query) {
           if (!text || !query) return 0;
   
-          try {
-              let pattern;
-              if (searchState.useRegex) {
-                  pattern = new RegExp(query, 'gi');
-              } else {
-                  const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                  pattern = new RegExp(escapedQuery, 'gi');
-              }
+          const pattern = buildSearchPattern(query);
+          if (!pattern) return 0;
   
-              const matches = text.match(pattern);
-              return matches ? matches.length : 0;
-          } catch (e) {
-              return 0;
-          }
+          const matches = text.match(pattern);
+          return matches ? matches.length : 0;
       }
   
       // Toggle search hint and clear button visibility based on input content
@@ -15024,15 +14992,8 @@
           saveSearchState();
   
           // Create search pattern (always case-insensitive)
-          let searchPattern;
-          try {
-              if (searchState.useRegex) {
-                  searchPattern = new RegExp(query, 'gi');
-              } else {
-                  const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                  searchPattern = new RegExp(escapedQuery, 'gi');
-              }
-          } catch (e) {
+          const searchPattern = buildSearchPattern(query);
+          if (!searchPattern) {
               // Invalid regex: show everything rather than filtering on a
               // pattern the user is still typing
               searchState.matches = [];
@@ -15397,14 +15358,8 @@
           if (!text) return '';
           if (!query) return escapeHtml(text);
   
-          let pattern;
-          try {
-              pattern = searchState.useRegex ?
-                  new RegExp(query, 'gi') :
-                  new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
-          } catch (e) {
-              return escapeHtml(text);
-          }
+          const pattern = buildSearchPattern(query);
+          if (!pattern) return escapeHtml(text);
   
           let html = '';
           let lastIndex = 0;
@@ -21983,20 +21938,27 @@
           return ancestors;
       }
   
+      // Build the case-insensitive global search pattern for `query`, honoring
+      // the regex/literal toggle (literal queries are escaped). Returns null
+      // when useRegex is on and the query is not yet a valid regex — each caller
+      // supplies its own fallback so invalid-regex handling stays per-caller.
+      function buildSearchPattern(query) {
+          try {
+              const source = searchState.useRegex
+                  ? query
+                  : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              return new RegExp(source, 'gi');
+          } catch (e) {
+              return null;
+          }
+      }
+  
       // Create excerpt with context around matches
       function createExcerpt(text, query, contextLength = 50) {
           if (!text || !query) return '';
   
-          // Create search pattern (always case-insensitive)
-          let pattern;
-          try {
-              if (searchState.useRegex) {
-                  pattern = new RegExp(query, 'gi');
-              } else {
-                  const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                  pattern = new RegExp(escapedQuery, 'gi');
-              }
-          } catch (e) {
+          const pattern = buildSearchPattern(query);
+          if (!pattern) {
               return text.substring(0, 100) + (text.length > 100 ? '...' : '');
           }
   
@@ -22049,20 +22011,11 @@
       function countMatches(text, query) {
           if (!text || !query) return 0;
   
-          try {
-              let pattern;
-              if (searchState.useRegex) {
-                  pattern = new RegExp(query, 'gi');
-              } else {
-                  const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                  pattern = new RegExp(escapedQuery, 'gi');
-              }
+          const pattern = buildSearchPattern(query);
+          if (!pattern) return 0;
   
-              const matches = text.match(pattern);
-              return matches ? matches.length : 0;
-          } catch (e) {
-              return 0;
-          }
+          const matches = text.match(pattern);
+          return matches ? matches.length : 0;
       }
   
       // Toggle search hint and clear button visibility based on input content
@@ -22176,15 +22129,8 @@
           saveSearchState();
   
           // Create search pattern (always case-insensitive)
-          let searchPattern;
-          try {
-              if (searchState.useRegex) {
-                  searchPattern = new RegExp(query, 'gi');
-              } else {
-                  const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                  searchPattern = new RegExp(escapedQuery, 'gi');
-              }
-          } catch (e) {
+          const searchPattern = buildSearchPattern(query);
+          if (!searchPattern) {
               // Invalid regex: show everything rather than filtering on a
               // pattern the user is still typing
               searchState.matches = [];
@@ -22549,14 +22495,8 @@
           if (!text) return '';
           if (!query) return escapeHtml(text);
   
-          let pattern;
-          try {
-              pattern = searchState.useRegex ?
-                  new RegExp(query, 'gi') :
-                  new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
-          } catch (e) {
-              return escapeHtml(text);
-          }
+          const pattern = buildSearchPattern(query);
+          if (!pattern) return escapeHtml(text);
   
           let html = '';
           let lastIndex = 0;
@@ -29159,20 +29099,27 @@
           return ancestors;
       }
   
+      // Build the case-insensitive global search pattern for `query`, honoring
+      // the regex/literal toggle (literal queries are escaped). Returns null
+      // when useRegex is on and the query is not yet a valid regex — each caller
+      // supplies its own fallback so invalid-regex handling stays per-caller.
+      function buildSearchPattern(query) {
+          try {
+              const source = searchState.useRegex
+                  ? query
+                  : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              return new RegExp(source, 'gi');
+          } catch (e) {
+              return null;
+          }
+      }
+  
       // Create excerpt with context around matches
       function createExcerpt(text, query, contextLength = 50) {
           if (!text || !query) return '';
   
-          // Create search pattern (always case-insensitive)
-          let pattern;
-          try {
-              if (searchState.useRegex) {
-                  pattern = new RegExp(query, 'gi');
-              } else {
-                  const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                  pattern = new RegExp(escapedQuery, 'gi');
-              }
-          } catch (e) {
+          const pattern = buildSearchPattern(query);
+          if (!pattern) {
               return text.substring(0, 100) + (text.length > 100 ? '...' : '');
           }
   
@@ -29225,20 +29172,11 @@
       function countMatches(text, query) {
           if (!text || !query) return 0;
   
-          try {
-              let pattern;
-              if (searchState.useRegex) {
-                  pattern = new RegExp(query, 'gi');
-              } else {
-                  const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                  pattern = new RegExp(escapedQuery, 'gi');
-              }
+          const pattern = buildSearchPattern(query);
+          if (!pattern) return 0;
   
-              const matches = text.match(pattern);
-              return matches ? matches.length : 0;
-          } catch (e) {
-              return 0;
-          }
+          const matches = text.match(pattern);
+          return matches ? matches.length : 0;
       }
   
       // Toggle search hint and clear button visibility based on input content
@@ -29352,15 +29290,8 @@
           saveSearchState();
   
           // Create search pattern (always case-insensitive)
-          let searchPattern;
-          try {
-              if (searchState.useRegex) {
-                  searchPattern = new RegExp(query, 'gi');
-              } else {
-                  const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                  searchPattern = new RegExp(escapedQuery, 'gi');
-              }
-          } catch (e) {
+          const searchPattern = buildSearchPattern(query);
+          if (!searchPattern) {
               // Invalid regex: show everything rather than filtering on a
               // pattern the user is still typing
               searchState.matches = [];
@@ -29725,14 +29656,8 @@
           if (!text) return '';
           if (!query) return escapeHtml(text);
   
-          let pattern;
-          try {
-              pattern = searchState.useRegex ?
-                  new RegExp(query, 'gi') :
-                  new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
-          } catch (e) {
-              return escapeHtml(text);
-          }
+          const pattern = buildSearchPattern(query);
+          if (!pattern) return escapeHtml(text);
   
           let html = '';
           let lastIndex = 0;
@@ -36286,20 +36211,27 @@
           return ancestors;
       }
   
+      // Build the case-insensitive global search pattern for `query`, honoring
+      // the regex/literal toggle (literal queries are escaped). Returns null
+      // when useRegex is on and the query is not yet a valid regex — each caller
+      // supplies its own fallback so invalid-regex handling stays per-caller.
+      function buildSearchPattern(query) {
+          try {
+              const source = searchState.useRegex
+                  ? query
+                  : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              return new RegExp(source, 'gi');
+          } catch (e) {
+              return null;
+          }
+      }
+  
       // Create excerpt with context around matches
       function createExcerpt(text, query, contextLength = 50) {
           if (!text || !query) return '';
   
-          // Create search pattern (always case-insensitive)
-          let pattern;
-          try {
-              if (searchState.useRegex) {
-                  pattern = new RegExp(query, 'gi');
-              } else {
-                  const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                  pattern = new RegExp(escapedQuery, 'gi');
-              }
-          } catch (e) {
+          const pattern = buildSearchPattern(query);
+          if (!pattern) {
               return text.substring(0, 100) + (text.length > 100 ? '...' : '');
           }
   
@@ -36352,20 +36284,11 @@
       function countMatches(text, query) {
           if (!text || !query) return 0;
   
-          try {
-              let pattern;
-              if (searchState.useRegex) {
-                  pattern = new RegExp(query, 'gi');
-              } else {
-                  const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                  pattern = new RegExp(escapedQuery, 'gi');
-              }
+          const pattern = buildSearchPattern(query);
+          if (!pattern) return 0;
   
-              const matches = text.match(pattern);
-              return matches ? matches.length : 0;
-          } catch (e) {
-              return 0;
-          }
+          const matches = text.match(pattern);
+          return matches ? matches.length : 0;
       }
   
       // Toggle search hint and clear button visibility based on input content
@@ -36479,15 +36402,8 @@
           saveSearchState();
   
           // Create search pattern (always case-insensitive)
-          let searchPattern;
-          try {
-              if (searchState.useRegex) {
-                  searchPattern = new RegExp(query, 'gi');
-              } else {
-                  const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                  searchPattern = new RegExp(escapedQuery, 'gi');
-              }
-          } catch (e) {
+          const searchPattern = buildSearchPattern(query);
+          if (!searchPattern) {
               // Invalid regex: show everything rather than filtering on a
               // pattern the user is still typing
               searchState.matches = [];
@@ -36852,14 +36768,8 @@
           if (!text) return '';
           if (!query) return escapeHtml(text);
   
-          let pattern;
-          try {
-              pattern = searchState.useRegex ?
-                  new RegExp(query, 'gi') :
-                  new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
-          } catch (e) {
-              return escapeHtml(text);
-          }
+          const pattern = buildSearchPattern(query);
+          if (!pattern) return escapeHtml(text);
   
           let html = '';
           let lastIndex = 0;
@@ -43358,20 +43268,27 @@
           return ancestors;
       }
   
+      // Build the case-insensitive global search pattern for `query`, honoring
+      // the regex/literal toggle (literal queries are escaped). Returns null
+      // when useRegex is on and the query is not yet a valid regex — each caller
+      // supplies its own fallback so invalid-regex handling stays per-caller.
+      function buildSearchPattern(query) {
+          try {
+              const source = searchState.useRegex
+                  ? query
+                  : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              return new RegExp(source, 'gi');
+          } catch (e) {
+              return null;
+          }
+      }
+  
       // Create excerpt with context around matches
       function createExcerpt(text, query, contextLength = 50) {
           if (!text || !query) return '';
   
-          // Create search pattern (always case-insensitive)
-          let pattern;
-          try {
-              if (searchState.useRegex) {
-                  pattern = new RegExp(query, 'gi');
-              } else {
-                  const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                  pattern = new RegExp(escapedQuery, 'gi');
-              }
-          } catch (e) {
+          const pattern = buildSearchPattern(query);
+          if (!pattern) {
               return text.substring(0, 100) + (text.length > 100 ? '...' : '');
           }
   
@@ -43424,20 +43341,11 @@
       function countMatches(text, query) {
           if (!text || !query) return 0;
   
-          try {
-              let pattern;
-              if (searchState.useRegex) {
-                  pattern = new RegExp(query, 'gi');
-              } else {
-                  const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                  pattern = new RegExp(escapedQuery, 'gi');
-              }
+          const pattern = buildSearchPattern(query);
+          if (!pattern) return 0;
   
-              const matches = text.match(pattern);
-              return matches ? matches.length : 0;
-          } catch (e) {
-              return 0;
-          }
+          const matches = text.match(pattern);
+          return matches ? matches.length : 0;
       }
   
       // Toggle search hint and clear button visibility based on input content
@@ -43551,15 +43459,8 @@
           saveSearchState();
   
           // Create search pattern (always case-insensitive)
-          let searchPattern;
-          try {
-              if (searchState.useRegex) {
-                  searchPattern = new RegExp(query, 'gi');
-              } else {
-                  const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                  searchPattern = new RegExp(escapedQuery, 'gi');
-              }
-          } catch (e) {
+          const searchPattern = buildSearchPattern(query);
+          if (!searchPattern) {
               // Invalid regex: show everything rather than filtering on a
               // pattern the user is still typing
               searchState.matches = [];
@@ -43924,14 +43825,8 @@
           if (!text) return '';
           if (!query) return escapeHtml(text);
   
-          let pattern;
-          try {
-              pattern = searchState.useRegex ?
-                  new RegExp(query, 'gi') :
-                  new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
-          } catch (e) {
-              return escapeHtml(text);
-          }
+          const pattern = buildSearchPattern(query);
+          if (!pattern) return escapeHtml(text);
   
           let html = '';
           let lastIndex = 0;
@@ -50254,20 +50149,27 @@
           return ancestors;
       }
   
+      // Build the case-insensitive global search pattern for `query`, honoring
+      // the regex/literal toggle (literal queries are escaped). Returns null
+      // when useRegex is on and the query is not yet a valid regex — each caller
+      // supplies its own fallback so invalid-regex handling stays per-caller.
+      function buildSearchPattern(query) {
+          try {
+              const source = searchState.useRegex
+                  ? query
+                  : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              return new RegExp(source, 'gi');
+          } catch (e) {
+              return null;
+          }
+      }
+  
       // Create excerpt with context around matches
       function createExcerpt(text, query, contextLength = 50) {
           if (!text || !query) return '';
   
-          // Create search pattern (always case-insensitive)
-          let pattern;
-          try {
-              if (searchState.useRegex) {
-                  pattern = new RegExp(query, 'gi');
-              } else {
-                  const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                  pattern = new RegExp(escapedQuery, 'gi');
-              }
-          } catch (e) {
+          const pattern = buildSearchPattern(query);
+          if (!pattern) {
               return text.substring(0, 100) + (text.length > 100 ? '...' : '');
           }
   
@@ -50320,20 +50222,11 @@
       function countMatches(text, query) {
           if (!text || !query) return 0;
   
-          try {
-              let pattern;
-              if (searchState.useRegex) {
-                  pattern = new RegExp(query, 'gi');
-              } else {
-                  const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                  pattern = new RegExp(escapedQuery, 'gi');
-              }
+          const pattern = buildSearchPattern(query);
+          if (!pattern) return 0;
   
-              const matches = text.match(pattern);
-              return matches ? matches.length : 0;
-          } catch (e) {
-              return 0;
-          }
+          const matches = text.match(pattern);
+          return matches ? matches.length : 0;
       }
   
       // Toggle search hint and clear button visibility based on input content
@@ -50447,15 +50340,8 @@
           saveSearchState();
   
           // Create search pattern (always case-insensitive)
-          let searchPattern;
-          try {
-              if (searchState.useRegex) {
-                  searchPattern = new RegExp(query, 'gi');
-              } else {
-                  const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                  searchPattern = new RegExp(escapedQuery, 'gi');
-              }
-          } catch (e) {
+          const searchPattern = buildSearchPattern(query);
+          if (!searchPattern) {
               // Invalid regex: show everything rather than filtering on a
               // pattern the user is still typing
               searchState.matches = [];
@@ -50820,14 +50706,8 @@
           if (!text) return '';
           if (!query) return escapeHtml(text);
   
-          let pattern;
-          try {
-              pattern = searchState.useRegex ?
-                  new RegExp(query, 'gi') :
-                  new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
-          } catch (e) {
-              return escapeHtml(text);
-          }
+          const pattern = buildSearchPattern(query);
+          if (!pattern) return escapeHtml(text);
   
           let html = '';
           let lastIndex = 0;
