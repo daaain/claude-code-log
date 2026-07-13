@@ -40,7 +40,7 @@ class AgyProvider(BaseProvider):
         if not brain_dir.exists():
             return
 
-        for session_dir in brain_dir.iterdir():
+        for session_dir in sorted(brain_dir.iterdir()):
             if not session_dir.is_dir():
                 continue
             transcript_file = (
@@ -99,13 +99,12 @@ class AgyProvider(BaseProvider):
                     for transcript_entry in self._parse_entry(
                         entry, session_id, message_count, prev_uuid
                     ):
+                        if max_messages is not None and message_count >= max_messages:
+                            return
                         if hasattr(transcript_entry, "uuid"):
                             prev_uuid = cast(Any, transcript_entry).uuid
                         yield transcript_entry
                         message_count += 1
-
-                if max_messages is not None and message_count >= max_messages:
-                    break
 
     def _parse_entry(
         self,

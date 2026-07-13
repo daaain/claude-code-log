@@ -171,6 +171,24 @@ def test_provider_prefix_errors_are_clear(monkeypatch: pytest.MonkeyPatch) -> No
     assert "not found for provider codex" in missing.output
 
 
+def test_provider_duplicate_exact_session_id_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakeProvider(["duplicate", "duplicate"])
+    monkeypatch.setattr(
+        "claude_code_log.providers.discover_providers",
+        lambda: FakeRegistry(fake),
+    )
+
+    result = CliRunner().invoke(
+        main, ["--provider", "codex", "--session-id", "duplicate"]
+    )
+
+    assert result.exit_code != 0
+    assert "Duplicate session ID 'duplicate'" in result.output
+    assert fake.loaded == []
+
+
 def test_unknown_and_unavailable_provider_errors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

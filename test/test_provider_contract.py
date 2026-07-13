@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 import json
 import logging
 import shutil
@@ -9,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from claude_code_log.models import AssistantTranscriptEntry, UserTranscriptEntry
 from claude_code_log.providers.agy import AgyProvider
 from claude_code_log.providers.base import BaseProvider
 from claude_code_log.providers.claude import ClaudeProvider
@@ -18,6 +20,18 @@ from claude_code_log.providers.registry import ProviderRegistry
 
 CODEX_FIXTURES = Path(__file__).parent / "test_data" / "codex"
 CODEX_ID = "11111111-1111-4111-8111-111111111111"
+
+
+def _message_entries(
+    entries: Sequence[object],
+) -> list[UserTranscriptEntry | AssistantTranscriptEntry]:
+    result = [
+        entry
+        for entry in entries
+        if isinstance(entry, (UserTranscriptEntry, AssistantTranscriptEntry))
+    ]
+    assert len(result) == len(entries)
+    return result
 
 
 def _claude_provider(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ClaudeProvider:
@@ -87,13 +101,30 @@ def test_claude_contract_and_strict_normalized_cap(
         list(provider.load_session("../session-a"))
 
 
+def test_claude_duplicate_exact_id_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    provider = _claude_provider(tmp_path, monkeypatch)
+    projects = provider.get_data_dir()
+    assert projects is not None
+    duplicate_project = projects / "another-project"
+    duplicate_project.mkdir()
+    shutil.copyfile(
+        projects / "synthetic-project" / "session-a.jsonl",
+        duplicate_project / "session-a.jsonl",
+    )
+
+    with pytest.raises(ValueError, match="Multiple Claude sessions"):
+        list(provider.load_session("session-a"))
+
+
 def test_agy_contract_caps_expanded_raw_record_and_chains_entries(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     provider = _agy_provider(tmp_path, monkeypatch)
 
     assert [item.session_id for item in provider.discover_sessions()] == ["abcd"]
-    entries = list(provider.load_session("abcd"))
+    entries = _message_entries(list(provider.load_session("abcd")))
     assert len(entries) == 4
     assert [entry.parentUuid for entry in entries] == [
         None,
@@ -111,7 +142,7 @@ def test_codex_contract_caps_normalized_entries_and_chains(
 ) -> None:
     monkeypatch.setenv("CODEX_HOME", str(CODEX_FIXTURES))
     provider = CodexProvider()
-    entries = list(provider.load_session(CODEX_ID))
+    entries = _message_entries(list(provider.load_session(CODEX_ID)))
 
     assert list(provider.load_session(CODEX_ID, max_messages=3)) == entries[:3]
     assert [entry.parentUuid for entry in entries] == [
@@ -124,7 +155,9 @@ def test_discovery_order_is_deterministic_for_directory_providers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     claude = _claude_provider(tmp_path, monkeypatch)
-    first_project = claude.get_data_dir() / "synthetic-project"  # type: ignore[operator]
+    claude_root = claude.get_data_dir()
+    assert claude_root is not None
+    first_project = claude_root / "synthetic-project"
     shutil.copyfile(
         first_project / "session-a.jsonl", first_project / "session-z.jsonl"
     )
@@ -138,7 +171,9 @@ def test_discovery_order_is_deterministic_for_directory_providers(
     ]
 
     agy = _agy_provider(tmp_path, monkeypatch)
-    brain = agy.get_data_dir() / "brain"  # type: ignore[operator]
+    agy_root = agy.get_data_dir()
+    assert agy_root is not None
+    brain = agy_root / "brain"
     shutil.copytree(brain / "abcd", brain / "ffff")
     shutil.copytree(brain / "abcd", brain / "beef")
     assert [item.session_id for item in agy.discover_sessions()] == [

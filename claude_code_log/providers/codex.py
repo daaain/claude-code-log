@@ -1193,7 +1193,11 @@ class CodexProvider(BaseProvider):
                 continue
             if depth >= maximum:
                 return True
-            children = item.values() if isinstance(item, dict) else item
+            children: list[Any] = (
+                list(cast(dict[Any, Any], item).values())
+                if isinstance(item, dict)
+                else cast(list[Any], item)
+            )
             pending.extend((child, depth + 1) for child in children)
         return False
 

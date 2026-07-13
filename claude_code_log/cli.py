@@ -1042,7 +1042,7 @@ def main(
 
     try:
         if provider is not None:
-            from .providers import discover_providers
+            from .providers import SessionInfo, discover_providers
 
             assert session_id is not None  # enforced by provider-mode validation
             provider_session_id = session_id
@@ -1053,10 +1053,14 @@ def main(
             if not selected.is_available():
                 raise ValueError(f"Provider {provider} is not available")
 
-            sessions_by_id = {
-                info.session_id: info for info in selected.discover_sessions()
-            }
+            sessions_by_id: dict[str, list[SessionInfo]] = {}
+            for info in selected.discover_sessions():
+                sessions_by_id.setdefault(info.session_id, []).append(info)
             if provider_session_id in sessions_by_id:
+                if len(sessions_by_id[provider_session_id]) != 1:
+                    raise ValueError(
+                        f"Duplicate session ID '{provider_session_id}' for provider {provider}"
+                    )
                 matched_id = provider_session_id
             else:
                 matches = sorted(
@@ -1073,7 +1077,12 @@ def main(
                     )
                 matched_id = matches[0]
 
-            info = sessions_by_id[matched_id]
+            if len(sessions_by_id[matched_id]) != 1:
+                raise ValueError(
+                    f"Duplicate session ID '{matched_id}' for provider {provider}"
+                )
+
+            info = sessions_by_id[matched_id][0]
             messages = list(selected.load_session(matched_id))
             title = info.title or f"{provider.title()}: Session {matched_id[:8]}"
 

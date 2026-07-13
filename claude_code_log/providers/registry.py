@@ -1,8 +1,11 @@
 """Provider registry for auto-discovery and management."""
 
+import logging
 from typing import Dict, Iterator, List, Optional, Type
 
 from .base import BaseProvider, SessionInfo
+
+logger = logging.getLogger(__name__)
 
 
 class ProviderRegistry:
@@ -27,13 +30,24 @@ class ProviderRegistry:
         self._provider_classes[name] = provider_class
 
     def instantiate_registered(self) -> None:
-        for provider_class in self._provider_classes.values():
+        for registered_name, provider_class in sorted(self._provider_classes.items()):
             try:
                 provider = provider_class()
-                self.register(provider)
-            except Exception:
-                # Skip providers that fail to initialize
-                pass
+                actual_name = provider.get_provider_name()
+                if actual_name != registered_name:
+                    logger.warning(
+                        "Provider registered as %s reported mismatched name %s; skipping",
+                        registered_name,
+                        actual_name,
+                    )
+                    continue
+                self._providers[registered_name] = provider
+            except Exception as exc:
+                logger.warning(
+                    "Unable to initialize provider %s (%s)",
+                    registered_name,
+                    type(exc).__name__,
+                )
 
     def get_provider(self, name: str) -> Optional[BaseProvider]:
         """Get a registered provider by name."""
@@ -42,18 +56,18 @@ class ProviderRegistry:
     def get_available_providers(self) -> List[str]:
         """Get names of all available providers (with valid data directories)."""
         available: List[str] = []
-        for name, provider in self._providers.items():
+        for name, provider in sorted(self._providers.items()):
             if provider.is_available():
                 available.append(name)
         return available
 
     def get_all_providers(self) -> List[str]:
         """Get names of all registered providers."""
-        return list(self._providers.keys())
+        return sorted(self._providers)
 
     def discover_all_sessions(self) -> Iterator[SessionInfo]:
         """Discover sessions from all available providers."""
-        for provider in self._providers.values():
+        for _, provider in sorted(self._providers.items()):
             if provider.is_available():
                 yield from provider.discover_sessions()
 
