@@ -8,7 +8,6 @@ shapes for which it has useful semantics.
 
 from __future__ import annotations
 
-from collections import Counter
 from dataclasses import dataclass
 import json
 import logging
@@ -52,6 +51,8 @@ _RUNNING_CELL_RE = re.compile(r"Script running with cell ID ([^\s]+)")
 _COMPLETED_COMMAND_RE = re.compile(
     r"\AScript completed\r?\nWall time:? [^\r\n]+\r?\nOutput:\r?\n?\Z"
 )
+_INVISIBLE_RECORD_KINDS = {"session_meta", "turn_context"}
+_MAX_JSON_NESTING = 512
 
 
 @dataclass(frozen=True)
@@ -209,6 +210,18 @@ class CodexProvider(BaseProvider):
             list(self._decode_records(parent_paths[0]))
         )
         prefix_length = self._contiguous_prefix_length(child_records, parent_records)
+        if prefix_length == 0 and identity.spawn_call_id:
+            boundaries = [
+                index + 1
+                for index, record in enumerate(parent_records)
+                if record.payload.get("call_id") == identity.spawn_call_id
+                and record.payload.get("type")
+                in {"function_call", "custom_tool_call"}
+            ]
+            if len(boundaries) == 1:
+                prefix_length = self._prefix_length_at_parent_boundary(
+                    child_records, parent_records, boundaries[0]
+                )
         if prefix_length == 0:
             return identity
         return CodexSessionIdentity(
@@ -238,7 +251,7 @@ class CodexProvider(BaseProvider):
         child_records: list[_DecodedRecord],
         parent_records: list[_DecodedRecord],
     ) -> int:
-        """Find the longest leading child sequence occurring in its parent."""
+        """Find a strong leading-child match at the end of its parent."""
         best = 0
         for start in range(len(parent_records)):
             length = 0
@@ -250,7 +263,27 @@ class CodexProvider(BaseProvider):
                 )
             ):
                 length += 1
-            best = max(best, length)
+            if start + length == len(parent_records) and length >= 2:
+                best = max(best, length)
+        return best
+
+    def _prefix_length_at_parent_boundary(
+        self,
+        child_records: list[_DecodedRecord],
+        parent_records: list[_DecodedRecord],
+        boundary: int,
+    ) -> int:
+        """Match copied history ending at an explicit stable fork item."""
+        best = 0
+        for start in range(boundary):
+            length = boundary - start
+            if length < 2 or length > len(child_records):
+                continue
+            if all(
+                self._same_semantic_record(child_records[offset], parent_records[start + offset])
+                for offset in range(length)
+            ):
+                best = max(best, length)
         return best
 
     def _same_semantic_record(
@@ -331,7 +364,12 @@ class CodexProvider(BaseProvider):
                     continue
                 try:
                     raw: Any = json.loads(line)
-                except json.JSONDecodeError:
+                except (ValueError, RecursionError):
+                    logger.warning(
+                        "Malformed JSON in Codex rollout %s line %d", path, line_no
+                    )
+                    continue
+                if self._json_nesting_exceeds(raw, _MAX_JSON_NESTING):
                     logger.warning(
                         "Malformed JSON in Codex rollout %s line %d", path, line_no
                     )
@@ -378,17 +416,10 @@ class CodexProvider(BaseProvider):
         records: list[_DecodedRecord],
         max_messages: Optional[int],
     ) -> Iterator[_CodexEntry]:
+        records = self._deduplicate_visible_messages(records)
         records = self._coalesce_command_sessions(records)
         tool_names = self._adapted_tool_names(records)
         web_open_batches = self._web_open_batches(records)
-        preferred = Counter(
-            fingerprint
-            for record in records
-            if record.kind == "event_msg"
-            for fingerprint in [self._event_message_fingerprint(record.payload)]
-            if fingerprint is not None
-        )
-        suppressed = Counter[tuple[str, str]]()
         model = identity.model
         cwd = str(identity.cwd) if identity.cwd else ""
         version = identity.version
@@ -414,8 +445,6 @@ class CodexProvider(BaseProvider):
                 identity.thread_id,
                 record,
                 model,
-                preferred,
-                suppressed,
                 tool_names,
                 web_open_batches,
             )
@@ -435,6 +464,26 @@ class CodexProvider(BaseProvider):
                 parent_uuid = entry.uuid
                 emitted += 1
                 yield entry
+
+    def _deduplicate_visible_messages(
+        self, records: list[_DecodedRecord]
+    ) -> list[_DecodedRecord]:
+        """Prefer the event copy only for an adjacent event/response pair."""
+        suppressed: set[int] = set()
+        for index in range(len(records) - 1):
+            left = records[index]
+            right = records[index + 1]
+            fingerprint = self._visible_message_fingerprint(left)
+            if fingerprint is None or fingerprint != self._visible_message_fingerprint(
+                right
+            ):
+                continue
+            if {left.kind, right.kind} != {"event_msg", "response_item"}:
+                continue
+            suppressed.add(index if left.kind == "response_item" else index + 1)
+        return [
+            record for index, record in enumerate(records) if index not in suppressed
+        ]
 
     def _coalesce_command_sessions(
         self, records: list[_DecodedRecord]
@@ -471,7 +520,9 @@ class CodexProvider(BaseProvider):
                 position += 1
                 continue
             call_id = call[0]
-            if not self._is_call_output(result, call_id):
+            if not self._only_invisible_between(
+                records, call_index, result_index
+            ) or not self._is_call_output(result, call_id):
                 position += 1
                 continue
             initial_output = result.payload.get("output")
@@ -489,16 +540,27 @@ class CodexProvider(BaseProvider):
             chunks: list[str] = []
             continuation_indices: list[int] = []
             session_id: Optional[int] = None
+            previous_result_index = result_index
+            terminal = False
             while cursor + 1 < len(tool_records):
                 next_call_index = tool_records[cursor]
                 next_result_index = tool_records[cursor + 1]
                 next_call = self._adapted_call(records[next_call_index])
-                if next_call is None or not self._is_call_output(
-                    records[next_result_index], next_call[0]
+                if (
+                    not self._only_invisible_between(
+                        records, previous_result_index, next_call_index
+                    )
+                    or not self._only_invisible_between(
+                        records, next_call_index, next_result_index
+                    )
+                    or next_call is None
+                    or not self._is_call_output(records[next_result_index], next_call[0])
                 ):
                     break
                 name, input_data = next_call[1].name, next_call[1].input
-                matches_wait = name == "wait" and str(input_data.get("cell_id")) == cell_id
+                matches_wait = (
+                    name == "wait" and str(input_data.get("cell_id")) == cell_id
+                )
                 matches_write = (
                     name == "write_stdin"
                     and session_id is not None
@@ -520,9 +582,11 @@ class CodexProvider(BaseProvider):
                 continuation_indices.extend([next_call_index, next_result_index])
                 cursor += 2
                 if isinstance(envelope.get("exit_code"), int):
+                    terminal = True
                     break
+                previous_result_index = next_result_index
 
-            if chunks and continuation_indices:
+            if terminal and continuation_indices:
                 payload = dict(result.payload)
                 payload["output"] = "".join(chunks)
                 replacements[result_index] = _DecodedRecord(
@@ -542,9 +606,15 @@ class CodexProvider(BaseProvider):
             if index not in suppressed
         ]
 
-    def _adapted_call(
-        self, record: _DecodedRecord
-    ) -> Optional[tuple[str, Any]]:
+    def _only_invisible_between(
+        self, records: list[_DecodedRecord], left: int, right: int
+    ) -> bool:
+        return all(
+            record.kind in _INVISIBLE_RECORD_KINDS
+            for record in records[left + 1 : right]
+        )
+
+    def _adapted_call(self, record: _DecodedRecord) -> Optional[tuple[str, Any]]:
         payload_type = self._nonempty_string(record.payload.get("type"))
         if payload_type not in {"function_call", "custom_tool_call"}:
             return None
@@ -649,8 +719,6 @@ class CodexProvider(BaseProvider):
         thread_id: str,
         record: _DecodedRecord,
         model: str,
-        preferred: Counter[tuple[str, str]],
-        suppressed: Counter[tuple[str, str]],
         tool_names: dict[str, str],
         web_open_batches: dict[str, list[_WebOpenItem]],
     ) -> list[_CodexEntry]:
@@ -661,8 +729,6 @@ class CodexProvider(BaseProvider):
                 thread_id,
                 record,
                 model,
-                preferred,
-                suppressed,
                 tool_names,
                 web_open_batches,
             )
@@ -689,8 +755,6 @@ class CodexProvider(BaseProvider):
         thread_id: str,
         record: _DecodedRecord,
         model: str,
-        preferred: Counter[tuple[str, str]],
-        suppressed: Counter[tuple[str, str]],
         tool_names: dict[str, str],
         web_open_batches: dict[str, list[_WebOpenItem]],
     ) -> list[_CodexEntry]:
@@ -704,14 +768,6 @@ class CodexProvider(BaseProvider):
             normalized_role = (
                 "user" if role == "user" else "assistant" if role == "assistant" else ""
             )
-            fingerprint = (normalized_role, text)
-            if (
-                normalized_role
-                and text
-                and suppressed[fingerprint] < preferred[fingerprint]
-            ):
-                suppressed[fingerprint] += 1
-                return []
             if normalized_role == "user" and text:
                 return self._normalize_user_text(
                     thread_id, uuid, record.timestamp, text
@@ -859,6 +915,19 @@ class CodexProvider(BaseProvider):
         )
         text = self._event_text(payload)
         return (role, text) if role and text else None
+
+    def _visible_message_fingerprint(
+        self, record: _DecodedRecord
+    ) -> Optional[tuple[str, str]]:
+        if record.kind == "event_msg":
+            return self._event_message_fingerprint(record.payload)
+        if record.kind != "response_item" or record.payload.get("type") != "message":
+            return None
+        role = record.payload.get("role")
+        if role not in {"user", "assistant"}:
+            return None
+        text = self._message_text(record.payload.get("content"))
+        return (cast(str, role), text) if text else None
 
     def _event_text(self, payload: dict[str, Any]) -> str:
         value = payload.get("message", payload.get("text", ""))
@@ -1047,6 +1116,18 @@ class CodexProvider(BaseProvider):
 
     def _entry_uuid(self, thread_id: str, line_no: int, subindex: int) -> str:
         return f"codex-{thread_id}-{line_no}-{subindex}"
+
+    def _json_nesting_exceeds(self, value: Any, maximum: int) -> bool:
+        pending: list[tuple[Any, int]] = [(value, 0)]
+        while pending:
+            item, depth = pending.pop()
+            if not isinstance(item, (dict, list)):
+                continue
+            if depth >= maximum:
+                return True
+            children = item.values() if isinstance(item, dict) else item
+            pending.extend((child, depth + 1) for child in children)
+        return False
 
     def _nonempty_string(self, value: Any) -> Optional[str]:
         return value if isinstance(value, str) and value else None
