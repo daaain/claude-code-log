@@ -460,7 +460,7 @@ class CodexProvider(BaseProvider):
                 entry.cwd = cwd
                 entry.version = version
                 entry.sessionId = identity.thread_id
-                if hasattr(entry, "message") and entry.type == "assistant":
+                if isinstance(entry, AssistantTranscriptEntry):
                     entry.message.id = entry.uuid
                     entry.message.model = model
                 parent_uuid = entry.uuid

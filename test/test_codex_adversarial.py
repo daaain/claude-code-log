@@ -8,7 +8,12 @@ from pathlib import Path
 
 import pytest
 
-from claude_code_log.models import ToolResultContent, ToolUseContent
+from claude_code_log.models import (
+    AssistantTranscriptEntry,
+    ToolResultContent,
+    ToolUseContent,
+    UserTranscriptEntry,
+)
 from claude_code_log.providers.codex import (
     CodexProvider,
     CodexSessionIdentity,
@@ -62,7 +67,9 @@ def _command_envelope(**values: object) -> list[dict[str, str]]:
     return [{"type": "input_text", "text": json.dumps(values)}]
 
 
-def _normalized(records: list[_DecodedRecord]) -> list[object]:
+def _normalized(
+    records: list[_DecodedRecord],
+) -> list[UserTranscriptEntry | AssistantTranscriptEntry]:
     provider = CodexProvider()
     identity = CodexSessionIdentity(thread_id=THREAD_ID, path=Path("synthetic.jsonl"))
     return list(provider._normalize_records(identity, records, None))
