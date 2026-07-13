@@ -4,7 +4,13 @@ from claude_code_log.factories.user_factory import (
     create_bash_input_message,
     create_bash_output_message,
 )
-from claude_code_log.models import MessageMeta
+from claude_code_log.models import (
+    AssistantTranscriptEntry,
+    MessageMeta,
+    TextContent,
+    UserTranscriptEntry,
+)
+from claude_code_log.providers.codex import CodexProvider
 from claude_code_log.providers.codex_messages import parse_codex_user_shell_command
 
 
@@ -21,6 +27,17 @@ codex-tools.md
 
 </result>
 </user_shell_command>"""
+
+
+class TestProvider(CodexProvider):
+    __test__ = False
+
+    def normalize_user_text(
+        self, text: str
+    ) -> list[UserTranscriptEntry | AssistantTranscriptEntry]:
+        return self._normalize_user_text(
+            "session", "entry", "2026-07-14T00:00:00Z", text
+        )
 
 
 def test_user_shell_envelope_decodes_command_and_output() -> None:
@@ -54,3 +71,16 @@ def test_malformed_or_unsafe_shell_envelopes_are_not_decoded() -> None:
     assert parse_codex_user_shell_command("<user_shell_command>") is None
     unsafe = SHELL_MESSAGE.replace("ls work/", "echo </bash-input>")
     assert parse_codex_user_shell_command(unsafe) is None
+
+
+def test_failed_user_shell_command_keeps_exit_and_duration_losslessly() -> None:
+    failed = SHELL_MESSAGE.replace("Exit code: 0", "Exit code: 7")
+
+    entries = TestProvider().normalize_user_text(failed)
+
+    assert len(entries) == 1
+    content = entries[0].message.content
+    assert len(content) == 1 and isinstance(content[0], TextContent)
+    assert content[0].text == failed
+    assert "Exit code: 7" in content[0].text
+    assert "Duration: 0.0167 seconds" in content[0].text

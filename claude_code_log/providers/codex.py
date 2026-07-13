@@ -887,6 +887,8 @@ class CodexProvider(BaseProvider):
     ) -> list[_CodexEntry]:
         shell = parse_codex_user_shell_command(text)
         if shell is not None:
+            if shell.exit_code != 0:
+                return [make_user_entry(thread_id, uuid, timestamp, text)]
             return [
                 make_user_entry(
                     thread_id,
