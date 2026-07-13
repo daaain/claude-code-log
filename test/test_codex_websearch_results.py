@@ -35,14 +35,16 @@ def test_query_is_shown_only_in_websearch_title() -> None:
 def test_codex_websearch_result_is_treated_as_markdown_summary() -> None:
     provider = TestProvider()
     markdown = "## Result\n\n- [Synthetic](https://example.invalid/result)"
-    normalized = provider.normalize_tool_output(_direct_result(markdown), "WebSearch")
+    normalized, structured = provider._adapt_tool_result(
+        _direct_result(markdown), tool_name="WebSearch", is_error=False
+    )
     raw = ToolResultContent(
         type="tool_result",
         tool_use_id="call-search",
         content=normalized,
     )
 
-    output = create_tool_output("WebSearch", raw)
+    output = create_tool_output("WebSearch", raw, tool_use_result=structured)
 
     assert normalized == markdown
     assert isinstance(output, WebSearchOutput)
@@ -58,3 +60,9 @@ def test_websearch_errors_keep_generic_result_rendering() -> None:
     )
 
     assert create_tool_output("WebSearch", raw) is raw
+
+    normalized, structured = TestProvider()._adapt_tool_result(
+        "Search failed", tool_name="WebSearch", is_error=True
+    )
+    assert normalized == "Search failed"
+    assert structured is None

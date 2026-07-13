@@ -8,6 +8,7 @@ from claude_code_log.models import (
     ToolResultContent,
 )
 from claude_code_log.providers.codex_tools import adapt_codex_tool_call
+from claude_code_log.providers.codex import CodexProvider
 
 
 def test_exec_command_reuses_bash_renderer() -> None:
@@ -185,7 +186,11 @@ def test_codex_todo_success_result_hides_exec_transport() -> None:
         ],
     )
 
-    output = create_tool_output("TodoWrite", raw)
+    normalized, _ = CodexProvider()._adapt_tool_result(
+        raw.content, tool_name="TodoWrite", is_error=False
+    )
+    adapted = raw.model_copy(update={"content": normalized})
+    output = create_tool_output("TodoWrite", adapted)
 
     assert isinstance(output, ToolResultContent)
     assert output.content == "Todo list updated."
@@ -198,3 +203,17 @@ def test_unfamiliar_todo_result_stays_generic() -> None:
         content=[{"type": "text", "text": "A future result shape"}],
     )
     assert create_tool_output("TodoWrite", raw) is raw
+
+
+def test_codex_todo_error_transport_is_not_collapsed() -> None:
+    content = [
+        {
+            "type": "input_text",
+            "text": "Script completed\nWall time: 0.0 seconds\nOutput:\n",
+        },
+        {"type": "input_text", "text": "{}"},
+    ]
+    normalized, _ = CodexProvider()._adapt_tool_result(
+        content, tool_name="TodoWrite", is_error=True
+    )
+    assert normalized == content

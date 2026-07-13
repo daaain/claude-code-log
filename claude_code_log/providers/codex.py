@@ -19,6 +19,7 @@ from typing import Any, Iterator, Optional, TypeAlias, cast
 from claude_code_log.models import (
     AssistantTranscriptEntry,
     ToolResultContent,
+    ToolUseResult,
     TranscriptEntry,
     UserMessageModel,
     UserTranscriptEntry,
@@ -847,9 +848,12 @@ class CodexProvider(BaseProvider):
             call_id = self._nonempty_string(payload.get("call_id")) or uuid
             if call_id in web_open_batches:
                 return []
-            output = self._tool_output(
+            raw_is_error = payload.get("is_error")
+            is_error = raw_is_error if isinstance(raw_is_error, bool) else None
+            output, tool_use_result = self._adapt_tool_result(
                 payload.get("output", ""),
                 tool_name=tool_names.get(call_id),
+                is_error=is_error is True,
             )
             return [
                 UserTranscriptEntry(
@@ -862,6 +866,7 @@ class CodexProvider(BaseProvider):
                     version="",
                     uuid=uuid,
                     timestamp=record.timestamp,
+                    toolUseResult=tool_use_result,
                     message=UserMessageModel(
                         role="user",
                         content=[
@@ -869,6 +874,7 @@ class CodexProvider(BaseProvider):
                                 type="tool_result",
                                 tool_use_id=call_id,
                                 content=output,
+                                is_error=is_error,
                             )
                         ],
                     ),
@@ -1001,6 +1007,66 @@ class CodexProvider(BaseProvider):
             return json.dumps(cast(Any, value), ensure_ascii=False)
         except (TypeError, ValueError):
             return repr(cast(object, value))
+
+    def _adapt_tool_result(
+        self,
+        value: Any,
+        *,
+        tool_name: Optional[str],
+        is_error: bool,
+    ) -> tuple[str | list[dict[str, Any]], Optional[ToolUseResult]]:
+        output = self._tool_output(value, tool_name=tool_name)
+        if not is_error and tool_name == "Task" and isinstance(output, str):
+            output = self._task_acknowledgement(output)
+        if not is_error and tool_name == "TodoWrite" and isinstance(output, list):
+            acknowledgement = self._todo_acknowledgement(output)
+            if acknowledgement is not None:
+                output = acknowledgement
+        tool_use_result: Optional[ToolUseResult] = None
+        if not is_error and tool_name == "WebSearch" and isinstance(output, str):
+            tool_use_result = {
+                "query": "",
+                "results": [{"content": []}, output],
+            }
+        return output, tool_use_result
+
+    def _task_acknowledgement(self, content: str) -> str:
+        try:
+            acknowledgement: Any = json.loads(content)
+        except (ValueError, RecursionError):
+            return content
+        if not isinstance(acknowledgement, dict):
+            return content
+        acknowledgement_dict = cast(dict[str, Any], acknowledgement)
+        if not isinstance(acknowledgement_dict.get("task_name"), str):
+            return content
+        remainder = dict(acknowledgement_dict)
+        remainder.pop("task_name", None)
+        if not remainder:
+            return ""
+        return (
+            "```json\n" + json.dumps(remainder, indent=2, ensure_ascii=False) + "\n```"
+        )
+
+    def _todo_acknowledgement(self, items: list[dict[str, Any]]) -> Optional[str]:
+        texts: list[str] = []
+        for item in items:
+            if item.get("type") not in {"input_text", "output_text", "text"}:
+                return None
+            text = item.get("text")
+            if not isinstance(text, str):
+                return None
+            texts.append(text)
+        if not any(text.startswith("Script completed") for text in texts):
+            return None
+        for text in texts:
+            try:
+                decoded: Any = json.loads(text)
+            except (ValueError, RecursionError):
+                continue
+            if decoded == {}:
+                return "Todo list updated."
+        return None
 
     def _command_output(self, items: list[dict[str, Any]]) -> Optional[str]:
         """Unwrap the Codex ``exec_command`` result envelope.

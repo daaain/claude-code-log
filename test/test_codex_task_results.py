@@ -2,13 +2,17 @@
 
 from claude_code_log.factories.tool_factory import create_tool_output
 from claude_code_log.models import TaskOutput, ToolResultContent
+from claude_code_log.providers.codex import CodexProvider
 
 
 def _result(content: str) -> ToolResultContent:
+    normalized, _ = CodexProvider()._adapt_tool_result(
+        content, tool_name="Task", is_error=False
+    )
     return ToolResultContent(
         type="tool_result",
         tool_use_id="call-task",
-        content=content,
+        content=normalized,
     )
 
 
@@ -35,3 +39,11 @@ def test_normal_task_markdown_is_unchanged() -> None:
 
     assert isinstance(output, TaskOutput)
     assert output.result == "## Research complete\n\nAll done."
+
+
+def test_task_error_payload_is_not_treated_as_an_acknowledgement() -> None:
+    content = '{"task_name":"/root/research","error":"failed"}'
+    normalized, _ = CodexProvider()._adapt_tool_result(
+        content, tool_name="Task", is_error=True
+    )
+    assert normalized == content
