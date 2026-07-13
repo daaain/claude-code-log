@@ -30,14 +30,14 @@ def provider(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> CodexProvider:
     sessions = tmp_path / "sessions"
     sessions.mkdir()
     source = (
-        "const r = await tools.web__run({open: [{ref_id: \"https://example.invalid/a\"}, "
-        "{ref_id: \"https://example.invalid/b\"}], response_length: \"long\"}); "
+        'const r = await tools.web__run({open: [{ref_id: "https://example.invalid/a"}, '
+        '{ref_id: "https://example.invalid/b"}], response_length: "long"}); '
         "text(r);"
     )
     combined = (
-        "# A\n\nSource: open({\"ref_id\":\"https://example.invalid/a\"})\n\nBody A"
+        '# A\n\nSource: open({"ref_id":"https://example.invalid/a"})\n\nBody A'
         "\n--------------------------------------------------------------------------------\n"
-        "# B\n\nSource: open({\"ref_id\":\"https://example.invalid/b\"})\n\nBody B"
+        '# B\n\nSource: open({"ref_id":"https://example.invalid/b"})\n\nBody B'
     )
     records = [
         _record(

@@ -215,8 +215,7 @@ class CodexProvider(BaseProvider):
                 index + 1
                 for index, record in enumerate(parent_records)
                 if record.payload.get("call_id") == identity.spawn_call_id
-                and record.payload.get("type")
-                in {"function_call", "custom_tool_call"}
+                and record.payload.get("type") in {"function_call", "custom_tool_call"}
             ]
             if len(boundaries) == 1:
                 prefix_length = self._prefix_length_at_parent_boundary(
@@ -280,7 +279,9 @@ class CodexProvider(BaseProvider):
             if length < 2 or length > len(child_records):
                 continue
             if all(
-                self._same_semantic_record(child_records[offset], parent_records[start + offset])
+                self._same_semantic_record(
+                    child_records[offset], parent_records[start + offset]
+                )
                 for offset in range(length)
             ):
                 best = max(best, length)
@@ -554,7 +555,9 @@ class CodexProvider(BaseProvider):
                         records, next_call_index, next_result_index
                     )
                     or next_call is None
-                    or not self._is_call_output(records[next_result_index], next_call[0])
+                    or not self._is_call_output(
+                        records[next_result_index], next_call[0]
+                    )
                 ):
                     break
                 name, input_data = next_call[1].name, next_call[1].input
@@ -679,11 +682,10 @@ class CodexProvider(BaseProvider):
 
             payload_type = self._nonempty_string(record.payload.get("type"))
             call_id = self._nonempty_string(record.payload.get("call_id"))
-            if (
-                call_id is None
-                or payload_type
-                not in {"function_call_output", "custom_tool_call_output"}
-            ):
+            if call_id is None or payload_type not in {
+                "function_call_output",
+                "custom_tool_call_output",
+            }:
                 continue
             value = record.payload.get("output")
             if isinstance(value, str):

@@ -899,9 +899,7 @@ def parse_websearch_output(
         # summary so the specialized WebSearch renderer handles its links,
         # headings, and lists instead of showing a generic code block.
         if not tool_result.is_error:
-            return WebSearchOutput(
-                query="", links=[], preamble=None, summary=text
-            )
+            return WebSearchOutput(query="", links=[], preamble=None, summary=text)
 
     return None
 

@@ -122,12 +122,16 @@ def test_structured_custom_and_open_ended_tools_are_correlated(
         for item in content
         if isinstance(item, ToolResultContent)
     }
-    assert uses.keys() == results.keys() == {
-        "call-structured-001",
-        "call-custom-001",
-        "call-mcp-001",
-        "call-async-001",
-    }
+    assert (
+        uses.keys()
+        == results.keys()
+        == {
+            "call-structured-001",
+            "call-custom-001",
+            "call-mcp-001",
+            "call-async-001",
+        }
+    )
     assert uses["call-structured-001"].name == "Bash"
     assert uses["call-custom-001"].name == "apply_patch"
     assert uses["call-mcp-001"].name == "mcp__synthetic__lookup"
@@ -171,7 +175,9 @@ def test_flat_legacy_rollout_is_normalized(provider: CodexProvider) -> None:
 def test_child_metadata_retains_lineage_and_inherited_prefix(
     provider: CodexProvider,
 ) -> None:
-    info = next(item for item in provider.discover_sessions() if item.session_id == CHILD_ID)
+    info = next(
+        item for item in provider.discover_sessions() if item.session_id == CHILD_ID
+    )
     # These fields are the frozen extension point for later hierarchical rendering.
     assert getattr(info, "parent_thread_id") == PARENT_ID
     assert getattr(info, "forked_from_id") == "fork-item-001"
@@ -186,16 +192,14 @@ def test_unknown_and_malformed_records_warn_without_leaking_content(
     home = tmp_path / "codex-home"
     sessions = home / "sessions"
     sessions.mkdir(parents=True)
-    source = FIXTURES / "malformed" / (
-        "rollout-66666666-6666-4666-8666-666666666666.jsonl"
+    source = (
+        FIXTURES / "malformed" / ("rollout-66666666-6666-4666-8666-666666666666.jsonl")
     )
     shutil.copyfile(source, sessions / source.name)
     monkeypatch.setenv("CODEX_HOME", str(home))
     caplog.set_level(logging.WARNING)
 
-    entries = list(
-        CodexProvider().load_session("66666666-6666-4666-8666-666666666666")
-    )
+    entries = list(CodexProvider().load_session("66666666-6666-4666-8666-666666666666"))
 
     assert _visible_text(entries) == ["Safe line before malformed input."]
     warnings = "\n".join(record.getMessage() for record in caplog.records)

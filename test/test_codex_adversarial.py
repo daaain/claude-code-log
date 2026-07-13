@@ -37,9 +37,7 @@ def _event(line_no: int, role: str, text: str) -> _DecodedRecord:
     return _record(line_no, "event_msg", {"type": event_type, "message": text})
 
 
-def _call(
-    line_no: int, call_id: str, name: str, arguments: str
-) -> _DecodedRecord:
+def _call(line_no: int, call_id: str, name: str, arguments: str) -> _DecodedRecord:
     return _record(
         line_no,
         "response_item",
@@ -204,11 +202,18 @@ def test_inherited_prefix_requires_strong_parent_suffix_evidence() -> None:
     other = _event(2, "assistant", "Other")
 
     assert provider._contiguous_prefix_length([shared], [other, shared, other]) == 0
-    assert provider._contiguous_prefix_length([shared, other], [shared, other, shared]) == 0
-    assert provider._contiguous_prefix_length([shared, other], [other, shared, other]) == 2
+    assert (
+        provider._contiguous_prefix_length([shared, other], [shared, other, shared])
+        == 0
+    )
+    assert (
+        provider._contiguous_prefix_length([shared, other], [other, shared, other]) == 2
+    )
 
 
-def test_assignment_and_emission_text_in_comments_or_strings_is_not_structural() -> None:
+def test_assignment_and_emission_text_in_comments_or_strings_is_not_structural() -> (
+    None
+):
     source = (
         "// const result = await tools.exec_command(\n"
         'await tools.exec_command({cmd: "git status"}); text("result");'
@@ -241,12 +246,12 @@ def test_object_key_rewriting_never_mutates_command_strings() -> None:
             "Bash",
         ),
         (
-            'const result = await tools.exec_command({cmd: "echo \\\"quoted\\\"", '
+            'const result = await tools.exec_command({cmd: "echo \\"quoted\\"", '
             'env: {MODE: "test",},}); text(result);',
             "Bash",
         ),
         (
-            'const result = await tools.exec_command({cmd: `echo ${value}`}); '
+            "const result = await tools.exec_command({cmd: `echo ${value}`}); "
             "text(result);",
             "Workflow",
         ),
@@ -256,8 +261,7 @@ def test_object_key_rewriting_never_mutates_command_strings() -> None:
             "Workflow",
         ),
         (
-            'const result = await tools.exec_command({cmd: "real"}); '
-            "text(`result`);",
+            'const result = await tools.exec_command({cmd: "real"}); text(`result`);',
             "Workflow",
         ),
         (

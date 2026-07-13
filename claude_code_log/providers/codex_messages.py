@@ -90,9 +90,7 @@ def format_codex_user_message(text: str) -> str:
     profile = root.find("./filesystem/permission_profile")
     permission_rows: list[tuple[str, str]] = []
     profile_type = profile.get("type") if profile is not None else None
-    file_system = (
-        profile.find("file_system") if profile is not None else None
-    )
+    file_system = profile.find("file_system") if profile is not None else None
     file_system_type = file_system.get("type") if file_system is not None else None
     if file_system is not None:
         for entry in file_system.findall("entry"):

@@ -148,9 +148,7 @@ def _canonicalize(name: str, input_data: dict[str, Any]) -> AdaptedToolCall:
                 status = item.get("status", "pending")
                 if not isinstance(step, str) or not isinstance(status, str):
                     return AdaptedToolCall(name, input_data)
-                todos.append(
-                    {"content": step, "activeForm": step, "status": status}
-                )
+                todos.append({"content": step, "activeForm": step, "status": status})
             return AdaptedToolCall("TodoWrite", {"todos": todos})
 
     if name == "list_agents":
@@ -286,9 +284,7 @@ def _find_output_emissions(source: str) -> list[_Emission]:
         if end is None:
             return []
         emissions.append(
-            _Emission(
-                expression=source[cursor + 1 : closing], start=index, end=end
-            )
+            _Emission(expression=source[cursor + 1 : closing], start=index, end=end)
         )
         index = end
     return emissions
@@ -325,10 +321,14 @@ def _scrub_opaque_literals(source: str) -> str:
             index += 1
             continue
         end = _skip_string(source, index, char)
-        content_end = end - 1 if end <= len(source) and source[end - 1 : end] == char else end
+        content_end = (
+            end - 1 if end <= len(source) and source[end - 1 : end] == char else end
+        )
         content = source[index + 1 : content_end]
         output.append(char)
-        output.append(_REDACTED_PAYLOAD if _FERNET_TOKEN.fullmatch(content) else content)
+        output.append(
+            _REDACTED_PAYLOAD if _FERNET_TOKEN.fullmatch(content) else content
+        )
         if content_end < end:
             output.append(char)
         index = end

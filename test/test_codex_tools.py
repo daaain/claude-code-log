@@ -68,7 +68,9 @@ def test_one_tool_with_multiple_output_emissions_is_workflow() -> None:
 
 
 def test_dynamic_exec_falls_back_to_workflow() -> None:
-    source = "const args = getArgs(); const r = await tools.exec_command(args); text(r);"
+    source = (
+        "const args = getArgs(); const r = await tools.exec_command(args); text(r);"
+    )
     call = adapt_codex_tool_call("exec", {"raw": source}, raw_input=source)
     assert call.name == "Workflow"
 
@@ -85,9 +87,7 @@ def test_collaboration_calls_reuse_task_and_message_renderers() -> None:
     assert message.name == "SendMessage"
     assert message.input["recipient"] == "research"
     assert isinstance(create_tool_input(spawn.name, spawn.input), TaskInput)
-    assert isinstance(
-        create_tool_input(message.name, message.input), SendMessageInput
-    )
+    assert isinstance(create_tool_input(message.name, message.input), SendMessageInput)
 
 
 def test_fernet_shaped_spawn_payload_is_not_rendered_as_task_prompt() -> None:
@@ -162,7 +162,7 @@ def test_unknown_tool_stays_generic() -> None:
 
 
 def test_tool_like_text_inside_string_is_not_unwrapped() -> None:
-    source = 'text("example: tools.exec_command({cmd: \\\"unsafe\\\"})");'
+    source = 'text("example: tools.exec_command({cmd: \\"unsafe\\"})");'
     call = adapt_codex_tool_call("exec", {"raw": source}, raw_input=source)
     assert call.name == "Workflow"
 
