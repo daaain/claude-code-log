@@ -54,15 +54,13 @@ class TestWorkflowPhaseFold:
                 // fold control TOGGLES the phase's own children container —
                 // independent of any ancestor's fold state, i.e. offsetParent.)
                 const phases = Array.from(
-                    document.querySelectorAll('.message.workflow_phase[data-message-id]'));
+                    document.querySelectorAll('.message.workflow_phase[id^="msg-"]'));
                 for (const phase of phases) {
                     const cc = phase.parentElement &&
                         phase.parentElement.querySelector(':scope > .children');
                     const agent = cc && cc.querySelector('.message.workflow_agent');
-                    const mid = phase.getAttribute('data-message-id');
-                    const bar = document.querySelector(
-                        `.fold-bar[data-message-id="${mid}"] `
-                        + `.fold-bar-section.fold-one-level`);
+                    const bar = phase.querySelector(
+                        ':scope > .fold-bar .fold-bar-section.fold-one-level');
                     if (!agent || !bar || !cc) continue;
 
                     const hidden = () => cc.style.display === 'none';
@@ -71,7 +69,7 @@ class TestWorkflowPhaseFold:
                     const d1 = hidden();
                     bar.click();
                     const d2 = hidden();
-                    return { found: true, phaseId: mid, d0, d1, d2 };
+                    return { found: true, phaseId: phase.id, d0, d1, d2 };
                 }
                 return { found: false };
             }"""

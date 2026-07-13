@@ -4715,10 +4715,10 @@
       <div class="session-divider"></div>
       
       <div class='message-node'>
-      <div class='message session-header' data-message-id='d-0' data-session-id='eb000000-0000-4000-8000-000000000001' id='msg-d-0'>
+      <div class='message session-header' data-session-id='eb000000-0000-4000-8000-000000000001' id='msg-d-0'>
           <div class='header'>Session: eb000000 <span class='message-model' title='Main agent model'>claude-opus-4-7</span></div>
           
-          <div class='fold-bar' data-message-id='d-0' data-border-color='session-header'>
+          <div class='fold-bar' data-border-color='session-header'>
               
               
               <div class='fold-bar-section fold-one-level' data-action='fold-one' data-target='d-0' data-title-unfolded='Fold (all levels) all 8 descendants' data-title-folded='Unfold (1st level) 1 user' title='Fold (all levels) all 8 descendants'>
@@ -4740,7 +4740,7 @@
       
       <div class='message-node'>
       
-      <div class='message user' data-message-id='d-1' data-uuid='11111111-0000-4000-8000-000000000001' id='msg-d-1'>
+      <div class='message user' data-uuid='11111111-0000-4000-8000-000000000001' id='msg-d-1'>
           <div class='header'>
               <span>🤷 User</span>
               <div class='header-info'>
@@ -4754,7 +4754,7 @@
           <div class='content'><div class='user-content'><button type='button' class='user-view-toggle' aria-label='Toggle between Markdown and raw view' title='Toggle Markdown / raw view'>raw</button><div class='user-md'><p>Spawn a coverage analysis agent in the background and wait for the result.</p>
   </div><pre class='user-raw'>Spawn a coverage analysis agent in the background and wait for the result.</pre></div></div>
           
-          <div class='fold-bar' data-message-id='d-1' data-border-color='user'>
+          <div class='fold-bar' data-border-color='user'>
               
               
               <div class='fold-bar-section fold-one-level' data-action='fold-one' data-target='d-1' data-title-unfolded='Fold (all levels) all 7 descendants' data-title-folded='Unfold (1st level) 2 tools, 1 task_notification, 1 more' title='Fold (all levels) all 7 descendants'>
@@ -4776,7 +4776,7 @@
       
       <div class='message-node'>
       
-      <div class='message tool_use pair_first' data-message-id='d-2' data-uuid='22222222-0000-4000-8000-000000000002' id='msg-d-2'>
+      <div class='message tool_use pair_first' data-uuid='22222222-0000-4000-8000-000000000002' id='msg-d-2'>
           <div class='header'>
               <span title="ID: tu_Task_async_001">🔧 Task <span class='tool-summary'>Coverage analysis</span> <span class='tool-subagent'>(Explore)</span> <span class='task-async-hint'>[async <a class='task-id-forward-link' href='#msg-d-7'><code>#cccc333</code></a>]</span> <span class='message-model' title='Model this sub-agent ran on'>claude-opus-4-7</span></span>
               <div class='header-info'>
@@ -4799,7 +4799,7 @@
       
       <div class='message-node'>
       
-      <div class='message tool_result pair_last' data-message-id='d-3' data-uuid='11111111-0000-4000-8000-000000000003' id='msg-d-3'>
+      <div class='message tool_result pair_last' data-uuid='11111111-0000-4000-8000-000000000003' id='msg-d-3'>
           <div class='header'>
               <span title="ID: tu_Task_async_001"></span>
               <div class='header-info'>
@@ -4820,7 +4820,7 @@
   <p>All uncovered branches are now exercised.</p>
   </div><dl class="teammate-tool-card teammate-spawn-card"><dt>Agent</dt><dd><code>cccc333</code></dd></dl></div>
           
-          <div class='fold-bar' data-message-id='d-3' data-border-color='tool_result'>
+          <div class='fold-bar' data-border-color='tool_result'>
               
               
               <div class='fold-bar-section fold-one-level full-width' data-action='fold-one' data-target='d-3' data-title-unfolded='Fold 2 assistants, 1 user' data-title-folded='Unfold (1st level) 2 assistants, 1 user' title='Fold 2 assistants, 1 user'>
@@ -4838,7 +4838,7 @@
       
       <div class='message-node'>
       
-      <div class='message assistant sidechain' data-message-id='d-5' data-uuid='cccccccc-0000-4000-8000-000000000002' id='msg-d-5'>
+      <div class='message assistant sidechain' data-uuid='cccccccc-0000-4000-8000-000000000002' id='msg-d-5'>
           <div class='header'>
               <span>🔗 Sub-assistant</span>
               <div class='header-info'>
@@ -4866,7 +4866,7 @@
       
       <div class='message-node'>
       
-      <div class='message tool_use pair_first' data-message-id='d-7' data-uuid='22222222-0000-4000-8000-000000000004' id='msg-d-7'>
+      <div class='message tool_use pair_first' data-uuid='22222222-0000-4000-8000-000000000004' id='msg-d-7'>
           <div class='header'>
               <span title="ID: tu_TaskOutput_001">🔍 TaskOutput <a class='task-id-backlink' href='#msg-d-2'><code>#cccc333</code></a></span>
               <div class='header-info'>
@@ -4888,7 +4888,7 @@
       
       <div class='message-node'>
       
-      <div class='message tool_result pair_last' data-message-id='d-8' data-uuid='11111111-0000-4000-8000-000000000005' id='msg-d-8'>
+      <div class='message tool_result pair_last' data-uuid='11111111-0000-4000-8000-000000000005' id='msg-d-8'>
           <div class='header'>
               <span title="ID: tu_TaskOutput_001"></span>
               <div class='header-info'>
@@ -4910,7 +4910,7 @@
       
       <div class='message-node'>
       
-      <div class='message user task-notification' data-message-id='d-9' data-uuid='11111111-0000-4000-8000-000000000006' id='msg-d-9'>
+      <div class='message user task-notification' data-uuid='11111111-0000-4000-8000-000000000006' id='msg-d-9'>
           <div class='header'>
               <span>🔄 Async result <span class='tool-summary'>Agent &quot;Coverage analysis&quot; completed</span></span>
               <div class='header-info'>
@@ -4932,7 +4932,7 @@
       
       <div class='message-node'>
       
-      <div class='message assistant' data-message-id='d-10' data-uuid='22222222-0000-4000-8000-000000000007' id='msg-d-10'>
+      <div class='message assistant' data-uuid='22222222-0000-4000-8000-000000000007' id='msg-d-10'>
           <div class='header'>
               <span>🤖 Assistant</span>
               <div class='header-info'>
@@ -5668,8 +5668,9 @@
               // --- DOM-nesting fold helpers (replaced the d-N ancestry-class scheme) ---
               function getMessageEl(messageId) {
                   if (!messageId) return null;
-                  const sel = (window.CSS && CSS.escape) ? CSS.escape(messageId) : messageId;
-                  return document.querySelector('.message[data-message-id="' + sel + '"]');
+                  // The card's DOM id is 'msg-' + message_id; data-message-id
+                  // held the same value and has been dropped, so resolve by id.
+                  return document.getElementById('msg-' + messageId);
               }
               function getChildrenContainer(messageEl) {
                   // .children is now a SIBLING of the card inside the shared
@@ -11478,10 +11479,10 @@
       <div class="session-divider"></div>
       
       <div class='message-node'>
-      <div class='message session-header' data-message-id='d-0' data-session-id='eb000000-0000-4000-8000-000000000001' id='msg-d-0'>
+      <div class='message session-header' data-session-id='eb000000-0000-4000-8000-000000000001' id='msg-d-0'>
           <div class='header'>Session: eb000000 <span class='message-model' title='Main agent model'>claude-opus-4-7</span></div>
           
-          <div class='fold-bar' data-message-id='d-0' data-border-color='session-header'>
+          <div class='fold-bar' data-border-color='session-header'>
               
               
               <div class='fold-bar-section fold-one-level' data-action='fold-one' data-target='d-0' data-title-unfolded='Fold (all levels) all 4 descendants' data-title-folded='Unfold (1st level) 1 user' title='Fold (all levels) all 4 descendants'>
@@ -11503,7 +11504,7 @@
       
       <div class='message-node'>
       
-      <div class='message user' data-message-id='d-1' data-uuid='11111111-0000-4000-8000-000000000001' id='msg-d-1'>
+      <div class='message user' data-uuid='11111111-0000-4000-8000-000000000001' id='msg-d-1'>
           <div class='header'>
               <span>🤷 User</span>
               <div class='header-info'>
@@ -11517,7 +11518,7 @@
           <div class='content'><div class='user-content'><button type='button' class='user-view-toggle' aria-label='Toggle between Markdown and raw view' title='Toggle Markdown / raw view'>raw</button><div class='user-md'><p>Spawn a coverage analysis agent in the background and wait for the result.</p>
   </div><pre class='user-raw'>Spawn a coverage analysis agent in the background and wait for the result.</pre></div></div>
           
-          <div class='fold-bar' data-message-id='d-1' data-border-color='user'>
+          <div class='fold-bar' data-border-color='user'>
               
               
               <div class='fold-bar-section fold-one-level full-width' data-action='fold-one' data-target='d-1' data-title-unfolded='Fold 1 tool, 1 task_notification, 1 more' data-title-folded='Unfold (1st level) 1 tool, 1 task_notification, 1 more' title='Fold 1 tool, 1 task_notification, 1 more'>
@@ -11535,7 +11536,7 @@
       
       <div class='message-node'>
       
-      <div class='message tool_use pair_first' data-message-id='d-2' data-uuid='22222222-0000-4000-8000-000000000002' id='msg-d-2'>
+      <div class='message tool_use pair_first' data-uuid='22222222-0000-4000-8000-000000000002' id='msg-d-2'>
           <div class='header'>
               <span title="ID: tu_Task_async_001">🔧 Task <span class='tool-summary'>Coverage analysis</span> <span class='tool-subagent'>(Explore)</span> <span class='task-async-hint'>[async <code>#cccc333</code>]</span></span>
               <div class='header-info'>
@@ -11558,7 +11559,7 @@
       
       <div class='message-node'>
       
-      <div class='message tool_result pair_last' data-message-id='d-3' data-uuid='11111111-0000-4000-8000-000000000003' id='msg-d-3'>
+      <div class='message tool_result pair_last' data-uuid='11111111-0000-4000-8000-000000000003' id='msg-d-3'>
           <div class='header'>
               <span title="ID: tu_Task_async_001"></span>
               <div class='header-info'>
@@ -11590,7 +11591,7 @@
       
       <div class='message-node'>
       
-      <div class='message assistant' data-message-id='d-10' data-uuid='22222222-0000-4000-8000-000000000007' id='msg-d-10'>
+      <div class='message assistant' data-uuid='22222222-0000-4000-8000-000000000007' id='msg-d-10'>
           <div class='header'>
               <span>🤖 Assistant</span>
               <div class='header-info'>
@@ -12326,8 +12327,9 @@
               // --- DOM-nesting fold helpers (replaced the d-N ancestry-class scheme) ---
               function getMessageEl(messageId) {
                   if (!messageId) return null;
-                  const sel = (window.CSS && CSS.escape) ? CSS.escape(messageId) : messageId;
-                  return document.querySelector('.message[data-message-id="' + sel + '"]');
+                  // The card's DOM id is 'msg-' + message_id; data-message-id
+                  // held the same value and has been dropped, so resolve by id.
+                  return document.getElementById('msg-' + messageId);
               }
               function getChildrenContainer(messageEl) {
                   // .children is now a SIBLING of the card inside the shared
@@ -20553,10 +20555,10 @@
       <div class="session-divider"></div>
       
       <div class='message-node'>
-      <div class='message session-header' data-message-id='d-0' data-session-id='test_session' id='msg-d-0'>
+      <div class='message session-header' data-session-id='test_session' id='msg-d-0'>
           <div class='header'>Session: test_ses <span class='message-model' title='Main agent model'>claude-3-sonnet-20240229</span></div>
           
-          <div class='fold-bar' data-message-id='d-0' data-border-color='session-header'>
+          <div class='fold-bar' data-border-color='session-header'>
               
               
               <div class='fold-bar-section fold-one-level' data-action='fold-one' data-target='d-0' data-title-unfolded='Fold (all levels) all 9 descendants' data-title-folded='Unfold (1st level) 4 users' title='Fold (all levels) all 9 descendants'>
@@ -20578,7 +20580,7 @@
       
       <div class='message-node'>
       
-      <div class='message user' data-message-id='d-1' data-uuid='msg_001' id='msg-d-1'>
+      <div class='message user' data-uuid='msg_001' id='msg-d-1'>
           <div class='header'>
               <span>🤷 User</span>
               <div class='header-info'>
@@ -20592,7 +20594,7 @@
           <div class='content'><div class='user-content'><button type='button' class='user-view-toggle' aria-label='Toggle between Markdown and raw view' title='Toggle Markdown / raw view'>raw</button><div class='user-md'><p>Hello Claude! Can you help me understand how Python decorators work?</p>
   </div><pre class='user-raw'>Hello Claude! Can you help me understand how Python decorators work?</pre></div></div>
           
-          <div class='fold-bar' data-message-id='d-1' data-border-color='user'>
+          <div class='fold-bar' data-border-color='user'>
               
               
               <div class='fold-bar-section fold-one-level full-width' data-action='fold-one' data-target='d-1' data-title-unfolded='Fold 1 assistant' data-title-folded='Unfold (1st level) 1 assistant' title='Fold 1 assistant'>
@@ -20610,7 +20612,7 @@
       
       <div class='message-node'>
       
-      <div class='message assistant' data-message-id='d-2' data-uuid='msg_002' id='msg-d-2'>
+      <div class='message assistant' data-uuid='msg_002' id='msg-d-2'>
           <div class='header'>
               <span>🤖 Assistant</span>
               <div class='header-info'>
@@ -20659,7 +20661,7 @@
       
       <div class='message-node'>
       
-      <div class='message user' data-message-id='d-3' data-uuid='msg_003' id='msg-d-3'>
+      <div class='message user' data-uuid='msg_003' id='msg-d-3'>
           <div class='header'>
               <span>🤷 User</span>
               <div class='header-info'>
@@ -20673,7 +20675,7 @@
           <div class='content'><div class='user-content'><button type='button' class='user-view-toggle' aria-label='Toggle between Markdown and raw view' title='Toggle Markdown / raw view'>raw</button><div class='user-md'><p>Great! Can you also show me how to create a decorator that takes parameters?</p>
   </div><pre class='user-raw'>Great! Can you also show me how to create a decorator that takes parameters?</pre></div></div>
           
-          <div class='fold-bar' data-message-id='d-3' data-border-color='user'>
+          <div class='fold-bar' data-border-color='user'>
               
               
               <div class='fold-bar-section fold-one-level full-width' data-action='fold-one' data-target='d-3' data-title-unfolded='Fold 1 tool, 1 assistant' data-title-folded='Unfold (1st level) 1 tool, 1 assistant' title='Fold 1 tool, 1 assistant'>
@@ -20691,7 +20693,7 @@
       
       <div class='message-node'>
       
-      <div class='message tool_use pair_first' data-message-id='d-4' data-uuid='msg_004' id='msg-d-4'>
+      <div class='message tool_use pair_first' data-uuid='msg_004' id='msg-d-4'>
           <div class='header'>
               <span title="ID: tool_001">📝 Edit <span class='tool-summary'>/tmp/decorator_example.py</span></span>
               <div class='header-info'>
@@ -20713,7 +20715,7 @@
       
       <div class='message-node'>
       
-      <div class='message tool_result pair_last' data-message-id='d-5' data-uuid='msg_005' id='msg-d-5'>
+      <div class='message tool_result pair_last' data-uuid='msg_005' id='msg-d-5'>
           <div class='header'>
               <span title="ID: tool_001"></span>
               <div class='header-info'>
@@ -20735,7 +20737,7 @@
       
       <div class='message-node'>
       
-      <div class='message assistant' data-message-id='d-6' data-uuid='msg_006' id='msg-d-6'>
+      <div class='message assistant' data-uuid='msg_006' id='msg-d-6'>
           <div class='header'>
               <span>🤖 Assistant</span>
               <div class='header-info'>
@@ -20777,7 +20779,7 @@
       
       <div class='message-node'>
       
-      <div class='message user' data-message-id='d-7' data-uuid='msg_007' id='msg-d-7'>
+      <div class='message user' data-uuid='msg_007' id='msg-d-7'>
           <div class='header'>
               <span>🤷 User</span>
               <div class='header-info'>
@@ -20791,7 +20793,7 @@
           <div class='content'><div class='user-content'><button type='button' class='user-view-toggle' aria-label='Toggle between Markdown and raw view' title='Toggle Markdown / raw view'>raw</button><div class='user-md'><p>Can you run that example to show the output?</p>
   </div><pre class='user-raw'>Can you run that example to show the output?</pre></div></div>
           
-          <div class='fold-bar' data-message-id='d-7' data-border-color='user'>
+          <div class='fold-bar' data-border-color='user'>
               
               
               <div class='fold-bar-section fold-one-level full-width' data-action='fold-one' data-target='d-7' data-title-unfolded='Fold 1 tool, 1 assistant' data-title-folded='Unfold (1st level) 1 tool, 1 assistant' title='Fold 1 tool, 1 assistant'>
@@ -20809,7 +20811,7 @@
       
       <div class='message-node'>
       
-      <div class='message tool_use pair_first' data-message-id='d-8' data-uuid='msg_008' id='msg-d-8'>
+      <div class='message tool_use pair_first' data-uuid='msg_008' id='msg-d-8'>
           <div class='header'>
               <span title="ID: tool_002">💻 Bash <span class='tool-summary'>Run the decorator example to show output</span></span>
               <div class='header-info'>
@@ -20831,7 +20833,7 @@
       
       <div class='message-node'>
       
-      <div class='message tool_result pair_last' data-message-id='d-9' data-uuid='msg_009' id='msg-d-9'>
+      <div class='message tool_result pair_last' data-uuid='msg_009' id='msg-d-9'>
           <div class='header'>
               <span title="ID: tool_002"></span>
               <div class='header-info'>
@@ -20855,7 +20857,7 @@
       
       <div class='message-node'>
       
-      <div class='message assistant' data-message-id='d-10' data-uuid='msg_010' id='msg-d-10'>
+      <div class='message assistant' data-uuid='msg_010' id='msg-d-10'>
           <div class='header'>
               <span>🤖 Assistant</span>
               <div class='header-info'>
@@ -20893,7 +20895,7 @@
       
       <div class='message-node'>
       
-      <div class='message user' data-message-id='d-11' data-uuid='msg_011' id='msg-d-11'>
+      <div class='message user' data-uuid='msg_011' id='msg-d-11'>
           <div class='header'>
               <span>🤷 User</span>
               <div class='header-info'>
@@ -21624,8 +21626,9 @@
               // --- DOM-nesting fold helpers (replaced the d-N ancestry-class scheme) ---
               function getMessageEl(messageId) {
                   if (!messageId) return null;
-                  const sel = (window.CSS && CSS.escape) ? CSS.escape(messageId) : messageId;
-                  return document.querySelector('.message[data-message-id="' + sel + '"]');
+                  // The card's DOM id is 'msg-' + message_id; data-message-id
+                  // held the same value and has been dropped, so resolve by id.
+                  return document.getElementById('msg-' + messageId);
               }
               function getChildrenContainer(messageEl) {
                   // .children is now a SIBLING of the card inside the shared
@@ -27434,10 +27437,10 @@
       <div class="session-divider"></div>
       
       <div class='message-node'>
-      <div class='message session-header' data-message-id='d-0' data-session-id='ef000000-0000-4000-8000-000000000001' id='msg-d-0'>
+      <div class='message session-header' data-session-id='ef000000-0000-4000-8000-000000000001' id='msg-d-0'>
           <div class='header'>Session: ef000000<span class="session-team-badge" style="--cc-color: var(--cc-purple); --cc-color-bg: var(--cc-purple-bg);"><span class="session-team-icon">👥</span>Team: test-coverage</span> <span class='message-model' title='Main agent model'>claude-opus-4-7</span></div>
           
-          <div class='fold-bar' data-message-id='d-0' data-border-color='session-header'>
+          <div class='fold-bar' data-border-color='session-header'>
               
               
               <div class='fold-bar-section fold-one-level' data-action='fold-one' data-target='d-0' data-title-unfolded='Fold (all levels) all 19 descendants' data-title-folded='Unfold (1st level) 2 teammates, 1 user' title='Fold (all levels) all 19 descendants'>
@@ -27459,7 +27462,7 @@
       
       <div class='message-node'>
       
-      <div class='message user' data-message-id='d-1' data-uuid='11111111-0000-4000-8000-000000000001' id='msg-d-1'>
+      <div class='message user' data-uuid='11111111-0000-4000-8000-000000000001' id='msg-d-1'>
           <div class='header'>
               <span>🤷 User</span>
               <div class='header-info'>
@@ -27473,7 +27476,7 @@
           <div class='content'><div class='user-content'><button type='button' class='user-view-toggle' aria-label='Toggle between Markdown and raw view' title='Toggle Markdown / raw view'>raw</button><div class='user-md'><p>Start a test-coverage team and dispatch two teammates.</p>
   </div><pre class='user-raw'>Start a test-coverage team and dispatch two teammates.</pre></div></div>
           
-          <div class='fold-bar' data-message-id='d-1' data-border-color='user'>
+          <div class='fold-bar' data-border-color='user'>
               
               
               <div class='fold-bar-section fold-one-level' data-action='fold-one' data-target='d-1' data-title-unfolded='Fold (all levels) all 12 descendants' data-title-folded='Unfold (1st level) 6 tools' title='Fold (all levels) all 12 descendants'>
@@ -27495,7 +27498,7 @@
       
       <div class='message-node'>
       
-      <div class='message tool_use pair_first' data-message-id='d-2' data-uuid='22222222-0000-4000-8000-000000000002' id='msg-d-2'>
+      <div class='message tool_use pair_first' data-uuid='22222222-0000-4000-8000-000000000002' id='msg-d-2'>
           <div class='header'>
               <span title="ID: tu_TeamCreate_001">🛠️ TeamCreate</span>
               <div class='header-info'>
@@ -27517,7 +27520,7 @@
       
       <div class='message-node'>
       
-      <div class='message tool_result pair_last' data-message-id='d-3' data-uuid='11111111-0000-4000-8000-000000000003' id='msg-d-3'>
+      <div class='message tool_result pair_last' data-uuid='11111111-0000-4000-8000-000000000003' id='msg-d-3'>
           <div class='header'>
               <span title="ID: tu_TeamCreate_001"></span>
               <div class='header-info'>
@@ -27539,7 +27542,7 @@
       
       <div class='message-node'>
       
-      <div class='message tool_use' data-message-id='d-4' data-uuid='22222222-0000-4000-8000-000000000004' id='msg-d-4'>
+      <div class='message tool_use' data-uuid='22222222-0000-4000-8000-000000000004' id='msg-d-4'>
           <div class='header'>
               <span title="ID: tu_TaskCreate_alice">🛠️ Task <code>#1</code> <span class='tool-summary'>Add relay tests</span> <span class='task-action'>[created]</span></span>
               <div class='header-info'>
@@ -27565,7 +27568,7 @@
       
       <div class='message-node'>
       
-      <div class='message tool_use' data-message-id='d-6' data-uuid='22222222-0000-4000-8000-000000000006' id='msg-d-6'>
+      <div class='message tool_use' data-uuid='22222222-0000-4000-8000-000000000006' id='msg-d-6'>
           <div class='header'>
               <span title="ID: tu_TaskCreate_bob">🛠️ Task <code>#2</code> <span class='tool-summary'>Add server tests</span> <span class='task-action'>[created]</span></span>
               <div class='header-info'>
@@ -27591,7 +27594,7 @@
       
       <div class='message-node'>
       
-      <div class='message tool_use' data-message-id='d-8' data-uuid='22222222-0000-4000-8000-000000000008' id='msg-d-8'>
+      <div class='message tool_use' data-uuid='22222222-0000-4000-8000-000000000008' id='msg-d-8'>
           <div class='header'>
               <span title="ID: tu_TaskUpdate_001">🛠️ Task <a class='task-id-backlink' href='#msg-d-4'><code>#1</code></a> <span class='tool-summary'>Add relay tests</span> <span class='task-action'>[updated]</span></span>
               <div class='header-info'>
@@ -27615,7 +27618,7 @@
       
       <div class='message-node'>
       
-      <div class='message tool_use pair_first' data-message-id='d-10' data-uuid='22222222-0000-4000-8000-000000000010' id='msg-d-10'>
+      <div class='message tool_use pair_first' data-uuid='22222222-0000-4000-8000-000000000010' id='msg-d-10'>
           <div class='header'>
               <span title="ID: tu_Task_alice">🔧 Task <span class='tool-summary'>Run alice&#x27;s test work</span> <span class='tool-subagent'>(general-purpose)</span> <span class='message-model' title='Model this sub-agent ran on'>claude-opus-4-7</span></span>
               <div class='header-info'>
@@ -27638,7 +27641,7 @@
       
       <div class='message-node'>
       
-      <div class='message tool_result pair_last' data-message-id='d-11' data-uuid='11111111-0000-4000-8000-000000000011' id='msg-d-11'>
+      <div class='message tool_result pair_last' data-uuid='11111111-0000-4000-8000-000000000011' id='msg-d-11'>
           <div class='header'>
               <span title="ID: tu_Task_alice"></span>
               <div class='header-info'>
@@ -27652,7 +27655,7 @@
           <div class='content markdown'><div class="task-result markdown"><p>Relay tests added. Coverage 15% → 96%.</p>
   </div><dl class="teammate-tool-card teammate-spawn-card"><dt>Agent</dt><dd><code>aaaa111111111111</code></dd><dt>Worktree</dt><dd><code>/home/synthetic/worktrees/agent-aaaa1111</code></dd><dt>Branch</dt><dd><code>worktree-agent-aaaa1111</code></dd><dt>Usage</dt><dd>12,345 tokens · 5 tool uses · 60.0s</dd></dl></div>
           
-          <div class='fold-bar' data-message-id='d-11' data-border-color='tool_result'>
+          <div class='fold-bar' data-border-color='tool_result'>
               
               
               <div class='fold-bar-section fold-one-level full-width' data-action='fold-one' data-target='d-11' data-title-unfolded='Fold 2 assistants, 1 user' data-title-folded='Unfold (1st level) 2 assistants, 1 user' title='Fold 2 assistants, 1 user'>
@@ -27670,7 +27673,7 @@
       
       <div class='message-node'>
       
-      <div class='message assistant sidechain' data-message-id='d-13' data-uuid='aaaaaaaa-0000-4000-8000-000000000002' id='msg-d-13'>
+      <div class='message assistant sidechain' data-uuid='aaaaaaaa-0000-4000-8000-000000000002' id='msg-d-13'>
           <div class='header'>
               <span>🔗 Sub-assistant</span>
               <div class='header-info'>
@@ -27693,7 +27696,7 @@
       
       <div class='message-node'>
       
-      <div class='message assistant sidechain' data-message-id='d-14' data-uuid='aaaaaaaa-0000-4000-8000-000000000003' id='msg-d-14'>
+      <div class='message assistant sidechain' data-uuid='aaaaaaaa-0000-4000-8000-000000000003' id='msg-d-14'>
           <div class='header'>
               <span>🔗 Sub-assistant</span>
               <div class='header-info'>
@@ -27721,7 +27724,7 @@
       
       <div class='message-node'>
       
-      <div class='message tool_use pair_first' data-message-id='d-15' data-uuid='22222222-0000-4000-8000-000000000012' id='msg-d-15'>
+      <div class='message tool_use pair_first' data-uuid='22222222-0000-4000-8000-000000000012' id='msg-d-15'>
           <div class='header'>
               <span title="ID: tu_Task_bob">🔧 Task <span class='tool-summary'>Run bob&#x27;s test work</span> <span class='tool-subagent'>(general-purpose)</span> <span class='message-model' title='Model this sub-agent ran on'>claude-opus-4-7</span></span>
               <div class='header-info'>
@@ -27744,7 +27747,7 @@
       
       <div class='message-node'>
       
-      <div class='message tool_result pair_last' data-message-id='d-16' data-uuid='11111111-0000-4000-8000-000000000013' id='msg-d-16'>
+      <div class='message tool_result pair_last' data-uuid='11111111-0000-4000-8000-000000000013' id='msg-d-16'>
           <div class='header'>
               <span title="ID: tu_Task_bob"></span>
               <div class='header-info'>
@@ -27758,7 +27761,7 @@
           <div class='content markdown'><div class="task-result markdown"><p>Server tests added. Coverage 22% → 88%.</p>
   </div><dl class="teammate-tool-card teammate-spawn-card"><dt>Agent</dt><dd><code>bbbb222222222222</code></dd><dt>Worktree</dt><dd><code>/home/synthetic/worktrees/agent-bbbb2222</code></dd><dt>Branch</dt><dd><code>worktree-agent-bbbb2222</code></dd><dt>Usage</dt><dd>9,876 tokens · 4 tool uses · 42.0s</dd></dl></div>
           
-          <div class='fold-bar' data-message-id='d-16' data-border-color='tool_result'>
+          <div class='fold-bar' data-border-color='tool_result'>
               
               
               <div class='fold-bar-section fold-one-level full-width' data-action='fold-one' data-target='d-16' data-title-unfolded='Fold 2 assistants, 1 teammate' data-title-folded='Unfold (1st level) 2 assistants, 1 teammate' title='Fold 2 assistants, 1 teammate'>
@@ -27776,7 +27779,7 @@
       
       <div class='message-node'>
       
-      <div class='message user teammate sidechain' data-message-id='d-17' data-uuid='bbbbbbbb-0000-4000-8000-000000000001' id='msg-d-17'>
+      <div class='message user teammate sidechain' data-uuid='bbbbbbbb-0000-4000-8000-000000000001' id='msg-d-17'>
           <div class='header'>
               <span>Teammate</span>
               <div class='header-info'>
@@ -27799,7 +27802,7 @@
       
       <div class='message-node'>
       
-      <div class='message assistant sidechain' data-message-id='d-18' data-uuid='bbbbbbbb-0000-4000-8000-000000000002' id='msg-d-18'>
+      <div class='message assistant sidechain' data-uuid='bbbbbbbb-0000-4000-8000-000000000002' id='msg-d-18'>
           <div class='header'>
               <span>🔗 Sub-assistant</span>
               <div class='header-info'>
@@ -27822,7 +27825,7 @@
       
       <div class='message-node'>
       
-      <div class='message assistant sidechain' data-message-id='d-19' data-uuid='bbbbbbbb-0000-4000-8000-000000000003' id='msg-d-19'>
+      <div class='message assistant sidechain' data-uuid='bbbbbbbb-0000-4000-8000-000000000003' id='msg-d-19'>
           <div class='header'>
               <span>🔗 Sub-assistant</span>
               <div class='header-info'>
@@ -27855,7 +27858,7 @@
       
       <div class='message-node'>
       
-      <div class='message user teammate' data-message-id='d-20' data-uuid='11111111-0000-4000-8000-000000000014' id='msg-d-20'>
+      <div class='message user teammate' data-uuid='11111111-0000-4000-8000-000000000014' id='msg-d-20'>
           <div class='header'>
               <span>Teammate</span>
               <div class='header-info'>
@@ -27882,7 +27885,7 @@
       
       <div class='message-node'>
       
-      <div class='message user teammate' data-message-id='d-21' data-uuid='11111111-0000-4000-8000-000000000015' id='msg-d-21'>
+      <div class='message user teammate' data-uuid='11111111-0000-4000-8000-000000000015' id='msg-d-21'>
           <div class='header'>
               <span>Teammate</span>
               <div class='header-info'>
@@ -27898,7 +27901,7 @@
   </div></div><div class="teammate-message teammate-system"><div class="teammate-message-header"><span class="teammate-badge" style="--cc-color: var(--cc-gray);"><span class="teammate-icon">▎</span>system</span></div><div class="teammate-body"><p>teammate_terminated: alice exited cleanly</p>
   </div></div></div>
           
-          <div class='fold-bar' data-message-id='d-21' data-border-color='user teammate'>
+          <div class='fold-bar' data-border-color='user teammate'>
               
               
               <div class='fold-bar-section fold-one-level full-width' data-action='fold-one' data-target='d-21' data-title-unfolded='Fold 3 tools, 1 assistant' data-title-folded='Unfold (1st level) 3 tools, 1 assistant' title='Fold 3 tools, 1 assistant'>
@@ -27916,7 +27919,7 @@
       
       <div class='message-node'>
       
-      <div class='message tool_use pair_first' data-message-id='d-22' data-uuid='22222222-0000-4000-8000-000000000016' id='msg-d-22'>
+      <div class='message tool_use pair_first' data-uuid='22222222-0000-4000-8000-000000000016' id='msg-d-22'>
           <div class='header'>
               <span title="ID: tu_TaskList_001">🛠️ TaskList</span>
               <div class='header-info'>
@@ -27938,7 +27941,7 @@
       
       <div class='message-node'>
       
-      <div class='message tool_result pair_last' data-message-id='d-23' data-uuid='11111111-0000-4000-8000-000000000017' id='msg-d-23'>
+      <div class='message tool_result pair_last' data-uuid='11111111-0000-4000-8000-000000000017' id='msg-d-23'>
           <div class='header'>
               <span title="ID: tu_TaskList_001"></span>
               <div class='header-info'>
@@ -27960,7 +27963,7 @@
       
       <div class='message-node'>
       
-      <div class='message tool_use pair_first' data-message-id='d-24' data-uuid='22222222-0000-4000-8000-000000000018' id='msg-d-24'>
+      <div class='message tool_use pair_first' data-uuid='22222222-0000-4000-8000-000000000018' id='msg-d-24'>
           <div class='header'>
               <span title="ID: tu_SendMessage_001">✉️ SendMessage <span class='tool-summary'>to <span class="teammate-badge" style="--cc-color: var(--cc-blue); --cc-color-bg: var(--cc-blue-bg);"><span class="teammate-icon">▎</span>alice</span></span></span>
               <div class='header-info'>
@@ -27983,7 +27986,7 @@
       
       <div class='message-node'>
       
-      <div class='message tool_result pair_last' data-message-id='d-25' data-uuid='11111111-0000-4000-8000-000000000019' id='msg-d-25'>
+      <div class='message tool_result pair_last' data-uuid='11111111-0000-4000-8000-000000000019' id='msg-d-25'>
           <div class='header'>
               <span title="ID: tu_SendMessage_001"></span>
               <div class='header-info'>
@@ -28005,7 +28008,7 @@
       
       <div class='message-node'>
       
-      <div class='message tool_use pair_first' data-message-id='d-26' data-uuid='22222222-0000-4000-8000-000000000020' id='msg-d-26'>
+      <div class='message tool_use pair_first' data-uuid='22222222-0000-4000-8000-000000000020' id='msg-d-26'>
           <div class='header'>
               <span title="ID: tu_TeamDelete_001">🛠️ TeamDelete</span>
               <div class='header-info'>
@@ -28027,7 +28030,7 @@
       
       <div class='message-node'>
       
-      <div class='message tool_result pair_last' data-message-id='d-27' data-uuid='11111111-0000-4000-8000-000000000021' id='msg-d-27'>
+      <div class='message tool_result pair_last' data-uuid='11111111-0000-4000-8000-000000000021' id='msg-d-27'>
           <div class='header'>
               <span title="ID: tu_TeamDelete_001"></span>
               <div class='header-info'>
@@ -28049,7 +28052,7 @@
       
       <div class='message-node'>
       
-      <div class='message assistant' data-message-id='d-28' data-uuid='22222222-0000-4000-8000-000000000022' id='msg-d-28'>
+      <div class='message assistant' data-uuid='22222222-0000-4000-8000-000000000022' id='msg-d-28'>
           <div class='header'>
               <span>🤖 Assistant</span>
               <div class='header-info'>
@@ -28785,8 +28788,9 @@
               // --- DOM-nesting fold helpers (replaced the d-N ancestry-class scheme) ---
               function getMessageEl(messageId) {
                   if (!messageId) return null;
-                  const sel = (window.CSS && CSS.escape) ? CSS.escape(messageId) : messageId;
-                  return document.querySelector('.message[data-message-id="' + sel + '"]');
+                  // The card's DOM id is 'msg-' + message_id; data-message-id
+                  // held the same value and has been dropped, so resolve by id.
+                  return document.getElementById('msg-' + messageId);
               }
               function getChildrenContainer(messageEl) {
                   // .children is now a SIBLING of the card inside the shared
@@ -34595,10 +34599,10 @@
       <div class="session-divider"></div>
       
       <div class='message-node'>
-      <div class='message session-header' data-message-id='d-0' data-session-id='edge_cases' id='msg-d-0'>
+      <div class='message session-header' data-session-id='edge_cases' id='msg-d-0'>
           <div class='header'>Session: Tested various edge cases including markdown formatting, long text, tool errors, system messages, command outputs, special characters and emojis. All message types render correctly in the transcript viewer. • edge_cas <span class='message-model' title='Main agent model'>claude-3-sonnet-20240229</span></div>
           
-          <div class='fold-bar' data-message-id='d-0' data-border-color='session-header'>
+          <div class='fold-bar' data-border-color='session-header'>
               
               
               <div class='fold-bar-section fold-one-level' data-action='fold-one' data-target='d-0' data-title-unfolded='Fold (all levels) all 9 descendants' data-title-folded='Unfold (1st level) 5 users' title='Fold (all levels) all 9 descendants'>
@@ -34620,7 +34624,7 @@
       
       <div class='message-node'>
       
-      <div class='message user' data-message-id='d-1' data-uuid='edge_001' id='msg-d-1'>
+      <div class='message user' data-uuid='edge_001' id='msg-d-1'>
           <div class='header'>
               <span>🤷 User</span>
               <div class='header-info'>
@@ -34634,7 +34638,7 @@
           <div class='content'><div class='user-content'><button type='button' class='user-view-toggle' aria-label='Toggle between Markdown and raw view' title='Toggle Markdown / raw view'>raw</button><div class='user-md'><p>Here's a message with some <strong>markdown</strong> formatting, <code>inline code</code>, and even a <a href="https://example.com">link</a>. Let's see how it renders!</p>
   </div><pre class='user-raw'>Here&#x27;s a message with some **markdown** formatting, `inline code`, and even a [link](https://example.com). Let&#x27;s see how it renders!</pre></div></div>
           
-          <div class='fold-bar' data-message-id='d-1' data-border-color='user'>
+          <div class='fold-bar' data-border-color='user'>
               
               
               <div class='fold-bar-section fold-one-level full-width' data-action='fold-one' data-target='d-1' data-title-unfolded='Fold 1 assistant' data-title-folded='Unfold (1st level) 1 assistant' title='Fold 1 assistant'>
@@ -34652,7 +34656,7 @@
       
       <div class='message-node'>
       
-      <div class='message assistant' data-message-id='d-2' data-uuid='edge_002' id='msg-d-2'>
+      <div class='message assistant' data-uuid='edge_002' id='msg-d-2'>
           <div class='header'>
               <span>🤖 Assistant</span>
               <div class='header-info'>
@@ -34720,7 +34724,7 @@
       
       <div class='message-node'>
       
-      <div class='message user' data-message-id='d-3' data-uuid='edge_003' id='msg-d-3'>
+      <div class='message user' data-uuid='edge_003' id='msg-d-3'>
           <div class='header'>
               <span>🤷 User</span>
               <div class='header-info'>
@@ -34734,7 +34738,7 @@
           <div class='content'><div class='user-content'><button type='button' class='user-view-toggle' aria-label='Toggle between Markdown and raw view' title='Toggle Markdown / raw view'>raw</button><div class='user-md'><p>Let's test a very long message to see how it handles text wrapping and layout. Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum. Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium doloremque laudantium, totam rem aperiam, eaque ipsa quae ab illo inventore veritatis et quasi architecto beatae vitae dicta sunt explicabo. Nemo enim ipsam voluptatem quia voluptas sit aspernatur aut odit aut fugit, sed quia consequuntur magni dolores eos qui ratione voluptatem sequi nesciunt. Neque porro quisquam est, qui dolorem ipsum quia dolor sit amet, consectetur, adipisci velit, sed quia non numquam eius modi tempora incidunt ut labore et dolore magnam aliquam quaerat voluptatem.</p>
   </div><pre class='user-raw'>Let&#x27;s test a very long message to see how it handles text wrapping and layout. Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum. Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium doloremque laudantium, totam rem aperiam, eaque ipsa quae ab illo inventore veritatis et quasi architecto beatae vitae dicta sunt explicabo. Nemo enim ipsam voluptatem quia voluptas sit aspernatur aut odit aut fugit, sed quia consequuntur magni dolores eos qui ratione voluptatem sequi nesciunt. Neque porro quisquam est, qui dolorem ipsum quia dolor sit amet, consectetur, adipisci velit, sed quia non numquam eius modi tempora incidunt ut labore et dolore magnam aliquam quaerat voluptatem.</pre></div></div>
           
-          <div class='fold-bar' data-message-id='d-3' data-border-color='user'>
+          <div class='fold-bar' data-border-color='user'>
               
               
               <div class='fold-bar-section fold-one-level full-width' data-action='fold-one' data-target='d-3' data-title-unfolded='Fold 1 tool' data-title-folded='Unfold (1st level) 1 tool' title='Fold 1 tool'>
@@ -34752,7 +34756,7 @@
       
       <div class='message-node'>
       
-      <div class='message tool_use pair_first' data-message-id='d-4' data-uuid='edge_004' id='msg-d-4'>
+      <div class='message tool_use pair_first' data-uuid='edge_004' id='msg-d-4'>
           <div class='header'>
               <span title="ID: tool_edge_001">🛠️ FailingTool</span>
               <div class='header-info'>
@@ -34779,7 +34783,7 @@
       
       <div class='message-node'>
       
-      <div class='message tool_result error pair_last' data-message-id='d-5' data-uuid='edge_005' id='msg-d-5'>
+      <div class='message tool_result error pair_last' data-uuid='edge_005' id='msg-d-5'>
           <div class='header'>
               <span title="ID: tool_edge_001">🚨 Error</span>
               <div class='header-info'>
@@ -34806,7 +34810,7 @@
       
       <div class='message-node'>
       
-      <div class='message user slash-command pair_first' data-message-id='d-6' data-uuid='edge_007' id='msg-d-6'>
+      <div class='message user slash-command pair_first' data-uuid='edge_007' id='msg-d-6'>
           <div class='header'>
               <span>🤷 Slash Command</span>
               <div class='header-info'>
@@ -34830,7 +34834,7 @@
       
       <div class='message-node'>
       
-      <div class='message user command-output pair_last' data-message-id='d-7' data-uuid='edge_008' id='msg-d-7'>
+      <div class='message user command-output pair_last' data-uuid='edge_008' id='msg-d-7'>
           <div class='header'>
               <span></span>
               <div class='header-info'>
@@ -34848,7 +34852,7 @@
   Status: SUCCESS
   Timestamp: 2025-06-14T11:02:20Z</pre></div>
           
-          <div class='fold-bar' data-message-id='d-7' data-border-color='user command-output'>
+          <div class='fold-bar' data-border-color='user command-output'>
               
               
               <div class='fold-bar-section fold-one-level' data-action='fold-one' data-target='d-7' data-title-unfolded='Fold (all levels) all 2 descendants' data-title-folded='Unfold (1st level) 1 assistant' title='Fold (all levels) all 2 descendants'>
@@ -34870,7 +34874,7 @@
       
       <div class='message-node'>
       
-      <div class='message assistant' data-message-id='d-8' data-uuid='edge_009' id='msg-d-8'>
+      <div class='message assistant' data-uuid='edge_009' id='msg-d-8'>
           <div class='header'>
               <span>🤖 Assistant</span>
               <div class='header-info'>
@@ -34886,7 +34890,7 @@
           <div class='content markdown'><div class="assistant-text markdown"><p>I see the long Lorem ipsum text wraps nicely! Long text handling is important for readability. The CSS should handle word wrapping automatically.</p>
   </div></div>
           
-          <div class='fold-bar' data-message-id='d-8' data-border-color='assistant'>
+          <div class='fold-bar' data-border-color='assistant'>
               
               
               <div class='fold-bar-section fold-one-level full-width' data-action='fold-one' data-target='d-8' data-title-unfolded='Fold 1 tool' data-title-folded='Unfold (1st level) 1 tool' title='Fold 1 tool'>
@@ -34904,7 +34908,7 @@
       
       <div class='message-node'>
       
-      <div class='message tool_use' data-message-id='d-9' data-uuid='edge_009' id='msg-d-9'>
+      <div class='message tool_use' data-uuid='edge_009' id='msg-d-9'>
           <div class='header'>
               <span title="ID: tool_edge_002">🛠️ MultiEdit</span>
               <div class='header-info'>
@@ -34936,7 +34940,7 @@
       
       <div class='message-node'>
       
-      <div class='message user' data-message-id='d-10' data-uuid='edge_011' id='msg-d-10'>
+      <div class='message user' data-uuid='edge_011' id='msg-d-10'>
           <div class='header'>
               <span>🤷 User</span>
               <div class='header-info'>
@@ -34959,7 +34963,7 @@
       
       <div class='message-node'>
       
-      <div class='message user' data-message-id='d-13' data-uuid='edge_010' id='msg-d-13'>
+      <div class='message user' data-uuid='edge_010' id='msg-d-13'>
           <div class='header'>
               <span>🤷 User</span>
               <div class='header-info'>
@@ -34987,10 +34991,10 @@
       <div class="session-divider"></div>
       
       <div class='message-node'>
-      <div class='message session-header' data-message-id='d-11' data-session-id='todowrite_session' id='msg-d-11'>
+      <div class='message session-header' data-session-id='todowrite_session' id='msg-d-11'>
           <div class='header'>Session: todowrit <span class='message-model' title='Main agent model'>claude-sonnet-4</span></div>
           
-          <div class='fold-bar' data-message-id='d-11' data-border-color='session-header'>
+          <div class='fold-bar' data-border-color='session-header'>
               
               
               <div class='fold-bar-section fold-one-level full-width' data-action='fold-one' data-target='d-11' data-title-unfolded='Fold 1 tool' data-title-folded='Unfold (1st level) 1 tool' title='Fold 1 tool'>
@@ -35008,7 +35012,7 @@
       
       <div class='message-node'>
       
-      <div class='message tool_use' data-message-id='d-12' data-uuid='assistant_004' id='msg-d-12'>
+      <div class='message tool_use' data-uuid='assistant_004' id='msg-d-12'>
           <div class='header'>
               <span title="ID: toolu_todowrite_002">🛠️ TodoWrite</span>
               <div class='header-info'>
@@ -35897,8 +35901,9 @@
               // --- DOM-nesting fold helpers (replaced the d-N ancestry-class scheme) ---
               function getMessageEl(messageId) {
                   if (!messageId) return null;
-                  const sel = (window.CSS && CSS.escape) ? CSS.escape(messageId) : messageId;
-                  return document.querySelector('.message[data-message-id="' + sel + '"]');
+                  // The card's DOM id is 'msg-' + message_id; data-message-id
+                  // held the same value and has been dropped, so resolve by id.
+                  return document.getElementById('msg-' + messageId);
               }
               function getChildrenContainer(messageEl) {
                   // .children is now a SIBLING of the card inside the shared
@@ -41768,10 +41773,10 @@
       <div class="session-divider"></div>
       
       <div class='message-node'>
-      <div class='message session-header' data-message-id='d-0' data-session-id='session_b' id='msg-d-0'>
+      <div class='message session-header' data-session-id='session_b' id='msg-d-0'>
           <div class='header'>Session: session_ <span class='message-model' title='Main agent model'>claude-3-sonnet-20240229</span></div>
           
-          <div class='fold-bar' data-message-id='d-0' data-border-color='session-header'>
+          <div class='fold-bar' data-border-color='session-header'>
               
               
               <div class='fold-bar-section fold-one-level' data-action='fold-one' data-target='d-0' data-title-unfolded='Fold (all levels) all 3 descendants' data-title-folded='Unfold (1st level) 2 users' title='Fold (all levels) all 3 descendants'>
@@ -41793,7 +41798,7 @@
       
       <div class='message-node'>
       
-      <div class='message user' data-message-id='d-1' data-uuid='session_b_001' id='msg-d-1'>
+      <div class='message user' data-uuid='session_b_001' id='msg-d-1'>
           <div class='header'>
               <span>🤷 User</span>
               <div class='header-info'>
@@ -41807,7 +41812,7 @@
           <div class='content'><div class='user-content'><button type='button' class='user-view-toggle' aria-label='Toggle between Markdown and raw view' title='Toggle Markdown / raw view'>raw</button><div class='user-md'><p>This is from a different session file to test multi-session handling.</p>
   </div><pre class='user-raw'>This is from a different session file to test multi-session handling.</pre></div></div>
           
-          <div class='fold-bar' data-message-id='d-1' data-border-color='user'>
+          <div class='fold-bar' data-border-color='user'>
               
               
               <div class='fold-bar-section fold-one-level full-width' data-action='fold-one' data-target='d-1' data-title-unfolded='Fold 1 assistant' data-title-folded='Unfold (1st level) 1 assistant' title='Fold 1 assistant'>
@@ -41825,7 +41830,7 @@
       
       <div class='message-node'>
       
-      <div class='message assistant' data-message-id='d-2' data-uuid='session_b_002' id='msg-d-2'>
+      <div class='message assistant' data-uuid='session_b_002' id='msg-d-2'>
           <div class='header'>
               <span>🤖 Assistant</span>
               <div class='header-info'>
@@ -41855,7 +41860,7 @@
       
       <div class='message-node'>
       
-      <div class='message user' data-message-id='d-3' data-uuid='session_b_003' id='msg-d-3'>
+      <div class='message user' data-uuid='session_b_003' id='msg-d-3'>
           <div class='header'>
               <span>🤷 User</span>
               <div class='header-info'>
@@ -41883,10 +41888,10 @@
       <div class="session-divider"></div>
       
       <div class='message-node'>
-      <div class='message session-header' data-message-id='d-4' data-session-id='test_session' id='msg-d-4'>
+      <div class='message session-header' data-session-id='test_session' id='msg-d-4'>
           <div class='header'>Session: User learned about Python decorators, including basic decorators and parameterized decorators. Created and ran examples showing how decorators work with functions. User is now ready to implement their own timing decorator. • test_ses <span class='message-model' title='Main agent model'>claude-3-sonnet-20240229</span></div>
           
-          <div class='fold-bar' data-message-id='d-4' data-border-color='session-header'>
+          <div class='fold-bar' data-border-color='session-header'>
               
               
               <div class='fold-bar-section fold-one-level' data-action='fold-one' data-target='d-4' data-title-unfolded='Fold (all levels) all 9 descendants' data-title-folded='Unfold (1st level) 4 users' title='Fold (all levels) all 9 descendants'>
@@ -41908,7 +41913,7 @@
       
       <div class='message-node'>
       
-      <div class='message user' data-message-id='d-5' data-uuid='msg_001' id='msg-d-5'>
+      <div class='message user' data-uuid='msg_001' id='msg-d-5'>
           <div class='header'>
               <span>🤷 User</span>
               <div class='header-info'>
@@ -41922,7 +41927,7 @@
           <div class='content'><div class='user-content'><button type='button' class='user-view-toggle' aria-label='Toggle between Markdown and raw view' title='Toggle Markdown / raw view'>raw</button><div class='user-md'><p>Hello Claude! Can you help me understand how Python decorators work?</p>
   </div><pre class='user-raw'>Hello Claude! Can you help me understand how Python decorators work?</pre></div></div>
           
-          <div class='fold-bar' data-message-id='d-5' data-border-color='user'>
+          <div class='fold-bar' data-border-color='user'>
               
               
               <div class='fold-bar-section fold-one-level full-width' data-action='fold-one' data-target='d-5' data-title-unfolded='Fold 1 assistant' data-title-folded='Unfold (1st level) 1 assistant' title='Fold 1 assistant'>
@@ -41940,7 +41945,7 @@
       
       <div class='message-node'>
       
-      <div class='message assistant' data-message-id='d-6' data-uuid='msg_002' id='msg-d-6'>
+      <div class='message assistant' data-uuid='msg_002' id='msg-d-6'>
           <div class='header'>
               <span>🤖 Assistant</span>
               <div class='header-info'>
@@ -41989,7 +41994,7 @@
       
       <div class='message-node'>
       
-      <div class='message user' data-message-id='d-7' data-uuid='msg_003' id='msg-d-7'>
+      <div class='message user' data-uuid='msg_003' id='msg-d-7'>
           <div class='header'>
               <span>🤷 User</span>
               <div class='header-info'>
@@ -42003,7 +42008,7 @@
           <div class='content'><div class='user-content'><button type='button' class='user-view-toggle' aria-label='Toggle between Markdown and raw view' title='Toggle Markdown / raw view'>raw</button><div class='user-md'><p>Great! Can you also show me how to create a decorator that takes parameters?</p>
   </div><pre class='user-raw'>Great! Can you also show me how to create a decorator that takes parameters?</pre></div></div>
           
-          <div class='fold-bar' data-message-id='d-7' data-border-color='user'>
+          <div class='fold-bar' data-border-color='user'>
               
               
               <div class='fold-bar-section fold-one-level full-width' data-action='fold-one' data-target='d-7' data-title-unfolded='Fold 1 tool, 1 assistant' data-title-folded='Unfold (1st level) 1 tool, 1 assistant' title='Fold 1 tool, 1 assistant'>
@@ -42021,7 +42026,7 @@
       
       <div class='message-node'>
       
-      <div class='message tool_use pair_first' data-message-id='d-8' data-uuid='msg_004' id='msg-d-8'>
+      <div class='message tool_use pair_first' data-uuid='msg_004' id='msg-d-8'>
           <div class='header'>
               <span title="ID: tool_001">📝 Edit <span class='tool-summary'>/tmp/decorator_example.py</span></span>
               <div class='header-info'>
@@ -42043,7 +42048,7 @@
       
       <div class='message-node'>
       
-      <div class='message tool_result pair_last' data-message-id='d-9' data-uuid='msg_005' id='msg-d-9'>
+      <div class='message tool_result pair_last' data-uuid='msg_005' id='msg-d-9'>
           <div class='header'>
               <span title="ID: tool_001"></span>
               <div class='header-info'>
@@ -42065,7 +42070,7 @@
       
       <div class='message-node'>
       
-      <div class='message assistant' data-message-id='d-10' data-uuid='msg_006' id='msg-d-10'>
+      <div class='message assistant' data-uuid='msg_006' id='msg-d-10'>
           <div class='header'>
               <span>🤖 Assistant</span>
               <div class='header-info'>
@@ -42107,7 +42112,7 @@
       
       <div class='message-node'>
       
-      <div class='message user' data-message-id='d-11' data-uuid='msg_007' id='msg-d-11'>
+      <div class='message user' data-uuid='msg_007' id='msg-d-11'>
           <div class='header'>
               <span>🤷 User</span>
               <div class='header-info'>
@@ -42121,7 +42126,7 @@
           <div class='content'><div class='user-content'><button type='button' class='user-view-toggle' aria-label='Toggle between Markdown and raw view' title='Toggle Markdown / raw view'>raw</button><div class='user-md'><p>Can you run that example to show the output?</p>
   </div><pre class='user-raw'>Can you run that example to show the output?</pre></div></div>
           
-          <div class='fold-bar' data-message-id='d-11' data-border-color='user'>
+          <div class='fold-bar' data-border-color='user'>
               
               
               <div class='fold-bar-section fold-one-level full-width' data-action='fold-one' data-target='d-11' data-title-unfolded='Fold 1 tool, 1 assistant' data-title-folded='Unfold (1st level) 1 tool, 1 assistant' title='Fold 1 tool, 1 assistant'>
@@ -42139,7 +42144,7 @@
       
       <div class='message-node'>
       
-      <div class='message tool_use pair_first' data-message-id='d-12' data-uuid='msg_008' id='msg-d-12'>
+      <div class='message tool_use pair_first' data-uuid='msg_008' id='msg-d-12'>
           <div class='header'>
               <span title="ID: tool_002">💻 Bash <span class='tool-summary'>Run the decorator example to show output</span></span>
               <div class='header-info'>
@@ -42161,7 +42166,7 @@
       
       <div class='message-node'>
       
-      <div class='message tool_result pair_last' data-message-id='d-13' data-uuid='msg_009' id='msg-d-13'>
+      <div class='message tool_result pair_last' data-uuid='msg_009' id='msg-d-13'>
           <div class='header'>
               <span title="ID: tool_002"></span>
               <div class='header-info'>
@@ -42185,7 +42190,7 @@
       
       <div class='message-node'>
       
-      <div class='message assistant' data-message-id='d-14' data-uuid='msg_010' id='msg-d-14'>
+      <div class='message assistant' data-uuid='msg_010' id='msg-d-14'>
           <div class='header'>
               <span>🤖 Assistant</span>
               <div class='header-info'>
@@ -42223,7 +42228,7 @@
       
       <div class='message-node'>
       
-      <div class='message user' data-message-id='d-15' data-uuid='msg_011' id='msg-d-15'>
+      <div class='message user' data-uuid='msg_011' id='msg-d-15'>
           <div class='header'>
               <span>🤷 User</span>
               <div class='header-info'>
@@ -42954,8 +42959,9 @@
               // --- DOM-nesting fold helpers (replaced the d-N ancestry-class scheme) ---
               function getMessageEl(messageId) {
                   if (!messageId) return null;
-                  const sel = (window.CSS && CSS.escape) ? CSS.escape(messageId) : messageId;
-                  return document.querySelector('.message[data-message-id="' + sel + '"]');
+                  // The card's DOM id is 'msg-' + message_id; data-message-id
+                  // held the same value and has been dropped, so resolve by id.
+                  return document.getElementById('msg-' + messageId);
               }
               function getChildrenContainer(messageEl) {
                   // .children is now a SIBLING of the card inside the shared
@@ -48764,10 +48770,10 @@
       <div class="session-divider"></div>
       
       <div class='message-node'>
-      <div class='message session-header' data-message-id='d-0' data-session-id='test_session' id='msg-d-0'>
+      <div class='message session-header' data-session-id='test_session' id='msg-d-0'>
           <div class='header'>Session: User learned about Python decorators, including basic decorators and parameterized decorators. Created and ran examples showing how decorators work with functions. User is now ready to implement their own timing decorator. • test_ses <span class='message-model' title='Main agent model'>claude-3-sonnet-20240229</span></div>
           
-          <div class='fold-bar' data-message-id='d-0' data-border-color='session-header'>
+          <div class='fold-bar' data-border-color='session-header'>
               
               
               <div class='fold-bar-section fold-one-level' data-action='fold-one' data-target='d-0' data-title-unfolded='Fold (all levels) all 9 descendants' data-title-folded='Unfold (1st level) 4 users' title='Fold (all levels) all 9 descendants'>
@@ -48789,7 +48795,7 @@
       
       <div class='message-node'>
       
-      <div class='message user' data-message-id='d-1' data-uuid='msg_001' id='msg-d-1'>
+      <div class='message user' data-uuid='msg_001' id='msg-d-1'>
           <div class='header'>
               <span>🤷 User</span>
               <div class='header-info'>
@@ -48803,7 +48809,7 @@
           <div class='content'><div class='user-content'><button type='button' class='user-view-toggle' aria-label='Toggle between Markdown and raw view' title='Toggle Markdown / raw view'>raw</button><div class='user-md'><p>Hello Claude! Can you help me understand how Python decorators work?</p>
   </div><pre class='user-raw'>Hello Claude! Can you help me understand how Python decorators work?</pre></div></div>
           
-          <div class='fold-bar' data-message-id='d-1' data-border-color='user'>
+          <div class='fold-bar' data-border-color='user'>
               
               
               <div class='fold-bar-section fold-one-level full-width' data-action='fold-one' data-target='d-1' data-title-unfolded='Fold 1 assistant' data-title-folded='Unfold (1st level) 1 assistant' title='Fold 1 assistant'>
@@ -48821,7 +48827,7 @@
       
       <div class='message-node'>
       
-      <div class='message assistant' data-message-id='d-2' data-uuid='msg_002' id='msg-d-2'>
+      <div class='message assistant' data-uuid='msg_002' id='msg-d-2'>
           <div class='header'>
               <span>🤖 Assistant</span>
               <div class='header-info'>
@@ -48870,7 +48876,7 @@
       
       <div class='message-node'>
       
-      <div class='message user' data-message-id='d-3' data-uuid='msg_003' id='msg-d-3'>
+      <div class='message user' data-uuid='msg_003' id='msg-d-3'>
           <div class='header'>
               <span>🤷 User</span>
               <div class='header-info'>
@@ -48884,7 +48890,7 @@
           <div class='content'><div class='user-content'><button type='button' class='user-view-toggle' aria-label='Toggle between Markdown and raw view' title='Toggle Markdown / raw view'>raw</button><div class='user-md'><p>Great! Can you also show me how to create a decorator that takes parameters?</p>
   </div><pre class='user-raw'>Great! Can you also show me how to create a decorator that takes parameters?</pre></div></div>
           
-          <div class='fold-bar' data-message-id='d-3' data-border-color='user'>
+          <div class='fold-bar' data-border-color='user'>
               
               
               <div class='fold-bar-section fold-one-level full-width' data-action='fold-one' data-target='d-3' data-title-unfolded='Fold 1 tool, 1 assistant' data-title-folded='Unfold (1st level) 1 tool, 1 assistant' title='Fold 1 tool, 1 assistant'>
@@ -48902,7 +48908,7 @@
       
       <div class='message-node'>
       
-      <div class='message tool_use pair_first' data-message-id='d-4' data-uuid='msg_004' id='msg-d-4'>
+      <div class='message tool_use pair_first' data-uuid='msg_004' id='msg-d-4'>
           <div class='header'>
               <span title="ID: tool_001">📝 Edit <span class='tool-summary'>/tmp/decorator_example.py</span></span>
               <div class='header-info'>
@@ -48924,7 +48930,7 @@
       
       <div class='message-node'>
       
-      <div class='message tool_result pair_last' data-message-id='d-5' data-uuid='msg_005' id='msg-d-5'>
+      <div class='message tool_result pair_last' data-uuid='msg_005' id='msg-d-5'>
           <div class='header'>
               <span title="ID: tool_001"></span>
               <div class='header-info'>
@@ -48946,7 +48952,7 @@
       
       <div class='message-node'>
       
-      <div class='message assistant' data-message-id='d-6' data-uuid='msg_006' id='msg-d-6'>
+      <div class='message assistant' data-uuid='msg_006' id='msg-d-6'>
           <div class='header'>
               <span>🤖 Assistant</span>
               <div class='header-info'>
@@ -48988,7 +48994,7 @@
       
       <div class='message-node'>
       
-      <div class='message user' data-message-id='d-7' data-uuid='msg_007' id='msg-d-7'>
+      <div class='message user' data-uuid='msg_007' id='msg-d-7'>
           <div class='header'>
               <span>🤷 User</span>
               <div class='header-info'>
@@ -49002,7 +49008,7 @@
           <div class='content'><div class='user-content'><button type='button' class='user-view-toggle' aria-label='Toggle between Markdown and raw view' title='Toggle Markdown / raw view'>raw</button><div class='user-md'><p>Can you run that example to show the output?</p>
   </div><pre class='user-raw'>Can you run that example to show the output?</pre></div></div>
           
-          <div class='fold-bar' data-message-id='d-7' data-border-color='user'>
+          <div class='fold-bar' data-border-color='user'>
               
               
               <div class='fold-bar-section fold-one-level full-width' data-action='fold-one' data-target='d-7' data-title-unfolded='Fold 1 tool, 1 assistant' data-title-folded='Unfold (1st level) 1 tool, 1 assistant' title='Fold 1 tool, 1 assistant'>
@@ -49020,7 +49026,7 @@
       
       <div class='message-node'>
       
-      <div class='message tool_use pair_first' data-message-id='d-8' data-uuid='msg_008' id='msg-d-8'>
+      <div class='message tool_use pair_first' data-uuid='msg_008' id='msg-d-8'>
           <div class='header'>
               <span title="ID: tool_002">💻 Bash <span class='tool-summary'>Run the decorator example to show output</span></span>
               <div class='header-info'>
@@ -49042,7 +49048,7 @@
       
       <div class='message-node'>
       
-      <div class='message tool_result pair_last' data-message-id='d-9' data-uuid='msg_009' id='msg-d-9'>
+      <div class='message tool_result pair_last' data-uuid='msg_009' id='msg-d-9'>
           <div class='header'>
               <span title="ID: tool_002"></span>
               <div class='header-info'>
@@ -49066,7 +49072,7 @@
       
       <div class='message-node'>
       
-      <div class='message assistant' data-message-id='d-10' data-uuid='msg_010' id='msg-d-10'>
+      <div class='message assistant' data-uuid='msg_010' id='msg-d-10'>
           <div class='header'>
               <span>🤖 Assistant</span>
               <div class='header-info'>
@@ -49104,7 +49110,7 @@
       
       <div class='message-node'>
       
-      <div class='message user' data-message-id='d-11' data-uuid='msg_011' id='msg-d-11'>
+      <div class='message user' data-uuid='msg_011' id='msg-d-11'>
           <div class='header'>
               <span>🤷 User</span>
               <div class='header-info'>
@@ -49835,8 +49841,9 @@
               // --- DOM-nesting fold helpers (replaced the d-N ancestry-class scheme) ---
               function getMessageEl(messageId) {
                   if (!messageId) return null;
-                  const sel = (window.CSS && CSS.escape) ? CSS.escape(messageId) : messageId;
-                  return document.querySelector('.message[data-message-id="' + sel + '"]');
+                  // The card's DOM id is 'msg-' + message_id; data-message-id
+                  // held the same value and has been dropped, so resolve by id.
+                  return document.getElementById('msg-' + messageId);
               }
               function getChildrenContainer(messageEl) {
                   // .children is now a SIBLING of the card inside the shared

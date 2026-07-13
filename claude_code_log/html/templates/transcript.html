@@ -128,10 +128,10 @@
        SIBLINGS here, so the card's border/background/margins frame only the
        card itself, not the whole subtree (issue #174 nested-DOM follow-up). #}
     <div class='message-node'>
-    <div class='message session-header{% if message.is_branch_header %} branch-header{% endif %}' data-message-id='{{ message.message_id }}' data-session-id='{{ message.session_id }}' id='msg-{{ message.message_id }}'{% if message.branch_depth %} style='margin-left: {{ message.branch_depth * 2 }}em'{% endif %}>
+    <div class='message session-header{% if message.is_branch_header %} branch-header{% endif %}' data-session-id='{{ message.session_id }}' id='msg-{{ message.message_id }}'{% if message.branch_depth %} style='margin-left: {{ message.branch_depth * 2 }}em'{% endif %}>
         <div class='header'>{% if message.is_branch_header %}&#x21b3; {% else %}Session: {% endif %}{{ html_content|safe }}{% if message.display_model and not message.is_branch_header %} <span class='message-model' title='Main agent model'>{{ message.display_model }}</span>{% endif %}</div>
         {% if message.has_children %}
-        <div class='fold-bar' data-message-id='{{ message.message_id }}' data-border-color='session-header'>
+        <div class='fold-bar' data-border-color='session-header'>
             {% if message.immediate_children_count == message.total_descendants_count %}
             {# Same count = only one level, show single full-width button #}
             <div class='fold-bar-section fold-one-level full-width' data-action='fold-one' data-target='{{ message.message_id }}' data-title-unfolded='Fold {{ message.get_immediate_children_label() }}' data-title-folded='Unfold (1st level) {{ message.get_immediate_children_label() }}' title='Fold {{ message.get_immediate_children_label() }}'>
@@ -180,8 +180,8 @@
        "The anchor problem"). Archive search / annotations can deep-link on it.
        NOT unique per card: sibling cards split from one entry (text + tool_use)
        share the entry's UUID, so anything needing per-card identity within a
-       page must use data-message-id or element identity instead. #}
-    <div class='message {{ msg_css_class }}{% if message.is_paired %} {{ message.pair_role }}{% endif %}' data-message-id='{{ message.message_id }}'{% if message.meta and message.meta.uuid %} data-uuid='{{ message.meta.uuid }}'{% endif %} id='msg-{{ message.message_id }}'>
+       page must use the card's `id` (msg-…) or element identity instead. #}
+    <div class='message {{ msg_css_class }}{% if message.is_paired %} {{ message.pair_role }}{% endif %}'{% if message.meta and message.meta.uuid %} data-uuid='{{ message.meta.uuid }}'{% endif %} id='msg-{{ message.message_id }}'>
         <div class='header'>
             {% set msg_emoji = get_message_emoji(message) -%}
             <span{% if message.title_hint %} title="{{ message.title_hint }}"{% endif %}>{% if message_title %}{%
@@ -199,7 +199,7 @@
         {% if message.meta %}<div class='debug-info'>{{ message.meta.uuid[:12] }}{% if message.meta.parent_uuid %} &rarr; {{ message.meta.parent_uuid[:12] }}{% endif %}</div>{% endif %}
         <div class='content{% if markdown %} markdown{% endif %}'>{{ html_content | safe }}</div>
         {% if message.has_children %}
-        <div class='fold-bar' data-message-id='{{ message.message_id }}' data-border-color='{{ msg_css_class }}'>
+        <div class='fold-bar' data-border-color='{{ msg_css_class }}'>
             {% if message.immediate_children_count == message.total_descendants_count %}
             {# Same count = only one level, show single full-width button #}
             <div class='fold-bar-section fold-one-level full-width' data-action='fold-one' data-target='{{ message.message_id }}' data-title-unfolded='Fold {{ message.get_immediate_children_label() }}' data-title-folded='Unfold (1st level) {{ message.get_immediate_children_label() }}' title='Fold {{ message.get_immediate_children_label() }}'>
@@ -836,8 +836,9 @@
             // --- DOM-nesting fold helpers (replaced the d-N ancestry-class scheme) ---
             function getMessageEl(messageId) {
                 if (!messageId) return null;
-                const sel = (window.CSS && CSS.escape) ? CSS.escape(messageId) : messageId;
-                return document.querySelector('.message[data-message-id="' + sel + '"]');
+                // The card's DOM id is 'msg-' + message_id; data-message-id
+                // held the same value and has been dropped, so resolve by id.
+                return document.getElementById('msg-' + messageId);
             }
             function getChildrenContainer(messageEl) {
                 // .children is now a SIBLING of the card inside the shared
