@@ -232,6 +232,55 @@ def test_object_key_rewriting_never_mutates_command_strings() -> None:
 
 
 @pytest.mark.parametrize(
+    ("source", "expected_name"),
+    [
+        (
+            '/* tools.exec_command({cmd: "fake"}) */ '
+            'const result = await tools.exec_command({cmd: "real"}); '
+            "text(result.output);",
+            "Bash",
+        ),
+        (
+            'const result = await tools.exec_command({cmd: "echo \\\"quoted\\\"", '
+            'env: {MODE: "test",},}); text(result);',
+            "Bash",
+        ),
+        (
+            'const result = await tools.exec_command({cmd: `echo ${value}`}); '
+            "text(result);",
+            "Workflow",
+        ),
+        (
+            'const result = await tools.exec_command({cmd: "unterminated}); '
+            "text(result);",
+            "Workflow",
+        ),
+        (
+            'const result = await tools.exec_command({cmd: "real"}); '
+            "text(`result`);",
+            "Workflow",
+        ),
+        (
+            'const result = await tools.exec_command({cmd: "real"}); '
+            "text({nested: [result.output, {ok: true}]} );",
+            "Bash",
+        ),
+    ],
+    ids=[
+        "commented-tool",
+        "escapes-nesting-trailing-commas",
+        "template-expression",
+        "unterminated-string",
+        "result-name-in-template",
+        "nested-emission-expression",
+    ],
+)
+def test_exec_wrapper_lexical_matrix(source: str, expected_name: str) -> None:
+    call = adapt_codex_tool_call("exec", {"raw": source}, raw_input=source)
+    assert call.name == expected_name
+
+
+@pytest.mark.parametrize(
     "line",
     [
         '{"type":"event_msg","payload":{"type":"user_message","message":"SECRET","n":'

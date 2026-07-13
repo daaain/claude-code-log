@@ -26,15 +26,20 @@ class AdaptedToolCall:
 class _StaticCall:
     name: str
     argument: str
+    start: int
+    end: int
+
+
+@dataclass(frozen=True)
+class _Emission:
+    expression: str
+    start: int
+    end: int
 
 
 _IDENTIFIER = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*")
-_OBJECT_KEY = re.compile(r'([,{]\s*)([A-Za-z_$][A-Za-z0-9_$]*)(\s*:)' )
-_TRAILING_COMMA = re.compile(r",(\s*[}\]])")
 _FERNET_TOKEN = re.compile(r"\AgAAAAA[A-Za-z0-9_-]{80,}={0,2}\Z")
-_OUTPUT_EMISSION = re.compile(
-    r"\b(?:text|image|generatedImage)\s*\((.*?)\)\s*;", re.DOTALL
-)
+_REDACTED_PAYLOAD = "[opaque payload redacted]"
 
 
 def adapt_codex_tool_call(
@@ -47,34 +52,49 @@ def adapt_codex_tool_call(
     if name == "exec" and isinstance(raw_input, str):
         calls = _find_static_tool_calls(raw_input)
         if len(calls) != 1:
-            return AdaptedToolCall("Workflow", {"script": raw_input})
+            return _workflow(raw_input)
         if not _is_simple_result_forwarder(raw_input, calls[0]):
-            return AdaptedToolCall("Workflow", {"script": raw_input})
+            return _workflow(raw_input)
         decoded = _decode_object_literal(calls[0].argument)
         if decoded is None:
-            return AdaptedToolCall("Workflow", {"script": raw_input})
+            return _workflow(raw_input)
         return _canonicalize(calls[0].name, decoded)
     return _canonicalize(name, input_data)
 
 
 def _is_simple_result_forwarder(source: str, call: _StaticCall) -> bool:
     """Reject compound exec programs even when they contain one tools.* call."""
-    if re.search(r"\bALL_TOOLS\b", source):
+    code = _code_projection(source)
+    if re.search(r"\bALL_TOOLS\b", code):
         return False
     assignment = re.search(
         r"\b(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*"
-        r"await\s+tools\."
-        + re.escape(call.name)
-        + r"\s*\(",
-        source,
+        r"await\s+tools\." + re.escape(call.name) + r"\s*\(",
+        code,
     )
-    if assignment is None:
+    if assignment is None or assignment.end() - 1 != call.start:
         return False
-    emissions = _OUTPUT_EMISSION.findall(source)
+    assignment_end = _statement_end(code, call.end + 1)
+    if assignment_end is None:
+        return False
+    emissions = _find_output_emissions(source)
     if len(emissions) != 1:
         return False
     result_name = assignment.group(1)
-    return re.search(r"\b" + re.escape(result_name) + r"\b", emissions[0]) is not None
+    expression_code = _code_projection(emissions[0].expression)
+    if re.search(r"\b" + re.escape(result_name) + r"\b", expression_code) is None:
+        return False
+    remainder = list(code)
+    for start, end in (
+        (assignment.start(), assignment_end),
+        (emissions[0].start, emissions[0].end),
+    ):
+        remainder[start:end] = " " * (end - start)
+    return not "".join(remainder).strip()
+
+
+def _workflow(source: str) -> AdaptedToolCall:
+    return AdaptedToolCall("Workflow", {"script": _scrub_opaque_literals(source)})
 
 
 def _canonicalize(name: str, input_data: dict[str, Any]) -> AdaptedToolCall:
@@ -178,7 +198,12 @@ def _find_static_tool_calls(source: str) -> list[_StaticCall]:
         if end is None:
             return []
         calls.append(
-            _StaticCall(name=name_match.group(0), argument=source[cursor + 1 : end])
+            _StaticCall(
+                name=name_match.group(0),
+                argument=source[cursor + 1 : end],
+                start=cursor,
+                end=end,
+            )
         )
         index = end + 1
     return calls
@@ -189,15 +214,125 @@ def _decode_object_literal(argument: str) -> Optional[dict[str, Any]]:
     if not value.startswith("{") or not value.endswith("}"):
         return None
     # Codex-generated wrappers use JSON values with JavaScript identifier keys.
-    # Quote those keys and remove trailing commas; unsupported expressions fail
-    # closed and keep the original Workflow rendering.
-    json_like = _OBJECT_KEY.sub(r'\1"\2"\3', value)
-    json_like = _TRAILING_COMMA.sub(r"\1", json_like)
+    # Rewrite only code positions; quoted commands and comments are never
+    # interpreted as object syntax.
+    json_like = _json_compatible_object(value)
     try:
         decoded: Any = json.loads(json_like)
     except json.JSONDecodeError:
         return None
     return cast(dict[str, Any], decoded) if isinstance(decoded, dict) else None
+
+
+def _json_compatible_object(source: str) -> str:
+    output: list[str] = []
+    index = 0
+    expect_key = False
+    while index < len(source):
+        skipped = _skip_literal_or_comment(source, index)
+        if skipped is not None:
+            output.append(source[index:skipped])
+            index = skipped
+            continue
+        char = source[index]
+        if char in "{,":
+            next_index = _skip_space(source, index + 1)
+            if char == "," and next_index < len(source) and source[next_index] in "}]":
+                index += 1
+                continue
+            expect_key = True
+            output.append(char)
+            index += 1
+            continue
+        if expect_key and char.isspace():
+            output.append(char)
+            index += 1
+            continue
+        if expect_key:
+            match = _IDENTIFIER.match(source, index)
+            if match is not None:
+                colon = _skip_space(source, match.end())
+                if colon < len(source) and source[colon] == ":":
+                    output.append(json.dumps(match.group(0)))
+                    index = match.end()
+                    expect_key = False
+                    continue
+            expect_key = False
+        output.append(char)
+        index += 1
+    return "".join(output)
+
+
+def _find_output_emissions(source: str) -> list[_Emission]:
+    emissions: list[_Emission] = []
+    index = 0
+    while index < len(source):
+        skipped = _skip_literal_or_comment(source, index)
+        if skipped is not None:
+            index = skipped
+            continue
+        name = _IDENTIFIER.match(source, index)
+        if name is None or name.group(0) not in {"text", "image", "generatedImage"}:
+            index += 1
+            continue
+        cursor = _skip_space(source, name.end())
+        if cursor >= len(source) or source[cursor] != "(":
+            index = name.end()
+            continue
+        closing = _matching_delimiter(source, cursor, "(", ")")
+        if closing is None:
+            return []
+        end = _statement_end(_code_projection(source), closing + 1)
+        if end is None:
+            return []
+        emissions.append(
+            _Emission(
+                expression=source[cursor + 1 : closing], start=index, end=end
+            )
+        )
+        index = end
+    return emissions
+
+
+def _statement_end(code: str, index: int) -> Optional[int]:
+    cursor = _skip_space(code, index)
+    return cursor + 1 if cursor < len(code) and code[cursor] == ";" else None
+
+
+def _code_projection(source: str) -> str:
+    """Blank literals/comments while retaining code offsets and delimiters."""
+    projected = list(source)
+    index = 0
+    while index < len(source):
+        skipped = _skip_literal_or_comment(source, index)
+        if skipped is None:
+            index += 1
+            continue
+        for offset in range(index, skipped):
+            if projected[offset] not in "\r\n":
+                projected[offset] = " "
+        index = skipped
+    return "".join(projected)
+
+
+def _scrub_opaque_literals(source: str) -> str:
+    output: list[str] = []
+    index = 0
+    while index < len(source):
+        char = source[index]
+        if char not in {'"', "'", "`"}:
+            output.append(char)
+            index += 1
+            continue
+        end = _skip_string(source, index, char)
+        content_end = end - 1 if end <= len(source) and source[end - 1 : end] == char else end
+        content = source[index + 1 : content_end]
+        output.append(char)
+        output.append(_REDACTED_PAYLOAD if _FERNET_TOKEN.fullmatch(content) else content)
+        if content_end < end:
+            output.append(char)
+        index = end
+    return "".join(output)
 
 
 def _skip_space(source: str, index: int) -> int:
