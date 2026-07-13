@@ -1,0 +1,7 @@
+{
+  "type": "event_msg",
+  "payload": {
+    "type": "user_message",
+    "message": "<environment_context><cwd>/workspace/synthetic-project</cwd><shell>bash</shell><current_date>2026-07-14</current_date><timezone>Etc/UTC</timezone><filesystem><workspace_roots><root>/workspace/synthetic-project</root></workspace_roots><permission_profile type=\"managed\"><file_system type=\"restricted\"><entry access=\"write\"><path>/workspace/synthetic-project</path></entry></file_system></permission_profile></filesystem></environment_context>"
+  }
+}

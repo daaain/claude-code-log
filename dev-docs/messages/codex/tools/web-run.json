@@ -1,0 +1,19 @@
+[
+  {
+    "type": "response_item",
+    "payload": {
+      "type": "custom_tool_call",
+      "name": "exec",
+      "input": "const result = await tools.web__run({search_query: [{q: \"synthetic query\"}]}); text(result);",
+      "call_id": "call-web-001"
+    }
+  },
+  {
+    "type": "response_item",
+    "payload": {
+      "type": "custom_tool_call_output",
+      "call_id": "call-web-001",
+      "output": "## Synthetic result\n\nNo external data."
+    }
+  }
+]
