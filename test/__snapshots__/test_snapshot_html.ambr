@@ -4394,17 +4394,23 @@
                       return;
                   }
   
-                  console.log('Loading vis-timeline from CDN...');
+                  // Vendored, offline-first asset paths (issue #278). The
+                  // Python renderer writes vis-timeline's JS/CSS into a
+                  // sibling `assets/` directory and passes the relative
+                  // base here. No CDN, no third-party request when a
+                  // transcript rendered from private logs is opened.
+                  const assetBase = "";
+                  console.log('Loading vis-timeline from', assetBase || '(no local asset base)');
   
                   // Load CSS first
                   const link = document.createElement('link');
                   link.rel = 'stylesheet';
-                  link.href = 'https://unpkg.com/vis-timeline/styles/vis-timeline-graph2d.min.css';
+                  link.href = assetBase + 'vis-timeline-graph2d.min.css';
                   document.head.appendChild(link);
   
                   // Load JavaScript
                   const script = document.createElement('script');
-                  script.src = 'https://unpkg.com/vis-timeline/standalone/umd/vis-timeline-graph2d.min.js';
+                  script.src = assetBase + 'vis-timeline-graph2d.min.js';
                   script.onload = () => {
                       console.log('vis-timeline loaded successfully');
                       isTimelineLoaded = true;
@@ -10885,17 +10891,23 @@
                       return;
                   }
   
-                  console.log('Loading vis-timeline from CDN...');
+                  // Vendored, offline-first asset paths (issue #278). The
+                  // Python renderer writes vis-timeline's JS/CSS into a
+                  // sibling `assets/` directory and passes the relative
+                  // base here. No CDN, no third-party request when a
+                  // transcript rendered from private logs is opened.
+                  const assetBase = "";
+                  console.log('Loading vis-timeline from', assetBase || '(no local asset base)');
   
                   // Load CSS first
                   const link = document.createElement('link');
                   link.rel = 'stylesheet';
-                  link.href = 'https://unpkg.com/vis-timeline/styles/vis-timeline-graph2d.min.css';
+                  link.href = assetBase + 'vis-timeline-graph2d.min.css';
                   document.head.appendChild(link);
   
                   // Load JavaScript
                   const script = document.createElement('script');
-                  script.src = 'https://unpkg.com/vis-timeline/standalone/umd/vis-timeline-graph2d.min.js';
+                  script.src = assetBase + 'vis-timeline-graph2d.min.js';
                   script.onload = () => {
                       console.log('vis-timeline loaded successfully');
                       isTimelineLoaded = true;
@@ -19478,17 +19490,23 @@
                       return;
                   }
   
-                  console.log('Loading vis-timeline from CDN...');
+                  // Vendored, offline-first asset paths (issue #278). The
+                  // Python renderer writes vis-timeline's JS/CSS into a
+                  // sibling `assets/` directory and passes the relative
+                  // base here. No CDN, no third-party request when a
+                  // transcript rendered from private logs is opened.
+                  const assetBase = "";
+                  console.log('Loading vis-timeline from', assetBase || '(no local asset base)');
   
                   // Load CSS first
                   const link = document.createElement('link');
                   link.rel = 'stylesheet';
-                  link.href = 'https://unpkg.com/vis-timeline/styles/vis-timeline-graph2d.min.css';
+                  link.href = assetBase + 'vis-timeline-graph2d.min.css';
                   document.head.appendChild(link);
   
                   // Load JavaScript
                   const script = document.createElement('script');
-                  script.src = 'https://unpkg.com/vis-timeline/standalone/umd/vis-timeline-graph2d.min.js';
+                  script.src = assetBase + 'vis-timeline-graph2d.min.js';
                   script.onload = () => {
                       console.log('vis-timeline loaded successfully');
                       isTimelineLoaded = true;
@@ -26084,17 +26102,23 @@
                       return;
                   }
   
-                  console.log('Loading vis-timeline from CDN...');
+                  // Vendored, offline-first asset paths (issue #278). The
+                  // Python renderer writes vis-timeline's JS/CSS into a
+                  // sibling `assets/` directory and passes the relative
+                  // base here. No CDN, no third-party request when a
+                  // transcript rendered from private logs is opened.
+                  const assetBase = "";
+                  console.log('Loading vis-timeline from', assetBase || '(no local asset base)');
   
                   // Load CSS first
                   const link = document.createElement('link');
                   link.rel = 'stylesheet';
-                  link.href = 'https://unpkg.com/vis-timeline/styles/vis-timeline-graph2d.min.css';
+                  link.href = assetBase + 'vis-timeline-graph2d.min.css';
                   document.head.appendChild(link);
   
                   // Load JavaScript
                   const script = document.createElement('script');
-                  script.src = 'https://unpkg.com/vis-timeline/standalone/umd/vis-timeline-graph2d.min.js';
+                  script.src = assetBase + 'vis-timeline-graph2d.min.js';
                   script.onload = () => {
                       console.log('vis-timeline loaded successfully');
                       isTimelineLoaded = true;
@@ -32957,17 +32981,23 @@
                       return;
                   }
   
-                  console.log('Loading vis-timeline from CDN...');
+                  // Vendored, offline-first asset paths (issue #278). The
+                  // Python renderer writes vis-timeline's JS/CSS into a
+                  // sibling `assets/` directory and passes the relative
+                  // base here. No CDN, no third-party request when a
+                  // transcript rendered from private logs is opened.
+                  const assetBase = "";
+                  console.log('Loading vis-timeline from', assetBase || '(no local asset base)');
   
                   // Load CSS first
                   const link = document.createElement('link');
                   link.rel = 'stylesheet';
-                  link.href = 'https://unpkg.com/vis-timeline/styles/vis-timeline-graph2d.min.css';
+                  link.href = assetBase + 'vis-timeline-graph2d.min.css';
                   document.head.appendChild(link);
   
                   // Load JavaScript
                   const script = document.createElement('script');
-                  script.src = 'https://unpkg.com/vis-timeline/standalone/umd/vis-timeline-graph2d.min.js';
+                  script.src = assetBase + 'vis-timeline-graph2d.min.js';
                   script.onload = () => {
                       console.log('vis-timeline loaded successfully');
                       isTimelineLoaded = true;
@@ -39793,17 +39823,23 @@
                       return;
                   }
   
-                  console.log('Loading vis-timeline from CDN...');
+                  // Vendored, offline-first asset paths (issue #278). The
+                  // Python renderer writes vis-timeline's JS/CSS into a
+                  // sibling `assets/` directory and passes the relative
+                  // base here. No CDN, no third-party request when a
+                  // transcript rendered from private logs is opened.
+                  const assetBase = "assets/";
+                  console.log('Loading vis-timeline from', assetBase || '(no local asset base)');
   
                   // Load CSS first
                   const link = document.createElement('link');
                   link.rel = 'stylesheet';
-                  link.href = 'https://unpkg.com/vis-timeline/styles/vis-timeline-graph2d.min.css';
+                  link.href = assetBase + 'vis-timeline-graph2d.min.css';
                   document.head.appendChild(link);
   
                   // Load JavaScript
                   const script = document.createElement('script');
-                  script.src = 'https://unpkg.com/vis-timeline/standalone/umd/vis-timeline-graph2d.min.js';
+                  script.src = assetBase + 'vis-timeline-graph2d.min.js';
                   script.onload = () => {
                       console.log('vis-timeline loaded successfully');
                       isTimelineLoaded = true;
@@ -46572,17 +46608,23 @@
                       return;
                   }
   
-                  console.log('Loading vis-timeline from CDN...');
+                  // Vendored, offline-first asset paths (issue #278). The
+                  // Python renderer writes vis-timeline's JS/CSS into a
+                  // sibling `assets/` directory and passes the relative
+                  // base here. No CDN, no third-party request when a
+                  // transcript rendered from private logs is opened.
+                  const assetBase = "";
+                  console.log('Loading vis-timeline from', assetBase || '(no local asset base)');
   
                   // Load CSS first
                   const link = document.createElement('link');
                   link.rel = 'stylesheet';
-                  link.href = 'https://unpkg.com/vis-timeline/styles/vis-timeline-graph2d.min.css';
+                  link.href = assetBase + 'vis-timeline-graph2d.min.css';
                   document.head.appendChild(link);
   
                   // Load JavaScript
                   const script = document.createElement('script');
-                  script.src = 'https://unpkg.com/vis-timeline/standalone/umd/vis-timeline-graph2d.min.js';
+                  script.src = assetBase + 'vis-timeline-graph2d.min.js';
                   script.onload = () => {
                       console.log('vis-timeline loaded successfully');
                       isTimelineLoaded = true;

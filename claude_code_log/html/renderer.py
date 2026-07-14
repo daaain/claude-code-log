@@ -1582,6 +1582,19 @@ class HtmlRenderer(Renderer):
         self._output_dir = output_dir
         self._image_counter = 0
 
+        # Vendored timeline assets (issue #278): when rendering into a
+        # real output directory, drop vis-timeline's JS/CSS into a
+        # sibling ``assets/`` dir and point the template at the relative
+        # path. Without an output dir (bare string render) the sidecar
+        # can't exist; the timeline's onerror handler degrades quietly.
+        if output_dir is not None:
+            from .utils import ensure_vendor_assets, VENDOR_ASSETS_DIRNAME
+
+            ensure_vendor_assets(output_dir)
+            timeline_asset_base: Optional[str] = VENDOR_ASSETS_DIRNAME
+        else:
+            timeline_asset_base = None
+
         if not title:
             title = "Claude Transcript"
 
@@ -1634,6 +1647,7 @@ class HtmlRenderer(Renderer):
                     is_session_header=is_session_header,
                     page_info=page_info,
                     page_stats=page_stats,
+                    timeline_asset_base=timeline_asset_base,
                 )
             )
 
