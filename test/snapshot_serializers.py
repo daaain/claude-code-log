@@ -18,6 +18,21 @@ _TMP_PATH_PATTERN = (
 )
 _TMP_PATH_REPLACEMENT = "/[TMP_PATH]"
 
+# Inlined vis-timeline library (issue #278). On the no-output-directory
+# render path the ~530 KB vendored JS/CSS is embedded directly in the page.
+# That bulk is a third-party asset, not transcript-rendering output, so
+# collapse it to a placeholder — otherwise every vis-timeline upgrade would
+# rewrite megabytes of snapshot and drown real diffs. The presence of the
+# tags (verified in browser/render tests) is what matters here, not bytes.
+_INLINE_VIS_JS_PATTERN = r'<script id="vis-timeline-inline-js">.*?</script>'
+_INLINE_VIS_CSS_PATTERN = r'<style id="vis-timeline-inline-css">.*?</style>'
+_INLINE_VIS_JS_REPLACEMENT = (
+    '<script id="vis-timeline-inline-js">[VIS_TIMELINE_JS]</script>'
+)
+_INLINE_VIS_CSS_REPLACEMENT = (
+    '<style id="vis-timeline-inline-css">[VIS_TIMELINE_CSS]</style>'
+)
+
 
 class NormalisedMarkdownSerializer(AmberSnapshotExtension):
     """
@@ -75,6 +90,21 @@ class NormalisedHTMLSerializer(AmberSnapshotExtension):
             r"🕒 \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}</div>",
             "🕒 [LAST_MODIFIED]</div>",
             html,
+        )
+
+        # Collapse the inlined vis-timeline library (issue #278) so its
+        # ~530 KB of third-party bytes don't bloat or churn the snapshots.
+        html = re.sub(
+            _INLINE_VIS_JS_PATTERN,
+            _INLINE_VIS_JS_REPLACEMENT,
+            html,
+            flags=re.DOTALL,
+        )
+        html = re.sub(
+            _INLINE_VIS_CSS_PATTERN,
+            _INLINE_VIS_CSS_REPLACEMENT,
+            html,
+            flags=re.DOTALL,
         )
 
         return html

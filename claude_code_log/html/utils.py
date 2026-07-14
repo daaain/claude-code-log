@@ -937,3 +937,25 @@ def ensure_vendor_assets(output_dir: Path) -> None:
         if dest.exists() and dest.stat().st_size == src.stat().st_size:
             continue
         shutil.copyfile(src, dest)
+
+
+@functools.lru_cache(maxsize=1)
+def read_vendor_timeline_inline() -> tuple[str, str]:
+    """Return the vendored vis-timeline ``(js, css)`` for inlining.
+
+    Used only on the no-output-directory render path (e.g. the
+    ``generate_html`` convenience API), where there is nowhere to write
+    a sidecar so the assets must be embedded directly in the page to
+    keep a single self-contained file working (issue #278).
+
+    The JS has any ``</script`` sequence neutralised to ``<\\/script``
+    so it can't break out of the inline ``<script>`` tag. The current
+    vendored build contains none, but a future upgrade might; this makes
+    the inline path safe regardless. Cached because the 530 KB read
+    would otherwise repeat on every string render.
+    """
+    src_dir = _vendor_source_dir()
+    js = (src_dir / "vis-timeline-graph2d.min.js").read_text(encoding="utf-8")
+    css = (src_dir / "vis-timeline-graph2d.min.css").read_text(encoding="utf-8")
+    js = js.replace("</script", "<\\/script")
+    return js, css

@@ -1582,18 +1582,26 @@ class HtmlRenderer(Renderer):
         self._output_dir = output_dir
         self._image_counter = 0
 
-        # Vendored timeline assets (issue #278): when rendering into a
-        # real output directory, drop vis-timeline's JS/CSS into a
-        # sibling ``assets/`` dir and point the template at the relative
-        # path. Without an output dir (bare string render) the sidecar
-        # can't exist; the timeline's onerror handler degrades quietly.
+        # Vendored timeline assets (issue #278), fully offline either way:
+        #  - With an output directory, drop vis-timeline's JS/CSS into a
+        #    sibling ``assets/`` dir once and point the template at the
+        #    relative path (small pages; the multi-file default).
+        #  - Without an output directory (bare-string render, e.g. the
+        #    ``generate_html`` convenience API), there is nowhere to put a
+        #    sidecar, so inline the JS/CSS directly into the page so a
+        #    single self-contained file still has a working timeline.
+        timeline_asset_base: Optional[str] = None
+        timeline_inline_js: Optional[str] = None
+        timeline_inline_css: Optional[str] = None
         if output_dir is not None:
             from .utils import ensure_vendor_assets, VENDOR_ASSETS_DIRNAME
 
             ensure_vendor_assets(output_dir)
-            timeline_asset_base: Optional[str] = VENDOR_ASSETS_DIRNAME
+            timeline_asset_base = VENDOR_ASSETS_DIRNAME
         else:
-            timeline_asset_base = None
+            from .utils import read_vendor_timeline_inline
+
+            timeline_inline_js, timeline_inline_css = read_vendor_timeline_inline()
 
         if not title:
             title = "Claude Transcript"
@@ -1648,6 +1656,8 @@ class HtmlRenderer(Renderer):
                     page_info=page_info,
                     page_stats=page_stats,
                     timeline_asset_base=timeline_asset_base,
+                    timeline_inline_js=timeline_inline_js,
+                    timeline_inline_css=timeline_inline_css,
                 )
             )
 
