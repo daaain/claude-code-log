@@ -1237,7 +1237,7 @@ class CodexProvider(BaseProvider):
         return None
 
     def _entry_uuid(self, thread_id: str, line_no: int, subindex: int) -> str:
-        return f"codex-{thread_id}-{line_no}-{subindex}"
+        return f"c{line_no}-{subindex}-{thread_id}"
 
     def _json_nesting_exceeds(self, value: Any, maximum: int) -> bool:
         pending: list[tuple[Any, int]] = [(value, 0)]

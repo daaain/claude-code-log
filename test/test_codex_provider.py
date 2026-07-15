@@ -65,6 +65,12 @@ def test_data_dir_honors_codex_home(provider: CodexProvider) -> None:
     assert provider.get_session_format() == "jsonl"
 
 
+def test_entry_uuid_exposes_record_position_before_thread_id(
+    provider: CodexProvider,
+) -> None:
+    assert provider._entry_uuid(ROOT_ID, 123, 4) == f"c123-4-{ROOT_ID}"
+
+
 def test_discovery_is_recursive_deterministic_and_active_only(
     provider: CodexProvider,
 ) -> None:

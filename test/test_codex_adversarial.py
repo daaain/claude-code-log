@@ -278,6 +278,12 @@ def test_object_key_rewriting_never_mutates_command_strings() -> None:
             "Bash",
         ),
         (
+            "const result = await tools.mcp__clmail__communicate("
+            '{action: "send", params: {to: "main"}}); '
+            "text(JSON.stringify(result));",
+            "mcp__clmail__communicate",
+        ),
+        (
             "const result = await tools.exec_command({cmd: `echo ${value}`}); "
             "text(result);",
             "Workflow",
@@ -300,6 +306,7 @@ def test_object_key_rewriting_never_mutates_command_strings() -> None:
     ids=[
         "commented-tool",
         "escapes-nesting-trailing-commas",
+        "stringified-direct-result",
         "template-expression",
         "unterminated-string",
         "result-name-in-template",

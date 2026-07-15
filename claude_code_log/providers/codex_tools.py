@@ -82,7 +82,12 @@ def _is_simple_result_forwarder(source: str, call: _StaticCall) -> bool:
         return False
     result_name = assignment.group(1)
     expression_code = _code_projection(emissions[0].expression).strip()
-    if expression_code not in {result_name, f"{result_name}.output"}:
+    direct_forwarders = {result_name, f"{result_name}.output"}
+    stringified_result = re.fullmatch(
+        r"JSON\s*\.\s*stringify\s*\(\s*" + re.escape(result_name) + r"\s*\)",
+        expression_code,
+    )
+    if expression_code not in direct_forwarders and stringified_result is None:
         return False
     remainder = list(code)
     for start, end in (
