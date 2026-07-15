@@ -7,7 +7,7 @@ different types of Claude transcript messages are rendered, serving both as a
 test and as documentation for the visual design.
 
 Session 1: Hand-crafted examples showing various formatting scenarios
-Session 2: Auto-generated from dev-docs/messages samples showing all message types
+Session 2: Auto-generated from dev-docs/messages/claude-code samples
 """
 
 import copy
@@ -373,10 +373,10 @@ def load_jsonl_sample(file_path: Path) -> dict | None:
 
 
 def create_sample_messages_session() -> list[dict]:
-    """Create a session from all message samples in dev-docs/messages.
+    """Create a session from Claude Code samples in dev-docs/messages/claude-code.
 
     This function:
-    1. Loads all .jsonl samples from dev-docs/messages/
+    1. Loads all .jsonl samples from dev-docs/messages/claude-code/
     2. Transforms them in-memory with consistent sessionId, uuid, parentUuid
     3. Orders them logically (user→assistant→tools, sidechain under Task)
     4. Duplicates tools with isSidechain=True (except Task itself)
@@ -385,7 +385,7 @@ def create_sample_messages_session() -> list[dict]:
         List of transformed message dictionaries for a single session
     """
     script_dir = Path(__file__).parent
-    samples_dir = script_dir.parent / "dev-docs" / "messages"
+    samples_dir = script_dir.parent / "dev-docs" / "messages" / "claude-code"
 
     session_id = "sample_messages_session"
     base_time = datetime(2025, 7, 1, 12, 0, 0, tzinfo=timezone.utc)
@@ -654,13 +654,13 @@ def generate_style_guide():
 
     # Generate transcript style guide with two sessions:
     # Session 1: Hand-crafted examples
-    # Session 2: Auto-generated from dev-docs/messages samples
+    # Session 2: Auto-generated from dev-docs/messages/claude-code samples
     print("  📝 Creating transcript style guide...")
 
     print("    Session 1: Hand-crafted examples...")
     style_guide_data = create_style_guide_data()
 
-    print("    Session 2: Message samples from dev-docs/messages...")
+    print("    Session 2: Message samples from dev-docs/messages/claude-code...")
     sample_messages_data = create_sample_messages_session()
 
     # Combine both sessions

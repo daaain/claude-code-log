@@ -669,7 +669,7 @@ def main():
         test_data / "real_projects",  # Only use real_projects as instructed
     ]
 
-    output_dir = Path(__file__).parent.parent / "dev-docs" / "messages"
+    output_dir = Path(__file__).parent.parent / "dev-docs" / "messages" / "claude-code"
 
     # Create subdirectories
     for subdir in ["user", "assistant", "system", "tools"]:

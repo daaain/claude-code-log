@@ -146,7 +146,7 @@ Based on flags and tag patterns in `TextContent`, user text messages are classif
 - **Condition**: No special flags or tags
 - **Content Model**: Plain `TextContent`
 - **CSS Class**: `user`
-- **Files**: [user.json](messages/user/user.json) | [user.jsonl](messages/user/user.jsonl)
+- **Files**: [user.json](messages/claude-code/user/user.json) | [user.jsonl](messages/claude-code/user/user.jsonl)
 
 ```json
 {
@@ -164,7 +164,7 @@ Based on flags and tag patterns in `TextContent`, user text messages are classif
 - **Condition**: `isMeta: true` flag
 - **Content Model**: `UserSlashCommandMessage` (models.py)
 - **CSS Class**: `user slash-command`
-- **Files**: [user_slash_command.json](messages/user/user_slash_command.json)
+- **Files**: [user_slash_command.json](messages/claude-code/user/user_slash_command.json)
 
 ```json
 {
@@ -188,7 +188,7 @@ class UserSlashCommandMessage(MessageContent):
 - **Condition**: Contains `<command-name>` tags
 - **Content Model**: `SlashCommandMessage` with parsed name/args/contents
 - **CSS Class**: `user slash-command`
-- **Files**: [user_command.json](messages/user/user_command.json)
+- **Files**: [user_command.json](messages/claude-code/user/user_command.json)
 
 ```python
 @dataclass
@@ -208,7 +208,7 @@ class SlashCommandMessage(MessageContent):
 - **Condition**: Contains `<local-command-stdout>` tags
 - **Content Model**: `CommandOutputMessage`
 - **CSS Class**: `user command-output`
-- **Files**: [command_output.json](messages/user/command_output.json)
+- **Files**: [command_output.json](messages/claude-code/user/command_output.json)
 
 ```python
 @dataclass
@@ -222,7 +222,7 @@ class CommandOutputMessage(MessageContent):
 - **Condition**: Contains `<bash-input>` tags
 - **Content Model**: `BashInputMessage`
 - **CSS Class**: `bash-input` (filtered by User)
-- **Files**: [bash_input.json](messages/user/bash_input.json)
+- **Files**: [bash_input.json](messages/claude-code/user/bash_input.json)
 
 ```python
 @dataclass
@@ -237,7 +237,7 @@ The corresponding output uses `<bash-stdout>` and optionally `<bash-stderr>` tag
 - **Condition**: Contains `<bash-stdout>` tags
 - **Content Model**: `BashOutputMessage`
 - **CSS Class**: `bash-output` (filtered by User)
-- **Files**: [bash_output.json](messages/user/bash_output.json)
+- **Files**: [bash_output.json](messages/claude-code/user/bash_output.json)
 
 ### Compacted Conversation
 
@@ -284,7 +284,7 @@ class UserMemoryMessage(MessageContent):
 - **Condition**: `isSidechain: true`
 - **CSS Class**: `user sidechain`
 - **Note**: Typically skipped during rendering (duplicates Task prompt)
-- **Files**: [user_sidechain.json](messages/user/user_sidechain.json)
+- **Files**: [user_sidechain.json](messages/claude-code/user/user_sidechain.json)
 
 ### Async Task Notification (`<task-notification>`)
 
@@ -362,18 +362,18 @@ Tool results appear as `ToolResultContent` items in user messages, linked to the
 
 | Tool | Output Model | Key Fields | Files |
 |------|--------------|------------|-------|
-| Read | `ReadOutput` | file_path, content, start_line, num_lines, is_truncated | [tool_result](messages/tools/Read-tool_result.json) |
-| Edit | `EditOutput` | file_path, success, diffs, message, start_line | [tool_result](messages/tools/Edit-tool_result.json) |
-| Write | `WriteOutput` | file_path, success, message | [tool_result](messages/tools/Write-tool_result.json) |
-| Bash | `BashOutput` | content, has_ansi | [tool_result](messages/tools/Bash-tool_result.json) |
-| Task | `TaskOutput` *(see note)* | result, metadata, async_final_answer | [tool_result](messages/tools/Task-tool_result.json) |
+| Read | `ReadOutput` | file_path, content, start_line, num_lines, is_truncated | [tool_result](messages/claude-code/tools/Read-tool_result.json) |
+| Edit | `EditOutput` | file_path, success, diffs, message, start_line | [tool_result](messages/claude-code/tools/Edit-tool_result.json) |
+| Write | `WriteOutput` | file_path, success, message | [tool_result](messages/claude-code/tools/Write-tool_result.json) |
+| Bash | `BashOutput` | content, has_ansi | [tool_result](messages/claude-code/tools/Bash-tool_result.json) |
+| Task | `TaskOutput` *(see note)* | result, metadata, async_final_answer | [tool_result](messages/claude-code/tools/Task-tool_result.json) |
 | TaskOutput | `TaskOutputResult` *(see note)* | retrieval_status, task_id, task_type, status, output_truncated, output_file | (async-agent polling tool — issue #90) |
 | TaskStop | `TaskStopOutput` | stopped, message | (kills a background task by id — PR #158 follow-up) |
-| AskUserQuestion | `AskUserQuestionOutput` | answers, raw_message | [tool_result](messages/tools/AskUserQuestion-tool_result.json) |
-| ExitPlanMode | `ExitPlanModeOutput` | message, approved | [tool_result](messages/tools/ExitPlanMode-tool_result.json) |
-| Glob | `GlobOutput` *(TODO)* | pattern, files, truncated | [tool_result](messages/tools/Glob-tool_result.json) |
-| Grep | `GrepOutput` *(TODO)* | pattern, matches, output_mode, truncated | [tool_result](messages/tools/Grep-tool_result.json) |
-| (error) | — | is_error: true | [Bash error](messages/tools/Bash-tool_result_error.json) |
+| AskUserQuestion | `AskUserQuestionOutput` | answers, raw_message | [tool_result](messages/claude-code/tools/AskUserQuestion-tool_result.json) |
+| ExitPlanMode | `ExitPlanModeOutput` | message, approved | [tool_result](messages/claude-code/tools/ExitPlanMode-tool_result.json) |
+| Glob | `GlobOutput` *(TODO)* | pattern, files, truncated | [tool_result](messages/claude-code/tools/Glob-tool_result.json) |
+| Grep | `GrepOutput` *(TODO)* | pattern, matches, output_mode, truncated | [tool_result](messages/claude-code/tools/Grep-tool_result.json) |
+| (error) | — | is_error: true | [Bash error](messages/claude-code/tools/Bash-tool_result_error.json) |
 
 **(TODO)**: Glob and Grep output models defined in models.py but not yet used.
 
@@ -409,12 +409,12 @@ polls between an async-Task launch and its completion notification). The fold wr
 
 - **Condition**: `is_error: true`
 - **CSS Class**: `tool_result error`
-- **Files**: [Bash-tool_result_error.json](messages/tools/Bash-tool_result_error.json)
+- **Files**: [Bash-tool_result_error.json](messages/claude-code/tools/Bash-tool_result_error.json)
 
 ### Read Tool Result → ReadOutput
 
 Read tool results in cat-n format are parsed into structured `ReadOutput`:
-- **Files**: [Read-tool_result.json](messages/tools/Read-tool_result.json)
+- **Files**: [Read-tool_result.json](messages/claude-code/tools/Read-tool_result.json)
 
 ```python
 @dataclass
@@ -431,7 +431,7 @@ class ReadOutput(MessageContent):
 ### Edit Tool Result → EditOutput
 
 Edit tool results with cat-n snippets are parsed into structured `EditOutput`:
-- **Files**: [Edit-tool_result.json](messages/tools/Edit-tool_result.json)
+- **Files**: [Edit-tool_result.json](messages/claude-code/tools/Edit-tool_result.json)
 
 ```python
 @dataclass
@@ -472,7 +472,7 @@ ToolOutput = Union[
 ## 1.4 Images (ImageContent)
 
 - **CSS Class**: `image`
-- **Files**: [image.json](messages/user/image.json)
+- **Files**: [image.json](messages/claude-code/user/image.json)
 
 ```json
 {
@@ -520,7 +520,7 @@ Assistant messages contain `ContentItem` instances that are:
 
 - **Content Model**: `AssistantTextMessage` (models.py)
 - **CSS Class**: `assistant` (or `assistant sidechain`)
-- **Files**: [assistant.json](messages/assistant/assistant.json)
+- **Files**: [assistant.json](messages/claude-code/assistant/assistant.json)
 
 ```python
 @dataclass
@@ -534,13 +534,13 @@ class AssistantTextMessage(MessageContent):
 - **Condition**: `isSidechain: true`
 - **CSS Class**: `assistant sidechain`
 - **Title**: "Sub-assistant"
-- **Files**: [assistant_sidechain.json](messages/assistant/assistant_sidechain.json)
+- **Files**: [assistant_sidechain.json](messages/claude-code/assistant/assistant_sidechain.json)
 
 ## 2.3 Thinking Content → ThinkingMessage
 
 - **Content Model**: `ThinkingMessage` (models.py)
 - **CSS Class**: `thinking`
-- **Files**: [thinking.json](messages/assistant/thinking.json)
+- **Files**: [thinking.json](messages/claude-code/assistant/thinking.json)
 
 ```python
 @dataclass
@@ -634,7 +634,7 @@ class AskUserQuestionItem(BaseModel):
 ### Tool Use Message Structure
 
 - **CSS Class**: `tool_use` (or `tool_use sidechain`)
-- **Files**: See [messages/tools/](messages/tools/) (e.g., `Read-tool_use.json`)
+- **Files**: See [messages/claude-code/tools/](messages/claude-code/tools/) (e.g., `Read-tool_use.json`)
 
 ```json
 {
@@ -667,7 +667,7 @@ System messages are parsed into structured content models in `models.py`:
 
 - **Content Model**: `SystemMessage` (models.py)
 - **CSS Class**: `system system-info`, `system system-warning`, `system system-error`
-- **Files**: [system_info.json](messages/system/system_info.json)
+- **Files**: [system_info.json](messages/claude-code/system/system_info.json)
 
 ```python
 @dataclass
@@ -735,7 +735,7 @@ These entry types primarily contain metadata, with some rendered conditionally.
 ## 4.1 Summary (SummaryTranscriptEntry)
 
 - **Purpose**: Session summary for navigation
-- **Files**: [summary.json](messages/system/summary.json)
+- **Files**: [summary.json](messages/claude-code/system/summary.json)
 
 ```json
 {
@@ -752,13 +752,13 @@ The `leafUuid` links the summary to the last message of the session.
 - **Purpose**: User interrupts and steering during assistant responses
 - **Rendered**: Only `remove` operations (as `UserSteeringContent`)
 - **CSS Class**: `user steering`
-- **Files**: [queue_operation.json](messages/system/queue_operation.json)
+- **Files**: [queue_operation.json](messages/claude-code/system/queue_operation.json)
 
 ## 4.3 File History Snapshot
 
 - **Purpose**: File state snapshots for undo/redo
 - **Not Rendered**
-- **Files**: [file_history_snapshot.json](messages/system/file_history_snapshot.json)
+- **Files**: [file_history_snapshot.json](messages/claude-code/system/file_history_snapshot.json)
 
 ---
 
@@ -945,39 +945,39 @@ Sub-agent messages (from `Task` tool):
 
 | Tool | Use Sample | Result Sample | Input Model | Output Model |
 |------|------------|---------------|-------------|--------------|
-| Read | [tool_use](messages/tools/Read-tool_use.json) | [tool_result](messages/tools/Read-tool_result.json) | `ReadInput` | `ReadOutput` |
-| Write | [tool_use](messages/tools/Write-tool_use.json) | [tool_result](messages/tools/Write-tool_result.json) | `WriteInput` | `WriteOutput` *(TODO)* |
-| Edit | [tool_use](messages/tools/Edit-tool_use.json) | [tool_result](messages/tools/Edit-tool_result.json) | `EditInput` | `EditOutput` |
-| MultiEdit | [tool_use](messages/tools/MultiEdit-tool_use.json) | [tool_result](messages/tools/MultiEdit-tool_result.json) | `MultiEditInput` | — |
-| Glob | [tool_use](messages/tools/Glob-tool_use.json) | [tool_result](messages/tools/Glob-tool_result.json) | `GlobInput` | `GlobOutput` *(TODO)* |
-| Grep | [tool_use](messages/tools/Grep-tool_use.json) | [tool_result](messages/tools/Grep-tool_result.json) | `GrepInput` | `GrepOutput` *(TODO)* |
+| Read | [tool_use](messages/claude-code/tools/Read-tool_use.json) | [tool_result](messages/claude-code/tools/Read-tool_result.json) | `ReadInput` | `ReadOutput` |
+| Write | [tool_use](messages/claude-code/tools/Write-tool_use.json) | [tool_result](messages/claude-code/tools/Write-tool_result.json) | `WriteInput` | `WriteOutput` *(TODO)* |
+| Edit | [tool_use](messages/claude-code/tools/Edit-tool_use.json) | [tool_result](messages/claude-code/tools/Edit-tool_result.json) | `EditInput` | `EditOutput` |
+| MultiEdit | [tool_use](messages/claude-code/tools/MultiEdit-tool_use.json) | [tool_result](messages/claude-code/tools/MultiEdit-tool_result.json) | `MultiEditInput` | — |
+| Glob | [tool_use](messages/claude-code/tools/Glob-tool_use.json) | [tool_result](messages/claude-code/tools/Glob-tool_result.json) | `GlobInput` | `GlobOutput` *(TODO)* |
+| Grep | [tool_use](messages/claude-code/tools/Grep-tool_use.json) | [tool_result](messages/claude-code/tools/Grep-tool_result.json) | `GrepInput` | `GrepOutput` *(TODO)* |
 
 ### Shell Operations
 
 | Tool | Use Sample | Result Sample | Input Model | Output Model |
 |------|------------|---------------|-------------|--------------|
-| Bash | [tool_use](messages/tools/Bash-tool_use.json) | [tool_result](messages/tools/Bash-tool_result.json) | `BashInput` | `BashOutput` *(TODO)* |
-| BashOutput | [tool_use](messages/tools/BashOutput-tool_use.json) | [tool_result](messages/tools/BashOutput-tool_result.json) | — | — |
-| KillShell | [tool_use](messages/tools/KillShell-tool_use.json) | [tool_result](messages/tools/KillShell-tool_result.json) | — | — |
+| Bash | [tool_use](messages/claude-code/tools/Bash-tool_use.json) | [tool_result](messages/claude-code/tools/Bash-tool_result.json) | `BashInput` | `BashOutput` *(TODO)* |
+| BashOutput | [tool_use](messages/claude-code/tools/BashOutput-tool_use.json) | [tool_result](messages/claude-code/tools/BashOutput-tool_result.json) | — | — |
+| KillShell | [tool_use](messages/claude-code/tools/KillShell-tool_use.json) | [tool_result](messages/claude-code/tools/KillShell-tool_result.json) | — | — |
 
 ### Agent Operations
 
 | Tool | Use Sample | Result Sample | Input Model | Output Model |
 |------|------------|---------------|-------------|--------------|
-| Task | [tool_use](messages/tools/Task-tool_use.json) | [tool_result](messages/tools/Task-tool_result.json) | `TaskInput` | `TaskOutput` |
+| Task | [tool_use](messages/claude-code/tools/Task-tool_use.json) | [tool_result](messages/claude-code/tools/Task-tool_result.json) | `TaskInput` | `TaskOutput` |
 | TaskOutput *(async-agent polling)* | — | — | `TaskOutputInput` | `TaskOutputResult` |
 | TaskStop *(kill background task)* | — | — | `TaskStopInput` | `TaskStopOutput` |
-| TodoWrite | [tool_use](messages/tools/TodoWrite-tool_use.json) | [tool_result](messages/tools/TodoWrite-tool_result.json) | `TodoWriteInput` | — |
-| AskUserQuestion | [tool_use](messages/tools/AskUserQuestion-tool_use.json) | [tool_result](messages/tools/AskUserQuestion-tool_result.json) | `AskUserQuestionInput` | — |
-| ExitPlanMode | [tool_use](messages/tools/ExitPlanMode-tool_use.json) | [tool_result](messages/tools/ExitPlanMode-tool_result.json) | `ExitPlanModeInput` | — |
+| TodoWrite | [tool_use](messages/claude-code/tools/TodoWrite-tool_use.json) | [tool_result](messages/claude-code/tools/TodoWrite-tool_result.json) | `TodoWriteInput` | — |
+| AskUserQuestion | [tool_use](messages/claude-code/tools/AskUserQuestion-tool_use.json) | [tool_result](messages/claude-code/tools/AskUserQuestion-tool_result.json) | `AskUserQuestionInput` | — |
+| ExitPlanMode | [tool_use](messages/claude-code/tools/ExitPlanMode-tool_use.json) | [tool_result](messages/claude-code/tools/ExitPlanMode-tool_result.json) | `ExitPlanModeInput` | — |
 
 ### Web Operations
 
 | Tool | Use Sample | Result Sample | Input Model | Output Model |
 |------|------------|---------------|-------------|--------------|
-| WebFetch | [tool_use](messages/tools/WebFetch-tool_use.json) | [tool_result](messages/tools/WebFetch-tool_result.json) | — | — |
-| WebSearch | [tool_use](messages/tools/WebSearch-tool_use.json) | [tool_result](messages/tools/WebSearch-tool_result.json) | — | — |
-| Artifact *(deploy HTML/MD page, CC 2.1.172+)* | [tool_use](messages/tools/Artifact-tool_use.json) | [tool_result](messages/tools/Artifact-tool_result.json) | `ArtifactInput` | `ArtifactOutput` |
+| WebFetch | [tool_use](messages/claude-code/tools/WebFetch-tool_use.json) | [tool_result](messages/claude-code/tools/WebFetch-tool_result.json) | — | — |
+| WebSearch | [tool_use](messages/claude-code/tools/WebSearch-tool_use.json) | [tool_result](messages/claude-code/tools/WebSearch-tool_result.json) | — | — |
+| Artifact *(deploy HTML/MD page, CC 2.1.172+)* | [tool_use](messages/claude-code/tools/Artifact-tool_use.json) | [tool_result](messages/claude-code/tools/Artifact-tool_result.json) | `ArtifactInput` | `ArtifactOutput` |
 
 ---
 
