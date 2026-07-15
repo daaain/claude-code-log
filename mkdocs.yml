@@ -89,6 +89,7 @@ nav:
       - Workflows: development/workflows.md
       - CSS classes: development/css-classes.md
       - Implementing a tool renderer: development/implementing-a-tool-renderer.md
+      - Tool coverage: development/tools-coverage.md
       - Plugins: development/plugins.md
   - Contributing: contributing.md
   - Changelog: changelog.md
