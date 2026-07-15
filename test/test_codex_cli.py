@@ -81,8 +81,9 @@ def test_provider_exact_session_writes_requested_output(
     assert result.exit_code == 0, result.output
     assert provider.loaded == ["01234567-89ab-cdef"]
     assert output.exists()
-    assert "hello provider" in output.read_text()
-    assert "provider reply" in output.read_text()
+    document = output.read_text(encoding="utf-8")
+    assert "hello provider" in document
+    assert "provider reply" in document
 
 
 def test_provider_unique_prefix_and_output_suffix_inference(
@@ -96,7 +97,7 @@ def test_provider_unique_prefix_and_output_suffix_inference(
 
     assert result.exit_code == 0, result.output
     assert provider.loaded == ["01234567-89ab-cdef"]
-    assert "# Codex test" in output.read_text()
+    assert "# Codex test" in output.read_text(encoding="utf-8")
 
 
 def test_provider_directory_output_creates_nested_destination(
@@ -120,7 +121,7 @@ def test_provider_directory_output_creates_nested_destination(
     destination = output_root / "session-01234567-89ab-cdef.md"
     assert result.exit_code == 0, result.output
     assert destination.exists()
-    assert "hello provider" in destination.read_text()
+    assert "hello provider" in destination.read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize(

@@ -44,7 +44,7 @@ def test_normalized_renderer_dispatches_options_title_and_creates_parent(
     )
 
     assert returned == output
-    assert output.read_text() == "rendered"
+    assert output.read_text(encoding="utf-8") == "rendered"
     assert renderer_options == [
         (
             ("md", None),

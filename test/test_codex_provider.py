@@ -222,7 +222,9 @@ def test_fixture_json_and_privacy_contract() -> None:
         "@example.",
     )
     for path in FIXTURES.rglob("*.jsonl"):
-        for line_number, line in enumerate(path.read_text().splitlines(), 1):
+        for line_number, line in enumerate(
+            path.read_text(encoding="utf-8").splitlines(), 1
+        ):
             try:
                 record = json.loads(line)
             except json.JSONDecodeError:

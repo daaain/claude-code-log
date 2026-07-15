@@ -22,7 +22,7 @@ EXPECTED_FAMILIES = {
 
 
 def test_codex_schema_manifest_is_complete_valid_and_sanitized() -> None:
-    manifest = json.loads((CORPUS / "manifest.json").read_text())
+    manifest = json.loads((CORPUS / "manifest.json").read_text(encoding="utf-8"))
     families = manifest["families"]
     assert set(families) == EXPECTED_FAMILIES
 
@@ -39,6 +39,6 @@ def test_codex_schema_manifest_is_complete_valid_and_sanitized() -> None:
     for relative_path in families.values():
         path = CORPUS / relative_path
         assert path.is_file(), relative_path
-        value = json.loads(path.read_text())
+        value = json.loads(path.read_text(encoding="utf-8"))
         serialized = json.dumps(value)
         assert not any(fragment in serialized for fragment in forbidden)

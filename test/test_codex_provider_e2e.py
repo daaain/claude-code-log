@@ -37,7 +37,7 @@ def test_real_codex_provider_exports_semantic_transcript(
     )
 
     assert result.exit_code == 0, result.output
-    document = output.read_text()
+    document = output.read_text(encoding="utf-8")
     expected_in_order = [
         "List the synthetic files.",
         "I will inspect the synthetic directory.",
