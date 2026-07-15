@@ -184,9 +184,16 @@ class CodexProvider(BaseProvider):
         # Recursive discovery supports both current date shards and old flat
         # layouts.  archived_sessions is deliberately outside this v1 root.
         sessions_dir = data_dir / "sessions"
-        return sorted(
-            path for path in sessions_dir.rglob(_ROLLOUT_GLOB) if path.is_file()
-        )
+        sessions_root = sessions_dir.resolve()
+        paths: set[Path] = set()
+        for path in sessions_dir.rglob(_ROLLOUT_GLOB):
+            try:
+                resolved = path.resolve()
+                if path.is_file() and resolved.is_relative_to(sessions_root):
+                    paths.add(resolved)
+            except OSError:
+                continue
+        return sorted(paths)
 
     def _session_index(self, data_dir: Path) -> dict[str, list[Path]]:
         index: dict[str, list[Path]] = {}
@@ -544,6 +551,7 @@ class CodexProvider(BaseProvider):
             session_id: Optional[int] = None
             previous_result_index = result_index
             terminal = False
+            terminal_exit_code: Optional[int] = None
             while cursor + 1 < len(tool_records):
                 next_call_index = tool_records[cursor]
                 next_result_index = tool_records[cursor + 1]
@@ -585,7 +593,9 @@ class CodexProvider(BaseProvider):
                     session_id = raw_session_id
                 continuation_indices.extend([next_call_index, next_result_index])
                 cursor += 2
-                if isinstance(envelope.get("exit_code"), int):
+                exit_code = envelope.get("exit_code")
+                if isinstance(exit_code, int):
+                    terminal_exit_code = exit_code
                     terminal = True
                     break
                 previous_result_index = next_result_index
@@ -593,6 +603,7 @@ class CodexProvider(BaseProvider):
             if terminal and continuation_indices:
                 payload = dict(result.payload)
                 payload["output"] = "".join(chunks)
+                payload["is_error"] = terminal_exit_code != 0
                 replacements[result_index] = _DecodedRecord(
                     line_no=result.line_no,
                     timestamp=result.timestamp,
@@ -984,7 +995,7 @@ class CodexProvider(BaseProvider):
         if isinstance(value, str):
             try:
                 parsed: Any = json.loads(value)
-            except json.JSONDecodeError:
+            except (ValueError, RecursionError):
                 return {"raw": value}
             if isinstance(parsed, dict):
                 return cast(dict[str, Any], parsed)
@@ -1024,6 +1035,10 @@ class CodexProvider(BaseProvider):
             acknowledgement = self._todo_acknowledgement(output)
             if acknowledgement is not None:
                 output = acknowledgement
+        if not is_error and tool_name == "TaskList" and isinstance(output, str):
+            task_list = self._list_agents_output(output)
+            if task_list is not None:
+                output = task_list
         tool_use_result: Optional[ToolUseResult] = None
         if not is_error and tool_name == "WebSearch" and isinstance(output, str):
             tool_use_result = {
@@ -1031,6 +1046,43 @@ class CodexProvider(BaseProvider):
                 "results": [{"content": []}, output],
             }
         return output, tool_use_result
+
+    def _list_agents_output(self, content: str) -> Optional[str]:
+        try:
+            decoded: Any = json.loads(content)
+        except (ValueError, RecursionError):
+            return None
+        if not isinstance(decoded, dict):
+            return None
+        agents = cast(dict[str, Any], decoded).get("agents")
+        if not isinstance(agents, list):
+            return None
+
+        rows: list[str] = []
+        for index, raw_agent in enumerate(cast(list[Any], agents), 1):
+            if not isinstance(raw_agent, dict):
+                return None
+            agent = cast(dict[str, Any], raw_agent)
+            agent_name = agent.get("agent_name")
+            raw_status = agent.get("agent_status")
+            if not isinstance(agent_name, str):
+                return None
+            if isinstance(raw_status, str):
+                status = raw_status
+            elif isinstance(raw_status, dict):
+                fields = cast(dict[str, Any], raw_status)
+                status = next(iter(fields)) if len(fields) == 1 else "unknown"
+            else:
+                status = "unknown"
+            short_name = agent_name.rstrip("/").rsplit("/", 1)[-1] or agent_name
+            last_message = agent.get("last_task_message")
+            subject = (
+                last_message
+                if isinstance(last_message, str) and last_message
+                else short_name
+            )
+            rows.append(f"#{index} [{status}] {subject} ({short_name})")
+        return "\n".join(rows) if rows else None
 
     def _task_acknowledgement(self, content: str) -> str:
         try:
@@ -1123,7 +1175,7 @@ class CodexProvider(BaseProvider):
                 continue
             try:
                 decoded: Any = json.loads(text)
-            except json.JSONDecodeError:
+            except (ValueError, RecursionError):
                 continue
             if not isinstance(decoded, dict):
                 continue

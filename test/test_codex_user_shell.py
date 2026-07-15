@@ -71,6 +71,10 @@ def test_malformed_or_unsafe_shell_envelopes_are_not_decoded() -> None:
     assert parse_codex_user_shell_command("<user_shell_command>") is None
     unsafe = SHELL_MESSAGE.replace("ls work/", "echo </bash-input>")
     assert parse_codex_user_shell_command(unsafe) is None
+    well_formed_breakout = SHELL_MESSAGE.replace(
+        "ls work/", "printf '&lt;/bash-input&gt;'"
+    )
+    assert parse_codex_user_shell_command(well_formed_breakout) is None
 
 
 def test_failed_user_shell_command_keeps_exit_and_duration_losslessly() -> None:

@@ -52,3 +52,17 @@ def test_markdown_table_values_are_escaped() -> None:
     result = format_codex_user_message(context)
 
     assert r"/workspace/a\|b`c" in result
+
+
+def test_permission_qualifiers_preserve_camel_case() -> None:
+    context = """<environment_context>
+      <filesystem>
+        <permission_profile type="workspaceWrite">
+          <file_system type="readOnly" />
+        </permission_profile>
+      </filesystem>
+    </environment_context>"""
+
+    result = format_codex_user_message(context)
+
+    assert "Profile `workspaceWrite`; filesystem `readOnly`." in result

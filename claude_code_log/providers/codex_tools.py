@@ -81,8 +81,8 @@ def _is_simple_result_forwarder(source: str, call: _StaticCall) -> bool:
     if len(emissions) != 1:
         return False
     result_name = assignment.group(1)
-    expression_code = _code_projection(emissions[0].expression)
-    if re.search(r"\b" + re.escape(result_name) + r"\b", expression_code) is None:
+    expression_code = _code_projection(emissions[0].expression).strip()
+    if expression_code not in {result_name, f"{result_name}.output"}:
         return False
     remainder = list(code)
     for start, end in (
@@ -108,33 +108,35 @@ def _canonicalize(name: str, input_data: dict[str, Any]) -> AdaptedToolCall:
             return AdaptedToolCall("Bash", adapted)
 
     if name == "spawn_agent":
-        prompt = input_data.get("message")
-        task_name = input_data.get("task_name")
+        safe_input = _scrub_opaque_field(input_data, "message")
+        prompt = safe_input.get("message")
+        task_name = safe_input.get("task_name")
         if isinstance(prompt, str) and isinstance(task_name, str):
-            visible_prompt = "" if _FERNET_TOKEN.fullmatch(prompt) else prompt
             return AdaptedToolCall(
                 "Task",
                 {
-                    "prompt": visible_prompt,
+                    "prompt": "" if prompt == _REDACTED_PAYLOAD else prompt,
                     "subagent_type": "codex",
                     "description": task_name,
                     "name": task_name,
                 },
             )
+        return AdaptedToolCall(name, safe_input)
 
     if name in {"send_message", "followup_task"}:
-        target = input_data.get("target")
-        message = input_data.get("message")
+        safe_input = _scrub_opaque_field(input_data, "message")
+        target = safe_input.get("target")
+        message = safe_input.get("message")
         if isinstance(target, str) and isinstance(message, str):
-            visible_message = "" if _FERNET_TOKEN.fullmatch(message) else message
             return AdaptedToolCall(
                 "SendMessage",
                 {
                     "type": "followup" if name == "followup_task" else "message",
                     "recipient": target,
-                    "content": visible_message,
+                    "content": "" if message == _REDACTED_PAYLOAD else message,
                 },
             )
+        return AdaptedToolCall(name, safe_input)
 
     if name == "update_plan":
         plan = input_data.get("plan")
@@ -171,6 +173,15 @@ def _canonicalize(name: str, input_data: dict[str, Any]) -> AdaptedToolCall:
                 return AdaptedToolCall("WebSearch", {"query": " • ".join(text_queries)})
 
     return AdaptedToolCall(name, input_data)
+
+
+def _scrub_opaque_field(input_data: dict[str, Any], field: str) -> dict[str, Any]:
+    value = input_data.get(field)
+    if not isinstance(value, str) or _FERNET_TOKEN.fullmatch(value) is None:
+        return input_data
+    scrubbed = dict(input_data)
+    scrubbed[field] = _REDACTED_PAYLOAD
+    return scrubbed
 
 
 def _find_static_tool_calls(source: str) -> list[_StaticCall]:
@@ -217,7 +228,7 @@ def _decode_object_literal(argument: str) -> Optional[dict[str, Any]]:
     json_like = _json_compatible_object(value)
     try:
         decoded: Any = json.loads(json_like)
-    except json.JSONDecodeError:
+    except (ValueError, RecursionError):
         return None
     return cast(dict[str, Any], decoded) if isinstance(decoded, dict) else None
 

@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+import claude_code_log.discovery as discovery
 from claude_code_log.models import AssistantTranscriptEntry, UserTranscriptEntry
 from claude_code_log.providers.agy import AgyProvider
 from claude_code_log.providers.base import BaseProvider
@@ -20,6 +21,24 @@ from claude_code_log.providers.registry import ProviderRegistry
 
 CODEX_FIXTURES = Path(__file__).parent / "test_data" / "codex"
 CODEX_ID = "11111111-1111-4111-8111-111111111111"
+
+
+def test_unified_load_session_propagates_message_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[tuple[str, str, int | None]] = []
+
+    class StubRegistry:
+        def load_session(
+            self, provider_name: str, session_id: str, max_messages: int | None = None
+        ) -> list[str]:
+            observed.append((provider_name, session_id, max_messages))
+            return ["limited"]
+
+    monkeypatch.setattr(discovery, "discover_providers", StubRegistry)
+
+    assert discovery.load_session("codex", CODEX_ID, max_messages=2) == ["limited"]
+    assert observed == [("codex", CODEX_ID, 2)]
 
 
 def _message_entries(

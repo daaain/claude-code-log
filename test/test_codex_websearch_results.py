@@ -27,9 +27,11 @@ def _direct_result(output: str) -> list[dict[str, str]]:
     ]
 
 
-def test_query_is_shown_only_in_websearch_title() -> None:
+def test_long_query_retains_shared_claude_websearch_body() -> None:
     query = "site:developers.openai.com/codex " * 10
-    assert format_websearch_input(WebSearchInput(query=query)) == ""
+    assert format_websearch_input(WebSearchInput(query=query)) == (
+        f'<div class="websearch-query">{query}</div>'
+    )
 
 
 def test_codex_websearch_result_is_treated_as_markdown_summary() -> None:

@@ -126,7 +126,8 @@ def format_codex_user_message(text: str) -> str:
         if file_system_type:
             qualifiers.append(f"filesystem {_inline_code(file_system_type)}")
         if qualifiers:
-            parts.extend(["; ".join(qualifiers).capitalize() + ".", ""])
+            sentence = "; ".join(qualifiers)
+            parts.extend([sentence[:1].upper() + sentence[1:] + ".", ""])
         if permission_rows:
             parts.extend(["| Access | Target |", "|---|---|"])
             parts.extend(

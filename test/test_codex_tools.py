@@ -1,5 +1,7 @@
 """Codex-to-shared tool adapter contract."""
 
+import pytest
+
 from claude_code_log.factories.tool_factory import create_tool_input, create_tool_output
 from claude_code_log.models import (
     BashInput,
@@ -132,6 +134,24 @@ def test_ordinary_agent_message_is_preserved() -> None:
     )
 
     assert call.input["content"] == message
+
+
+@pytest.mark.parametrize(
+    ("name", "input_data"),
+    [
+        ("spawn_agent", {"task_name": 7}),
+        ("send_message", {"target": 7}),
+        ("followup_task", {"target": None}),
+    ],
+)
+def test_malformed_collaboration_calls_scrub_opaque_messages(
+    name: str, input_data: dict[str, object]
+) -> None:
+    token = "gAAAAA" + "A" * 100
+    call = adapt_codex_tool_call(name, {**input_data, "message": token})
+
+    assert token not in repr(call.input)
+    assert call.input["message"] == "[opaque payload redacted]"
 
 
 def test_plan_and_search_reuse_specialized_renderers() -> None:

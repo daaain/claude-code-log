@@ -1292,45 +1292,8 @@ def parse_taskupdate_output(
 def parse_tasklist_output(
     tool_result: ToolResultContent, file_path: Optional[str]
 ) -> Optional[TaskListOutput]:
-    """Parse TaskList rows or a Codex ``list_agents`` result."""
+    """Parse canonical TaskList text rows."""
     del file_path
-    data = _try_load_json_text(tool_result)
-    if data is not None and isinstance(data.get("agents"), list):
-        agents = cast(list[Any], data["agents"])
-        tasks: list[TaskListItem] = []
-        for raw_agent in agents:
-            if not isinstance(raw_agent, dict):
-                return None
-            agent = cast(dict[str, Any], raw_agent)
-            agent_name = agent.get("agent_name")
-            raw_status = agent.get("agent_status")
-            if not isinstance(agent_name, str):
-                return None
-            if isinstance(raw_status, str):
-                status = raw_status
-            elif isinstance(raw_status, dict):
-                status_fields = cast(dict[str, Any], raw_status)
-                status = (
-                    next(iter(status_fields)) if len(status_fields) == 1 else "unknown"
-                )
-            else:
-                status = "unknown"
-            short_name = agent_name.rstrip("/").rsplit("/", 1)[-1] or agent_name
-            last_message = agent.get("last_task_message")
-            subject = (
-                last_message
-                if isinstance(last_message, str) and last_message
-                else short_name
-            )
-            tasks.append(
-                TaskListItem(
-                    id=short_name,
-                    subject=subject,
-                    status=status,
-                )
-            )
-        return TaskListOutput(tasks=tasks, raw_text=None)
-
     text = _extract_tool_result_text(tool_result)
     if not text:
         return None

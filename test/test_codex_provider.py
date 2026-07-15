@@ -77,6 +77,21 @@ def test_discovery_is_recursive_deterministic_and_active_only(
     assert all(session.provider == "codex" for session in first)
 
 
+def test_rollout_discovery_rejects_symlinks_outside_sessions(tmp_path: Path) -> None:
+    home = tmp_path / "codex-home"
+    sessions = home / "sessions"
+    sessions.mkdir(parents=True)
+    outside = tmp_path / "rollout-external.jsonl"
+    outside.write_text("{}\n", encoding="utf-8")
+    link = sessions / "rollout-external.jsonl"
+    try:
+        link.symlink_to(outside)
+    except OSError:
+        pytest.skip("symlinks are unavailable")
+
+    assert CodexProvider()._rollout_paths(home) == []
+
+
 def test_load_deduplicates_visible_messages_and_preserves_order(
     provider: CodexProvider,
 ) -> None:

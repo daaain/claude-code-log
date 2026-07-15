@@ -203,6 +203,26 @@ def test_async_bash_retains_nonterminal_live_handle() -> None:
     ]
 
 
+def test_async_bash_fold_preserves_terminal_failure_status() -> None:
+    records = [
+        _call(1, "exec", "exec_command", '{"cmd":"pytest"}'),
+        _output(2, "exec", "Script running with cell ID cell-1"),
+        _call(3, "wait", "wait", '{"cell_id":"cell-1"}'),
+        _output(
+            4,
+            "wait",
+            _command_envelope(output="failed\n", exit_code=7, wall_time_seconds=1.0),
+        ),
+    ]
+
+    content = [item for entry in _normalized(records) for item in entry.message.content]
+    results = [item for item in content if isinstance(item, ToolResultContent)]
+    assert len(results) == 1
+    assert results[0].tool_use_id == "exec"
+    assert results[0].content == "failed\n"
+    assert results[0].is_error is True
+
+
 def test_inherited_prefix_requires_strong_parent_suffix_evidence() -> None:
     provider = CodexProvider()
     shared = _event(1, "assistant", "Done.")
@@ -274,7 +294,7 @@ def test_object_key_rewriting_never_mutates_command_strings() -> None:
         (
             'const result = await tools.exec_command({cmd: "real"}); '
             "text({nested: [result.output, {ok: true}]} );",
-            "Bash",
+            "Workflow",
         ),
     ],
     ids=[
@@ -289,6 +309,25 @@ def test_object_key_rewriting_never_mutates_command_strings() -> None:
 def test_exec_wrapper_lexical_matrix(source: str, expected_name: str) -> None:
     call = adapt_codex_tool_call("exec", {"raw": source}, raw_input=source)
     assert call.name == expected_name
+
+
+@pytest.mark.parametrize("error_type", [ValueError, RecursionError])
+def test_nested_json_helpers_tolerate_parser_failures(
+    error_type: type[Exception], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail_json_loads(_value: str) -> object:
+        raise error_type("synthetic parser limit")
+
+    monkeypatch.setattr(json, "loads", fail_json_loads)
+    source = 'const result = await tools.exec_command({cmd: "real"}); text(result);'
+    assert adapt_codex_tool_call("exec", {"raw": source}, raw_input=source).name == (
+        "Workflow"
+    )
+
+    provider = CodexProvider()
+    value = '{"output":"safe"}'
+    assert provider._tool_input(value) == {"raw": value}
+    assert provider._command_result([{"type": "input_text", "text": value}]) is None
 
 
 @pytest.mark.parametrize(
