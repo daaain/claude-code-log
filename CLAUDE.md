@@ -107,6 +107,7 @@ with pointers to the deep-dive docs:
 - [dev-docs/teammates.md](dev-docs/teammates.md) - Teammates feature deep-dive
 - [dev-docs/message-hierarchy.md](dev-docs/message-hierarchy.md) - Fold/unfold state machine
 - [dev-docs/implementing-a-tool-renderer.md](dev-docs/implementing-a-tool-renderer.md) - How-to: add a new tool
+- [dev-docs/tools-coverage.md](dev-docs/tools-coverage.md) - Which tools are typed vs. generic, vs. upstream reference
 - [dev-docs/plugins.md](dev-docs/plugins.md) - Plugin system reference + author guide
 
 User-facing docs live in [docs/](docs/); plans and TODOs live in [work/](work/).
