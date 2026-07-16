@@ -85,12 +85,15 @@ docs-gen:
     uv run python scripts/generate_tui_screenshots.py docs/assets/tui
 
 # Serve the documentation site locally with live reload (http://127.0.0.1:8000)
+# `--group docs` pulls in the docs-only deps (mkdocs et al.) on demand — the
+# group is not synced by a plain `uv run`, so run it here rather than relying
+# on a prior `uv sync --group docs`.
 docs-serve:
-    DISABLE_MKDOCS_2_WARNING=true uv run mkdocs serve
+    DISABLE_MKDOCS_2_WARNING=true uv run --group docs mkdocs serve
 
 # Build the documentation site (strict: fails on broken links/nav)
 docs-build:
-    DISABLE_MKDOCS_2_WARNING=true uv run mkdocs build --strict
+    DISABLE_MKDOCS_2_WARNING=true uv run --group docs mkdocs build --strict
 
 build:
     -rm dist/*
