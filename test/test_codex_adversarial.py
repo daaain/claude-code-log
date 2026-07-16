@@ -183,6 +183,62 @@ def test_visible_message_pairing_handles_both_record_orders(
     assert _visible_text(records) == ["Adjacent"]
 
 
+def _image_message(line_no: int, text: str) -> _DecodedRecord:
+    return _record(
+        line_no,
+        "response_item",
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": '<image name="screenshot.png">'},
+                {"type": "input_image", "image_url": "data:image/png;base64,AA=="},
+                {"type": "input_text", "text": "</image>"},
+                {"type": "input_text", "text": text},
+            ],
+        },
+    )
+
+
+def _image_event(line_no: int, text: str) -> _DecodedRecord:
+    return _record(
+        line_no,
+        "event_msg",
+        {
+            "type": "user_message",
+            "message": text,
+            "images": [],
+            "local_images": ["/tmp/screenshot.png"],
+        },
+    )
+
+
+@pytest.mark.parametrize("response_first", [True, False])
+def test_image_message_pairing_keeps_richer_response_copy(
+    response_first: bool,
+) -> None:
+    text = "Please inspect [Image #1]."
+    response = _image_message(1, text)
+    event = _image_event(2, text)
+    records = [response, event] if response_first else [event, response]
+
+    entries = _normalized(records)
+
+    assert len(entries) == 1
+    assert _visible_text(records) == [
+        '<image name="screenshot.png">\n</image>\n' + text
+    ]
+
+
+def test_image_message_pairing_preserves_distinct_adjacent_prompt() -> None:
+    records = [
+        _image_message(1, "Inspect this image."),
+        _image_event(2, "Inspect this other image."),
+    ]
+
+    assert len(_normalized(records)) == 2
+
+
 def test_async_bash_does_not_fold_across_visible_activity() -> None:
     records = [
         _call(1, "exec", "exec_command", '{"cmd":"pytest"}'),

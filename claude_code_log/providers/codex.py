@@ -52,6 +52,7 @@ _RUNNING_CELL_RE = re.compile(r"Script running with cell ID ([^\s]+)")
 _COMPLETED_COMMAND_RE = re.compile(
     r"\AScript completed\r?\nWall time:? [^\r\n]+\r?\nOutput:\r?\n?\Z"
 )
+_IMAGE_WRAPPER_RE = re.compile(r"\A</?image(?:\s[^>]*)?>\Z")
 _INVISIBLE_RECORD_KINDS = {"session_meta", "turn_context"}
 _MAX_JSON_NESTING = 512
 
@@ -477,22 +478,67 @@ class CodexProvider(BaseProvider):
     def _deduplicate_visible_messages(
         self, records: list[_DecodedRecord]
     ) -> list[_DecodedRecord]:
-        """Prefer the event copy only for an adjacent event/response pair."""
+        """Collapse adjacent event/response mirrors without losing images."""
         suppressed: set[int] = set()
         for index in range(len(records) - 1):
             left = records[index]
             right = records[index + 1]
             fingerprint = self._visible_message_fingerprint(left)
-            if fingerprint is None or fingerprint != self._visible_message_fingerprint(
-                right
-            ):
-                continue
             if {left.kind, right.kind} != {"event_msg", "response_item"}:
                 continue
-            suppressed.add(index if left.kind == "response_item" else index + 1)
+            if (
+                fingerprint is not None
+                and fingerprint == self._visible_message_fingerprint(right)
+            ):
+                suppressed.add(index if left.kind == "response_item" else index + 1)
+                continue
+            image_mirror = self._image_message_mirror(left, right)
+            if image_mirror is not None:
+                suppressed.add(index + image_mirror)
         return [
             record for index, record in enumerate(records) if index not in suppressed
         ]
+
+    def _image_message_mirror(
+        self, left: _DecodedRecord, right: _DecodedRecord
+    ) -> Optional[int]:
+        """Return the event-side index for a richer image response mirror."""
+        event_index = 0 if left.kind == "event_msg" else 1
+        event = left if event_index == 0 else right
+        response = right if event_index == 0 else left
+        if (
+            event.payload.get("type") != "user_message"
+            or response.payload.get("type") != "message"
+            or response.payload.get("role") != "user"
+        ):
+            return None
+        event_text = self._event_text(event.payload)
+        response_text = self._image_message_text(response.payload.get("content"))
+        return event_index if event_text and event_text == response_text else None
+
+    def _image_message_text(self, content: Any) -> Optional[str]:
+        """Extract text from a response message known to contain an image."""
+        if not isinstance(content, list):
+            return None
+        items = cast(list[Any], content)
+        parts: list[str] = []
+        has_image = False
+        for raw_item in items:
+            if isinstance(raw_item, str):
+                parts.append(raw_item)
+                continue
+            if not isinstance(raw_item, dict):
+                continue
+            item = cast(dict[str, Any], raw_item)
+            if item.get("type") == "input_image":
+                has_image = True
+                continue
+            if item.get("type") not in {"input_text", "output_text", "text"}:
+                continue
+            text = item.get("text")
+            if isinstance(text, str) and _IMAGE_WRAPPER_RE.fullmatch(text) is None:
+                parts.append(text)
+        return "\n".join(parts) if has_image else None
 
     def _coalesce_command_sessions(
         self, records: list[_DecodedRecord]
