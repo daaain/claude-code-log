@@ -859,11 +859,21 @@ class CodexProvider(BaseProvider):
             call_id = self._nonempty_string(payload.get("call_id")) or uuid
             if call_id in web_open_batches:
                 return []
+            tool_name = tool_names.get(call_id)
             raw_is_error = payload.get("is_error")
             is_error = raw_is_error if isinstance(raw_is_error, bool) else None
+            raw_output = payload.get("output", "")
+            forwarded = (
+                None
+                if tool_name == "Workflow"
+                else self._forwarded_tool_result(raw_output)
+            )
+            if forwarded is not None:
+                raw_output, forwarded_is_error = forwarded
+                is_error = bool(is_error) or forwarded_is_error
             output, tool_use_result = self._adapt_tool_result(
-                payload.get("output", ""),
-                tool_name=tool_names.get(call_id),
+                raw_output,
+                tool_name=tool_name,
                 is_error=is_error is True,
             )
             return [
@@ -1159,6 +1169,59 @@ class CodexProvider(BaseProvider):
                 chunks.append("\n")
             chunks.append(text)
         return "".join(chunks)
+
+    def _forwarded_tool_result(
+        self, value: Any
+    ) -> Optional[tuple[str | list[dict[str, Any]], bool]]:
+        """Unwrap a direct nested-tool result emitted by ``functions.exec``.
+
+        A recognized one-tool wrapper emits exactly two text items: Codex's
+        execution status followed by a JSON-serialized MCP ``CallToolResult``.
+        Claude Code stores the inner content directly in ``tool_result``;
+        mirroring that shape lets generic and plugin transformers behave the
+        same across providers. Compound ``Workflow`` calls are excluded by the
+        caller so their transport remains lossless.
+        """
+        if not isinstance(value, list):
+            return None
+        items = cast(list[Any], value)
+        if len(items) != 2:
+            return None
+        if not all(isinstance(item, dict) for item in items):
+            return None
+        status, emitted = cast(list[dict[str, Any]], items)
+        status_text = status.get("text")
+        emitted_text = emitted.get("text")
+        if (
+            status.get("type") not in {"input_text", "output_text", "text"}
+            or not isinstance(status_text, str)
+            or _COMPLETED_COMMAND_RE.fullmatch(status_text) is None
+            or emitted.get("type") not in {"input_text", "output_text", "text"}
+            or not isinstance(emitted_text, str)
+        ):
+            return None
+        try:
+            decoded: Any = json.loads(emitted_text)
+        except (ValueError, RecursionError):
+            return None
+        if not isinstance(decoded, dict):
+            return None
+        envelope = cast(dict[str, Any], decoded)
+        content = envelope.get("content")
+        is_error = envelope.get("isError")
+        if (
+            not isinstance(content, list)
+            or not isinstance(is_error, bool)
+            or not all(isinstance(item, dict) for item in cast(list[Any], content))
+        ):
+            return None
+        blocks = cast(list[dict[str, Any]], content)
+        if len(blocks) == 1:
+            block = blocks[0]
+            text = block.get("text")
+            if block.get("type") == "text" and isinstance(text, str):
+                return text, is_error
+        return blocks, is_error
 
     def _command_result(self, value: Any) -> Optional[dict[str, Any]]:
         if not isinstance(value, list):

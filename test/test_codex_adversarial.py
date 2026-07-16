@@ -67,6 +67,27 @@ def _command_envelope(**values: object) -> list[dict[str, str]]:
     return [{"type": "input_text", "text": json.dumps(values)}]
 
 
+def _forwarded_result_envelope(
+    payload: object, *, is_error: bool = False
+) -> list[dict[str, str]]:
+    return [
+        {
+            "type": "input_text",
+            "text": "Script completed\nWall time 0.1 seconds\nOutput:\n",
+        },
+        {
+            "type": "input_text",
+            "text": json.dumps(
+                {
+                    "content": [{"type": "text", "text": json.dumps(payload)}],
+                    "structuredContent": payload,
+                    "isError": is_error,
+                }
+            ),
+        },
+    ]
+
+
 def _normalized(
     records: list[_DecodedRecord],
 ) -> list[UserTranscriptEntry | AssistantTranscriptEntry]:
@@ -221,6 +242,66 @@ def test_async_bash_fold_preserves_terminal_failure_status() -> None:
     assert results[0].tool_use_id == "exec"
     assert results[0].content == "failed\n"
     assert results[0].is_error is True
+
+
+@pytest.mark.parametrize("nested_tool", ["mcp__clmail__communicate", "future_tool"])
+def test_direct_nested_tool_result_matches_native_tool_result_shape(
+    nested_tool: str,
+) -> None:
+    payload = {"sent": True, "message_ids": [4730]}
+    source = (
+        f'const result = await tools.{nested_tool}({{action: "send"}}); '
+        "text(JSON.stringify(result));"
+    )
+    records = [
+        _call(1, "exec", "exec", source),
+        _output(2, "exec", _forwarded_result_envelope(payload)),
+    ]
+
+    content = [item for entry in _normalized(records) for item in entry.message.content]
+    uses = [item for item in content if isinstance(item, ToolUseContent)]
+    results = [item for item in content if isinstance(item, ToolResultContent)]
+
+    assert [item.name for item in uses] == [nested_tool]
+    assert len(results) == 1
+    assert results[0].content == json.dumps(payload)
+    assert results[0].is_error is False
+
+
+def test_direct_nested_tool_result_propagates_mcp_error() -> None:
+    source = (
+        'const result = await tools.mcp__clmail__communicate({action: "send"}); '
+        "text(JSON.stringify(result));"
+    )
+    records = [
+        _call(1, "exec", "exec", source),
+        _output(
+            2,
+            "exec",
+            _forwarded_result_envelope({"error": "recipient missing"}, is_error=True),
+        ),
+    ]
+
+    content = [item for entry in _normalized(records) for item in entry.message.content]
+    result = next(item for item in content if isinstance(item, ToolResultContent))
+    assert result.content == json.dumps({"error": "recipient missing"})
+    assert result.is_error is True
+
+
+def test_workflow_result_retains_nested_tool_transport() -> None:
+    payload = {"sent": True, "message_ids": [4730]}
+    output = _forwarded_result_envelope(payload)
+    source = (
+        'const result = await tools.mcp__clmail__communicate({action: "send"}); '
+        'text("prefix"); text(JSON.stringify(result));'
+    )
+    records = [_call(1, "exec", "exec", source), _output(2, "exec", output)]
+
+    content = [item for entry in _normalized(records) for item in entry.message.content]
+    uses = [item for item in content if isinstance(item, ToolUseContent)]
+    result = next(item for item in content if isinstance(item, ToolResultContent))
+    assert [item.name for item in uses] == ["Workflow"]
+    assert result.content == output
 
 
 def test_inherited_prefix_requires_strong_parent_suffix_evidence() -> None:
