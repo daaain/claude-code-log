@@ -4591,6 +4591,11 @@ def _render_messages(
             # ``attachment_factory._create_queued_command_message``). Otherwise
             # a promptless attachment would seed the budget and drop the paired
             # ``remove`` that still holds the steering text.
+            # NB: with the text-keyed budget below this guard is no longer
+            # load-bearing (a promptless qc would key under ``""`` and can't
+            # match a content-bearing ``remove``) — kept as belt-and-suspenders
+            # and to avoid a spurious ``""`` count feeding the imbalance
+            # warning.
             qc_prompt = (entry.attachment or {}).get("prompt")
             if isinstance(qc_prompt, str) and qc_prompt.strip():
                 text = _steering_match_text(qc_prompt)

@@ -302,6 +302,16 @@ The keying matters on two axes:
   transcripts (no `queued_command`, empty budget) render `remove` exactly
   as before.
 
+**Null-content era (≥~2.1.187).** In recent harnesses the paired `remove`
+op carries `content: null` — the steering text lives **only** in the
+`queued_command` attachment. Rendering steering from the attachment is
+therefore not just a de-duplication nicety but the *only* path that
+surfaces steering text at all on such transcripts (a null `remove`
+renders nothing, and pre-#284 the attachment was ghosted, so the text was
+silently lost). Null-content removes are dropped by the empty-content
+skip in `_filter_messages` *before* the suppression loop, so they neither
+consume budget nor trip the imbalance warning.
+
 **Transformer pass.** The `queued_command` prompt is routed through the
 same `create_user_message` classification + plugin-transformer pass as an
 idle-delivered prompt, so e.g. a `[monitor] …` steering injection renders
