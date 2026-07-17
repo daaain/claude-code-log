@@ -104,7 +104,8 @@ Keep parsing, analysis, and canonicalization separate:
 JavaScript source
     -> Tree-sitter JavaScript syntax tree
     -> invocation/binding extraction
-    -> symbolic provenance analysis
+    -> bounded abstract interpretation
+       (constant propagation, provenance, static loop unrolling)
     -> output-emission analysis
     -> AdaptedToolBatch
     -> existing canonicalization and renderers
@@ -139,10 +140,15 @@ support is:
 - direct `tools.name({...})` elements inside a static `Promise.all([...])`;
 - JSON-compatible object and array literals, including strings, numbers,
   booleans, and `null`;
+- immutable local constants and identifier substitution in supported literals;
+- object shorthand such as `{actor, params: {to}}` when each identifier has a
+  known constant value;
 - straight-line bindings and emissions;
 - `text(result)`, `text(result.output)`, and longer static property paths;
 - `text(JSON.stringify(result))`;
 - template literals whose substitutions all trace to one result;
+- bounded `for...of` loops over a statically known array, including tool calls
+  and emissions inside the loop body;
 - known `for...of` or `forEach` output loops over a statically known result
   collection.
 
@@ -150,15 +156,68 @@ Use a tiny provenance lattice during analysis:
 
 ```text
 Unknown
+Constant(value)
 ToolResult(call_id)
 ResultField(call_id, property_path)
 Collection([provenance, ...])
 ```
 
-Bindings copy provenance. Static member access appends a property. A `text()`
-call records an emission only when its argument resolves unambiguously to one
-tool result. Mutation, computed properties, unknown function calls, branches
-with differing provenance, and dynamic iteration should yield `Unknown`.
+Bindings copy abstract values. Object and array literals recursively resolve
+their identifier references. Static member access appends a property to result
+provenance. A `text()` call records an emission only when its argument resolves
+unambiguously to one tool result. Mutation, computed properties, unknown
+function calls, branches with differing values, and dynamic iteration should
+yield `Unknown`.
+
+### Bounded semantic expansion
+
+Tree-sitter supplies syntax, not the reconstructed invocation sequence. The
+analyzer therefore needs to simulate a deliberately small semantic subset.
+This is abstract interpretation rather than JavaScript execution: only
+whitelisted AST nodes have transfer functions, and no user function, getter,
+module, or runtime API is invoked.
+
+For example:
+
+```javascript
+for (const id of [4745, 4746, 4756]) {
+  const r = await tools.mcp__clmail__communicate({
+    action: "read",
+    actor: "/workspace/codex",
+    params: {id}
+  });
+  text(JSON.stringify(r));
+}
+```
+
+The evaluator should resolve the array to three constants, clone the loop
+environment for each element, bind `id`, evaluate the body, and emit three
+ordered tool calls. The shorthand `{id}` becomes `{id: 4745}`, `{id: 4746}`,
+and `{id: 4756}`. Each loop-local `r` has distinct `ToolResult(call_id)`
+provenance, so the three `text()` emissions correlate with the three transport
+result rows.
+
+Likewise:
+
+```javascript
+const actor = "/workspace/codex";
+const to = "/workspace/clmail/alice";
+const r = await tools.mcp__clmail__communicate({
+  action: "send",
+  actor,
+  params: {to, subject: "Ready"}
+});
+text(r);
+```
+
+The evaluator should propagate both string constants through shorthand object
+properties before decoding the tool parameters. This produces one call with
+fully materialized input and one correlated emission.
+
+Bound the simulation by source bytes, AST nodes, nesting depth, loop
+iterations, expanded calls, and emitted results. A supported loop whose static
+array exceeds the configured limit must remain a raw `Workflow`; it must not
+be partially expanded.
 
 ## Fallback contract
 
@@ -168,11 +227,13 @@ raw program as `Workflow` whenever any of these occur:
 - the syntax tree contains relevant `ERROR` or missing nodes;
 - a tool name or argument cannot be extracted statically;
 - an argument is not in the supported literal subset;
+- a referenced identifier has no single immutable constant value;
 - a result is reassigned or mutated;
 - an emitted value could belong to more than one call;
 - a call has no correlatable transport result;
 - an output row is consumed inconsistently;
 - unsupported control flow affects calls or emissions;
+- a loop source is dynamic or any expansion limit is exceeded;
 - extra executable statements remain after recognized statements are removed.
 
 The fallback must retain the original JavaScript and all result rows. Never
@@ -229,6 +290,10 @@ The Tree-sitter prototype must retain coverage for:
 - adjacent sequential calls and calls declared first then emitted later;
 - reversed emission order, with results still attached to invocation order;
 - heterogeneous multi-tool programs, not only repeated `exec_command` calls;
+- immutable constant substitution and shorthand object properties;
+- a static `for...of` array expanded into distinct calls and result emissions;
+- loop-local result provenance that remains distinct across iterations;
+- dynamic, oversized, or mutating loops that must remain `Workflow`;
 - `Promise.all` marker output and ordered `for...of` output;
 - the full two-call plugin-list/find example followed by
   `text(a.output); text(b.output);`;
@@ -259,38 +324,16 @@ create immutable tagged result references rather than mutate a shared proxy.
 Those details do not make execution safe and are not a recommendation to use
 it.
 
-## Current branch completion state
-
-The latest local commit, `da8141b`, improves correlation for deferred and
-reordered emissions. The last full local `just ci` completed successfully
-before this documentation-only handoff. Do not push this branch without running
-`just ci` again.
-
-GitHub Actions run `29594805523` exposed one unresolved Windows-only failure in
-`test_readable_image_paths_become_ordered_base64_content`: Python's platform
-MIME lookup does not identify `.webp`, so the readable WebP fixture is omitted.
-The likely narrow fix is a deterministic image-extension fallback (at least
-`.webp` to `image/webp`) in `claude_code_log/providers/codex.py::_read_image`,
-plus a regression that mocks `mimetypes.guess_type()` returning `None`. This is
-not a Tree-sitter issue and is not fixed by this handoff commit.
-
-The generated file
-`session-019f4cc3-922e-7cc2-9975-cd529e8871af.html` is user-owned, untracked
-evidence. Do not stage, modify, or delete it.
-
 ## Branch and merge sequence
 
 PRs #242 and #243 correspond to the first commits in this branch's original
-stack and are now on `main` as `bbdba6c` and `b4b254c`. Before rewriting this
-branch:
+stack and are now on `main` as `bbdba6c` and `b4b254c`. The branch has already
+been rebased with `--update-refs`, the superseded commits were removed, and
+full local CI was rerun. The remaining sequence is:
 
-1. fetch current `main`;
-2. rebase `dev/codex-tools` onto it with `--update-refs`, allowing Git to drop
-   patch-equivalent commits already supplied by #242 and #243;
-3. resolve only genuine conflicts and rerun full `just ci`;
-4. update PR #279 only when explicitly requested;
-5. merge #279 after Windows CI and review are green;
-6. create the Tree-sitter experiment as a new branch from the resulting
+1. update PR #279 only when explicitly requested;
+2. merge #279 after Windows CI and review are green;
+3. create the Tree-sitter experiment as a new branch from the resulting
    `main`.
 
 Do not add Tree-sitter dependencies or experimental analyzer code to
