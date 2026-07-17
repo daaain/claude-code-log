@@ -1,0 +1,2 @@
+{"timestamp":"2024-01-01T00:00:00.000Z","type":"session_meta","payload":{"id":"55555555-5555-4555-8555-555555555555","cwd":"/workspace/synthetic-project","cli_version":"0.0.0-test"}}
+{"timestamp":"2024-01-01T00:00:01.000Z","type":"event_msg","payload":{"type":"user_message","message":"Archived synthetic prompt."}}

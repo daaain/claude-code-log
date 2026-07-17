@@ -284,7 +284,7 @@ def format_websearch_input(search_input: WebSearchInput) -> str:
     Otherwise returns empty since the full query is already in the title.
     """
     if len(search_input.query) <= 100:
-        return ""  # Full query shown in title
+        return ""
     escaped_query = escape_html(search_input.query)
     return f'<div class="websearch-query">{escaped_query}</div>'
 
@@ -579,7 +579,9 @@ def format_task_output(output: TaskOutput) -> str:
     Returns:
         HTML string with markdown rendered in collapsible section
     """
-    parts: list[str] = [render_markdown_collapsible(output.result, "task-result")]
+    parts: list[str] = []
+    if output.result:
+        parts.append(render_markdown_collapsible(output.result, "task-result"))
     if output.async_final_answer:
         parts.append(
             '<div class="task-async-answer-label">'
@@ -748,8 +750,10 @@ def format_multiedit_input(multiedit_input: MultiEditInput) -> str:
 
     # Render each edit as a diff - edits are typed EditItem objects
     for idx, edit in enumerate(multiedit_input.edits, 1):
+        path = f" — {escape_html(edit.file_path)}" if edit.file_path else ""
         html_parts.append(
-            f"<div class='multiedit-item'><div class='multiedit-item-header'>Edit #{idx}</div>"
+            f"<div class='multiedit-item'><div class='multiedit-item-header'>"
+            f"Edit #{idx}{path}</div>"
         )
         html_parts.append(render_single_diff(edit.old_string, edit.new_string))
         html_parts.append("</div>")

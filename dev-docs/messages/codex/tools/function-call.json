@@ -1,0 +1,19 @@
+[
+  {
+    "type": "response_item",
+    "payload": {
+      "type": "function_call",
+      "name": "exec_command",
+      "arguments": "{\"cmd\":\"find . -maxdepth 1 -type f\"}",
+      "call_id": "call-structured-001"
+    }
+  },
+  {
+    "type": "response_item",
+    "payload": {
+      "type": "function_call_output",
+      "call_id": "call-structured-001",
+      "output": "./alpha.txt\n./beta.txt"
+    }
+  }
+]

@@ -16,6 +16,12 @@ TUI demo:
 
 This tool generates clean, minimalist HTML pages showing user prompts and assistant responses chronologically. It's designed to create a readable log of your Claude Code interactions with support for both individual files and entire project hierarchies.
 
+> [!NOTE]
+> Experimental provider support is now available for single-session exports from
+> Antigravity CLI (`agy`, **alpha**) and Codex CLI (`codex`, **beta**). Use
+> `--provider agy|codex --session-id <id>`; these integrations may change as the
+> upstream transcript formats evolve.
+
 📄 **[View Example HTML Output](https://daaain.github.io/claude-code-log/example/)** - A real example generated from a sample of this project's development, regenerated on every docs build
 
 ## Quickstart

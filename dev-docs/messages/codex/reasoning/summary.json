@@ -1,0 +1,9 @@
+{
+  "type": "response_item",
+  "payload": {
+    "type": "reasoning",
+    "summary": [
+      {"type": "summary_text", "text": "I will inspect the synthetic directory."}
+    ]
+  }
+}

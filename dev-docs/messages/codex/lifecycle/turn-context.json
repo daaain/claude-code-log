@@ -1,0 +1,9 @@
+{
+  "type": "turn_context",
+  "payload": {
+    "cwd": "/workspace/synthetic-project",
+    "model": "synthetic-model",
+    "approval_policy": "never",
+    "sandbox_policy": {"type": "read-only"}
+  }
+}

@@ -18,6 +18,7 @@ from .converter import (
     convert_jsonl_to_html,
     ensure_fresh_cache,
     generate_single_session_file,
+    render_normalized_session_file,
     get_file_extension,
     get_index_filename,
     process_projects_hierarchy,
@@ -726,6 +727,12 @@ def _validate_git_link_template(template: str) -> None:
     ),
 )
 @click.option(
+    "--provider",
+    default=None,
+    metavar="NAME",
+    help="Load a single session from a registered provider (for example, codex).",
+)
+@click.option(
     "--session-id",
     default=None,
     help="Export a single session by ID (full ID or prefix). Project path is optional — looks up the session globally via cache.",
@@ -816,6 +823,7 @@ def main(
     image_export_mode: Optional[str],
     page_size: int,
     jobs: Optional[int],
+    provider: Optional[str],
     session_id: Optional[str],
     detail: str,
     compact: bool,
@@ -843,6 +851,45 @@ def main(
 
     # Configure logging to show warnings and above
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
+
+    # Provider sessions are an intentionally narrow first slice. Keep them
+    # away from the Claude project/cache pipeline and reject options whose
+    # meaning would otherwise be silently ambiguous.
+    if provider is not None:
+        if session_id is None:
+            raise click.UsageError("--provider requires --session-id.")
+        conflicts: list[str] = []
+        if input_path is not None:
+            conflicts.append("INPUT_PATH")
+        for enabled, flag in (
+            (all_projects, "--all-projects"),
+            (tui, "--tui"),
+            (projects_dir is not None, "--projects-dir"),
+            (expand_paths, "--expand-paths"),
+            (filter_path is not None, "--filter-path"),
+            (no_individual_sessions, "--no-individual-sessions"),
+            (from_date is not None, "--from-date"),
+            (to_date is not None, "--to-date"),
+            (no_cache, "--no-cache"),
+            (clear_cache, "--clear-cache"),
+            (clear_output, "--clear-output"),
+        ):
+            if enabled:
+                conflicts.append(flag)
+        for parameter, flag in (
+            ("combined", "--combined"),
+            ("page_size", "--page-size"),
+        ):
+            if (
+                ctx.get_parameter_source(parameter)
+                is not click.core.ParameterSource.DEFAULT
+            ):
+                conflicts.append(flag)
+        if conflicts:
+            raise click.UsageError(
+                f"--provider does not support {', '.join(conflicts)}; "
+                "provider mode exports one session only."
+            )
 
     # Resolve --combined default and back-compat with --no-individual-sessions.
     # `--combined` semantics:
@@ -994,6 +1041,87 @@ def main(
     detail_level = DetailLevel(detail.lower())
 
     try:
+        if provider is not None:
+            from .providers import SessionInfo, discover_providers
+
+            assert session_id is not None  # enforced by provider-mode validation
+            provider_session_id = session_id
+            registry = discover_providers()
+            selected = registry.get_provider(provider)
+            if selected is None:
+                raise ValueError(f"Unknown provider: {provider}")
+            if not selected.is_available():
+                raise ValueError(f"Provider {provider} is not available")
+
+            sessions_by_id: dict[str, list[SessionInfo]] = {}
+            for info in selected.discover_sessions():
+                sessions_by_id.setdefault(info.session_id, []).append(info)
+            if provider_session_id in sessions_by_id:
+                if len(sessions_by_id[provider_session_id]) != 1:
+                    raise ValueError(
+                        f"Duplicate session ID '{provider_session_id}' for provider {provider}"
+                    )
+                matched_id = provider_session_id
+            else:
+                matches = sorted(
+                    sid for sid in sessions_by_id if sid.startswith(provider_session_id)
+                )
+                if not matches:
+                    raise ValueError(
+                        f"Session '{provider_session_id}' not found for provider {provider}"
+                    )
+                if len(matches) > 1:
+                    raise ValueError(
+                        f"Ambiguous session ID prefix '{provider_session_id}' matches: "
+                        + ", ".join(matches)
+                    )
+                matched_id = matches[0]
+
+            if len(sessions_by_id[matched_id]) != 1:
+                raise ValueError(
+                    f"Duplicate session ID '{matched_id}' for provider {provider}"
+                )
+
+            info = sessions_by_id[matched_id][0]
+            messages = list(selected.load_session(matched_id))
+            title = info.title or f"{provider.title()}: Session {matched_id[:8]}"
+
+            def render_provider(destination: Path) -> Path:
+                return render_normalized_session_file(
+                    messages,
+                    matched_id,
+                    destination,
+                    output_format,
+                    title,
+                    image_export_mode,
+                    detail_level,
+                    compact,
+                    no_timestamps,
+                    no_recaps,
+                )
+
+            if _is_stdout_target(output):
+                _render_to_stdout(
+                    Path(f"{provider}:{matched_id}"),
+                    lambda tmpdir: render_provider(
+                        tmpdir / f"session.{get_file_extension(output_format)}"
+                    ),
+                )
+                return
+
+            filename = f"session-{matched_id}.{get_file_extension(output_format)}"
+            if output is None:
+                destination = Path.cwd() / filename
+            elif _output_path_is_file(output):
+                destination = output
+            else:
+                destination = output / filename
+            output_path = render_provider(destination)
+            click.echo(f"Successfully exported {provider} session to {output_path}")
+            if open_browser:
+                click.launch(str(output_path))
+            return
+
         # Handle TUI mode
         if tui:
             # Handle default case for TUI - use projects_dir or default ~/.claude/projects

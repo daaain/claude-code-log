@@ -55,15 +55,18 @@ def get_session_stats() -> dict[str, int]:
     return stats
 
 
-def load_session(provider_name: str, session_id: str):
+def load_session(
+    provider_name: str, session_id: str, max_messages: Optional[int] = None
+):
     """Load a session from a specific provider.
 
     Args:
         provider_name: Name of the provider.
         session_id: ID of the session to load.
+        max_messages: Optional maximum number of messages to load.
 
     Returns:
         Iterator of TranscriptEntry objects.
     """
     registry = discover_providers()
-    return registry.load_session(provider_name, session_id)
+    return registry.load_session(provider_name, session_id, max_messages=max_messages)

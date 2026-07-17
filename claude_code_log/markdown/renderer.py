@@ -1074,7 +1074,8 @@ class MarkdownRenderer(Renderer):
         # All diffs visible; result goes in collapsible in format_EditOutput
         parts: list[str] = []
         for i, edit in enumerate(input.edits, 1):
-            parts.append(f"**Edit {i}:**")
+            path = f" — `{edit.file_path}`" if edit.file_path else ""
+            parts.append(f"**Edit {i}{path}:**")
             diff_text = generate_unified_diff(edit.old_string, edit.new_string)
             parts.append(self._code_fence(diff_text, "diff"))
         return "\n\n".join(parts)
@@ -1644,7 +1645,9 @@ class MarkdownRenderer(Renderer):
         ``_link_async_notifications``; emit it as a second collapsible
         block so the spawn carries the actual agent answer.
         """
-        parts: list[str] = [self._collapsible("Report", self._quote(output.result))]
+        parts: list[str] = []
+        if output.result:
+            parts.append(self._collapsible("Report", self._quote(output.result)))
         if output.async_final_answer:
             parts.append(
                 self._collapsible(

@@ -458,7 +458,10 @@ def parse_task_output(
         TaskOutput with the agent's response
     """
     del file_path  # Unused
-    if not (content := _extract_tool_result_text(tool_result)):
+    content = _extract_tool_result_text(tool_result)
+    if not content:
+        if tool_result.content == "":
+            return TaskOutput(result="")
         return None
     body, metadata = parse_agent_result_metadata(content)
     return TaskOutput(result=body, metadata=metadata)
@@ -866,7 +869,9 @@ def parse_websearch_output(
     # Fallback: parse from text content (agent progress entries)
     text = _extract_tool_result_text(tool_result)
     if text:
-        return _parse_websearch_from_text(text)
+        parsed = _parse_websearch_from_text(text)
+        if parsed is not None:
+            return parsed
 
     return None
 
@@ -1287,7 +1292,7 @@ def parse_taskupdate_output(
 def parse_tasklist_output(
     tool_result: ToolResultContent, file_path: Optional[str]
 ) -> Optional[TaskListOutput]:
-    """Parse TaskList text output: one ``#N [status] subject (owner)`` per line."""
+    """Parse canonical TaskList text rows."""
     del file_path
     text = _extract_tool_result_text(tool_result)
     if not text:

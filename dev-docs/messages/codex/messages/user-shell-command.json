@@ -1,0 +1,7 @@
+{
+  "type": "event_msg",
+  "payload": {
+    "type": "user_message",
+    "message": "<user_shell_command><command>printf synthetic</command><result>Exit code: 0\nDuration: 0.01 seconds\nOutput:\nsynthetic</result></user_shell_command>"
+  }
+}

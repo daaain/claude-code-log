@@ -1,0 +1,5 @@
+{"timestamp":"2026-01-03T04:05:06.000Z","type":"session_meta","payload":{"id":"22222222-2222-4222-8222-222222222222","timestamp":"2026-01-03T04:05:06.000Z","cwd":"/workspace/synthetic-project","originator":"codex_cli_rs","cli_version":"0.0.0-test","source":"cli"}}
+{"timestamp":"2026-01-03T04:05:07.000Z","type":"event_msg","payload":{"type":"user_message","message":"Spawn a synthetic researcher."}}
+{"timestamp":"2026-01-03T04:05:08.000Z","type":"response_item","payload":{"type":"function_call","name":"spawn_agent","arguments":"{\"task_name\":\"synthetic_researcher\",\"message\":\"Inspect fixtures.\"}","call_id":"call-spawn-001"}}
+{"timestamp":"2026-01-03T04:05:09.000Z","type":"event_msg","payload":{"type":"collab_tool_call","call_id":"call-spawn-001","sender_thread_id":"22222222-2222-4222-8222-222222222222","new_thread_id":"33333333-3333-4333-8333-333333333333","tool":"spawn_agent"}}
+{"timestamp":"2026-01-03T04:05:10.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call-spawn-001","output":"agent 33333333-3333-4333-8333-333333333333 spawned"}}
