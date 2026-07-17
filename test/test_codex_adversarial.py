@@ -660,6 +660,54 @@ def test_static_for_of_becomes_distinct_tool_result_pairs() -> None:
     ]
 
 
+def test_static_for_of_unwraps_each_nested_mcp_result_like_a_direct_call() -> None:
+    source = """
+        for (const id of [4745, 4746, 4756]) {
+          const r = await tools.mcp__clmail__communicate({
+            action: "read", actor: "/workspace/codex", params: {id}
+          });
+          text(JSON.stringify(r));
+        }
+    """
+    payloads = [
+        {"id": 4745, "subject": "ACK"},
+        {"id": 4746, "subject": "Handoff"},
+        {"id": 4756, "subject": "Delivery note"},
+    ]
+    emitted = [_forwarded_result_envelope(payload)[1] for payload in payloads]
+    records = [
+        _record(
+            1,
+            "response_item",
+            {
+                "type": "custom_tool_call",
+                "call_id": "batch",
+                "name": "exec",
+                "input": source,
+            },
+        ),
+        _output(
+            2,
+            "batch",
+            [
+                {
+                    "type": "input_text",
+                    "text": "Script completed\nWall time 0.1 seconds\nOutput:\n",
+                },
+                *emitted,
+            ],
+        ),
+    ]
+
+    content = [item for entry in _normalized(records) for item in entry.message.content]
+    results = [item for item in content if isinstance(item, ToolResultContent)]
+
+    assert [item.content for item in results] == [
+        json.dumps(payload) for payload in payloads
+    ]
+    assert [item.is_error for item in results] == [False, False, False]
+
+
 @pytest.mark.parametrize(
     ("source", "expected_name"),
     [

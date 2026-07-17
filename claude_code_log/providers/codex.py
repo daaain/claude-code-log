@@ -996,8 +996,13 @@ class CodexProvider(BaseProvider):
                             call.input,
                         )
                     )
+                    raw_result: Any = result
+                    is_error = False
+                    forwarded = self._forwarded_tool_emission(result)
+                    if forwarded is not None:
+                        raw_result, is_error = forwarded
                     output, tool_use_result = self._adapt_tool_result(
-                        result, tool_name=call.name, is_error=False
+                        raw_result, tool_name=call.name, is_error=is_error
                     )
                     rendered_output = (
                         output
@@ -1011,6 +1016,9 @@ class CodexProvider(BaseProvider):
                         derived_id,
                         rendered_output,
                     )
+                    result_content = result_entry.message.content[0]
+                    if isinstance(result_content, ToolResultContent):
+                        result_content.is_error = is_error
                     result_entry.toolUseResult = tool_use_result
                     expanded.append(result_entry)
                 return expanded
@@ -1531,6 +1539,18 @@ class CodexProvider(BaseProvider):
             or not isinstance(emitted_text, str)
         ):
             return None
+        return self._forwarded_tool_emission(emitted_text)
+
+    def _forwarded_tool_emission(
+        self, emitted_text: str
+    ) -> Optional[tuple[str | list[dict[str, Any]], bool]]:
+        """Decode one JSON-serialized nested-tool result emission.
+
+        Direct wrappers carry this emission after a status block, while an
+        expanded ordered batch has already split the status from each emitted
+        result.  Keeping the envelope decoder shared gives both forms the same
+        canonical tool-result shape for downstream plugins.
+        """
         try:
             decoded: Any = json.loads(emitted_text)
         except (ValueError, RecursionError):
