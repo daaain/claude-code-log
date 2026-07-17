@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 from pathlib import Path
+from unittest.mock import patch
 
 from claude_code_log.models import ImageContent, TextContent, UserTranscriptEntry
 from claude_code_log.providers.codex import (
@@ -36,23 +37,31 @@ def test_readable_image_paths_become_ordered_base64_content(tmp_path: Path) -> N
     first.write_bytes(b"png payload")
     second.write_bytes(b"webp payload")
 
-    entry = _normalize(
-        [
-            {
-                "type": "input_text",
-                "text": f'<image name=[Image #1] path="{first}">',
-            },
-            {"type": "input_image", "image_url": "data:image/png;base64,c3RhbGU="},
-            {"type": "input_text", "text": "</image>"},
-            {
-                "type": "input_text",
-                "text": (
-                    f'<image path="{second}" name="[Image #2]"></image>'
-                    "Before [Image #1], between [Image #2], after."
-                ),
-            },
-        ]
-    )
+    with patch(
+        "claude_code_log.providers.codex.mimetypes.guess_type",
+        return_value=(None, None),
+    ) as guess_type:
+        entry = _normalize(
+            [
+                {
+                    "type": "input_text",
+                    "text": f'<image name=[Image #1] path="{first}">',
+                },
+                {
+                    "type": "input_image",
+                    "image_url": "data:image/png;base64,c3RhbGU=",
+                },
+                {"type": "input_text", "text": "</image>"},
+                {
+                    "type": "input_text",
+                    "text": (
+                        f'<image path="{second}" name="[Image #2]"></image>'
+                        "Before [Image #1], between [Image #2], after."
+                    ),
+                },
+            ]
+        )
+    guess_type.assert_not_called()
 
     assert [type(item) for item in entry.message.content] == [
         TextContent,

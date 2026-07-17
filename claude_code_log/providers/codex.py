@@ -70,6 +70,13 @@ _IMAGE_PATH_RE = re.compile(
     r"(?P<bare>[^\s>]+))",
     re.IGNORECASE,
 )
+_IMAGE_MEDIA_TYPES = {
+    ".gif": "image/gif",
+    ".jpeg": "image/jpeg",
+    ".jpg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+}
 _INVISIBLE_RECORD_KINDS = {"session_meta", "turn_context"}
 _MAX_JSON_NESTING = 512
 
@@ -1224,7 +1231,9 @@ class CodexProvider(BaseProvider):
 
     def _read_image(self, raw_path: str) -> Optional[ImageContent]:
         path = Path(raw_path).expanduser()
-        media_type, _ = mimetypes.guess_type(path.name)
+        media_type = _IMAGE_MEDIA_TYPES.get(path.suffix.lower())
+        if media_type is None:
+            media_type, _ = mimetypes.guess_type(path.name)
         if media_type is None or not media_type.startswith("image/"):
             return None
         try:
