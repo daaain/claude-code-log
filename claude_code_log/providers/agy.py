@@ -6,8 +6,6 @@ import re
 from pathlib import Path
 from typing import Any, Iterator, Optional, cast
 
-logger = logging.getLogger(__name__)
-
 from claude_code_log.models import TranscriptEntry
 
 from .base import (
@@ -18,6 +16,8 @@ from .base import (
     make_assistant_entry,
     make_user_entry,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class AgyProvider(BaseProvider):
