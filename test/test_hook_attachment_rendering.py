@@ -3,7 +3,8 @@
 Covers:
 - Pydantic parse of the issue's example payload (anchored on ``parentUuid``).
 - Factory dispatch to ``HookAttachmentMessage`` for each hook flavour.
-- Non-hook attachment types stay structural (factory returns ``None``).
+- Non-hook attachment types stay structural (factory returns ``None``),
+  except ``queued_command``, which is promoted to a steering message.
 - Full-detail HTML rendering surfaces the hook payload.
 - HIGH and below detail levels drop hook attachments.
 - Parent-anchor: the rendered attachment's parent_uuid matches the
@@ -23,6 +24,7 @@ from claude_code_log.models import (
     DetailLevel,
     HookAttachmentMessage,
     TranscriptEntry,
+    UserSteeringMessage,
 )
 
 
@@ -182,15 +184,35 @@ class TestNonHookAttachments:
         assert isinstance(entry, AttachmentTranscriptEntry)
         assert create_attachment_message(entry) is None
 
-    def test_queued_command_returns_none(self) -> None:
+    def test_queued_command_promoted_to_steering(self) -> None:
+        """``queued_command`` is no longer structural-only: it is promoted
+        to a steering message anchored on its uuid/parentUuid (spec:
+        ``work/steering-queued-command.md``). A plain prompt (no
+        transformer match) becomes a ``UserSteeringMessage``."""
         raw = _make_attachment(
             uuid="aaaaaaaa-0000-4000-8000-000000000002",
-            parent_uuid=None,
+            parent_uuid="bbbbbbbb-0000-4000-8000-000000000002",
             payload={
                 "type": "queued_command",
                 "prompt": "follow-up",
                 "commandMode": "prompt",
             },
+        )
+        entry = create_transcript_entry(raw)
+        assert isinstance(entry, AttachmentTranscriptEntry)
+        result = create_attachment_message(entry)
+        assert isinstance(result, UserSteeringMessage)
+        assert result.meta.uuid == "aaaaaaaa-0000-4000-8000-000000000002"
+        assert result.meta.parent_uuid == "bbbbbbbb-0000-4000-8000-000000000002"
+        assert any(getattr(item, "text", "") == "follow-up" for item in result.items)
+
+    def test_queued_command_without_prompt_returns_none(self) -> None:
+        """A ``queued_command`` with no usable prompt text stays
+        structural (``None``) — nothing to render."""
+        raw = _make_attachment(
+            uuid="aaaaaaaa-0000-4000-8000-000000000009",
+            parent_uuid=None,
+            payload={"type": "queued_command", "commandMode": "prompt"},
         )
         entry = create_transcript_entry(raw)
         assert isinstance(entry, AttachmentTranscriptEntry)
