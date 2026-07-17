@@ -561,6 +561,41 @@ def test_ordered_batch_result_count_mismatch_stays_workflow() -> None:
     assert [item.name for item in uses] == ["Workflow"]
 
 
+def test_sequential_batch_pairs_outputs_by_result_variable() -> None:
+    source = (
+        'const a = await tools.exec_command({cmd: "one"});'
+        'const b = await tools.exec_command({cmd: "two"});'
+        "text(b.output); text(a.output);"
+    )
+    records = [
+        _record(
+            1,
+            "response_item",
+            {
+                "type": "custom_tool_call",
+                "call_id": "batch",
+                "name": "exec",
+                "input": source,
+            },
+        ),
+        _output(
+            2,
+            "batch",
+            [
+                {"type": "input_text", "text": "Script completed\nOutput:\n"},
+                {"type": "input_text", "text": "two output"},
+                {"type": "input_text", "text": "one output"},
+            ],
+        ),
+    ]
+
+    content = [item for entry in _normalized(records) for item in entry.message.content]
+
+    assert [
+        item.content for item in content if isinstance(item, ToolResultContent)
+    ] == ["one output", "two output"]
+
+
 @pytest.mark.parametrize(
     ("source", "expected_name"),
     [

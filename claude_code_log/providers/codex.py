@@ -804,7 +804,7 @@ class CodexProvider(BaseProvider):
 
     def _tool_batches(self, records: list[_DecodedRecord]) -> dict[str, _ToolBatch]:
         """Correlate static multi-tool programs with their output groups."""
-        requests: dict[str, tuple[list[AdaptedToolCall], str]] = {}
+        requests: dict[str, tuple[list[AdaptedToolCall], str, list[int]]] = {}
         outputs: dict[str, tuple[list[dict[str, Any]], str]] = {}
         for record in records:
             payload_type = self._nonempty_string(record.payload.get("type"))
@@ -819,7 +819,11 @@ class CodexProvider(BaseProvider):
                 if isinstance(source, str):
                     batch = adapt_codex_tool_batch(source)
                     if batch is not None:
-                        requests[call_id] = (batch.calls, batch.output_mode)
+                        requests[call_id] = (
+                            batch.calls,
+                            batch.output_mode,
+                            batch.result_indexes,
+                        )
             elif payload_type in {
                 "function_call_output",
                 "custom_tool_call_output",
@@ -834,16 +838,17 @@ class CodexProvider(BaseProvider):
                     )
 
         batches: dict[str, _ToolBatch] = {}
-        for call_id, (calls, output_mode) in requests.items():
+        for call_id, (calls, output_mode, result_indexes) in requests.items():
             output = outputs.get(call_id)
             if output is None:
                 continue
             split = self._batch_outputs(output[0], output_mode, len(calls))
             if split is None:
                 continue
+            results = [split[index] for index in result_indexes]
             batches[call_id] = _ToolBatch(
                 calls=calls,
-                results=split,
+                results=results,
                 result_timestamp=output[1],
             )
         return batches

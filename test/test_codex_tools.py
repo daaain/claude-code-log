@@ -139,6 +139,7 @@ def test_static_promise_all_batch_recovers_heterogeneous_tools() -> None:
 
     assert calls is not None
     assert calls.output_mode == "markers"
+    assert calls.result_indexes == [0, 1]
     assert [(call.name, call.input) for call in calls.calls] == [
         ("Bash", {"command": "pytest -q"}),
         ("WebSearch", {"query": "synthetic"}),
@@ -179,7 +180,50 @@ def test_sequential_calls_use_ordered_outputs() -> None:
 
     assert batch is not None
     assert batch.output_mode == "ordered"
+    assert batch.result_indexes == [0, 1]
     assert [call.input["command"] for call in batch.calls] == ["one", "two"]
+
+
+def test_sequential_calls_can_emit_after_all_invocations() -> None:
+    source = (
+        "const a = await tools.exec_command({"
+        'cmd:"codex plugin list --json",'
+        'workdir:"/home/cboos/Workspace/github/daain/claude-code-log/codex",'
+        'sandbox_permissions:"require_escalated",'
+        'justification:"Allow reading the installed Codex plugin registry to verify '
+        'the ClMail test installation?",'
+        'prefix_rule:["codex","plugin","list"],'
+        "yield_time_ms:30000,max_output_tokens:5000});\n"
+        "const b = await tools.exec_command({"
+        'cmd:"find /home/cboos/.codex/plugins/cache/clmail-local/clmail/6.13.2 '
+        '-maxdepth 4 -type f -print",'
+        'workdir:"/home/cboos/Workspace/github/daain/claude-code-log/codex",'
+        "yield_time_ms:10000,max_output_tokens:3000});\n"
+        "text(a.output); text(b.output);"
+    )
+
+    batch = adapt_codex_tool_batch(source)
+
+    assert batch is not None
+    assert batch.result_indexes == [0, 1]
+    assert [call.input["command"] for call in batch.calls] == [
+        "codex plugin list --json",
+        "find /home/cboos/.codex/plugins/cache/clmail-local/clmail/6.13.2 "
+        "-maxdepth 4 -type f -print",
+    ]
+
+
+def test_sequential_calls_correlate_outputs_by_result_variable() -> None:
+    source = (
+        'const a = await tools.exec_command({cmd: "one"});'
+        'const b = await tools.exec_command({cmd: "two"});'
+        "text(b.output); text(a.output);"
+    )
+
+    batch = adapt_codex_tool_batch(source)
+
+    assert batch is not None
+    assert batch.result_indexes == [1, 0]
 
 
 def test_all_tools_plus_one_command_is_compound_workflow() -> None:

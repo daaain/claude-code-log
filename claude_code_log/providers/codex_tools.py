@@ -26,6 +26,7 @@ class AdaptedToolCall:
 class AdaptedToolBatch:
     calls: list[AdaptedToolCall]
     output_mode: Literal["markers", "ordered"]
+    result_indexes: list[int]
 
 
 @dataclass(frozen=True)
@@ -146,13 +147,13 @@ def _adapt_promise_batch(
         if item.name == "Workflow":
             return None
         adapted.append(item)
-    return AdaptedToolBatch(adapted, output_mode)
+    return AdaptedToolBatch(adapted, output_mode, list(range(len(adapted))))
 
 
 def _adapt_sequential_batch(
     source: str, calls: list[_StaticCall]
 ) -> Optional[AdaptedToolBatch]:
-    """Decode ``call; text(result); call; text(result)`` programs."""
+    """Decode static calls whose emitted result variables are unambiguous."""
     code = _code_projection(source)
     remainder = list(code)
     adapted: list[AdaptedToolCall] = []
@@ -160,23 +161,13 @@ def _adapt_sequential_batch(
     if len(emissions) != len(calls):
         return None
 
-    previous_end = 0
-    for index, (call, emission) in enumerate(zip(calls, emissions)):
+    assignments: list[tuple[int, int, str]] = []
+    for call in calls:
         assignment = _call_assignment(code, call)
         if assignment is None:
             return None
-        assignment_start, assignment_end, result_name = assignment
-        next_call_start = (
-            calls[index + 1].start if index + 1 < len(calls) else len(source)
-        )
-        if not (
-            previous_end <= assignment_start
-            and assignment_end <= emission.start < emission.end <= next_call_start
-        ):
-            return None
-        expression = _code_projection(emission.expression).strip()
-        if expression not in {result_name, f"{result_name}.output"}:
-            return None
+        assignments.append(assignment)
+        assignment_start, assignment_end, _ = assignment
         decoded = _decode_object_literal(call.argument)
         if decoded is None:
             return None
@@ -184,16 +175,26 @@ def _adapt_sequential_batch(
         if item.name == "Workflow":
             return None
         adapted.append(item)
-        for start, end in (
-            (assignment_start, assignment_end),
-            (emission.start, emission.end),
-        ):
-            remainder[start:end] = " " * (end - start)
-        previous_end = emission.end
+        remainder[assignment_start:assignment_end] = " " * (
+            assignment_end - assignment_start
+        )
 
-    if "".join(remainder).strip():
+    result_indexes = [-1] * len(calls)
+    result_names = [assignment[2] for assignment in assignments]
+    for emission_index, emission in enumerate(emissions):
+        owners = [
+            index
+            for index, result_name in enumerate(result_names)
+            if _is_result_expression(emission.expression, result_name)
+        ]
+        if len(owners) != 1 or result_indexes[owners[0]] != -1:
+            return None
+        result_indexes[owners[0]] = emission_index
+        remainder[emission.start : emission.end] = " " * (emission.end - emission.start)
+
+    if -1 in result_indexes or "".join(remainder).strip():
         return None
-    return AdaptedToolBatch(adapted, "ordered")
+    return AdaptedToolBatch(adapted, "ordered", result_indexes)
 
 
 def _is_simple_result_forwarder(source: str, call: _StaticCall) -> bool:
