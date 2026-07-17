@@ -750,8 +750,10 @@ def format_multiedit_input(multiedit_input: MultiEditInput) -> str:
 
     # Render each edit as a diff - edits are typed EditItem objects
     for idx, edit in enumerate(multiedit_input.edits, 1):
+        path = f" — {escape_html(edit.file_path)}" if edit.file_path else ""
         html_parts.append(
-            f"<div class='multiedit-item'><div class='multiedit-item-header'>Edit #{idx}</div>"
+            f"<div class='multiedit-item'><div class='multiedit-item-header'>"
+            f"Edit #{idx}{path}</div>"
         )
         html_parts.append(render_single_diff(edit.old_string, edit.new_string))
         html_parts.append("</div>")

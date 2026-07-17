@@ -1074,7 +1074,8 @@ class MarkdownRenderer(Renderer):
         # All diffs visible; result goes in collapsible in format_EditOutput
         parts: list[str] = []
         for i, edit in enumerate(input.edits, 1):
-            parts.append(f"**Edit {i}:**")
+            path = f" — `{edit.file_path}`" if edit.file_path else ""
+            parts.append(f"**Edit {i}{path}:**")
             diff_text = generate_unified_diff(edit.old_string, edit.new_string)
             parts.append(self._code_fence(diff_text, "diff"))
         return "\n\n".join(parts)

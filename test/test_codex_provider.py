@@ -154,7 +154,12 @@ def test_structured_custom_and_open_ended_tools_are_correlated(
         }
     )
     assert uses["call-structured-001"].name == "Bash"
-    assert uses["call-custom-001"].name == "apply_patch"
+    assert uses["call-custom-001"].name == "Edit"
+    assert uses["call-custom-001"].input == {
+        "file_path": "gamma.txt",
+        "old_string": "",
+        "new_string": "synthetic\n",
+    }
     assert uses["call-mcp-001"].name == "mcp__synthetic__lookup"
     assert results["call-structured-001"].content == "./alpha.txt\n./beta.txt"
     bash_output = create_tool_output(

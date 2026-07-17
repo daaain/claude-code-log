@@ -8,9 +8,11 @@ shapes for which it has useful semantics.
 
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass
 import json
 import logging
+import mimetypes
 import os
 from pathlib import Path
 import re
@@ -18,6 +20,9 @@ from typing import Any, Iterator, Optional, TypeAlias, cast
 
 from claude_code_log.models import (
     AssistantTranscriptEntry,
+    ImageContent,
+    ImageSource,
+    TextContent,
     ToolResultContent,
     ToolUseResult,
     TranscriptEntry,
@@ -35,7 +40,7 @@ from .base import (
     make_tool_use_entry,
     make_user_entry,
 )
-from .codex_tools import adapt_codex_tool_call
+from .codex_tools import AdaptedToolCall, adapt_codex_tool_batch, adapt_codex_tool_call
 from .codex_messages import format_codex_user_message, parse_codex_user_shell_command
 
 logger = logging.getLogger(__name__)
@@ -52,7 +57,18 @@ _RUNNING_CELL_RE = re.compile(r"Script running with cell ID ([^\s]+)")
 _COMPLETED_COMMAND_RE = re.compile(
     r"\AScript completed\r?\nWall time:? [^\r\n]+\r?\nOutput:\r?\n?\Z"
 )
-_IMAGE_WRAPPER_RE = re.compile(r"\A</?image(?:\s[^>]*)?>\Z")
+_IMAGE_TAG_RE = re.compile(r"</?image(?:\s[^>]*)?>", re.IGNORECASE)
+_IMAGE_OPEN_TAG_RE = re.compile(r"<image(?P<attributes>\s[^>]*)?>", re.IGNORECASE)
+_IMAGE_NAME_RE = re.compile(
+    r"\bname\s*=\s*(?:\"(?P<double>[^\"]*)\"|'(?P<single>[^']*)'|"
+    r"(?P<bare>\[Image\s+#[^\]]+\]|[^\s>]+))",
+    re.IGNORECASE,
+)
+_IMAGE_PATH_RE = re.compile(
+    r"\bpath\s*=\s*(?:\"(?P<double>[^\"]*)\"|'(?P<single>[^']*)'|"
+    r"(?P<bare>[^\s>]+))",
+    re.IGNORECASE,
+)
 _INVISIBLE_RECORD_KINDS = {"session_meta", "turn_context"}
 _MAX_JSON_NESTING = 512
 
@@ -97,6 +113,13 @@ class _DecodedRecord:
 class _WebOpenItem:
     ref_id: str
     result: str
+    result_timestamp: str
+
+
+@dataclass(frozen=True)
+class _ToolBatch:
+    calls: list[AdaptedToolCall]
+    results: list[str]
     result_timestamp: str
 
 
@@ -430,6 +453,7 @@ class CodexProvider(BaseProvider):
         records = self._coalesce_command_sessions(records)
         tool_names = self._adapted_tool_names(records)
         web_open_batches = self._web_open_batches(records)
+        tool_batches = self._tool_batches(records)
         model = identity.model
         cwd = str(identity.cwd) if identity.cwd else ""
         version = identity.version
@@ -457,6 +481,7 @@ class CodexProvider(BaseProvider):
                 model,
                 tool_names,
                 web_open_batches,
+                tool_batches,
             )
             for subindex, entry in enumerate(candidates):
                 if max_messages is not None and emitted >= max_messages:
@@ -536,8 +561,10 @@ class CodexProvider(BaseProvider):
             if item.get("type") not in {"input_text", "output_text", "text"}:
                 continue
             text = item.get("text")
-            if isinstance(text, str) and _IMAGE_WRAPPER_RE.fullmatch(text) is None:
-                parts.append(text)
+            if isinstance(text, str):
+                cleaned = _IMAGE_TAG_RE.sub("", text)
+                if cleaned:
+                    parts.append(cleaned)
         return "\n".join(parts) if has_image else None
 
     def _coalesce_command_sessions(
@@ -774,6 +801,72 @@ class CodexProvider(BaseProvider):
             ]
         return batches
 
+    def _tool_batches(self, records: list[_DecodedRecord]) -> dict[str, _ToolBatch]:
+        """Correlate static Promise.all calls with their RESULT_n output groups."""
+        requests: dict[str, list[AdaptedToolCall]] = {}
+        outputs: dict[str, tuple[list[str], str]] = {}
+        for record in records:
+            payload_type = self._nonempty_string(record.payload.get("type"))
+            call_id = self._nonempty_string(record.payload.get("call_id"))
+            if call_id is None:
+                continue
+            if payload_type == "custom_tool_call" and record.payload.get("name") == "exec":
+                source = record.payload.get("input")
+                if isinstance(source, str):
+                    calls = adapt_codex_tool_batch(source)
+                    if calls is not None:
+                        requests[call_id] = calls
+            elif payload_type in {
+                "function_call_output",
+                "custom_tool_call_output",
+            }:
+                output = record.payload.get("output")
+                if isinstance(output, list) and all(
+                    isinstance(item, dict) for item in cast(list[Any], output)
+                ):
+                    split = self._batch_outputs(cast(list[dict[str, Any]], output))
+                    if split is not None:
+                        outputs[call_id] = (split, record.timestamp)
+
+        batches: dict[str, _ToolBatch] = {}
+        for call_id, calls in requests.items():
+            output = outputs.get(call_id)
+            if output is None or len(output[0]) != len(calls):
+                continue
+            batches[call_id] = _ToolBatch(
+                calls=calls,
+                results=output[0],
+                result_timestamp=output[1],
+            )
+        return batches
+
+    def _batch_outputs(self, items: list[dict[str, Any]]) -> Optional[list[str]]:
+        texts: list[str] = []
+        for item in items:
+            if item.get("type") not in {"input_text", "output_text", "text"}:
+                return None
+            text = item.get("text")
+            if not isinstance(text, str):
+                return None
+            texts.append(text)
+        if not texts or not texts[0].startswith("Script completed"):
+            return None
+
+        groups: list[list[str]] = []
+        for text in texts[1:]:
+            marker = re.fullmatch(r"RESULT_([1-9][0-9]*)", text)
+            if marker is not None:
+                if int(marker.group(1)) != len(groups) + 1:
+                    return None
+                groups.append([])
+                continue
+            if not groups:
+                return None
+            if groups[-1] and groups[-1][-1] and not groups[-1][-1].endswith("\n"):
+                groups[-1].append("\n")
+            groups[-1].append(text)
+        return ["".join(group) for group in groups] if groups else None
+
     def _normalize_record(
         self,
         thread_id: str,
@@ -781,6 +874,7 @@ class CodexProvider(BaseProvider):
         model: str,
         tool_names: dict[str, str],
         web_open_batches: dict[str, list[_WebOpenItem]],
+        tool_batches: dict[str, _ToolBatch],
     ) -> list[_CodexEntry]:
         if record.kind == "event_msg":
             return self._normalize_event(thread_id, record, model)
@@ -791,6 +885,7 @@ class CodexProvider(BaseProvider):
                 model,
                 tool_names,
                 web_open_batches,
+                tool_batches,
             )
         return []
 
@@ -817,6 +912,7 @@ class CodexProvider(BaseProvider):
         model: str,
         tool_names: dict[str, str],
         web_open_batches: dict[str, list[_WebOpenItem]],
+        tool_batches: dict[str, _ToolBatch],
     ) -> list[_CodexEntry]:
         payload = record.payload
         payload_type = self._nonempty_string(payload.get("type")) or ""
@@ -824,10 +920,17 @@ class CodexProvider(BaseProvider):
 
         if payload_type == "message":
             role = self._nonempty_string(payload.get("role")) or ""
-            text = self._message_text(payload.get("content"))
+            content = payload.get("content")
+            text = self._message_text(content)
             normalized_role = (
                 "user" if role == "user" else "assistant" if role == "assistant" else ""
             )
+            if normalized_role == "user":
+                image_entry = self._normalize_user_images(
+                    thread_id, uuid, record.timestamp, content
+                )
+                if image_entry is not None:
+                    return [image_entry]
             if normalized_role == "user" and text:
                 return self._normalize_user_text(
                     thread_id, uuid, record.timestamp, text
@@ -851,6 +954,37 @@ class CodexProvider(BaseProvider):
 
         if payload_type in {"function_call", "custom_tool_call"}:
             call_id = self._nonempty_string(payload.get("call_id")) or uuid
+            tool_batch = tool_batches.get(call_id)
+            if tool_batch is not None:
+                expanded: list[_CodexEntry] = []
+                for index, (call, result) in enumerate(
+                    zip(tool_batch.calls, tool_batch.results)
+                ):
+                    derived_id = f"{call_id}:batch:{index}"
+                    expanded.append(
+                        make_tool_use_entry(
+                            thread_id,
+                            uuid,
+                            record.timestamp,
+                            model,
+                            derived_id,
+                            call.name,
+                            call.input,
+                        )
+                    )
+                    output, tool_use_result = self._adapt_tool_result(
+                        result, tool_name=call.name, is_error=False
+                    )
+                    result_entry = make_tool_result_entry(
+                        thread_id,
+                        uuid,
+                        tool_batch.result_timestamp,
+                        derived_id,
+                        output,
+                    )
+                    result_entry.toolUseResult = tool_use_result
+                    expanded.append(result_entry)
+                return expanded
             batch = web_open_batches.get(call_id)
             if batch is not None:
                 expanded: list[_CodexEntry] = []
@@ -903,7 +1037,7 @@ class CodexProvider(BaseProvider):
 
         if payload_type in {"function_call_output", "custom_tool_call_output"}:
             call_id = self._nonempty_string(payload.get("call_id")) or uuid
-            if call_id in web_open_batches:
+            if call_id in web_open_batches or call_id in tool_batches:
                 return []
             tool_name = tool_names.get(call_id)
             raw_is_error = payload.get("is_error")
@@ -978,6 +1112,113 @@ class CodexProvider(BaseProvider):
                 format_codex_user_message(text),
             )
         ]
+
+    def _normalize_user_images(
+        self, thread_id: str, uuid: str, timestamp: str, content: Any
+    ) -> Optional[UserTranscriptEntry]:
+        """Turn Codex image wrappers into Claude-compatible content blocks."""
+        if isinstance(content, str):
+            raw_items: list[Any] = [content]
+        elif isinstance(content, list):
+            raw_items = cast(list[Any], content)
+        else:
+            return None
+
+        text_parts: list[str] = []
+        descriptors: dict[str, Optional[ImageContent]] = {}
+        found_tag = False
+        for raw_item in raw_items:
+            text: Optional[str] = None
+            if isinstance(raw_item, str):
+                text = raw_item
+            elif isinstance(raw_item, dict):
+                item = cast(dict[str, Any], raw_item)
+                if item.get("type") in {"input_text", "output_text", "text"}:
+                    value = item.get("text")
+                    text = value if isinstance(value, str) else None
+            if text is None:
+                continue
+
+            tags = list(_IMAGE_TAG_RE.finditer(text))
+            found_tag = found_tag or bool(tags)
+            for tag in _IMAGE_OPEN_TAG_RE.finditer(text):
+                attributes = tag.group("attributes") or ""
+                name = self._image_attribute(_IMAGE_NAME_RE, attributes)
+                path = self._image_attribute(_IMAGE_PATH_RE, attributes)
+                if name and name not in descriptors:
+                    descriptors[name] = self._read_image(path) if path else None
+
+            cleaned = _IMAGE_TAG_RE.sub("", text)
+            if cleaned:
+                text_parts.append(cleaned)
+
+        if not found_tag:
+            return None
+
+        text = format_codex_user_message("\n".join(text_parts))
+        items: list[TextContent | ImageContent] = []
+        if descriptors:
+            placeholder_re = re.compile(
+                "(" + "|".join(re.escape(name) for name in descriptors) + ")"
+            )
+            for part in placeholder_re.split(text):
+                if not part:
+                    continue
+                if part not in descriptors:
+                    self._append_image_text(items, part)
+                    continue
+                image = descriptors[part]
+                if image is not None:
+                    items.append(image)
+                else:
+                    self._append_image_text(items, f"`{part}`")
+        elif text:
+            items.append(TextContent(type="text", text=text))
+
+        return UserTranscriptEntry(
+            type="user",
+            parentUuid=None,
+            isSidechain=False,
+            userType="external",
+            cwd="",
+            sessionId=thread_id,
+            version="",
+            uuid=uuid,
+            timestamp=timestamp,
+            message=UserMessageModel(role="user", content=items),
+        )
+
+    def _append_image_text(
+        self, items: list[TextContent | ImageContent], text: str
+    ) -> None:
+        if items and isinstance(items[-1], TextContent):
+            items[-1].text += text
+        else:
+            items.append(TextContent(type="text", text=text))
+
+    def _image_attribute(self, pattern: re.Pattern[str], attributes: str) -> str:
+        match = pattern.search(attributes)
+        if match is None:
+            return ""
+        return next((value for value in match.groupdict().values() if value), "")
+
+    def _read_image(self, raw_path: str) -> Optional[ImageContent]:
+        path = Path(raw_path).expanduser()
+        media_type, _ = mimetypes.guess_type(path.name)
+        if media_type is None or not media_type.startswith("image/"):
+            return None
+        try:
+            data = path.read_bytes()
+        except OSError:
+            return None
+        return ImageContent(
+            type="image",
+            source=ImageSource(
+                type="base64",
+                media_type=media_type,
+                data=base64.b64encode(data).decode("ascii"),
+            ),
+        )
 
     def _event_message_fingerprint(
         self, payload: dict[str, Any]
@@ -1091,6 +1332,16 @@ class CodexProvider(BaseProvider):
             acknowledgement = self._todo_acknowledgement(output)
             if acknowledgement is not None:
                 output = acknowledgement
+        if (
+            not is_error
+            and tool_name in {"Edit", "MultiEdit"}
+            and isinstance(output, list)
+        ):
+            acknowledgement = self._empty_result_acknowledgement(
+                output, "File updated successfully."
+            )
+            if acknowledgement is not None:
+                output = acknowledgement
         if not is_error and tool_name == "TaskList" and isinstance(output, str):
             task_list = self._list_agents_output(output)
             if task_list is not None:
@@ -1159,6 +1410,11 @@ class CodexProvider(BaseProvider):
         )
 
     def _todo_acknowledgement(self, items: list[dict[str, Any]]) -> Optional[str]:
+        return self._empty_result_acknowledgement(items, "Todo list updated.")
+
+    def _empty_result_acknowledgement(
+        self, items: list[dict[str, Any]], acknowledgement: str
+    ) -> Optional[str]:
         texts: list[str] = []
         for item in items:
             if item.get("type") not in {"input_text", "output_text", "text"}:
@@ -1175,7 +1431,7 @@ class CodexProvider(BaseProvider):
             except (ValueError, RecursionError):
                 continue
             if decoded == {}:
-                return "Todo list updated."
+                return acknowledgement
         return None
 
     def _command_output(self, items: list[dict[str, Any]]) -> Optional[str]:

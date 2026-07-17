@@ -225,9 +225,7 @@ def test_image_message_pairing_keeps_richer_response_copy(
     entries = _normalized(records)
 
     assert len(entries) == 1
-    assert _visible_text(records) == [
-        '<image name="screenshot.png">\n</image>\n' + text
-    ]
+    assert _visible_text(records) == [text]
 
 
 def test_image_message_pairing_preserves_distinct_adjacent_prompt() -> None:
@@ -398,6 +396,91 @@ def test_object_key_rewriting_never_mutates_command_strings() -> None:
 
     assert call.name == "Bash"
     assert call.input["command"] == "echo {foo: bar}"
+
+
+def test_promise_all_batch_becomes_ordered_tool_result_pairs() -> None:
+    source = (
+        "const results = await Promise.all(["
+        'tools.exec_command({cmd: "one"}), '
+        'tools.exec_command({cmd: "two"})]); '
+        "results.forEach((r,i)=>{text(`RESULT_${i+1}`);text(r.output)});"
+    )
+    records = [
+        _record(
+            1,
+            "response_item",
+            {
+                "type": "custom_tool_call",
+                "call_id": "batch",
+                "name": "exec",
+                "input": source,
+            },
+        ),
+        _output(
+            2,
+            "batch",
+            [
+                {"type": "input_text", "text": "Script completed\nOutput:\n"},
+                {"type": "input_text", "text": "RESULT_1"},
+                {"type": "input_text", "text": "first output\n"},
+                {"type": "input_text", "text": "RESULT_2"},
+                {"type": "input_text", "text": "second output\n"},
+            ],
+        ),
+    ]
+
+    entries = _normalized(records)
+    content = [item for entry in entries for item in entry.message.content]
+
+    assert [item.name for item in content if isinstance(item, ToolUseContent)] == [
+        "Bash",
+        "Bash",
+    ]
+    results = [item for item in content if isinstance(item, ToolResultContent)]
+    assert [item.tool_use_id for item in results] == [
+        "batch:batch:0",
+        "batch:batch:1",
+    ]
+    assert [item.content for item in results] == ["first output\n", "second output\n"]
+
+
+def test_promise_batch_result_count_mismatch_stays_workflow() -> None:
+    source = (
+        "const results = await Promise.all(["
+        'tools.exec_command({cmd: "one"}), '
+        'tools.exec_command({cmd: "two"})]); '
+        "results.forEach((r,i)=>{text(`RESULT_${i+1}`);text(r.output)});"
+    )
+    records = [
+        _record(
+            1,
+            "response_item",
+            {
+                "type": "custom_tool_call",
+                "call_id": "batch",
+                "name": "exec",
+                "input": source,
+            },
+        ),
+        _output(
+            2,
+            "batch",
+            [
+                {"type": "input_text", "text": "Script completed\nOutput:\n"},
+                {"type": "input_text", "text": "RESULT_1"},
+                {"type": "input_text", "text": "only one output"},
+            ],
+        ),
+    ]
+
+    uses = [
+        item
+        for entry in _normalized(records)
+        for item in entry.message.content
+        if isinstance(item, ToolUseContent)
+    ]
+
+    assert [item.name for item in uses] == ["Workflow"]
 
 
 @pytest.mark.parametrize(

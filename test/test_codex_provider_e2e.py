@@ -47,7 +47,7 @@ def test_real_codex_provider_exports_semantic_transcript(
     assert positions == sorted(positions)
     assert "find . -maxdepth 1 -type f" in document
     assert "./alpha.txt" in document and "./beta.txt" in document
-    assert "apply_patch" in document
+    assert "gamma.txt" in document and "synthetic" in document
     assert "mcp__synthetic__lookup" in document
     assert "tests running" in document and "2 passed" in document
     assert "write_stdin" not in document

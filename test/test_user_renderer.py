@@ -21,6 +21,8 @@ from claude_code_log.html.user_formatters import (
 from claude_code_log.models import (
     CompactedSummaryMessage,
     ContentItem,
+    ImageContent,
+    ImageSource,
     MessageMeta,
     TextContent,
     UserMemoryMessage,
@@ -231,6 +233,65 @@ class TestParseUserMessageContentRegular:
         )
 
         assert content_model is None
+
+    def test_numbered_image_references_control_image_placement(self):
+        """Claude image blocks render where their text references occur."""
+        first = ImageContent(
+            type="image",
+            source=ImageSource(type="base64", media_type="image/png", data="first"),
+        )
+        second = ImageContent(
+            type="image",
+            source=ImageSource(type="base64", media_type="image/png", data="second"),
+        )
+        content_list: list[ContentItem] = [
+            first,
+            second,
+            TextContent(
+                type="text",
+                text="Compare [Image #2] with [Image #1]; keep [Image #3].",
+            ),
+        ]
+
+        content_model = create_user_message(
+            MessageMeta.empty(), content_list, extract_text_content(content_list)
+        )
+
+        assert isinstance(content_model, UserTextMessage)
+        assert content_model.items == [
+            TextContent(type="text", text="Compare "),
+            second,
+            TextContent(type="text", text=" with "),
+            first,
+            TextContent(type="text", text="; keep [Image #3]."),
+        ]
+        html = format_user_text_model_content(content_model)
+        assert "[Image #1]" not in html
+        assert "[Image #2]" not in html
+        assert html.index("second") < html.index("first")
+        assert "[Image #3]" in html
+
+    def test_unreferenced_images_keep_their_original_position(self):
+        image = ImageContent(
+            type="image",
+            source=ImageSource(type="base64", media_type="image/png", data="image"),
+        )
+        content_list: list[ContentItem] = [
+            TextContent(type="text", text="Before"),
+            image,
+            TextContent(type="text", text="After"),
+        ]
+
+        content_model = create_user_message(
+            MessageMeta.empty(), content_list, extract_text_content(content_list)
+        )
+
+        assert isinstance(content_model, UserTextMessage)
+        assert content_model.items == [
+            TextContent(type="text", text="Before"),
+            image,
+            TextContent(type="text", text="After"),
+        ]
 
 
 # =============================================================================

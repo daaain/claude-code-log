@@ -5,11 +5,15 @@ import pytest
 from claude_code_log.factories.tool_factory import create_tool_input, create_tool_output
 from claude_code_log.models import (
     BashInput,
+    EditInput,
     SendMessageInput,
     TaskInput,
     ToolResultContent,
 )
-from claude_code_log.providers.codex_tools import adapt_codex_tool_call
+from claude_code_log.providers.codex_tools import (
+    adapt_codex_tool_batch,
+    adapt_codex_tool_call,
+)
 from claude_code_log.providers.codex import CodexProvider
 
 
@@ -21,6 +25,83 @@ def test_exec_command_reuses_bash_renderer() -> None:
     )
     assert call.name == "Bash"
     assert call.input == {"command": "git status"}
+
+
+def test_apply_patch_exec_reuses_edit_renderer() -> None:
+    patch = (
+        "*** Begin Patch\n"
+        "*** Update File: example.py\n"
+        "@@\n"
+        "-old value\n"
+        "+new value\n"
+        "*** End Patch"
+    )
+    source = (
+        f"const patch = {__import__('json').dumps(patch)};\n"
+        "text(await tools.apply_patch(patch));"
+    )
+
+    call = adapt_codex_tool_call("exec", {"raw": source}, raw_input=source)
+
+    assert call.name == "Edit"
+    assert call.input == {
+        "file_path": "example.py",
+        "old_string": "old value\n",
+        "new_string": "new value\n",
+    }
+    assert isinstance(create_tool_input(call.name, call.input), EditInput)
+
+
+def test_direct_add_patch_reuses_edit_renderer() -> None:
+    patch = "*** Begin Patch\n*** Add File: added.txt\n+hello\n*** End Patch"
+
+    call = adapt_codex_tool_call("apply_patch", {"raw": patch}, raw_input=patch)
+
+    assert call.name == "Edit"
+    assert call.input == {
+        "file_path": "added.txt",
+        "old_string": "",
+        "new_string": "hello\n",
+    }
+
+
+def test_delete_patch_without_body_has_visible_deletion() -> None:
+    patch = "*** Begin Patch\n*** Delete File: obsolete.txt\n*** End Patch"
+    source = (
+        f"const patch = {__import__('json').dumps(patch)}; "
+        "text(await tools.apply_patch(patch));"
+    )
+
+    call = adapt_codex_tool_call("exec", {"raw": source}, raw_input=source)
+
+    assert call.name == "Edit"
+    assert call.input["file_path"] == "obsolete.txt"
+    assert call.input["old_string"] == "[deleted file]\n"
+    assert call.input["new_string"] == ""
+
+
+def test_multi_file_patch_reuses_multiedit_renderer() -> None:
+    patch = (
+        "*** Begin Patch\n"
+        "*** Add File: one.txt\n+one\n"
+        "*** Add File: two.txt\n+two\n"
+        "*** End Patch"
+    )
+    source = (
+        f"const patch = {__import__('json').dumps(patch)}; "
+        "text(await tools.apply_patch(patch));"
+    )
+
+    call = adapt_codex_tool_call("exec", {"raw": source}, raw_input=source)
+
+    assert call.name == "MultiEdit"
+    assert call.input == {
+        "file_path": "2 files",
+        "edits": [
+            {"file_path": "one.txt", "old_string": "", "new_string": "one\n"},
+            {"file_path": "two.txt", "old_string": "", "new_string": "two\n"},
+        ],
+    }
 
 
 def test_single_mcp_call_keeps_name_for_plugin_transformers() -> None:
@@ -44,6 +125,33 @@ def test_multi_call_exec_remains_visible_as_workflow() -> None:
     call = adapt_codex_tool_call("exec", {"raw": source}, raw_input=source)
     assert call.name == "Workflow"
     assert call.input == {"script": source}
+
+
+def test_static_promise_all_batch_recovers_heterogeneous_tools() -> None:
+    source = (
+        "const results = await Promise.all([\n"
+        ' tools.exec_command({cmd: "pytest -q"}),\n'
+        ' tools.web__run({search_query: [{q: "synthetic"}]})\n'
+        "]); results.forEach((r,i)=>{text(`RESULT_${i+1}`);text(r.output)});"
+    )
+
+    calls = adapt_codex_tool_batch(source)
+
+    assert calls is not None
+    assert [(call.name, call.input) for call in calls] == [
+        ("Bash", {"command": "pytest -q"}),
+        ("WebSearch", {"query": "synthetic"}),
+    ]
+
+
+def test_promise_batch_with_uncorrelated_emission_is_rejected() -> None:
+    source = (
+        "const results = await Promise.all(["
+        'tools.exec_command({cmd: "one"}), tools.exec_command({cmd: "two"})]);'
+        "text(results[0].output);"
+    )
+
+    assert adapt_codex_tool_batch(source) is None
 
 
 def test_all_tools_plus_one_command_is_compound_workflow() -> None:
@@ -214,6 +322,23 @@ def test_codex_todo_success_result_hides_exec_transport() -> None:
 
     assert isinstance(output, ToolResultContent)
     assert output.content == "Todo list updated."
+
+
+@pytest.mark.parametrize("tool_name", ["Edit", "MultiEdit"])
+def test_codex_edit_success_result_hides_exec_transport(tool_name: str) -> None:
+    content = [
+        {
+            "type": "input_text",
+            "text": "Script completed\nWall time: 0.0 seconds\nOutput:\n",
+        },
+        {"type": "input_text", "text": "{}"},
+    ]
+
+    normalized, _ = CodexProvider()._adapt_tool_result(
+        content, tool_name=tool_name, is_error=False
+    )
+
+    assert normalized == "File updated successfully."
 
 
 def test_unfamiliar_todo_result_stays_generic() -> None:

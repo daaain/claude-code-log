@@ -49,6 +49,8 @@ from .task_notification_factory import (
 )
 from .teammate_factory import create_teammate_message, has_teammate_message
 
+_IMAGE_PLACEHOLDER_RE = re.compile(r"\[Image\s+#(?P<number>[1-9][0-9]*)\]")
+
 
 # =============================================================================
 # Message Type Detection
@@ -565,8 +567,24 @@ def _classify_user_message(
     if user_memory := create_user_memory_message(meta, first_text):
         return user_memory
 
+    # Claude Code stores image blocks separately from their numbered references.
+    # Resolve those references here so every provider shares the same rendering.
+    images = [
+        image
+        for item in content_list
+        if (image := _as_image_content(item)) is not None
+    ]
+    referenced_images = {
+        int(match.group("number"))
+        for item in content_list
+        if hasattr(item, "text")
+        for match in _IMAGE_PLACEHOLDER_RE.finditer(getattr(item, "text"))
+        if int(match.group("number")) <= len(images)
+    }
+
     # Build items list preserving order, extracting IDE notifications from text
     items: list[TextContent | ImageContent | IdeNotificationContent] = []
+    image_number = 0
 
     for item in content_list:
         # Check for text content
@@ -582,12 +600,37 @@ def _classify_user_message(
 
             # Add remaining text as TextContent if non-empty
             if remaining_text.strip():
-                items.append(TextContent(type="text", text=remaining_text))
-        elif isinstance(item, ImageContent):
-            # ImageContent model - use as-is
-            items.append(item)
-        elif hasattr(item, "source") and getattr(item, "type", None) == "image":
-            # Duck-typed image content - convert to our Pydantic model
-            items.append(ImageContent.model_validate(item.model_dump()))
+                _append_text_with_images(items, remaining_text, images)
+        elif (image := _as_image_content(item)) is not None:
+            image_number += 1
+            if image_number not in referenced_images:
+                items.append(image)
 
     return UserTextMessage(items=items, meta=meta)
+
+
+def _as_image_content(item: ContentItem) -> Optional[ImageContent]:
+    if isinstance(item, ImageContent):
+        return item
+    if hasattr(item, "source") and getattr(item, "type", None) == "image":
+        return ImageContent.model_validate(item.model_dump())
+    return None
+
+
+def _append_text_with_images(
+    items: list[TextContent | ImageContent | IdeNotificationContent],
+    text: str,
+    images: list[ImageContent],
+) -> None:
+    """Replace valid numbered image references while preserving surrounding text."""
+    cursor = 0
+    for match in _IMAGE_PLACEHOLDER_RE.finditer(text):
+        number = int(match.group("number"))
+        if number > len(images):
+            continue
+        if match.start() > cursor:
+            items.append(TextContent(type="text", text=text[cursor : match.start()]))
+        items.append(images[number - 1])
+        cursor = match.end()
+    if cursor < len(text):
+        items.append(TextContent(type="text", text=text[cursor:]))

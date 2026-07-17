@@ -53,6 +53,10 @@ def adapt_codex_tool_call(
         calls = _find_static_tool_calls(raw_input)
         if len(calls) != 1:
             return _workflow(raw_input)
+        if calls[0].name == "apply_patch":
+            patch = _decode_apply_patch_exec(raw_input, calls[0])
+            adapted = _canonicalize_patch(patch) if patch is not None else None
+            return adapted if adapted is not None else _workflow(raw_input)
         if not _is_simple_result_forwarder(raw_input, calls[0]):
             return _workflow(raw_input)
         decoded = _decode_object_literal(calls[0].argument)
@@ -60,6 +64,66 @@ def adapt_codex_tool_call(
             return _workflow(raw_input)
         return _canonicalize(calls[0].name, decoded)
     return _canonicalize(name, input_data)
+
+
+def adapt_codex_tool_batch(source: str) -> Optional[list[AdaptedToolCall]]:
+    """Decode a static ``Promise.all`` batch with ordered result emissions."""
+    calls = _find_static_tool_calls(source)
+    if len(calls) < 2:
+        return None
+    code = _code_projection(source)
+    assignment = re.search(
+        r"\bconst\s+(?P<results>[A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*"
+        r"await\s+Promise\s*\.\s*all\s*\(",
+        code,
+    )
+    if assignment is None:
+        return None
+    open_paren = assignment.end() - 1
+    close_paren = _matching_delimiter(source, open_paren, "(", ")")
+    array_start = _skip_space(source, open_paren + 1)
+    if close_paren is None or array_start >= len(source) or source[array_start] != "[":
+        return None
+    array_end = _matching_delimiter(source, array_start, "[", "]")
+    if array_end is None or _skip_space(source, array_end + 1) != close_paren:
+        return None
+    if any(call.start < array_start or call.end > array_end for call in calls):
+        return None
+
+    array_remainder = list(code[array_start + 1 : array_end])
+    for call in calls:
+        tool_start = source.rfind("tools.", array_start + 1, call.start)
+        if tool_start < 0:
+            return None
+        start = tool_start - array_start - 1
+        end = call.end + 1 - array_start - 1
+        array_remainder[start:end] = " " * (end - start)
+    if re.fullmatch(r"[\s,]*", "".join(array_remainder)) is None:
+        return None
+
+    statement_end = _statement_end(code, close_paren + 1)
+    if statement_end is None:
+        return None
+    tail = re.sub(r"\s+", "", source[statement_end:])
+    results = assignment.group("results")
+    expected = {
+        f"{results}.forEach((r,i)=>{{text(`RESULT_${{i+1}}`);text(r.output)}});",
+        f"{results}.forEach((r,i)=>{{text(`RESULT_${{i+1}}`);text(r.output);"
+        "if(r.session_id)text(`SESSION_ID=${r.session_id}`)});",
+    }
+    if tail not in expected:
+        return None
+
+    adapted: list[AdaptedToolCall] = []
+    for call in calls:
+        decoded = _decode_object_literal(call.argument)
+        if decoded is None:
+            return None
+        item = _canonicalize(call.name, decoded)
+        if item.name == "Workflow":
+            return None
+        adapted.append(item)
+    return adapted
 
 
 def _is_simple_result_forwarder(source: str, call: _StaticCall) -> bool:
@@ -103,6 +167,13 @@ def _workflow(source: str) -> AdaptedToolCall:
 
 
 def _canonicalize(name: str, input_data: dict[str, Any]) -> AdaptedToolCall:
+    if name == "apply_patch":
+        raw_patch = input_data.get("patch", input_data.get("raw"))
+        if isinstance(raw_patch, str):
+            adapted = _canonicalize_patch(raw_patch)
+            if adapted is not None:
+                return adapted
+
     if name == "exec_command":
         command = input_data.get("cmd")
         if isinstance(command, str):
@@ -178,6 +249,136 @@ def _canonicalize(name: str, input_data: dict[str, Any]) -> AdaptedToolCall:
                 return AdaptedToolCall("WebSearch", {"query": " • ".join(text_queries)})
 
     return AdaptedToolCall(name, input_data)
+
+
+def _decode_apply_patch_exec(source: str, call: _StaticCall) -> Optional[str]:
+    """Decode Codex's ``const patch = "..."; text(await apply_patch(patch))``."""
+    argument = call.argument.strip()
+    if _IDENTIFIER.fullmatch(argument) is None:
+        return None
+    code = _code_projection(source)
+    assignment = re.search(
+        r"\b(?:const|let|var)\s+" + re.escape(argument) + r"\s*=", code
+    )
+    if assignment is None:
+        return None
+    literal_start = _skip_space(source, assignment.end())
+    if literal_start >= len(source) or source[literal_start] != '"':
+        return None
+    literal_end = _skip_string(source, literal_start, '"')
+    if literal_end > len(source) or source[literal_end - 1 : literal_end] != '"':
+        return None
+    assignment_end = _statement_end(code, literal_end)
+    if assignment_end is None:
+        return None
+
+    emissions = _find_output_emissions(source)
+    if len(emissions) != 1:
+        return None
+    expression = _code_projection(emissions[0].expression).strip()
+    expected = (
+        r"await\s+tools\s*\.\s*apply_patch\s*\(\s*"
+        + re.escape(argument)
+        + r"\s*\)"
+    )
+    if re.fullmatch(expected, expression) is None:
+        return None
+
+    remainder = list(code)
+    for start, end in (
+        (assignment.start(), assignment_end),
+        (emissions[0].start, emissions[0].end),
+    ):
+        remainder[start:end] = " " * (end - start)
+    if "".join(remainder).strip():
+        return None
+    try:
+        decoded: Any = json.loads(source[literal_start:literal_end])
+    except (ValueError, RecursionError):
+        return None
+    return decoded if isinstance(decoded, str) else None
+
+
+def _canonicalize_patch(patch: str) -> Optional[AdaptedToolCall]:
+    """Represent apply_patch operations with the Edit/MultiEdit renderers."""
+    lines = patch.splitlines()
+    if len(lines) < 3 or lines[0] != "*** Begin Patch" or lines[-1] != "*** End Patch":
+        return None
+    headers = [
+        (index, match)
+        for index, line in enumerate(lines)
+        if (
+            match := re.fullmatch(
+                r"\*\*\* (Add|Delete|Update) File: (?P<path>.+)", line
+            )
+        )
+    ]
+    if not headers or headers[0][0] != 1:
+        return None
+    edits: list[dict[str, str]] = []
+    for position, (header_index, header) in enumerate(headers):
+        body_end = (
+            headers[position + 1][0]
+            if position + 1 < len(headers)
+            else len(lines) - 1
+        )
+        edit = _patch_edit(
+            header.group(1),
+            header.group("path"),
+            lines[header_index + 1 : body_end],
+        )
+        if edit is None:
+            return None
+        edits.append(edit)
+    if len(edits) == 1:
+        return AdaptedToolCall("Edit", edits[0])
+    return AdaptedToolCall(
+        "MultiEdit",
+        {
+            "file_path": f"{len({edit['file_path'] for edit in edits})} files",
+            "edits": edits,
+        },
+    )
+
+
+def _patch_edit(
+    operation: str, path: str, body: list[str]
+) -> Optional[dict[str, str]]:
+    if any(line.startswith("*** Move to:") for line in body):
+        return None
+
+    if operation == "Add":
+        if any(not line.startswith("+") for line in body):
+            return None
+        old_string = ""
+        new_string = _patch_text([line[1:] for line in body])
+    elif operation == "Delete":
+        if body and any(not line.startswith("-") for line in body):
+            return None
+        old_string = (
+            _patch_text([line[1:] for line in body]) if body else "[deleted file]\n"
+        )
+        new_string = ""
+    else:
+        old_lines: list[str] = []
+        new_lines: list[str] = []
+        for line in body:
+            if line.startswith("@@") or line == "*** End of File":
+                continue
+            if not line or line[0] not in {" ", "+", "-"}:
+                return None
+            if line[0] != "+":
+                old_lines.append(line[1:])
+            if line[0] != "-":
+                new_lines.append(line[1:])
+        old_string = _patch_text(old_lines)
+        new_string = _patch_text(new_lines)
+
+    return {"file_path": path, "old_string": old_string, "new_string": new_string}
+
+
+def _patch_text(lines: list[str]) -> str:
+    return "\n".join(lines) + ("\n" if lines else "")
 
 
 def _scrub_opaque_field(input_data: dict[str, Any], field: str) -> dict[str, Any]:

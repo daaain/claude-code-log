@@ -1276,6 +1276,7 @@ class EditInput(BaseModel):
 class EditItem(BaseModel):
     """Single edit item for MultiEdit tool."""
 
+    file_path: Optional[str] = None
     old_string: str
     new_string: str
 
