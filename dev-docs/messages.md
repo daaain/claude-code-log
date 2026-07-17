@@ -275,16 +275,32 @@ Steering messages represent user input injected mid-turn to steer an
 ongoing assistant response.
 
 **De-duplication (modern transcripts).** Every steering delivery writes
-*both* a `queued_command` attachment and a legacy `remove` op, 1:1. To
-avoid a duplicate card, `_render_messages` suppresses the `remove`
-per-session, per inferred harness version: a pre-pass collects the set of
-`version` values under which a `queued_command` appears (queue-op entries
-carry no `version`, so a `remove`'s version is inferred from the last
-version-bearing entry in file order — a turn cannot span a harness
-restart). A `remove` is skipped iff its inferred version is in that set.
-Per-session scoping keeps per-session HTML caching correct; the 1:1
-pairing makes it sufficient. Old transcripts (empty set) render `remove`
-exactly as before.
+*both* a `queued_command` attachment and a legacy `remove` op, normally
+1:1. To avoid a duplicate card, `_render_messages` suppresses the `remove`
+whose steering text is already covered by a rendered `queued_command`. A
+pass-1 pre-pass counts *renderable* `queued_command`s keyed by `(session,
+version, prompt-text)`; pass 2 spends a decrementing budget under the
+matching key. (Queue-op entries carry no `version`, so a `remove`'s
+version is inferred from the last version-bearing entry in file order — a
+turn cannot span a harness restart.)
+
+The keying matters on two axes:
+
+- **Per `(session, version)`** — session HTML is cached individually, so
+  cross-session state would break incremental-cache correctness; and a
+  resumed session can span a harness upgrade, so the version is learned
+  from the file rather than assumed.
+- **Per prompt-text** — a `remove` is paired to a `queued_command` by
+  *content*, not arrival order. The 1:1 pairing is **not** airtight in
+  real archives (observed: a 2.1.160 file with 34 removes / 29
+  `queued_command`s). Content-keying makes suppression **lossless and
+  order-independent**: exactly the removes with a matching card are hidden,
+  and any orphan `remove` (no matching card, or one arriving before its
+  paired sibling) still renders as legacy steering rather than being
+  dropped. Rendering an orphan under a version that *did* have cards logs a
+  one-shot WARNING (content preserved, invariant-break made visible). Old
+  transcripts (no `queued_command`, empty budget) render `remove` exactly
+  as before.
 
 **Transformer pass.** The `queued_command` prompt is routed through the
 same `create_user_message` classification + plugin-transformer pass as an
@@ -779,10 +795,12 @@ The `leafUuid` links the summary to the last message of the session.
 ## 4.2 Queue Operation (QueueOperationTranscriptEntry)
 
 - **Purpose**: User interrupts and steering during assistant responses
-- **Rendered**: Only `remove` operations (as `UserSteeringMessage`), and
-  only on legacy transcripts — on modern transcripts (≳2.1.101) the paired
-  `queued_command` attachment is rendered instead and the `remove` is
-  suppressed. See "User Steering (Queue Remove / queued_command)" above.
+- **Rendered**: Only `remove` operations (as `UserSteeringMessage`). On
+  modern transcripts (≳2.1.101) a `remove` is suppressed when a paired
+  `queued_command` attachment covers its steering text (rendered instead);
+  a `remove` with no matching card — legacy transcripts, or an orphan when
+  the 1:1 pairing breaks — still renders. See "User Steering (Queue Remove
+  / queued_command)" above.
 - **CSS Class**: `user steering`
 - **Files**: [queue_operation.json](messages/system/queue_operation.json)
 

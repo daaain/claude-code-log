@@ -302,13 +302,24 @@ class TestMixedVersion:
         # the legacy one is the uuid-less remove (no debug line for it).
         assert "qc1 &rarr; u2" in html
 
+    @staticmethod
+    def _imbalance_warnings(caplog):
+        import logging
+
+        return [
+            rec
+            for rec in caplog.records
+            if "steering suppression imbalance" in rec.message
+            and rec.levelno == logging.WARNING
+        ]
+
     def test_orphan_removes_render_losslessly(self, caplog):
         """The remove↔queued_command 1:1 pairing is not airtight in real
         archives (observed: a 2.1.160 file with 34 removes / 29 qc). When a
         (session, version) has MORE removes than renderable queued_command
-        cards, suppression must be lossless: hide exactly one remove per
-        card (no duplicate), and RENDER the orphan removes rather than drop
-        their steering text. The broken invariant is logged once."""
+        cards, suppression must be lossless: hide exactly the removes with a
+        matching card (no duplicate), and RENDER the orphan removes rather
+        than drop their steering text. The broken invariant is logged once."""
         import logging
 
         with caplog.at_level(logging.WARNING, logger="claude_code_log.renderer"):
@@ -330,14 +341,44 @@ class TestMixedVersion:
         # Both texts survive; nothing silently dropped.
         assert "first-steer" in html
         assert "second-steer-ORPHAN" in html
-        # The broken 1:1 invariant is surfaced (once) so it's not silent.
-        imbalance_warnings = [
-            rec
-            for rec in caplog.records
-            if "steering suppression imbalance" in rec.message
-            and rec.levelno == logging.WARNING
-        ]
-        assert len(imbalance_warnings) == 1, (
-            "expected exactly one imbalance WARNING when removes > "
-            f"renderable queued_commands; got {len(imbalance_warnings)}"
-        )
+        # The paired text renders exactly once (via the qc card), NOT twice.
+        # Each rendered message text appears twice in the HTML (card body +
+        # timeline data), so a single render == 2 occurrences; a duplicate
+        # (paired remove ALSO rendered) would be 4.
+        assert html.count("first-steer") == 2
+        assert len(self._imbalance_warnings(caplog)) == 1
+
+    def test_orphan_remove_before_paired_remove_is_lossless(self, caplog):
+        """Order-independence (CodeRabbit #284): suppression must pair a
+        ``remove`` to its ``queued_command`` by PROMPT CONTENT, not arrival
+        order. With an order-only budget, an orphan ``remove`` arriving
+        BEFORE the paired one wrongly spends the budget → the orphan's text
+        is dropped and the paired text is duplicated (rendered by both the
+        qc card and the un-suppressed paired remove).
+
+        Mutation-check: key the budget on ``(session, version)`` only
+        (drop ``remove_text`` from the key in renderer.py) and this test
+        goes RED — ``orphan-first-STEER`` disappears and ``paired-STEER``
+        renders twice (verified against this fixture)."""
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="claude_code_log.renderer"):
+            html = _render(
+                [
+                    _user("u1", None, "start"),
+                    _assistant("a1", "u1", "working"),
+                    _remove("orphan-first-STEER"),  # orphan, arrives FIRST
+                    _remove("paired-STEER"),  # paired (qc below has this text)
+                    _user("u2", "a1", "next"),
+                    _queued_command("qc1", "u2", "paired-STEER"),
+                    _assistant("a2", "qc1", "ok"),
+                ]
+            )
+
+        # Two cards: the qc (paired-STEER) + the orphan remove (rendered).
+        assert html.count("User (steering)") == 2
+        # The orphan survives — NOT consumed by the paired card's budget.
+        assert "orphan-first-STEER" in html
+        # The paired text renders exactly once (via the qc), NOT duplicated.
+        assert html.count("paired-STEER") == 2
+        assert len(self._imbalance_warnings(caplog)) == 1
