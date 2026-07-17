@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import time
 from dataclasses import dataclass, field, replace
@@ -89,6 +90,8 @@ from .utils import (
 from .renderer_timings import (
     log_timing,
 )
+
+logger = logging.getLogger(__name__)
 
 
 # -- Rendering Context --------------------------------------------------------
@@ -4543,17 +4546,18 @@ def _render_messages(
     # list; entries removed by structural filtering are simply absent
     # from the map and skipped by the scan.
     uuid_to_entry: dict[str, TranscriptEntry] = {}
-    # Pass 1 for legacy steering-``remove`` suppression: per session, the set
-    # of harness ``version`` values under which a ``queued_command`` attachment
-    # appears. Modern Claude Code (≳2.1.101) writes an in-DAG ``queued_command``
-    # for every steering delivery, 1:1 with the chain-less legacy ``remove`` op;
+    # Pass 1 for legacy steering-``remove`` suppression: per ``(session,
+    # version)``, the count of *renderable* ``queued_command`` attachments.
+    # Modern Claude Code (≳2.1.101) writes an in-DAG ``queued_command`` for
+    # every steering delivery, 1:1 with the chain-less legacy ``remove`` op;
     # once we render the former we must suppress the latter to avoid a duplicate
-    # card. Scoped per session (session HTML is cached individually — cross-
+    # card. Keyed per session (session HTML is cached individually — cross-
     # session state would break incremental-cache correctness) and per version
     # (a resumed session can span a harness upgrade, so neither a session-level
     # boolean nor hard-coded version knowledge is correct — learn it from the
-    # file). See ``_render_messages`` pass 2 below for the inference.
-    versions_with_queued_command: dict[str, set[str]] = {}
+    # file). A count (not a bare set) so pass 2 can warn if it suppresses more
+    # removes than there are cards to replace them. See pass 2 below.
+    renderable_qc_count: dict[tuple[str, str], int] = {}
     for entry in messages:
         entry_uuid = getattr(entry, "uuid", "")
         if entry_uuid:
@@ -4569,9 +4573,8 @@ def _render_messages(
             # the paired ``remove`` that still holds the steering text.
             qc_prompt = (entry.attachment or {}).get("prompt")
             if isinstance(qc_prompt, str) and qc_prompt.strip():
-                versions_with_queued_command.setdefault(entry.sessionId, set()).add(
-                    entry.version
-                )
+                key = (entry.sessionId, entry.version)
+                renderable_qc_count[key] = renderable_qc_count.get(key, 0) + 1
 
     # Track which sessions have had headers added.
     seen_sessions: set[str] = set()
@@ -4581,6 +4584,18 @@ def _render_messages(
     # ``version``; a ``remove`` happens mid-turn and a turn cannot span a
     # harness restart, so the most recent version in its session is its version.
     last_version_by_session: dict[str, str] = {}
+    # Decrementing budget of renderable ``queued_command`` cards per ``(session,
+    # version)``, seeded from the pass-1 count. Each suppressed ``remove`` spends
+    # one unit; once a key's budget is exhausted, further removes under that key
+    # are *rendered* as legacy steering rather than dropped. This makes
+    # suppression LOSSLESS: we hide exactly ``min(#removes, #renderable_qc)`` per
+    # version (no duplicate cards), and any orphan removes (the 1:1 pairing does
+    # break in real archives — e.g. a 2.1.160 file with 34 removes / 29 qc)
+    # still render their steering text.
+    qc_budget: dict[tuple[str, str], int] = dict(renderable_qc_count)
+    # (session, version) keys already warned about, so the imbalance is logged
+    # at most once per key rather than per orphan remove.
+    warned_qc_imbalance: set[tuple[str, str]] = set()
 
     for message in messages:
         message_type = message.type
@@ -4595,10 +4610,10 @@ def _render_messages(
         if msg_version:
             last_version_by_session[msg_session_id] = msg_version
 
-        # Suppress the legacy steering ``remove`` when its session has learned a
-        # ``queued_command`` under the same (inferred) harness version: the
-        # modern in-DAG attachment is rendered instead, 1:1. Old transcripts
-        # (no ``queued_command`` anywhere) have an empty set → removes render as
+        # Suppress the legacy steering ``remove`` when its session still has an
+        # unspent ``queued_command`` under the same (inferred) harness version:
+        # the modern in-DAG attachment is rendered instead, 1:1. Old transcripts
+        # (no ``queued_command`` anywhere) have no budget → removes render as
         # before. ``remove`` ops are uuid-less (no DAG role), so suppression is
         # plain skipping with no dangling-anchor risk.
         if (
@@ -4610,12 +4625,30 @@ def _render_messages(
             # version-bearing entry preceded this remove, so we can't confirm a
             # same-version ``queued_command`` — render the remove (safe default)
             # rather than risk suppressing a real steering card.
+            key = (message.sessionId, inferred_version)
+            if inferred_version and qc_budget.get(key, 0) > 0:
+                qc_budget[key] -= 1  # spend one paired card; hide this remove
+                continue
+            # Budget exhausted for a version that DID have queued_commands →
+            # this is an orphan remove (more removes than cards). Fall through
+            # to render it (lossless), and flag the broken 1:1 invariant once.
             if (
                 inferred_version
-                and inferred_version
-                in versions_with_queued_command.get(message.sessionId, set())
+                and key in renderable_qc_count
+                and key not in warned_qc_imbalance
             ):
-                continue
+                warned_qc_imbalance.add(key)
+                session_id, version = key
+                logger.warning(
+                    "steering suppression imbalance in session %s under version "
+                    "%s: more 'remove' ops than renderable queued_command cards "
+                    "(%d card(s)) — rendering the surplus remove(s) as legacy "
+                    "steering (content preserved). The remove↔queued_command "
+                    "1:1 pairing appears violated (seen in real archives).",
+                    session_id,
+                    version,
+                    renderable_qc_count.get(key, 0),
+                )
 
         # Pre-D11 inline derivation (``current_render_session`` +
         # agent-parent resolution) collapsed into one map lookup.

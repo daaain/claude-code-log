@@ -301,3 +301,43 @@ class TestMixedVersion:
         # The modern steering card is the attachment (has a debug line);
         # the legacy one is the uuid-less remove (no debug line for it).
         assert "qc1 &rarr; u2" in html
+
+    def test_orphan_removes_render_losslessly(self, caplog):
+        """The remove↔queued_command 1:1 pairing is not airtight in real
+        archives (observed: a 2.1.160 file with 34 removes / 29 qc). When a
+        (session, version) has MORE removes than renderable queued_command
+        cards, suppression must be lossless: hide exactly one remove per
+        card (no duplicate), and RENDER the orphan removes rather than drop
+        their steering text. The broken invariant is logged once."""
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="claude_code_log.renderer"):
+            html = _render(
+                [
+                    _user("u1", None, "start"),
+                    _assistant("a1", "u1", "working"),
+                    _remove("first-steer"),  # paired → suppressed (spends the card)
+                    _remove("second-steer-ORPHAN"),  # orphan → rendered, not dropped
+                    _user("u2", "a1", "next"),
+                    _queued_command("qc1", "u2", "first-steer"),  # only ONE card
+                    _assistant("a2", "qc1", "ok"),
+                ]
+            )
+
+        # Lossless: exactly two steering cards — the qc card + the orphan
+        # remove — with NO duplicate for the paired one.
+        assert html.count("User (steering)") == 2
+        # Both texts survive; nothing silently dropped.
+        assert "first-steer" in html
+        assert "second-steer-ORPHAN" in html
+        # The broken 1:1 invariant is surfaced (once) so it's not silent.
+        imbalance_warnings = [
+            rec
+            for rec in caplog.records
+            if "steering suppression imbalance" in rec.message
+            and rec.levelno == logging.WARNING
+        ]
+        assert len(imbalance_warnings) == 1, (
+            "expected exactly one imbalance WARNING when removes > "
+            f"renderable queued_commands; got {len(imbalance_warnings)}"
+        )

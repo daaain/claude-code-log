@@ -99,6 +99,11 @@ def _create_queued_command_message(
     meta = create_meta(transcript)
     chunk: list[Any] = [TextContent(type="text", text=prompt)]
     result = create_user_message(meta, chunk, prompt, is_slash_command=False)
+    # Defensive only: create_user_message never returns None for a non-empty
+    # text chunk (it returns None solely on an empty content_list / the empty
+    # is_slash_command path, neither reachable here). Kept to guard against a
+    # future change to its contract — the effective render condition upstream
+    # is exactly this ``prompt.strip()``, so pre-pass and factory can't drift.
     if result is None:
         return None
 
