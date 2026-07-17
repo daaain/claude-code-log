@@ -20,6 +20,7 @@ from typing import Any, Iterator, Optional, TypeAlias, cast
 
 from claude_code_log.models import (
     AssistantTranscriptEntry,
+    ContentItem,
     ImageContent,
     ImageSource,
     TextContent,
@@ -810,7 +811,10 @@ class CodexProvider(BaseProvider):
             call_id = self._nonempty_string(record.payload.get("call_id"))
             if call_id is None:
                 continue
-            if payload_type == "custom_tool_call" and record.payload.get("name") == "exec":
+            if (
+                payload_type == "custom_tool_call"
+                and record.payload.get("name") == "exec"
+            ):
                 source = record.payload.get("input")
                 if isinstance(source, str):
                     calls = adapt_codex_tool_batch(source)
@@ -975,12 +979,17 @@ class CodexProvider(BaseProvider):
                     output, tool_use_result = self._adapt_tool_result(
                         result, tool_name=call.name, is_error=False
                     )
+                    rendered_output = (
+                        output
+                        if isinstance(output, str)
+                        else json.dumps(output, ensure_ascii=False)
+                    )
                     result_entry = make_tool_result_entry(
                         thread_id,
                         uuid,
                         tool_batch.result_timestamp,
                         derived_id,
-                        output,
+                        rendered_output,
                     )
                     result_entry.toolUseResult = tool_use_result
                     expanded.append(result_entry)
@@ -1156,7 +1165,7 @@ class CodexProvider(BaseProvider):
             return None
 
         text = format_codex_user_message("\n".join(text_parts))
-        items: list[TextContent | ImageContent] = []
+        items: list[ContentItem] = []
         if descriptors:
             placeholder_re = re.compile(
                 "(" + "|".join(re.escape(name) for name in descriptors) + ")"
@@ -1188,9 +1197,7 @@ class CodexProvider(BaseProvider):
             message=UserMessageModel(role="user", content=items),
         )
 
-    def _append_image_text(
-        self, items: list[TextContent | ImageContent], text: str
-    ) -> None:
+    def _append_image_text(self, items: list[ContentItem], text: str) -> None:
         if items and isinstance(items[-1], TextContent):
             items[-1].text += text
         else:

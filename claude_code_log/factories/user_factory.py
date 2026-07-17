@@ -570,9 +570,7 @@ def _classify_user_message(
     # Claude Code stores image blocks separately from their numbered references.
     # Resolve those references here so every provider shares the same rendering.
     images = [
-        image
-        for item in content_list
-        if (image := _as_image_content(item)) is not None
+        image for item in content_list if (image := _as_image_content(item)) is not None
     ]
     referenced_images = {
         int(match.group("number"))

@@ -170,9 +170,9 @@ def _canonicalize(name: str, input_data: dict[str, Any]) -> AdaptedToolCall:
     if name == "apply_patch":
         raw_patch = input_data.get("patch", input_data.get("raw"))
         if isinstance(raw_patch, str):
-            adapted = _canonicalize_patch(raw_patch)
-            if adapted is not None:
-                return adapted
+            patch_call = _canonicalize_patch(raw_patch)
+            if patch_call is not None:
+                return patch_call
 
     if name == "exec_command":
         command = input_data.get("cmd")
@@ -277,9 +277,7 @@ def _decode_apply_patch_exec(source: str, call: _StaticCall) -> Optional[str]:
         return None
     expression = _code_projection(emissions[0].expression).strip()
     expected = (
-        r"await\s+tools\s*\.\s*apply_patch\s*\(\s*"
-        + re.escape(argument)
-        + r"\s*\)"
+        r"await\s+tools\s*\.\s*apply_patch\s*\(\s*" + re.escape(argument) + r"\s*\)"
     )
     if re.fullmatch(expected, expression) is None:
         return None
@@ -318,9 +316,7 @@ def _canonicalize_patch(patch: str) -> Optional[AdaptedToolCall]:
     edits: list[dict[str, str]] = []
     for position, (header_index, header) in enumerate(headers):
         body_end = (
-            headers[position + 1][0]
-            if position + 1 < len(headers)
-            else len(lines) - 1
+            headers[position + 1][0] if position + 1 < len(headers) else len(lines) - 1
         )
         edit = _patch_edit(
             header.group(1),
@@ -341,9 +337,7 @@ def _canonicalize_patch(patch: str) -> Optional[AdaptedToolCall]:
     )
 
 
-def _patch_edit(
-    operation: str, path: str, body: list[str]
-) -> Optional[dict[str, str]]:
+def _patch_edit(operation: str, path: str, body: list[str]) -> Optional[dict[str, str]]:
     if any(line.startswith("*** Move to:") for line in body):
         return None
 

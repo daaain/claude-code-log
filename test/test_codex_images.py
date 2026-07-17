@@ -61,9 +61,7 @@ def test_readable_image_paths_become_ordered_base64_content(tmp_path: Path) -> N
         ImageContent,
         TextContent,
     ]
-    images = [
-        item for item in entry.message.content if isinstance(item, ImageContent)
-    ]
+    images = [item for item in entry.message.content if isinstance(item, ImageContent)]
     assert [(image.source.media_type, image.source.data) for image in images] == [
         ("image/png", base64.b64encode(first.read_bytes()).decode("ascii")),
         ("image/webp", base64.b64encode(second.read_bytes()).decode("ascii")),
