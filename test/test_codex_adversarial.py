@@ -596,6 +596,59 @@ def test_sequential_batch_pairs_outputs_by_result_variable() -> None:
     ] == ["one output", "two output"]
 
 
+def test_static_for_of_becomes_distinct_tool_result_pairs() -> None:
+    source = """
+        for (const id of [4745, 4746, 4756]) {
+          const r = await tools.mcp__clmail__communicate({
+            action: "read", actor: "/workspace/codex", params: {id}
+          });
+          text(JSON.stringify(r));
+        }
+    """
+    records = [
+        _record(
+            1,
+            "response_item",
+            {
+                "type": "custom_tool_call",
+                "call_id": "batch",
+                "name": "exec",
+                "input": source,
+            },
+        ),
+        _output(
+            2,
+            "batch",
+            [
+                {"type": "input_text", "text": "Script completed\nOutput:\n"},
+                {"type": "input_text", "text": "message 4745"},
+                {"type": "input_text", "text": "message 4746"},
+                {"type": "input_text", "text": "message 4756"},
+            ],
+        ),
+    ]
+
+    content = [item for entry in _normalized(records) for item in entry.message.content]
+    uses = [item for item in content if isinstance(item, ToolUseContent)]
+    results = [item for item in content if isinstance(item, ToolResultContent)]
+
+    assert [item.name for item in uses] == [
+        "mcp__clmail__communicate",
+        "mcp__clmail__communicate",
+        "mcp__clmail__communicate",
+    ]
+    assert [item.input["params"] for item in uses] == [
+        {"id": 4745},
+        {"id": 4746},
+        {"id": 4756},
+    ]
+    assert [item.content for item in results] == [
+        "message 4745",
+        "message 4746",
+        "message 4756",
+    ]
+
+
 @pytest.mark.parametrize(
     ("source", "expected_name"),
     [

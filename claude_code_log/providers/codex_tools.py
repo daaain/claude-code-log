@@ -15,6 +15,8 @@ import json
 import re
 from typing import Any, Literal, Optional, cast
 
+from .codex_javascript import analyze_javascript_tools
+
 
 @dataclass(frozen=True)
 class AdaptedToolCall:
@@ -57,6 +59,10 @@ def adapt_codex_tool_call(
 ) -> AdaptedToolCall:
     """Map a raw Codex tool call to a shared canonical tool when safe."""
     if name == "exec" and isinstance(raw_input, str):
+        analyzed = analyze_javascript_tools(raw_input)
+        if analyzed is not None and len(analyzed.calls) == 1:
+            call = analyzed.calls[0]
+            return _canonicalize(call.name, call.input)
         calls = _find_static_tool_calls(raw_input)
         if len(calls) != 1:
             return _workflow(raw_input)
@@ -75,6 +81,11 @@ def adapt_codex_tool_call(
 
 def adapt_codex_tool_batch(source: str) -> Optional[AdaptedToolBatch]:
     """Decode static multi-tool programs whose outputs remain correlatable."""
+    analyzed = analyze_javascript_tools(source)
+    if analyzed is not None and len(analyzed.calls) >= 2:
+        adapted = [_canonicalize(call.name, call.input) for call in analyzed.calls]
+        if all(call.name != "Workflow" for call in adapted):
+            return AdaptedToolBatch(adapted, "ordered", analyzed.result_indexes)
     calls = _find_static_tool_calls(source)
     if len(calls) < 2:
         return None

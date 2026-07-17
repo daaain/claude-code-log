@@ -117,6 +117,26 @@ def test_single_mcp_call_keeps_name_for_plugin_transformers() -> None:
     assert call.input["action"] == "list"
 
 
+def test_single_mcp_call_resolves_constant_shorthand_input() -> None:
+    source = """
+        const actor = "/workspace/codex";
+        const to = "/workspace/clmail/alice";
+        const r = await tools.mcp__clmail__communicate({
+          action: "send", actor, params: {to, subject: "Ready"}
+        });
+        text(r);
+    """
+
+    call = adapt_codex_tool_call("exec", {"raw": source}, raw_input=source)
+
+    assert call.name == "mcp__clmail__communicate"
+    assert call.input == {
+        "action": "send",
+        "actor": "/workspace/codex",
+        "params": {"to": "/workspace/clmail/alice", "subject": "Ready"},
+    }
+
+
 def test_multi_call_exec_remains_visible_as_workflow() -> None:
     source = (
         'const a = await tools.exec_command({cmd: "one"}); '
@@ -224,6 +244,35 @@ def test_sequential_calls_correlate_outputs_by_result_variable() -> None:
 
     assert batch is not None
     assert batch.result_indexes == [1, 0]
+
+
+def test_static_for_of_expands_distinct_tool_calls() -> None:
+    source = """
+        for (const id of [4745, 4746, 4756]) {
+          const r = await tools.mcp__clmail__communicate({
+            action: "read",
+            actor: "/workspace/codex",
+            params: {id}
+          });
+          text(JSON.stringify(r));
+        }
+    """
+
+    batch = adapt_codex_tool_batch(source)
+
+    assert batch is not None
+    assert batch.output_mode == "ordered"
+    assert batch.result_indexes == [0, 1, 2]
+    assert [call.name for call in batch.calls] == [
+        "mcp__clmail__communicate",
+        "mcp__clmail__communicate",
+        "mcp__clmail__communicate",
+    ]
+    assert [call.input["params"] for call in batch.calls] == [
+        {"id": 4745},
+        {"id": 4746},
+        {"id": 4756},
+    ]
 
 
 def test_all_tools_plus_one_command_is_compound_workflow() -> None:
