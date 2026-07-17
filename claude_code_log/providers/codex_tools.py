@@ -1,11 +1,11 @@
 """Canonicalize Codex tool calls for the shared renderer pipeline.
 
 Codex persists many calls inside a ``custom_tool_call`` named ``exec`` whose
-input is a small JavaScript orchestration program.  This module unwraps only
-the safe, common case: exactly one static ``tools.<name>({...})`` invocation
-with a JSON-compatible object literal.  Dynamic or multi-call programs remain
-visible as ``Workflow`` tools, and anything unknown retains its original name
-and input for the generic renderer.
+input is a small JavaScript orchestration program.  This module unwraps static
+``tools.<name>({...})`` invocations with JSON-compatible object literals when
+their emitted outputs can be correlated unambiguously.  Dynamic programs
+remain visible as ``Workflow`` tools, and anything unknown retains its original
+name and input for the generic renderer.
 """
 
 from __future__ import annotations
@@ -13,13 +13,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import re
-from typing import Any, Optional, cast
+from typing import Any, Literal, Optional, cast
 
 
 @dataclass(frozen=True)
 class AdaptedToolCall:
     name: str
     input: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class AdaptedToolBatch:
+    calls: list[AdaptedToolCall]
+    output_mode: Literal["markers", "ordered"]
 
 
 @dataclass(frozen=True)
@@ -66,11 +72,20 @@ def adapt_codex_tool_call(
     return _canonicalize(name, input_data)
 
 
-def adapt_codex_tool_batch(source: str) -> Optional[list[AdaptedToolCall]]:
-    """Decode a static ``Promise.all`` batch with ordered result emissions."""
+def adapt_codex_tool_batch(source: str) -> Optional[AdaptedToolBatch]:
+    """Decode static multi-tool programs whose outputs remain correlatable."""
     calls = _find_static_tool_calls(source)
     if len(calls) < 2:
         return None
+    promise = _adapt_promise_batch(source, calls)
+    if promise is not None:
+        return promise
+    return _adapt_sequential_batch(source, calls)
+
+
+def _adapt_promise_batch(
+    source: str, calls: list[_StaticCall]
+) -> Optional[AdaptedToolBatch]:
     code = _code_projection(source)
     assignment = re.search(
         r"\bconst\s+(?P<results>[A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*"
@@ -106,12 +121,20 @@ def adapt_codex_tool_batch(source: str) -> Optional[list[AdaptedToolCall]]:
         return None
     tail = re.sub(r"\s+", "", source[statement_end:])
     results = assignment.group("results")
-    expected = {
+    marker_tails = {
         f"{results}.forEach((r,i)=>{{text(`RESULT_${{i+1}}`);text(r.output)}});",
         f"{results}.forEach((r,i)=>{{text(`RESULT_${{i+1}}`);text(r.output);"
         "if(r.session_id)text(`SESSION_ID=${r.session_id}`)});",
     }
-    if tail not in expected:
+    ordered_tails = {
+        f"for(constrof{results})text(r.output);",
+        f"for(constrof{results}){{text(r.output);}}",
+    }
+    if tail in marker_tails:
+        output_mode: Literal["markers", "ordered"] = "markers"
+    elif tail in ordered_tails:
+        output_mode = "ordered"
+    else:
         return None
 
     adapted: list[AdaptedToolCall] = []
@@ -123,7 +146,54 @@ def adapt_codex_tool_batch(source: str) -> Optional[list[AdaptedToolCall]]:
         if item.name == "Workflow":
             return None
         adapted.append(item)
-    return adapted
+    return AdaptedToolBatch(adapted, output_mode)
+
+
+def _adapt_sequential_batch(
+    source: str, calls: list[_StaticCall]
+) -> Optional[AdaptedToolBatch]:
+    """Decode ``call; text(result); call; text(result)`` programs."""
+    code = _code_projection(source)
+    remainder = list(code)
+    adapted: list[AdaptedToolCall] = []
+    emissions = _find_output_emissions(source)
+    if len(emissions) != len(calls):
+        return None
+
+    previous_end = 0
+    for index, (call, emission) in enumerate(zip(calls, emissions)):
+        assignment = _call_assignment(code, call)
+        if assignment is None:
+            return None
+        assignment_start, assignment_end, result_name = assignment
+        next_call_start = (
+            calls[index + 1].start if index + 1 < len(calls) else len(source)
+        )
+        if not (
+            previous_end <= assignment_start
+            and assignment_end <= emission.start < emission.end <= next_call_start
+        ):
+            return None
+        expression = _code_projection(emission.expression).strip()
+        if expression not in {result_name, f"{result_name}.output"}:
+            return None
+        decoded = _decode_object_literal(call.argument)
+        if decoded is None:
+            return None
+        item = _canonicalize(call.name, decoded)
+        if item.name == "Workflow":
+            return None
+        adapted.append(item)
+        for start, end in (
+            (assignment_start, assignment_end),
+            (emission.start, emission.end),
+        ):
+            remainder[start:end] = " " * (end - start)
+        previous_end = emission.end
+
+    if "".join(remainder).strip():
+        return None
+    return AdaptedToolBatch(adapted, "ordered")
 
 
 def _is_simple_result_forwarder(source: str, call: _StaticCall) -> bool:
@@ -131,35 +201,65 @@ def _is_simple_result_forwarder(source: str, call: _StaticCall) -> bool:
     code = _code_projection(source)
     if re.search(r"\bALL_TOOLS\b", code):
         return False
-    assignment = re.search(
-        r"\b(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*"
-        r"await\s+tools\." + re.escape(call.name) + r"\s*\(",
-        code,
-    )
-    if assignment is None or assignment.end() - 1 != call.start:
+    assignment = _call_assignment(code, call)
+    if assignment is None:
         return False
-    assignment_end = _statement_end(code, call.end + 1)
-    if assignment_end is None:
-        return False
+    assignment_start, assignment_end, result_name = assignment
     emissions = _find_output_emissions(source)
-    if len(emissions) != 1:
+    if not emissions:
         return False
-    result_name = assignment.group(1)
-    expression_code = _code_projection(emissions[0].expression).strip()
-    direct_forwarders = {result_name, f"{result_name}.output"}
-    stringified_result = re.fullmatch(
-        r"JSON\s*\.\s*stringify\s*\(\s*" + re.escape(result_name) + r"\s*\)",
-        expression_code,
-    )
-    if expression_code not in direct_forwarders and stringified_result is None:
+    if any(
+        not _is_result_expression(item.expression, result_name) for item in emissions
+    ):
         return False
     remainder = list(code)
-    for start, end in (
-        (assignment.start(), assignment_end),
-        (emissions[0].start, emissions[0].end),
-    ):
+    for start, end in [(assignment_start, assignment_end)] + [
+        (item.start, item.end) for item in emissions
+    ]:
         remainder[start:end] = " " * (end - start)
     return not "".join(remainder).strip()
+
+
+def _call_assignment(code: str, call: _StaticCall) -> Optional[tuple[int, int, str]]:
+    pattern = re.compile(
+        r"\b(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*"
+        r"await\s+tools\." + re.escape(call.name) + r"\s*\("
+    )
+    assignment = next(
+        (match for match in pattern.finditer(code) if match.end() - 1 == call.start),
+        None,
+    )
+    if assignment is None:
+        return None
+    assignment_end = _statement_end(code, call.end + 1)
+    if assignment_end is None:
+        return None
+    return assignment.start(), assignment_end, assignment.group(1)
+
+
+def _is_result_expression(expression: str, result_name: str) -> bool:
+    code = _code_projection(expression).strip()
+    direct = re.fullmatch(
+        re.escape(result_name) + r"(?:\s*\.\s*[A-Za-z_$][A-Za-z0-9_$]*)?",
+        code,
+    )
+    if direct is not None:
+        return True
+    if re.fullmatch(
+        r"JSON\s*\.\s*stringify\s*\(\s*" + re.escape(result_name) + r"\s*\)",
+        code,
+    ):
+        return True
+    value = expression.strip()
+    if len(value) < 2 or value[0] != "`" or value[-1] != "`":
+        return False
+    interpolation = re.compile(
+        r"\$\{\s*" + re.escape(result_name) + r"\s*\.\s*[A-Za-z_$][A-Za-z0-9_$]*\s*\}"
+    )
+    body = value[1:-1]
+    return interpolation.search(body) is not None and "${" not in interpolation.sub(
+        "", body
+    )
 
 
 def _workflow(source: str) -> AdaptedToolCall:

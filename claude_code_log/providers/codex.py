@@ -803,9 +803,9 @@ class CodexProvider(BaseProvider):
         return batches
 
     def _tool_batches(self, records: list[_DecodedRecord]) -> dict[str, _ToolBatch]:
-        """Correlate static Promise.all calls with their RESULT_n output groups."""
-        requests: dict[str, list[AdaptedToolCall]] = {}
-        outputs: dict[str, tuple[list[str], str]] = {}
+        """Correlate static multi-tool programs with their output groups."""
+        requests: dict[str, tuple[list[AdaptedToolCall], str]] = {}
+        outputs: dict[str, tuple[list[dict[str, Any]], str]] = {}
         for record in records:
             payload_type = self._nonempty_string(record.payload.get("type"))
             call_id = self._nonempty_string(record.payload.get("call_id"))
@@ -817,9 +817,9 @@ class CodexProvider(BaseProvider):
             ):
                 source = record.payload.get("input")
                 if isinstance(source, str):
-                    calls = adapt_codex_tool_batch(source)
-                    if calls is not None:
-                        requests[call_id] = calls
+                    batch = adapt_codex_tool_batch(source)
+                    if batch is not None:
+                        requests[call_id] = (batch.calls, batch.output_mode)
             elif payload_type in {
                 "function_call_output",
                 "custom_tool_call_output",
@@ -828,23 +828,29 @@ class CodexProvider(BaseProvider):
                 if isinstance(output, list) and all(
                     isinstance(item, dict) for item in cast(list[Any], output)
                 ):
-                    split = self._batch_outputs(cast(list[dict[str, Any]], output))
-                    if split is not None:
-                        outputs[call_id] = (split, record.timestamp)
+                    outputs[call_id] = (
+                        cast(list[dict[str, Any]], output),
+                        record.timestamp,
+                    )
 
         batches: dict[str, _ToolBatch] = {}
-        for call_id, calls in requests.items():
+        for call_id, (calls, output_mode) in requests.items():
             output = outputs.get(call_id)
-            if output is None or len(output[0]) != len(calls):
+            if output is None:
+                continue
+            split = self._batch_outputs(output[0], output_mode, len(calls))
+            if split is None:
                 continue
             batches[call_id] = _ToolBatch(
                 calls=calls,
-                results=output[0],
+                results=split,
                 result_timestamp=output[1],
             )
         return batches
 
-    def _batch_outputs(self, items: list[dict[str, Any]]) -> Optional[list[str]]:
+    def _batch_outputs(
+        self, items: list[dict[str, Any]], output_mode: str, expected: int
+    ) -> Optional[list[str]]:
         texts: list[str] = []
         for item in items:
             if item.get("type") not in {"input_text", "output_text", "text"}:
@@ -855,6 +861,8 @@ class CodexProvider(BaseProvider):
             texts.append(text)
         if not texts or not texts[0].startswith("Script completed"):
             return None
+        if output_mode == "ordered":
+            return texts[1:] if len(texts) == expected + 1 else None
 
         groups: list[list[str]] = []
         for text in texts[1:]:
@@ -869,7 +877,7 @@ class CodexProvider(BaseProvider):
             if groups[-1] and groups[-1][-1] and not groups[-1][-1].endswith("\n"):
                 groups[-1].append("\n")
             groups[-1].append(text)
-        return ["".join(group) for group in groups] if groups else None
+        return ["".join(group) for group in groups] if len(groups) == expected else None
 
     def _normalize_record(
         self,

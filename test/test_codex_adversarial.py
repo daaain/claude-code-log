@@ -483,6 +483,84 @@ def test_promise_batch_result_count_mismatch_stays_workflow() -> None:
     assert [item.name for item in uses] == ["Workflow"]
 
 
+def test_ordered_batch_becomes_tool_result_pairs() -> None:
+    source = (
+        "const results = await Promise.all(["
+        'tools.exec_command({cmd: "one"}), '
+        'tools.exec_command({cmd: "two"})]); '
+        "for (const r of results) text(r.output);"
+    )
+    records = [
+        _record(
+            1,
+            "response_item",
+            {
+                "type": "custom_tool_call",
+                "call_id": "batch",
+                "name": "exec",
+                "input": source,
+            },
+        ),
+        _output(
+            2,
+            "batch",
+            [
+                {"type": "input_text", "text": "Script completed\nOutput:\n"},
+                {"type": "input_text", "text": "first output"},
+                {"type": "input_text", "text": "second output"},
+            ],
+        ),
+    ]
+
+    content = [item for entry in _normalized(records) for item in entry.message.content]
+
+    assert [item.name for item in content if isinstance(item, ToolUseContent)] == [
+        "Bash",
+        "Bash",
+    ]
+    assert [
+        item.content for item in content if isinstance(item, ToolResultContent)
+    ] == ["first output", "second output"]
+
+
+def test_ordered_batch_result_count_mismatch_stays_workflow() -> None:
+    source = (
+        "const results = await Promise.all(["
+        'tools.exec_command({cmd: "one"}), '
+        'tools.exec_command({cmd: "two"})]); '
+        "for (const r of results) text(r.output);"
+    )
+    records = [
+        _record(
+            1,
+            "response_item",
+            {
+                "type": "custom_tool_call",
+                "call_id": "batch",
+                "name": "exec",
+                "input": source,
+            },
+        ),
+        _output(
+            2,
+            "batch",
+            [
+                {"type": "input_text", "text": "Script completed\nOutput:\n"},
+                {"type": "input_text", "text": "only one output"},
+            ],
+        ),
+    ]
+
+    uses = [
+        item
+        for entry in _normalized(records)
+        for item in entry.message.content
+        if isinstance(item, ToolUseContent)
+    ]
+
+    assert [item.name for item in uses] == ["Workflow"]
+
+
 @pytest.mark.parametrize(
     ("source", "expected_name"),
     [

@@ -138,7 +138,8 @@ def test_static_promise_all_batch_recovers_heterogeneous_tools() -> None:
     calls = adapt_codex_tool_batch(source)
 
     assert calls is not None
-    assert [(call.name, call.input) for call in calls] == [
+    assert calls.output_mode == "markers"
+    assert [(call.name, call.input) for call in calls.calls] == [
         ("Bash", {"command": "pytest -q"}),
         ("WebSearch", {"query": "synthetic"}),
     ]
@@ -154,6 +155,33 @@ def test_promise_batch_with_uncorrelated_emission_is_rejected() -> None:
     assert adapt_codex_tool_batch(source) is None
 
 
+def test_promise_for_of_batch_uses_ordered_outputs() -> None:
+    source = (
+        "const results = await Promise.all(["
+        'tools.exec_command({cmd: "one"}), tools.exec_command({cmd: "two"})]);'
+        "for (const r of results) text(r.output);"
+    )
+
+    batch = adapt_codex_tool_batch(source)
+
+    assert batch is not None
+    assert batch.output_mode == "ordered"
+    assert [call.input["command"] for call in batch.calls] == ["one", "two"]
+
+
+def test_sequential_calls_use_ordered_outputs() -> None:
+    source = (
+        'const first = await tools.exec_command({cmd: "one"}); text(first.output);'
+        'const second = await tools.exec_command({cmd: "two"}); text(second.output);'
+    )
+
+    batch = adapt_codex_tool_batch(source)
+
+    assert batch is not None
+    assert batch.output_mode == "ordered"
+    assert [call.input["command"] for call in batch.calls] == ["one", "two"]
+
+
 def test_all_tools_plus_one_command_is_compound_workflow() -> None:
     source = (
         "const matches = ALL_TOOLS.filter(x => x.name.includes('git')); "
@@ -167,7 +195,18 @@ def test_all_tools_plus_one_command_is_compound_workflow() -> None:
     assert call.input == {"script": source}
 
 
-def test_one_tool_with_multiple_output_emissions_is_workflow() -> None:
+def test_one_tool_with_multiple_result_emissions_reuses_renderer() -> None:
+    source = (
+        'const result = await tools.exec_command({cmd: "git status"}); '
+        "text(result.output); text(`exit_code=${result.exit_code}`);"
+    )
+
+    assert (
+        adapt_codex_tool_call("exec", {"raw": source}, raw_input=source).name == "Bash"
+    )
+
+
+def test_one_tool_with_unrelated_output_emission_is_workflow() -> None:
     source = (
         'const result = await tools.exec_command({cmd: "git status"}); '
         'text("prefix"); text(result.output);'
