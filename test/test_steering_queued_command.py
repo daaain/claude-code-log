@@ -114,7 +114,19 @@ def _remove(text, *, sid=_SID):
 
 
 def _queued_command(uuid, parent, prompt, *, version=_MODERN, sid=_SID):
-    """Modern in-DAG queued_command attachment paired with a 'remove'."""
+    """Modern in-DAG queued_command attachment paired with a 'remove'.
+
+    ``prompt=None`` omits the prompt key entirely (a promptless, non-
+    renderable attachment).
+    """
+    attachment = {
+        "type": "queued_command",
+        "commandMode": "prompt",
+        "origin": {"kind": "human"},
+        "timestamp": "2026-07-11T07:00:00.000Z",
+    }
+    if prompt is not None:
+        attachment["prompt"] = prompt
     return {
         "type": "attachment",
         "uuid": uuid,
@@ -125,13 +137,7 @@ def _queued_command(uuid, parent, prompt, *, version=_MODERN, sid=_SID):
         "sessionId": sid,
         "version": version,
         "timestamp": "2026-07-11T07:00:03.000Z",
-        "attachment": {
-            "type": "queued_command",
-            "prompt": prompt,
-            "commandMode": "prompt",
-            "origin": {"kind": "human"},
-            "timestamp": "2026-07-11T07:00:00.000Z",
-        },
+        "attachment": attachment,
     }
 
 
@@ -197,6 +203,26 @@ class TestModernQueuedCommand:
         # promoted to a (would-be empty) steering card.
         assert "monk blocked — permission prompt" in html
         assert html.count("User (steering)") == 0
+
+    def test_promptless_queued_command_does_not_suppress_remove(self):
+        """A queued_command with no usable prompt renders nothing, so it
+        must NOT seed the version-suppression set — otherwise the paired
+        `remove` (which still carries the steering text) would be dropped
+        and the steering content lost entirely."""
+        html = _render(
+            [
+                _user("u1", None, "start"),
+                _assistant("a1", "u1", "working"),
+                _remove("do not lose this steering text"),
+                _user("u2", "a1", "next real prompt"),
+                _queued_command("qc1", "u2", None),  # promptless → renders nothing
+                _assistant("a2", "qc1", "ok"),
+            ]
+        )
+
+        # The remove is the only carrier of the text → it must still render.
+        assert "do not lose this steering text" in html
+        assert html.count("User (steering)") == 1
 
 
 # --------------------------------------------------------------------------

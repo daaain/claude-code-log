@@ -3764,10 +3764,11 @@ def _filter_messages(messages: list[TranscriptEntry]) -> list[TranscriptEntry]:
 
         # Attachment entries (issue #128): include — pass-2 walker will
         # call ``create_attachment_message`` to surface hook payloads at
-        # full detail. Non-hook attachment flavours produce ``None`` and
-        # are silently dropped at registration time, mirroring the
-        # pre-#128 PassthroughTranscriptEntry behaviour. Detail-level
-        # filtering happens later: ``_ghost_template_by_detail`` drops
+        # full detail (and ``queued_command`` as a steering message).
+        # The remaining non-hook flavours produce ``None`` and are
+        # silently dropped at registration time, mirroring the pre-#128
+        # PassthroughTranscriptEntry behaviour. Detail-level filtering
+        # happens later: ``_ghost_template_by_detail`` drops
         # ``HookAttachmentMessage`` at HIGH and below.
         if isinstance(message, AttachmentTranscriptEntry):
             filtered.append(message)
@@ -4561,9 +4562,16 @@ def _render_messages(
             isinstance(entry, AttachmentTranscriptEntry)
             and (entry.attachment or {}).get("type") == "queued_command"
         ):
-            versions_with_queued_command.setdefault(entry.sessionId, set()).add(
-                entry.version
-            )
+            # Only count a version whose ``queued_command`` will actually
+            # render — i.e. it carries a usable prompt (mirrors the guard in
+            # ``attachment_factory._create_queued_command_message``). Otherwise
+            # a promptless attachment would seed the suppression set and drop
+            # the paired ``remove`` that still holds the steering text.
+            qc_prompt = (entry.attachment or {}).get("prompt")
+            if isinstance(qc_prompt, str) and qc_prompt.strip():
+                versions_with_queued_command.setdefault(entry.sessionId, set()).add(
+                    entry.version
+                )
 
     # Track which sessions have had headers added.
     seen_sessions: set[str] = set()
@@ -4598,8 +4606,14 @@ def _render_messages(
             and message.operation == "remove"
         ):
             inferred_version = last_version_by_session.get(message.sessionId, "")
-            if inferred_version in versions_with_queued_command.get(
-                message.sessionId, set()
+            # A non-empty inferred version is required: an empty string means no
+            # version-bearing entry preceded this remove, so we can't confirm a
+            # same-version ``queued_command`` — render the remove (safe default)
+            # rather than risk suppressing a real steering card.
+            if (
+                inferred_version
+                and inferred_version
+                in versions_with_queued_command.get(message.sessionId, set())
             ):
                 continue
 
