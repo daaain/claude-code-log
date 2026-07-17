@@ -9,16 +9,25 @@ which left the user unable to inspect any hook output even at
 full-detail.
 
 This factory promotes the *hook* flavours into a renderable
-``HookAttachmentMessage``; non-hook flavours still return ``None`` so
-they keep the historical "structural in DAG, hidden from rendering"
-behaviour. New attachment flavours can grow their own factory branch
-here as needed.
+``HookAttachmentMessage`` and ``queued_command`` (modern steering
+deliveries) into a ``UserSteeringMessage``; the remaining non-hook
+flavours still return ``None`` so they keep the historical "structural
+in DAG, hidden from rendering" behaviour. New attachment flavours can
+grow their own factory branch here as needed.
 """
 
 from typing import Any, Optional, cast
 
-from ..models import AttachmentTranscriptEntry, HookAttachmentMessage
+from ..models import (
+    AttachmentTranscriptEntry,
+    HookAttachmentMessage,
+    MessageContent,
+    TextContent,
+    UserSteeringMessage,
+    UserTextMessage,
+)
 from .meta_factory import create_meta
+from .user_factory import create_user_message
 
 
 # Attachment ``type`` values produced when a Claude Code hook fires.
@@ -61,9 +70,51 @@ def _coerce_int(value: Any) -> Optional[int]:
     return None
 
 
+def _create_queued_command_message(
+    transcript: AttachmentTranscriptEntry,
+    payload: dict[str, Any],
+) -> Optional[MessageContent]:
+    """Promote a ``queued_command`` attachment to a steering message.
+
+    Modern Claude Code (≳2.1.101) writes a ``queued_command`` attachment
+    for every steering delivery — an in-DAG, uuid'd record that is
+    strictly better than the chain-less legacy queue-operation
+    ``remove`` (which we suppress per-version in the renderer once a
+    ``queued_command`` is seen). The steering text lives in
+    ``payload["prompt"]``.
+
+    The text is routed through :func:`create_user_message` so it gets
+    the same classification + plugin-transformer pass as an
+    idle-delivered user prompt: a ``[monitor] …`` steering injection
+    renders as the same demoted marker as its non-steering siblings. If
+    no transformer rewrites it (the result is a *plain*
+    ``UserTextMessage``), it is wrapped as ``UserSteeringMessage`` to
+    keep the ``user steering`` CSS treatment; a transformed/other
+    classification is returned unchanged.
+    """
+    prompt = payload.get("prompt")
+    if not isinstance(prompt, str) or not prompt.strip():
+        return None
+
+    meta = create_meta(transcript)
+    chunk: list[Any] = [TextContent(type="text", text=prompt)]
+    result = create_user_message(meta, chunk, prompt, is_slash_command=False)
+    if result is None:
+        return None
+
+    # Only a plain, untransformed UserTextMessage becomes steering. An
+    # exact-type check mirrors the legacy-path hardening in renderer.py:
+    # a transformer may return a UserTextMessage *subclass* carrying its
+    # content in own fields with ``items=[]`` — rebuilding steering from
+    # its ``items`` would blank the card.
+    if type(result) is UserTextMessage:
+        return UserSteeringMessage(items=result.items, meta=meta)
+    return result
+
+
 def create_attachment_message(
     transcript: AttachmentTranscriptEntry,
-) -> Optional[HookAttachmentMessage]:
+) -> Optional[MessageContent]:
     """Build a renderable MessageContent from an attachment entry.
 
     Returns ``None`` for attachment flavours we don't surface yet — the
@@ -76,11 +127,17 @@ def create_attachment_message(
         transcript: Parsed attachment entry from the JSONL file.
 
     Returns:
-        HookAttachmentMessage for hook flavours; ``None`` otherwise.
+        A renderable content model (``HookAttachmentMessage`` for hook
+        flavours, a steering message for ``queued_command``); ``None``
+        otherwise.
     """
     payload = transcript.attachment or {}
 
     attachment_type = payload.get("type")
+
+    if attachment_type == "queued_command":
+        return _create_queued_command_message(transcript, payload)
+
     kind = (
         _HOOK_KINDS.get(attachment_type) if isinstance(attachment_type, str) else None
     )

@@ -4542,18 +4542,66 @@ def _render_messages(
     # list; entries removed by structural filtering are simply absent
     # from the map and skipped by the scan.
     uuid_to_entry: dict[str, TranscriptEntry] = {}
+    # Pass 1 for legacy steering-``remove`` suppression: per session, the set
+    # of harness ``version`` values under which a ``queued_command`` attachment
+    # appears. Modern Claude Code (≳2.1.101) writes an in-DAG ``queued_command``
+    # for every steering delivery, 1:1 with the chain-less legacy ``remove`` op;
+    # once we render the former we must suppress the latter to avoid a duplicate
+    # card. Scoped per session (session HTML is cached individually — cross-
+    # session state would break incremental-cache correctness) and per version
+    # (a resumed session can span a harness upgrade, so neither a session-level
+    # boolean nor hard-coded version knowledge is correct — learn it from the
+    # file). See ``_render_messages`` pass 2 below for the inference.
+    versions_with_queued_command: dict[str, set[str]] = {}
     for entry in messages:
         entry_uuid = getattr(entry, "uuid", "")
         if entry_uuid:
             uuid_to_entry.setdefault(entry_uuid, entry)
+        if (
+            isinstance(entry, AttachmentTranscriptEntry)
+            and (entry.attachment or {}).get("type") == "queued_command"
+        ):
+            versions_with_queued_command.setdefault(entry.sessionId, set()).add(
+                entry.version
+            )
 
     # Track which sessions have had headers added.
     seen_sessions: set[str] = set()
+
+    # Pass 2 state for steering-``remove`` suppression: the last version-bearing
+    # entry seen per session, in file order. Queue-op entries carry no
+    # ``version``; a ``remove`` happens mid-turn and a turn cannot span a
+    # harness restart, so the most recent version in its session is its version.
+    last_version_by_session: dict[str, str] = {}
 
     for message in messages:
         message_type = message.type
         msg_session_id = getattr(message, "sessionId", "") or ""
         message_uuid = getattr(message, "uuid", "") or ""
+
+        # Track the harness version per session in file order (pass 2 of the
+        # steering-``remove`` suppression). Version-bearing entries carry a
+        # non-empty ``version``; queue-op / summary entries don't and leave the
+        # last value in place.
+        msg_version = getattr(message, "version", "") or ""
+        if msg_version:
+            last_version_by_session[msg_session_id] = msg_version
+
+        # Suppress the legacy steering ``remove`` when its session has learned a
+        # ``queued_command`` under the same (inferred) harness version: the
+        # modern in-DAG attachment is rendered instead, 1:1. Old transcripts
+        # (no ``queued_command`` anywhere) have an empty set → removes render as
+        # before. ``remove`` ops are uuid-less (no DAG role), so suppression is
+        # plain skipping with no dangling-anchor risk.
+        if (
+            isinstance(message, QueueOperationTranscriptEntry)
+            and message.operation == "remove"
+        ):
+            inferred_version = last_version_by_session.get(message.sessionId, "")
+            if inferred_version in versions_with_queued_command.get(
+                message.sessionId, set()
+            ):
+                continue
 
         # Pre-D11 inline derivation (``current_render_session`` +
         # agent-parent resolution) collapsed into one map lookup.
@@ -4786,11 +4834,19 @@ def _render_messages(
                         chunk_meta, chunk, chunk_usage
                     )
 
-                # Convert to UserSteeringMessage for queue-operation 'remove' messages
+                # Convert to UserSteeringMessage for queue-operation 'remove'
+                # messages. Exact-type check (not ``isinstance``): a plugin
+                # transformer may have rewritten the text into a
+                # ``UserTextMessage`` *subclass* that carries its content in
+                # own fields with ``items=[]`` (e.g. hook-demotion). Rebuilding
+                # ``UserSteeringMessage(items=content_model.items)`` from such a
+                # subclass would clobber the transformed content back into an
+                # empty-items steering card. Only the plain, untransformed
+                # ``UserTextMessage`` is promoted to steering here.
                 if (
                     isinstance(message, QueueOperationTranscriptEntry)
                     and message.operation == "remove"
-                    and isinstance(content_model, UserTextMessage)
+                    and type(content_model) is UserTextMessage
                 ):
                     content_model = UserSteeringMessage(
                         items=content_model.items, meta=chunk_meta
