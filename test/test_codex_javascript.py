@@ -93,3 +93,49 @@ def test_analyzer_rejects_dynamic_or_oversized_loops_without_partial_results() -
 
     assert analyze_javascript_tools(dynamic) is None
     assert analyze_javascript_tools(oversized, max_loop_iterations=2) is None
+
+
+def test_analyzer_rejects_dynamic_tool_arguments_without_legacy_fallback() -> None:
+    batch = analyze_javascript_tools(
+        "const args = getArgs(); "
+        "const result = await tools.exec_command(args); text(result);"
+    )
+
+    assert batch is None
+
+
+def test_analyzer_supports_inline_awaited_tool_emission() -> None:
+    batch = analyze_javascript_tools(
+        'const patch = "*** Begin Patch\\n*** End Patch"; '
+        "text(await tools.apply_patch(patch));"
+    )
+
+    assert batch is not None
+    assert [(call.name, call.input) for call in batch.calls] == [
+        ("apply_patch", {"patch": "*** Begin Patch\n*** End Patch"})
+    ]
+
+
+def test_analyzer_allows_multiple_emissions_for_one_direct_call() -> None:
+    batch = analyze_javascript_tools(
+        'const result = await tools.exec_command({cmd: "git status"}); '
+        "text(result.output); text(`exit_code=${result.exit_code}`);"
+    )
+
+    assert batch is not None
+    assert len(batch.calls) == 1
+    assert batch.result_indexes == [0]
+
+
+def test_analyzer_recovers_promise_all_marker_outputs() -> None:
+    batch = analyze_javascript_tools(
+        "const results = await Promise.all(["
+        'tools.exec_command({cmd: "one"}), '
+        'tools.exec_command({cmd: "two"})]); '
+        "results.forEach((r,i)=>{text(`RESULT_${i+1}`);text(r.output)});"
+    )
+
+    assert batch is not None
+    assert [call.input["cmd"] for call in batch.calls] == ["one", "two"]
+    assert batch.result_indexes == [0, 1]
+    assert batch.output_mode == "markers"

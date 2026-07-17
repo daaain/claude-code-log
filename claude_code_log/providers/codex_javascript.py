@@ -10,7 +10,7 @@ from __future__ import annotations
 import ast
 from dataclasses import dataclass
 import json
-from typing import Any, Optional, TypeAlias, cast
+from typing import Any, Literal, Optional, TypeAlias, cast
 
 from tree_sitter import Language, Node, Parser
 import tree_sitter_javascript
@@ -50,6 +50,7 @@ class JavaScriptToolBatch:
 
     calls: list[JavaScriptToolCall]
     result_indexes: list[int]
+    output_mode: Literal["markers", "ordered"] = "ordered"
 
 
 @dataclass(frozen=True)
@@ -63,7 +64,12 @@ class _ToolResult:
     path: tuple[str, ...] = ()
 
 
-_AbstractValue: TypeAlias = _Constant | _ToolResult
+@dataclass(frozen=True)
+class _Collection:
+    values: tuple[_ToolResult, ...]
+
+
+_AbstractValue: TypeAlias = _Collection | _Constant | _ToolResult
 _Environment: TypeAlias = dict[str, _AbstractValue]
 
 
@@ -130,12 +136,18 @@ class _StaticEvaluator:
         self.calls: list[JavaScriptToolCall] = []
         self.emissions: list[int] = []
         self.loop_iterations = 0
+        self.output_mode: Literal["markers", "ordered"] = "ordered"
 
     def evaluate(self) -> Optional[JavaScriptToolBatch]:
         environment: _Environment = {}
         if not self._statements(self.syntax.root.named_children, environment):
             return None
-        if not self.calls or len(self.calls) != len(self.emissions):
+        if not self.calls or not self.emissions:
+            return None
+
+        if len(self.calls) == 1 and all(index == 0 for index in self.emissions):
+            return JavaScriptToolBatch(self.calls, [0], self.output_mode)
+        if len(self.calls) != len(self.emissions):
             return None
 
         result_indexes = [-1] * len(self.calls)
@@ -145,7 +157,7 @@ class _StaticEvaluator:
             result_indexes[call_index] = output_index
         if -1 in result_indexes:
             return None
-        return JavaScriptToolBatch(self.calls, result_indexes)
+        return JavaScriptToolBatch(self.calls, result_indexes, self.output_mode)
 
     def _statements(self, statements: list[Node], environment: _Environment) -> bool:
         for statement in statements:
@@ -156,7 +168,9 @@ class _StaticEvaluator:
                     return False
                 continue
             if statement.type == "expression_statement":
-                if not self._emission(statement, environment):
+                if not self._emission(
+                    statement, environment
+                ) and not self._collection_for_each(statement, environment):
                     return False
                 continue
             if statement.type == "for_in_statement":
@@ -197,6 +211,9 @@ class _StaticEvaluator:
         expressions = node.named_children
         if len(expressions) != 1:
             return None
+        collection = self._promise_all(expressions[0], environment)
+        if collection is not None:
+            return collection
         call = self._tool_call(expressions[0], environment)
         if call is None or len(self.calls) >= self.max_expanded_calls:
             return None
@@ -228,13 +245,16 @@ class _StaticEvaluator:
         ):
             return None
         values = arguments.named_children
-        if len(values) != 1 or values[0].type != "object":
+        if len(values) != 1:
             return None
+        tool_name = self.syntax.text(property_node)
         input_data = self._constant(values[0], environment)
+        if tool_name == "apply_patch" and isinstance(input_data, str):
+            input_data = {"patch": input_data}
         if input_data is _UNKNOWN or not isinstance(input_data, dict):
             return None
         return JavaScriptToolCall(
-            name=self.syntax.text(property_node),
+            name=tool_name,
             input=cast(dict[str, Any], input_data),
         )
 
@@ -253,7 +273,18 @@ class _StaticEvaluator:
             or len(arguments.named_children) != 1
         ):
             return False
-        result = self._result_reference(arguments.named_children[0], environment)
+        argument = arguments.named_children[0]
+        if argument.type == "await_expression":
+            awaited = argument.named_children
+            if len(awaited) != 1 or len(self.calls) >= self.max_expanded_calls:
+                return False
+            tool_call = self._tool_call(awaited[0], environment)
+            if tool_call is None:
+                return False
+            result = _ToolResult(len(self.calls))
+            self.calls.append(tool_call)
+        else:
+            result = self._result_reference(argument, environment)
         if result is None:
             return False
         self.emissions.append(result.call_index)
@@ -281,7 +312,65 @@ class _StaticEvaluator:
             if arguments is None or len(arguments.named_children) != 1:
                 return None
             return self._result_reference(arguments.named_children[0], environment)
+        if node.type == "template_string":
+            results: list[_ToolResult] = []
+            for child in node.named_children:
+                if child.type == "string_fragment":
+                    continue
+                if (
+                    child.type != "template_substitution"
+                    or len(child.named_children) != 1
+                ):
+                    return None
+                result = self._result_reference(child.named_children[0], environment)
+                if result is None:
+                    return None
+                results.append(result)
+            if results and all(
+                item.call_index == results[0].call_index for item in results
+            ):
+                return results[0]
         return None
+
+    def _promise_all(
+        self, node: Node, environment: _Environment
+    ) -> Optional[_Collection]:
+        if node.type != "call_expression":
+            return None
+        function = node.child_by_field_name("function")
+        arguments = node.child_by_field_name("arguments")
+        if (
+            function is None
+            or function.type != "member_expression"
+            or arguments is None
+            or len(arguments.named_children) != 1
+        ):
+            return None
+        owner = function.child_by_field_name("object")
+        property_node = function.child_by_field_name("property")
+        if (
+            owner is None
+            or owner.type != "identifier"
+            or self.syntax.text(owner) != "Promise"
+            or property_node is None
+            or property_node.type != "property_identifier"
+            or self.syntax.text(property_node) != "all"
+        ):
+            return None
+        array = arguments.named_children[0]
+        if array.type != "array":
+            return None
+
+        results: list[_ToolResult] = []
+        for element in array.named_children:
+            if len(self.calls) >= self.max_expanded_calls:
+                return None
+            call = self._tool_call(element, environment)
+            if call is None:
+                return None
+            results.append(_ToolResult(len(self.calls)))
+            self.calls.append(call)
+        return _Collection(tuple(results))
 
     def _is_json_stringify(self, node: Node) -> bool:
         function = node.child_by_field_name("function")
@@ -313,13 +402,20 @@ class _StaticEvaluator:
             or self.syntax.text(operator) != "of"
             or right is None
             or body is None
-            or body.type != "statement_block"
         ):
             return False
-        values = self._constant(right, environment)
-        if values is _UNKNOWN or not isinstance(values, list):
-            return False
-        loop_values = cast(list[Any], values)
+        right_value = (
+            environment.get(self.syntax.text(right))
+            if right.type == "identifier"
+            else None
+        )
+        if isinstance(right_value, _Collection):
+            loop_values: list[Any] = list(right_value.values)
+        else:
+            values = self._constant(right, environment)
+            if values is _UNKNOWN or not isinstance(values, list):
+                return False
+            loop_values = cast(list[Any], values)
         if self.loop_iterations + len(loop_values) > self.max_loop_iterations:
             return False
 
@@ -327,10 +423,90 @@ class _StaticEvaluator:
         name = self.syntax.text(left)
         for value in loop_values:
             iteration_environment = dict(environment)
-            iteration_environment[name] = _Constant(value)
-            if not self._statements(body.named_children, iteration_environment):
+            iteration_environment[name] = (
+                value if isinstance(value, _ToolResult) else _Constant(value)
+            )
+            statements = (
+                body.named_children if body.type == "statement_block" else [body]
+            )
+            if not self._statements(statements, iteration_environment):
                 return False
         return True
+
+    def _collection_for_each(self, statement: Node, environment: _Environment) -> bool:
+        expressions = statement.named_children
+        if len(expressions) != 1 or expressions[0].type != "call_expression":
+            return False
+        call = expressions[0]
+        function = call.child_by_field_name("function")
+        arguments = call.child_by_field_name("arguments")
+        if (
+            function is None
+            or function.type != "member_expression"
+            or arguments is None
+            or len(arguments.named_children) != 1
+        ):
+            return False
+        owner = function.child_by_field_name("object")
+        property_node = function.child_by_field_name("property")
+        if (
+            owner is None
+            or owner.type != "identifier"
+            or property_node is None
+            or property_node.type != "property_identifier"
+            or self.syntax.text(property_node) != "forEach"
+        ):
+            return False
+        collection = environment.get(self.syntax.text(owner))
+        arrow = arguments.named_children[0]
+        if not isinstance(collection, _Collection) or arrow.type != "arrow_function":
+            return False
+        parameters = arrow.child_by_field_name("parameters")
+        body = arrow.child_by_field_name("body")
+        if (
+            parameters is None
+            or body is None
+            or body.type != "statement_block"
+            or len(parameters.named_children) != 2
+            or len(body.named_children) != 2
+        ):
+            return False
+        result_name, index_name = parameters.named_children
+        if result_name.type != "identifier" or index_name.type != "identifier":
+            return False
+        marker, emission = body.named_children
+        if not self._is_result_marker(marker, self.syntax.text(index_name)):
+            return False
+
+        for result in collection.values:
+            iteration_environment = dict(environment)
+            iteration_environment[self.syntax.text(result_name)] = result
+            if not self._emission(emission, iteration_environment):
+                return False
+        self.output_mode = "markers"
+        return True
+
+    def _is_result_marker(self, statement: Node, index_name: str) -> bool:
+        if (
+            statement.type != "expression_statement"
+            or len(statement.named_children) != 1
+        ):
+            return False
+        call = statement.named_children[0]
+        if call.type != "call_expression":
+            return False
+        function = call.child_by_field_name("function")
+        arguments = call.child_by_field_name("arguments")
+        return (
+            function is not None
+            and function.type == "identifier"
+            and self.syntax.text(function) == "text"
+            and arguments is not None
+            and len(arguments.named_children) == 1
+            and arguments.named_children[0].type == "template_string"
+            and self.syntax.text(arguments.named_children[0])
+            == f"`RESULT_${{{index_name}+1}}`"
+        )
 
     def _constant(self, node: Node, environment: _Environment) -> Any:
         if node.type == "identifier":

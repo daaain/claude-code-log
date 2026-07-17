@@ -63,6 +63,30 @@ def adapt_codex_tool_call(
         if analyzed is not None and len(analyzed.calls) == 1:
             call = analyzed.calls[0]
             return _canonicalize(call.name, call.input)
+        return _workflow(raw_input)
+    return _canonicalize(name, input_data)
+
+
+def adapt_codex_tool_batch(source: str) -> Optional[AdaptedToolBatch]:
+    """Decode static multi-tool programs whose outputs remain correlatable."""
+    analyzed = analyze_javascript_tools(source)
+    if analyzed is not None and len(analyzed.calls) >= 2:
+        adapted = [_canonicalize(call.name, call.input) for call in analyzed.calls]
+        if all(call.name != "Workflow" for call in adapted):
+            return AdaptedToolBatch(
+                adapted, analyzed.output_mode, analyzed.result_indexes
+            )
+    return None
+
+
+def adapt_codex_tool_call_legacy(
+    name: str,
+    input_data: dict[str, Any],
+    *,
+    raw_input: Any = None,
+) -> AdaptedToolCall:
+    """Run the pre-Tree-sitter recognizer explicitly as a comparison baseline."""
+    if name == "exec" and isinstance(raw_input, str):
         calls = _find_static_tool_calls(raw_input)
         if len(calls) != 1:
             return _workflow(raw_input)
@@ -79,13 +103,8 @@ def adapt_codex_tool_call(
     return _canonicalize(name, input_data)
 
 
-def adapt_codex_tool_batch(source: str) -> Optional[AdaptedToolBatch]:
-    """Decode static multi-tool programs whose outputs remain correlatable."""
-    analyzed = analyze_javascript_tools(source)
-    if analyzed is not None and len(analyzed.calls) >= 2:
-        adapted = [_canonicalize(call.name, call.input) for call in analyzed.calls]
-        if all(call.name != "Workflow" for call in adapted):
-            return AdaptedToolBatch(adapted, "ordered", analyzed.result_indexes)
+def adapt_codex_tool_batch_legacy(source: str) -> Optional[AdaptedToolBatch]:
+    """Run the pre-Tree-sitter batch recognizer explicitly for comparison."""
     calls = _find_static_tool_calls(source)
     if len(calls) < 2:
         return None

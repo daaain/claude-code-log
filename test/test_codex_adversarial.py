@@ -112,10 +112,7 @@ def _visible_text(records: list[_DecodedRecord]) -> list[str]:
             'const a = await tools.spawn_agent({task_name: "one", message: "TOKEN"}); '
             'const b = await tools.exec_command({cmd: "true"}); text(a); text(b);'
         ),
-        (
-            'const args = {task_name: "one", message: "TOKEN"}; '
-            "const a = await tools.spawn_agent(args); text(a);"
-        ),
+        ("const args = getArgs(); const a = await tools.spawn_agent(args); text(a);"),
         (
             'const a = await tools.spawn_agent({task_name: "one", message: "TOKEN"}); '
             'text("prefix"); text(a);'
@@ -135,6 +132,20 @@ def test_workflow_fallback_scrubs_opaque_agent_payload(source: str) -> None:
     assert call.name == "Workflow"
     assert token not in call.input["script"]
     assert "spawn_agent" in call.input["script"]
+
+
+def test_static_object_argument_is_adapted_and_scrubs_opaque_agent_payload() -> None:
+    token = "gAAAAA" + "A" * 100
+    source = (
+        f'const args = {{task_name: "one", message: "{token}"}}; '
+        "const result = await tools.spawn_agent(args); text(result);"
+    )
+
+    call = adapt_codex_tool_call("exec", {"raw": source}, raw_input=source)
+
+    assert call.name == "Task"
+    assert call.input["prompt"] == ""
+    assert token not in repr(call.input)
 
 
 def test_workflow_fallback_preserves_ordinary_long_prompt() -> None:
