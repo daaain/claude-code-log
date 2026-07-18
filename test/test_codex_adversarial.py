@@ -519,7 +519,7 @@ def test_parallel_marker_sessions_fold_into_their_originating_bash_calls() -> No
 
 
 def test_incomplete_parallel_marker_sessions_remain_workflow() -> None:
-    source = """
+    source = r"""
         const results = await Promise.all([
           tools.exec_command({cmd: "pytest"}),
           tools.exec_command({cmd: "pyright"})
@@ -971,6 +971,66 @@ def test_static_for_of_becomes_distinct_tool_result_pairs() -> None:
         "message 4745",
         "message 4746",
         "message 4756",
+    ]
+
+
+def test_static_path_loop_becomes_template_bash_result_pairs() -> None:
+    source = r"""
+        const paths = [
+          "/tmp/github/SKILL.md",
+          "/tmp/openai-docs/SKILL.md"
+        ];
+        for (const path of paths) {
+          const r = await tools.exec_command({
+            cmd: `sed -n '1,260p' '${path}'`,
+            workdir: "/workspace"
+          });
+          text(`FILE ${path}\n${r.output}`);
+        }
+    """
+    records = [
+        _record(
+            1,
+            "response_item",
+            {
+                "type": "custom_tool_call",
+                "call_id": "batch",
+                "name": "exec",
+                "input": source,
+            },
+        ),
+        _output(
+            2,
+            "batch",
+            [
+                {
+                    "type": "input_text",
+                    "text": "Script completed\nWall time 0.1 seconds\nOutput:\n",
+                },
+                {
+                    "type": "input_text",
+                    "text": "FILE /tmp/github/SKILL.md\nGitHub skill",
+                },
+                {
+                    "type": "input_text",
+                    "text": "FILE /tmp/openai-docs/SKILL.md\nOpenAI docs skill",
+                },
+            ],
+        ),
+    ]
+
+    content = [item for entry in _normalized(records) for item in entry.message.content]
+    uses = [item for item in content if isinstance(item, ToolUseContent)]
+    results = [item for item in content if isinstance(item, ToolResultContent)]
+
+    assert [item.name for item in uses] == ["Bash", "Bash"]
+    assert [item.input["command"] for item in uses] == [
+        "sed -n '1,260p' '/tmp/github/SKILL.md'",
+        "sed -n '1,260p' '/tmp/openai-docs/SKILL.md'",
+    ]
+    assert [item.content for item in results] == [
+        "FILE /tmp/github/SKILL.md\nGitHub skill",
+        "FILE /tmp/openai-docs/SKILL.md\nOpenAI docs skill",
     ]
 
 

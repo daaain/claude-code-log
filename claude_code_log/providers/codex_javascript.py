@@ -364,17 +364,23 @@ class _StaticEvaluator:
         if node.type == "template_string":
             results: list[_ToolResult] = []
             for child in node.named_children:
-                if child.type == "string_fragment":
+                if child.type in {"string_fragment", "escape_sequence"}:
                     continue
                 if (
                     child.type != "template_substitution"
                     or len(child.named_children) != 1
                 ):
                     return None
-                result = self._result_reference(child.named_children[0], environment)
-                if result is None:
+                expression = child.named_children[0]
+                result = self._result_reference(expression, environment)
+                if result is not None:
+                    results.append(result)
+                    continue
+                constant = self._constant(expression, environment)
+                if constant is _UNKNOWN or not isinstance(
+                    constant, (str, int, float, bool, type(None))
+                ):
                     return None
-                results.append(result)
             if results and all(
                 item.call_index == results[0].call_index for item in results
             ):
@@ -635,7 +641,31 @@ class _StaticEvaluator:
             return values
         if node.type == "object":
             return self._object(node, environment)
+        if node.type == "template_string":
+            return self._template_constant(node, environment)
         return _UNKNOWN
+
+    def _template_constant(self, node: Node, environment: _Environment) -> Any:
+        parts: list[str] = []
+        for child in node.named_children:
+            if child.type == "string_fragment":
+                fragment = self.syntax.text(child)
+                parts.append(fragment)
+                continue
+            if child.type == "escape_sequence":
+                escape = _decode_template_escape(self.syntax.text(child))
+                if escape is _UNKNOWN:
+                    return _UNKNOWN
+                parts.append(cast(str, escape))
+                continue
+            if child.type != "template_substitution" or len(child.named_children) != 1:
+                return _UNKNOWN
+            value = self._constant(child.named_children[0], environment)
+            rendered = _template_primitive(value)
+            if rendered is _UNKNOWN:
+                return _UNKNOWN
+            parts.append(cast(str, rendered))
+        return "".join(parts)
 
     def _object(self, node: Node, environment: _Environment) -> Any:
         value: dict[str, Any] = {}
@@ -691,3 +721,37 @@ def _decode_number(source: str) -> Any:
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return value
     return _UNKNOWN
+
+
+def _template_primitive(value: Any) -> Any:
+    if value is _UNKNOWN or isinstance(value, (dict, list)):
+        return _UNKNOWN
+    if value is None:
+        return "null"
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return json.dumps(value, ensure_ascii=False)
+    return _UNKNOWN
+
+
+def _decode_template_escape(source: str) -> Any:
+    escapes = {
+        r"\\": "\\",
+        r"\n": "\n",
+        r"\r": "\r",
+        r"\t": "\t",
+        r"\b": "\b",
+        r"\f": "\f",
+        r"\v": "\v",
+        r"\0": "\0",
+        r"\`": "`",
+        r"\$": "$",
+        r"\'": "'",
+        r"\"": '"',
+    }
+    return escapes.get(source, _UNKNOWN)

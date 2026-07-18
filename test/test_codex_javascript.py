@@ -77,6 +77,28 @@ def test_analyzer_unrolls_static_for_of_tool_calls() -> None:
     assert batch.result_indexes == [0, 1, 2]
 
 
+def test_analyzer_unrolls_template_commands_and_mixed_template_results() -> None:
+    batch = analyze_javascript_tools(
+        r"""
+        const paths = ["/tmp/one/SKILL.md", "/tmp/two/SKILL.md"];
+        for (const path of paths) {
+          const r = await tools.exec_command({
+            cmd: `sed -n '1,260p' '${path}'`,
+            workdir: "/workspace"
+          });
+          text(`FILE ${path}\n${r.output}`);
+        }
+        """
+    )
+
+    assert batch is not None
+    assert [call.input["cmd"] for call in batch.calls] == [
+        "sed -n '1,260p' '/tmp/one/SKILL.md'",
+        "sed -n '1,260p' '/tmp/two/SKILL.md'",
+    ]
+    assert batch.result_indexes == [0, 1]
+
+
 def test_analyzer_rejects_dynamic_or_oversized_loops_without_partial_results() -> None:
     dynamic = """
         for (const id of ids) {
