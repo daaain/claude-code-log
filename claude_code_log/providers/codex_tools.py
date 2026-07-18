@@ -30,6 +30,7 @@ class AdaptedToolBatch:
     output_mode: Literal["markers", "ordered"]
     result_indexes: list[int]
     session_markers: bool = False
+    result_prefixes: tuple[Optional[str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -79,6 +80,7 @@ def adapt_codex_tool_batch(source: str) -> Optional[AdaptedToolBatch]:
                 analyzed.output_mode,
                 analyzed.result_indexes,
                 analyzed.session_markers,
+                analyzed.result_prefixes,
             )
     return None
 

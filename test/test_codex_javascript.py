@@ -97,6 +97,39 @@ def test_analyzer_unrolls_template_commands_and_mixed_template_results() -> None
         "sed -n '1,260p' '/tmp/two/SKILL.md'",
     ]
     assert batch.result_indexes == [0, 1]
+    assert batch.result_prefixes == (
+        "FILE /tmp/one/SKILL.md\n",
+        "FILE /tmp/two/SKILL.md\n",
+    )
+
+
+def test_analyzer_unrolls_destructured_rows_in_static_for_of_loop() -> None:
+    batch = analyze_javascript_tools(
+        r"""
+        const ranges = [
+          ["claude_code_log/cli.py", 570, 850],
+          ["claude_code_log/models.py", 1, 240]
+        ];
+        for (const [f, a, b] of ranges) {
+          const r = await tools.exec_command({
+            cmd: `sed -n '${a},${b}p' '${f}'`,
+            workdir: "/workspace"
+          });
+          text(`=== ${f} @ ${a} ===\n${r.output}`);
+        }
+        """
+    )
+
+    assert batch is not None
+    assert [call.input["cmd"] for call in batch.calls] == [
+        "sed -n '570,850p' 'claude_code_log/cli.py'",
+        "sed -n '1,240p' 'claude_code_log/models.py'",
+    ]
+    assert batch.result_indexes == [0, 1]
+    assert batch.result_prefixes == (
+        "=== claude_code_log/cli.py @ 570 ===\n",
+        "=== claude_code_log/models.py @ 1 ===\n",
+    )
 
 
 def test_analyzer_rejects_dynamic_or_oversized_loops_without_partial_results() -> None:

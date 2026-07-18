@@ -1034,6 +1034,121 @@ def test_static_path_loop_becomes_template_bash_result_pairs() -> None:
     ]
 
 
+def test_static_destructured_range_loop_becomes_bash_result_pairs() -> None:
+    source = r"""
+        const ranges = [
+          ["claude_code_log/cli.py", 570, 850],
+          ["claude_code_log/models.py", 1, 240]
+        ];
+        for (const [f, a, b] of ranges) {
+          const r = await tools.exec_command({
+            cmd: `sed -n '${a},${b}p' '${f}'`,
+            workdir: "/workspace"
+          });
+          text(`FILE ${f}:${a}\n${r.output}`);
+        }
+    """
+    records = [
+        _record(
+            1,
+            "response_item",
+            {
+                "type": "custom_tool_call",
+                "call_id": "batch",
+                "name": "exec",
+                "input": source,
+            },
+        ),
+        _output(
+            2,
+            "batch",
+            [
+                {"type": "input_text", "text": "Script completed\nOutput:\n"},
+                {
+                    "type": "input_text",
+                    "text": "FILE claude_code_log/cli.py:570\nCLI source",
+                },
+                {
+                    "type": "input_text",
+                    "text": "FILE claude_code_log/models.py:1\nModels source",
+                },
+            ],
+        ),
+    ]
+
+    content = [item for entry in _normalized(records) for item in entry.message.content]
+    uses = [item for item in content if isinstance(item, ToolUseContent)]
+    results = [item for item in content if isinstance(item, ToolResultContent)]
+
+    assert [item.name for item in uses] == ["Bash", "Bash"]
+    assert [item.input["command"] for item in uses] == [
+        "sed -n '570,850p' 'claude_code_log/cli.py'",
+        "sed -n '1,240p' 'claude_code_log/models.py'",
+    ]
+    assert [item.content for item in results] == [
+        "FILE claude_code_log/cli.py:570\nCLI source",
+        "FILE claude_code_log/models.py:1\nModels source",
+    ]
+
+
+def test_truncated_consolidated_range_loop_preserves_known_boundaries() -> None:
+    source = r"""
+        const ranges = [
+          ["cli.py", 570, 850],
+          ["workflow.py", 1, 280],
+          ["models.py", 1, 240]
+        ];
+        for (const [f, a, b] of ranges) {
+          const r = await tools.exec_command({cmd: `sed -n '${a},${b}p' '${f}'`});
+          text(`FILE ${f}:${a}\n${r.output}`);
+        }
+    """
+    records = [
+        _record(
+            1,
+            "response_item",
+            {
+                "type": "custom_tool_call",
+                "call_id": "batch",
+                "name": "exec",
+                "input": source,
+            },
+        ),
+        _output(
+            2,
+            "batch",
+            [
+                {"type": "input_text", "text": "Script completed\nOutput:\n"},
+                {
+                    "type": "input_text",
+                    "text": (
+                        "Warning: truncated output (original token count: 10000)\n"
+                        "FILE cli.py:570\nCLI source\n"
+                        "… middle omitted …\n"
+                        "FILE models.py:1\nModels source"
+                    ),
+                },
+            ],
+        ),
+    ]
+
+    content = [item for entry in _normalized(records) for item in entry.message.content]
+    uses = [item for item in content if isinstance(item, ToolUseContent)]
+    results = [item for item in content if isinstance(item, ToolResultContent)]
+
+    assert [item.input["command"] for item in uses] == [
+        "sed -n '570,850p' 'cli.py'",
+        "sed -n '1,280p' 'workflow.py'",
+        "sed -n '1,240p' 'models.py'",
+    ]
+    assert [item.content for item in results] == [
+        "Warning: truncated output (original token count: 10000)\n"
+        "FILE cli.py:570\nCLI source\n… middle omitted …",
+        "[Output omitted by Codex truncation]",
+        "FILE models.py:1\nModels source",
+    ]
+
+
 def test_static_for_of_unwraps_each_nested_mcp_result_like_a_direct_call() -> None:
     source = """
         for (const id of [4745, 4746, 4756]) {

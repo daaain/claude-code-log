@@ -52,6 +52,7 @@ class JavaScriptToolBatch:
     result_indexes: list[int]
     output_mode: Literal["markers", "ordered"] = "ordered"
     session_markers: bool = False
+    result_prefixes: tuple[Optional[str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -136,6 +137,7 @@ class _StaticEvaluator:
         self.max_expanded_calls = max_expanded_calls
         self.calls: list[JavaScriptToolCall] = []
         self.emissions: list[int] = []
+        self.emission_prefixes: list[Optional[str]] = []
         self.loop_iterations = 0
         self.output_mode: Literal["markers", "ordered"] = "ordered"
         self.session_markers = False
@@ -149,7 +151,11 @@ class _StaticEvaluator:
 
         if len(self.calls) == 1 and all(index == 0 for index in self.emissions):
             return JavaScriptToolBatch(
-                self.calls, [0], self.output_mode, self.session_markers
+                self.calls,
+                [0],
+                self.output_mode,
+                self.session_markers,
+                tuple(self.emission_prefixes),
             )
         if len(self.calls) != len(self.emissions):
             return None
@@ -162,7 +168,11 @@ class _StaticEvaluator:
         if -1 in result_indexes:
             return None
         return JavaScriptToolBatch(
-            self.calls, result_indexes, self.output_mode, self.session_markers
+            self.calls,
+            result_indexes,
+            self.output_mode,
+            self.session_markers,
+            tuple(self.emission_prefixes),
         )
 
     def _statements(self, statements: list[Node], environment: _Environment) -> bool:
@@ -219,10 +229,19 @@ class _StaticEvaluator:
             environment[identifier] = value
             return True
 
-        if name.type != "array_pattern" or not isinstance(value, _Collection):
+        if name.type != "array_pattern":
+            return False
+        if isinstance(value, _Collection):
+            values: tuple[_AbstractValue, ...] = value.values
+        elif isinstance(value, _Constant):
+            raw_values: Any = value.value
+            if not isinstance(raw_values, list):
+                return False
+            values = tuple(_Constant(item) for item in cast(list[Any], raw_values))
+        else:
             return False
         bindings = name.named_children
-        if len(bindings) != len(value.values) or not all(
+        if len(bindings) != len(values) or not all(
             binding.type == "identifier" for binding in bindings
         ):
             return False
@@ -248,7 +267,7 @@ class _StaticEvaluator:
             identifier in environment for identifier in identifiers
         ):
             return False
-        environment.update(zip(identifiers, value.values))
+        environment.update(zip(identifiers, values))
         return True
 
     def _declaration_value(
@@ -337,7 +356,43 @@ class _StaticEvaluator:
         if result is None:
             return False
         self.emissions.append(result.call_index)
+        self.emission_prefixes.append(
+            self._result_prefix(argument, environment, result)
+        )
         return len(self.emissions) <= self.max_expanded_calls
+
+    def _result_prefix(
+        self, node: Node, environment: _Environment, result: _ToolResult
+    ) -> Optional[str]:
+        """Return the static text before a result embedded in a template."""
+        if node.type != "template_string":
+            return None
+        parts: list[str] = []
+        for child in node.named_children:
+            if child.type == "string_fragment":
+                parts.append(self.syntax.text(child))
+                continue
+            if child.type == "escape_sequence":
+                escape = _decode_template_escape(self.syntax.text(child))
+                if escape is _UNKNOWN:
+                    return None
+                parts.append(cast(str, escape))
+                continue
+            if child.type != "template_substitution" or len(child.named_children) != 1:
+                return None
+            expression = child.named_children[0]
+            reference = self._result_reference(expression, environment)
+            if reference is not None:
+                return (
+                    "".join(parts)
+                    if reference.call_index == result.call_index
+                    else None
+                )
+            rendered = _template_primitive(self._constant(expression, environment))
+            if rendered is _UNKNOWN:
+                return None
+            parts.append(cast(str, rendered))
+        return None
 
     def _result_reference(
         self, node: Node, environment: _Environment
@@ -452,7 +507,7 @@ class _StaticEvaluator:
             kind is None
             or self.syntax.text(kind) != "const"
             or left is None
-            or left.type != "identifier"
+            or left.type not in {"identifier", "array_pattern"}
             or operator is None
             or self.syntax.text(operator) != "of"
             or right is None
@@ -475,12 +530,11 @@ class _StaticEvaluator:
             return False
 
         self.loop_iterations += len(loop_values)
-        name = self.syntax.text(left)
         for value in loop_values:
             iteration_environment = dict(environment)
-            iteration_environment[name] = (
-                value if isinstance(value, _ToolResult) else _Constant(value)
-            )
+            abstract = value if isinstance(value, _ToolResult) else _Constant(value)
+            if not self._bind_declaration(left, abstract, iteration_environment):
+                return False
             statements = (
                 body.named_children if body.type == "statement_block" else [body]
             )
