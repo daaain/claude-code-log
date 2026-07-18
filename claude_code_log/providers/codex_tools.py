@@ -29,6 +29,7 @@ class AdaptedToolBatch:
     calls: list[AdaptedToolCall]
     output_mode: Literal["markers", "ordered"]
     result_indexes: list[int]
+    session_markers: bool = False
 
 
 @dataclass(frozen=True)
@@ -74,7 +75,10 @@ def adapt_codex_tool_batch(source: str) -> Optional[AdaptedToolBatch]:
         adapted = [_canonicalize(call.name, call.input) for call in analyzed.calls]
         if all(call.name != "Workflow" for call in adapted):
             return AdaptedToolBatch(
-                adapted, analyzed.output_mode, analyzed.result_indexes
+                adapted,
+                analyzed.output_mode,
+                analyzed.result_indexes,
+                analyzed.session_markers,
             )
     return None
 

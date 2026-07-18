@@ -168,3 +168,35 @@ def test_analyzer_destructures_mixed_promise_all_results() -> None:
         "pr_number": 243,
     }
     assert batch.result_indexes == [0, 1, 2]
+
+
+def test_analyzer_recognizes_parallel_session_markers() -> None:
+    batch = analyze_javascript_tools(
+        """
+        const results = await Promise.all([
+          tools.exec_command({cmd: "pytest"}),
+          tools.exec_command({cmd: "pyright"})
+        ]);
+        results.forEach((r, i) => {
+          text(`RESULT_${i+1}`);
+          text(r.output);
+          if (r.session_id) text(`SESSION_ID=${r.session_id}`)
+        });
+        """
+    )
+
+    assert batch is not None
+    assert batch.output_mode == "markers"
+    assert batch.session_markers is True
+    assert batch.result_indexes == [0, 1]
+
+
+def test_analyzer_recognizes_single_session_marker() -> None:
+    batch = analyze_javascript_tools(
+        "const r = await tools.write_stdin({session_id: 73978}); "
+        "text(r.output); if (r.session_id) text(`SESSION_ID=${r.session_id}`);"
+    )
+
+    assert batch is not None
+    assert batch.session_markers is True
+    assert batch.result_indexes == [0]

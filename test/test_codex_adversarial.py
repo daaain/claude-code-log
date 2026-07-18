@@ -393,6 +393,180 @@ def test_async_bash_does_not_fold_across_task_boundary() -> None:
     ]
 
 
+def test_parallel_marker_sessions_fold_into_their_originating_bash_calls() -> None:
+    origin_source = """
+        const results = await Promise.all([
+          tools.exec_command({cmd: "pytest"}),
+          tools.exec_command({cmd: "pyright"}),
+          tools.exec_command({cmd: "git diff --check"})
+        ]);
+        results.forEach((r, i) => {
+          text(`RESULT_${i+1}`); text(r.output);
+          if (r.session_id) text(`SESSION_ID=${r.session_id}`)
+        });
+    """
+    parallel_poll = """
+        const results = await Promise.all([
+          tools.write_stdin({session_id: 52391, chars: ""}),
+          tools.write_stdin({session_id: 92535, chars: ""})
+        ]);
+        results.forEach((r, i) => {
+          text(`RESULT_${i+1}`); text(r.output);
+          if (r.session_id) text(`SESSION_ID=${r.session_id}`)
+        });
+    """
+    final_poll = (
+        'const r = await tools.write_stdin({session_id: 52391, chars: ""}); '
+        "text(r.output); if (r.session_id) text(`SESSION_ID=${r.session_id}`);"
+    )
+    records = [
+        _record(
+            1,
+            "response_item",
+            {
+                "type": "custom_tool_call",
+                "call_id": "origin",
+                "name": "exec",
+                "input": origin_source,
+            },
+        ),
+        _output(
+            2,
+            "origin",
+            [
+                {
+                    "type": "input_text",
+                    "text": "Script completed\nWall time 1.0 seconds\nOutput:\n",
+                },
+                {"type": "input_text", "text": "RESULT_1"},
+                {"type": "input_text", "text": "pytest start\n"},
+                {"type": "input_text", "text": "SESSION_ID=52391"},
+                {"type": "input_text", "text": "RESULT_2"},
+                {"type": "input_text", "text": "pyright start\n"},
+                {"type": "input_text", "text": "SESSION_ID=92535"},
+                {"type": "input_text", "text": "RESULT_3"},
+                {"type": "input_text", "text": "diff complete\n"},
+            ],
+        ),
+        _record(3, "event_msg", {"type": "token_count"}),
+        _record(
+            4,
+            "response_item",
+            {
+                "type": "custom_tool_call",
+                "call_id": "parallel-poll",
+                "name": "exec",
+                "input": parallel_poll,
+            },
+        ),
+        _output(5, "parallel-poll", "Script running with cell ID 39"),
+        _record(6, "response_item", {"type": "reasoning", "summary": []}),
+        _call(7, "wait", "wait", '{"cell_id":"39"}'),
+        _output(
+            8,
+            "wait",
+            [
+                {
+                    "type": "input_text",
+                    "text": "Script completed\nWall time 23.0 seconds\nOutput:\n",
+                },
+                {"type": "input_text", "text": "RESULT_1"},
+                {"type": "input_text", "text": "pytest middle\n"},
+                {"type": "input_text", "text": "SESSION_ID=52391"},
+                {"type": "input_text", "text": "RESULT_2"},
+                {"type": "input_text", "text": "pyright complete\n"},
+            ],
+        ),
+        _record(9, "event_msg", {"type": "token_count"}),
+        _record(
+            10,
+            "response_item",
+            {
+                "type": "custom_tool_call",
+                "call_id": "final-poll",
+                "name": "exec",
+                "input": final_poll,
+            },
+        ),
+        _output(
+            11,
+            "final-poll",
+            [
+                {
+                    "type": "input_text",
+                    "text": "Script completed\nWall time 1.6 seconds\nOutput:\n",
+                },
+                {"type": "input_text", "text": "pytest complete\n"},
+            ],
+        ),
+    ]
+
+    content = [item for entry in _normalized(records) for item in entry.message.content]
+    uses = [item for item in content if isinstance(item, ToolUseContent)]
+    results = [item for item in content if isinstance(item, ToolResultContent)]
+
+    assert [item.name for item in uses] == ["Bash", "Bash", "Bash"]
+    assert [item.input["command"] for item in uses] == [
+        "pytest",
+        "pyright",
+        "git diff --check",
+    ]
+    assert [item.content for item in results] == [
+        "pytest start\npytest middle\npytest complete\n",
+        "pyright start\npyright complete\n",
+        "diff complete\n",
+    ]
+
+
+def test_incomplete_parallel_marker_sessions_remain_workflow() -> None:
+    source = """
+        const results = await Promise.all([
+          tools.exec_command({cmd: "pytest"}),
+          tools.exec_command({cmd: "pyright"})
+        ]);
+        results.forEach((r, i) => {
+          text(`RESULT_${i+1}`); text(r.output);
+          if (r.session_id) text(`SESSION_ID=${r.session_id}`)
+        });
+    """
+    records = [
+        _record(
+            1,
+            "response_item",
+            {
+                "type": "custom_tool_call",
+                "call_id": "origin",
+                "name": "exec",
+                "input": source,
+            },
+        ),
+        _output(
+            2,
+            "origin",
+            [
+                {
+                    "type": "input_text",
+                    "text": "Script completed\nWall time 1.0 seconds\nOutput:\n",
+                },
+                {"type": "input_text", "text": "RESULT_1"},
+                {"type": "input_text", "text": ""},
+                {"type": "input_text", "text": "SESSION_ID=52391"},
+                {"type": "input_text", "text": "RESULT_2"},
+                {"type": "input_text", "text": "pyright complete\n"},
+            ],
+        ),
+    ]
+
+    uses = [
+        item
+        for entry in _normalized(records)
+        for item in entry.message.content
+        if isinstance(item, ToolUseContent)
+    ]
+
+    assert [item.name for item in uses] == ["Workflow"]
+
+
 @pytest.mark.parametrize("nested_tool", ["mcp__clmail__communicate", "future_tool"])
 def test_direct_nested_tool_result_matches_native_tool_result_shape(
     nested_tool: str,

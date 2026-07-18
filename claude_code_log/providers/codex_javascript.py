@@ -51,6 +51,7 @@ class JavaScriptToolBatch:
     calls: list[JavaScriptToolCall]
     result_indexes: list[int]
     output_mode: Literal["markers", "ordered"] = "ordered"
+    session_markers: bool = False
 
 
 @dataclass(frozen=True)
@@ -137,6 +138,7 @@ class _StaticEvaluator:
         self.emissions: list[int] = []
         self.loop_iterations = 0
         self.output_mode: Literal["markers", "ordered"] = "ordered"
+        self.session_markers = False
 
     def evaluate(self) -> Optional[JavaScriptToolBatch]:
         environment: _Environment = {}
@@ -146,7 +148,9 @@ class _StaticEvaluator:
             return None
 
         if len(self.calls) == 1 and all(index == 0 for index in self.emissions):
-            return JavaScriptToolBatch(self.calls, [0], self.output_mode)
+            return JavaScriptToolBatch(
+                self.calls, [0], self.output_mode, self.session_markers
+            )
         if len(self.calls) != len(self.emissions):
             return None
 
@@ -157,7 +161,9 @@ class _StaticEvaluator:
             result_indexes[call_index] = output_index
         if -1 in result_indexes:
             return None
-        return JavaScriptToolBatch(self.calls, result_indexes, self.output_mode)
+        return JavaScriptToolBatch(
+            self.calls, result_indexes, self.output_mode, self.session_markers
+        )
 
     def _statements(self, statements: list[Node], environment: _Environment) -> bool:
         for statement in statements:
@@ -176,6 +182,11 @@ class _StaticEvaluator:
             if statement.type == "for_in_statement":
                 if not self._for_of(statement, environment):
                     return False
+                continue
+            if statement.type == "if_statement":
+                if self._session_marker(statement, environment) is None:
+                    return False
+                self.session_markers = True
                 continue
             return False
         return True
@@ -506,13 +517,13 @@ class _StaticEvaluator:
             or body is None
             or body.type != "statement_block"
             or len(parameters.named_children) != 2
-            or len(body.named_children) != 2
+            or len(body.named_children) not in {2, 3}
         ):
             return False
         result_name, index_name = parameters.named_children
         if result_name.type != "identifier" or index_name.type != "identifier":
             return False
-        marker, emission = body.named_children
+        marker, emission, *tail = body.named_children
         if not self._is_result_marker(marker, self.syntax.text(index_name)):
             return False
 
@@ -521,8 +532,62 @@ class _StaticEvaluator:
             iteration_environment[self.syntax.text(result_name)] = result
             if not self._emission(emission, iteration_environment):
                 return False
+            if tail and self._session_marker(tail[0], iteration_environment) != result:
+                return False
+        self.session_markers = bool(tail)
         self.output_mode = "markers"
         return True
+
+    def _session_marker(
+        self, statement: Node, environment: _Environment
+    ) -> Optional[_ToolResult]:
+        if statement.type != "if_statement":
+            return None
+        condition = statement.child_by_field_name("condition")
+        consequence = statement.child_by_field_name("consequence")
+        if condition is None or consequence is None:
+            return None
+        if condition.type == "parenthesized_expression":
+            if len(condition.named_children) != 1:
+                return None
+            condition = condition.named_children[0]
+        condition_result = self._result_reference(condition, environment)
+        if condition_result is None or condition_result.path != ("session_id",):
+            return None
+
+        expressions = consequence.named_children
+        if len(expressions) != 1 or expressions[0].type != "call_expression":
+            return None
+        call = expressions[0]
+        function = call.child_by_field_name("function")
+        arguments = call.child_by_field_name("arguments")
+        if (
+            function is None
+            or function.type != "identifier"
+            or self.syntax.text(function) != "text"
+            or arguments is None
+            or len(arguments.named_children) != 1
+        ):
+            return None
+        template = arguments.named_children[0]
+        if template.type != "template_string" or len(template.named_children) != 2:
+            return None
+        fragment, substitution = template.named_children
+        if (
+            fragment.type != "string_fragment"
+            or self.syntax.text(fragment) != "SESSION_ID="
+            or substitution.type != "template_substitution"
+            or len(substitution.named_children) != 1
+        ):
+            return None
+        emitted_result = self._result_reference(
+            substitution.named_children[0], environment
+        )
+        return (
+            _ToolResult(condition_result.call_index)
+            if emitted_result == condition_result
+            else None
+        )
 
     def _is_result_marker(self, statement: Node, index_name: str) -> bool:
         if (

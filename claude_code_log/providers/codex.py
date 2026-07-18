@@ -42,6 +42,7 @@ from .base import (
     make_user_entry,
 )
 from .codex_tools import AdaptedToolCall, adapt_codex_tool_batch, adapt_codex_tool_call
+from .codex_javascript import analyze_javascript_tools
 from .codex_messages import format_codex_user_message, parse_codex_user_shell_command
 
 logger = logging.getLogger(__name__)
@@ -128,6 +129,21 @@ class _ToolBatch:
     calls: list[AdaptedToolCall]
     results: list[str]
     result_timestamp: str
+
+
+@dataclass(frozen=True)
+class _SessionMarkerOutput:
+    output: str
+    session_id: Optional[int]
+
+
+@dataclass(frozen=True)
+class _SessionMarkerProgram:
+    call_index: int
+    result_index: int
+    calls: list[AdaptedToolCall]
+    results: list[_SessionMarkerOutput]
+    output_mode: str
 
 
 class CodexProvider(BaseProvider):
@@ -457,7 +473,9 @@ class CodexProvider(BaseProvider):
         max_messages: Optional[int],
     ) -> Iterator[_CodexEntry]:
         records = self._deduplicate_visible_messages(records)
+        records = self._coalesce_exec_wrapper_cells(records)
         records = self._coalesce_command_sessions(records)
+        records = self._coalesce_marker_command_sessions(records)
         tool_names = self._adapted_tool_names(records)
         web_open_batches = self._web_open_batches(records)
         tool_batches = self._tool_batches(records)
@@ -574,6 +592,101 @@ class CodexProvider(BaseProvider):
                     parts.append(cleaned)
         return "\n".join(parts) if has_image else None
 
+    def _coalesce_exec_wrapper_cells(
+        self, records: list[_DecodedRecord]
+    ) -> list[_DecodedRecord]:
+        """Remove outer ``exec`` cell polling around a completed JS wrapper."""
+        tool_records = self._tool_record_indexes(records)
+        suppressed: set[int] = set()
+        replacements: dict[int, _DecodedRecord] = {}
+        position = 0
+        while position + 3 < len(tool_records):
+            call_index, result_index, wait_index, wait_result_index = tool_records[
+                position : position + 4
+            ]
+            call = records[call_index]
+            result = records[result_index]
+            wait = self._adapted_call(records[wait_index])
+            call_id = self._nonempty_string(call.payload.get("call_id"))
+            raw_output = result.payload.get("output")
+            match = (
+                _RUNNING_CELL_RE.search(raw_output)
+                if isinstance(raw_output, str)
+                else None
+            )
+            if (
+                call.payload.get("type") != "custom_tool_call"
+                or call.payload.get("name") != "exec"
+                or call_id is None
+                or not self._is_call_output(result, call_id)
+                or match is None
+                or wait is None
+                or wait[1].name != "wait"
+                or str(wait[1].input.get("cell_id")) != match.group(1)
+                or not self._is_call_output(records[wait_result_index], wait[0])
+                or not self._only_invisible_between(records, result_index, wait_index)
+                or not self._only_invisible_between(
+                    records, wait_index, wait_result_index
+                )
+            ):
+                position += 1
+                continue
+
+            completed = records[wait_result_index].payload.get("output")
+            if not self._completed_wrapper_output(completed):
+                position += 1
+                continue
+            # A serialized command result still belongs to the inner Bash
+            # session and is handled by _coalesce_command_sessions instead.
+            if self._command_result(completed) is not None:
+                position += 1
+                continue
+
+            payload = dict(result.payload)
+            payload["output"] = completed
+            replacements[result_index] = _DecodedRecord(
+                line_no=result.line_no,
+                timestamp=result.timestamp,
+                kind=result.kind,
+                payload=payload,
+            )
+            suppressed.update({wait_index, wait_result_index})
+            position += 4
+
+        return [
+            replacements.get(index, record)
+            for index, record in enumerate(records)
+            if index not in suppressed
+        ]
+
+    def _completed_wrapper_output(self, value: Any) -> bool:
+        if not isinstance(value, list) or not value:
+            return False
+        first = cast(list[Any], value)[0]
+        if not isinstance(first, dict):
+            return False
+        item = cast(dict[str, Any], first)
+        text = item.get("text")
+        return (
+            item.get("type") in {"input_text", "output_text", "text"}
+            and isinstance(text, str)
+            and _COMPLETED_COMMAND_RE.fullmatch(text) is not None
+        )
+
+    def _tool_record_indexes(self, records: list[_DecodedRecord]) -> list[int]:
+        return [
+            index
+            for index, record in enumerate(records)
+            if record.kind == "response_item"
+            and self._nonempty_string(record.payload.get("type"))
+            in {
+                "function_call",
+                "custom_tool_call",
+                "function_call_output",
+                "custom_tool_call_output",
+            }
+        ]
+
     def _coalesce_command_sessions(
         self, records: list[_DecodedRecord]
     ) -> list[_DecodedRecord]:
@@ -586,18 +699,7 @@ class CodexProvider(BaseProvider):
         tool events whose identifiers form that exact chain; otherwise retain
         every record unchanged.
         """
-        tool_records = [
-            index
-            for index, record in enumerate(records)
-            if record.kind == "response_item"
-            and self._nonempty_string(record.payload.get("type"))
-            in {
-                "function_call",
-                "custom_tool_call",
-                "function_call_output",
-                "custom_tool_call_output",
-            }
-        ]
+        tool_records = self._tool_record_indexes(records)
         suppressed: set[int] = set()
         replacements: dict[int, _DecodedRecord] = {}
         position = 0
@@ -700,6 +802,237 @@ class CodexProvider(BaseProvider):
             for index, record in enumerate(records)
             if index not in suppressed
         ]
+
+    def _coalesce_marker_command_sessions(
+        self, records: list[_DecodedRecord]
+    ) -> list[_DecodedRecord]:
+        """Fold parallel ``SESSION_ID=`` polling back into its Bash batch."""
+        tool_records = self._tool_record_indexes(records)
+        programs: dict[int, _SessionMarkerProgram] = {}
+        position = 0
+        while position + 1 < len(tool_records):
+            call_index, result_index = tool_records[position : position + 2]
+            if self._only_invisible_between(records, call_index, result_index):
+                program = self._session_marker_program(
+                    records, call_index, result_index
+                )
+                if program is not None:
+                    programs[position] = program
+            position += 2
+
+        suppressed: set[int] = set()
+        replacements: dict[int, _DecodedRecord] = {}
+        for origin_position, origin in programs.items():
+            if origin.output_mode != "markers" or not all(
+                call.name == "Bash" for call in origin.calls
+            ):
+                continue
+            live: dict[int, int] = {}
+            chunks = [[result.output] for result in origin.results]
+            valid = True
+            for index, result in enumerate(origin.results):
+                if result.session_id is None:
+                    continue
+                if result.session_id in live:
+                    valid = False
+                    break
+                live[result.session_id] = index
+            if not valid or not live:
+                continue
+
+            consumed: list[tuple[int, int]] = []
+            previous_result = origin.result_index
+            cursor = origin_position + 2
+            while live and cursor + 1 < len(tool_records):
+                poll = programs.get(cursor)
+                if (
+                    poll is None
+                    or not self._only_invisible_between(
+                        records, previous_result, poll.call_index
+                    )
+                    or not all(call.name == "write_stdin" for call in poll.calls)
+                ):
+                    valid = False
+                    break
+
+                requested: list[int] = []
+                for call in poll.calls:
+                    session_id = call.input.get("session_id")
+                    if not isinstance(session_id, int):
+                        valid = False
+                        break
+                    requested.append(session_id)
+                if (
+                    not valid
+                    or len(set(requested)) != len(requested)
+                    or any(session_id not in live for session_id in requested)
+                ):
+                    valid = False
+                    break
+
+                for session_id, result in zip(requested, poll.results):
+                    origin_index = live.pop(session_id)
+                    chunks[origin_index].append(result.output)
+                    if result.session_id is not None:
+                        if result.session_id in live:
+                            valid = False
+                            break
+                        live[result.session_id] = origin_index
+                if not valid:
+                    break
+                consumed.append((poll.call_index, poll.result_index))
+                previous_result = poll.result_index
+                cursor += 2
+
+            if not valid or live or not consumed:
+                continue
+
+            original_output = records[origin.result_index].payload.get("output")
+            status = self._first_text_item(original_output)
+            if status is None:
+                continue
+            rewritten: list[dict[str, str]] = [status]
+            for index, parts in enumerate(chunks, 1):
+                rewritten.append({"type": "input_text", "text": f"RESULT_{index}"})
+                rewritten.append({"type": "input_text", "text": "".join(parts)})
+            result = records[origin.result_index]
+            payload = dict(result.payload)
+            payload["output"] = rewritten
+            replacements[origin.result_index] = _DecodedRecord(
+                line_no=result.line_no,
+                timestamp=result.timestamp,
+                kind=result.kind,
+                payload=payload,
+            )
+            for call_index, result_index in consumed:
+                suppressed.update({call_index, result_index})
+
+        return [
+            replacements.get(index, record)
+            for index, record in enumerate(records)
+            if index not in suppressed
+        ]
+
+    def _session_marker_program(
+        self, records: list[_DecodedRecord], call_index: int, result_index: int
+    ) -> Optional[_SessionMarkerProgram]:
+        call_record = records[call_index]
+        result_record = records[result_index]
+        if (
+            call_record.payload.get("type") != "custom_tool_call"
+            or call_record.payload.get("name") != "exec"
+        ):
+            return None
+        call_id = self._nonempty_string(call_record.payload.get("call_id"))
+        source = call_record.payload.get("input")
+        if (
+            call_id is None
+            or not isinstance(source, str)
+            or not self._is_call_output(result_record, call_id)
+        ):
+            return None
+        analyzed = analyze_javascript_tools(source)
+        if analyzed is None or not analyzed.session_markers:
+            return None
+        parsed = self._session_marker_outputs(
+            result_record.payload.get("output"),
+            analyzed.output_mode,
+            len(analyzed.calls),
+        )
+        if parsed is None:
+            return None
+        calls = [
+            adapt_codex_tool_call(call.name, call.input) for call in analyzed.calls
+        ]
+        return _SessionMarkerProgram(
+            call_index=call_index,
+            result_index=result_index,
+            calls=calls,
+            results=[parsed[index] for index in analyzed.result_indexes],
+            output_mode=analyzed.output_mode,
+        )
+
+    def _session_marker_outputs(
+        self, value: Any, output_mode: str, expected: int
+    ) -> Optional[list[_SessionMarkerOutput]]:
+        texts = self._text_items(value)
+        if (
+            texts is None
+            or len(texts) < 2
+            or not texts[0].startswith("Script completed")
+        ):
+            return None
+        if output_mode == "ordered":
+            if expected != 1:
+                return None
+            parsed = self._session_marker_group(texts[1:])
+            return [parsed] if parsed is not None else None
+
+        groups: list[list[str]] = []
+        for text in texts[1:]:
+            marker = re.fullmatch(r"RESULT_([1-9][0-9]*)", text)
+            if marker is not None:
+                if int(marker.group(1)) != len(groups) + 1:
+                    return None
+                groups.append([])
+            elif not groups:
+                return None
+            else:
+                groups[-1].append(text)
+        if len(groups) != expected:
+            return None
+        parsed_groups = [self._session_marker_group(group) for group in groups]
+        return (
+            cast(list[_SessionMarkerOutput], parsed_groups)
+            if all(group is not None for group in parsed_groups)
+            else None
+        )
+
+    def _session_marker_group(self, texts: list[str]) -> Optional[_SessionMarkerOutput]:
+        session_id: Optional[int] = None
+        chunks: list[str] = []
+        for text in texts:
+            marker = re.fullmatch(r"SESSION_ID=([1-9][0-9]*)", text)
+            if marker is None:
+                chunks.append(text)
+                continue
+            if session_id is not None:
+                return None
+            session_id = int(marker.group(1))
+        return _SessionMarkerOutput("".join(chunks), session_id)
+
+    def _text_items(self, value: Any) -> Optional[list[str]]:
+        if not isinstance(value, list):
+            return None
+        texts: list[str] = []
+        for raw_item in cast(list[Any], value):
+            if not isinstance(raw_item, dict):
+                return None
+            item = cast(dict[str, Any], raw_item)
+            text = item.get("text")
+            if item.get("type") not in {
+                "input_text",
+                "output_text",
+                "text",
+            } or not isinstance(text, str):
+                return None
+            texts.append(text)
+        return texts
+
+    def _first_text_item(self, value: Any) -> Optional[dict[str, str]]:
+        if not isinstance(value, list) or not value:
+            return None
+        first = cast(list[Any], value)[0]
+        if not isinstance(first, dict):
+            return None
+        item = cast(dict[str, Any], first)
+        text = item.get("text")
+        item_type = item.get("type")
+        if item_type not in {"input_text", "output_text", "text"} or not isinstance(
+            text, str
+        ):
+            return None
+        return {"type": cast(str, item_type), "text": text}
 
     def _only_invisible_between(
         self, records: list[_DecodedRecord], left: int, right: int
@@ -832,7 +1165,7 @@ class CodexProvider(BaseProvider):
 
     def _tool_batches(self, records: list[_DecodedRecord]) -> dict[str, _ToolBatch]:
         """Correlate static multi-tool programs with their output groups."""
-        requests: dict[str, tuple[list[AdaptedToolCall], str, list[int]]] = {}
+        requests: dict[str, tuple[list[AdaptedToolCall], str, list[int], bool]] = {}
         outputs: dict[str, tuple[list[dict[str, Any]], str]] = {}
         for record in records:
             payload_type = self._nonempty_string(record.payload.get("type"))
@@ -851,6 +1184,7 @@ class CodexProvider(BaseProvider):
                             batch.calls,
                             batch.output_mode,
                             batch.result_indexes,
+                            batch.session_markers,
                         )
             elif payload_type in {
                 "function_call_output",
@@ -866,9 +1200,16 @@ class CodexProvider(BaseProvider):
                     )
 
         batches: dict[str, _ToolBatch] = {}
-        for call_id, (calls, output_mode, result_indexes) in requests.items():
+        for call_id, (
+            calls,
+            output_mode,
+            result_indexes,
+            session_markers,
+        ) in requests.items():
             output = outputs.get(call_id)
             if output is None:
+                continue
+            if session_markers and self._contains_session_marker(output[0]):
                 continue
             split = self._batch_outputs(output[0], output_mode, len(calls))
             if split is None:
@@ -880,6 +1221,13 @@ class CodexProvider(BaseProvider):
                 result_timestamp=output[1],
             )
         return batches
+
+    def _contains_session_marker(self, items: list[dict[str, Any]]) -> bool:
+        return any(
+            isinstance(text := item.get("text"), str)
+            and re.fullmatch(r"SESSION_ID=[1-9][0-9]*", text) is not None
+            for item in items
+        )
 
     def _batch_outputs(
         self, items: list[dict[str, Any]], output_mode: str, expected: int
