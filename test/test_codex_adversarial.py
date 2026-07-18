@@ -309,6 +309,90 @@ def test_async_bash_fold_preserves_terminal_failure_status() -> None:
     assert results[0].is_error is True
 
 
+def test_async_bash_folds_wait_and_write_stdin_across_ignored_records() -> None:
+    write_source = (
+        'const r = await tools.write_stdin({session_id: 73978, chars: ""}); '
+        "text(JSON.stringify(r));"
+    )
+    records = [
+        _call(1, "exec", "exec_command", '{"cmd":"pytest"}'),
+        _output(2, "exec", "Script running with cell ID 14"),
+        _record(3, "event_msg", {"type": "token_count"}),
+        _record(
+            4,
+            "response_item",
+            {
+                "type": "message",
+                "role": "developer",
+                "content": [{"type": "input_text", "text": "Prefix approved"}],
+            },
+        ),
+        _record(5, "response_item", {"type": "reasoning", "summary": []}),
+        _call(6, "wait", "wait", '{"cell_id":"14"}'),
+        _output(
+            7,
+            "wait",
+            _command_envelope(
+                output="bringing up nodes... [98%]\n",
+                session_id=73978,
+                wall_time_seconds=30.0,
+            ),
+        ),
+        _record(8, "event_msg", {"type": "token_count"}),
+        _record(9, "response_item", {"type": "reasoning", "summary": []}),
+        _record(
+            10,
+            "response_item",
+            {
+                "type": "custom_tool_call",
+                "call_id": "write",
+                "name": "exec",
+                "input": write_source,
+            },
+        ),
+        _output(
+            11,
+            "write",
+            _command_envelope(
+                output="2335 passed, 7 skipped\n",
+                exit_code=0,
+                wall_time_seconds=7.9,
+            ),
+        ),
+    ]
+
+    content = [item for entry in _normalized(records) for item in entry.message.content]
+    uses = [item for item in content if isinstance(item, ToolUseContent)]
+    results = [item for item in content if isinstance(item, ToolResultContent)]
+
+    assert [item.id for item in uses] == ["exec"]
+    assert [item.tool_use_id for item in results] == ["exec"]
+    assert results[0].content == (
+        "bringing up nodes... [98%]\n2335 passed, 7 skipped\n"
+    )
+    assert results[0].is_error is False
+
+
+def test_async_bash_does_not_fold_across_task_boundary() -> None:
+    records = [
+        _call(1, "exec", "exec_command", '{"cmd":"pytest"}'),
+        _output(2, "exec", "Script running with cell ID 14"),
+        _record(3, "event_msg", {"type": "task_complete"}),
+        _call(4, "wait", "wait", '{"cell_id":"14"}'),
+        _output(
+            5,
+            "wait",
+            _command_envelope(output="passed\n", exit_code=0),
+        ),
+    ]
+
+    content = [item for entry in _normalized(records) for item in entry.message.content]
+    assert [item.id for item in content if isinstance(item, ToolUseContent)] == [
+        "exec",
+        "wait",
+    ]
+
+
 @pytest.mark.parametrize("nested_tool", ["mcp__clmail__communicate", "future_tool"])
 def test_direct_nested_tool_result_matches_native_tool_result_shape(
     nested_tool: str,

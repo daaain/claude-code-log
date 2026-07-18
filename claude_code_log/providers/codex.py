@@ -77,7 +77,6 @@ _IMAGE_MEDIA_TYPES = {
     ".png": "image/png",
     ".webp": "image/webp",
 }
-_INVISIBLE_RECORD_KINDS = {"session_meta", "turn_context"}
 _MAX_JSON_NESTING = 512
 
 
@@ -706,9 +705,31 @@ class CodexProvider(BaseProvider):
         self, records: list[_DecodedRecord], left: int, right: int
     ) -> bool:
         return all(
-            record.kind in _INVISIBLE_RECORD_KINDS
+            self._is_ignorable_command_interstitial(record)
             for record in records[left + 1 : right]
         )
+
+    def _is_ignorable_command_interstitial(self, record: _DecodedRecord) -> bool:
+        """Whether a non-tool record may sit inside one command poll chain."""
+        if record.kind == "session_meta":
+            return True
+        if record.kind == "event_msg":
+            # Token accounting is emitted after nearly every model/tool step.
+            # Task boundaries and other events remain barriers even when the
+            # renderer currently ignores them.
+            return record.payload.get("type") == "token_count"
+        if record.kind != "response_item":
+            return False
+
+        payload_type = record.payload.get("type")
+        if payload_type == "reasoning":
+            return not self._reasoning_summary(record.payload)
+        if payload_type == "message":
+            # Approval bookkeeping is persisted as developer context between
+            # a timed-out command result and its first wait call.  User and
+            # assistant messages are visible and must break correlation.
+            return record.payload.get("role") not in {"user", "assistant"}
+        return False
 
     def _adapted_call(self, record: _DecodedRecord) -> Optional[tuple[str, Any]]:
         payload_type = self._nonempty_string(record.payload.get("type"))
