@@ -455,6 +455,62 @@ def test_promise_all_batch_becomes_ordered_tool_result_pairs() -> None:
     assert [item.content for item in results] == ["first output\n", "second output\n"]
 
 
+def test_destructured_mixed_promise_batch_preserves_call_and_result_order() -> None:
+    source = """
+        const [pr, auth, refs] = await Promise.all([
+          tools.mcp__codex_apps__github_get_pr_info({
+            repository_full_name: "daaain/claude-code-log", pr_number: 243
+          }),
+          tools.exec_command({cmd: "gh auth status"}),
+          tools.exec_command({cmd: "git log --oneline"})
+        ]);
+        text(JSON.stringify(pr));
+        text(auth.output);
+        text(refs.output);
+    """
+    pr = {"number": 243, "title": "AGY provider"}
+    records = [
+        _record(
+            1,
+            "response_item",
+            {
+                "type": "custom_tool_call",
+                "call_id": "batch",
+                "name": "exec",
+                "input": source,
+            },
+        ),
+        _output(
+            2,
+            "batch",
+            [
+                {
+                    "type": "input_text",
+                    "text": "Script completed\nWall time 0.1 seconds\nOutput:\n",
+                },
+                _forwarded_result_envelope(pr)[1],
+                {"type": "input_text", "text": "github.com authenticated"},
+                {"type": "input_text", "text": "ca6da78 latest commit"},
+            ],
+        ),
+    ]
+
+    content = [item for entry in _normalized(records) for item in entry.message.content]
+    uses = [item for item in content if isinstance(item, ToolUseContent)]
+    results = [item for item in content if isinstance(item, ToolResultContent)]
+
+    assert [item.name for item in uses] == [
+        "mcp__codex_apps__github_get_pr_info",
+        "Bash",
+        "Bash",
+    ]
+    assert [item.content for item in results] == [
+        json.dumps(pr),
+        "github.com authenticated",
+        "ca6da78 latest commit",
+    ]
+
+
 def test_promise_batch_result_count_mismatch_stays_workflow() -> None:
     source = (
         "const results = await Promise.all(["

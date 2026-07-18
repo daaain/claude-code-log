@@ -139,3 +139,32 @@ def test_analyzer_recovers_promise_all_marker_outputs() -> None:
     assert [call.input["cmd"] for call in batch.calls] == ["one", "two"]
     assert batch.result_indexes == [0, 1]
     assert batch.output_mode == "markers"
+
+
+def test_analyzer_destructures_mixed_promise_all_results() -> None:
+    batch = analyze_javascript_tools(
+        """
+        const [pr, auth, refs] = await Promise.all([
+          tools.mcp__codex_apps__github_get_pr_info({
+            repository_full_name: "daaain/claude-code-log", pr_number: 243
+          }),
+          tools.exec_command({cmd: "gh auth status"}),
+          tools.exec_command({cmd: "git log --oneline"})
+        ]);
+        text(JSON.stringify(pr));
+        text(auth.output);
+        text(refs.output);
+        """
+    )
+
+    assert batch is not None
+    assert [call.name for call in batch.calls] == [
+        "mcp__codex_apps__github_get_pr_info",
+        "exec_command",
+        "exec_command",
+    ]
+    assert batch.calls[0].input == {
+        "repository_full_name": "daaain/claude-code-log",
+        "pr_number": 243,
+    }
+    assert batch.result_indexes == [0, 1, 2]

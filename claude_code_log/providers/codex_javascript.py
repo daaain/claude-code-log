@@ -189,17 +189,55 @@ class _StaticEvaluator:
                 return False
             name = declarator.child_by_field_name("name")
             value = declarator.child_by_field_name("value")
-            if (
-                name is None
-                or name.type != "identifier"
-                or value is None
-                or self.syntax.text(name) in environment
-            ):
+            if name is None or value is None:
                 return False
             abstract = self._declaration_value(value, environment)
-            if abstract is None:
+            if abstract is None or not self._bind_declaration(
+                name, abstract, environment
+            ):
                 return False
-            environment[self.syntax.text(name)] = abstract
+        return True
+
+    def _bind_declaration(
+        self, name: Node, value: _AbstractValue, environment: _Environment
+    ) -> bool:
+        if name.type == "identifier":
+            identifier = self.syntax.text(name)
+            if identifier in environment:
+                return False
+            environment[identifier] = value
+            return True
+
+        if name.type != "array_pattern" or not isinstance(value, _Collection):
+            return False
+        bindings = name.named_children
+        if len(bindings) != len(value.values) or not all(
+            binding.type == "identifier" for binding in bindings
+        ):
+            return False
+
+        # Accept only the plain ``[a, b]`` form.  Tree-sitter omits elisions
+        # from named_children, so checking the punctuation sequence prevents
+        # accidentally rebinding ``[a, , b]`` to adjacent results.
+        children = name.children
+        if len(children) != 2 * len(bindings) + 1:
+            return False
+        if children[0].type != "[" or children[-1].type != "]":
+            return False
+        if any(children[index].type != "," for index in range(2, len(children) - 1, 2)):
+            return False
+        if any(
+            children[index] != binding
+            for index, binding in zip(range(1, len(children) - 1, 2), bindings)
+        ):
+            return False
+
+        identifiers = [self.syntax.text(binding) for binding in bindings]
+        if len(set(identifiers)) != len(identifiers) or any(
+            identifier in environment for identifier in identifiers
+        ):
+            return False
+        environment.update(zip(identifiers, value.values))
         return True
 
     def _declaration_value(
