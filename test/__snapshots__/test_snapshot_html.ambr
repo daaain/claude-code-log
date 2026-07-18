@@ -1353,11 +1353,10 @@
       border-radius: 3px;
   }
   
-  /* Nested tables produced by the recursive params renderer: keep the
-     flat look but let the key column shrink (index/short keys) so depth
-     doesn't eat horizontal space. */
+  /* Nested tables produced by the recursive params renderer retain the
+     same readable key-column width at every depth. */
   .tool-params-nested .tool-param-key {
-      width: auto;
+      width: 8em;
       min-width: 4em;
   }
   
@@ -8117,11 +8116,10 @@
       border-radius: 3px;
   }
   
-  /* Nested tables produced by the recursive params renderer: keep the
-     flat look but let the key column shrink (index/short keys) so depth
-     doesn't eat horizontal space. */
+  /* Nested tables produced by the recursive params renderer retain the
+     same readable key-column width at every depth. */
   .tool-params-nested .tool-param-key {
-      width: auto;
+      width: 8em;
       min-width: 4em;
   }
   
@@ -17193,11 +17191,10 @@
       border-radius: 3px;
   }
   
-  /* Nested tables produced by the recursive params renderer: keep the
-     flat look but let the key column shrink (index/short keys) so depth
-     doesn't eat horizontal space. */
+  /* Nested tables produced by the recursive params renderer retain the
+     same readable key-column width at every depth. */
   .tool-params-nested .tool-param-key {
-      width: auto;
+      width: 8em;
       min-width: 4em;
   }
   
@@ -24075,11 +24072,10 @@
       border-radius: 3px;
   }
   
-  /* Nested tables produced by the recursive params renderer: keep the
-     flat look but let the key column shrink (index/short keys) so depth
-     doesn't eat horizontal space. */
+  /* Nested tables produced by the recursive params renderer retain the
+     same readable key-column width at every depth. */
   .tool-params-nested .tool-param-key {
-      width: auto;
+      width: 8em;
       min-width: 4em;
   }
   
@@ -31237,11 +31233,10 @@
       border-radius: 3px;
   }
   
-  /* Nested tables produced by the recursive params renderer: keep the
-     flat look but let the key column shrink (index/short keys) so depth
-     doesn't eat horizontal space. */
+  /* Nested tables produced by the recursive params renderer retain the
+     same readable key-column width at every depth. */
   .tool-params-nested .tool-param-key {
-      width: auto;
+      width: 8em;
       min-width: 4em;
   }
   
@@ -38350,11 +38345,10 @@
       border-radius: 3px;
   }
   
-  /* Nested tables produced by the recursive params renderer: keep the
-     flat look but let the key column shrink (index/short keys) so depth
-     doesn't eat horizontal space. */
+  /* Nested tables produced by the recursive params renderer retain the
+     same readable key-column width at every depth. */
   .tool-params-nested .tool-param-key {
-      width: auto;
+      width: 8em;
       min-width: 4em;
   }
   
@@ -45408,11 +45402,10 @@
       border-radius: 3px;
   }
   
-  /* Nested tables produced by the recursive params renderer: keep the
-     flat look but let the key column shrink (index/short keys) so depth
-     doesn't eat horizontal space. */
+  /* Nested tables produced by the recursive params renderer retain the
+     same readable key-column width at every depth. */
   .tool-params-nested .tool-param-key {
-      width: auto;
+      width: 8em;
       min-width: 4em;
   }
   
