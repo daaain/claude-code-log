@@ -323,16 +323,15 @@ def test_sequential_calls_can_emit_after_all_invocations() -> None:
     source = (
         "const a = await tools.exec_command({"
         'cmd:"codex plugin list --json",'
-        'workdir:"/home/cboos/Workspace/github/daain/claude-code-log/codex",'
+        'workdir:"/workspace/project",'
         'sandbox_permissions:"require_escalated",'
-        'justification:"Allow reading the installed Codex plugin registry to verify '
-        'the ClMail test installation?",'
+        'justification:"Allow reading the synthetic plugin registry?",'
         'prefix_rule:["codex","plugin","list"],'
         "yield_time_ms:30000,max_output_tokens:5000});\n"
         "const b = await tools.exec_command({"
-        'cmd:"find /home/cboos/.codex/plugins/cache/clmail-local/clmail/6.13.2 '
+        'cmd:"find /home/user/.codex/plugins/cache/example-plugin/1.2.3 '
         '-maxdepth 4 -type f -print",'
-        'workdir:"/home/cboos/Workspace/github/daain/claude-code-log/codex",'
+        'workdir:"/workspace/project",'
         "yield_time_ms:10000,max_output_tokens:3000});\n"
         "text(a.output); text(b.output);"
     )
@@ -343,7 +342,7 @@ def test_sequential_calls_can_emit_after_all_invocations() -> None:
     assert batch.result_indexes == [0, 1]
     assert [call.input["command"] for call in batch.calls] == [
         "codex plugin list --json",
-        "find /home/cboos/.codex/plugins/cache/clmail-local/clmail/6.13.2 "
+        "find /home/user/.codex/plugins/cache/example-plugin/1.2.3 "
         "-maxdepth 4 -type f -print",
     ]
 

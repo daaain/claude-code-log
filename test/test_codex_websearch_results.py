@@ -173,6 +173,24 @@ def test_codex_webfetch_uses_the_same_result_normalizer() -> None:
     assert "id='web-ref-turn12search1'" in rendered
 
 
+def test_codex_web_result_escapes_markdown_link_targets() -> None:
+    serialized = """Result
+ (https://example.invalid/a path?q=\"value\")
+citeturn1search0 Content type: text/html; Source: open; Redirected to URL: https://example.invalid/canonical path?q=\"value\"; Total lines: 12
+"""
+
+    normalized, _ = TestProvider()._adapt_tool_result(
+        _direct_result(serialized), tool_name="WebSearch", is_error=False
+    )
+
+    assert isinstance(normalized, str)
+    assert "## [Result](https://example.invalid/a%20path?q=%22value%22)" in normalized
+    assert (
+        "[canonical source](https://example.invalid/canonical%20path?q=%22value%22)"
+        in normalized
+    )
+
+
 def test_websearch_errors_keep_generic_result_rendering() -> None:
     raw = ToolResultContent(
         type="tool_result",

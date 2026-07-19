@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 
+from ..markdown.renderer import safe_markdown_link_target
+
 _SOURCE_REF_RE = re.compile(r"cite(?P<ref>turn\d+(?:search|view)\d+)")
 _NUMERIC_CITE_RE = re.compile(r"cite\d+†(?P<label>.*?)", re.DOTALL)
 _SOURCE_HEADER_RE = re.compile(
@@ -36,7 +38,8 @@ def normalize_codex_web_result(text: str) -> tuple[str, list[str]]:
 
     def source_header(match: re.Match[str]) -> str:
         title = match.group("title").strip().replace("[", r"\[").replace("]", r"\]")
-        return f"## [{title}]({match.group('url')})\n\n"
+        url = safe_markdown_link_target(match.group("url"))
+        return f"## [{title}]({url})\n\n"
 
     def source_ref(match: re.Match[str]) -> str:
         ref = match.group("ref")
@@ -51,7 +54,8 @@ def normalize_codex_web_result(text: str) -> tuple[str, list[str]]:
         parts = [f"Fetched {match.group('content_type').strip()}"]
         redirect = match.group("redirect")
         if redirect:
-            parts.append(f"[canonical source]({redirect.strip()})")
+            target = safe_markdown_link_target(redirect.strip())
+            parts.append(f"[canonical source]({target})")
         parts.append(f"{int(match.group('lines')):,} lines")
         return "> " + " · ".join(parts)
 

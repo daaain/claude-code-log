@@ -1,9 +1,23 @@
 """Tree-sitter parsing and bounded Codex JavaScript analysis."""
 
+from pytest import MonkeyPatch
+
+from claude_code_log.providers import codex_javascript
 from claude_code_log.providers.codex_javascript import (
     analyze_javascript_tools,
     parse_javascript,
 )
+
+
+def test_analyzer_fails_closed_on_unexpected_parser_error(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    def fail_parse(_source: str) -> None:
+        raise RuntimeError("synthetic parser failure")
+
+    monkeypatch.setattr(codex_javascript, "parse_javascript", fail_parse)
+
+    assert analyze_javascript_tools("const valid = true;") is None
 
 
 def test_parse_javascript_retains_exact_utf8_node_ranges() -> None:

@@ -102,16 +102,22 @@ def analyze_javascript_tools(
     max_loop_iterations: int = MAX_LOOP_ITERATIONS,
     max_expanded_calls: int = MAX_EXPANDED_CALLS,
 ) -> Optional[JavaScriptToolBatch]:
-    """Materialize a safe, bounded subset of a Codex JavaScript wrapper."""
-    syntax = parse_javascript(source)
-    if syntax is None:
+    """Materialize a safe, bounded subset, failing closed on parser surprises."""
+    try:
+        syntax = parse_javascript(source)
+        if syntax is None:
+            return None
+        evaluator = _StaticEvaluator(
+            syntax,
+            max_loop_iterations=max_loop_iterations,
+            max_expanded_calls=max_expanded_calls,
+        )
+        return evaluator.evaluate()
+    except Exception:
+        # Transcript JavaScript is untrusted, and decoding it is best-effort.
+        # An unforeseen tree-sitter node shape or dependency API change must
+        # leave the original ToolExecution visible rather than abort rendering.
         return None
-    evaluator = _StaticEvaluator(
-        syntax,
-        max_loop_iterations=max_loop_iterations,
-        max_expanded_calls=max_expanded_calls,
-    )
-    return evaluator.evaluate()
 
 
 def _node_count_exceeds(root: Node, limit: int) -> bool:

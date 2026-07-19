@@ -40,7 +40,7 @@ Symmetric inverse of the relative-`--filter-path`-with-`--expand-paths` footgun 
 
 ```
 $ uv run claude-code-log -o .examples/.../ccl --all-projects \
-      --filter-path /home/cboos/Workspace/github/daain \
+      --filter-path /home/user/Workspace/github/example \
       --detail low --compact --format md
 Processed 665 projects in 1.3s
   Index regenerated
