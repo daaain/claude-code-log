@@ -1835,10 +1835,13 @@ def convert_jsonl_to_html(
     use_cache: bool = True,
     silent: bool = False,
     page_size: int = 2000,
+    detail: DetailLevel = DEFAULT_DETAIL_LEVEL,
 ) -> Path:
     """Convert JSONL transcript(s) to HTML file(s).
 
-    Convenience wrapper around convert_jsonl_to() for HTML format.
+    Convenience wrapper around convert_jsonl_to() for HTML format. The
+    ``detail`` default matches the CLI (``DEFAULT_DETAIL_LEVEL`` == HIGH /
+    ``--depth tool``); pass ``DetailLevel.FULL`` to render everything.
     """
     return convert_jsonl_to(
         "html",
@@ -1850,6 +1853,7 @@ def convert_jsonl_to_html(
         use_cache,
         silent,
         page_size=page_size,
+        detail=detail,
     )
 
 
