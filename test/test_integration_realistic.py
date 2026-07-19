@@ -1892,7 +1892,7 @@ class TestExperimentsWorktreesTeammates:
                     return
                 ad = dict(attrs)
                 classes = set((ad.get("class") or "").split())
-                mid = ad.get("data-message-id")
+                mid = ad.get("id")
                 is_node = "message-node" in classes
                 if "message" in classes and not is_node:
                     # A message card: attach to its nearest message-node frame.

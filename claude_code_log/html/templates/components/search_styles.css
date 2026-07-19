@@ -110,6 +110,7 @@
     display: flex;
     gap: 12px;
     font-size: 0.75em;
+    margin-top: 6px;
 }
 
 .search-option-inline {
@@ -149,6 +150,25 @@
 .search-nav-btn:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+}
+
+/* Keyboard shortcut labels inside the prev/next buttons */
+.search-nav-btn .search-kbd {
+    font-family: inherit;
+    font-size: 0.85em;
+    color: var(--text-muted);
+    margin-left: 2px;
+}
+
+/* Search-as-filter (transcript pages): messages that don't match an active
+   search are hidden; ancestors of matches ("Show context" mode) stay visible
+   but dimmed so the matches themselves stand out. */
+.message.search-hidden {
+    display: none;
+}
+
+.message.search-context {
+    opacity: 0.55;
 }
 
 /* Search Match Highlighting */

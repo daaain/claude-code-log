@@ -51,12 +51,12 @@ class TestFilteredParentDoesNotCascade:
         result = page.evaluate(
             """() => {
                 // Find a card that has a .children sibling holding >=1 other card.
-                const cards = Array.from(document.querySelectorAll('.message[data-message-id]'));
+                const cards = Array.from(document.querySelectorAll('.message[id^="msg-"]'));
                 let parent = null, childCard = null;
                 for (const c of cards) {
                     const cc = c.parentElement &&
                         c.parentElement.querySelector(':scope > .children');
-                    const inner = cc && cc.querySelector('.message[data-message-id]');
+                    const inner = cc && cc.querySelector('.message[id^="msg-"]');
                     if (inner) { parent = c; childCard = inner; break; }
                 }
                 if (!parent) return { error: 'no parent-with-children found' };
@@ -67,7 +67,7 @@ class TestFilteredParentDoesNotCascade:
 
                 // The count selector used by updateVisibleCounts():
                 const countedAsVisible = document
-                    .querySelector(`.message[data-message-id="${childCard.getAttribute('data-message-id')}"]:not(.filtered-hidden)`) !== null;
+                    .querySelector(`.message[id="${childCard.id}"]:not(.filtered-hidden)`) !== null;
 
                 return {
                     parentDisplay: getComputedStyle(parent).display,         // none
@@ -114,8 +114,7 @@ class TestFoldHidesForkPoint:
                 for (const sec of sections) {
                     if (sec.classList.contains('folded')) continue;
                     const id = sec.getAttribute('data-target');
-                    const card = document.querySelector(
-                        `.message[data-message-id="${id}"]`);
+                    const card = document.getElementById(`msg-${id}`);
                     const cc = card && card.parentElement.querySelector(':scope > .children');
                     if (!cc || getComputedStyle(cc).display === 'none') continue;
 

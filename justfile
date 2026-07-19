@@ -1,3 +1,6 @@
+# Pytest verbosity: quiet for AI agents (AI_AGENT set), verbose for humans
+pytest_verbosity := if env("AI_AGENT", "") != "" { "-q" } else { "-v" }
+
 # Default is to list commands
 default:
     @just --list
@@ -10,27 +13,27 @@ cli *ARGS:
 # the pytest-playwright plugin — it imports playwright (~1s) per xdist worker on
 # Windows (spawned workers re-import). See work/xdist-import-cost.md.
 test:
-    uv run pytest -p no:playwright -m "not (tui or browser or benchmark)" -v
+    uv run pytest -p no:playwright -m "not (tui or browser or benchmark)" {{ pytest_verbosity }}
 
 # Run benchmark tests serially for stable measurements (outputs to GITHUB_STEP_SUMMARY in CI). DEBUG_TIMING enables coverage of renderer_timings.py
 test-benchmark:
-    CLAUDE_CODE_LOG_DEBUG_TIMING=1 uv run pytest -n0 -m benchmark -v
+    CLAUDE_CODE_LOG_DEBUG_TIMING=1 uv run pytest -n0 -m benchmark {{ pytest_verbosity }}
 
 # Update snapshot tests (runs serially for deterministic file ordering)
 update-snapshot:
-    uv run pytest -n0 -m snapshot --snapshot-update -v
+    uv run pytest -n0 -m snapshot --snapshot-update {{ pytest_verbosity }}
 
 # Run TUI tests (requires isolated event loop)
 test-tui:
-    uv run pytest -m tui -v
+    uv run pytest -m tui {{ pytest_verbosity }}
 
 # Run browser tests (requires Chromium)
 test-browser:
-    uv run pytest -m browser -v
+    uv run pytest -m browser {{ pytest_verbosity }}
 
 # Run integration tests with realistic JSONL data
 test-integration:
-    uv run pytest -m integration -v
+    uv run pytest -m integration {{ pytest_verbosity }}
 
 # Run all tests in sequence (separated to avoid event loop conflicts)
 test-all:
@@ -38,15 +41,15 @@ test-all:
     set -e  # Exit on first failure
     echo "🧪 Running all tests in sequence..."
     echo "📦 Running unit tests..."
-    uv run pytest -p no:playwright -m "not (tui or browser or integration or benchmark)" -v
+    uv run pytest -p no:playwright -m "not (tui or browser or integration or benchmark)" {{ pytest_verbosity }}
     echo "🖥️  Running TUI tests..."
-    uv run pytest -m tui -v
+    uv run pytest -m tui {{ pytest_verbosity }}
     echo "🌐 Running browser tests..."
-    uv run pytest -m browser -v
+    uv run pytest -m browser {{ pytest_verbosity }}
     echo "🔄 Running integration tests..."
-    uv run pytest -m integration -v
+    uv run pytest -m integration {{ pytest_verbosity }}
     echo "📊 Running benchmark tests..."
-    CLAUDE_CODE_LOG_DEBUG_TIMING=1 uv run pytest -n0 -m benchmark -v
+    CLAUDE_CODE_LOG_DEBUG_TIMING=1 uv run pytest -n0 -m benchmark {{ pytest_verbosity }}
     echo "✅ All tests completed!"
 
 # Run tests with coverage (all categories)
@@ -55,15 +58,15 @@ test-cov:
     set -e  # Exit on first failure
     echo "📊 Running all tests with coverage..."
     echo "📦 Running unit tests with coverage..."
-    uv run pytest -p no:playwright -m "not (tui or browser or integration or benchmark)" --cov=claude_code_log --cov-report=xml --cov-report=html --cov-report=term -v
+    uv run pytest -p no:playwright -m "not (tui or browser or integration or benchmark)" --cov=claude_code_log --cov-report=xml --cov-report=html --cov-report=term {{ pytest_verbosity }}
     echo "🖥️  Running TUI tests with coverage append..."
-    uv run pytest -m tui --cov=claude_code_log --cov-append --cov-report=xml --cov-report=html --cov-report=term -v
+    uv run pytest -m tui --cov=claude_code_log --cov-append --cov-report=xml --cov-report=html --cov-report=term {{ pytest_verbosity }}
     echo "🌐 Running browser tests with coverage append..."
-    uv run pytest -m browser --cov=claude_code_log --cov-append --cov-report=xml --cov-report=html --cov-report=term -v
+    uv run pytest -m browser --cov=claude_code_log --cov-append --cov-report=xml --cov-report=html --cov-report=term {{ pytest_verbosity }}
     echo "🔄 Running integration tests with coverage append..."
-    uv run pytest -m integration --cov=claude_code_log --cov-append --cov-report=xml --cov-report=html --cov-report=term -v
+    uv run pytest -m integration --cov=claude_code_log --cov-append --cov-report=xml --cov-report=html --cov-report=term {{ pytest_verbosity }}
     echo "📊 Running benchmark tests with coverage append..."
-    CLAUDE_CODE_LOG_DEBUG_TIMING=1 uv run pytest -n0 -m benchmark --cov=claude_code_log --cov-append --cov-report=xml --cov-report=html --cov-report=term -v
+    CLAUDE_CODE_LOG_DEBUG_TIMING=1 uv run pytest -n0 -m benchmark --cov=claude_code_log --cov-append --cov-report=xml --cov-report=html --cov-report=term {{ pytest_verbosity }}
     echo "✅ All tests with coverage completed!"
 
 format:
