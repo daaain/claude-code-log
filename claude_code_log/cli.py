@@ -808,10 +808,10 @@ def _validate_git_link_template(template: str) -> None:
     is_flag=True,
     help=(
         "Suppress '※ recap' (away-summary) messages. Recaps are otherwise "
-        "shown at every detail level — they are themselves a high-level "
+        "shown at every depth level — they are themselves a high-level "
         "summary of activity (#179). Use this to get a 'really user-only' "
-        "view (--detail user-only --no-recaps) or to drop the recap/agent "
-        "redundancy at --detail minimal."
+        "view (--depth user --no-recaps) or to drop the recap/agent "
+        "redundancy at --depth assistant."
     ),
 )
 @click.option(

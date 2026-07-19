@@ -1240,9 +1240,11 @@ def _get_page_html_path(page_number: int, variant_suffix: str = "") -> str:
 
 
 def _variant_label_from_suffix(suffix: str) -> str:
-    """Human-readable label for a filename suffix (e.g. '.low.compact')."""
+    """Human-readable label for a filename suffix (e.g. '.agent.compact')."""
     if not suffix:
-        return "Full"
+        # The empty suffix is the default level — tool/HIGH since #159, NOT
+        # full (which is now the ``.hook`` variant).
+        return "Tool"
     parts = [p for p in suffix.split(".") if p]
     # Capitalise each segment; "compact" stays lowercased as the adverb.
     # Replace hyphens with spaces so "user-only" renders as "User only"
@@ -1257,7 +1259,8 @@ def _enumerate_project_variants(
     """List variant entry files present in a project directory.
 
     Looks for top-level `combined_transcripts*.html` entries (page 1 of
-    each variant), sorted so the default (full) variant comes first.
+    each variant), sorted so the default (tool, empty-suffix) variant
+    comes first.
     Paginated `_N` trailers are excluded by the regex.
 
     Returns a list of ``{"file": relative-path, "label": human-name,

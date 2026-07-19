@@ -432,9 +432,10 @@ class TestEnumerateProjectVariants:
         variants = _enumerate_project_variants(tmp_path, "project")
         suffixes = [v["suffix"] for v in variants]
         labels = [v["label"] for v in variants]
-        # Default first.
+        # Default first — labeled "Tool" (the empty-suffix default level is
+        # now tool/HIGH, #159; the old .full variant is a named entry).
         assert suffixes[0] == ""
-        assert labels[0] == "Full"
+        assert labels[0] == "Tool"
         # All four entries present, no paginated trailers.
         assert sorted(suffixes) == ["", ".high", ".low", ".user-only"]
         # Hyphenated label renders with a space (UI polish).
