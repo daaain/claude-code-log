@@ -701,12 +701,14 @@ class CodexProvider(BaseProvider):
     ) -> list[_DecodedRecord]:
         """Fold adjacent terminal polling calls into their spawning Bash result.
 
-        A long-running ``exec_command`` first returns a cell id.  Codex then
-        emits ``wait(cell_id=...)`` and usually ``write_stdin(session_id=...)``
-        as separate tools.  They are transport details of one command, not
-        independent transcript actions.  Coalesce only consecutive visible
-        tool events whose identifiers form that exact chain; otherwise retain
-        every record unchanged.
+        A long-running ``exec_command`` may first return either an outer cell id
+        or a serialized result carrying the inner command's session id.  Codex
+        then emits ``wait(cell_id=...)`` and/or ``write_stdin(session_id=...)``
+        as separate tools; a slow ``write_stdin`` wrapper can itself yield an
+        outer cell that requires another ``wait``.  These are transport details
+        of one command, not independent transcript actions.  Coalesce only
+        consecutive visible tool events whose identifiers form that exact
+        chain and reach an exit code; otherwise retain every record unchanged.
         """
         tool_records = self._tool_record_indexes(records)
         suppressed: set[int] = set()
@@ -731,18 +733,36 @@ class CodexProvider(BaseProvider):
                 if isinstance(initial_output, str)
                 else None
             )
-            if match is None:
+            initial_envelope = self._command_result(initial_output)
+            initial_session_id = (
+                initial_envelope.get("session_id")
+                if initial_envelope is not None
+                else None
+            )
+            if match is None and not isinstance(initial_session_id, int):
+                position += 1
+                continue
+            if initial_envelope is not None and isinstance(
+                initial_envelope.get("exit_code"), int
+            ):
                 position += 1
                 continue
 
-            cell_id = match.group(1)
+            cell_id = match.group(1) if match is not None else None
             cursor = position + 2
             chunks: list[str] = []
+            if initial_envelope is not None:
+                initial_chunk = initial_envelope.get("output")
+                if isinstance(initial_chunk, str) and initial_chunk:
+                    chunks.append(initial_chunk)
             continuation_indices: list[int] = []
-            session_id: Optional[int] = None
+            session_id = (
+                initial_session_id if isinstance(initial_session_id, int) else None
+            )
             previous_result_index = result_index
             terminal = False
             terminal_exit_code: Optional[int] = None
+            terminal_result: Optional[_DecodedRecord] = None
             while cursor + 1 < len(tool_records):
                 next_call_index = tool_records[cursor]
                 next_result_index = tool_records[cursor + 1]
@@ -762,43 +782,59 @@ class CodexProvider(BaseProvider):
                     break
                 name, input_data = next_call[1].name, next_call[1].input
                 matches_wait = (
-                    name == "wait" and str(input_data.get("cell_id")) == cell_id
+                    name == "wait"
+                    and cell_id is not None
+                    and str(input_data.get("cell_id")) == cell_id
                 )
                 matches_write = (
                     name == "write_stdin"
+                    and cell_id is None
                     and session_id is not None
                     and input_data.get("session_id") == session_id
                 )
                 if not (matches_wait or matches_write):
                     break
-                envelope = self._command_result(
-                    records[next_result_index].payload.get("output")
-                )
+                continuation_output = records[next_result_index].payload.get("output")
+                envelope = self._command_result(continuation_output)
                 if envelope is None:
-                    break
+                    wrapper_match = (
+                        _RUNNING_CELL_RE.search(continuation_output)
+                        if isinstance(continuation_output, str)
+                        else None
+                    )
+                    if wrapper_match is None:
+                        break
+                    cell_id = wrapper_match.group(1)
+                    continuation_indices.extend([next_call_index, next_result_index])
+                    cursor += 2
+                    previous_result_index = next_result_index
+                    continue
                 output = envelope.get("output")
                 if isinstance(output, str) and output:
                     chunks.append(output)
                 raw_session_id = envelope.get("session_id")
                 if isinstance(raw_session_id, int):
                     session_id = raw_session_id
+                if matches_wait:
+                    cell_id = None
                 continuation_indices.extend([next_call_index, next_result_index])
                 cursor += 2
                 exit_code = envelope.get("exit_code")
                 if isinstance(exit_code, int):
                     terminal_exit_code = exit_code
+                    terminal_result = records[next_result_index]
                     terminal = True
                     break
                 previous_result_index = next_result_index
 
-            if terminal and continuation_indices:
+            if terminal and continuation_indices and terminal_result is not None:
                 payload = dict(result.payload)
                 payload["output"] = "".join(chunks)
                 payload["is_error"] = terminal_exit_code != 0
                 replacements[result_index] = _DecodedRecord(
-                    line_no=result.line_no,
-                    timestamp=result.timestamp,
-                    kind=result.kind,
+                    line_no=terminal_result.line_no,
+                    timestamp=terminal_result.timestamp,
+                    kind=terminal_result.kind,
                     payload=payload,
                 )
                 suppressed.update(continuation_indices)

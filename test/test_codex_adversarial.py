@@ -384,6 +384,174 @@ def test_async_bash_folds_wait_and_write_stdin_across_ignored_records() -> None:
     assert results[0].is_error is False
 
 
+def test_async_bash_folds_json_session_and_direct_write_stdin_poll() -> None:
+    origin_source = (
+        'const r = await tools.exec_command({cmd:"uv run pytest -m tui -q", '
+        "yield_time_ms:1000,max_output_tokens:12000,tty:true}); "
+        "text(JSON.stringify(r));"
+    )
+    poll_source = (
+        'const r = await tools.write_stdin({session_id:41447,chars:"",'
+        "yield_time_ms:10000,max_output_tokens:12000}); text(JSON.stringify(r));"
+    )
+    records = [
+        _record(
+            1,
+            "response_item",
+            {
+                "type": "custom_tool_call",
+                "call_id": "origin",
+                "name": "exec",
+                "input": origin_source,
+            },
+        ),
+        _output(
+            2,
+            "origin",
+            _command_envelope(
+                chunk_id="af326b",
+                wall_time_seconds=1.0,
+                session_id=41447,
+                output="bringing up nodes...\n",
+            ),
+        ),
+        _record(
+            3,
+            "response_item",
+            {
+                "type": "custom_tool_call",
+                "call_id": "poll",
+                "name": "exec",
+                "input": poll_source,
+            },
+        ),
+        _output(
+            4,
+            "poll",
+            _command_envelope(
+                chunk_id="7a379c",
+                wall_time_seconds=0.0,
+                exit_code=0,
+                output="68 passed in 8.34s\n",
+            ),
+        ),
+    ]
+
+    entries = _normalized(records)
+    content = [item for entry in entries for item in entry.message.content]
+    uses = [item for item in content if isinstance(item, ToolUseContent)]
+    results = [item for item in content if isinstance(item, ToolResultContent)]
+    result_entry = next(
+        entry
+        for entry in entries
+        if any(isinstance(item, ToolResultContent) for item in entry.message.content)
+    )
+
+    assert [(item.id, item.name) for item in uses] == [("origin", "Bash")]
+    assert [item.tool_use_id for item in results] == ["origin"]
+    assert results[0].content == "bringing up nodes...\n68 passed in 8.34s\n"
+    assert results[0].is_error is False
+    assert result_entry.timestamp == "2026-07-14T00:00:04Z"
+
+
+def test_async_bash_folds_write_stdin_outer_cell_wait_and_final_poll() -> None:
+    origin_source = (
+        'const r = await tools.exec_command({cmd:"uv run pytest -m integration -q", '
+        "yield_time_ms:1000,max_output_tokens:12000,tty:true}); "
+        "text(JSON.stringify(r));"
+    )
+    poll_source = (
+        'const r = await tools.write_stdin({session_id:82784,chars:"",'
+        "yield_time_ms:10000,max_output_tokens:12000}); text(JSON.stringify(r));"
+    )
+    records = [
+        _record(
+            1,
+            "response_item",
+            {
+                "type": "custom_tool_call",
+                "call_id": "origin",
+                "name": "exec",
+                "input": origin_source,
+            },
+        ),
+        _output(
+            2,
+            "origin",
+            _command_envelope(
+                chunk_id="first",
+                wall_time_seconds=1.0,
+                session_id=82784,
+                output="bringing up nodes...\n",
+            ),
+        ),
+        _record(
+            3,
+            "response_item",
+            {
+                "type": "custom_tool_call",
+                "call_id": "slow-poll",
+                "name": "exec",
+                "input": poll_source,
+            },
+        ),
+        _output(
+            4,
+            "slow-poll",
+            "Script running with cell ID 45\nWall time 10.2 seconds\nOutput:\n",
+        ),
+        _call(5, "wait", "wait", '{"cell_id":"45"}'),
+        _output(
+            6,
+            "wait",
+            _command_envelope(
+                chunk_id="middle",
+                wall_time_seconds=10.0,
+                session_id=82784,
+                output="integration tests running...\n",
+            ),
+        ),
+        _record(
+            7,
+            "response_item",
+            {
+                "type": "custom_tool_call",
+                "call_id": "final-poll",
+                "name": "exec",
+                "input": poll_source,
+            },
+        ),
+        _output(
+            8,
+            "final-poll",
+            _command_envelope(
+                chunk_id="final",
+                wall_time_seconds=6.9,
+                exit_code=0,
+                output="78 passed, 7 skipped\n",
+            ),
+        ),
+    ]
+
+    entries = _normalized(records)
+    content = [item for entry in entries for item in entry.message.content]
+    uses = [item for item in content if isinstance(item, ToolUseContent)]
+    results = [item for item in content if isinstance(item, ToolResultContent)]
+    result_entry = next(
+        entry
+        for entry in entries
+        if any(isinstance(item, ToolResultContent) for item in entry.message.content)
+    )
+
+    assert [(item.id, item.name) for item in uses] == [("origin", "Bash")]
+    assert [item.tool_use_id for item in results] == ["origin"]
+    assert results[0].content == (
+        "bringing up nodes...\nintegration tests running...\n78 passed, 7 skipped\n"
+    )
+    assert results[0].is_error is False
+    assert result_entry.timestamp == "2026-07-14T00:00:08Z"
+
+
 def test_async_bash_does_not_fold_across_task_boundary() -> None:
     records = [
         _call(1, "exec", "exec_command", '{"cmd":"pytest"}'),
