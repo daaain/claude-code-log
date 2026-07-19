@@ -66,16 +66,17 @@ and broader compatibility across Codex versions and surfaces.
   unique stable spawn-call boundary.
 - Async command polling folds into Bash only across invisible metadata and only
   after a terminal exit result. Live or ambiguous handles remain lossless.
-- Static `exec_command`, plan, collaboration, agent-list, search-only web, and
-  exact open-only web batches reuse existing typed renderers. Dynamic,
-  compound, malformed, mixed-action, and unknown calls keep generic Workflow
-  or raw tool rendering.
+- Static tool programs—including sequential and parallel batches, bounded
+  loops, constant/template composition, and selected polling patterns—reuse
+  existing typed renderers. Dynamic, malformed, ambiguous, mixed-action, and
+  unknown calls keep generic Workflow or raw tool rendering.
 - Opaque agent payloads are scrubbed before every Workflow fallback. Encrypted
   reasoning is never inspected or rendered.
 - Successful user-shell commands use the compact Bash presentation. Non-zero
   commands retain their original envelope so exit status and duration remain
   visible.
 
-The staged internal refactors intentionally deferred from this correctness
-round are recorded in
-[`work/codex-architecture-followups.md`](../../../work/codex-architecture-followups.md).
+The current item, adapter, and static-analysis census lives in
+[`tools-coverage.md`](../../tools-coverage.md). Remaining product, evidence,
+and architecture work is grouped in
+[`work/codex-backlog.md`](../../../work/codex-backlog.md).
