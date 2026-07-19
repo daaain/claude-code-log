@@ -129,6 +129,18 @@ def test_mixed_patch_batch_splits_writes_without_reordering_edits() -> None:
         "created.txt",
         "last.txt",
     ]
+    assert batch.calls[0].input["edits"] == [
+        {
+            "file_path": "first.txt",
+            "old_string": "old\n",
+            "new_string": "new\n",
+        },
+        {
+            "file_path": "obsolete.txt",
+            "old_string": "[deleted file]\n",
+            "new_string": "",
+        },
+    ]
     assert batch.calls[1].input["content"] == "created\n"
 
 

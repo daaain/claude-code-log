@@ -492,7 +492,7 @@ def _expand_patch(patch: str) -> Optional[list[AdaptedToolCall]]:
         if len(edits) == 1:
             expanded.append(AdaptedToolCall("Edit", edits[0]))
         elif edits:
-            expanded.append(_multiedit_call(edits))
+            expanded.append(_multiedit_call(list(edits)))
         edits.clear()
 
     for operation, edit in operations:
