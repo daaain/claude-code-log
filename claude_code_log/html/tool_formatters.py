@@ -34,7 +34,12 @@ from .utils import (
     render_user_markdown_collapsible,
     resolve_memory_body_links,
 )
-from ..utils import ARTIFACT_FAVICON_TEXT_MAX, is_safe_web_url, strip_error_tags
+from ..utils import (
+    ARTIFACT_FAVICON_TEXT_MAX,
+    is_safe_web_url,
+    split_websearch_queries,
+    strip_error_tags,
+)
 from ..workflow import resolve_workflow_header, resolve_workflow_script
 from ..models import (
     AskUserQuestionInput,
@@ -287,6 +292,10 @@ def format_websearch_input(search_input: WebSearchInput) -> str:
     Only shows the query if it exceeds 100 chars (truncated in title).
     Otherwise returns empty since the full query is already in the title.
     """
+    queries = split_websearch_queries(search_input.query)
+    if len(queries) > 1:
+        items = "".join(f"<li>{escape_html(query)}</li>" for query in queries)
+        return f'<ul class="websearch-queries">{items}</ul>'
     if len(search_input.query) <= 100:
         return ""
     escaped_query = escape_html(search_input.query)

@@ -2,19 +2,27 @@
 
 from typing import Any
 
-from claude_code_log.factories.tool_factory import create_tool_output
+from claude_code_log.factories.tool_factory import (
+    create_tool_output,
+    create_tool_use_message,
+)
+from claude_code_log.html.renderer import HtmlRenderer
 from claude_code_log.html.tool_formatters import (
     format_webfetch_output,
     format_websearch_input,
     format_websearch_output,
 )
 from claude_code_log.models import (
+    MessageMeta,
     ToolResultContent,
+    ToolUseContent,
     WebFetchOutput,
     WebSearchInput,
     WebSearchOutput,
 )
+from claude_code_log.markdown.renderer import MarkdownRenderer
 from claude_code_log.providers.codex import CodexProvider
+from claude_code_log.renderer import TemplateMessage
 
 
 class TestProvider(CodexProvider):
@@ -40,6 +48,43 @@ def test_long_query_retains_shared_claude_websearch_body() -> None:
     query = "site:developers.openai.com/codex " * 10
     assert format_websearch_input(WebSearchInput(query=query)) == (
         f'<div class="websearch-query">{query}</div>'
+    )
+
+
+def test_parallel_websearch_queries_use_compact_title_and_body_list() -> None:
+    queries = [
+        "site:developers.openai.com/codex local sessions",
+        "site:developers.openai.com/codex JSONL rollout sessions",
+        "site:developers.openai.com/codex tools shell apply_patch",
+    ]
+    query = " • ".join(queries)
+    input = WebSearchInput(query=query)
+    tool_use = ToolUseContent(
+        type="tool_use", id="search", name="WebSearch", input={"query": query}
+    )
+    content = create_tool_use_message(MessageMeta.empty(), tool_use, {}).content
+    assert content is not None
+    message = TemplateMessage(content)
+
+    html = HtmlRenderer(image_export_mode="placeholder")
+    assert html.title_WebSearchInput(input, message).endswith(
+        "<span class='tool-summary'>"
+        "site:developers.openai.com/codex local sessions (...)</span>"
+    )
+    assert format_websearch_input(input) == (
+        '<ul class="websearch-queries">'
+        "<li>site:developers.openai.com/codex local sessions</li>"
+        "<li>site:developers.openai.com/codex JSONL rollout sessions</li>"
+        "<li>site:developers.openai.com/codex tools shell apply_patch</li>"
+        "</ul>"
+    )
+
+    markdown = MarkdownRenderer()
+    assert markdown.title_WebSearchInput(input, message) == (
+        "🔎 WebSearch `site:developers.openai.com/codex local sessions (...)`"
+    )
+    assert markdown.format_WebSearchInput(input, message) == "\n".join(
+        f"- {item}" for item in queries
     )
 
 

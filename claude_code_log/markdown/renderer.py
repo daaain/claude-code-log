@@ -24,6 +24,7 @@ from ..utils import (
     format_timestamp,
     generate_unified_diff,
     is_safe_web_url,
+    split_websearch_queries,
     strip_error_tags,
 )
 from ..models import (
@@ -1133,10 +1134,12 @@ class MarkdownRenderer(Renderer):
         # Title contains "Exiting plan mode", body is empty
         return ""
 
-    def format_WebSearchInput(self, _input: WebSearchInput, _: TemplateMessage) -> str:
-        """Format → '' (query shown in title)."""
-        # Query is shown in the title, body is empty
-        return ""
+    def format_WebSearchInput(self, input: WebSearchInput, _: TemplateMessage) -> str:
+        """Format → parallel queries as a list; single query stays title-only."""
+        queries = split_websearch_queries(input.query)
+        if len(queries) == 1:
+            return ""
+        return "\n".join(f"- {safe_markdown_inline(query)}" for query in queries)
 
     def format_WebFetchInput(self, input: WebFetchInput, _: TemplateMessage) -> str:
         """Format → '' (url in title, prompt if long)."""
@@ -2115,7 +2118,9 @@ class MarkdownRenderer(Renderer):
 
     def title_WebSearchInput(self, input: WebSearchInput, _: TemplateMessage) -> str:
         """Title → '🔎 WebSearch `query`'."""
-        return f"🔎 WebSearch `{input.query}`"
+        queries = split_websearch_queries(input.query)
+        summary = f"{queries[0]} (...)" if len(queries) > 1 else input.query
+        return f"🔎 WebSearch `{summary}`"
 
     def title_WebFetchInput(self, input: WebFetchInput, _: TemplateMessage) -> str:
         """Title → '🌐 WebFetch `url`' (truncated if > 60 chars)."""

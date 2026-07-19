@@ -112,7 +112,7 @@ from ..renderer_timings import (
     report_timing_statistics,
     set_timing_var,
 )
-from ..utils import format_timestamp
+from ..utils import format_timestamp, split_websearch_queries
 from .system_formatters import (
     format_away_summary_content,
     format_hook_attachment_content,
@@ -1255,7 +1255,9 @@ class HtmlRenderer(Renderer):
         self, input: WebSearchInput, message: TemplateMessage
     ) -> str:
         """Title → '🔎 WebSearch <query>'."""
-        return self._tool_title(message, "🔎", input.query)
+        queries = split_websearch_queries(input.query)
+        summary = f"{queries[0]} (...)" if len(queries) > 1 else input.query
+        return self._tool_title(message, "🔎", summary)
 
     def title_WebFetchInput(
         self, input: WebFetchInput, message: TemplateMessage

@@ -76,7 +76,40 @@ def _search_input_params(content: ToolUseMessage) -> Optional[dict[str, Any]]:
     return params
 
 
-_SEARCH_HIGHLIGHT_TAG_RE = re.compile(r"</?span(?:\s[^>]*)?>", re.IGNORECASE)
+_SEARCH_HIT_START_RE = re.compile(r'\{\s*"url"\s*:')
+
+
+def _search_hits(body: str) -> Optional[list[dict[str, Any]]]:
+    """Decode hits, salvaging complete objects from Codex-truncated JSON."""
+    try:
+        decoded: Any = json.loads(body)
+    except (ValueError, RecursionError):
+        decoded = None
+    if isinstance(decoded, dict):
+        hits_value = cast(dict[str, Any], decoded).get("hits")
+        if isinstance(hits_value, list):
+            return [
+                cast(dict[str, Any], hit)
+                for hit in cast(list[Any], hits_value)
+                if isinstance(hit, dict)
+            ]
+
+    decoder = json.JSONDecoder()
+    recovered: list[dict[str, Any]] = []
+    seen_urls: set[str] = set()
+    for match in _SEARCH_HIT_START_RE.finditer(body):
+        try:
+            value, _ = decoder.raw_decode(body, match.start())
+        except (ValueError, RecursionError):
+            continue
+        if not isinstance(value, dict):
+            continue
+        hit = cast(dict[str, Any], value)
+        url = hit.get("url")
+        if isinstance(url, str) and url not in seen_urls:
+            seen_urls.add(url)
+            recovered.append(hit)
+    return recovered or None
 
 
 def _search_result_markdown(content: ToolResultMessage) -> Optional[str]:
@@ -85,21 +118,12 @@ def _search_result_markdown(content: ToolResultMessage) -> Optional[str]:
         return None
     if body == "[Output omitted by Codex truncation]":
         return body
-    try:
-        decoded: Any = json.loads(body)
-    except (ValueError, RecursionError):
-        return None
-    if not isinstance(decoded, dict):
-        return None
-    hits_value = cast(dict[str, Any], decoded).get("hits")
-    if not isinstance(hits_value, list):
+    hits = _search_hits(body)
+    if hits is None:
         return None
 
     rendered: list[str] = []
-    for item in cast(list[Any], hits_value):
-        if not isinstance(item, dict):
-            continue
-        hit = cast(dict[str, Any], item)
+    for hit in hits:
         url = hit.get("url")
         if not isinstance(url, str) or not is_safe_web_url(url):
             continue
@@ -109,37 +133,28 @@ def _search_result_markdown(content: ToolResultMessage) -> Optional[str]:
             if isinstance(hierarchy_value, dict)
             else {}
         )
-        title_value = hierarchy.get("lvl1")
-        section_value = hierarchy.get("lvl2")
-        title = title_value if isinstance(title_value, str) else url
-        label = (
-            f"{title} — {section_value}"
-            if isinstance(section_value, str) and section_value
-            else title
-        )
+        hierarchy_parts = [
+            value
+            for level in range(7)
+            if isinstance((value := hierarchy.get(f"lvl{level}")), str) and value
+        ]
+        label = " • ".join(hierarchy_parts) if hierarchy_parts else url
         rendered.append(
-            f"- [{safe_markdown_inline(unescape(label))}]"
+            f"### [{safe_markdown_inline(unescape(label))}]"
             f"({safe_markdown_link_target(url)})"
         )
+        raw_content = hit.get("content")
+        if isinstance(raw_content, str) and raw_content:
+            rendered.extend(("", raw_content.strip()))
+        rendered.extend(("", "---", ""))
 
-        snippet_value = hit.get("_snippetResult")
-        snippet = ""
-        if isinstance(snippet_value, dict):
-            snippet_content = cast(dict[str, Any], snippet_value).get("content")
-            if isinstance(snippet_content, dict):
-                raw_snippet = cast(dict[str, Any], snippet_content).get("value")
-                if isinstance(raw_snippet, str):
-                    snippet = raw_snippet
-        if not snippet:
-            raw_content = hit.get("content")
-            if isinstance(raw_content, str):
-                snippet = raw_content[:300]
-        if snippet:
-            snippet = unescape(_SEARCH_HIGHLIGHT_TAG_RE.sub("", snippet))
-            snippet = " ".join(snippet.split())
-            rendered.append(f"  {safe_markdown_inline(snippet)}")
-
-    return "\n".join(rendered) if rendered else "No documentation results."
+    if not rendered:
+        return "No documentation results."
+    while rendered and not rendered[-1]:
+        rendered.pop()
+    if rendered and rendered[-1] == "---":
+        rendered.pop()
+    return "\n".join(rendered).rstrip()
 
 
 @dataclass

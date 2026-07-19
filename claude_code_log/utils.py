@@ -45,6 +45,12 @@ from .factories import (
 VARIANT_ENTRY_RE = re.compile(r"^combined_transcripts((?:\.[a-z-]+)*)\.html$")
 
 
+def split_websearch_queries(query: str) -> list[str]:
+    """Split the separator used by Codex to aggregate parallel web queries."""
+    parts = [part.strip() for part in query.split(" • ")]
+    return parts if len(parts) > 1 and all(parts) else [query]
+
+
 def variant_suffix(
     detail: DetailLevel | str = DetailLevel.FULL,
     compact: bool = False,
