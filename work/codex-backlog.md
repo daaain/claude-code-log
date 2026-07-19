@@ -16,17 +16,23 @@
   user shell records, local image inlining, and adjacent duplicate handling.
 - Provider-local tool/result transport normalization with typed Bash, Write,
   Delete, Edit, MultiEdit, TodoWrite, Task, SendMessage, TaskList, WebSearch, and
-  WebFetch reuse; OpenAI Developer Docs searches and fetches render through a
-  Codex-only built-in plugin, while open-ended MCP/plugin names remain transformable by
-  external plugins.
+  WebFetch reuse. Multi-query web searches use compact titles and explicit
+  query lists; Codex web citations and source metadata become readable
+  Markdown.
+- OpenAI Developer Docs searches and fetches render through a Codex-only
+  built-in plugin. Batched/aliased results project back to their source calls;
+  complete search hits survive damaged truncation envelopes with linked
+  hierarchy titles and Markdown bodies. Other MCP/plugin names remain generic
+  and transformable by external plugins.
 - Conservative async folding for outer code-mode cells and ordered or parallel
   command `wait`/`write_stdin` continuations.
 - Tree-sitter-only bounded JavaScript analysis for static calls, batches,
   constants/templates/joins, loops/destructuring, delays, provenance, and
-  truncated prefixed output, including projection of aggregated static result
-  objects back to their source calls, plus static-array `map` batches with
-  spread result envelopes. Unsupported programs remain `ToolExecution`; the
-  legacy recognizer is not a production fallback.
+  truncated prefixed/projected output, including projection of aggregated
+  static result objects back to their source calls, plus static-array `map`
+  batches with spread result envelopes. Unsupported programs remain a typed
+  `ToolExecution` pair with labelled results and preserved wall time; the legacy
+  recognizer is not a production fallback.
 - Cross-provider contracts, adversarial correlation/privacy tests, a sanitized
   schema corpus, and real provider-to-HTML/Markdown export tests.
 
@@ -72,10 +78,11 @@ families and the provider contract are in
   generic by default.
 - Sample additional direct non-wrapper tool shapes and newer generated
   JavaScript before expanding the whitelist.
-- Candidate abstract-interpreter additions include safe static member/index
-  access, more immutable expression operators, and additional bounded control
-  flow. Each addition needs both positive provenance tests and negative
-  ambiguity/mutation tests.
+- Candidate abstract-interpreter additions include safe constant member/index
+  evaluation (result-field provenance is already covered), more immutable
+  expression operators, and additional bounded control flow beyond the current
+  static loops and session-marker condition. Each addition needs both positive
+  provenance tests and negative ambiguity/mutation tests.
 - Keep consolidated-output recovery conservative: split only on unique static
   materialized boundaries, and never invent a missing result unless Codex
   explicitly reports truncation.

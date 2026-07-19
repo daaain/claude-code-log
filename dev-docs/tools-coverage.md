@@ -93,17 +93,19 @@ rendering.
 
 **Totals:** 21 full · 5 input only · 16 generic.
 
-## Tools we support that upstream no longer documents
+## Tools we support that upstream does not document
 
-A transcript viewer reads *history*. These entries look obsolete against
-today's reference but are load-bearing for archived transcripts, so
-**none of them should be dropped** — a removal silently degrades old
-logs to generic rendering.
+A transcript viewer reads *history*, and provider adapters also need internal
+canonical tools. These entries are historical, undocumented, or deliberately
+internal, but all are load-bearing for supported transcripts; removing one
+silently degrades rendering.
 
-| Tool | Why it's gone upstream | Why we keep it |
+| Tool | Upstream status | Why we keep it |
 | :--- | :--- | :--- |
+| `Delete` | Internal canonical tool; never in the reference table | Codex `apply_patch` deletions receive a dedicated typed pair instead of masquerading as edits |
 | `Task` | Renamed to `Agent` | Every subagent spawn in pre-rename transcripts |
 | `MultiEdit` | Removed; superseded by `Edit` | Common in older transcripts; has input model + title, no output parser |
+| `ToolExecution` | Internal canonical tool; never in the reference table | Faithful typed fallback for Codex JavaScript that the bounded analyzer cannot reconstruct safely |
 | `ask_user_question` | Legacy snake_case name of `AskUserQuestion` | Aliased to the same input model |
 | `TeamCreate` | Never in the reference table | Agent-teams feature; fully typed both sides |
 | `TeamDelete` | Never in the reference table | Ditto |
@@ -126,8 +128,11 @@ there.
 ## MCP and plugin tools
 
 `mcp__<server>__<tool>` names never appear in the reference table and are
-unbounded by definition, so they always take the generic path. Plugins
-can register their own formatters — see [plugins.md](plugins.md).
+unbounded by definition, so the default is faithful generic rendering. Plugins
+can register their own formatters, and providers may canonicalize a small,
+evidence-backed family before plugin dispatch. The Codex provider does this for
+OpenAI Developer Docs search/fetch calls; all other MCP names remain open-ended.
+See [plugins.md](plugins.md).
 
 ## Keeping this page current
 
@@ -201,7 +206,7 @@ factories.
 | `spawn_agent` | `Task` | Typed input/output; opaque transport payloads are redacted on both specialized and `ToolExecution` paths. |
 | `send_message`, `followup_task` | `SendMessage` | Typed input/output with target and follow-up semantics retained. |
 | `list_agents` | `TaskList` | Typed input/output when agent rows are valid; malformed output stays generic. |
-| search-only `web__run` | `WebSearch` | Typed input/output with all static queries represented in the title. Named `turn…search/view…` refs become anchors; numeric citation wrappers, word limits, and packed source-line markers are normalized into readable Markdown. |
+| search-only `web__run` | `WebSearch` | Typed input/output; a multi-query call keeps the first query in a compact title and lists every query in the body. Named `turn…search/view…` refs become anchors; numeric citation wrappers, word limits, and packed source-line markers are normalized into readable Markdown. |
 | open-only `web__run` batch | `WebFetch` pairs | Expanded only when refs and result chunks split exactly; output uses the shared Codex web-result normalizer. |
 | find-only `web__run` | `WebFetch` | Static refs and patterns become typed input; a reusable `turn…` ref links back to the card that introduced it, and output uses the shared Codex web-result normalizer. |
 | `mcp__openaiDeveloperDocs__fetch_openai_doc` | `CodexDoc` | Codex-only built-in plugin: URL/anchor parameters stay visible and the returned documentation renders as collapsible Markdown. Aggregated static result objects are projected back into one pair per fetch. |
@@ -228,7 +233,8 @@ Supported composition currently includes:
   `Promise.all()` batches with identifier or array destructuring;
 - result provenance through direct references, property paths,
   `JSON.stringify()`, result-derived templates, and static object projections
-  such as `JSON.stringify({first, second})`;
+  such as `JSON.stringify({first, second})` and renamed projections such as
+  `JSON.stringify({approval: first, mcp: second})`;
 - bounded `for...of` expansion over static arrays, including destructured
   rows and loop-local calls/emissions;
 - bounded `Promise.all(staticArray.map(async ...))` expansion with destructured
@@ -240,9 +246,9 @@ Supported composition currently includes:
   bookkeeping inside the polling interval;
 - command-session continuation through `wait` and `write_stdin`, including
   ordered and parallel marker sessions;
-- consolidated output splitting on unique materialized template prefixes;
-  missing sections are identified only when Codex explicitly reports
-  truncation.
+- consolidated output splitting on unique materialized template prefixes and
+  projected JSON objects after a Codex truncation preamble; missing sections
+  are identified only when Codex explicitly reports truncation.
 
 Dynamic identifiers, mutation, unsupported branches/loops, computed tool
 names, ambiguous emissions, repeated/absent output separators, parse recovery,
