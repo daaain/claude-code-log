@@ -219,7 +219,7 @@ In code order, `generate_template_messages`:
    `prepare_session_summaries` + `prepare_session_ai_titles` (merged),
    `prepare_session_team_names`, and `_extract_session_hierarchy`.
 2. **Pre-render filtering** — `_filter_messages` (structural only).
-   Detail-level filtering is no longer a pre-render pass — the
+   Depth filtering is no longer a pre-render pass — the
    single-axis ghosting model moved it entirely to step 5.
 3. **Collect + render** — `_collect_session_info`, then
    `_render_messages` (**Phase 1**: wrappers, session headers,
@@ -229,7 +229,7 @@ In code order, `generate_template_messages`:
    points (`_link_junction_forwards`). Branch-header previews are
    computed in step 3 by `_build_branch_header` scanning the
    branch's DAG-line uuids; there's no separate back-fill pass.
-5. **Post-render detail filter** — `_ghost_template_by_detail` (only
+5. **Post-render detail filter** — `_ghost_template_by_depth` (only
    below FULL): sets non-visible slots to `None` in place (no reindex),
    then calls `_repair_stale_anchor_refs`.
 6. **Nav + structure** — `prepare_session_navigation`, then

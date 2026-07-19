@@ -113,20 +113,20 @@ class TestAsyncAgentsHTMLSnapshots:
 
         Regression guard for the "fold lost at low" report (mail #2620 →
         Plan A): the spawn-fold is now sourced from the notification's
-        ``result_text``, so it survives the LOW detail level where
+        ``result_text``, so it survives the LOW depth level where
         sidechain entries are stripped pre-render. The locked-in shape
         confirms the ``Result (from async notification)`` fold is
         still rendered under the ``Async agent launched successfully``
         stub at LOW.
         """
         from claude_code_log.html.renderer import HtmlRenderer
-        from claude_code_log.models import DetailLevel
+        from claude_code_log.models import RenderingDepth
 
         async_dir = test_data_dir / "async_agents"
         main_jsonl = async_dir / "eb000000-0000-4000-8000-000000000001.jsonl"
         messages = load_transcript(main_jsonl)
         renderer = HtmlRenderer()
-        renderer.detail = DetailLevel.LOW
+        renderer.depth = RenderingDepth.AGENT
         html = renderer.generate(messages, "Async Agents Fixture (LOW)")
         assert html == html_snapshot
 

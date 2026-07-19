@@ -6,7 +6,7 @@ Exercises the tool-side branch of the plugin contract:
 - Narrows by ``content.tool_name`` inside ``transform()``
 - Returns a plugin-defined subclass of ``ToolUseMessage`` carrying its
   own class-side ``format_markdown`` / ``title`` methods
-- The plugin subclass declares ``detail_visibility = LOW`` so it
+- The plugin subclass declares ``depth_visibility = LOW`` so it
   shows up at ``--detail low`` without core needing to update
   ``_LOW_KEEP_TOOLS``
 """
@@ -18,7 +18,7 @@ from typing import ClassVar, Optional
 
 from claude_code_log.factories.priorities import TOOL_INPUT_GENERIC
 from claude_code_log.models import (
-    DetailLevel,
+    RenderingDepth,
     MessageContent,
     MessageMeta,
     ToolUseMessage,
@@ -39,7 +39,7 @@ class TestClmailCommunicateInputMessage(ToolUseMessage):
     # Plugin-owned visibility: visible at --detail low (the user-relevant
     # default for "show me clmail-style mail-handling activity"). Bypasses
     # the core _LOW_KEEP_TOOLS allowlist.
-    detail_visibility: ClassVar[DetailLevel] = DetailLevel.LOW
+    depth_visibility: ClassVar[RenderingDepth] = RenderingDepth.AGENT
 
     # No ``format_html`` defined: HtmlRenderer dispatch synthesizes
     # HTML from this ``format_markdown`` output via mistune and wraps

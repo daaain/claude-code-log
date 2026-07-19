@@ -16,7 +16,7 @@ from ..models import (
     BashOutputMessage,
     CommandOutputMessage,
     CompactedSummaryMessage,
-    DetailLevel,
+    RenderingDepth,
     HookAttachmentMessage,
     HookSummaryMessage,
     ImageContent,
@@ -571,14 +571,14 @@ class HtmlRenderer(Renderer):
         """Format → metadata `<dl>` + collapsible Markdown body for an
         async-agent ``<task-notification>`` user entry (issue #90).
 
-        At ``DetailLevel.LOW`` a duplicate-flagged notification renders
+        At ``RenderingDepth.AGENT`` a duplicate-flagged notification renders
         empty so the rendering loop's "skip empty messages" elision
         drops the card — the spawn-fold already shows the answer in
         place, and "ghosting" via empty output avoids the index-remap
         cascade that deleting the message would trigger (ancestry
         classes, backlinks, session nav anchors).
         """
-        if self.detail == DetailLevel.LOW and content.result_is_duplicate:
+        if self.depth == RenderingDepth.AGENT and content.result_is_duplicate:
             return ""
         return _format_task_notification_content(content)
 
@@ -606,7 +606,7 @@ class HtmlRenderer(Renderer):
     def format_WorkflowPhaseMessage(
         self, content: WorkflowPhaseMessage, _: TemplateMessage
     ) -> str:
-        """Format → spliced workflow phase card body (detail + agent count)."""
+        """Format → spliced workflow phase card body (depth + agent count)."""
         return format_workflow_phase_content(content)
 
     def format_WorkflowAgentMessage(
@@ -1416,12 +1416,12 @@ class HtmlRenderer(Renderer):
         useful at-a-glance hint; the rest of the metadata renders in
         the body card.
 
-        Empty at ``DetailLevel.LOW`` for duplicate-flagged
+        Empty at ``RenderingDepth.AGENT`` for duplicate-flagged
         notifications — pairs with ``format_TaskNotificationMessage``
         to "ghost" the card while keeping the message in
         ``ctx.messages``.
         """
-        if self.detail == DetailLevel.LOW and content.result_is_duplicate:
+        if self.depth == RenderingDepth.AGENT and content.result_is_duplicate:
             return ""
         if content.summary:
             return (
@@ -1589,7 +1589,7 @@ class HtmlRenderer(Renderer):
         root_messages, session_nav, ctx = generate_template_messages(
             messages,
             session_tree=session_tree,
-            detail=self.detail,
+            depth=self.depth,
             no_recaps=self.no_recaps,
         )
         # Snapshot the teammate-color map onto the renderer so per-message
@@ -1666,7 +1666,7 @@ class HtmlRenderer(Renderer):
         # Get combined transcript link if cache manager is available.
         # The back-link must point at the combined file of the *same*
         # variant this session is being rendered at — mixing variants
-        # would land the user on a different detail/compact rendering.
+        # would land the user on a different depth/compact rendering.
         # Suppressed under `--combined no` where the combined file is
         # never written.
         combined_link = None
@@ -1677,7 +1677,7 @@ class HtmlRenderer(Renderer):
                     from ..utils import variant_suffix as _variant_suffix
 
                     suffix = _variant_suffix(
-                        self.detail, self.compact, "html", no_recaps=self.no_recaps
+                        self.depth, self.compact, "html", no_recaps=self.no_recaps
                     )
                     combined_link = f"combined_transcripts{suffix}.html"
             except Exception:

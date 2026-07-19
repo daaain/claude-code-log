@@ -48,14 +48,14 @@ exhausting the renderer-side `format_<ClassName>` chain (Strategy 2
 in the RFC). Returning `None` from `format_html` falls back to
 `mistune(format_markdown)` — consistent with the rest of the codebase.
 
-## `detail_visibility`
+## `depth_visibility`
 
-A `ClassVar[DetailLevel]` on the plugin's `MessageContent` subclass
+A `ClassVar[RenderingDepth]` on the plugin's `MessageContent` subclass
 declares the minimum detail level at which the message is rendered.
 Monotone-down: a message is visible iff `current_detail` is at least
-as verbose as `detail_visibility` (with `FULL` most verbose,
+as verbose as `depth_visibility` (with `FULL` most verbose,
 `USER_ONLY` least). Plugin classes that declare their own
-`detail_visibility` bypass the orthogonal `_LOW_KEEP_TOOLS` tool-name
+`depth_visibility` bypass the orthogonal `_LOW_KEEP_TOOLS` tool-name
 allowlist — their declared visibility is authoritative.
 
 ## Installing this fixture for tests

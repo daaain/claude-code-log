@@ -373,7 +373,7 @@ The `result_text` is the canonical source for the spawn-fold —
 `TaskOutput.async_final_answer` of the spawning `Task` tool_result so
 the answer renders in place. See
 [agents.md § 2 (Async task agents)](agents.md#2-async-task-agents-90)
-for the end-to-end flow and detail-level matrix.
+for the end-to-end flow and depth matrix.
 
 ### IDE Notifications
 
@@ -763,7 +763,7 @@ class HookSummaryMessage(MessageContent):
 - **Condition**: `subtype: "away_summary"`
 - **CSS Class**: `system system-away-summary`
 - **Header**: `📝 Recap` (icon from `get_message_emoji`, title from `title_AwaySummaryMessage`)
-- **Detail levels**: visible at EVERY level (`detail_visibility = USER_ONLY`) — a recap is itself a high-level summary of activity (#179). Suppress with `--no-recaps` (handled in `_ghost_template_by_detail`), which drops them at all levels including FULL.
+- **Detail levels**: visible at EVERY level (`depth_visibility = USER_ONLY`) — a recap is itself a high-level summary of activity (#179). Suppress with `--no-recaps` (handled in `_ghost_template_by_depth`), which drops them at all levels including FULL.
 
 Claude Code emits these system entries when a session resumes after a break — narrative prose summarising recent activity. The factory strips a trailing `" (disable recaps in /config)"` UI hint when present (suffix-match, not global) so all renderers inherit the polished form.
 

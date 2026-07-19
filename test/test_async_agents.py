@@ -34,7 +34,7 @@ from claude_code_log.factories.tool_factory import (
 from claude_code_log.models import (
     AssistantTextMessage,
     AssistantTranscriptEntry,
-    DetailLevel,
+    RenderingDepth,
     MessageMeta,
     TaskNotificationMessage,
     TaskNotificationUsage,
@@ -483,12 +483,12 @@ class TestAsyncAgentsRenderingPipeline:
         assert sum(walk(r) for r in roots) == 1
 
 
-class TestAsyncAgentsDetailLevels:
+class TestAsyncAgentsRenderingDepths:
     """Detail-level invariants for the async-agent fold (issue #90).
 
     Plan A (mail #2620 → #2622): the spawn-fold sources from the
     notification's ``result_text`` (not from the sidechain assistant),
-    so it survives the LOW detail level where ``_filter_by_detail``
+    so it survives the LOW depth level where ``_filter_by_depth``
     has stripped sidechain entries before the renderer ever runs.
     At MINIMAL / USER_ONLY the spawning Task tool_result itself is
     filtered out post-render — there's nothing to fold onto, so the
@@ -523,17 +523,17 @@ class TestAsyncAgentsDetailLevels:
                 return tm.content
         return None
 
-    def _render_at(self, detail: DetailLevel) -> tuple:
+    def _render_at(self, depth: RenderingDepth) -> tuple:
         messages = load_transcript(MAIN_JSONL, cache_manager=None, silent=True)
-        return generate_template_messages(messages, detail=detail)
+        return generate_template_messages(messages, depth=depth)
 
     @pytest.mark.parametrize(
-        "detail",
-        [DetailLevel.FULL, DetailLevel.HIGH, DetailLevel.LOW],
+        "depth",
+        [RenderingDepth.HOOK, RenderingDepth.TOOL, RenderingDepth.AGENT],
     )
-    def test_fold_present_when_spawn_target_kept(self, detail: DetailLevel) -> None:
+    def test_fold_present_when_spawn_target_kept(self, depth: RenderingDepth) -> None:
         """At FULL/HIGH/LOW the spawning Task tool_result survives the
-        detail filters, so the notification's ``result_text`` is folded
+        depth filters, so the notification's ``result_text`` is folded
         onto its ``async_final_answer``.
 
         Regression guard for the "fold lost at --detail low" report:
@@ -541,14 +541,14 @@ class TestAsyncAgentsDetailLevels:
         being present; LOW strips sidechain entries, so the fold went
         missing despite the spawn surviving.
         """
-        _roots, _nav, ctx = self._render_at(detail)
+        _roots, _nav, ctx = self._render_at(depth)
 
         spawn_output = self._spawning_task_output(ctx)
         assert spawn_output is not None, (
-            f"spawning Task tool_result missing at detail={detail.value}"
+            f"spawning Task tool_result missing at depth={depth.value}"
         )
         assert spawn_output.async_final_answer is not None, (
-            f"async_final_answer not folded at detail={detail.value}"
+            f"async_final_answer not folded at depth={depth.value}"
         )
         assert FINAL_ANSWER_NEEDLE in spawn_output.async_final_answer
 
@@ -557,10 +557,10 @@ class TestAsyncAgentsDetailLevels:
         ``result_is_duplicate`` and wired with a spawn backlink. The
         formatter still emits the full metadata card — keeping it for
         transcript fidelity is the documented FULL/HIGH behavior."""
-        for detail in (DetailLevel.FULL, DetailLevel.HIGH):
-            _roots, _nav, ctx = self._render_at(detail)
+        for depth in (RenderingDepth.HOOK, RenderingDepth.TOOL):
+            _roots, _nav, ctx = self._render_at(depth)
             notif = self._notification(ctx)
-            assert notif is not None, f"notification missing at {detail.value}"
+            assert notif is not None, f"notification missing at {depth.value}"
             assert notif.result_is_duplicate is True
             assert notif.spawning_task_message_index is not None
 
@@ -578,7 +578,7 @@ class TestAsyncAgentsDetailLevels:
         from claude_code_log.html.renderer import HtmlRenderer
         from claude_code_log.markdown.renderer import MarkdownRenderer
 
-        _roots, _nav, ctx = self._render_at(DetailLevel.LOW)
+        _roots, _nav, ctx = self._render_at(RenderingDepth.AGENT)
         notif = self._notification(ctx)
         assert notif is not None, (
             "notification should remain in ctx.messages even when ghosted"
@@ -596,26 +596,28 @@ class TestAsyncAgentsDetailLevels:
         )
 
         for renderer in (HtmlRenderer(), MarkdownRenderer()):
-            renderer.detail = DetailLevel.LOW
+            renderer.depth = RenderingDepth.AGENT
             assert renderer.format_TaskNotificationMessage(notif, tm_notif) == ""
             assert renderer.title_TaskNotificationMessage(notif, tm_notif) == ""
 
     @pytest.mark.parametrize(
-        "detail",
-        [DetailLevel.MINIMAL, DetailLevel.USER_ONLY],
+        "depth",
+        [RenderingDepth.ASSISTANT, RenderingDepth.USER],
     )
-    def test_fold_skipped_when_spawn_target_filtered(self, detail: DetailLevel) -> None:
+    def test_fold_skipped_when_spawn_target_filtered(
+        self, depth: RenderingDepth
+    ) -> None:
         """At MINIMAL/USER_ONLY the post-render filter drops every
         ``ToolResultMessage`` (only user/assistant text survives). The
         spawn fold is skipped so the notification body remains the
         only surviving copy of the agent's answer.
         """
-        _roots, _nav, ctx = self._render_at(detail)
+        _roots, _nav, ctx = self._render_at(depth)
 
         # Spawning Task tool_result was filtered out post-render.
         spawn_output = self._spawning_task_output(ctx)
         assert spawn_output is None, (
-            f"Task tool_result should be filtered at detail={detail.value}"
+            f"Task tool_result should be filtered at depth={depth.value}"
         )
 
         # Notification card still in ctx; body is NOT marked duplicate
@@ -623,6 +625,6 @@ class TestAsyncAgentsDetailLevels:
         notif = self._notification(ctx)
         assert notif is not None
         assert notif.result_is_duplicate is False, (
-            f"notification body must remain visible at detail={detail.value}"
+            f"notification body must remain visible at depth={depth.value}"
         )
         assert FINAL_ANSWER_NEEDLE in notif.result_text

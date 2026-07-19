@@ -84,7 +84,7 @@ This is the full plan that should be truncated.
         result_content = """Plan was not approved. User requested changes.
 
 Please modify the following aspects:
-- Add more detail to step 3
+- Add more depth to step 3
 - Include error handling
 """
 
@@ -93,7 +93,7 @@ Please modify the following aspects:
         # Should keep full content for errors
         assert "Plan was not approved" in processed
         assert "Please modify" in processed
-        assert "Add more detail" in processed
+        assert "Add more depth" in processed
 
     def test_format_exitplanmode_result_generic(self):
         """Test ExitPlanMode result without approval message."""

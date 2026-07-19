@@ -56,7 +56,7 @@ class TestCombinedTranscriptLink:
             # Verify combined transcript link elements are present.
             # generate_session_html renders at the library default (FULL), so
             # the same-variant combined link carries FULL's suffix (.hook, the
-            # --depth name for full detail; #159) — not the bare default file.
+            # --depth name for full depth; #159) — not the bare default file.
             assert "← View All Sessions (Combined Transcript)" in html
             assert 'href="combined_transcripts.hook.html"' in html
 

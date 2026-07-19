@@ -45,8 +45,8 @@ from .models import (
     AiTitleTranscriptEntry,
     AttachmentTranscriptEntry,
     BaseTranscriptEntry,
-    DEFAULT_DETAIL_LEVEL,
-    DetailLevel,
+    DEFAULT_DEPTH,
+    RenderingDepth,
     PassthroughTranscriptEntry,
     TranscriptEntry,
     AssistantTranscriptEntry,
@@ -361,7 +361,7 @@ def load_transcript(
                     ]:
                         # Parse using Pydantic models. ``attachment`` joined
                         # this list in #128 so the hook payload survives to
-                        # the rendering layer at full detail (was a
+                        # the rendering layer at full depth (was a
                         # PassthroughTranscriptEntry before, which threw
                         # the payload away at parse time).
                         entry = create_transcript_entry(entry_dict)
@@ -1607,7 +1607,7 @@ def _generate_paginated_html(
     working_directories: List[str],
     silent: bool = False,
     session_tree: Optional[SessionTree] = None,
-    detail: DetailLevel = DEFAULT_DETAIL_LEVEL,
+    depth: RenderingDepth = DEFAULT_DEPTH,
     compact: bool = False,
     no_recaps: bool = False,
 ) -> tuple[Path, bool]:
@@ -1632,7 +1632,7 @@ def _generate_paginated_html(
     from .html.renderer import HtmlRenderer
     from .utils import format_timestamp, variant_suffix as _variant_suffix
 
-    suffix = _variant_suffix(detail, compact, "html", no_recaps=no_recaps)
+    suffix = _variant_suffix(depth, compact, "html", no_recaps=no_recaps)
 
     # Check if page size changed - if so, invalidate all pages
     cached_page_size = cache_manager.get_page_size_config()
@@ -1790,7 +1790,7 @@ def _generate_paginated_html(
         # Generate HTML for this page
         page_title = f"{title} - Page {page_num}" if page_num > 1 else title
         page_renderer = HtmlRenderer()
-        page_renderer.detail = detail
+        page_renderer.depth = depth
         page_renderer.compact = compact
         page_renderer.no_recaps = no_recaps
         html_content = page_renderer.generate(
@@ -1835,13 +1835,13 @@ def convert_jsonl_to_html(
     use_cache: bool = True,
     silent: bool = False,
     page_size: int = 2000,
-    detail: DetailLevel = DEFAULT_DETAIL_LEVEL,
+    depth: RenderingDepth = DEFAULT_DEPTH,
 ) -> Path:
     """Convert JSONL transcript(s) to HTML file(s).
 
     Convenience wrapper around convert_jsonl_to() for HTML format. The
-    ``detail`` default matches the CLI (``DEFAULT_DETAIL_LEVEL`` == HIGH /
-    ``--depth tool``); pass ``DetailLevel.FULL`` to render everything.
+    ``depth`` default matches the CLI (``DEFAULT_DEPTH`` == HIGH /
+    ``--depth tool``); pass ``RenderingDepth.HOOK`` to render everything.
     """
     return convert_jsonl_to(
         "html",
@@ -1853,7 +1853,7 @@ def convert_jsonl_to_html(
         use_cache,
         silent,
         page_size=page_size,
-        detail=detail,
+        depth=depth,
     )
 
 
@@ -1868,7 +1868,7 @@ def convert_jsonl_to(
     silent: bool = False,
     image_export_mode: Optional[str] = None,
     page_size: int = 2000,
-    detail: DetailLevel = DEFAULT_DETAIL_LEVEL,
+    depth: RenderingDepth = DEFAULT_DEPTH,
     compact: bool = False,
     update_cache: bool = True,
     output_root: Optional[Path] = None,
@@ -1892,7 +1892,7 @@ def convert_jsonl_to(
         image_export_mode: Image export mode ("placeholder", "embedded", "referenced").
         page_size: Maximum messages per page for combined transcript pagination.
             If None, uses format default (embedded for HTML, referenced for Markdown).
-        detail: Output detail level (full, high, low, minimal).
+        depth: Output depth level (full, high, low, minimal).
         force_regenerate: Always (re)generate, bypassing the version-marker
             staleness skip. The CLI sets this for an explicit ``--output``
             (issue #221): the staleness heuristic only knows the embedded
@@ -1934,7 +1934,7 @@ def convert_jsonl_to(
 
     from .utils import variant_suffix as _variant_suffix
 
-    suffix = _variant_suffix(detail, compact, format, no_timestamps, no_recaps)
+    suffix = _variant_suffix(depth, compact, format, no_timestamps, no_recaps)
 
     # Output destination decoupled from `input_path` (#151). Both
     # branches below assign to `effective_output_dir`; declare it
@@ -2057,7 +2057,7 @@ def convert_jsonl_to(
     renderer = get_renderer(
         format,
         image_export_mode,
-        detail=detail,
+        depth=depth,
         compact=compact,
         no_timestamps=no_timestamps,
         no_recaps=no_recaps,
@@ -2116,7 +2116,7 @@ def convert_jsonl_to(
             working_directories,
             silent=silent,
             session_tree=session_tree,
-            detail=detail,
+            depth=depth,
             compact=compact,
             no_recaps=no_recaps,
         )
@@ -2242,7 +2242,7 @@ def convert_jsonl_to(
             image_export_mode,
             silent=silent,
             session_tree=session_tree,
-            detail=detail,
+            depth=depth,
             compact=compact,
             write_combined=write_combined,
             no_timestamps=no_timestamps,
@@ -2435,7 +2435,7 @@ def _generate_individual_session_files(
     image_export_mode: Optional[str] = None,
     silent: bool = False,
     session_tree: Optional[SessionTree] = None,
-    detail: DetailLevel = DEFAULT_DETAIL_LEVEL,
+    depth: RenderingDepth = DEFAULT_DEPTH,
     compact: bool = False,
     write_combined: bool = True,
     no_timestamps: bool = False,
@@ -2449,7 +2449,7 @@ def _generate_individual_session_files(
     from .utils import variant_suffix as _variant_suffix
 
     ext = get_file_extension(format)
-    suffix = _variant_suffix(detail, compact, format, no_timestamps, no_recaps)
+    suffix = _variant_suffix(depth, compact, format, no_timestamps, no_recaps)
     # Find all unique session IDs, excluding warmup sessions and
     # coalescing agent sessionIds to their trunk — same rule as
     # compute_session_data() when it writes the sessions table.
@@ -2479,7 +2479,7 @@ def _generate_individual_session_files(
     renderer = get_renderer(
         format,
         image_export_mode,
-        detail=detail,
+        depth=depth,
         compact=compact,
         no_timestamps=no_timestamps,
         no_recaps=no_recaps,
@@ -2603,7 +2603,7 @@ def generate_single_session_file(
     output: Optional[Path] = None,
     use_cache: bool = True,
     image_export_mode: Optional[str] = None,
-    detail: DetailLevel = DEFAULT_DETAIL_LEVEL,
+    depth: RenderingDepth = DEFAULT_DEPTH,
     compact: bool = False,
     no_timestamps: bool = False,
     no_recaps: bool = False,
@@ -2617,7 +2617,7 @@ def generate_single_session_file(
         output: Optional output file path (defaults to session-{id}.{ext} in input_path)
         use_cache: Whether to use caching
         image_export_mode: Image export mode
-        detail: Output detail level.
+        depth: Output depth level.
         compact: Whether to merge consecutive same-type headings (Markdown only).
 
     Returns:
@@ -2709,7 +2709,7 @@ def generate_single_session_file(
     from .utils import variant_suffix as _variant_suffix
 
     ext = get_file_extension(format)
-    suffix = _variant_suffix(detail, compact, format, no_timestamps, no_recaps)
+    suffix = _variant_suffix(depth, compact, format, no_timestamps, no_recaps)
     output_dir = input_path
     if output is not None:
         # User's explicit path wins; no suffix appended.
@@ -2722,7 +2722,7 @@ def generate_single_session_file(
     renderer = get_renderer(
         format,
         image_export_mode,
-        detail=detail,
+        depth=depth,
         compact=compact,
         no_timestamps=no_timestamps,
         no_recaps=no_recaps,
@@ -2744,7 +2744,7 @@ def render_normalized_session_file(
     format: str = "html",
     title: Optional[str] = None,
     image_export_mode: Optional[str] = None,
-    detail: DetailLevel = DEFAULT_DETAIL_LEVEL,
+    depth: RenderingDepth = DEFAULT_DEPTH,
     compact: bool = False,
     no_timestamps: bool = False,
     no_recaps: bool = False,
@@ -2758,7 +2758,7 @@ def render_normalized_session_file(
     renderer = get_renderer(
         format,
         image_export_mode,
-        detail=detail,
+        depth=depth,
         compact=compact,
         no_timestamps=no_timestamps,
         no_recaps=no_recaps,
@@ -3011,7 +3011,7 @@ def _convert_project_worker(
             silent=True,
             image_export_mode=worker_args["image_export_mode"],
             page_size=worker_args["page_size"],
-            detail=worker_args["detail"],
+            depth=worker_args["depth"],
             compact=worker_args["compact"],
             output_root=(
                 Path(worker_args["output_root"]) if worker_args["output_root"] else None
@@ -3035,7 +3035,7 @@ def process_projects_hierarchy(
     image_export_mode: Optional[str] = None,
     silent: bool = True,
     page_size: int = 2000,
-    detail: DetailLevel = DEFAULT_DETAIL_LEVEL,
+    depth: RenderingDepth = DEFAULT_DEPTH,
     compact: bool = False,
     output_dir: Optional[Path] = None,
     expand_paths: bool = False,
@@ -3128,7 +3128,7 @@ def process_projects_hierarchy(
     # all need to use the same name. Hard-coding "combined_transcripts.html"
     # would make non-default --format / --detail / --compact
     # combinations cache-miss forever and link to the wrong file.
-    variant = _variant_suffix(detail, compact, output_format, no_timestamps, no_recaps)
+    variant = _variant_suffix(depth, compact, output_format, no_timestamps, no_recaps)
     combined_ext = get_file_extension(output_format)
     combined_name = f"combined_transcripts{variant}.{combined_ext}"
 
@@ -3249,7 +3249,7 @@ def process_projects_hierarchy(
                 silent=silent,
                 image_export_mode=image_export_mode,
                 page_size=page_size,
-                detail=detail,
+                depth=depth,
                 compact=compact,
                 output_root=(
                     plan.dest_dir if plan.dest_dir != plan.project_dir else None
@@ -3292,7 +3292,7 @@ def process_projects_hierarchy(
                             "use_cache": use_cache,
                             "image_export_mode": image_export_mode,
                             "page_size": page_size,
-                            "detail": detail,
+                            "depth": depth,
                             "compact": compact,
                             "output_root": (
                                 str(plan.dest_dir)

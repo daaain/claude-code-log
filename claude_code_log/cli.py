@@ -1056,13 +1056,12 @@ def main(
             err=True,
         )
 
-    from .models import DEFAULT_DETAIL_LEVEL, DEPTH_TO_DETAIL, DetailLevel
+    from .models import DEFAULT_DEPTH, DETAIL_ALIASES, RenderingDepth
 
-    # Resolve the output level from --depth (preferred) or the deprecated
+    # Resolve the RenderingDepth from --depth (preferred) or the deprecated
     # --detail (#159). Both default to None so an explicit choice is
-    # detectable; they are mutually exclusive. The filename suffix is always
-    # the --depth name of the resolved level (see utils.variant_suffix), so
-    # nothing beyond the level itself needs to flow downstream.
+    # detectable; they are mutually exclusive. The --depth names ARE the
+    # RenderingDepth values; --detail's legacy names map via DETAIL_ALIASES.
     if depth is not None and detail is not None:
         raise click.UsageError(
             "--depth and --detail are mutually exclusive; --detail is the "
@@ -1074,11 +1073,11 @@ def main(
             "prefer --depth (session|user|assistant|agent|tool|hook).",
             err=True,
         )
-        detail_level = DetailLevel(detail.lower())
+        depth_level = DETAIL_ALIASES[detail.lower()]
     elif depth is not None:
-        detail_level = DEPTH_TO_DETAIL[depth.lower()]
+        depth_level = RenderingDepth(depth.lower())
     else:
-        detail_level = DEFAULT_DETAIL_LEVEL
+        depth_level = DEFAULT_DEPTH
 
     try:
         if provider is not None:
@@ -1134,7 +1133,7 @@ def main(
                     output_format,
                     title,
                     image_export_mode,
-                    detail_level,
+                    depth_level,
                     compact,
                     no_timestamps,
                     no_recaps,
@@ -1324,7 +1323,7 @@ def main(
                         tmpdir / f"session.{get_file_extension(output_format)}",
                         False,  # use_cache: one-off stream, don't touch cache
                         "embedded",  # inline images; the temp dir is discarded
-                        detail=detail_level,
+                        depth=depth_level,
                         compact=compact,
                         no_timestamps=no_timestamps,
                         no_recaps=no_recaps,
@@ -1339,7 +1338,7 @@ def main(
                 output,
                 not no_cache,
                 image_export_mode,
-                detail=detail_level,
+                depth=depth_level,
                 compact=compact,
                 no_timestamps=no_timestamps,
                 no_recaps=no_recaps,
@@ -1396,7 +1395,7 @@ def main(
                 output_format,
                 image_export_mode,
                 page_size=page_size,
-                detail=detail_level,
+                depth=depth_level,
                 compact=compact,
                 output_dir=output_dir_for_projects,
                 expand_paths=expand_paths,
@@ -1470,7 +1469,7 @@ def main(
                     silent=True,
                     image_export_mode="embedded",
                     page_size=page_size,
-                    detail=detail_level,
+                    depth=depth_level,
                     compact=compact,
                     update_cache=False,
                     write_combined=True,
@@ -1497,7 +1496,7 @@ def main(
             not no_cache,
             image_export_mode=image_export_mode,
             page_size=page_size,
-            detail=detail_level,
+            depth=depth_level,
             compact=compact,
             # User's `-o` path is a one-off export, not a cached artifact:
             # don't occupy a cache slot keyed by an arbitrary destination.

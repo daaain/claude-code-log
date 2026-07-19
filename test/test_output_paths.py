@@ -2,7 +2,7 @@
 
 Covers:
 
-- `variant_suffix()` matrix across (detail, compact, format).
+- `variant_suffix()` matrix across (depth, compact, format).
 - `VARIANT_ENTRY_RE` regex acceptance/rejection.
 - `_get_page_html_path(n, suffix)` composition with pagination.
 - Converter integration: combined / session / --session-id paths all
@@ -34,7 +34,7 @@ from claude_code_log.converter import (
     generate_single_session_file,
     process_projects_hierarchy,
 )
-from claude_code_log.models import DetailLevel
+from claude_code_log.models import RenderingDepth
 from claude_code_log.utils import VARIANT_ENTRY_RE, variant_suffix
 
 
@@ -47,60 +47,60 @@ class TestVariantSuffix:
     def test_default_is_empty(self) -> None:
         # The default level is now HIGH (== --depth tool), #159 — it gets no
         # suffix. FULL is no longer the default, so it earns one.
-        assert variant_suffix(DetailLevel.HIGH, False, "html") == ""
-        assert variant_suffix(DetailLevel.HIGH, False, "md") == ""
-        assert variant_suffix(DetailLevel.FULL, False, "html") == ".hook"
+        assert variant_suffix(RenderingDepth.TOOL, False, "html") == ""
+        assert variant_suffix(RenderingDepth.TOOL, False, "md") == ""
+        assert variant_suffix(RenderingDepth.HOOK, False, "html") == ".hook"
 
     def test_detail_only(self) -> None:
         # Suffixes are the --depth names of the level (single canonical name),
         # regardless of whether --depth or the deprecated --detail selected it.
-        assert variant_suffix(DetailLevel.HIGH, False, "html") == ""  # default
-        assert variant_suffix(DetailLevel.LOW, False, "html") == ".agent"
-        assert variant_suffix(DetailLevel.MINIMAL, False, "md") == ".assistant"
-        assert variant_suffix(DetailLevel.USER_ONLY, False, "html") == ".user"
-        assert variant_suffix(DetailLevel.FULL, False, "md") == ".hook"
-        assert variant_suffix(DetailLevel.SESSION, False, "html") == ".session"
+        assert variant_suffix(RenderingDepth.TOOL, False, "html") == ""  # default
+        assert variant_suffix(RenderingDepth.AGENT, False, "html") == ".agent"
+        assert variant_suffix(RenderingDepth.ASSISTANT, False, "md") == ".assistant"
+        assert variant_suffix(RenderingDepth.USER, False, "html") == ".user"
+        assert variant_suffix(RenderingDepth.HOOK, False, "md") == ".hook"
+        assert variant_suffix(RenderingDepth.SESSION, False, "html") == ".session"
 
     def test_compact_markdown_only(self) -> None:
         # Compact contributes for Markdown output.
-        assert variant_suffix(DetailLevel.HIGH, True, "md") == ".compact"  # default
-        assert variant_suffix(DetailLevel.HIGH, True, "markdown") == ".compact"
-        assert variant_suffix(DetailLevel.LOW, True, "md") == ".agent.compact"
-        assert variant_suffix(DetailLevel.FULL, True, "md") == ".hook.compact"
+        assert variant_suffix(RenderingDepth.TOOL, True, "md") == ".compact"  # default
+        assert variant_suffix(RenderingDepth.TOOL, True, "markdown") == ".compact"
+        assert variant_suffix(RenderingDepth.AGENT, True, "md") == ".agent.compact"
+        assert variant_suffix(RenderingDepth.HOOK, True, "md") == ".hook.compact"
         # HTML silently drops the compact component.
-        assert variant_suffix(DetailLevel.HIGH, True, "html") == ""
-        assert variant_suffix(DetailLevel.LOW, True, "html") == ".agent"
+        assert variant_suffix(RenderingDepth.TOOL, True, "html") == ""
+        assert variant_suffix(RenderingDepth.AGENT, True, "html") == ".agent"
 
     def test_no_recaps_all_formats(self) -> None:
         # --no-recaps filters messages, so unlike compact/no-timestamps it
         # earns a suffix slot for EVERY format (html/md/json), else the
         # variant collides with the plain export on filename + cache key (#179).
         # Anchored on the default level (HIGH), which is otherwise suffix-less.
-        assert variant_suffix(DetailLevel.HIGH, False, "html", no_recaps=True) == (
+        assert variant_suffix(RenderingDepth.TOOL, False, "html", no_recaps=True) == (
             ".no-recaps"
         )
-        assert variant_suffix(DetailLevel.HIGH, False, "json", no_recaps=True) == (
+        assert variant_suffix(RenderingDepth.TOOL, False, "json", no_recaps=True) == (
             ".no-recaps"
         )
-        assert variant_suffix(DetailLevel.HIGH, False, "md", no_recaps=True) == (
+        assert variant_suffix(RenderingDepth.TOOL, False, "md", no_recaps=True) == (
             ".no-recaps"
         )
-        # Composes with detail (and stays ahead of the markdown-only flags).
+        # Composes with depth (and stays ahead of the markdown-only flags).
         assert (
-            variant_suffix(DetailLevel.USER_ONLY, False, "html", no_recaps=True)
+            variant_suffix(RenderingDepth.USER, False, "html", no_recaps=True)
             == ".user.no-recaps"
         )
         assert (
             variant_suffix(
-                DetailLevel.USER_ONLY, True, "md", no_timestamps=True, no_recaps=True
+                RenderingDepth.USER, True, "md", no_timestamps=True, no_recaps=True
             )
             == ".user.no-recaps.compact.no-timestamps"
         )
 
-    def test_string_detail_accepted(self) -> None:
+    def test_string_depth_accepted(self) -> None:
         # The CLI passes the already-normalised enum, but convenience callers
-        # may pass the string form (a DetailLevel value, not a --depth name).
-        assert variant_suffix("low", False, "html") == ".agent"
+        # may pass the string form — a RenderingDepth value (== --depth name).
+        assert variant_suffix("agent", False, "html") == ".agent"
 
 
 # ---------------------------------------------------------------------------
@@ -257,7 +257,7 @@ class TestConverterVariantPaths:
     def test_low_variant_encodes_suffix(self, tmp_path: Path) -> None:
         _write_session(tmp_path / "sess1.jsonl", "sess1")
         output_path = convert_jsonl_to(
-            "html", tmp_path, silent=True, detail=DetailLevel.LOW
+            "html", tmp_path, silent=True, depth=RenderingDepth.AGENT
         )
         assert output_path.name == "combined_transcripts.agent.html"
         assert output_path.exists()
@@ -265,7 +265,9 @@ class TestConverterVariantPaths:
     def test_low_and_full_coexist(self, tmp_path: Path) -> None:
         _write_session(tmp_path / "sess1.jsonl", "sess1")
         full = convert_jsonl_to("html", tmp_path, silent=True)
-        low = convert_jsonl_to("html", tmp_path, silent=True, detail=DetailLevel.LOW)
+        low = convert_jsonl_to(
+            "html", tmp_path, silent=True, depth=RenderingDepth.AGENT
+        )
         assert full.name == "combined_transcripts.html"
         assert low.name == "combined_transcripts.agent.html"
         assert full.exists() and low.exists()
@@ -288,7 +290,7 @@ class TestConverterVariantPaths:
             "md",
             tmp_path,
             silent=True,
-            detail=DetailLevel.LOW,
+            depth=RenderingDepth.AGENT,
             compact=True,
         )
         assert path.name == "combined_transcripts.agent.compact.md"
@@ -300,7 +302,7 @@ class TestConverterVariantPaths:
             "html",
             tmp_path,
             silent=True,
-            detail=DetailLevel.LOW,
+            depth=RenderingDepth.AGENT,
         )
         assert (tmp_path / "session-sess1.agent.html").exists()
         assert not (tmp_path / "session-sess1.html").exists()
@@ -313,7 +315,7 @@ class TestConverterVariantPaths:
             tmp_path,
             explicit,
             silent=True,
-            detail=DetailLevel.LOW,
+            depth=RenderingDepth.AGENT,
         )
         # User's literal path wins: no suffix appended.
         assert result == explicit
@@ -328,7 +330,7 @@ class TestConverterVariantPaths:
             tmp_path,
             "sess1",
             use_cache=True,
-            detail=DetailLevel.LOW,
+            depth=RenderingDepth.AGENT,
         )
         assert out.name == "session-sess1.agent.html"
 
@@ -339,7 +341,7 @@ class TestConverterVariantPaths:
             "html",
             jsonl,
             silent=True,
-            detail=DetailLevel.LOW,
+            depth=RenderingDepth.AGENT,
         )
         # HIGH is now the default (bare) level, so use a non-default level
         # (LOW → .agent) to exercise the single-file suffix path.
@@ -367,7 +369,9 @@ class TestCacheVariantCoexistence:
         full_ino = full_stat.st_ino
 
         # Render LOW — must NOT touch the FULL file's cache row.
-        low = convert_jsonl_to("html", tmp_path, silent=True, detail=DetailLevel.LOW)
+        low = convert_jsonl_to(
+            "html", tmp_path, silent=True, depth=RenderingDepth.AGENT
+        )
         assert low.exists()
         assert full1.exists()
 
@@ -381,7 +385,9 @@ class TestCacheVariantCoexistence:
     def test_low_render_does_not_delete_full_pages(self, tmp_path: Path) -> None:
         _write_session(tmp_path / "sess1.jsonl", "sess1")
         full = convert_jsonl_to("html", tmp_path, silent=True)
-        low = convert_jsonl_to("html", tmp_path, silent=True, detail=DetailLevel.LOW)
+        low = convert_jsonl_to(
+            "html", tmp_path, silent=True, depth=RenderingDepth.AGENT
+        )
         # Both exist and are distinct files.
         assert full.exists() and low.exists() and full != low
 
@@ -398,7 +404,7 @@ class TestSessionBackLink:
             "html",
             tmp_path,
             silent=True,
-            detail=DetailLevel.LOW,
+            depth=RenderingDepth.AGENT,
         )
         session_file = tmp_path / "session-sess1.agent.html"
         # Explicit UTF-8: the HTML contains emoji glyphs (🤷, 🤖, 📦);
@@ -655,7 +661,7 @@ class TestPaginatedVariantCoexistence:
             tmp_path,
             silent=True,
             page_size=2,
-            detail=DetailLevel.LOW,
+            depth=RenderingDepth.AGENT,
         )
         assert low_page1.name == "combined_transcripts.agent.html"
         low_page2 = tmp_path / "combined_transcripts.agent_2.html"

@@ -8,9 +8,8 @@ from typing import Optional
 
 from .models import (
     ContentItem,
-    DEFAULT_DETAIL_LEVEL,
-    DETAIL_TO_DEPTH,
-    DetailLevel,
+    DEFAULT_DEPTH,
+    RenderingDepth,
     TextContent,
     TranscriptEntry,
     UserTranscriptEntry,
@@ -31,7 +30,7 @@ from .factories import (
 # Variants of the same project render to distinct filenames so each
 # variant has its own on-disk artifact and its own cache row. The DEFAULT
 # level (``--depth tool`` / legacy ``--detail high``, ==
-# ``DEFAULT_DETAIL_LEVEL``) gets NO suffix. Other levels earn one, named by
+# ``DEFAULT_DEPTH``) gets NO suffix. Other levels earn one, named by
 # the ``--depth`` scale regardless of which option selected the level (#159
 # — the deprecated ``--detail low`` renders to the same ``.agent`` file as
 # ``--depth agent``):
@@ -55,7 +54,7 @@ VARIANT_ENTRY_RE = re.compile(r"^combined_transcripts((?:\.[a-z-]+)*)\.html$")
 
 
 def variant_suffix(
-    detail: DetailLevel | str = DEFAULT_DETAIL_LEVEL,
+    depth: RenderingDepth | str = DEFAULT_DEPTH,
     compact: bool = False,
     format: str = "html",
     no_timestamps: bool = False,
@@ -64,25 +63,26 @@ def variant_suffix(
     """Compute the filename infix for a given render variant.
 
     Returns the empty string for the default variant
-    (``DEFAULT_DETAIL_LEVEL`` == ``--depth tool`` / ``--detail high``, no
+    (``DEFAULT_DEPTH`` == ``--depth tool`` / ``--detail high``, no
     compact). Otherwise returns a dot-prefixed suffix that is inserted
     after the basename and before the page number / extension.
 
-    Non-default levels are named by the ``--depth`` scale
-    (``.hook/.agent/.session/…``) regardless of whether the level was
+    Non-default depths are named by the ``--depth`` scale
+    (``.hook/.agent/.session/…``) regardless of whether the depth was
     selected via ``--depth`` or the deprecated ``--detail`` — a single
-    canonical name per level, so cache keys and filenames never diverge
+    canonical name per depth, so cache keys and filenames never diverge
     for the same content. (Legacy ``--detail`` names like ``.low`` are not
     preserved on the filename; ``--detail`` itself is deprecated. See
     #159.)
     """
-    # `DetailLevel` inherits from `str`, so `isinstance(detail, str)` is
-    # always True — narrow only on `DetailLevel` to coerce plain strings.
-    if not isinstance(detail, DetailLevel):
-        detail = DetailLevel(detail)
+    # `RenderingDepth` inherits from `str`, so `isinstance(depth, str)` is
+    # always True — narrow only on `RenderingDepth` to coerce plain strings.
+    if not isinstance(depth, RenderingDepth):
+        depth = RenderingDepth(depth)
     parts: list[str] = []
-    if detail != DEFAULT_DETAIL_LEVEL:
-        parts.append(DETAIL_TO_DEPTH[detail])
+    if depth != DEFAULT_DEPTH:
+        # The enum value IS the --depth name, so it's the suffix directly.
+        parts.append(depth.value)
     # `--no-recaps` filters *messages* out of the rendered tree, so it
     # affects EVERY format (html/md/json) — unlike compact/no-timestamps
     # below. It must earn a suffix slot regardless of format, else a

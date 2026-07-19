@@ -32,7 +32,7 @@ for user-facing operations docs see [`docs/`](../docs/).
 | Fold-bar / message hierarchy | `html/templates/components/`, JS in `transcript.html` | [message-hierarchy.md](message-hierarchy.md) |
 | CSS class taxonomy | `html/templates/components/*.css` | [css-classes.md](css-classes.md) |
 | JSON export (#36) | [`json/`](../claude_code_log/json/) | inlined below (§ 2.5) |
-| Detail-level filter | renderer.py § Detail-level filtering, `models.DetailLevel` | inlined below (§ 2.6) |
+| Depth filter | renderer.py § Depth filtering, `models.RenderingDepth` | inlined below (§ 2.6) |
 | Image export | [`image_export.py`](../claude_code_log/image_export.py) | inlined below (§ 2.7) |
 | Performance profiling | [`renderer_timings.py`](../claude_code_log/renderer_timings.py) | inlined below (§ 2.8) |
 | Diagnosing hangs (SIGUSR1) | [`cli.py`](../claude_code_log/cli.py) `_install_stack_dump_signal` | inlined below (§ 2.9) |
@@ -136,7 +136,7 @@ at `~/.claude/projects/claude-code-log-cache.db` (or
   restoration (the cache holds enough to re-render even after the
   source JSONL is deleted).
 - Per-rendered-HTML: the HTML output itself, indexed by source file
-  mtime + detail-level + compact flag (migrations 002–004) — so
+  mtime + depth + compact flag (migrations 002–004) — so
   re-runs with unchanged inputs serve the cached HTML directly.
 
 Invalidation is mtime-based: when a JSONL's mtime is newer than its
@@ -238,16 +238,16 @@ The projects-index JSON (`all-projects-summary.json`) is a parallel
 top-level file — same shape as HTML's `index.html` but consumable by
 external tools (dashboards, query scripts, `jq` pipelines).
 
-### 2.6 Detail-level filter
+### 2.6 Depth filter
 
 The `--depth` flag (#159) lets users dial how deep into the message
 hierarchy to render — `session > user > assistant > agent > tool > hook`
 — naming the level by the node the output stops at. It maps onto
-`models.DetailLevel` (which keeps the older verbosity names internally)
+`models.RenderingDepth` (which keeps the older verbosity names internally)
 via `models.DEPTH_TO_DETAIL`:
 
-- `hook` (= `DetailLevel.FULL`) — everything, incl. hooks + system notices.
-- `tool` (= `HIGH`, **default**, `DEFAULT_DETAIL_LEVEL`) — detailed but
+- `hook` (= `RenderingDepth.HOOK`) — everything, incl. hooks + system notices.
+- `tool` (= `HIGH`, **default**, `DEFAULT_DEPTH`) — detailed but
   cleaned: drops system/hook noise while keeping the full conversation
   and tool I/O.
 - `agent` (= `LOW`) — drops most tool I/O, keeps the conversation plus a
@@ -260,12 +260,12 @@ via `models.DEPTH_TO_DETAIL`:
 - `session` (= `SESSION`, depth-only, no `--detail` spelling) — session
   structure only: session/branch headers + fork landmarks, every message
   body dropped. Handled by an explicit branch in
-  `_ghost_template_by_detail` (the `visible_at` predicate keeps
+  `_ghost_template_by_depth` (the `visible_at` predicate keeps
   threshold-less built-ins like `UserTextMessage` visible at every level,
-  so "drop even user messages" can't be expressed via `detail_visibility`).
+  so "drop even user messages" can't be expressed via `depth_visibility`).
 
 The legacy `--detail full|high|low|minimal|user-only` is kept as a
-deprecated alias (removed in 2.0) and maps to the same `DetailLevel`s.
+deprecated alias (removed in 2.0) and maps to the same `RenderingDepth`s.
 Filenames use a single canonical suffix per level — the `--depth` name
 (`.hook/.agent/.assistant/.user/.session`), with the default `tool`/HIGH
 suffix-less — regardless of which option selected it (so `--detail low`
@@ -273,19 +273,19 @@ and `--depth agent` share the `.agent` file). See `utils.variant_suffix`.
 
 Recaps (`AwaySummaryMessage`) are a cross-cutting exception: they are a
 high-level summary of activity, so they stay visible at *every* content
-level (`detail_visibility = USER_ONLY`), including `user`. The `--no-recaps`
+level (`depth_visibility = USER_ONLY`), including `user`. The `--no-recaps`
 flag suppresses them at all levels — giving `--depth user --no-recaps`
 for a truly user-only view, or `--depth assistant --no-recaps` to drop the
 recap/agent redundancy (#179).
 
 Filtering happens in a single *post-render* pass on `TemplateMessage`:
-`_ghost_template_by_detail` sets each non-visible slot in
+`_ghost_template_by_depth` sets each non-visible slot in
 `RenderingContext.messages` to `None` ("ghosting"), keyed by the content
-class's `detail_visibility` predicate (plus the `_LOW_KEEP_TOOLS`
+class's `depth_visibility` predicate (plus the `_LOW_KEEP_TOOLS`
 allowlist at `low` and sidechain dropping below `FULL`). Indices stay
 stable — surviving messages keep their `message_index`, so there is no
 reindex; the rendered tree simply skips ghost slots. Earlier revisions
-ran a *second*, pre-render `_filter_by_detail` pass on `TranscriptEntry`
+ran a *second*, pre-render `_filter_by_depth` pass on `TranscriptEntry`
 plus a `_reindex_filtered_context` remap after every deletion; the
 ghosting model collapsed both into this one axis.
 
@@ -295,7 +295,7 @@ Because anchor-target references can be cached before a slot is ghosted —
 a branch header's `parent_message_index`, `session_first_message`
 entries, junction forward-links — each ghosting step sanitizes them
 afterward: `_pair_skill_tool_uses` calls `_drop_anchor_refs_into_ghosts`
-and `_ghost_template_by_detail` calls `_repair_stale_anchor_refs`, so no
+and `_ghost_template_by_depth` calls `_repair_stale_anchor_refs`, so no
 `#msg-d-{N}` backlink dangles (see PR #131 fix). See
 [rendering-architecture.md § 5](rendering-architecture.md) for the full
 pass order.
@@ -489,7 +489,7 @@ Terms that appear across multiple subsystems — defined once here.
   thinking + assistant). `pair_middle` exists for triples — currently
   the slash-command `(UserSlash → Slash → CommandOutput)` shape.
 
-- **detail level**: see § 2.6.
+- **depth**: see § 2.6.
 
 - **detail-aware tools**: the curated set of tools whose I/O survives
   `--detail low` because they convey *what the agent did*, not *what

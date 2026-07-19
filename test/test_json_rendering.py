@@ -13,7 +13,7 @@ from claude_code_log.cache import get_library_version
 from claude_code_log.cli import _clear_output_files, main
 from claude_code_log.converter import load_transcript
 from claude_code_log.json.renderer import JsonRenderer
-from claude_code_log.models import DetailLevel
+from claude_code_log.models import RenderingDepth
 from claude_code_log.renderer import get_renderer
 
 
@@ -107,7 +107,7 @@ class TestJsonGenerate:
 
         assert data["version"] == get_library_version()
         assert data["title"] == "Test"
-        assert data["detail"] == DetailLevel.FULL.value
+        assert data["depth"] == RenderingDepth.HOOK.value
         assert data["compact"] is False
         assert isinstance(data["sessions"], list)
         assert isinstance(data["messages"], list)
@@ -254,7 +254,7 @@ class TestJsonGenerate:
     def test_detail_minimal_filters_tool_messages(self, test_data_dir: Path):
         """--detail minimal should strip tool_use/tool_result nodes."""
         messages = load_transcript(test_data_dir / "representative_messages.jsonl")
-        renderer = get_renderer("json", detail=DetailLevel.MINIMAL)
+        renderer = get_renderer("json", depth=RenderingDepth.ASSISTANT)
         out = renderer.generate(messages, "Test")
         assert out is not None
         data = json.loads(out)

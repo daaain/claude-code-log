@@ -206,7 +206,7 @@ class TestIsOutdatedNonRegularFileGuard:
 
 
 class TestSingleFileStaleness:
-    """#221 follow-up: the *default* single-file output (no ``-o``, detail-
+    """#221 follow-up: the *default* single-file output (no ``-o``, depth-
     suffixed naming) rides the version-only skip, so a source that grows
     between runs was wrongly kept stale. And a genuine skip printed BOTH the
     converter's "is current, skipping" line and the CLI's "Successfully

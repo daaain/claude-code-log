@@ -508,7 +508,7 @@ continuation content (prose or thinking — `_is_continuation_content`)
 sits between the two in linear order, so the result keeps its
 chronological place. Sibling tool messages (parallel batches),
 sidechain/subagent threads, and empty splits don't block pairing. At
-reduced detail levels the ghost pass runs *before* pairing, so once the
+reduced depths the ghost pass runs *before* pairing, so once the
 continuation is filtered out the pair re-forms and renders adjacent —
 the compact view wanted there. Pinned by `test_continuation_fork.py`
 (DAG side) and `test_continuation_pairing.py` (renderer side).
@@ -674,7 +674,7 @@ Plumbing:
   verbatim).
 
 The label degrades gracefully whenever any step is missing — no
-`parent_uuid`, parent filtered out (e.g. at `HIGH` detail level), parent
+`parent_uuid`, parent filtered out (e.g. at `HIGH` depth), parent
 isn't a `SystemMessage`, or `compact_pre_tokens` is None/zero — by
 dropping the `(Nk tokens)` fragment while still appending the summary's
 own timestamp. Older transcripts without `compactMetadata` get

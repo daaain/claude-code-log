@@ -21,7 +21,7 @@ from claude_code_log.converter import convert_jsonl_to, load_transcript
 from claude_code_log.html.renderer import HtmlRenderer
 from claude_code_log.markdown.renderer import MarkdownRenderer
 from claude_code_log.models import (
-    DetailLevel,
+    RenderingDepth,
 )
 from claude_code_log.renderer import generate_template_messages
 
@@ -121,22 +121,22 @@ def _write_jsonl(entries: list[dict], path: Path) -> Path:
     return path
 
 
-# -- Single-axis collapse: the pre-render detail filter is gone --------------
+# -- Single-axis collapse: the pre-render depth filter is gone --------------
 
 
 def test_pre_render_detail_filter_is_deleted():
-    """``_filter_by_detail`` (and its reindex helper) must stay deleted.
+    """``_filter_by_depth`` (and its reindex helper) must stay deleted.
 
-    Single-axis collapse (Phase 3) folded all detail stripping into the
-    post-render ``_ghost_template_by_detail`` pass. Pin the deletion so the
+    Single-axis collapse (Phase 3) folded all depth stripping into the
+    post-render ``_ghost_template_by_depth`` pass. Pin the deletion so the
     pre-render filter can't be reintroduced and quietly recreate the
     two-axis complexity the ghosting epic removed.
     """
     import claude_code_log.renderer as renderer
 
-    assert not hasattr(renderer, "_filter_by_detail"), (
-        "_filter_by_detail was reintroduced — detail filtering must happen "
-        "only post-render via _ghost_template_by_detail (single-axis)."
+    assert not hasattr(renderer, "_filter_by_depth"), (
+        "_filter_by_depth was reintroduced — depth filtering must happen "
+        "only post-render via _ghost_template_by_depth (single-axis)."
     )
     assert not hasattr(renderer, "_reindex_filtered_context"), (
         "_reindex_filtered_context was reintroduced — ghosting keeps indices "
@@ -144,15 +144,15 @@ def test_pre_render_detail_filter_is_deleted():
     )
 
 
-# -- MINIMAL detail filtering (end-to-end) -----------------------------------
+# -- MINIMAL depth filtering (end-to-end) -----------------------------------
 
 
 class TestFilterMinimal:
-    """MINIMAL detail filtering, end-to-end via ``generate_template_messages``.
+    """MINIMAL depth filtering, end-to-end via ``generate_template_messages``.
 
     Single-axis collapse (Phase 3) removed the pre-render
-    ``_filter_by_detail``; all stripping now happens post-render in
-    ``_ghost_template_by_detail`` via per-class ``detail_visibility``. These
+    ``_filter_by_depth``; all stripping now happens post-render in
+    ``_ghost_template_by_depth`` via per-class ``depth_visibility``. These
     pin the same MINIMAL contract through the public pipeline by asserting on
     the *visible* (non-ghost) messages, since the stripped content is ghosted
     (``None`` slot) rather than removed pre-render.
@@ -161,7 +161,7 @@ class TestFilterMinimal:
     def _render_minimal(self, entries, tmp_path):
         messages = load_transcript(_write_jsonl(entries, tmp_path / "t.jsonl"))
         root_messages, _, ctx = generate_template_messages(
-            messages, detail=DetailLevel.MINIMAL
+            messages, depth=RenderingDepth.ASSISTANT
         )
         types: set[str] = set()
         _collect_types(root_messages, types)
@@ -254,7 +254,7 @@ class TestFilterMinimal:
         )
 
 
-# -- Tests for HIGH detail level -----------------------------------------------
+# -- Tests for HIGH depth level -----------------------------------------------
 
 
 class TestHighTemplateMessages:
@@ -271,7 +271,7 @@ class TestHighTemplateMessages:
         ]
         messages = load_transcript(_write_jsonl(entries, tmp_path / "t.jsonl"))
         root_messages, _, ctx = generate_template_messages(
-            messages, detail=DetailLevel.HIGH
+            messages, depth=RenderingDepth.TOOL
         )
         types = {msg.content.message_type for msg in ctx.messages if msg is not None}
         assert "tool_use" in types
@@ -287,7 +287,7 @@ class TestHighTemplateMessages:
         ]
         messages = load_transcript(_write_jsonl(entries, tmp_path / "t.jsonl"))
         root_messages, _, ctx = generate_template_messages(
-            messages, detail=DetailLevel.HIGH
+            messages, depth=RenderingDepth.TOOL
         )
         types = {msg.content.message_type for msg in ctx.messages if msg is not None}
         assert "tool_result" in types
@@ -303,7 +303,7 @@ class TestHighTemplateMessages:
         ]
         messages = load_transcript(_write_jsonl(entries, tmp_path / "t.jsonl"))
         root_messages, _, ctx = generate_template_messages(
-            messages, detail=DetailLevel.HIGH
+            messages, depth=RenderingDepth.TOOL
         )
         types = {msg.content.message_type for msg in ctx.messages if msg is not None}
         assert "thinking" in types
@@ -317,7 +317,7 @@ class TestHighTemplateMessages:
         ]
         messages = load_transcript(_write_jsonl(entries, tmp_path / "t.jsonl"))
         root_messages, _, ctx = generate_template_messages(
-            messages, detail=DetailLevel.HIGH
+            messages, depth=RenderingDepth.TOOL
         )
         types = {msg.content.message_type for msg in ctx.messages if msg is not None}
         assert "system" not in types
@@ -329,7 +329,7 @@ class TestHighTemplateMessages:
             _assistant_entry("Goodbye"),
         ]
         messages = load_transcript(_write_jsonl(entries, tmp_path / "t.jsonl"))
-        _, _, ctx = generate_template_messages(messages, detail=DetailLevel.HIGH)
+        _, _, ctx = generate_template_messages(messages, depth=RenderingDepth.TOOL)
         for msg in ctx.messages:
             if msg is None:
                 continue
@@ -339,7 +339,7 @@ class TestHighTemplateMessages:
             ), f"Slash command found in HIGH output: {msg.content.__class__.__name__}"
 
 
-# -- Tests for LOW detail level ------------------------------------------------
+# -- Tests for LOW depth level ------------------------------------------------
 
 
 class TestLowTemplateMessages:
@@ -360,7 +360,7 @@ class TestLowTemplateMessages:
             ),
         ]
         messages = load_transcript(_write_jsonl(entries, tmp_path / "t.jsonl"))
-        _, _, ctx = generate_template_messages(messages, detail=DetailLevel.LOW)
+        _, _, ctx = generate_template_messages(messages, depth=RenderingDepth.AGENT)
         tool_names = [
             getattr(msg.content, "tool_name", None)
             for msg in ctx.messages
@@ -384,7 +384,7 @@ class TestLowTemplateMessages:
             ),
         ]
         messages = load_transcript(_write_jsonl(entries, tmp_path / "t.jsonl"))
-        _, _, ctx = generate_template_messages(messages, detail=DetailLevel.LOW)
+        _, _, ctx = generate_template_messages(messages, depth=RenderingDepth.AGENT)
         tool_names = [
             getattr(msg.content, "tool_name", None)
             for msg in ctx.messages
@@ -403,7 +403,7 @@ class TestLowTemplateMessages:
             ),
         ]
         messages = load_transcript(_write_jsonl(entries, tmp_path / "t.jsonl"))
-        _, _, ctx = generate_template_messages(messages, detail=DetailLevel.LOW)
+        _, _, ctx = generate_template_messages(messages, depth=RenderingDepth.AGENT)
         types = {msg.content.message_type for msg in ctx.messages if msg is not None}
         assert "thinking" not in types
 
@@ -414,7 +414,7 @@ class TestLowTemplateMessages:
             _assistant_entry("Hi there!"),
         ]
         messages = load_transcript(_write_jsonl(entries, tmp_path / "t.jsonl"))
-        _, _, ctx = generate_template_messages(messages, detail=DetailLevel.LOW)
+        _, _, ctx = generate_template_messages(messages, depth=RenderingDepth.AGENT)
         types = {msg.content.message_type for msg in ctx.messages if msg is not None}
         assert "user" in types
         assert "assistant" in types
@@ -427,7 +427,7 @@ class TestLowTemplateMessages:
             _assistant_entry("Hi"),
         ]
         messages = load_transcript(_write_jsonl(entries, tmp_path / "t.jsonl"))
-        _, _, ctx = generate_template_messages(messages, detail=DetailLevel.LOW)
+        _, _, ctx = generate_template_messages(messages, depth=RenderingDepth.AGENT)
         types = {msg.content.message_type for msg in ctx.messages if msg is not None}
         assert "system" not in types
 
@@ -457,7 +457,7 @@ class TestMinimalTemplateMessages:
         messages = load_transcript(_write_jsonl(entries, tmp_path / "t.jsonl"))
 
         root_messages, _, _ = generate_template_messages(
-            messages, detail=DetailLevel.MINIMAL
+            messages, depth=RenderingDepth.ASSISTANT
         )
         # Flatten tree
         all_types = set()
@@ -479,7 +479,7 @@ class TestMinimalTemplateMessages:
         messages = load_transcript(_write_jsonl(entries, tmp_path / "t.jsonl"))
 
         root_messages, _, _ = generate_template_messages(
-            messages, detail=DetailLevel.MINIMAL
+            messages, depth=RenderingDepth.ASSISTANT
         )
         all_types = set()
         _collect_types(root_messages, all_types)
@@ -495,7 +495,7 @@ class TestMinimalTemplateMessages:
         messages = load_transcript(_write_jsonl(entries, tmp_path / "t.jsonl"))
 
         root_messages, session_nav, _ = generate_template_messages(
-            messages, detail=DetailLevel.MINIMAL
+            messages, depth=RenderingDepth.ASSISTANT
         )
         assert len(root_messages) >= 1
         assert root_messages[0].is_session_header
@@ -537,7 +537,7 @@ class TestMinimalTemplateMessages:
         )
         messages = load_transcript(path)
 
-        _, _, ctx = generate_template_messages(messages, detail=DetailLevel.MINIMAL)
+        _, _, ctx = generate_template_messages(messages, depth=RenderingDepth.ASSISTANT)
         from claude_code_log.models import UserSteeringMessage
 
         steering = [
@@ -568,7 +568,7 @@ class TestMinimalTemplateMessages:
         messages = load_transcript(_write_jsonl(entries, tmp_path / "t.jsonl"))
 
         root_messages, _, _ = generate_template_messages(
-            messages, detail=DetailLevel.MINIMAL
+            messages, depth=RenderingDepth.ASSISTANT
         )
         all_types = set()
         _collect_types(root_messages, all_types)
@@ -586,7 +586,7 @@ class TestMinimalTemplateMessages:
         messages = load_transcript(_write_jsonl(entries, tmp_path / "t.jsonl"))
 
         root_messages, _, ctx = generate_template_messages(
-            messages, detail=DetailLevel.MINIMAL
+            messages, depth=RenderingDepth.ASSISTANT
         )
         all_types = set()
         _collect_types(root_messages, all_types)
@@ -615,7 +615,7 @@ class TestMinimalTemplateMessages:
         messages = load_transcript(_write_jsonl(entries, tmp_path / "t.jsonl"))
 
         root_messages, _, ctx = generate_template_messages(
-            messages, detail=DetailLevel.MINIMAL
+            messages, depth=RenderingDepth.ASSISTANT
         )
         # No sidechain messages should remain
         for msg in ctx.messages:
@@ -642,10 +642,10 @@ class TestMinimalTemplateMessages:
         messages = load_transcript(_write_jsonl(entries, tmp_path / "t.jsonl"))
 
         normal_roots, _, normal_ctx = generate_template_messages(
-            messages, detail=DetailLevel.FULL
+            messages, depth=RenderingDepth.HOOK
         )
         minimal_roots, _, minimal_ctx = generate_template_messages(
-            messages, detail=DetailLevel.MINIMAL
+            messages, depth=RenderingDepth.ASSISTANT
         )
 
         normal_count = sum(1 for m in normal_ctx.messages if m is not None)
@@ -678,7 +678,7 @@ class TestMinimalHtmlRendering:
         messages = load_transcript(_write_jsonl(entries, tmp_path / "t.jsonl"))
 
         renderer = HtmlRenderer()
-        renderer.detail = DetailLevel.MINIMAL
+        renderer.depth = RenderingDepth.ASSISTANT
         html = renderer.generate(messages, "Minimal Test")
 
         assert "class='message tool_use" not in html
@@ -699,7 +699,7 @@ class TestMinimalHtmlRendering:
         messages = load_transcript(_write_jsonl(entries, tmp_path / "t.jsonl"))
 
         renderer = HtmlRenderer()
-        renderer.detail = DetailLevel.MINIMAL
+        renderer.depth = RenderingDepth.ASSISTANT
         html = renderer.generate(messages, "Minimal Test")
 
         assert "class='message thinking" not in html
@@ -732,7 +732,7 @@ class TestMinimalMarkdownRendering:
         messages = load_transcript(_write_jsonl(entries, tmp_path / "t.jsonl"))
 
         renderer = MarkdownRenderer()
-        renderer.detail = DetailLevel.MINIMAL
+        renderer.depth = RenderingDepth.ASSISTANT
         md = renderer.generate(messages, "Minimal Test")
 
         assert "Write a file" in md
@@ -755,7 +755,7 @@ class TestMinimalMarkdownRendering:
         messages = load_transcript(_write_jsonl(entries, tmp_path / "t.jsonl"))
 
         renderer = MarkdownRenderer()
-        renderer.detail = DetailLevel.MINIMAL
+        renderer.depth = RenderingDepth.ASSISTANT
         md = renderer.generate(messages, "Minimal Test")
 
         assert "Here's the explanation" in md
@@ -771,7 +771,7 @@ class TestMinimalMarkdownRendering:
         messages = load_transcript(_write_jsonl(entries, tmp_path / "t.jsonl"))
 
         renderer = MarkdownRenderer()
-        renderer.detail = DetailLevel.MINIMAL
+        renderer.depth = RenderingDepth.ASSISTANT
         md = renderer.generate(messages, "Minimal Test")
 
         assert "# Minimal Test" in md
@@ -793,7 +793,7 @@ class TestMinimalMarkdownRendering:
             pytest.skip("No JSONL files in real_projects")
 
         renderer = MarkdownRenderer()
-        renderer.detail = DetailLevel.MINIMAL
+        renderer.depth = RenderingDepth.ASSISTANT
         messages = load_transcript(jsonl_files[0])
         md = renderer.generate(messages, "Minimal MD Test")
         assert md
@@ -803,7 +803,7 @@ class TestMinimalMarkdownRendering:
 # -- CLI tests ----------------------------------------------------------------
 
 
-class TestDetailCLI:
+class TestDepthCLI:
     """Test the --minimal CLI flag."""
 
     def test_minimal_flag_accepted(self, tmp_path):
@@ -929,7 +929,7 @@ class TestMinimalRealProjects:
         assert files, "No JSONL files found in real_projects"
 
         renderer = HtmlRenderer()
-        renderer.detail = DetailLevel.MINIMAL
+        renderer.depth = RenderingDepth.ASSISTANT
 
         for jsonl_file in files:
             messages = load_transcript(jsonl_file)
@@ -942,7 +942,7 @@ class TestMinimalRealProjects:
         files = self._get_project_jsonl_files(real_projects_path)
 
         renderer = HtmlRenderer()
-        renderer.detail = DetailLevel.MINIMAL
+        renderer.depth = RenderingDepth.ASSISTANT
 
         excluded_patterns = [
             "class='message tool_use",
@@ -972,10 +972,10 @@ class TestMinimalRealProjects:
         for jsonl_file in files:
             messages = load_transcript(jsonl_file)
             _, _, normal_ctx = generate_template_messages(
-                messages, detail=DetailLevel.FULL
+                messages, depth=RenderingDepth.HOOK
             )
             _, _, minimal_ctx = generate_template_messages(
-                messages, detail=DetailLevel.MINIMAL
+                messages, depth=RenderingDepth.ASSISTANT
             )
 
             normal_count = sum(1 for m in normal_ctx.messages if m is not None)
@@ -994,7 +994,7 @@ class TestMinimalRealProjects:
         for jsonl_file in files:
             messages = load_transcript(jsonl_file)
             root_messages, _, _ = generate_template_messages(
-                messages, detail=DetailLevel.MINIMAL
+                messages, depth=RenderingDepth.ASSISTANT
             )
             all_types = set()
             _collect_types(root_messages, all_types)
@@ -1010,9 +1010,9 @@ class TestMinimalRealProjects:
                 "user-steering",
                 "user-memory",
                 # Recaps (away_summary) report message_type "system" and are
-                # now kept at every detail level (#179). They're the only
+                # now kept at every depth level (#179). They're the only
                 # "system" type that survives MINIMAL — all other system
-                # messages declare detail_visibility=FULL and are dropped here.
+                # messages declare depth_visibility=FULL and are dropped here.
                 "system",
             }
             unexpected = non_header_types - allowed
@@ -1042,7 +1042,7 @@ class TestMinimalRealProjects:
             use_cache=False,
             generate_individual_sessions=False,
             silent=True,
-            detail=DetailLevel.MINIMAL,
+            depth=RenderingDepth.ASSISTANT,
         )
         html = output.read_text(encoding="utf-8")
         assert "<!DOCTYPE html>" in html
@@ -1066,7 +1066,7 @@ class TestMinimalTestData:
         messages = load_transcript(test_file)
 
         renderer = HtmlRenderer()
-        renderer.detail = DetailLevel.MINIMAL
+        renderer.depth = RenderingDepth.ASSISTANT
         html = renderer.generate(messages, "Minimal Representative")
 
         # Should have user and assistant content
@@ -1084,7 +1084,7 @@ class TestMinimalTestData:
         messages = load_transcript(test_file)
 
         root_messages, _, _ = generate_template_messages(
-            messages, detail=DetailLevel.MINIMAL
+            messages, depth=RenderingDepth.ASSISTANT
         )
         all_types = set()
         _collect_types(root_messages, all_types)
@@ -1108,7 +1108,7 @@ class TestCompactMarkdown:
         ]
         messages = load_transcript(_write_jsonl(entries, tmp_path / "t.jsonl"))
         renderer = MarkdownRenderer()
-        renderer.detail = DetailLevel.MINIMAL
+        renderer.depth = RenderingDepth.ASSISTANT
         renderer.compact = True
         md = renderer.generate(messages, "Compact Test")
         # Only one Assistant heading should appear
@@ -1127,7 +1127,7 @@ class TestCompactMarkdown:
         ]
         messages = load_transcript(_write_jsonl(entries, tmp_path / "t.jsonl"))
         renderer = MarkdownRenderer()
-        renderer.detail = DetailLevel.MINIMAL
+        renderer.depth = RenderingDepth.ASSISTANT
         renderer.compact = True
         md = renderer.generate(messages, "Compact Test")
         assert md.count("User:") == 1
@@ -1143,7 +1143,7 @@ class TestCompactMarkdown:
         ]
         messages = load_transcript(_write_jsonl(entries, tmp_path / "t.jsonl"))
         renderer = MarkdownRenderer()
-        renderer.detail = DetailLevel.MINIMAL
+        renderer.depth = RenderingDepth.ASSISTANT
         renderer.compact = True
         md = renderer.generate(messages, "Compact Test")
         # Two User headings (separated by an Assistant)
@@ -1159,7 +1159,7 @@ class TestCompactMarkdown:
         ]
         messages = load_transcript(_write_jsonl(entries, tmp_path / "t.jsonl"))
         renderer = MarkdownRenderer()
-        renderer.detail = DetailLevel.MINIMAL
+        renderer.depth = RenderingDepth.ASSISTANT
         renderer.compact = False
         md = renderer.generate(messages, "No Compact Test")
         assert md.count("Assistant:") == 2
@@ -1180,7 +1180,7 @@ class TestCompactMarkdown:
         ]
         messages = load_transcript(_write_jsonl(entries, tmp_path / "t.jsonl"))
         renderer = MarkdownRenderer()
-        renderer.detail = DetailLevel.MINIMAL
+        renderer.depth = RenderingDepth.ASSISTANT
         renderer.compact = True
         md = renderer.generate(messages, "Multi-Session")
         # Each session gets its own Assistant heading (session boundary resets)
@@ -1195,7 +1195,7 @@ class TestCompactMarkdown:
         ]
         messages = load_transcript(_write_jsonl(entries, tmp_path / "t.jsonl"))
         renderer = HtmlRenderer()
-        renderer.detail = DetailLevel.MINIMAL
+        renderer.depth = RenderingDepth.ASSISTANT
         renderer.compact = True
         html = renderer.generate(messages, "Compact HTML")
         # HTML doesn't implement compact — both messages render normally
@@ -1221,7 +1221,7 @@ class TestUserOnlyTemplateMessages:
         messages = load_transcript(_write_jsonl(entries, tmp_path / "t.jsonl"))
 
         root_messages, _, ctx = generate_template_messages(
-            messages, detail=DetailLevel.USER_ONLY
+            messages, depth=RenderingDepth.USER
         )
         all_types: set[str] = set()
         _collect_types(root_messages, all_types)
@@ -1267,7 +1267,7 @@ class TestUserOnlyTemplateMessages:
         )
         messages = load_transcript(path)
 
-        _, _, ctx = generate_template_messages(messages, detail=DetailLevel.USER_ONLY)
+        _, _, ctx = generate_template_messages(messages, depth=RenderingDepth.USER)
         from claude_code_log.models import UserSteeringMessage
 
         steering_content = [
@@ -1306,7 +1306,7 @@ class TestUserOnlyTemplateMessages:
         messages = load_transcript(_write_jsonl(entries, tmp_path / "t.jsonl"))
 
         root_messages, _, ctx = generate_template_messages(
-            messages, detail=DetailLevel.USER_ONLY
+            messages, depth=RenderingDepth.USER
         )
         all_types: set[str] = set()
         _collect_types(root_messages, all_types)
@@ -1335,7 +1335,7 @@ class TestUserOnlyTemplateMessages:
         entries = [_user_entry("Main prompt"), sidechain_user]
         messages = load_transcript(_write_jsonl(entries, tmp_path / "t.jsonl"))
 
-        _, _, ctx = generate_template_messages(messages, detail=DetailLevel.USER_ONLY)
+        _, _, ctx = generate_template_messages(messages, depth=RenderingDepth.USER)
         for msg in ctx.messages:
             if msg is None:
                 continue
@@ -1350,7 +1350,7 @@ class TestUserOnlyTemplateMessages:
         messages = load_transcript(_write_jsonl(entries, tmp_path / "t.jsonl"))
 
         root_messages, session_nav, _ = generate_template_messages(
-            messages, detail=DetailLevel.USER_ONLY
+            messages, depth=RenderingDepth.USER
         )
         assert len(root_messages) >= 1
         assert root_messages[0].is_session_header
@@ -1366,11 +1366,13 @@ class TestUserOnlyTemplateMessages:
         ]
         messages = load_transcript(_write_jsonl(entries, tmp_path / "t.jsonl"))
 
-        _, _, ctx_min = generate_template_messages(messages, detail=DetailLevel.MINIMAL)
+        _, _, ctx_min = generate_template_messages(
+            messages, depth=RenderingDepth.ASSISTANT
+        )
         # Re-load to avoid mutation shared state between runs
         messages2 = load_transcript(tmp_path / "t.jsonl")
         _, _, ctx_user = generate_template_messages(
-            messages2, detail=DetailLevel.USER_ONLY
+            messages2, depth=RenderingDepth.USER
         )
         ctx_user_count = sum(1 for m in ctx_user.messages if m is not None)
         ctx_min_count = sum(1 for m in ctx_min.messages if m is not None)
@@ -1378,7 +1380,7 @@ class TestUserOnlyTemplateMessages:
 
 
 class TestSteeringHierarchy:
-    """UserSteeringMessage must survive at every non-FULL detail level.
+    """UserSteeringMessage must survive at every non-FULL depth level.
 
     The documented hierarchy is `full > high > low > minimal > user-only`
     — whatever a lower level keeps, higher levels keep. Steering is
@@ -1417,17 +1419,17 @@ class TestSteeringHierarchy:
     @pytest.mark.parametrize(
         "level",
         [
-            DetailLevel.HIGH,
-            DetailLevel.LOW,
-            DetailLevel.MINIMAL,
-            DetailLevel.USER_ONLY,
+            RenderingDepth.TOOL,
+            RenderingDepth.AGENT,
+            RenderingDepth.ASSISTANT,
+            RenderingDepth.USER,
         ],
     )
     def test_steering_survives_at_every_non_full_level(self, tmp_path, level):
         path = self._write_with_steering(tmp_path)
         messages = load_transcript(path)
 
-        _, _, ctx = generate_template_messages(messages, detail=level)
+        _, _, ctx = generate_template_messages(messages, depth=level)
         from claude_code_log.models import UserSteeringMessage
 
         steering = [
@@ -1470,7 +1472,7 @@ class TestSteeringStringContent:
         )
         messages = load_transcript(path)
 
-        _, _, ctx = generate_template_messages(messages, detail=DetailLevel.MINIMAL)
+        _, _, ctx = generate_template_messages(messages, depth=RenderingDepth.ASSISTANT)
         from claude_code_log.models import UserSteeringMessage
 
         steering = [

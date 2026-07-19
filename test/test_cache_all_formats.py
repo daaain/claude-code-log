@@ -28,7 +28,7 @@ from typing import Any
 
 from claude_code_log.cache import CacheManager, get_library_version
 from claude_code_log.converter import RegenerationReport, convert_jsonl_to
-from claude_code_log.models import DetailLevel
+from claude_code_log.models import RenderingDepth
 
 
 def _entry(text: str, session_id: str, parent: str | None) -> dict[str, Any]:
@@ -75,7 +75,7 @@ def test_markdown_output_dir_writes_variant_keyed_cache_rows(tmp_path: Path):
         "markdown",
         project_dir,
         output_root=dest,
-        detail=DetailLevel.LOW,
+        depth=RenderingDepth.AGENT,
         compact=True,
         generate_individual_sessions=True,
         silent=True,

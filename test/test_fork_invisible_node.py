@@ -9,7 +9,7 @@ confusing anchor that jumped to the wrong place.
 The fix synthesizes a minimal ``SystemMessage`` placeholder for any
 content-less *fork-point* system node so it becomes a real ⟂ landmark, and the
 existing fork machinery resolves to it. As a belt-and-suspenders, when the fork
-point is genuinely unresolvable (e.g. ghosted at reduced detail), the branch
+point is genuinely unresolvable (e.g. ghosted at reduced depth), the branch
 back-link renders "from ⟂ Fork point" as plain text rather than a wrong anchor.
 """
 
@@ -24,7 +24,7 @@ from claude_code_log.converter import load_transcript
 from claude_code_log.html.renderer import HtmlRenderer, generate_html
 from claude_code_log.html.system_formatters import format_session_header_content
 from claude_code_log.models import (
-    DetailLevel,
+    RenderingDepth,
     MessageMeta,
     SessionHeaderMessage,
     SystemTranscriptEntry,
@@ -208,11 +208,11 @@ def _build_fork_fixture(tmp_path: Path) -> str:
     return generate_html(load_transcript(_write_fork_jsonl(tmp_path)), "fork")
 
 
-def _render_fork_at_detail(tmp_path: Path, detail: DetailLevel) -> str:
+def _render_fork_at_detail(tmp_path: Path, depth: RenderingDepth) -> str:
     messages = load_transcript(_write_fork_jsonl(tmp_path))
     renderer = HtmlRenderer()
-    renderer.detail = detail
-    return renderer.generate(messages, f"fork {detail.value}")
+    renderer.depth = depth
+    return renderer.generate(messages, f"fork {depth.value}")
 
 
 class TestForkInvisibleNodeIntegration:
@@ -251,69 +251,69 @@ class TestForkInvisibleNodeIntegration:
         assert nav.group(1) != "#msg-d-2"
 
 
-class TestForkSurvivesDetailFiltering:
+class TestForkSurvivesDepthFiltering:
     """When the fork node's own message is filtered by --detail, the fork
     point must still render as a landmark at its position, and the branch
     back-links must stay active (#233 follow-up — fork points get the same
     always-visible treatment as the branches they connect)."""
 
     # The placeholder (a content-less ``turn_duration`` SystemMessage) has
-    # detail_visibility=FULL, so it's filtered at every level below FULL —
+    # depth_visibility=FULL, so it's filtered at every level below FULL —
     # exercising the fork_only landmark path at all reduced levels.
     REDUCED = [
-        DetailLevel.HIGH,
-        DetailLevel.LOW,
-        DetailLevel.MINIMAL,
-        DetailLevel.USER_ONLY,
+        RenderingDepth.TOOL,
+        RenderingDepth.AGENT,
+        RenderingDepth.ASSISTANT,
+        RenderingDepth.USER,
     ]
 
     def test_fork_box_survives_but_body_suppressed_at_reduced_detail(
         self, tmp_path: Path
     ):
-        for detail in self.REDUCED:
-            html = _render_fork_at_detail(tmp_path, detail)
+        for depth in self.REDUCED:
+            html = _render_fork_at_detail(tmp_path, depth)
             # The fork node's own message body is filtered out…
-            assert "(turn_duration)" not in html, detail
-            assert "<div class='debug-info'>sd &rarr; a1</div>" not in html, detail
+            assert "(turn_duration)" not in html, depth
+            assert "<div class='debug-info'>sd &rarr; a1</div>" not in html, depth
             # …but the fork-point box still renders as a landmark.
-            assert "fork-point-header" in html, detail
+            assert "fork-point-header" in html, depth
 
     def test_backlinks_reactivate_to_the_landmark_at_reduced_detail(
         self, tmp_path: Path
     ):
-        for detail in self.REDUCED:
-            html = _render_fork_at_detail(tmp_path, detail)
+        for depth in self.REDUCED:
+            html = _render_fork_at_detail(tmp_path, depth)
             backlinks = re.findall(
                 r'class="branch-from">from <a href="(#msg-d-\d+)"', html
             )
             # Both branch back-links are ACTIVE links (not the plain-text span
             # fallback), pointing at one landmark, never the session header.
-            assert len(backlinks) == 2, (detail, backlinks)
-            assert len(set(backlinks)) == 1, (detail, backlinks)
-            assert "#msg-d-2" not in backlinks, (detail, backlinks)
+            assert len(backlinks) == 2, (depth, backlinks)
+            assert len(set(backlinks)) == 1, (depth, backlinks)
+            assert "#msg-d-2" not in backlinks, (depth, backlinks)
             # The landmark anchor (on the fork-point box) matches the target.
             fork_idx = backlinks[0].rsplit("-", 1)[-1]
-            assert f"class='fork-point' id='msg-d-{fork_idx}'" in html, detail
+            assert f"class='fork-point' id='msg-d-{fork_idx}'" in html, depth
 
     def test_no_dead_anchors_at_reduced_detail(self, tmp_path: Path):
         # Every #msg-d-N href must have a matching id in the same document.
-        for detail in self.REDUCED:
-            html = _render_fork_at_detail(tmp_path, detail)
+        for depth in self.REDUCED:
+            html = _render_fork_at_detail(tmp_path, depth)
             ids = set(re.findall(r"id=['\"]msg-d-(\d+)['\"]", html))
             hrefs = set(re.findall(r"href=['\"]#msg-d-(\d+)['\"]", html))
-            assert not (hrefs - ids), (detail, sorted(hrefs - ids))
+            assert not (hrefs - ids), (depth, sorted(hrefs - ids))
 
     def test_branch_headers_always_visible_keeps_fork_anchored(self):
         """Pin the load-bearing invariant the fork_only no-dead-anchor
         guarantee rests on (monk review note): branch session headers must
-        survive detail filtering at EVERY level. If they could be ghosted, a
+        survive depth filtering at EVERY level. If they could be ghosted, a
         2-branch fork could drop below 2 survivors, the fork-point box would be
         suppressed, and a kept fork_only slot would render with no anchor id —
         silently dangling a sibling branch's back-link.
 
-        ``SessionHeaderMessage`` declares no ``detail_visibility``, so
+        ``SessionHeaderMessage`` declares no ``depth_visibility``, so
         ``visible_at`` is True at every level. Assert that directly so a future
-        ``detail_visibility`` added to the class trips HERE rather than as a
+        ``depth_visibility`` added to the class trips HERE rather than as a
         downstream dead anchor.
         """
         branch = SessionHeaderMessage(
@@ -322,17 +322,17 @@ class TestForkSurvivesDetailFiltering:
             is_branch=True,
             meta=MessageMeta(uuid="b1", session_id="s1@abcdef012345", timestamp="t"),
         )
-        for detail in (
-            DetailLevel.FULL,
-            DetailLevel.HIGH,
-            DetailLevel.LOW,
-            DetailLevel.MINIMAL,
-            DetailLevel.USER_ONLY,
+        for depth in (
+            RenderingDepth.HOOK,
+            RenderingDepth.TOOL,
+            RenderingDepth.AGENT,
+            RenderingDepth.ASSISTANT,
+            RenderingDepth.USER,
         ):
-            assert branch.visible_at(detail) is True, (
-                f"branch SessionHeaderMessage must stay visible at {detail} — "
+            assert branch.visible_at(depth) is True, (
+                f"branch SessionHeaderMessage must stay visible at {depth} — "
                 "fork_only's no-dead-anchor guarantee depends on a 2-branch "
-                "fork keeping >=2 visible branches. A detail_visibility on "
+                "fork keeping >=2 visible branches. A depth_visibility on "
                 "SessionHeaderMessage would break it; update the fork_only "
                 "ghost-pass logic (renderer.py) accordingly."
             )

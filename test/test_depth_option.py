@@ -5,7 +5,7 @@
 replaces the deprecated ``--detail full|high|low|minimal|user-only`` with
 message-hierarchy names. Coverage:
 
-- the depth↔DetailLevel bijection and the new DEFAULT_DETAIL_LEVEL;
+- the depth↔RenderingDepth bijection and the new DEFAULT_DEPTH;
 - CLI resolution: default is tool/HIGH, --depth maps, --detail still works
   (with a deprecation warning), the two are mutually exclusive;
 - the filename suffix is the --depth name of the level (default = no suffix);
@@ -21,25 +21,24 @@ from click.testing import CliRunner
 
 from claude_code_log.cli import main
 from claude_code_log.models import (
-    DEFAULT_DETAIL_LEVEL,
-    DEPTH_TO_DETAIL,
-    DETAIL_TO_DEPTH,
-    DetailLevel,
+    DEFAULT_DEPTH,
+    DETAIL_ALIASES,
+    RenderingDepth,
 )
 from claude_code_log.utils import variant_suffix
 
 
 # --------------------------------------------------------------------------
-# Mapping + default
+# Enum + default
 # --------------------------------------------------------------------------
 class TestDepthMapping:
-    def test_default_level_is_high(self) -> None:
-        # #159: the default output level is HIGH == --depth tool.
-        assert DEFAULT_DETAIL_LEVEL is DetailLevel.HIGH
+    def test_default_depth_is_tool(self) -> None:
+        # #159: the default output depth is TOOL (== legacy --detail high).
+        assert DEFAULT_DEPTH is RenderingDepth.TOOL
 
-    def test_depth_maps_every_level_bijectively(self) -> None:
-        # All six --depth names present and mapping onto distinct DetailLevels.
-        assert set(DEPTH_TO_DETAIL) == {
+    def test_depth_values_are_the_cli_names(self) -> None:
+        # The enum values ARE the --depth names (no separate mapping table).
+        assert {d.value for d in RenderingDepth} == {
             "session",
             "user",
             "assistant",
@@ -47,46 +46,51 @@ class TestDepthMapping:
             "tool",
             "hook",
         }
-        assert set(DEPTH_TO_DETAIL.values()) == set(DetailLevel)
-        # Round-trips: DEPTH_TO_DETAIL and DETAIL_TO_DEPTH are inverses.
-        for name, level in DEPTH_TO_DETAIL.items():
-            assert DETAIL_TO_DEPTH[level] == name
+        # Round-trips: RenderingDepth(name) resolves each name back to itself.
+        for d in RenderingDepth:
+            assert RenderingDepth(d.value) is d
 
-    def test_specific_mappings(self) -> None:
-        assert DEPTH_TO_DETAIL["tool"] is DetailLevel.HIGH
-        assert DEPTH_TO_DETAIL["hook"] is DetailLevel.FULL
-        assert DEPTH_TO_DETAIL["agent"] is DetailLevel.LOW
-        assert DEPTH_TO_DETAIL["assistant"] is DetailLevel.MINIMAL
-        assert DEPTH_TO_DETAIL["user"] is DetailLevel.USER_ONLY
-        assert DEPTH_TO_DETAIL["session"] is DetailLevel.SESSION
+    def test_detail_aliases_map_legacy_names(self) -> None:
+        # The deprecated --detail names map onto RenderingDepth (session is
+        # depth-only, so absent).
+        assert DETAIL_ALIASES == {
+            "full": RenderingDepth.HOOK,
+            "high": RenderingDepth.TOOL,
+            "low": RenderingDepth.AGENT,
+            "minimal": RenderingDepth.ASSISTANT,
+            "user-only": RenderingDepth.USER,
+        }
 
-    def test_session_is_least_verbose(self) -> None:
-        # SESSION drops everything USER_ONLY drops AND more (it is below it).
-        assert DetailLevel.SESSION.includes(DetailLevel.SESSION)
-        assert not DetailLevel.SESSION.includes(DetailLevel.USER_ONLY)
-        # FULL still includes everything, including the new SESSION.
-        assert DetailLevel.FULL.includes(DetailLevel.SESSION)
+    def test_session_is_shallowest(self) -> None:
+        # SESSION drops everything USER drops AND more (it is below it).
+        assert RenderingDepth.SESSION.includes(RenderingDepth.SESSION)
+        assert not RenderingDepth.SESSION.includes(RenderingDepth.USER)
+        # HOOK (deepest) still includes everything, including SESSION.
+        assert RenderingDepth.HOOK.includes(RenderingDepth.SESSION)
 
 
 # --------------------------------------------------------------------------
-# Suffix: default level is suffix-less; others use the --depth name
+# Suffix: default depth is suffix-less; others use the --depth name
 # --------------------------------------------------------------------------
 class TestDepthSuffix:
-    def test_default_level_has_no_suffix(self) -> None:
-        assert variant_suffix(DetailLevel.HIGH) == ""
+    def test_default_depth_has_no_suffix(self) -> None:
+        assert variant_suffix(RenderingDepth.TOOL) == ""
 
-    def test_non_default_levels_use_depth_names(self) -> None:
-        assert variant_suffix(DetailLevel.FULL) == ".hook"
-        assert variant_suffix(DetailLevel.LOW) == ".agent"
-        assert variant_suffix(DetailLevel.MINIMAL) == ".assistant"
-        assert variant_suffix(DetailLevel.USER_ONLY) == ".user"
-        assert variant_suffix(DetailLevel.SESSION) == ".session"
+    def test_non_default_depths_use_depth_names(self) -> None:
+        assert variant_suffix(RenderingDepth.HOOK) == ".hook"
+        assert variant_suffix(RenderingDepth.AGENT) == ".agent"
+        assert variant_suffix(RenderingDepth.ASSISTANT) == ".assistant"
+        assert variant_suffix(RenderingDepth.USER) == ".user"
+        assert variant_suffix(RenderingDepth.SESSION) == ".session"
 
-    def test_deprecated_detail_names_produce_depth_suffix(self) -> None:
-        # A level selected via legacy --detail gets the SAME (depth) suffix as
-        # via --depth — one canonical name per level.
-        assert variant_suffix("low") == variant_suffix(DetailLevel.LOW) == ".agent"
-        assert variant_suffix("full") == ".hook"
+    def test_string_depth_accepted(self) -> None:
+        # variant_suffix coerces a plain depth-name string (the enum value).
+        assert (
+            variant_suffix("agent")
+            == variant_suffix(RenderingDepth.AGENT)
+            == (".agent")
+        )
+        assert variant_suffix("hook") == ".hook"
 
 
 # --------------------------------------------------------------------------
@@ -212,7 +216,7 @@ class TestSessionDepth:
         html = out.read_text(encoding="utf-8")
         # 'session structure only' — even user prompts are dropped (this is the
         # level below user-only). Mutation-check: reverting the SESSION branch
-        # in _ghost_template_by_detail makes these markers reappear.
+        # in _ghost_template_by_depth makes these markers reappear.
         assert "USER_PROMPT_MARKER" not in html
         assert "ASSISTANT_REPLY_MARKER" not in html
 

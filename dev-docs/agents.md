@@ -111,7 +111,7 @@ identification and tree building. For every Task tool_result whose
   text matches the notification's `result_text`, drops the duplicate
   from the sidechain tree. No-op at LOW (sidechain already gone).
 
-At `DetailLevel.LOW` the format-specific renderers honor the flag
+At `RenderingDepth.AGENT` the format-specific renderers honor the flag
 by **ghosting** the duplicate notification — `format_TaskNotificationMessage`
 and `title_TaskNotificationMessage` (in both `HtmlRenderer` and
 `MarkdownRenderer`) return `""` when `self.detail == LOW and
@@ -125,7 +125,7 @@ card from the visible output. The notification stays in
 `SessionHeaderMessage.parent_message_index`), and session navigation
 anchors all stay valid — no index-remap cascade required.
 
-### 2.4 Detail-level matrix
+### 2.4 Depth matrix
 
 | level     | spawn-fold visible | notification card | answer visible |
 |-----------|--------------------|-------------------|----------------|
@@ -135,9 +135,9 @@ anchors all stay valid — no index-remap cascade required.
 | minimal   | no (Task tool_result filtered) | yes (body kept) | yes (notification body) |
 | user-only | no (Task tool_result filtered) | yes (body kept) | yes (notification body) |
 
-The answer is visible exactly once at every detail level. At
+The answer is visible exactly once at every depth. At
 MINIMAL/USER_ONLY the spawn-fold is skipped (the Task tool_result
-itself is ghosted by `_ghost_template_by_detail`), so the
+itself is ghosted by `_ghost_template_by_depth`), so the
 notification card retains its body as the surviving copy.
 
 ### 2.5 Key files
@@ -177,7 +177,7 @@ The notification's `<result>` matches the last sub-assistant verbatim
 so the Phase 3 fold + dedup fires.
 
 Tests live in `test/test_async_agents.py` (parser unit tests, factory
-dispatch, rendering pipeline assertions, detail-level invariants —
+dispatch, rendering pipeline assertions, depth invariants —
 including the LOW regression guard for the fold).
 
 ## 3. Teammates (#91)
@@ -212,7 +212,7 @@ its `workflow_agent` card.
 
 See [workflows.md](workflows.md) for the full as-built reference
 (on-disk layout, parse model, taskId linkage, splice mechanics,
-detail-level behaviour).
+depth behaviour).
 
 ## 5. Nested agent hierarchies (#213)
 

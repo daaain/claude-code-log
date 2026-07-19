@@ -1,7 +1,7 @@
 """Regression coverage for ``_repair_stale_anchor_refs`` (Phase 2 of the
 ghosting epic).
 
-When ``_ghost_template_by_detail`` sets a fork-point's slot to ``None``,
+When ``_ghost_template_by_depth`` sets a fork-point's slot to ``None``,
 every cached anchor-target reference must be sanitized so no rendered
 ``#msg-d-{N}`` href dangles. Pre-ghost, ``_reindex_filtered_context``
 guaranteed this by remapping or dropping refs to filtered messages;
@@ -20,7 +20,7 @@ from typing import Any
 
 from claude_code_log.converter import load_transcript
 from claude_code_log.html.renderer import HtmlRenderer
-from claude_code_log.models import DetailLevel, SessionHeaderMessage
+from claude_code_log.models import RenderingDepth, SessionHeaderMessage
 from claude_code_log.renderer import generate_template_messages
 
 
@@ -138,13 +138,13 @@ def _fork_fixture(path: Path) -> Path:
 
 
 class TestGhostedForkAnchorBackrefRepair:
-    """Fork-point anchor handling under detail ghosting.
+    """Fork-point anchor handling under depth ghosting.
 
-    Original premise (Phase 2 of the ghosting epic): when the detail
+    Original premise (Phase 2 of the ghosting epic): when the depth
     filter ghosted a fork anchor to ``None``, the branch back-link had
     to be sanitized so its ``#msg-d-{N}`` href didn't dangle.
 
-    Superseded by the #233 follow-up (fork points survive detail
+    Superseded by the #233 follow-up (fork points survive depth
     filtering): a fork anchor whose body is filtered is now KEPT as a
     ``fork_only`` landmark (non-``None``) rather than ghosted, so its
     body is suppressed but the fork-point box stays visible and the
@@ -162,7 +162,7 @@ class TestGhostedForkAnchorBackrefRepair:
         ``fork_only`` landmark — not ghosted — and every branch header's
         back-link resolves to it (a live slot, never a dead ``#msg-d-N``)."""
         messages = load_transcript(_fork_fixture(tmp_path / "fork.jsonl"))
-        _, _, ctx = generate_template_messages(messages, detail=DetailLevel.USER_ONLY)
+        _, _, ctx = generate_template_messages(messages, depth=RenderingDepth.USER)
 
         survivors = [m for m in ctx.messages if m is not None]
 
@@ -242,7 +242,7 @@ class TestHtmlAnchorIntegrity:
         every href targets a live id."""
         messages = load_transcript(_fork_fixture(tmp_path / "fork.jsonl"))
         renderer = HtmlRenderer()
-        renderer.detail = DetailLevel.USER_ONLY
+        renderer.depth = RenderingDepth.USER
         html = renderer.generate(messages, "ghost-repair USER_ONLY")
         self._anchor_invariant(html)
 
@@ -252,15 +252,15 @@ class TestHtmlAnchorIntegrity:
         no-op path of the repair pass)."""
         messages = load_transcript(_fork_fixture(tmp_path / "fork.jsonl"))
         renderer = HtmlRenderer()
-        renderer.detail = DetailLevel.MINIMAL
+        renderer.depth = RenderingDepth.ASSISTANT
         html = renderer.generate(messages, "ghost-repair MINIMAL")
         self._anchor_invariant(html)
 
     def test_no_dead_anchors_at_full(self, tmp_path: Path) -> None:
-        """And at FULL (no detail filter runs at all — guards against
+        """And at FULL (no depth filter runs at all — guards against
         regressions in the non-ghosted pre-render path)."""
         messages = load_transcript(_fork_fixture(tmp_path / "fork.jsonl"))
         renderer = HtmlRenderer()
-        renderer.detail = DetailLevel.FULL
+        renderer.depth = RenderingDepth.HOOK
         html = renderer.generate(messages, "ghost-repair FULL")
         self._anchor_invariant(html)

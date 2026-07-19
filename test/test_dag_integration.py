@@ -1175,8 +1175,8 @@ class TestRenderSessionResetAcrossSessions:
         Pre-D11 the renderer derived ``render_session_id`` from a
         loop-local ``current_render_session`` variable flipped at
         the branch-start trigger (the line whose uuid matched the
-        branch's ``first_uuid``). If ``_filter_by_detail`` dropped
-        that ``first_uuid`` entry at non-FULL detail, the trigger
+        branch's ``first_uuid``). If ``_filter_by_depth`` dropped
+        that ``first_uuid`` entry at non-FULL depth, the trigger
         never fired and subsequent surviving branch entries silently
         inherited a stale render_session_id — landing in the wrong
         session group in the final tree.
@@ -1192,7 +1192,7 @@ class TestRenderSessionResetAcrossSessions:
         - Trunk: ``u`` (user) → ``a`` (assistant, ends in tool_use).
         - Fork at ``a``: two assistant children with ONLY a
           ``tool_use`` content item (no text). Both are dropped by
-          ``_filter_by_detail`` at MINIMAL (strip_types = ThinkingContent,
+          ``_filter_by_depth`` at MINIMAL (strip_types = ThinkingContent,
           ToolUseContent, ToolResultContent → no text_items left).
         - Branch 1 continues: ``c1`` (user, parent ``b1``).
         - Branch 2 continues: ``c2`` (user, parent ``b2``).
@@ -1209,11 +1209,11 @@ class TestRenderSessionResetAcrossSessions:
         ``uuid_to_render_sid[c2]`` is branch2's sid regardless of
         filtering.
         """
-        from claude_code_log.models import DetailLevel
+        from claude_code_log.models import RenderingDepth
         from claude_code_log.renderer import generate_template_messages
 
         # Helper: assistant with ONLY a tool_use content item (no
-        # text). At MINIMAL detail, _filter_by_detail strips
+        # text). At MINIMAL depth, _filter_by_depth strips
         # ToolUseContent and drops the entry entirely (no surviving
         # text_items).
         def _make_assistant_tool_only(
@@ -1286,7 +1286,7 @@ class TestRenderSessionResetAcrossSessions:
         _, _, ctx = generate_template_messages(
             messages,
             session_tree=session_tree,
-            detail=DetailLevel.MINIMAL,
+            depth=RenderingDepth.ASSISTANT,
         )
 
         # b1 and b2 should NOT appear in the rendered messages
@@ -1338,7 +1338,7 @@ class TestRenderSessionResetAcrossSessions:
         """CodeRabbit-flagged regression on the D11 map-driven trigger.
 
         Scenario: every trunk-session entry is filtered out at non-
-        FULL detail (e.g., all the trunk's assistants are tool_use-
+        FULL depth (e.g., all the trunk's assistants are tool_use-
         only and stripped at MINIMAL), so the FIRST surviving
         message processed for that trunk session is a BRANCH
         descendant. Without the trunk-header-before-branch-header
@@ -1379,7 +1379,7 @@ class TestRenderSessionResetAcrossSessions:
         - Every branch header's ``parent_message_index`` points to
           a registered message (NOT ``None``).
         """
-        from claude_code_log.models import DetailLevel, SessionHeaderMessage
+        from claude_code_log.models import RenderingDepth, SessionHeaderMessage
         from claude_code_log.renderer import generate_template_messages
 
         def _make_assistant_tool_only(
@@ -1440,7 +1440,7 @@ class TestRenderSessionResetAcrossSessions:
         _, _, ctx = generate_template_messages(
             messages,
             session_tree=session_tree,
-            detail=DetailLevel.MINIMAL,
+            depth=RenderingDepth.ASSISTANT,
         )
 
         # Collect every session header in encounter order.

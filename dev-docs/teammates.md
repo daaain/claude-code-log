@@ -829,10 +829,10 @@ trilogy. Not part of #91 but adjacent / discovered work:
 
 Async task agents (#90) are now supported — see
 [`agents.md` § 2](agents.md#2-async-task-agents-90) for the as-built
-flow (typed models, parsers, the spawn-fold pipeline, detail-level
+flow (typed models, parsers, the spawn-fold pipeline, depth
 matrix). The notification's `<result>` body folds onto
 `TaskOutput.async_final_answer` of the spawning Task tool_result so
-the answer renders at the spawn site, with detail-level-aware drop
+the answer renders at the spawn site, with depth-aware drop
 of the standalone notification card at LOW.
 
 Standard sync sub-agents (#79) share the same `agentId:` /
@@ -846,9 +846,9 @@ to use the fallback path (the current
 bare-text bodies, but hasn't been validated against real #79
 transcripts).
 
-### 10.2 Detail-level interaction
+### 10.2 Depth interaction
 
-The detail-level filter (`--detail high|low|minimal|user-only`) drops
+The depth filter (`--detail high|low|minimal|user-only`) drops
 tool_use/tool_result content at LOW and below by default, but the
 `_LOW_KEEP_TOOLS` whitelist in `renderer.py` exempts the spawn pair so
 teammate work survives a LOW rendering:
