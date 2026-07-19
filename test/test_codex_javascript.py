@@ -54,6 +54,53 @@ def test_analyzer_resolves_constant_shorthand_tool_input() -> None:
     assert batch.result_indexes == [0]
 
 
+def test_analyzer_materializes_static_promise_delay_before_tool_call() -> None:
+    batch = analyze_javascript_tools(
+        """
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        const r = await tools.mcp__clmail__communicate({
+          action: "list",
+          actor: "/workspace/codex",
+          params: {status: "unread"}
+        });
+        text(JSON.stringify(r));
+        """
+    )
+
+    assert batch is not None
+    assert [(call.name, call.input) for call in batch.calls] == [
+        ("wait", {"delay_ms": 5000}),
+        (
+            "mcp__clmail__communicate",
+            {
+                "action": "list",
+                "actor": "/workspace/codex",
+                "params": {"status": "unread"},
+            },
+        ),
+    ]
+    assert batch.result_indexes == [-1, 0]
+    assert batch.synthetic_results == ("Waited 5000 ms", None)
+    assert batch.output_count == 1
+
+
+def test_analyzer_rejects_dynamic_or_mismatched_promise_delay() -> None:
+    tail = 'const r = await tools.exec_command({cmd: "status"}); text(r.output);'
+
+    assert (
+        analyze_javascript_tools(
+            "await new Promise(resolve => setTimeout(resolve, delay));" + tail
+        )
+        is None
+    )
+    assert (
+        analyze_javascript_tools(
+            "await new Promise(resolve => setTimeout(done, 5000));" + tail
+        )
+        is None
+    )
+
+
 def test_analyzer_unrolls_static_for_of_tool_calls() -> None:
     batch = analyze_javascript_tools(
         """

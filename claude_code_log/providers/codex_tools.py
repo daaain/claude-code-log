@@ -31,6 +31,8 @@ class AdaptedToolBatch:
     result_indexes: list[int]
     session_markers: bool = False
     result_prefixes: tuple[Optional[str], ...] = ()
+    synthetic_results: tuple[Optional[str], ...] = ()
+    output_count: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -81,6 +83,8 @@ def adapt_codex_tool_batch(source: str) -> Optional[AdaptedToolBatch]:
                 analyzed.result_indexes,
                 analyzed.session_markers,
                 analyzed.result_prefixes,
+                analyzed.synthetic_results,
+                analyzed.output_count,
             )
     return None
 

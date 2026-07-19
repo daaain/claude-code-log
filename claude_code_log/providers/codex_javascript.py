@@ -53,6 +53,8 @@ class JavaScriptToolBatch:
     output_mode: Literal["markers", "ordered"] = "ordered"
     session_markers: bool = False
     result_prefixes: tuple[Optional[str], ...] = ()
+    synthetic_results: tuple[Optional[str], ...] = ()
+    output_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -136,6 +138,7 @@ class _StaticEvaluator:
         self.max_loop_iterations = max_loop_iterations
         self.max_expanded_calls = max_expanded_calls
         self.calls: list[JavaScriptToolCall] = []
+        self.synthetic_results: list[Optional[str]] = []
         self.emissions: list[int] = []
         self.emission_prefixes: list[Optional[str]] = []
         self.loop_iterations = 0
@@ -156,8 +159,12 @@ class _StaticEvaluator:
                 self.output_mode,
                 self.session_markers,
                 tuple(self.emission_prefixes),
+                tuple(self.synthetic_results),
+                len(self.emissions),
             )
-        if len(self.calls) != len(self.emissions):
+        if len(self.calls) != len(self.emissions) + sum(
+            result is not None for result in self.synthetic_results
+        ):
             return None
 
         result_indexes = [-1] * len(self.calls)
@@ -165,7 +172,10 @@ class _StaticEvaluator:
             if result_indexes[call_index] != -1:
                 return None
             result_indexes[call_index] = output_index
-        if -1 in result_indexes:
+        if any(
+            result_index == -1 and synthetic is None
+            for result_index, synthetic in zip(result_indexes, self.synthetic_results)
+        ):
             return None
         return JavaScriptToolBatch(
             self.calls,
@@ -173,6 +183,8 @@ class _StaticEvaluator:
             self.output_mode,
             self.session_markers,
             tuple(self.emission_prefixes),
+            tuple(self.synthetic_results),
+            len(self.emissions),
         )
 
     def _statements(self, statements: list[Node], environment: _Environment) -> bool:
@@ -184,9 +196,11 @@ class _StaticEvaluator:
                     return False
                 continue
             if statement.type == "expression_statement":
-                if not self._emission(
-                    statement, environment
-                ) and not self._collection_for_each(statement, environment):
+                if (
+                    not self._delay(statement)
+                    and not self._emission(statement, environment)
+                    and not self._collection_for_each(statement, environment)
+                ):
                     return False
                 continue
             if statement.type == "for_in_statement":
@@ -199,6 +213,62 @@ class _StaticEvaluator:
                 self.session_markers = True
                 continue
             return False
+        return True
+
+    def _delay(self, statement: Node) -> bool:
+        """Recognize Codex's static Promise/setTimeout delay wrapper."""
+        expressions = statement.named_children
+        if len(expressions) != 1 or expressions[0].type != "await_expression":
+            return False
+        awaited = expressions[0].named_children
+        if len(awaited) != 1 or awaited[0].type != "new_expression":
+            return False
+        promise = awaited[0]
+        constructor = promise.child_by_field_name("constructor")
+        arguments = promise.child_by_field_name("arguments")
+        if (
+            constructor is None
+            or constructor.type != "identifier"
+            or self.syntax.text(constructor) != "Promise"
+            or arguments is None
+            or len(arguments.named_children) != 1
+        ):
+            return False
+        callback = arguments.named_children[0]
+        parameter = callback.child_by_field_name("parameter")
+        body = callback.child_by_field_name("body")
+        if (
+            callback.type != "arrow_function"
+            or parameter is None
+            or parameter.type != "identifier"
+            or body is None
+            or body.type != "call_expression"
+        ):
+            return False
+        function = body.child_by_field_name("function")
+        timeout_arguments = body.child_by_field_name("arguments")
+        if (
+            function is None
+            or function.type != "identifier"
+            or self.syntax.text(function) != "setTimeout"
+            or timeout_arguments is None
+            or len(timeout_arguments.named_children) != 2
+        ):
+            return False
+        resolve, delay_node = timeout_arguments.named_children
+        delay = self._constant(delay_node, {})
+        valid = (
+            resolve.type == "identifier"
+            and self.syntax.text(resolve) == self.syntax.text(parameter)
+            and isinstance(delay, (int, float))
+            and not isinstance(delay, bool)
+            and delay >= 0
+            and delay != float("inf")
+        )
+        if not valid:
+            return False
+        self.calls.append(JavaScriptToolCall("wait", {"delay_ms": delay}))
+        self.synthetic_results.append(f"Waited {delay} ms")
         return True
 
     def _declaration(self, node: Node, environment: _Environment) -> bool:
@@ -287,6 +357,7 @@ class _StaticEvaluator:
             return None
         call_index = len(self.calls)
         self.calls.append(call)
+        self.synthetic_results.append(None)
         return _ToolResult(call_index)
 
     def _tool_call(
@@ -351,6 +422,7 @@ class _StaticEvaluator:
                 return False
             result = _ToolResult(len(self.calls))
             self.calls.append(tool_call)
+            self.synthetic_results.append(None)
         else:
             result = self._result_reference(argument, environment)
         if result is None:
@@ -480,6 +552,7 @@ class _StaticEvaluator:
                 return None
             results.append(_ToolResult(len(self.calls)))
             self.calls.append(call)
+            self.synthetic_results.append(None)
         return _Collection(tuple(results))
 
     def _is_json_stringify(self, node: Node) -> bool:

@@ -1173,6 +1173,8 @@ class CodexProvider(BaseProvider):
                 list[int],
                 bool,
                 tuple[Optional[str], ...],
+                tuple[Optional[str], ...],
+                Optional[int],
             ],
         ] = {}
         outputs: dict[str, tuple[list[dict[str, Any]], str]] = {}
@@ -1195,6 +1197,8 @@ class CodexProvider(BaseProvider):
                             batch.result_indexes,
                             batch.session_markers,
                             batch.result_prefixes,
+                            batch.synthetic_results,
+                            batch.output_count,
                         )
             elif payload_type in {
                 "function_call_output",
@@ -1216,6 +1220,8 @@ class CodexProvider(BaseProvider):
             result_indexes,
             session_markers,
             result_prefixes,
+            synthetic_results,
+            output_count,
         ) in requests.items():
             output = outputs.get(call_id)
             if output is None:
@@ -1223,11 +1229,17 @@ class CodexProvider(BaseProvider):
             if session_markers and self._contains_session_marker(output[0]):
                 continue
             split = self._batch_outputs(
-                output[0], output_mode, len(calls), result_prefixes
+                output[0],
+                output_mode,
+                output_count if output_count is not None else len(calls),
+                result_prefixes,
             )
             if split is None:
                 continue
-            results = [split[index] for index in result_indexes]
+            results = [
+                synthetic if synthetic is not None else split[result_indexes[index]]
+                for index, synthetic in enumerate(synthetic_results)
+            ]
             batches[call_id] = _ToolBatch(
                 calls=calls,
                 results=results,

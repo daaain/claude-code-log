@@ -591,6 +591,46 @@ def test_direct_nested_tool_result_matches_native_tool_result_shape(
     assert results[0].is_error is False
 
 
+def test_static_delay_before_nested_tool_becomes_wait_then_tool() -> None:
+    payload = {"messages": [{"id": 4812}]}
+    source = """
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        const r = await tools.mcp__clmail__communicate({
+          action: "list", actor: "/workspace/codex", params: {status: "unread"}
+        });
+        text(JSON.stringify(r));
+    """
+    records = [
+        _record(
+            1,
+            "response_item",
+            {
+                "type": "custom_tool_call",
+                "call_id": "exec",
+                "name": "exec",
+                "input": source,
+            },
+        ),
+        _output(2, "exec", _forwarded_result_envelope(payload)),
+    ]
+
+    content = [item for entry in _normalized(records) for item in entry.message.content]
+    uses = [item for item in content if isinstance(item, ToolUseContent)]
+    results = [item for item in content if isinstance(item, ToolResultContent)]
+
+    assert [item.name for item in uses] == ["wait", "mcp__clmail__communicate"]
+    assert uses[0].input == {"delay_ms": 5000}
+    assert uses[1].input == {
+        "action": "list",
+        "actor": "/workspace/codex",
+        "params": {"status": "unread"},
+    }
+    assert [item.content for item in results] == [
+        "Waited 5000 ms",
+        json.dumps(payload),
+    ]
+
+
 def test_direct_nested_tool_result_propagates_mcp_error() -> None:
     source = (
         'const result = await tools.mcp__clmail__communicate({action: "send"}); '
