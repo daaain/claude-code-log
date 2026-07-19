@@ -87,7 +87,7 @@ CLI orchestration delegates to `converter.py` (which owns the
 high-level "load + render + write" flow) and never touches `renderer.py`
 directly. Output paths follow a stable convention so the cache and
 re-renders can find existing files: `combined_transcripts.html`,
-`session-{id}.html`, `index.html`, with `--detail` and `--compact`
+`session-{id}.html`, `index.html`, with `--depth` and `--compact`
 adding suffixes per `utils.variant_suffix`.
 
 For the all-projects invocation, `process_projects_hierarchy` runs in
@@ -193,7 +193,7 @@ swap.
 [`claude_code_log/json/`](../claude_code_log/json/) is a thin renderer
 that mirrors `HtmlRenderer` / `MarkdownRenderer`: same
 `generate(...)` / `generate_session(...)` / `generate_projects_index(...)`
-surface, same `--detail` and `--compact` honoring. Output is a
+surface, same `--depth` and `--compact` honoring. Output is a
 structured JSON document — top-level `version` / `title` / `detail` /
 `compact` / `sessions` / `messages` keys; each node carries
 `index` / `type` / `title` / `timestamp` / `session_id` / `content`,
@@ -492,7 +492,7 @@ Terms that appear across multiple subsystems — defined once here.
 - **depth**: see § 2.6.
 
 - **detail-aware tools**: the curated set of tools whose I/O survives
-  `--detail low` because they convey *what the agent did*, not *what
+  `--depth agent` because they convey *what the agent did*, not *what
   it read* (`WebSearch`, `WebFetch`, `Task`, `Agent`).
 
 - **passthrough**: a `PassthroughTranscriptEntry` is a non-conversation

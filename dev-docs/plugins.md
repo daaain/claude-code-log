@@ -439,7 +439,7 @@ class's built-in renderer behaviour to take over.
 
 ## 6. `depth_visibility`
 
-`claude-code-log` filters messages per the `--detail` flag. Levels
+`claude-code-log` filters messages per the `--depth` flag. Levels
 in order of decreasing verbosity:
 
 ```

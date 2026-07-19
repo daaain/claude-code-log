@@ -848,10 +848,11 @@ transcripts).
 
 ### 10.2 Depth interaction
 
-The depth filter (`--detail high|low|minimal|user-only`) drops
-tool_use/tool_result content at AGENT and below by default, but the
-`_LOW_KEEP_TOOLS` whitelist in `renderer.py` exempts the spawn pair so
-teammate work survives a AGENT rendering:
+The depth filter (`--depth agent` and shallower; the deprecated
+`--detail low|minimal|user-only`) drops tool_use/tool_result content at
+AGENT and below by default, but the `_LOW_KEEP_TOOLS` whitelist in
+`renderer.py` exempts the spawn pair so teammate work survives an AGENT
+rendering:
 
 ```python
 _LOW_KEEP_TOOLS = {"WebSearch", "WebFetch", "Task", "Agent"}
