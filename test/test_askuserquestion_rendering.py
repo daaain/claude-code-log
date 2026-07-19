@@ -161,7 +161,7 @@ class TestAskUserQuestionRendering:
         ask_input = AskUserQuestionInput(
             questions=[
                 AskUserQuestionItem(
-                    question="Please describe the issue in depth.",
+                    question="Please describe the issue in detail.",
                     header="Issue",
                 )
             ]
@@ -170,7 +170,7 @@ class TestAskUserQuestionRendering:
         html = format_askuserquestion_input(ask_input)
 
         # Should render without options list
-        assert "Please describe the issue in depth." in html
+        assert "Please describe the issue in detail." in html
         assert "Issue" in html
         # Should not have options-related elements
         assert "question-options" not in html

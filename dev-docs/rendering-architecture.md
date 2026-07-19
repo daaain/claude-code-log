@@ -230,7 +230,7 @@ In code order, `generate_template_messages`:
    computed in step 3 by `_build_branch_header` scanning the
    branch's DAG-line uuids; there's no separate back-fill pass.
 5. **Post-render detail filter** — `_ghost_template_by_depth` (only
-   below FULL): sets non-visible slots to `None` in place (no reindex),
+   below HOOK): sets non-visible slots to `None` in place (no reindex),
    then calls `_repair_stale_anchor_refs`.
 6. **Nav + structure** — `prepare_session_navigation`, then
    `_reorder_session_template_messages`, `_identify_message_pairs`

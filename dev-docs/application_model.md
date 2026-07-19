@@ -247,15 +247,15 @@ hierarchy to render — `session > user > assistant > agent > tool > hook`
 via `models.DEPTH_TO_DETAIL`:
 
 - `hook` (= `RenderingDepth.HOOK`) — everything, incl. hooks + system notices.
-- `tool` (= `HIGH`, **default**, `DEFAULT_DEPTH`) — detailed but
+- `tool` (= `TOOL`, **default**, `DEFAULT_DEPTH`) — detailed but
   cleaned: drops system/hook noise while keeping the full conversation
   and tool I/O.
-- `agent` (= `LOW`) — drops most tool I/O, keeps the conversation plus a
+- `agent` (= `AGENT`) — drops most tool I/O, keeps the conversation plus a
   curated set of "interaction signal" tools (WebSearch, WebFetch, Task,
   Agent — the ones that show *what the agent did*, not *what it read*).
   See `_LOW_KEEP_TOOLS` in [`renderer.py`](../claude_code_log/renderer.py).
-- `assistant` (= `MINIMAL`) — drops all tool I/O (user + assistant only).
-- `user` (= `USER_ONLY`) — drops everything except user messages and
+- `assistant` (= `ASSISTANT`) — drops all tool I/O (user + assistant only).
+- `user` (= `USER`) — drops everything except user messages and
   steering (for feeding downstream agents, e.g. a requirements doc).
 - `session` (= `SESSION`, depth-only, no `--detail` spelling) — session
   structure only: session/branch headers + fork landmarks, every message
@@ -267,13 +267,13 @@ via `models.DEPTH_TO_DETAIL`:
 The legacy `--detail full|high|low|minimal|user-only` is kept as a
 deprecated alias (removed in 2.0) and maps to the same `RenderingDepth`s.
 Filenames use a single canonical suffix per level — the `--depth` name
-(`.hook/.agent/.assistant/.user/.session`), with the default `tool`/HIGH
+(`.hook/.agent/.assistant/.user/.session`), with the default `tool`/TOOL
 suffix-less — regardless of which option selected it (so `--detail low`
 and `--depth agent` share the `.agent` file). See `utils.variant_suffix`.
 
 Recaps (`AwaySummaryMessage`) are a cross-cutting exception: they are a
 high-level summary of activity, so they stay visible at *every* content
-level (`depth_visibility = USER_ONLY`), including `user`. The `--no-recaps`
+level (`depth_visibility = USER`), including `user`. The `--no-recaps`
 flag suppresses them at all levels — giving `--depth user --no-recaps`
 for a truly user-only view, or `--depth assistant --no-recaps` to drop the
 recap/agent redundancy (#179).
@@ -282,7 +282,7 @@ Filtering happens in a single *post-render* pass on `TemplateMessage`:
 `_ghost_template_by_depth` sets each non-visible slot in
 `RenderingContext.messages` to `None` ("ghosting"), keyed by the content
 class's `depth_visibility` predicate (plus the `_LOW_KEEP_TOOLS`
-allowlist at `low` and sidechain dropping below `FULL`). Indices stay
+allowlist at `low` and sidechain dropping below `HOOK`). Indices stay
 stable — surviving messages keep their `message_index`, so there is no
 reindex; the rendered tree simply skips ghost slots. Earlier revisions
 ran a *second*, pre-render `_filter_by_depth` pass on `TranscriptEntry`

@@ -128,7 +128,7 @@ class ProjectCache(BaseModel):
 # ========== Helper Functions ==========
 
 
-# Lone HIGH surrogates (U+D800–U+DBFF) are not in surrogateescape's
+# Lone TOOL surrogates (U+D800–U+DBFF) are not in surrogateescape's
 # back-mapping range (which only covers low surrogates U+DC80–U+DCFF
 # produced from raw byte decoding), so the surrogateescape-encode step
 # in scrub_surrogates would raise on them. Pre-substitute high

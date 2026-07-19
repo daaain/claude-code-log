@@ -1,6 +1,6 @@
 """Codex CLI rollout session provider.
 
-The rollout format is an implementation depth of Codex rather than a stable
+The rollout format is an implementation detail of Codex rather than a stable
 file-format API.  Parsing here is deliberately tolerant: the provider keeps
 the raw-record decoder small, ignores unknown records, and normalizes only
 shapes for which it has useful semantics.

@@ -443,7 +443,7 @@ class's built-in renderer behaviour to take over.
 in order of decreasing verbosity:
 
 ```
-FULL > HIGH > LOW > MINIMAL > USER_ONLY
+HOOK > TOOL > AGENT > ASSISTANT > USER
 ```
 
 Your plugin class declares a `ClassVar[RenderingDepth]` to opt into
@@ -459,11 +459,11 @@ minimum. With the ordering above:
 
 | Declared | Visible at |
 |---|---|
-| `FULL` | `FULL` only |
-| `HIGH` | `FULL`, `HIGH` |
-| `LOW` | `FULL`, `HIGH`, `LOW` |
-| `MINIMAL` | `FULL`, `HIGH`, `LOW`, `MINIMAL` |
-| `USER_ONLY` | all levels |
+| `HOOK` | `HOOK` only |
+| `TOOL` | `HOOK`, `TOOL` |
+| `AGENT` | `HOOK`, `TOOL`, `AGENT` |
+| `ASSISTANT` | `HOOK`, `TOOL`, `AGENT`, `ASSISTANT` |
+| `USER` | all levels |
 
 The order is pinned in a `_DEPTH_ORDER` map next to `RenderingDepth` in
 `models.py` (so a future reorder of the enum can't silently flip
@@ -473,8 +473,8 @@ content class as `MessageContent.visible_at(detail)` and consults the
 class-side `depth_visibility` ClassVar via `RenderingDepth.includes`.
 
 **Opt-in nature.** Most built-in `MessageContent` classes declare their
-own `depth_visibility` (e.g. `ToolUseMessage = LOW`, `SystemMessage =
-FULL`), and a plugin class subclassing such a built-in inherits the
+own `depth_visibility` (e.g. `ToolUseMessage = AGENT`, `SystemMessage =
+HOOK`), and a plugin class subclassing such a built-in inherits the
 parent's threshold through normal ClassVar inheritance unless it
 declares its own. A handful of built-ins (`UserTextMessage`,
 `TeammateMessage`, `TaskNotificationMessage`, `SessionHeaderMessage`)
@@ -490,31 +490,31 @@ visibility is authoritative.
 
 **Practical guide.** Pick based on user-perceived value:
 
-- `FULL` only — debug/dev signal that clutters normal viewing.
-- `HIGH` — interesting but optional; user has opted into detail.
-- `LOW` — should appear in the default summary view (the typical
+- `HOOK` only — debug/dev signal that clutters normal viewing.
+- `TOOL` — interesting but optional; user has opted into detail.
+- `AGENT` — should appear in the default summary view (the typical
   choice for tool-rendering plugins; bypasses the `_LOW_KEEP_TOOLS`
   allowlist that core would otherwise check).
-- `MINIMAL` — essential context (sparingly).
-- `USER_ONLY` — visible even in user-only views (almost never the
+- `ASSISTANT` — essential context (sparingly).
+- `USER` — visible even in user-only views (almost never the
   right choice for a tool/hook plugin; reserved for user-originated
   content).
 
-**`HIGH` vs `FULL` for hook-style content** — the two reference
+**`TOOL` vs `HOOK` for hook-style content** — the two reference
 plugins make different choices here, deliberately:
 
-- `hook_demotion.py` (this repo's test plugin) uses `FULL` —
+- `hook_demotion.py` (this repo's test plugin) uses `HOOK` —
   surfaces only in the most-verbose view. Right when the hook
   notification is pure noise reduction for typical reviewers.
 - A real-world plugin (e.g. for clmail-style hook notifications a
-  reviewer wants to *see when they fired*) typically picks `HIGH`
-  — surfaces in `HIGH` *and* `FULL`, hidden at `LOW` and below.
+  reviewer wants to *see when they fired*) typically picks `TOOL`
+  — surfaces in `TOOL` *and* `HOOK`, hidden at `AGENT` and below.
   Right when the hook firing itself is signal worth keeping in the
   detail view.
 
-The rule of thumb: ask "would a reviewer skimming at `HIGH` want
-to know this happened?" If yes, pick `HIGH`. If only at the
-debug-the-transcript level, pick `FULL`.
+The rule of thumb: ask "would a reviewer skimming at `TOOL` want
+to know this happened?" If yes, pick `TOOL`. If only at the
+debug-the-transcript level, pick `HOOK`.
 
 ---
 
@@ -713,11 +713,11 @@ modifies plugins (including injecting directly via
 `_cached_transformers`) must `reset_cache()` afterward — process-wide
 state otherwise leaks across tests.
 
-**`depth_visibility` is checked via `hasattr` for the LOW keep-list
+**`depth_visibility` is checked via `hasattr` for the AGENT keep-list
 opt-out.** This means inheriting `depth_visibility` from a future
 core-migrated parent class behaves the same as declaring it
 yourself: the keep-list is bypassed. Usually what you want; mention
-it if you're debugging a "why is my plugin visible at LOW even though
+it if you're debugging a "why is my plugin visible at AGENT even though
 the tool isn't in `_LOW_KEEP_TOOLS`?" question.
 
 **Markdown-shaped HTML and the `.markdown` CSS scope.** The

@@ -120,8 +120,8 @@ def format_hook_attachment_content(content: HookAttachmentMessage) -> str:
 
     Surfaces the hook command, exit code, duration and any
     stdout/stderr/blocking-error text. Folded by default; visible only
-    at full depth (post-render filter drops HookAttachmentMessage at
-    HIGH and below alongside HookSummaryMessage).
+    at HOOK depth (post-render filter drops HookAttachmentMessage at
+    TOOL and below alongside HookSummaryMessage).
 
     Args:
         content: HookAttachmentMessage with parsed hook payload.

@@ -361,7 +361,7 @@ def load_transcript(
                     ]:
                         # Parse using Pydantic models. ``attachment`` joined
                         # this list in #128 so the hook payload survives to
-                        # the rendering layer at full depth (was a
+                        # the rendering layer at HOOK depth (was a
                         # PassthroughTranscriptEntry before, which threw
                         # the payload away at parse time).
                         entry = create_transcript_entry(entry_dict)
@@ -1242,7 +1242,7 @@ def _get_page_html_path(page_number: int, variant_suffix: str = "") -> str:
 def _variant_label_from_suffix(suffix: str) -> str:
     """Human-readable label for a filename suffix (e.g. '.agent.compact')."""
     if not suffix:
-        # The empty suffix is the default level — tool/HIGH since #159, NOT
+        # The empty suffix is the default level — tool/TOOL since #159, NOT
         # full (which is now the ``.hook`` variant).
         return "Tool"
     parts = [p for p in suffix.split(".") if p]
@@ -1840,7 +1840,7 @@ def convert_jsonl_to_html(
     """Convert JSONL transcript(s) to HTML file(s).
 
     Convenience wrapper around convert_jsonl_to() for HTML format. The
-    ``depth`` default matches the CLI (``DEFAULT_DEPTH`` == HIGH /
+    ``depth`` default matches the CLI (``DEFAULT_DEPTH`` == TOOL /
     ``--depth tool``); pass ``RenderingDepth.HOOK`` to render everything.
     """
     return convert_jsonl_to(

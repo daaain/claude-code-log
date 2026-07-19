@@ -833,7 +833,7 @@ flow (typed models, parsers, the spawn-fold pipeline, depth
 matrix). The notification's `<result>` body folds onto
 `TaskOutput.async_final_answer` of the spawning Task tool_result so
 the answer renders at the spawn site, with depth-aware drop
-of the standalone notification card at LOW.
+of the standalone notification card at AGENT.
 
 Standard sync sub-agents (#79) share the same `agentId:` /
 `<usage>` metadata-tail shape that `parse_agent_result_metadata`
@@ -849,9 +849,9 @@ transcripts).
 ### 10.2 Depth interaction
 
 The depth filter (`--detail high|low|minimal|user-only`) drops
-tool_use/tool_result content at LOW and below by default, but the
+tool_use/tool_result content at AGENT and below by default, but the
 `_LOW_KEEP_TOOLS` whitelist in `renderer.py` exempts the spawn pair so
-teammate work survives a LOW rendering:
+teammate work survives a AGENT rendering:
 
 ```python
 _LOW_KEEP_TOOLS = {"WebSearch", "WebFetch", "Task", "Agent"}
@@ -862,15 +862,15 @@ the tool factory as `"Agent": TaskInput`); both names need to be
 whitelisted because real Claude Code teammate transcripts emit `Agent`
 rather than `Task`. With this in place:
 
-- The Agent / Task tool_use card stays visible at LOW.
+- The Agent / Task tool_use card stays visible at AGENT.
 - The matching tool_result card stays too, so the agent's response and
   `agent_metadata` (`agent_id`, `worktree_path`, usage, etc.) survive.
 - Subagent sidechain content (the "rest of the conversation" inside
-  the agent thread) is still filtered out at LOW by the broader
+  the agent thread) is still filtered out at AGENT by the broader
   `is_sidechain` rule — that's the intended trade-off; the
   spawn-and-result pair is enough to scan.
-- MINIMAL still strips everything except user/assistant text; the
-  `Agent` whitelist applies to LOW only.
+- ASSISTANT still strips everything except user/assistant text; the
+  `Agent` whitelist applies to AGENT only.
 
 Regression coverage for both halves of the contract:
 `TestExperimentsWorktreesTeammates::test_low_detail_preserves_agent_spawns`

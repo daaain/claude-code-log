@@ -674,7 +674,7 @@ Plumbing:
   verbatim).
 
 The label degrades gracefully whenever any step is missing — no
-`parent_uuid`, parent filtered out (e.g. at `HIGH` depth), parent
+`parent_uuid`, parent filtered out (e.g. at `TOOL` depth), parent
 isn't a `SystemMessage`, or `compact_pre_tokens` is None/zero — by
 dropping the `(Nk tokens)` fragment while still appending the summary's
 own timestamp. Older transcripts without `compactMetadata` get

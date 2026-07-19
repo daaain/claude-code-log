@@ -199,7 +199,7 @@ on non-workflow rendering would be high). Key mechanics:
   re-registered into the main ctx (fresh monotonic indices), tagged
   `in_workflow_sidechannel`, and its pairing references
   (`pair_first`/`pair_middle`/`pair_last`) remapped into the new index
-  space. The side-channel renders at FULL detail regardless of the main
+  space. The side-channel renders at HOOK detail regardless of the main
   render's level (see § 7).
 - **Side-channel user prompts** (`format_workflow_sidechannel_user_content`
   in `html/user_formatters.py`, gated on the graft tag): these prompts
@@ -290,9 +290,9 @@ The splice only materialises at `full` / `high`: the Workflow tool_use
 is dropped at `low` (it's not in `_LOW_KEEP_TOOLS`) and below, taking
 the attach point with it. Within a spliced tree, the agents'
 side-channel transcripts are rendered by a nested
-`generate_template_messages(entries)` call at **default FULL detail**
+`generate_template_messages(entries)` call at **default HOOK detail**
 regardless of the main render's level — at `--detail high` an agent's
-side-channel may therefore still show FULL-only content (system/hook
+side-channel may therefore still show HOOK-only content (system/hook
 entries). Accepted behaviour: the side-channel is an opt-in deep-dive
 under a fold.
 
