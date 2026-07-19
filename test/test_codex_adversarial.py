@@ -328,9 +328,20 @@ def test_async_bash_folds_wait_and_write_stdin_across_ignored_records() -> None:
             },
         ),
         _record(5, "response_item", {"type": "reasoning", "summary": []}),
-        _call(6, "wait", "wait", '{"cell_id":"14"}'),
-        _output(
+        _record(6, "inter_agent_communication_metadata", {"trigger_turn": False}),
+        _record(
             7,
+            "response_item",
+            {
+                "type": "agent_message",
+                "author": "/root/researcher",
+                "recipient": "/root",
+                "content": [{"type": "input_text", "text": "Internal result"}],
+            },
+        ),
+        _call(8, "wait", "wait", '{"cell_id":"14"}'),
+        _output(
+            9,
             "wait",
             _command_envelope(
                 output="bringing up nodes... [98%]\n",
@@ -338,10 +349,10 @@ def test_async_bash_folds_wait_and_write_stdin_across_ignored_records() -> None:
                 wall_time_seconds=30.0,
             ),
         ),
-        _record(8, "event_msg", {"type": "token_count"}),
-        _record(9, "response_item", {"type": "reasoning", "summary": []}),
+        _record(10, "event_msg", {"type": "token_count"}),
+        _record(11, "response_item", {"type": "reasoning", "summary": []}),
         _record(
-            10,
+            12,
             "response_item",
             {
                 "type": "custom_tool_call",
@@ -351,7 +362,7 @@ def test_async_bash_folds_wait_and_write_stdin_across_ignored_records() -> None:
             },
         ),
         _output(
-            11,
+            13,
             "write",
             _command_envelope(
                 output="2335 passed, 7 skipped\n",
@@ -661,7 +672,10 @@ def test_static_delay_before_nested_tool_becomes_wait_then_tool() -> None:
     ]
 
 
-def test_static_delay_nested_tool_coalesces_outer_cell_wait() -> None:
+@pytest.mark.parametrize("mcp_event_before_wait", [True, False])
+def test_static_delay_nested_tool_coalesces_outer_cell_wait(
+    mcp_event_before_wait: bool,
+) -> None:
     payload = {"thread_id": 4743, "messages": [{"id": 4743}], "count": 1}
     source = """
         await new Promise(resolve => setTimeout(resolve, 20000));
@@ -670,7 +684,7 @@ def test_static_delay_nested_tool_coalesces_outer_cell_wait() -> None:
         });
         text(JSON.stringify(r));
     """
-    records = [
+    start = [
         _record(
             1,
             "response_item",
@@ -687,16 +701,25 @@ def test_static_delay_nested_tool_coalesces_outer_cell_wait() -> None:
             "Script running with cell ID 13\nWall time 10.0 seconds\nOutput:\n",
         ),
         _record(3, "event_msg", {"type": "token_count"}),
-        _call(4, "poll", "wait", '{"cell_id":"13","yield_time_ms":15000}'),
-        _record(
-            5,
-            "event_msg",
-            {
-                "type": "mcp_tool_call_end",
-                "call_id": "exec-inner-mcp",
-                "result": {"Ok": {"structuredContent": payload}},
-            },
-        ),
+    ]
+    mcp_event = _record(
+        4 if mcp_event_before_wait else 5,
+        "event_msg",
+        {
+            "type": "mcp_tool_call_end",
+            "call_id": "exec-inner-mcp",
+            "result": {"Ok": {"structuredContent": payload}},
+        },
+    )
+    wait = _call(
+        5 if mcp_event_before_wait else 4,
+        "poll",
+        "wait",
+        '{"cell_id":"13","yield_time_ms":15000}',
+    )
+    records = [
+        *start,
+        *([mcp_event, wait] if mcp_event_before_wait else [wait, mcp_event]),
         _output(6, "poll", _forwarded_result_envelope(payload)),
     ]
 

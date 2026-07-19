@@ -624,7 +624,9 @@ class CodexProvider(BaseProvider):
                 or wait[1].name != "wait"
                 or str(wait[1].input.get("cell_id")) != match.group(1)
                 or not self._is_call_output(records[wait_result_index], wait[0])
-                or not self._only_invisible_between(records, result_index, wait_index)
+                or not self._only_exec_wrapper_interstitials(
+                    records, result_index, wait_index
+                )
                 or not self._only_exec_wrapper_interstitials(
                     records, wait_index, wait_result_index
                 )
@@ -1064,7 +1066,7 @@ class CodexProvider(BaseProvider):
 
     def _is_ignorable_command_interstitial(self, record: _DecodedRecord) -> bool:
         """Whether a non-tool record may sit inside one command poll chain."""
-        if record.kind == "session_meta":
+        if record.kind in {"session_meta", "inter_agent_communication_metadata"}:
             return True
         if record.kind == "event_msg":
             # Token accounting is emitted after nearly every model/tool step.
@@ -1075,6 +1077,11 @@ class CodexProvider(BaseProvider):
             return False
 
         payload_type = record.payload.get("type")
+        if payload_type == "agent_message":
+            # Internal collaboration delivery is paired with
+            # inter_agent_communication_metadata and is not a visible
+            # assistant response. It may arrive while a cell keeps running.
+            return True
         if payload_type == "reasoning":
             return not self._reasoning_summary(record.payload)
         if payload_type == "message":
