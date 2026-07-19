@@ -5,6 +5,8 @@ import pytest
 from claude_code_log.factories.tool_factory import create_tool_input, create_tool_output
 from claude_code_log.models import (
     BashInput,
+    DeleteInput,
+    DeleteOutput,
     EditInput,
     SendMessageInput,
     TaskInput,
@@ -66,7 +68,7 @@ def test_direct_single_add_patch_reuses_write_renderer() -> None:
     assert isinstance(create_tool_input(call.name, call.input), WriteInput)
 
 
-def test_delete_patch_without_body_has_visible_deletion() -> None:
+def test_delete_patch_without_body_reuses_delete_renderer() -> None:
     patch = "*** Begin Patch\n*** Delete File: obsolete.txt\n*** End Patch"
     source = (
         f"const patch = {__import__('json').dumps(patch)}; "
@@ -75,10 +77,25 @@ def test_delete_patch_without_body_has_visible_deletion() -> None:
 
     call = adapt_codex_tool_call("exec", {"raw": source}, raw_input=source)
 
-    assert call.name == "Edit"
-    assert call.input["file_path"] == "obsolete.txt"
-    assert call.input["old_string"] == "[deleted file]\n"
-    assert call.input["new_string"] == ""
+    assert call.name == "Delete"
+    assert call.input == {"file_path": "obsolete.txt"}
+    assert isinstance(create_tool_input(call.name, call.input), DeleteInput)
+
+
+def test_delete_result_keeps_first_transport_status_line() -> None:
+    result = ToolResultContent(
+        type="tool_result",
+        tool_use_id="delete",
+        content="Script completed\nWall time: 0.6 seconds\nOutput:\n",
+    )
+
+    output = create_tool_output("Delete", result, "/tmp/obsolete.txt")
+
+    assert output == DeleteOutput(
+        file_path="/tmp/obsolete.txt",
+        success=True,
+        message="Script completed",
+    )
 
 
 def test_multi_file_patch_reuses_multiedit_renderer() -> None:
@@ -105,7 +122,7 @@ def test_multi_file_patch_reuses_multiedit_renderer() -> None:
     }
 
 
-def test_mixed_patch_batch_splits_writes_without_reordering_edits() -> None:
+def test_mixed_patch_batch_splits_file_operations_without_reordering() -> None:
     patch = (
         "*** Begin Patch\n"
         "*** Update File: first.txt\n@@\n-old\n+new\n"
@@ -122,26 +139,26 @@ def test_mixed_patch_batch_splits_writes_without_reordering_edits() -> None:
     batch = adapt_codex_tool_batch(source)
 
     assert batch is not None
-    assert batch.result_indexes == [0, 0, 0]
-    assert [call.name for call in batch.calls] == ["MultiEdit", "Write", "Edit"]
+    assert batch.result_indexes == [0, 0, 0, 0]
+    assert [call.name for call in batch.calls] == [
+        "Edit",
+        "Delete",
+        "Write",
+        "Edit",
+    ]
     assert [call.input["file_path"] for call in batch.calls] == [
-        "2 files",
+        "first.txt",
+        "obsolete.txt",
         "created.txt",
         "last.txt",
     ]
-    assert batch.calls[0].input["edits"] == [
-        {
-            "file_path": "first.txt",
-            "old_string": "old\n",
-            "new_string": "new\n",
-        },
-        {
-            "file_path": "obsolete.txt",
-            "old_string": "[deleted file]\n",
-            "new_string": "",
-        },
-    ]
-    assert batch.calls[1].input["content"] == "created\n"
+    assert batch.calls[0].input == {
+        "file_path": "first.txt",
+        "old_string": "old\n",
+        "new_string": "new\n",
+    }
+    assert batch.calls[1].input == {"file_path": "obsolete.txt"}
+    assert batch.calls[2].input["content"] == "created\n"
 
 
 def test_single_mcp_call_keeps_name_for_plugin_transformers() -> None:
@@ -530,7 +547,7 @@ def test_codex_todo_success_result_hides_exec_transport() -> None:
     assert output.content == "Todo list updated."
 
 
-@pytest.mark.parametrize("tool_name", ["Write", "Edit", "MultiEdit"])
+@pytest.mark.parametrize("tool_name", ["Write", "Delete", "Edit", "MultiEdit"])
 def test_codex_file_success_result_keeps_exec_status(tool_name: str) -> None:
     content = [
         {
@@ -547,7 +564,7 @@ def test_codex_file_success_result_keeps_exec_status(tool_name: str) -> None:
     assert normalized == "Script completed\nWall time: 0.0 seconds\nOutput:\n"
 
 
-@pytest.mark.parametrize("tool_name", ["Write", "Edit", "MultiEdit"])
+@pytest.mark.parametrize("tool_name", ["Write", "Delete", "Edit", "MultiEdit"])
 def test_codex_bare_empty_patch_result_is_not_rewritten(tool_name: str) -> None:
     normalized, _ = CodexProvider()._adapt_tool_result(
         "{}", tool_name=tool_name, is_error=False

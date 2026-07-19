@@ -31,6 +31,7 @@ JSONL Parsing (parser.py)
 │   │   └── Plain user text
 │   ├── ToolResultContent → ToolResultMessage with output:
 │   │   ├── ReadOutput (cat-n formatted file content)
+│   │   ├── WriteOutput / DeleteOutput (status acknowledgment)
 │   │   ├── EditOutput (cat-n formatted edit result)
 │   │   └── ToolResultContent (generic fallback)
 │   └── ImageContent → Image messages
@@ -39,7 +40,7 @@ JSONL Parsing (parser.py)
 │   ├── TextContent → AssistantTextMessage
 │   ├── ThinkingContent → ThinkingMessage
 │   └── ToolUseContent → ToolUseMessage with parsed inputs:
-│       ├── ReadInput, WriteInput, EditInput, MultiEditInput
+│       ├── ReadInput, WriteInput, DeleteInput, EditInput, MultiEditInput
 │       ├── BashInput, GlobInput, GrepInput
 │       ├── TaskInput, TodoWriteInput, AskUserQuestionInput
 │       └── ExitPlanModeInput
@@ -509,12 +510,13 @@ class ToolResultMessage(MessageContent):
     output: ToolOutput  # Specialized output or ToolResultContent fallback
     is_error: bool = False
     tool_name: Optional[str] = None   # Name of the tool
-    file_path: Optional[str] = None   # File path for Read/Edit/Write
+    file_path: Optional[str] = None   # File path for Read/Write/Delete/Edit
 
 # ToolOutput is a union type for tool results
 ToolOutput = Union[
     ReadOutput,
     WriteOutput,
+    DeleteOutput,
     EditOutput,
     BashOutput,
     TaskOutput,
@@ -627,7 +629,7 @@ class ToolUseMessage(MessageContent):
 
 # ToolInput is a union of typed input models
 ToolInput = Union[
-    BashInput, ReadInput, WriteInput, EditInput, MultiEditInput,
+    BashInput, ReadInput, WriteInput, DeleteInput, EditInput, MultiEditInput,
     GlobInput, GrepInput, TaskInput, TodoWriteInput,
     AskUserQuestionInput, ExitPlanModeInput,
     ToolUseContent,  # Generic fallback when no specialized parser

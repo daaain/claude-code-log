@@ -39,6 +39,7 @@ from ..models import (
     AskUserQuestionInput,
     AskUserQuestionItem,
     BashInput,
+    DeleteInput,
     EditInput,
     ExitPlanModeInput,
     GlobInput,
@@ -75,6 +76,7 @@ from ..models import (
     # Tool output types
     AskUserQuestionOutput,
     BashOutput,
+    DeleteOutput,
     EditOutput,
     ExitPlanModeOutput,
     ReadOutput,
@@ -157,6 +159,8 @@ from .tool_formatters import (
     format_askuserquestion_output,
     format_bash_input,
     format_bash_output,
+    format_delete_input,
+    format_delete_output,
     format_edit_input,
     format_edit_output,
     format_exitplanmode_input,
@@ -631,6 +635,10 @@ class HtmlRenderer(Renderer):
         """Format → file path + syntax-highlighted content preview."""
         return format_write_input(input)
 
+    def format_DeleteInput(self, input: DeleteInput, _: TemplateMessage) -> str:
+        """Format → empty body; the path is shown in the title."""
+        return format_delete_input(input)
+
     def format_EditInput(self, input: EditInput, _: TemplateMessage) -> str:
         """Format → file path + diff of old_string/new_string."""
         return format_edit_input(input)
@@ -752,6 +760,10 @@ class HtmlRenderer(Renderer):
     def format_WriteOutput(self, output: WriteOutput, _: TemplateMessage) -> str:
         """Format → status message (e.g. 'Wrote 42 bytes')."""
         return format_write_output(output)
+
+    def format_DeleteOutput(self, output: DeleteOutput, _: TemplateMessage) -> str:
+        """Format → deletion status message."""
+        return format_delete_output(output)
 
     def format_EditOutput(self, output: EditOutput, _: TemplateMessage) -> str:
         """Format → status message (e.g. 'Applied edit')."""
@@ -1148,6 +1160,10 @@ class HtmlRenderer(Renderer):
                 message, "🧠", f"memory {memory_short_path(input.file_path)}"
             )
         return self._tool_title(message, "📝", input.file_path)
+
+    def title_DeleteInput(self, input: DeleteInput, message: TemplateMessage) -> str:
+        """Title → '🗑️ Delete <file_path>'."""
+        return self._tool_title(message, "🗑️", input.file_path)
 
     def title_ReadInput(self, input: ReadInput, message: TemplateMessage) -> str:
         """Title → '📄 Read <file_path>[, lines N-M]', or

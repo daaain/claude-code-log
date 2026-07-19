@@ -1264,6 +1264,12 @@ class WriteInput(BaseModel):
     content: str
 
 
+class DeleteInput(BaseModel):
+    """Input parameters for the Delete tool."""
+
+    file_path: str
+
+
 class EditInput(BaseModel):
     """Input parameters for the Edit tool."""
 
@@ -1678,6 +1684,7 @@ ToolInput = Union[
     BashInput,
     ReadInput,
     WriteInput,
+    DeleteInput,
     EditInput,
     MultiEditInput,
     GlobInput,
@@ -1743,6 +1750,15 @@ class WriteOutput:
     file_path: str
     success: bool
     message: str  # First line acknowledgment (truncated from full output)
+
+
+@dataclass
+class DeleteOutput:
+    """Parsed Delete tool output, symmetric with DeleteInput."""
+
+    file_path: str
+    success: bool
+    message: str
 
 
 @dataclass
@@ -2212,6 +2228,7 @@ class TaskStopOutput:
 ToolOutput = Union[
     ReadOutput,
     WriteOutput,
+    DeleteOutput,
     EditOutput,
     BashOutput,
     TaskOutput,

@@ -913,6 +913,57 @@ def test_mixed_apply_patch_becomes_write_and_edit_result_pairs() -> None:
     ]
 
 
+def test_delete_add_relocation_becomes_ordered_delete_write_pairs() -> None:
+    patch = (
+        "*** Begin Patch\n"
+        "*** Delete File: /tmp/plugin/hooks.json\n"
+        '*** Add File: /tmp/plugin/hooks/hooks.json\n+{"hooks": {}}\n'
+        "*** End Patch"
+    )
+    source = f"const patch = {json.dumps(patch)}; text(await tools.apply_patch(patch));"
+    records = [
+        _record(
+            1,
+            "response_item",
+            {
+                "type": "custom_tool_call",
+                "call_id": "relocate",
+                "name": "exec",
+                "input": source,
+            },
+        ),
+        _output(
+            2,
+            "relocate",
+            [
+                {"type": "input_text", "text": "Script completed\nOutput:\n"},
+                {"type": "input_text", "text": "{}"},
+            ],
+        ),
+    ]
+
+    content = [item for entry in _normalized(records) for item in entry.message.content]
+    uses = [item for item in content if isinstance(item, ToolUseContent)]
+    results = [item for item in content if isinstance(item, ToolResultContent)]
+
+    assert [item.name for item in uses] == ["Delete", "Write"]
+    assert [item.input for item in uses] == [
+        {"file_path": "/tmp/plugin/hooks.json"},
+        {
+            "file_path": "/tmp/plugin/hooks/hooks.json",
+            "content": '{"hooks": {}}\n',
+        },
+    ]
+    assert [item.tool_use_id for item in results] == [
+        "relocate:batch:0",
+        "relocate:batch:1",
+    ]
+    assert [item.content for item in results] == [
+        "Script completed\nOutput:\n",
+        "Script completed\nOutput:\n",
+    ]
+
+
 def test_destructured_mixed_promise_batch_preserves_call_and_result_order() -> None:
     source = """
         const [pr, auth, refs] = await Promise.all([

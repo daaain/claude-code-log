@@ -1288,7 +1288,7 @@ class CodexProvider(BaseProvider):
             if status is not None:
                 results = [
                     status
-                    if call.name in {"Write", "Edit", "MultiEdit"}
+                    if call.name in {"Write", "Delete", "Edit", "MultiEdit"}
                     and result.strip() == "{}"
                     else result
                     for call, result in zip(calls, results)
@@ -1888,7 +1888,7 @@ class CodexProvider(BaseProvider):
                 output = document
         if (
             not is_error
-            and tool_name in {"Write", "Edit", "MultiEdit"}
+            and tool_name in {"Write", "Delete", "Edit", "MultiEdit"}
             and isinstance(output, list)
         ):
             status = self._empty_result_status(output)

@@ -484,16 +484,18 @@ def _canonicalize_patch(patch: str) -> Optional[AdaptedToolCall]:
         operation, edit = operations[0]
         if operation == "Add":
             return _write_call(edit)
+        if operation == "Delete":
+            return _delete_call(edit)
         return AdaptedToolCall("Edit", edit)
     return _multiedit_call([edit for _, edit in operations])
 
 
 def _expand_patch(patch: str) -> Optional[list[AdaptedToolCall]]:
-    """Split Add operations from a mixed patch without changing its order."""
+    """Split Add/Delete operations from edits without changing patch order."""
     operations = _patch_operations(patch)
     if operations is None:
         return None
-    if not any(operation == "Add" for operation, _ in operations):
+    if not any(operation in {"Add", "Delete"} for operation, _ in operations):
         canonical = _canonicalize_patch(patch)
         return [canonical] if canonical is not None else None
 
@@ -511,6 +513,9 @@ def _expand_patch(patch: str) -> Optional[list[AdaptedToolCall]]:
         if operation == "Add":
             flush_edits()
             expanded.append(_write_call(edit))
+        elif operation == "Delete":
+            flush_edits()
+            expanded.append(_delete_call(edit))
         else:
             edits.append(edit)
     flush_edits()
@@ -557,6 +562,10 @@ def _write_call(edit: dict[str, str]) -> AdaptedToolCall:
     )
 
 
+def _delete_call(edit: dict[str, str]) -> AdaptedToolCall:
+    return AdaptedToolCall("Delete", {"file_path": edit["file_path"]})
+
+
 def _multiedit_call(edits: list[dict[str, str]]) -> AdaptedToolCall:
     return AdaptedToolCall(
         "MultiEdit",
@@ -579,9 +588,7 @@ def _patch_edit(operation: str, path: str, body: list[str]) -> Optional[dict[str
     elif operation == "Delete":
         if body and any(not line.startswith("-") for line in body):
             return None
-        old_string = (
-            _patch_text([line[1:] for line in body]) if body else "[deleted file]\n"
-        )
+        old_string = _patch_text([line[1:] for line in body]) if body else ""
         new_string = ""
     else:
         old_lines: list[str] = []

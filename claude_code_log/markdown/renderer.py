@@ -54,6 +54,7 @@ from ..models import (
     # Tool input types
     AskUserQuestionInput,
     BashInput,
+    DeleteInput,
     EditInput,
     ExitPlanModeInput,
     GlobInput,
@@ -93,6 +94,7 @@ from ..models import (
     # Tool output types
     AskUserQuestionOutput,
     BashOutput,
+    DeleteOutput,
     EditOutput,
     ExitPlanModeOutput,
     GlobOutput,
@@ -1063,6 +1065,10 @@ class MarkdownRenderer(Renderer):
         content = self._code_fence(input.content, self._lang_from_path(input.file_path))
         return self._collapsible(summary, content)
 
+    def format_DeleteInput(self, _input: DeleteInput, _: TemplateMessage) -> str:
+        """The deleted path is already carried by the title."""
+        return ""
+
     def format_EditInput(self, input: EditInput, _: TemplateMessage) -> str:
         """Format → '```diff\\n...\\n```'."""
         # Diff is visible; result goes in collapsible in format_EditOutput
@@ -1579,6 +1585,10 @@ class MarkdownRenderer(Renderer):
         """Format → '✓ Wrote N bytes'."""
         return f"✓ {output.message}"
 
+    def format_DeleteOutput(self, output: DeleteOutput, _: TemplateMessage) -> str:
+        """Format → deletion status line."""
+        return f"✓ {output.message}"
+
     def format_EditOutput(self, output: EditOutput, _: TemplateMessage) -> str:
         """Format → collapsible with result or '✓ Edited'."""
         if msg := output.message:
@@ -1946,6 +1956,10 @@ class MarkdownRenderer(Renderer):
         if is_memory_path(input.file_path):
             return f"🧠 Write memory `{memory_short_path(input.file_path)}`"
         return f"✍️  Write `{Path(input.file_path).name}`"
+
+    def title_DeleteInput(self, input: DeleteInput, _: TemplateMessage) -> str:
+        """Title → '🗑️ Delete `filename`'."""
+        return f"🗑️ Delete `{Path(input.file_path).name}`"
 
     def title_EditInput(self, input: EditInput, _: TemplateMessage) -> str:
         """Title → '✏️  Edit `filename`', or '🧠 Edit memory `short-path`' for

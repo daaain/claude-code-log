@@ -43,6 +43,8 @@ from ..models import (
     AskUserQuestionOutput,
     BashInput,
     BashOutput,
+    DeleteInput,
+    DeleteOutput,
     EditInput,
     EditOutput,
     CronCreateInput,
@@ -491,6 +493,11 @@ def format_write_output(output: WriteOutput) -> str:
     return f"<pre>{escaped_message} ...</pre>"
 
 
+def format_delete_output(output: DeleteOutput) -> str:
+    """Format a Delete tool result as its status line."""
+    return f"<pre>{escape_html(output.message)}</pre>"
+
+
 def format_bash_output(output: BashOutput) -> str:
     """Format Bash tool result as HTML with ANSI color support.
 
@@ -706,6 +713,11 @@ def format_write_input(write_input: WriteInput) -> str:
     return render_file_content_collapsible(
         write_input.content, write_input.file_path, "write-tool-content"
     )
+
+
+def format_delete_input(_delete_input: DeleteInput) -> str:
+    """The deleted path is already carried by the tool title."""
+    return ""
 
 
 # -- Edit Tools (Edit/Multiedit) ----------------------------------------------
@@ -1790,6 +1802,7 @@ __all__ = [
     "format_todowrite_input",
     "format_read_input",
     "format_write_input",
+    "format_delete_input",
     "format_edit_input",
     "format_multiedit_input",
     "format_bash_input",
@@ -1811,6 +1824,7 @@ __all__ = [
     # Tool output formatters (called by HtmlRenderer.format_{OutputClass})
     "format_read_output",
     "format_write_output",
+    "format_delete_output",
     "format_edit_output",
     "format_bash_output",
     "format_task_output",

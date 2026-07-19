@@ -170,7 +170,7 @@ Legend:
 | `plan` | Partial | Observed `update_plan` calls become `TodoWrite`; a native plan item shape is not decoded. |
 | `reasoning` | Direct | Readable summaries render as thinking; encrypted reasoning is deliberately never inspected or emitted. |
 | `commandExecution` | Adapted | `exec_command` becomes `Bash`; terminal `wait`/`write_stdin` polling and parallel marker sessions are coalesced when correlation is complete. |
-| `fileChange` | Partial | Static `apply_patch` Add operations become `Write`; adjacent Delete/Update runs become `Edit`/`MultiEdit`, preserving patch order. Moves, dynamic patches, and ambiguous programs remain `Workflow`. |
+| `fileChange` | Partial | Static `apply_patch` Add/Delete operations become `Write`/`Delete`; adjacent Update runs become `Edit`/`MultiEdit`, preserving patch order. Moves, dynamic patches, and ambiguous programs remain `Workflow`. |
 | `mcpToolCall` | Adapted | Exact MCP names and forwarded result envelopes are preserved, allowing plugins such as ClMail to apply the same transformation as for Claude Code. Codex OpenAI Developer Docs fetches receive a built-in document renderer. |
 | `dynamicToolCall` | Partial | Direct open-ended calls render generically; statically analyzable `exec` wrappers expand, while dynamic JavaScript remains `Workflow`. |
 | `collabAgentToolCall` | Partial | Observed spawn/message/list function calls reuse `Task`, `SendMessage`, and `TaskList`; the native public item shape is not decoded directly. |
@@ -196,7 +196,7 @@ factories.
 | Codex call | Canonical rendering | Coverage and fallback |
 | :--- | :--- | :--- |
 | `exec_command` | `Bash` | Typed input/output; approval justification becomes the description. Completed async polling chains fold into the originating Bash pair. |
-| `apply_patch` | `Write` / `Edit` / `MultiEdit` | Lossless Adds become individual `Write` pairs; adjacent static Delete/Update runs reuse the edit renderers. One aggregate result is correlated to every derived pair. Otherwise `Workflow`. |
+| `apply_patch` | `Write` / `Delete` / `Edit` / `MultiEdit` | Lossless Adds and Deletes become individual `Write` and `Delete` pairs; adjacent static Updates reuse the edit renderers. One aggregate result is correlated to every derived pair. Otherwise `Workflow`. |
 | `update_plan` | `TodoWrite` | Typed input; a successful empty transport becomes `Todo list updated.` |
 | `spawn_agent` | `Task` | Typed input/output; opaque transport payloads are redacted on both specialized and Workflow paths. |
 | `send_message`, `followup_task` | `SendMessage` | Typed input/output with target and follow-up semantics retained. |

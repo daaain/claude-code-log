@@ -15,7 +15,7 @@
 - Visible user/assistant messages, reasoning summaries, environment context,
   user shell records, local image inlining, and adjacent duplicate handling.
 - Provider-local tool/result transport normalization with typed Bash, Write,
-  Edit, MultiEdit, TodoWrite, Task, SendMessage, TaskList, WebSearch, and
+  Delete, Edit, MultiEdit, TodoWrite, Task, SendMessage, TaskList, WebSearch, and
   WebFetch reuse; OpenAI Developer Docs fetches render through a Codex-only
   built-in plugin, while open-ended MCP/plugin names remain transformable by
   external plugins.
