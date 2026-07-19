@@ -828,7 +828,10 @@ def test_mixed_apply_patch_becomes_write_and_edit_result_pairs() -> None:
         "patch:batch:0",
         "patch:batch:1",
     ]
-    assert [item.content for item in results] == ["{}", "{}"]
+    assert [item.content for item in results] == [
+        "Script completed\nOutput:\n",
+        "Script completed\nOutput:\n",
+    ]
 
 
 def test_destructured_mixed_promise_batch_preserves_call_and_result_order() -> None:

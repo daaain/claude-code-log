@@ -1240,6 +1240,15 @@ class CodexProvider(BaseProvider):
                 synthetic if synthetic is not None else split[result_indexes[index]]
                 for index, synthetic in enumerate(synthetic_results)
             ]
+            status = self._empty_result_status(output[0])
+            if status is not None:
+                results = [
+                    status
+                    if call.name in {"Write", "Edit", "MultiEdit"}
+                    and result.strip() == "{}"
+                    else result
+                    for call, result in zip(calls, results)
+                ]
             batches[call_id] = _ToolBatch(
                 calls=calls,
                 results=results,
@@ -1814,14 +1823,12 @@ class CodexProvider(BaseProvider):
                 output = acknowledgement
         if (
             not is_error
-            and tool_name in {"Edit", "MultiEdit"}
+            and tool_name in {"Write", "Edit", "MultiEdit"}
             and isinstance(output, list)
         ):
-            acknowledgement = self._empty_result_acknowledgement(
-                output, "File updated successfully."
-            )
-            if acknowledgement is not None:
-                output = acknowledgement
+            status = self._empty_result_status(output)
+            if status is not None:
+                output = status
         if not is_error and tool_name == "TaskList" and isinstance(output, str):
             task_list = self._list_agents_output(output)
             if task_list is not None:
@@ -1895,6 +1902,9 @@ class CodexProvider(BaseProvider):
     def _empty_result_acknowledgement(
         self, items: list[dict[str, Any]], acknowledgement: str
     ) -> Optional[str]:
+        return acknowledgement if self._empty_result_status(items) is not None else None
+
+    def _empty_result_status(self, items: list[dict[str, Any]]) -> Optional[str]:
         texts: list[str] = []
         for item in items:
             if item.get("type") not in {"input_text", "output_text", "text"}:
@@ -1911,7 +1921,7 @@ class CodexProvider(BaseProvider):
             except (ValueError, RecursionError):
                 continue
             if decoded == {}:
-                return acknowledgement
+                return texts[0]
         return None
 
     def _command_output(self, items: list[dict[str, Any]]) -> Optional[str]:

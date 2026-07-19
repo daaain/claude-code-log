@@ -484,8 +484,8 @@ def test_codex_todo_success_result_hides_exec_transport() -> None:
     assert output.content == "Todo list updated."
 
 
-@pytest.mark.parametrize("tool_name", ["Edit", "MultiEdit"])
-def test_codex_edit_success_result_hides_exec_transport(tool_name: str) -> None:
+@pytest.mark.parametrize("tool_name", ["Write", "Edit", "MultiEdit"])
+def test_codex_file_success_result_keeps_exec_status(tool_name: str) -> None:
     content = [
         {
             "type": "input_text",
@@ -498,7 +498,16 @@ def test_codex_edit_success_result_hides_exec_transport(tool_name: str) -> None:
         content, tool_name=tool_name, is_error=False
     )
 
-    assert normalized == "File updated successfully."
+    assert normalized == "Script completed\nWall time: 0.0 seconds\nOutput:\n"
+
+
+@pytest.mark.parametrize("tool_name", ["Write", "Edit", "MultiEdit"])
+def test_codex_bare_empty_patch_result_is_not_rewritten(tool_name: str) -> None:
+    normalized, _ = CodexProvider()._adapt_tool_result(
+        "{}", tool_name=tool_name, is_error=False
+    )
+
+    assert normalized == "{}"
 
 
 def test_unfamiliar_todo_result_stays_generic() -> None:
@@ -522,3 +531,11 @@ def test_codex_todo_error_transport_is_not_collapsed() -> None:
         content, tool_name="TodoWrite", is_error=True
     )
     assert normalized == content
+
+
+def test_codex_write_error_result_is_not_collapsed() -> None:
+    normalized, _ = CodexProvider()._adapt_tool_result(
+        "{}", tool_name="Write", is_error=True
+    )
+
+    assert normalized == "{}"
