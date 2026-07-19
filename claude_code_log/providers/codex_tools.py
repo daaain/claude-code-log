@@ -4,7 +4,7 @@ Codex persists many calls inside a ``custom_tool_call`` named ``exec`` whose
 input is a small JavaScript orchestration program.  This module unwraps static
 ``tools.<name>({...})`` invocations with JSON-compatible object literals when
 their emitted outputs can be correlated unambiguously.  Dynamic programs
-remain visible as ``Workflow`` tools, and anything unknown retains its original
+remain visible as ``ToolExecution`` tools, and anything unknown retains its original
 name and input for the generic renderer.
 """
 
@@ -68,7 +68,7 @@ def adapt_codex_tool_call(
         if analyzed is not None and len(analyzed.calls) == 1:
             call = analyzed.calls[0]
             return _canonicalize(call.name, call.input)
-        return _workflow(raw_input)
+        return _tool_execution(raw_input)
     return _canonicalize(name, input_data)
 
 
@@ -130,16 +130,16 @@ def adapt_codex_tool_call_legacy(
     if name == "exec" and isinstance(raw_input, str):
         calls = _find_static_tool_calls(raw_input)
         if len(calls) != 1:
-            return _workflow(raw_input)
+            return _tool_execution(raw_input)
         if calls[0].name == "apply_patch":
             patch = _decode_apply_patch_exec(raw_input, calls[0])
             adapted = _canonicalize_patch(patch) if patch is not None else None
-            return adapted if adapted is not None else _workflow(raw_input)
+            return adapted if adapted is not None else _tool_execution(raw_input)
         if not _is_simple_result_forwarder(raw_input, calls[0]):
-            return _workflow(raw_input)
+            return _tool_execution(raw_input)
         decoded = _decode_object_literal(calls[0].argument)
         if decoded is None:
-            return _workflow(raw_input)
+            return _tool_execution(raw_input)
         return _canonicalize(calls[0].name, decoded)
     return _canonicalize(name, input_data)
 
@@ -334,8 +334,8 @@ def _is_result_expression(expression: str, result_name: str) -> bool:
     )
 
 
-def _workflow(source: str) -> AdaptedToolCall:
-    return AdaptedToolCall("Workflow", {"script": _scrub_opaque_literals(source)})
+def _tool_execution(source: str) -> AdaptedToolCall:
+    return AdaptedToolCall("ToolExecution", {"script": _scrub_opaque_literals(source)})
 
 
 def _canonicalize(name: str, input_data: dict[str, Any]) -> AdaptedToolCall:

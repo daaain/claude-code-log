@@ -19,13 +19,14 @@
   WebFetch reuse; OpenAI Developer Docs fetches render through a Codex-only
   built-in plugin, while open-ended MCP/plugin names remain transformable by
   external plugins.
-- Conservative async folding for outer code-mode cells and sequential or
-  ordered and parallel command `wait`/`write_stdin` continuations.
+- Conservative async folding for outer code-mode cells and ordered or parallel
+  command `wait`/`write_stdin` continuations.
 - Tree-sitter-only bounded JavaScript analysis for static calls, batches,
   constants/templates/joins, loops/destructuring, delays, provenance, and
   truncated prefixed output, including projection of aggregated static result
-  objects back to their source calls. Unsupported programs remain Workflow;
-  the legacy recognizer is not a production fallback.
+  objects back to their source calls, plus static-array `map` batches with
+  spread result envelopes. Unsupported programs remain `ToolExecution`; the
+  legacy recognizer is not a production fallback.
 - Cross-provider contracts, adversarial correlation/privacy tests, a sanitized
   schema corpus, and real provider-to-HTML/Markdown export tests.
 

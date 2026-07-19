@@ -57,6 +57,7 @@ from ..models import (
     TeamDeleteInput,
     TodoWriteInput,
     ToolUseContent,
+    ToolExecutionInput,
     SkillInput,
     WebSearchInput,
     ArtifactInput,
@@ -90,6 +91,7 @@ from ..models import (
     TeamCreateOutput,
     TeamDeleteOutput,
     ToolResultContent,
+    ToolExecutionOutput,
     WebSearchOutput,
     ArtifactOutput,
     WebFetchOutput,
@@ -174,6 +176,8 @@ from .tool_formatters import (
     format_taskstop_output,
     format_todowrite_input,
     format_tool_result_content_raw,
+    format_tool_execution_input,
+    format_tool_execution_output,
     format_grep_input,
     format_websearch_input,
     format_websearch_output,
@@ -864,6 +868,24 @@ class HtmlRenderer(Renderer):
     ) -> str:
         """Format → meta header (name/description/phases) + highlighted JS script."""
         return format_workflow_input(input)
+
+    def format_ToolExecutionInput(
+        self, input: ToolExecutionInput, _: TemplateMessage
+    ) -> str:
+        """Format opaque Codex JavaScript as an execution snippet."""
+        return format_tool_execution_input(input)
+
+    def format_ToolExecutionOutput(
+        self, output: ToolExecutionOutput, _: TemplateMessage
+    ) -> str:
+        """Format execution status and labelled result emissions."""
+        return format_tool_execution_output(output)
+
+    def title_ToolExecutionInput(
+        self, _input: ToolExecutionInput, message: TemplateMessage
+    ) -> str:
+        """Title → code-oriented execution, distinct from Workflow."""
+        return self._tool_title(message, "⚙️")
 
     def format_WebFetchOutput(self, output: WebFetchOutput, _: TemplateMessage) -> str:
         """Format → collapsible markdown with metadata badge."""

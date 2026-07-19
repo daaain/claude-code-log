@@ -1320,8 +1320,11 @@ class CodexProvider(BaseProvider):
             return None
         if not isinstance(decoded, dict) or key not in decoded:
             return None
+        value = cast(dict[str, Any], decoded)[key]
+        if isinstance(value, str):
+            return value
         try:
-            return json.dumps(decoded[key], ensure_ascii=False)
+            return json.dumps(value, ensure_ascii=False)
         except (TypeError, ValueError):
             return None
 
@@ -1596,7 +1599,7 @@ class CodexProvider(BaseProvider):
             raw_output = payload.get("output", "")
             forwarded = (
                 None
-                if tool_name == "Workflow"
+                if tool_name in {"Workflow", "ToolExecution"}
                 else self._forwarded_tool_result(raw_output)
             )
             if forwarded is not None:

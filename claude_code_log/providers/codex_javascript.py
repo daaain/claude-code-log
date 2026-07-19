@@ -67,6 +67,7 @@ class _Constant:
 class _ToolResult:
     call_index: int
     path: tuple[str, ...] = ()
+    object_key: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -441,7 +442,7 @@ class _StaticEvaluator:
             result = self._result_reference(argument, environment)
         if result is None:
             return False
-        self.emission_groups.append(((result, None),))
+        self.emission_groups.append(((result, result.object_key),))
         self.emission_prefixes.append(
             self._result_prefix(argument, environment, result)
         )
@@ -538,7 +539,9 @@ class _StaticEvaluator:
             if result is None or property_node.type != "property_identifier":
                 return None
             return _ToolResult(
-                result.call_index, result.path + (self.syntax.text(property_node),)
+                result.call_index,
+                result.path + (self.syntax.text(property_node),),
+                result.object_key,
             )
         if node.type == "call_expression" and self._is_json_stringify(node):
             arguments = node.child_by_field_name("arguments")
@@ -596,12 +599,14 @@ class _StaticEvaluator:
             or self.syntax.text(property_node) != "all"
         ):
             return None
-        array = arguments.named_children[0]
-        if array.type != "array":
+        source = arguments.named_children[0]
+        if source.type == "call_expression":
+            return self._promise_all_map(source, environment)
+        if source.type != "array":
             return None
 
         results: list[_ToolResult] = []
-        for element in array.named_children:
+        for element in source.named_children:
             if len(self.calls) >= self.max_expanded_calls:
                 return None
             call = self._tool_call(element, environment)
@@ -611,6 +616,125 @@ class _StaticEvaluator:
             self.calls.append(call)
             self.synthetic_results.append(None)
         return _Collection(tuple(results))
+
+    def _promise_all_map(
+        self, node: Node, environment: _Environment
+    ) -> Optional[_Collection]:
+        """Expand ``Promise.all(staticArray.map(async (...) => ...))``."""
+        function = node.child_by_field_name("function")
+        arguments = node.child_by_field_name("arguments")
+        if (
+            function is None
+            or function.type != "member_expression"
+            or arguments is None
+            or len(arguments.named_children) != 1
+        ):
+            return None
+        owner = function.child_by_field_name("object")
+        property_node = function.child_by_field_name("property")
+        if (
+            owner is None
+            or owner.type != "identifier"
+            or property_node is None
+            or property_node.type != "property_identifier"
+            or self.syntax.text(property_node) != "map"
+        ):
+            return None
+        collection = environment.get(self.syntax.text(owner))
+        if not isinstance(collection, _Constant) or not isinstance(
+            collection.value, list
+        ):
+            return None
+        values = cast(
+            list[Any],
+            collection.value,  # pyright: ignore[reportUnknownMemberType]
+        )
+        arrow = arguments.named_children[0]
+        parameters = arrow.child_by_field_name("parameters")
+        body = arrow.child_by_field_name("body")
+        if (
+            arrow.type != "arrow_function"
+            or parameters is None
+            or len(parameters.named_children) != 1
+            or body is None
+            or body.type != "statement_block"
+            or len(body.named_children) != 2
+        ):
+            return None
+        parameter = parameters.named_children[0]
+        declaration, return_statement = body.named_children
+        if (
+            parameter.type not in {"identifier", "array_pattern"}
+            or declaration.type != "lexical_declaration"
+            or return_statement.type != "return_statement"
+            or len(return_statement.named_children) != 1
+        ):
+            return None
+        if self.loop_iterations + len(values) > self.max_loop_iterations:
+            return None
+
+        self.loop_iterations += len(values)
+        results: list[_ToolResult] = []
+        for value in values:
+            if len(self.calls) >= self.max_expanded_calls:
+                return None
+            iteration_environment = dict(environment)
+            if not self._bind_declaration(
+                parameter, _Constant(value), iteration_environment
+            ):
+                return None
+            call_count = len(self.calls)
+            if not self._declaration(declaration, iteration_environment):
+                return None
+            result = self._spread_result_object(
+                return_statement.named_children[0], iteration_environment
+            )
+            if (
+                result is None
+                or len(self.calls) != call_count + 1
+                or result.call_index != call_count
+                or self.calls[result.call_index].name != "exec_command"
+            ):
+                return None
+            results.append(result)
+        return _Collection(tuple(results))
+
+    def _spread_result_object(
+        self, node: Node, environment: _Environment
+    ) -> Optional[_ToolResult]:
+        """Resolve a static metadata object containing one ``...toolResult``."""
+        if node.type != "object":
+            return None
+        result: Optional[_ToolResult] = None
+        keys: set[str] = set()
+        for child in node.named_children:
+            if child.type == "spread_element":
+                if result is not None or len(child.named_children) != 1:
+                    return None
+                reference = self._result_reference(child.named_children[0], environment)
+                if reference is None:
+                    return None
+                result = _ToolResult(reference.call_index, object_key="output")
+                continue
+            if child.type == "shorthand_property_identifier":
+                key = self.syntax.text(child)
+                item = environment.get(key)
+                if not isinstance(item, _Constant):
+                    return None
+            elif child.type == "pair":
+                key_node = child.child_by_field_name("key")
+                value_node = child.child_by_field_name("value")
+                if key_node is None or value_node is None:
+                    return None
+                key = self._object_key(key_node)
+                if self._constant(value_node, environment) is _UNKNOWN:
+                    return None
+            else:
+                return None
+            if key is None or key == "output" or key in keys:
+                return None
+            keys.add(key)
+        return result
 
     def _is_json_stringify(self, node: Node) -> bool:
         function = node.child_by_field_name("function")

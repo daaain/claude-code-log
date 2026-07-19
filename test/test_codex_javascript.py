@@ -357,6 +357,36 @@ def test_analyzer_destructures_mixed_promise_all_results() -> None:
     assert batch.result_indexes == [0, 1, 2]
 
 
+def test_analyzer_expands_static_array_map_with_result_spread() -> None:
+    batch = analyze_javascript_tools(
+        """
+        const cmds = [
+          ["pyright", "uv run pyright"],
+          ["unit", "uv run pytest -m 'not (tui or browser)' -q"]
+        ];
+        const results = await Promise.all(cmds.map(async ([name, cmd]) => {
+          const r = await tools.exec_command({
+            cmd,
+            workdir: "/workspace",
+            yield_time_ms: 30000,
+            max_output_tokens: 30000
+          });
+          return {name, ...r};
+        }));
+        for (const r of results) text(JSON.stringify(r));
+        """
+    )
+
+    assert batch is not None
+    assert [call.name for call in batch.calls] == ["exec_command", "exec_command"]
+    assert [call.input["cmd"] for call in batch.calls] == [
+        "uv run pyright",
+        "uv run pytest -m 'not (tui or browser)' -q",
+    ]
+    assert batch.result_indexes == [0, 1]
+    assert batch.result_object_keys == ("output", "output")
+
+
 def test_analyzer_projects_result_object_shorthand_properties() -> None:
     batch = analyze_javascript_tools(
         """

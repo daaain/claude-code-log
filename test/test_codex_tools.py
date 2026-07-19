@@ -3,6 +3,7 @@
 import pytest
 
 from claude_code_log.factories.tool_factory import create_tool_input, create_tool_output
+from claude_code_log.html.tool_formatters import format_tool_execution_output
 from claude_code_log.models import (
     BashInput,
     DeleteInput,
@@ -11,6 +12,8 @@ from claude_code_log.models import (
     SendMessageInput,
     TaskInput,
     ToolResultContent,
+    ToolExecutionInput,
+    ToolExecutionOutput,
     WriteInput,
 )
 from claude_code_log.providers.codex_tools import (
@@ -94,7 +97,7 @@ def test_delete_result_keeps_first_transport_status_line() -> None:
     assert output == DeleteOutput(
         file_path="/tmp/obsolete.txt",
         success=True,
-        message="Script completed",
+        message="Script completed\nWall time: 0.6 seconds",
     )
 
 
@@ -234,7 +237,7 @@ def test_multi_call_exec_remains_visible_as_workflow() -> None:
         'const b = await tools.exec_command({cmd: "two"}); text(a); text(b);'
     )
     call = adapt_codex_tool_call("exec", {"raw": source}, raw_input=source)
-    assert call.name == "Workflow"
+    assert call.name == "ToolExecution"
     assert call.input == {"script": source}
 
 
@@ -375,7 +378,7 @@ def test_all_tools_plus_one_command_is_compound_workflow() -> None:
 
     call = adapt_codex_tool_call("exec", {"raw": source}, raw_input=source)
 
-    assert call.name == "Workflow"
+    assert call.name == "ToolExecution"
     assert call.input == {"script": source}
 
 
@@ -397,7 +400,7 @@ def test_one_tool_with_unrelated_output_emission_is_workflow() -> None:
     )
 
     assert adapt_codex_tool_call("exec", {"raw": source}, raw_input=source).name == (
-        "Workflow"
+        "ToolExecution"
     )
 
 
@@ -406,7 +409,7 @@ def test_dynamic_exec_falls_back_to_workflow() -> None:
         "const args = getArgs(); const r = await tools.exec_command(args); text(r);"
     )
     call = adapt_codex_tool_call("exec", {"raw": source}, raw_input=source)
-    assert call.name == "Workflow"
+    assert call.name == "ToolExecution"
 
 
 def test_collaboration_calls_reuse_task_and_message_renderers() -> None:
@@ -516,7 +519,49 @@ def test_unknown_tool_stays_generic() -> None:
 def test_tool_like_text_inside_string_is_not_unwrapped() -> None:
     source = 'text("example: tools.exec_command({cmd: \\"unsafe\\"})");'
     call = adapt_codex_tool_call("exec", {"raw": source}, raw_input=source)
-    assert call.name == "Workflow"
+    assert call.name == "ToolExecution"
+
+
+def test_opaque_exec_uses_typed_tool_execution_pair() -> None:
+    source = 'text("opaque");'
+    call = adapt_codex_tool_call("exec", {"raw": source}, raw_input=source)
+
+    assert call.name == "ToolExecution"
+    assert create_tool_input(call.name, call.input) == ToolExecutionInput(script=source)
+
+    result = ToolResultContent(
+        type="tool_result",
+        tool_use_id="opaque",
+        content=[
+            {
+                "type": "input_text",
+                "text": "Script completed\nWall time 0.2 seconds\nOutput:\n",
+            },
+            {"type": "input_text", "text": '{"ok": true}'},
+            {"type": "future_result", "value": 42},
+        ],
+    )
+    output = create_tool_output("ToolExecution", result)
+
+    assert output == ToolExecutionOutput(
+        status="Script completed\nWall time 0.2 seconds",
+        items=[
+            {"type": "input_text", "text": '{"ok": true}'},
+            {"type": "future_result", "value": 42},
+        ],
+    )
+    assert isinstance(output, ToolExecutionOutput)
+    rendered = format_tool_execution_output(output)
+    assert "Script completed<br>Wall time 0.2 seconds" in rendered
+    assert "<table class='tool-execution-results'>" in rendered
+    assert (
+        "<th scope='row' class='tool-execution-result-label'>Result 1</th>" in rendered
+    )
+    assert (
+        "<th scope='row' class='tool-execution-result-label'>Result 2</th>" in rendered
+    )
+    assert rendered.count("class='tool-execution-result-value'") == 2
+    assert "tool-result-json" in rendered
 
 
 def test_adapted_exec_selects_existing_bash_model() -> None:

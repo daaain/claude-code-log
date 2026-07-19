@@ -32,6 +32,7 @@ JSONL Parsing (parser.py)
 │   ├── ToolResultContent → ToolResultMessage with output:
 │   │   ├── ReadOutput (cat-n formatted file content)
 │   │   ├── WriteOutput / DeleteOutput (status acknowledgment)
+│   │   ├── ToolExecutionOutput (status + labelled opaque emissions)
 │   │   ├── EditOutput (cat-n formatted edit result)
 │   │   └── ToolResultContent (generic fallback)
 │   └── ImageContent → Image messages
@@ -43,7 +44,7 @@ JSONL Parsing (parser.py)
 │       ├── ReadInput, WriteInput, DeleteInput, EditInput, MultiEditInput
 │       ├── BashInput, GlobInput, GrepInput
 │       ├── TaskInput, TodoWriteInput, AskUserQuestionInput
-│       └── ExitPlanModeInput
+│       └── ExitPlanModeInput, ToolExecutionInput
 │
 ├── SystemTranscriptEntry
 │   ├── SystemMessage (level: info/warning/error)
@@ -517,6 +518,7 @@ ToolOutput = Union[
     ReadOutput,
     WriteOutput,
     DeleteOutput,
+    ToolExecutionOutput,
     EditOutput,
     BashOutput,
     TaskOutput,
@@ -631,7 +633,7 @@ class ToolUseMessage(MessageContent):
 ToolInput = Union[
     BashInput, ReadInput, WriteInput, DeleteInput, EditInput, MultiEditInput,
     GlobInput, GrepInput, TaskInput, TodoWriteInput,
-    AskUserQuestionInput, ExitPlanModeInput,
+    AskUserQuestionInput, ExitPlanModeInput, ToolExecutionInput,
     ToolUseContent,  # Generic fallback when no specialized parser
 ]
 ```

@@ -1346,6 +1346,36 @@
       vertical-align: top;
   }
   
+  /* Opaque Codex executions can emit several independent values. Keep their
+     ordinal labels in a stable column and neutralise the generic collapsible's
+     card-level pull-up inside result cells. */
+  .tool-execution-results {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 0.5em;
+  }
+  
+  .tool-execution-results tr {
+      border-bottom: 1px solid var(--tool-param-sep-color);
+  }
+  
+  .tool-execution-result-label {
+      width: 8em;
+      padding: 4px;
+      color: var(--text-secondary);
+      text-align: left;
+      vertical-align: top;
+  }
+  
+  .tool-execution-result-value {
+      padding: 4px;
+      vertical-align: top;
+  }
+  
+  .tool-execution-result-value .collapsible-details {
+      margin-top: 0;
+  }
+  
   .tool-param-structured {
       margin: 0;
       background-color: var(--bg-neutral);
@@ -8107,6 +8137,36 @@
       padding: 4px;
       color: #212529;
       vertical-align: top;
+  }
+  
+  /* Opaque Codex executions can emit several independent values. Keep their
+     ordinal labels in a stable column and neutralise the generic collapsible's
+     card-level pull-up inside result cells. */
+  .tool-execution-results {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 0.5em;
+  }
+  
+  .tool-execution-results tr {
+      border-bottom: 1px solid var(--tool-param-sep-color);
+  }
+  
+  .tool-execution-result-label {
+      width: 8em;
+      padding: 4px;
+      color: var(--text-secondary);
+      text-align: left;
+      vertical-align: top;
+  }
+  
+  .tool-execution-result-value {
+      padding: 4px;
+      vertical-align: top;
+  }
+  
+  .tool-execution-result-value .collapsible-details {
+      margin-top: 0;
   }
   
   .tool-param-structured {
@@ -17184,6 +17244,36 @@
       vertical-align: top;
   }
   
+  /* Opaque Codex executions can emit several independent values. Keep their
+     ordinal labels in a stable column and neutralise the generic collapsible's
+     card-level pull-up inside result cells. */
+  .tool-execution-results {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 0.5em;
+  }
+  
+  .tool-execution-results tr {
+      border-bottom: 1px solid var(--tool-param-sep-color);
+  }
+  
+  .tool-execution-result-label {
+      width: 8em;
+      padding: 4px;
+      color: var(--text-secondary);
+      text-align: left;
+      vertical-align: top;
+  }
+  
+  .tool-execution-result-value {
+      padding: 4px;
+      vertical-align: top;
+  }
+  
+  .tool-execution-result-value .collapsible-details {
+      margin-top: 0;
+  }
+  
   .tool-param-structured {
       margin: 0;
       background-color: var(--bg-neutral);
@@ -24063,6 +24153,36 @@
       padding: 4px;
       color: #212529;
       vertical-align: top;
+  }
+  
+  /* Opaque Codex executions can emit several independent values. Keep their
+     ordinal labels in a stable column and neutralise the generic collapsible's
+     card-level pull-up inside result cells. */
+  .tool-execution-results {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 0.5em;
+  }
+  
+  .tool-execution-results tr {
+      border-bottom: 1px solid var(--tool-param-sep-color);
+  }
+  
+  .tool-execution-result-label {
+      width: 8em;
+      padding: 4px;
+      color: var(--text-secondary);
+      text-align: left;
+      vertical-align: top;
+  }
+  
+  .tool-execution-result-value {
+      padding: 4px;
+      vertical-align: top;
+  }
+  
+  .tool-execution-result-value .collapsible-details {
+      margin-top: 0;
   }
   
   .tool-param-structured {
@@ -31226,6 +31346,36 @@
       vertical-align: top;
   }
   
+  /* Opaque Codex executions can emit several independent values. Keep their
+     ordinal labels in a stable column and neutralise the generic collapsible's
+     card-level pull-up inside result cells. */
+  .tool-execution-results {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 0.5em;
+  }
+  
+  .tool-execution-results tr {
+      border-bottom: 1px solid var(--tool-param-sep-color);
+  }
+  
+  .tool-execution-result-label {
+      width: 8em;
+      padding: 4px;
+      color: var(--text-secondary);
+      text-align: left;
+      vertical-align: top;
+  }
+  
+  .tool-execution-result-value {
+      padding: 4px;
+      vertical-align: top;
+  }
+  
+  .tool-execution-result-value .collapsible-details {
+      margin-top: 0;
+  }
+  
   .tool-param-structured {
       margin: 0;
       background-color: var(--bg-neutral);
@@ -38338,6 +38488,36 @@
       vertical-align: top;
   }
   
+  /* Opaque Codex executions can emit several independent values. Keep their
+     ordinal labels in a stable column and neutralise the generic collapsible's
+     card-level pull-up inside result cells. */
+  .tool-execution-results {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 0.5em;
+  }
+  
+  .tool-execution-results tr {
+      border-bottom: 1px solid var(--tool-param-sep-color);
+  }
+  
+  .tool-execution-result-label {
+      width: 8em;
+      padding: 4px;
+      color: var(--text-secondary);
+      text-align: left;
+      vertical-align: top;
+  }
+  
+  .tool-execution-result-value {
+      padding: 4px;
+      vertical-align: top;
+  }
+  
+  .tool-execution-result-value .collapsible-details {
+      margin-top: 0;
+  }
+  
   .tool-param-structured {
       margin: 0;
       background-color: var(--bg-neutral);
@@ -45393,6 +45573,36 @@
       padding: 4px;
       color: #212529;
       vertical-align: top;
+  }
+  
+  /* Opaque Codex executions can emit several independent values. Keep their
+     ordinal labels in a stable column and neutralise the generic collapsible's
+     card-level pull-up inside result cells. */
+  .tool-execution-results {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 0.5em;
+  }
+  
+  .tool-execution-results tr {
+      border-bottom: 1px solid var(--tool-param-sep-color);
+  }
+  
+  .tool-execution-result-label {
+      width: 8em;
+      padding: 4px;
+      color: var(--text-secondary);
+      text-align: left;
+      vertical-align: top;
+  }
+  
+  .tool-execution-result-value {
+      padding: 4px;
+      vertical-align: top;
+  }
+  
+  .tool-execution-result-value .collapsible-details {
+      margin-top: 0;
   }
   
   .tool-param-structured {

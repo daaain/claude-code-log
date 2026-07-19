@@ -69,6 +69,8 @@ from ..models import (
     TaskStopOutput,
     TodoWriteInput,
     ToolResultContent,
+    ToolExecutionInput,
+    ToolExecutionOutput,
     WebSearchInput,
     WebSearchOutput,
     ArtifactInput,
@@ -490,7 +492,7 @@ def format_write_output(output: WriteOutput) -> str:
         HTML string with the acknowledgment message
     """
     escaped_message = escape_html(output.message)
-    return f"<pre>{escaped_message} ...</pre>"
+    return f"<pre>{escaped_message}</pre>"
 
 
 def format_delete_output(output: DeleteOutput) -> str:
@@ -1708,6 +1710,54 @@ def format_workflow_input(workflow_input: WorkflowToolInput) -> str:
     return f"{prefix}{body}"
 
 
+def format_tool_execution_input(tool_input: ToolExecutionInput) -> str:
+    """Render opaque Codex JavaScript without Workflow-specific semantics."""
+    return render_file_content_collapsible(
+        tool_input.script,
+        "tool-execution.js",
+        "tool-execution-script",
+        line_threshold=12,
+        preview_line_count=6,
+    )
+
+
+def format_tool_execution_output(output: ToolExecutionOutput) -> str:
+    """Render transport status followed by a table of emitted results."""
+    parts = [
+        "<div class='tool-execution-status'>"
+        + "<br>".join(escape_html(line) for line in output.status.splitlines())
+        + "</div>"
+    ]
+    rows: list[str] = []
+    for index, item in enumerate(output.items, 1):
+        item_type = item.get("type")
+        text = item.get("text")
+        if item_type in {"input_text", "output_text", "text"} and isinstance(text, str):
+            content: str | list[dict[str, Any]] = text
+        else:
+            content = [item]
+        rendered = format_tool_result_content_raw(
+            ToolResultContent(
+                type="tool_result",
+                tool_use_id="tool-execution",
+                content=content,
+            )
+        )
+        rows.append(
+            "<tr>"
+            f"<th scope='row' class='tool-execution-result-label'>Result {index}</th>"
+            f"<td class='tool-execution-result-value'>{rendered}</td>"
+            "</tr>"
+        )
+    if rows:
+        parts.append(
+            "<table class='tool-execution-results'>"
+            f"<tbody>{''.join(rows)}</tbody>"
+            "</table>"
+        )
+    return "".join(parts)
+
+
 # -- Workflow run tree: phase + agent cards (issue #174 PR3) -------------------
 
 
@@ -1814,6 +1864,8 @@ __all__ = [
     "format_artifact_output",
     "format_webfetch_input",
     "format_workflow_input",
+    "format_tool_execution_input",
+    "format_tool_execution_output",
     "format_workflow_phase_content",
     "format_workflow_agent_content",
     "format_monitor_input",

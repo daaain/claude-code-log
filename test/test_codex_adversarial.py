@@ -129,7 +129,7 @@ def test_workflow_fallback_scrubs_opaque_agent_payload(source: str) -> None:
 
     call = adapt_codex_tool_call("exec", {"raw": source}, raw_input=source)
 
-    assert call.name == "Workflow"
+    assert call.name == "ToolExecution"
     assert token not in call.input["script"]
     assert "spawn_agent" in call.input["script"]
 
@@ -157,7 +157,7 @@ def test_workflow_fallback_preserves_ordinary_long_prompt() -> None:
 
     call = adapt_codex_tool_call("exec", {"raw": source}, raw_input=source)
 
-    assert call.name == "Workflow"
+    assert call.name == "ToolExecution"
     assert prompt in call.input["script"]
 
 
@@ -647,7 +647,7 @@ def test_incomplete_parallel_marker_sessions_remain_workflow() -> None:
         if isinstance(item, ToolUseContent)
     ]
 
-    assert [item.name for item in uses] == ["Workflow"]
+    assert [item.name for item in uses] == ["ToolExecution"]
 
 
 @pytest.mark.parametrize("nested_tool", ["mcp__clmail__communicate", "future_tool"])
@@ -844,7 +844,7 @@ def test_workflow_result_retains_nested_tool_transport() -> None:
     content = [item for entry in _normalized(records) for item in entry.message.content]
     uses = [item for item in content if isinstance(item, ToolUseContent)]
     result = next(item for item in content if isinstance(item, ToolResultContent))
-    assert [item.name for item in uses] == ["Workflow"]
+    assert [item.name for item in uses] == ["ToolExecution"]
     assert result.content == output
 
 
@@ -872,7 +872,7 @@ def test_assignment_and_emission_text_in_comments_or_strings_is_not_structural()
     )
 
     assert adapt_codex_tool_call("exec", {"raw": source}, raw_input=source).name == (
-        "Workflow"
+        "ToolExecution"
     )
 
 
@@ -1092,6 +1092,65 @@ def test_destructured_mixed_promise_batch_preserves_call_and_result_order() -> N
     ]
 
 
+def test_static_array_map_batch_extracts_spread_command_outputs() -> None:
+    source = """
+        const cmds = [
+          ["pyright", "uv run pyright"],
+          ["unit", "uv run pytest -q"]
+        ];
+        const results = await Promise.all(cmds.map(async ([name, cmd]) => {
+          const r = await tools.exec_command({cmd, workdir: "/workspace"});
+          return {name, ...r};
+        }));
+        for (const r of results) text(JSON.stringify(r));
+    """
+    records = [
+        _record(
+            1,
+            "response_item",
+            {
+                "type": "custom_tool_call",
+                "call_id": "mapped",
+                "name": "exec",
+                "input": source,
+            },
+        ),
+        _output(
+            2,
+            "mapped",
+            [
+                {
+                    "type": "input_text",
+                    "text": "Script completed\nWall time 0.2 seconds\nOutput:\n",
+                },
+                {
+                    "type": "input_text",
+                    "text": json.dumps(
+                        {"name": "pyright", "exit_code": 2, "output": "type error\n"}
+                    ),
+                },
+                {
+                    "type": "input_text",
+                    "text": json.dumps(
+                        {"name": "unit", "exit_code": 0, "output": "63 passed\n"}
+                    ),
+                },
+            ],
+        ),
+    ]
+
+    content = [item for entry in _normalized(records) for item in entry.message.content]
+    uses = [item for item in content if isinstance(item, ToolUseContent)]
+    results = [item for item in content if isinstance(item, ToolResultContent)]
+
+    assert [item.name for item in uses] == ["Bash", "Bash"]
+    assert [item.input["command"] for item in uses] == [
+        "uv run pyright",
+        "uv run pytest -q",
+    ]
+    assert [item.content for item in results] == ["type error\n", "63 passed\n"]
+
+
 def test_openai_docs_object_batch_becomes_three_doc_pairs() -> None:
     source = """
         const [hooks, plugins, marketplace] = await Promise.all([
@@ -1191,7 +1250,7 @@ def test_promise_batch_result_count_mismatch_stays_workflow() -> None:
         if isinstance(item, ToolUseContent)
     ]
 
-    assert [item.name for item in uses] == ["Workflow"]
+    assert [item.name for item in uses] == ["ToolExecution"]
 
 
 def test_ordered_batch_becomes_tool_result_pairs() -> None:
@@ -1269,7 +1328,7 @@ def test_ordered_batch_result_count_mismatch_stays_workflow() -> None:
         if isinstance(item, ToolUseContent)
     ]
 
-    assert [item.name for item in uses] == ["Workflow"]
+    assert [item.name for item in uses] == ["ToolExecution"]
 
 
 def test_sequential_batch_pairs_outputs_by_result_variable() -> None:
@@ -1606,21 +1665,21 @@ def test_static_for_of_unwraps_each_nested_mcp_result_like_a_direct_call() -> No
         (
             "const result = await tools.exec_command({cmd: `echo ${value}`}); "
             "text(result);",
-            "Workflow",
+            "ToolExecution",
         ),
         (
             'const result = await tools.exec_command({cmd: "unterminated}); '
             "text(result);",
-            "Workflow",
+            "ToolExecution",
         ),
         (
             'const result = await tools.exec_command({cmd: "real"}); text(`result`);',
-            "Workflow",
+            "ToolExecution",
         ),
         (
             'const result = await tools.exec_command({cmd: "real"}); '
             "text({nested: [result.output, {ok: true}]} );",
-            "Workflow",
+            "ToolExecution",
         ),
     ],
     ids=[
@@ -1648,7 +1707,7 @@ def test_nested_json_helpers_tolerate_parser_failures(
     monkeypatch.setattr(json, "loads", fail_json_loads)
     source = 'const result = await tools.exec_command({cmd: "real"}); text(result);'
     assert adapt_codex_tool_call("exec", {"raw": source}, raw_input=source).name == (
-        "Workflow"
+        "ToolExecution"
     )
 
     provider = CodexProvider()

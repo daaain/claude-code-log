@@ -170,9 +170,9 @@ Legend:
 | `plan` | Partial | Observed `update_plan` calls become `TodoWrite`; a native plan item shape is not decoded. |
 | `reasoning` | Direct | Readable summaries render as thinking; encrypted reasoning is deliberately never inspected or emitted. |
 | `commandExecution` | Adapted | `exec_command` becomes `Bash`; terminal `wait`/`write_stdin` polling and ordered or parallel marker sessions are coalesced when correlation is complete. |
-| `fileChange` | Partial | Static `apply_patch` Add/Delete operations become `Write`/`Delete`; adjacent Update runs become `Edit`/`MultiEdit`, preserving patch order. Moves, dynamic patches, and ambiguous programs remain `Workflow`. |
+| `fileChange` | Partial | Static `apply_patch` Add/Delete operations become `Write`/`Delete`; adjacent Update runs become `Edit`/`MultiEdit`, preserving patch order. Moves, dynamic patches, and ambiguous programs remain `ToolExecution`. |
 | `mcpToolCall` | Adapted | Exact MCP names and forwarded result envelopes are preserved, allowing plugins such as ClMail to apply the same transformation as for Claude Code. Codex OpenAI Developer Docs fetches receive a built-in document renderer. |
-| `dynamicToolCall` | Partial | Direct open-ended calls render generically; statically analyzable `exec` wrappers expand, while dynamic JavaScript remains `Workflow`. |
+| `dynamicToolCall` | Partial | Direct open-ended calls render generically; statically analyzable `exec` wrappers expand, while opaque JavaScript remains `ToolExecution`. |
 | `collabAgentToolCall` | Partial | Observed spawn/message/list function calls reuse `Task`, `SendMessage`, and `TaskList`; the native public item shape is not decoded directly. |
 | `webSearch` | Adapted | Search-only `web__run` calls become `WebSearch`; exact open-only batches become synthetic `WebFetch` pairs. Mixed actions remain generic. |
 | `imageView` | Partial | User-message image wrappers can inline readable local files. A native image-view item/tool result has no specialized adapter. |
@@ -196,9 +196,9 @@ factories.
 | Codex call | Canonical rendering | Coverage and fallback |
 | :--- | :--- | :--- |
 | `exec_command` | `Bash` | Typed input/output; approval justification becomes the description. Completed async polling chains fold into the originating Bash pair. |
-| `apply_patch` | `Write` / `Delete` / `Edit` / `MultiEdit` | Lossless Adds and Deletes become individual `Write` and `Delete` pairs; adjacent static Updates reuse the edit renderers. One aggregate result is correlated to every derived pair. Otherwise `Workflow`. |
+| `apply_patch` | `Write` / `Delete` / `Edit` / `MultiEdit` | Lossless Adds and Deletes become individual `Write` and `Delete` pairs; adjacent static Updates reuse the edit renderers. One aggregate result is correlated to every derived pair. Otherwise `ToolExecution`. |
 | `update_plan` | `TodoWrite` | Typed input; a successful empty transport becomes `Todo list updated.` |
-| `spawn_agent` | `Task` | Typed input/output; opaque transport payloads are redacted on both specialized and Workflow paths. |
+| `spawn_agent` | `Task` | Typed input/output; opaque transport payloads are redacted on both specialized and `ToolExecution` paths. |
 | `send_message`, `followup_task` | `SendMessage` | Typed input/output with target and follow-up semantics retained. |
 | `list_agents` | `TaskList` | Typed input/output when agent rows are valid; malformed output stays generic. |
 | search-only `web__run` | `WebSearch` | Typed input/output with all static queries represented in the title. |
@@ -208,7 +208,7 @@ factories.
 | static Promise delay | `wait` | Synthetic generic pair with `delay_ms` and an explicit completed result. |
 | `wait`, `write_stdin` command polling | Originating `Bash` | Folded only with a matching live handle and terminal result; otherwise preserved as generic calls. |
 | unknown direct function | Original name | Faithful generic params/result rendering. |
-| unsupported `exec` JavaScript | `Workflow` | Original script and transport result remain visible; opaque payloads are scrubbed. There is no legacy recognizer fallback. |
+| unsupported `exec` JavaScript | `ToolExecution` | Original script remains visible without claiming native Workflow semantics. Results retain completion and wall-time status, followed by labelled generic result sections; opaque payloads are scrubbed. There is no legacy recognizer fallback. |
 
 ### Static `exec` JavaScript analysis
 
@@ -229,6 +229,8 @@ Supported composition currently includes:
   such as `JSON.stringify({first, second})`;
 - bounded `for...of` expansion over static arrays, including destructured
   rows and loop-local calls/emissions;
+- bounded `Promise.all(staticArray.map(async ...))` expansion with destructured
+  rows, one loop-local call, and static metadata plus a spread result envelope;
 - ordered, reversed, and marker-delimited result correlation;
 - static Promise/`setTimeout` delays represented as `wait` calls;
 - outer `exec` cell continuations coalesced before static call expansion,
@@ -242,7 +244,7 @@ Supported composition currently includes:
 
 Dynamic identifiers, mutation, unsupported branches/loops, computed tool
 names, ambiguous emissions, repeated/absent output separators, parse recovery,
-and expansion-limit violations remain `Workflow`. False negatives are an
+and expansion-limit violations remain `ToolExecution`. False negatives are an
 acceptable compatibility cost; false reconstruction is not.
 
 ### Refreshing the Codex census

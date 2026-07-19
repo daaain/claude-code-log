@@ -39,6 +39,7 @@ from ..models import (
     TaskListInput,
     TaskOutputInput,
     TaskStopInput,
+    ToolExecutionInput,
     WorkflowToolInput,
     TaskUpdateInput,
     TeamCreateInput,
@@ -81,6 +82,7 @@ from ..models import (
     TaskOutput,
     TaskOutputResult,
     TaskStopOutput,
+    ToolExecutionOutput,
     TaskUpdateOutput,
     TeamCreateOutput,
     TeamDeleteOutput,
@@ -145,6 +147,7 @@ TOOL_INPUT_MODELS: dict[str, type[BaseModel]] = {
     "TaskStop": TaskStopInput,
     # Dynamic Workflow orchestrator (issue #174): input.script is JS.
     "Workflow": WorkflowToolInput,
+    "ToolExecution": ToolExecutionInput,
 }
 
 
@@ -434,7 +437,7 @@ def parse_write_output(
     if not lines[0]:
         return None
 
-    first_line = lines[0]
+    first_line = _transport_status_summary(content) or lines[0]
     return WriteOutput(
         file_path=file_path,
         success=True,  # If we got content, write succeeded
@@ -450,10 +453,44 @@ def parse_delete_output(
         return None
     if not (content := _extract_tool_result_text(tool_result)):
         return None
-    first_line = content.split("\n", 1)[0]
+    first_line = _transport_status_summary(content) or content.split("\n", 1)[0]
     if not first_line:
         return None
     return DeleteOutput(file_path=file_path, success=True, message=first_line)
+
+
+def _transport_status_summary(text: str) -> Optional[str]:
+    """Keep completion and wall-time lines, dropping the empty Output label."""
+    lines = text.splitlines()
+    if not lines or lines[0] != "Script completed":
+        return None
+    status: list[str] = []
+    for line in lines:
+        if line == "Output:":
+            break
+        if line:
+            status.append(line)
+    return "\n".join(status) if status else None
+
+
+def parse_toolexecution_output(
+    tool_result: ToolResultContent, file_path: Optional[str]
+) -> Optional[ToolExecutionOutput]:
+    """Separate an opaque Codex execution's status from emitted values."""
+    del file_path
+    if not isinstance(tool_result.content, list) or not tool_result.content:
+        return None
+    first, *items = tool_result.content
+    first_type = first.get("type")
+    first_text = first.get("text")
+    if first_type not in {"input_text", "output_text", "text"} or not isinstance(
+        first_text, str
+    ):
+        return None
+    status = _transport_status_summary(first_text)
+    if status is None:
+        return None
+    return ToolExecutionOutput(status=status, items=items)
 
 
 def parse_task_output(
@@ -1495,6 +1532,7 @@ TOOL_OUTPUT_PARSERS: dict[str, ToolOutputParser] = {
     "Edit": parse_edit_output,
     "Write": parse_write_output,
     "Delete": parse_delete_output,
+    "ToolExecution": parse_toolexecution_output,
     "Bash": parse_bash_output,
     "Task": parse_task_output,
     "Agent": parse_task_output,  # Teammates spawn tool — same parse shape

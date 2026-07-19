@@ -73,6 +73,7 @@ from ..models import (
     TeamDeleteInput,
     TodoWriteInput,
     ToolUseContent,
+    ToolExecutionInput,
     SkillInput,
     WebSearchInput,
     ArtifactInput,
@@ -108,6 +109,7 @@ from ..models import (
     TeamCreateOutput,
     TeamDeleteOutput,
     ToolResultContent,
+    ToolExecutionOutput,
     WebSearchOutput,
     ArtifactOutput,
     WebFetchOutput,
@@ -1234,6 +1236,48 @@ class MarkdownRenderer(Renderer):
         if script.strip():
             parts.append(self._code_fence(script, "js"))
         return "\n\n".join(parts)
+
+    def format_ToolExecutionInput(
+        self, input: ToolExecutionInput, _: TemplateMessage
+    ) -> str:
+        """Render opaque Codex JavaScript without Workflow semantics."""
+        return self._code_fence(input.script, "js")
+
+    def format_ToolExecutionOutput(
+        self, output: ToolExecutionOutput, _: TemplateMessage
+    ) -> str:
+        """Render transport status followed by labelled result emissions."""
+        parts = [output.status]
+        for index, item in enumerate(output.items, 1):
+            parts.append(f"**Result {index}:**")
+            item_type = item.get("type")
+            text = item.get("text")
+            if item_type in {"input_text", "output_text", "text"} and isinstance(
+                text, str
+            ):
+                try:
+                    decoded: Any = json.loads(text)
+                except (ValueError, RecursionError):
+                    parts.append(self._code_fence(text))
+                else:
+                    parts.append(
+                        self._code_fence(
+                            json.dumps(decoded, indent=2, ensure_ascii=False), "json"
+                        )
+                    )
+            else:
+                parts.append(
+                    self._code_fence(
+                        json.dumps(item, indent=2, ensure_ascii=False), "json"
+                    )
+                )
+        return "\n\n".join(parts)
+
+    def title_ToolExecutionInput(
+        self, _input: ToolExecutionInput, _: TemplateMessage
+    ) -> str:
+        """Title opaque Codex JavaScript distinctly from Workflow."""
+        return "⚙️ ToolExecution"
 
     def format_WorkflowPhaseMessage(
         self, content: WorkflowPhaseMessage, _: TemplateMessage
