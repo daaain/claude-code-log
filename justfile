@@ -297,8 +297,8 @@ github-release version="":
     # This looks for the section starting with ## [$TARGET_TAG] and extracts until the next ## or end of file
     RELEASE_NOTES_FILE=$(mktemp)
     awk -v tag="$TARGET_TAG" '
-        /^## \[/ { 
-            if (found && started) exit; 
+        /^## \[/ {
+            if (found && started) exit;
             if (index($0, "[" tag "]") > 0) {
                 found=1;
                 next;
@@ -384,8 +384,8 @@ release-preview version="":
 
     echo ""
     awk -v tag="$TARGET_TAG" '
-        /^## \[/ { 
-            if (found && started) exit; 
+        /^## \[/ {
+            if (found && started) exit;
             if (index($0, "[" tag "]") > 0) {
                 found=1;
                 next;

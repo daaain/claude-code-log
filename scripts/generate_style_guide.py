@@ -787,11 +787,11 @@ def generate_style_guide():
 </head>
 <body>
     <h1>🎨 Claude Code Log Style Guide</h1>
-    
+
     <div class="info">
         <strong>About this style guide:</strong> This collection demonstrates how different types of Claude transcript messages are rendered in the HTML viewer. It serves as both visual documentation and a testing reference for developers working on the transcript rendering system.
     </div>
-    
+
     <div class="guide-links">
         <div class="guide-card">
             <div class="guide-title">📝 Transcript Viewer Style Guide</div>
@@ -800,7 +800,7 @@ def generate_style_guide():
             </div>
             <a href="transcript_style_guide.html" class="guide-link">View Transcript Guide</a>
         </div>
-        
+
         <div class="guide-card">
             <div class="guide-title">📂 Project Index Style Guide</div>
             <div class="guide-description">
@@ -809,7 +809,7 @@ def generate_style_guide():
             <a href="index_style_guide.html" class="guide-link">View Index Guide</a>
         </div>
     </div>
-    
+
     <div class="info">
         <strong>Usage:</strong> These style guides are automatically generated from representative test data. They demonstrate the current visual design and can be used to verify that template changes render correctly across all message types.
     </div>

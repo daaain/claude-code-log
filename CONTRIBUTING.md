@@ -185,6 +185,15 @@ uv run pyright
 uv run ty check
 ```
 
+### Whitespace
+
+An [`.editorconfig`](.editorconfig) at the repo root defines the baseline —
+UTF-8, LF line endings, a final newline, and trimmed trailing whitespace.
+Most editors honour it automatically; please keep it observed. Two paths
+deliberately opt out of trailing-whitespace trimming: Markdown (a line ending
+in two spaces is a hard break) and syrupy `.ambr` snapshots (the serializer
+indents blank lines, so regenerate them rather than trimming by hand).
+
 ## Performance Profiling
 
 Enable timing instrumentation to identify bottlenecks:
