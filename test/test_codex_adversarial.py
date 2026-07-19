@@ -1210,6 +1210,116 @@ def test_static_array_map_batch_extracts_explicit_command_outputs() -> None:
     ]
 
 
+def test_static_array_map_batch_splits_consolidated_truncated_objects() -> None:
+    source = """
+        const qs = [
+          ["one", "printf one"],
+          ["two", "printf two"],
+          ["three", "printf three"]
+        ];
+        const out = await Promise.all(qs.map(async ([name, cmd]) => {
+          const r = await tools.exec_command({cmd, workdir: "/workspace"});
+          return {name, output: r.output};
+        }));
+        out.forEach(text);
+    """
+    emitted = (
+        "Warning: truncated output (original token count: 30000)\n"
+        "Total output lines: 3\n\n"
+        + json.dumps({"name": "one", "output": "first\n"}, separators=(",", ":"))
+        + '{"name":"two","output":"cut…99 tokens truncated…'
+    )
+    records = [
+        _record(
+            1,
+            "response_item",
+            {
+                "type": "custom_tool_call",
+                "call_id": "mapped-consolidated",
+                "name": "exec",
+                "input": source,
+            },
+        ),
+        _output(
+            2,
+            "mapped-consolidated",
+            [
+                {
+                    "type": "input_text",
+                    "text": "Script completed\nWall time 0.2 seconds\nOutput:\n",
+                },
+                {"type": "input_text", "text": emitted},
+            ],
+        ),
+    ]
+
+    content = [item for entry in _normalized(records) for item in entry.message.content]
+    uses = [item for item in content if isinstance(item, ToolUseContent)]
+    results = [item for item in content if isinstance(item, ToolResultContent)]
+
+    assert [item.name for item in uses] == ["Bash"] * 3
+    assert [item.content for item in results] == [
+        "first\n",
+        "[Output omitted by Codex truncation]",
+        "[Output omitted by Codex truncation]",
+    ]
+
+
+def test_sequential_object_batch_recovers_intact_tail_after_truncation() -> None:
+    source = """
+        const actor = "/workspace/codex";
+        const p = await tools.mcp__clmail__actors({
+          action: "presence", actor, params: {status: "all"}
+        });
+        const m = await tools.mcp__clmail__communicate({
+          action: "list", actor, params: {status: "unread"}
+        });
+        text(JSON.stringify({presence: p, mail: m}));
+    """
+    emitted = (
+        "Warning: truncated output (original token count: 10000)\n"
+        "Total output lines: 1\n\n"
+        '{"presence":{"content":"cut…99 tokens truncated…:broken},'
+        '"mail":{"messages":[],"count":0}}'
+    )
+    records = [
+        _record(
+            1,
+            "response_item",
+            {
+                "type": "custom_tool_call",
+                "call_id": "clmail-object",
+                "name": "exec",
+                "input": source,
+            },
+        ),
+        _output(
+            2,
+            "clmail-object",
+            [
+                {
+                    "type": "input_text",
+                    "text": "Script completed\nWall time 0.1 seconds\nOutput:\n",
+                },
+                {"type": "input_text", "text": emitted},
+            ],
+        ),
+    ]
+
+    content = [item for entry in _normalized(records) for item in entry.message.content]
+    uses = [item for item in content if isinstance(item, ToolUseContent)]
+    results = [item for item in content if isinstance(item, ToolResultContent)]
+
+    assert [item.name for item in uses] == [
+        "mcp__clmail__actors",
+        "mcp__clmail__communicate",
+    ]
+    assert [item.content for item in results] == [
+        "[Output omitted by Codex truncation]",
+        '{"messages": [], "count": 0}',
+    ]
+
+
 def test_openai_docs_object_batch_becomes_three_doc_pairs() -> None:
     source = """
         const [hooks, plugins, marketplace] = await Promise.all([

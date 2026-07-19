@@ -431,6 +431,11 @@ def test_analyzer_expands_static_array_map_with_explicit_result_fields() -> None
     ]
     assert batch.result_indexes == [0, 1, 2]
     assert batch.result_object_keys == ("output", "output", "output")
+    assert batch.result_prefixes == (
+        '{"name":"guide"',
+        '{"name":"status"',
+        '{"name":"head"',
+    )
     assert batch.output_count == 3
 
 

@@ -64,6 +64,8 @@ _TRUNCATED_OUTPUT_PREAMBLE_RE = re.compile(
     r"\AWarning: truncated output \([^\r\n]+\)\r?\n"
     r"Total output lines: [0-9]+\r?\n\r?\n"
 )
+_TRUNCATED_OUTPUT_MARKER_RE = re.compile(r"…[0-9]+ tokens truncated…")
+_TRUNCATED_OUTPUT_PLACEHOLDER = "[Output omitted by Codex truncation]"
 _IMAGE_TAG_RE = re.compile(r"</?image(?:\s[^>]*)?>", re.IGNORECASE)
 _IMAGE_OPEN_TAG_RE = re.compile(r"<image(?P<attributes>\s[^>]*)?>", re.IGNORECASE)
 _IMAGE_NAME_RE = re.compile(
@@ -1319,22 +1321,50 @@ class CodexProvider(BaseProvider):
 
     def _object_batch_result(self, output: str, key: str) -> Optional[str]:
         """Extract one statically-proven property from a JSON result object."""
+        if output == _TRUNCATED_OUTPUT_PLACEHOLDER:
+            return output
         truncation = _TRUNCATED_OUTPUT_PREAMBLE_RE.match(output)
         if truncation is not None:
             output = output[truncation.end() :]
+        was_truncated = (
+            truncation is not None
+            or _TRUNCATED_OUTPUT_MARKER_RE.search(output) is not None
+        )
         try:
             decoded: Any = json.loads(output)
         except (ValueError, RecursionError):
-            return None
+            if not was_truncated:
+                return None
+            recovered = self._truncated_object_batch_result(output, key)
+            return recovered if recovered is not None else _TRUNCATED_OUTPUT_PLACEHOLDER
         if not isinstance(decoded, dict):
             return None
         if key not in decoded:
-            return (
-                "[Output omitted by Codex truncation]"
-                if truncation is not None
-                else None
-            )
-        value = cast(dict[str, Any], decoded)[key]
+            return _TRUNCATED_OUTPUT_PLACEHOLDER if was_truncated else None
+        return self._batch_result_value(cast(dict[str, Any], decoded)[key])
+
+    def _truncated_object_batch_result(self, output: str, key: str) -> Optional[str]:
+        """Recover an intact property from the surviving tail of truncated JSON."""
+        encoded_key = json.dumps(key, ensure_ascii=False)
+        matches = list(re.finditer(re.escape(encoded_key) + r"\s*:\s*", output))
+        decoder = json.JSONDecoder()
+        for match in reversed(matches):
+            try:
+                value, end = decoder.raw_decode(output, match.end())
+            except (ValueError, RecursionError):
+                continue
+            remainder = output[end:].lstrip()
+            # Only the final top-level property is recoverable without trusting
+            # the damaged nesting/string state that precedes it.  Requiring
+            # exactly the outer closing brace also avoids selecting a same-name
+            # property from a nested surviving object.
+            if remainder.rstrip() != "}":
+                continue
+            return self._batch_result_value(value)
+        return None
+
+    def _batch_result_value(self, value: Any) -> Optional[str]:
+        """Serialize one decoded object-batch property for a tool result."""
         if isinstance(value, str):
             return value
         try:
@@ -1411,7 +1441,7 @@ class CodexProvider(BaseProvider):
         ):
             return None
 
-        results = ["[Output omitted by Codex truncation]" for _ in concrete]
+        results = [_TRUNCATED_OUTPUT_PLACEHOLDER for _ in concrete]
         for found_index, (result_index, position) in enumerate(found):
             start = 0 if found_index == 0 else position
             end = (

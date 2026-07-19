@@ -68,6 +68,7 @@ class _ToolResult:
     call_index: int
     path: tuple[str, ...] = ()
     object_key: Optional[str] = None
+    output_prefix: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -548,6 +549,7 @@ class _StaticEvaluator:
                 result.call_index,
                 result.path + (self.syntax.text(property_node),),
                 result.object_key,
+                result.output_prefix,
             )
         if node.type == "call_expression" and self._is_json_stringify(node):
             arguments = node.child_by_field_name("arguments")
@@ -720,8 +722,10 @@ class _StaticEvaluator:
             return None
         call_index: Optional[int] = None
         exposes_output = False
+        output_prefix: Optional[str] = None
         keys: set[str] = set()
         for child in node.named_children:
+            static_value: Any = _UNKNOWN
             if child.type == "spread_element":
                 if call_index is not None or len(child.named_children) != 1:
                     return None
@@ -736,6 +740,7 @@ class _StaticEvaluator:
                 item = environment.get(key)
                 if not isinstance(item, _Constant):
                     return None
+                static_value = item.value
             elif child.type == "pair":
                 key_node = child.child_by_field_name("key")
                 value_node = child.child_by_field_name("value")
@@ -755,16 +760,31 @@ class _StaticEvaluator:
                         return None
                     call_index = reference.call_index
                     exposes_output = exposes_output or key == "output"
-                elif self._constant(value_node, environment) is _UNKNOWN:
-                    return None
+                else:
+                    static_value = self._constant(value_node, environment)
+                    if static_value is _UNKNOWN:
+                        return None
             else:
                 return None
             if key is None or key in keys:
                 return None
+            if not keys and static_value is not _UNKNOWN:
+                try:
+                    output_prefix = json.dumps(
+                        {key: static_value},
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )[:-1]
+                except (TypeError, ValueError):
+                    return None
             keys.add(key)
         if call_index is None or not exposes_output:
             return None
-        return _ToolResult(call_index, object_key="output")
+        return _ToolResult(
+            call_index,
+            object_key="output",
+            output_prefix=output_prefix,
+        )
 
     def _is_json_stringify(self, node: Node) -> bool:
         function = node.child_by_field_name("function")
@@ -862,7 +882,7 @@ class _StaticEvaluator:
                 return False
             for result in collection.values:
                 self.emission_groups.append(((result, result.object_key),))
-                self.emission_prefixes.append(None)
+                self.emission_prefixes.append(result.output_prefix)
             self.output_mode = "ordered"
             return True
         if callback.type != "arrow_function":
