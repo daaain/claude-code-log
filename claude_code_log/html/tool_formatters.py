@@ -316,6 +316,14 @@ def _websearch_as_markdown(output: WebSearchOutput) -> str:
     return "\n".join(parts)
 
 
+def _web_source_anchors(refs: list[str]) -> str:
+    """Expose safe Codex web result handles as linkable card anchors."""
+    return "".join(
+        f"<span id='web-ref-{escape_html(ref)}' class='web-result-anchor'></span>"
+        for ref in refs
+    )
+
+
 def format_websearch_output(output: WebSearchOutput) -> str:
     """Format WebSearch tool result as collapsible markdown.
 
@@ -326,7 +334,8 @@ def format_websearch_output(output: WebSearchOutput) -> str:
     markdown block, rendered as collapsible content.
     """
     markdown_content = _websearch_as_markdown(output)
-    return render_markdown_collapsible(markdown_content, "websearch-results")
+    rendered = render_markdown_collapsible(markdown_content, "websearch-results")
+    return f"{_web_source_anchors(output.source_refs)}{rendered}"
 
 
 # -- TodoWrite Tool -----------------------------------------------------------
@@ -874,7 +883,8 @@ def format_webfetch_output(output: WebFetchOutput) -> str:
     # Render the result as markdown in a collapsible section
     content_html = render_markdown_collapsible(output.result, "webfetch-result")
 
-    return f"{badge_html}{content_html}"
+    anchors = _web_source_anchors(output.source_refs)
+    return f"{anchors}{badge_html}{content_html}"
 
 
 # -- Artifact Tool ------------------------------------------------------------

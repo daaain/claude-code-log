@@ -2073,6 +2073,7 @@ class WebSearchOutput:
     links: list[WebSearchLink]
     preamble: Optional[str] = None  # Text before the Links (usually query header)
     summary: Optional[str] = None  # Markdown analysis after the links
+    source_refs: list[str] = field(default_factory=list[str])
 
 
 @dataclass
@@ -2089,6 +2090,7 @@ class WebFetchOutput:
     code: Optional[int] = None  # HTTP status code
     code_text: Optional[str] = None  # HTTP status text (e.g., "OK")
     duration_ms: Optional[int] = None  # Time taken in milliseconds
+    source_refs: list[str] = field(default_factory=list[str])
 
 
 @dataclass

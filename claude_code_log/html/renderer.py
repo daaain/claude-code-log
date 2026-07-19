@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 from typing import TYPE_CHECKING, Any, Optional, Tuple, cast
 
 if TYPE_CHECKING:
@@ -1260,6 +1261,15 @@ class HtmlRenderer(Renderer):
         self, input: WebFetchInput, message: TemplateMessage
     ) -> str:
         """Title → '🌐 WebFetch <url>'."""
+        if re.fullmatch(r"turn\d+(?:search|view)\d+", input.url):
+            content = cast(ToolUseMessage, message.content)
+            tool_name = escape_html(content.tool_name)
+            ref = escape_html(input.url)
+            return (
+                f"🌐 {tool_name} "
+                f"<a class='web-ref-link' href='#web-ref-{ref}'>"
+                f"<span class='tool-summary'>{ref}</span></a>"
+            )
         return self._tool_title(message, "🌐", input.url)
 
     def title_ArtifactInput(

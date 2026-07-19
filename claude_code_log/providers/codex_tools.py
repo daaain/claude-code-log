@@ -426,6 +426,32 @@ def _canonicalize(name: str, input_data: dict[str, Any]) -> AdaptedToolCall:
             if text_queries and len(text_queries) == len(query_items):
                 return AdaptedToolCall("WebSearch", {"query": " • ".join(text_queries)})
 
+        finds = input_data.get("find")
+        other_actions = set(input_data) - {"find", "response_length"}
+        if isinstance(finds, list) and not other_actions:
+            find_items = cast(list[Any], finds)
+            refs: list[str] = []
+            patterns: list[str] = []
+            for raw_find in find_items:
+                if not isinstance(raw_find, dict):
+                    break
+                find = cast(dict[str, Any], raw_find)
+                ref_id = find.get("ref_id")
+                pattern = find.get("pattern")
+                if not isinstance(ref_id, str) or not isinstance(pattern, str):
+                    break
+                if ref_id not in refs:
+                    refs.append(ref_id)
+                patterns.append(pattern)
+            if patterns and len(patterns) == len(find_items):
+                return AdaptedToolCall(
+                    "WebFetch",
+                    {
+                        "url": " • ".join(refs),
+                        "prompt": "Find: " + " • ".join(patterns),
+                    },
+                )
+
     return AdaptedToolCall(name, input_data)
 
 

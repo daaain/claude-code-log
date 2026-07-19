@@ -846,7 +846,20 @@ def _parse_websearch_from_structured(
     if len(results) > 1 and isinstance(results[1], str):
         summary = results[1].strip() or None
 
-    return WebSearchOutput(query=query, links=links, preamble=None, summary=summary)
+    source_refs_raw = tool_use_result.get("sourceRefs", [])
+    source_refs = (
+        [ref for ref in cast(list[Any], source_refs_raw) if isinstance(ref, str)]
+        if isinstance(source_refs_raw, list)
+        else []
+    )
+
+    return WebSearchOutput(
+        query=query,
+        links=links,
+        preamble=None,
+        summary=summary,
+        source_refs=source_refs,
+    )
 
 
 def _parse_websearch_from_text(text: str) -> Optional[WebSearchOutput]:
@@ -959,16 +972,24 @@ def parse_webfetch_output(
     if tool_use_result is not None and isinstance(tool_use_result, dict):
         url = tool_use_result.get("url")
         result = tool_use_result.get("result")
+        is_codex_web_result = tool_use_result.get("codexWebResult") is True
+        source_refs_raw = tool_use_result.get("sourceRefs", [])
+        source_refs = (
+            [ref for ref in cast(list[Any], source_refs_raw) if isinstance(ref, str)]
+            if isinstance(source_refs_raw, list)
+            else []
+        )
 
-        # Both url and result are required
-        if url and result:
+        # Claude supplies a URL; Codex's ref-based open/find actions may not.
+        if result and (url or is_codex_web_result):
             return WebFetchOutput(
-                url=str(url),
+                url=str(url or ""),
                 result=str(result),
                 bytes=tool_use_result.get("bytes"),
                 code=tool_use_result.get("code"),
                 code_text=tool_use_result.get("codeText"),
                 duration_ms=tool_use_result.get("durationMs"),
+                source_refs=source_refs,
             )
         # Structured data present but incomplete — don't fall through
         return None

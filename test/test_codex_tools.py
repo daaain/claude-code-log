@@ -503,6 +503,25 @@ def test_plan_and_search_reuse_specialized_renderers() -> None:
     assert search.input == {"query": "synthetic query"}
 
 
+def test_find_only_web_run_reuses_webfetch_renderer() -> None:
+    find = adapt_codex_tool_call(
+        "web__run",
+        {
+            "find": [
+                {"ref_id": "turn12view0", "pattern": "collabToolCall"},
+                {"ref_id": "turn12view0", "pattern": "parentThreadId"},
+            ],
+            "response_length": "long",
+        },
+    )
+
+    assert find.name == "WebFetch"
+    assert find.input == {
+        "url": "turn12view0",
+        "prompt": "Find: collabToolCall • parentThreadId",
+    }
+
+
 def test_list_agents_reuses_task_list_renderer() -> None:
     call = adapt_codex_tool_call("list_agents", {"path_prefix": "/root"})
 

@@ -174,7 +174,7 @@ Legend:
 | `mcpToolCall` | Adapted | Exact MCP names and forwarded result envelopes are preserved, allowing plugins such as ClMail to apply the same transformation as for Claude Code. Codex OpenAI Developer Docs fetches receive a built-in document renderer. |
 | `dynamicToolCall` | Partial | Direct open-ended calls render generically; statically analyzable `exec` wrappers expand, while opaque JavaScript remains `ToolExecution`. |
 | `collabAgentToolCall` | Partial | Observed spawn/message/list function calls reuse `Task`, `SendMessage`, and `TaskList`; the native public item shape is not decoded directly. |
-| `webSearch` | Adapted | Search-only `web__run` calls become `WebSearch`; exact open-only batches become synthetic `WebFetch` pairs. Mixed actions remain generic. |
+| `webSearch` | Adapted | Search-only `web__run` calls become `WebSearch`; exact open-only batches and find-only calls become `WebFetch`. Codex citation/source serialization is normalized before Markdown rendering. Mixed actions remain generic. |
 | `imageView` | Partial | User-message image wrappers can inline readable local files. A native image-view item/tool result has no specialized adapter. |
 | `imageGeneration` | Missing | No observed native rollout mapping is normalized. A function/MCP tool with this behavior remains generic unless a plugin transforms it. |
 | `sleep` | Partial | Static Promise/`setTimeout` wrappers become synthetic `wait` pairs; a native sleep item shape is not decoded. |
@@ -201,8 +201,9 @@ factories.
 | `spawn_agent` | `Task` | Typed input/output; opaque transport payloads are redacted on both specialized and `ToolExecution` paths. |
 | `send_message`, `followup_task` | `SendMessage` | Typed input/output with target and follow-up semantics retained. |
 | `list_agents` | `TaskList` | Typed input/output when agent rows are valid; malformed output stays generic. |
-| search-only `web__run` | `WebSearch` | Typed input/output with all static queries represented in the title. |
-| open-only `web__run` batch | `WebFetch` pairs | Expanded only when refs and result chunks split exactly. |
+| search-only `web__run` | `WebSearch` | Typed input/output with all static queries represented in the title. Named `turn…search/view…` refs become anchors; numeric citation wrappers, word limits, and packed source-line markers are normalized into readable Markdown. |
+| open-only `web__run` batch | `WebFetch` pairs | Expanded only when refs and result chunks split exactly; output uses the shared Codex web-result normalizer. |
+| find-only `web__run` | `WebFetch` | Static refs and patterns become typed input; a reusable `turn…` ref links back to the card that introduced it, and output uses the shared Codex web-result normalizer. |
 | `mcp__openaiDeveloperDocs__fetch_openai_doc` | `CodexDoc` | Codex-only built-in plugin: URL/anchor parameters stay visible and the returned documentation renders as collapsible Markdown. Aggregated static result objects are projected back into one pair per fetch. |
 | `mcp__*`, app, and plugin tools | Original name | Generic built-in rendering, followed by optional plugin transformation. The namespace is intentionally not closed. |
 | static Promise delay | `wait` | Synthetic generic pair with `delay_ms` and an explicit completed result. |

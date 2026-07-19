@@ -44,6 +44,7 @@ from .base import (
 from .codex_tools import AdaptedToolCall, adapt_codex_tool_batch, adapt_codex_tool_call
 from .codex_javascript import analyze_javascript_tools
 from .codex_messages import format_codex_user_message, parse_codex_user_shell_command
+from .codex_web import normalize_codex_web_result
 
 logger = logging.getLogger(__name__)
 
@@ -1555,15 +1556,21 @@ class CodexProvider(BaseProvider):
                             {"url": item.ref_id, "prompt": ""},
                         )
                     )
-                    expanded.append(
-                        make_tool_result_entry(
-                            thread_id,
-                            uuid,
-                            item.result_timestamp,
-                            derived_id,
-                            item.result,
-                        )
+                    result, source_refs = normalize_codex_web_result(item.result)
+                    result_entry = make_tool_result_entry(
+                        thread_id,
+                        uuid,
+                        item.result_timestamp,
+                        derived_id,
+                        result,
                     )
+                    result_entry.toolUseResult = {
+                        "url": item.ref_id,
+                        "result": result,
+                        "sourceRefs": source_refs,
+                        "codexWebResult": True,
+                    }
+                    expanded.append(result_entry)
                 return expanded
             name = self._nonempty_string(payload.get("name")) or payload_type
             raw_input = (
@@ -1862,7 +1869,7 @@ class CodexProvider(BaseProvider):
             items = cast(list[Any], value)
             if all(isinstance(item, dict) for item in items):
                 structured = cast(list[dict[str, Any]], items)
-                if tool_name in {"Bash", "WebSearch"}:
+                if tool_name in {"Bash", "WebSearch", "WebFetch"}:
                     command_output = self._command_output(structured)
                     if command_output is not None:
                         return command_output
@@ -1908,9 +1915,19 @@ class CodexProvider(BaseProvider):
                 output = task_list
         tool_use_result: Optional[ToolUseResult] = None
         if not is_error and tool_name == "WebSearch" and isinstance(output, str):
+            output, source_refs = normalize_codex_web_result(output)
             tool_use_result = {
                 "query": "",
                 "results": [{"content": []}, output],
+                "sourceRefs": source_refs,
+            }
+        elif not is_error and tool_name == "WebFetch" and isinstance(output, str):
+            output, source_refs = normalize_codex_web_result(output)
+            tool_use_result = {
+                "url": "",
+                "result": output,
+                "sourceRefs": source_refs,
+                "codexWebResult": True,
             }
         return output, tool_use_result
 
