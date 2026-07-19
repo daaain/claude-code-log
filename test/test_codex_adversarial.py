@@ -783,6 +783,54 @@ def test_promise_all_batch_becomes_ordered_tool_result_pairs() -> None:
     assert [item.content for item in results] == ["first output\n", "second output\n"]
 
 
+def test_mixed_apply_patch_becomes_write_and_edit_result_pairs() -> None:
+    patch = (
+        "*** Begin Patch\n"
+        "*** Add File: created.txt\n+created\n"
+        "*** Update File: existing.txt\n@@\n-old\n+new\n"
+        "*** End Patch"
+    )
+    source = f"const patch = {json.dumps(patch)}; text(await tools.apply_patch(patch));"
+    records = [
+        _record(
+            1,
+            "response_item",
+            {
+                "type": "custom_tool_call",
+                "call_id": "patch",
+                "name": "exec",
+                "input": source,
+            },
+        ),
+        _output(
+            2,
+            "patch",
+            [
+                {"type": "input_text", "text": "Script completed\nOutput:\n"},
+                {"type": "input_text", "text": "{}"},
+            ],
+        ),
+    ]
+
+    content = [item for entry in _normalized(records) for item in entry.message.content]
+    uses = [item for item in content if isinstance(item, ToolUseContent)]
+    results = [item for item in content if isinstance(item, ToolResultContent)]
+
+    assert [item.name for item in uses] == ["Write", "Edit"]
+    assert [item.id for item in uses] == ["patch:batch:0", "patch:batch:1"]
+    assert uses[0].input == {"file_path": "created.txt", "content": "created\n"}
+    assert uses[1].input == {
+        "file_path": "existing.txt",
+        "old_string": "old\n",
+        "new_string": "new\n",
+    }
+    assert [item.tool_use_id for item in results] == [
+        "patch:batch:0",
+        "patch:batch:1",
+    ]
+    assert [item.content for item in results] == ["{}", "{}"]
+
+
 def test_destructured_mixed_promise_batch_preserves_call_and_result_order() -> None:
     source = """
         const [pr, auth, refs] = await Promise.all([

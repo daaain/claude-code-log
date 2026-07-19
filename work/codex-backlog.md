@@ -14,9 +14,9 @@
   message limits.
 - Visible user/assistant messages, reasoning summaries, environment context,
   user shell records, local image inlining, and adjacent duplicate handling.
-- Provider-local tool/result transport normalization with typed Bash, Edit,
-  MultiEdit, TodoWrite, Task, SendMessage, TaskList, WebSearch, and WebFetch
-  reuse; open-ended MCP/plugin names remain transformable by plugins.
+- Provider-local tool/result transport normalization with typed Bash, Write,
+  Edit, MultiEdit, TodoWrite, Task, SendMessage, TaskList, WebSearch, and
+  WebFetch reuse; open-ended MCP/plugin names remain transformable by plugins.
 - Conservative async command folding for sequential and parallel
   `wait`/`write_stdin` continuations.
 - Tree-sitter-only bounded JavaScript analysis for static calls, batches,

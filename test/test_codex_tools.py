@@ -9,6 +9,7 @@ from claude_code_log.models import (
     SendMessageInput,
     TaskInput,
     ToolResultContent,
+    WriteInput,
 )
 from claude_code_log.providers.codex_tools import (
     adapt_codex_tool_batch,
@@ -52,17 +53,17 @@ def test_apply_patch_exec_reuses_edit_renderer() -> None:
     assert isinstance(create_tool_input(call.name, call.input), EditInput)
 
 
-def test_direct_add_patch_reuses_edit_renderer() -> None:
+def test_direct_single_add_patch_reuses_write_renderer() -> None:
     patch = "*** Begin Patch\n*** Add File: added.txt\n+hello\n*** End Patch"
 
     call = adapt_codex_tool_call("apply_patch", {"raw": patch}, raw_input=patch)
 
-    assert call.name == "Edit"
+    assert call.name == "Write"
     assert call.input == {
         "file_path": "added.txt",
-        "old_string": "",
-        "new_string": "hello\n",
+        "content": "hello\n",
     }
+    assert isinstance(create_tool_input(call.name, call.input), WriteInput)
 
 
 def test_delete_patch_without_body_has_visible_deletion() -> None:
@@ -102,6 +103,33 @@ def test_multi_file_patch_reuses_multiedit_renderer() -> None:
             {"file_path": "two.txt", "old_string": "", "new_string": "two\n"},
         ],
     }
+
+
+def test_mixed_patch_batch_splits_writes_without_reordering_edits() -> None:
+    patch = (
+        "*** Begin Patch\n"
+        "*** Update File: first.txt\n@@\n-old\n+new\n"
+        "*** Delete File: obsolete.txt\n"
+        "*** Add File: created.txt\n+created\n"
+        "*** Update File: last.txt\n@@\n-before\n+after\n"
+        "*** End Patch"
+    )
+    source = (
+        f"const patch = {__import__('json').dumps(patch)};\n"
+        "text(await tools.apply_patch(patch));"
+    )
+
+    batch = adapt_codex_tool_batch(source)
+
+    assert batch is not None
+    assert batch.result_indexes == [0, 0, 0]
+    assert [call.name for call in batch.calls] == ["MultiEdit", "Write", "Edit"]
+    assert [call.input["file_path"] for call in batch.calls] == [
+        "2 files",
+        "created.txt",
+        "last.txt",
+    ]
+    assert batch.calls[1].input["content"] == "created\n"
 
 
 def test_single_mcp_call_keeps_name_for_plugin_transformers() -> None:
