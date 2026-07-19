@@ -231,6 +231,8 @@ Supported composition currently includes:
   rows and loop-local calls/emissions;
 - ordered, reversed, and marker-delimited result correlation;
 - static Promise/`setTimeout` delays represented as `wait` calls;
+- outer `exec` cell continuations coalesced before static call expansion,
+  including informational MCP completion events inside the polling interval;
 - command-session continuation through `wait` and `write_stdin`, including
   parallel marker sessions;
 - consolidated output splitting on unique materialized template prefixes;

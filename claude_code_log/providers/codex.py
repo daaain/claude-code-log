@@ -625,7 +625,7 @@ class CodexProvider(BaseProvider):
                 or str(wait[1].input.get("cell_id")) != match.group(1)
                 or not self._is_call_output(records[wait_result_index], wait[0])
                 or not self._only_invisible_between(records, result_index, wait_index)
-                or not self._only_invisible_between(
+                or not self._only_exec_wrapper_interstitials(
                     records, wait_index, wait_result_index
                 )
             ):
@@ -1039,6 +1039,26 @@ class CodexProvider(BaseProvider):
     ) -> bool:
         return all(
             self._is_ignorable_command_interstitial(record)
+            for record in records[left + 1 : right]
+        )
+
+    def _only_exec_wrapper_interstitials(
+        self, records: list[_DecodedRecord], left: int, right: int
+    ) -> bool:
+        """Allow an inner MCP completion event inside an outer exec cell poll.
+
+        Code-mode MCP calls emit ``mcp_tool_call_end`` immediately before the
+        enclosing ``wait`` result. The event duplicates the forwarded result
+        envelope and is not rendered independently, so it must not prevent the
+        outer wrapper from being coalesced. Keep this exception local to exec
+        wrappers; command-session polling retains its stricter boundaries.
+        """
+        return all(
+            self._is_ignorable_command_interstitial(record)
+            or (
+                record.kind == "event_msg"
+                and record.payload.get("type") == "mcp_tool_call_end"
+            )
             for record in records[left + 1 : right]
         )
 

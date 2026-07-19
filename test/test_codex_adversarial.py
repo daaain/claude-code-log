@@ -661,6 +661,62 @@ def test_static_delay_before_nested_tool_becomes_wait_then_tool() -> None:
     ]
 
 
+def test_static_delay_nested_tool_coalesces_outer_cell_wait() -> None:
+    payload = {"thread_id": 4743, "messages": [{"id": 4743}], "count": 1}
+    source = """
+        await new Promise(resolve => setTimeout(resolve, 20000));
+        const r = await tools.mcp__clmail__communicate({
+          action: "thread", actor: "/workspace/codex", params: {id: 4743}
+        });
+        text(JSON.stringify(r));
+    """
+    records = [
+        _record(
+            1,
+            "response_item",
+            {
+                "type": "custom_tool_call",
+                "call_id": "exec",
+                "name": "exec",
+                "input": source,
+            },
+        ),
+        _output(
+            2,
+            "exec",
+            "Script running with cell ID 13\nWall time 10.0 seconds\nOutput:\n",
+        ),
+        _record(3, "event_msg", {"type": "token_count"}),
+        _call(4, "poll", "wait", '{"cell_id":"13","yield_time_ms":15000}'),
+        _record(
+            5,
+            "event_msg",
+            {
+                "type": "mcp_tool_call_end",
+                "call_id": "exec-inner-mcp",
+                "result": {"Ok": {"structuredContent": payload}},
+            },
+        ),
+        _output(6, "poll", _forwarded_result_envelope(payload)),
+    ]
+
+    content = [item for entry in _normalized(records) for item in entry.message.content]
+    uses = [item for item in content if isinstance(item, ToolUseContent)]
+    results = [item for item in content if isinstance(item, ToolResultContent)]
+
+    assert [item.name for item in uses] == ["wait", "mcp__clmail__communicate"]
+    assert uses[0].input == {"delay_ms": 20000}
+    assert uses[1].input == {
+        "action": "thread",
+        "actor": "/workspace/codex",
+        "params": {"id": 4743},
+    }
+    assert [item.content for item in results] == [
+        "Waited 20000 ms",
+        json.dumps(payload),
+    ]
+
+
 def test_direct_nested_tool_result_propagates_mcp_error() -> None:
     source = (
         'const result = await tools.mcp__clmail__communicate({action: "send"}); '

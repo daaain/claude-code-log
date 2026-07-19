@@ -19,8 +19,8 @@
   WebFetch reuse; OpenAI Developer Docs fetches render through a Codex-only
   built-in plugin, while open-ended MCP/plugin names remain transformable by
   external plugins.
-- Conservative async command folding for sequential and parallel
-  `wait`/`write_stdin` continuations.
+- Conservative async folding for outer code-mode cells and sequential or
+  parallel command `wait`/`write_stdin` continuations.
 - Tree-sitter-only bounded JavaScript analysis for static calls, batches,
   constants/templates/joins, loops/destructuring, delays, provenance, and
   truncated prefixed output, including projection of aggregated static result
