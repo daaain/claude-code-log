@@ -60,6 +60,10 @@ _RUNNING_CELL_RE = re.compile(r"Script running with cell ID ([^\s]+)")
 _COMPLETED_COMMAND_RE = re.compile(
     r"\AScript completed\r?\nWall time:? [^\r\n]+\r?\nOutput:\r?\n?\Z"
 )
+_TRUNCATED_OUTPUT_PREAMBLE_RE = re.compile(
+    r"\AWarning: truncated output \([^\r\n]+\)\r?\n"
+    r"Total output lines: [0-9]+\r?\n\r?\n"
+)
 _IMAGE_TAG_RE = re.compile(r"</?image(?:\s[^>]*)?>", re.IGNORECASE)
 _IMAGE_OPEN_TAG_RE = re.compile(r"<image(?P<attributes>\s[^>]*)?>", re.IGNORECASE)
 _IMAGE_NAME_RE = re.compile(
@@ -1315,12 +1319,21 @@ class CodexProvider(BaseProvider):
 
     def _object_batch_result(self, output: str, key: str) -> Optional[str]:
         """Extract one statically-proven property from a JSON result object."""
+        truncation = _TRUNCATED_OUTPUT_PREAMBLE_RE.match(output)
+        if truncation is not None:
+            output = output[truncation.end() :]
         try:
             decoded: Any = json.loads(output)
         except (ValueError, RecursionError):
             return None
-        if not isinstance(decoded, dict) or key not in decoded:
+        if not isinstance(decoded, dict):
             return None
+        if key not in decoded:
+            return (
+                "[Output omitted by Codex truncation]"
+                if truncation is not None
+                else None
+            )
         value = cast(dict[str, Any], decoded)[key]
         if isinstance(value, str):
             return value
@@ -1893,7 +1906,7 @@ class CodexProvider(BaseProvider):
             acknowledgement = self._todo_acknowledgement(output)
             if acknowledgement is not None:
                 output = acknowledgement
-        if not is_error and tool_name == "CodexDoc":
+        if not is_error and tool_name in {"CodexDoc", "CodexDocSearch"}:
             document = (
                 self._openai_doc_result(output)
                 if isinstance(output, list)

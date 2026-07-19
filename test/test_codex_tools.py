@@ -211,6 +211,27 @@ def test_codex_openai_docs_object_batch_preserves_result_projection() -> None:
     assert batch.result_object_keys == ("hooks", "plugins", "marketplace")
 
 
+def test_codex_openai_docs_search_batch_preserves_aliased_results() -> None:
+    source = """
+        const [a, m] = await Promise.all([
+          tools.mcp__openaiDeveloperDocs__search_openai_docs({query: "Codex approval policy", limit: 5}),
+          tools.mcp__openaiDeveloperDocs__search_openai_docs({query: "Codex MCP streamable HTTP", limit: 5})
+        ]);
+        text(JSON.stringify({approval: a, mcp: m}));
+    """
+
+    batch = adapt_codex_tool_batch(source)
+
+    assert batch is not None
+    assert [call.name for call in batch.calls] == ["CodexDocSearch"] * 2
+    assert [call.input["query"] for call in batch.calls] == [
+        "Codex approval policy",
+        "Codex MCP streamable HTTP",
+    ]
+    assert batch.result_indexes == [0, 0]
+    assert batch.result_object_keys == ("approval", "mcp")
+
+
 def test_single_mcp_call_resolves_constant_shorthand_input() -> None:
     source = """
         const actor = "/workspace/codex";

@@ -3,6 +3,8 @@
 from claude_code_log.builtin_plugins.codex_docs import (
     CodexDocInputMessage,
     CodexDocResultMessage,
+    CodexDocSearchInputMessage,
+    CodexDocSearchResultMessage,
 )
 from claude_code_log.factories.tool_factory import (
     create_tool_result_message,
@@ -62,6 +64,45 @@ def test_builtin_codex_doc_pair_renders_link_and_collapsible_markdown() -> None:
 
 
 def test_builtin_doc_transformer_does_not_claim_raw_mcp_name() -> None:
+    reset_cache()
+
+
+def test_builtin_codex_doc_search_renders_compact_linked_hits() -> None:
+    reset_cache()
+    meta = MessageMeta.empty()
+    context: dict[str, ToolUseContent] = {}
+    tool_use = ToolUseContent(
+        type="tool_use",
+        id="docs-search",
+        name="CodexDocSearch",
+        input={"query": "Codex approval policy", "limit": 5},
+    )
+    use = create_tool_use_message(meta, tool_use, context).content
+    result = create_tool_result_message(
+        meta,
+        ToolResultContent(
+            type="tool_result",
+            tool_use_id=tool_use.id,
+            content="""{"hits":[{"url":"https://learn.chatgpt.com/docs/hooks#permissionrequest","hierarchy":{"lvl1":"Hooks","lvl2":"PermissionRequest"},"_snippetResult":{"content":{"value":"Use <span class=\\"algolia-docsearch-suggestion--highlight\\">approval</span> hooks."}}}]}""",
+        ),
+        context,
+    ).content
+
+    assert isinstance(use, CodexDocSearchInputMessage)
+    assert isinstance(result, CodexDocSearchResultMessage)
+
+    html = HtmlRenderer(image_export_mode="placeholder")
+    use_html = html.format_content(TemplateMessage(use))
+    result_html = html.format_content(TemplateMessage(result))
+    assert "Codex approval policy" in use_html
+    assert "Hooks — PermissionRequest" in result_html
+    assert "docs/hooks#permissionrequest" in result_html
+    assert "algolia-docsearch" not in result_html
+
+    markdown = MarkdownRenderer()
+    result_markdown = markdown.format_content(TemplateMessage(result))
+    assert "[Hooks — PermissionRequest]" in result_markdown
+    assert "Use approval hooks." in result_markdown
     reset_cache()
     raw_name = "mcp__openaiDeveloperDocs__fetch_openai_doc"
     tool_use = ToolUseContent(

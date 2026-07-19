@@ -345,6 +345,14 @@ def _canonicalize(name: str, input_data: dict[str, Any]) -> AdaptedToolCall:
         if isinstance(url, str) and (anchor is None or isinstance(anchor, str)):
             return AdaptedToolCall("CodexDoc", input_data)
 
+    if name == "mcp__openaiDeveloperDocs__search_openai_docs":
+        query = input_data.get("query")
+        limit = input_data.get("limit")
+        if isinstance(query, str) and (
+            limit is None or isinstance(limit, int) and not isinstance(limit, bool)
+        ):
+            return AdaptedToolCall("CodexDocSearch", input_data)
+
     if name == "apply_patch":
         raw_patch = input_data.get("patch", input_data.get("raw"))
         if isinstance(raw_patch, str):

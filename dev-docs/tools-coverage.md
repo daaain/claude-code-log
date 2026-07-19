@@ -171,7 +171,7 @@ Legend:
 | `reasoning` | Direct | Readable summaries render as thinking; encrypted reasoning is deliberately never inspected or emitted. |
 | `commandExecution` | Adapted | `exec_command` becomes `Bash`; terminal `wait`/`write_stdin` polling and ordered or parallel marker sessions are coalesced when correlation is complete. |
 | `fileChange` | Partial | Static `apply_patch` Add/Delete operations become `Write`/`Delete`; adjacent Update runs become `Edit`/`MultiEdit`, preserving patch order. Moves, dynamic patches, and ambiguous programs remain `ToolExecution`. |
-| `mcpToolCall` | Adapted | Exact MCP names and forwarded result envelopes are preserved, allowing plugins such as ClMail to apply the same transformation as for Claude Code. Codex OpenAI Developer Docs fetches receive a built-in document renderer. |
+| `mcpToolCall` | Adapted | Exact MCP names and forwarded result envelopes are preserved, allowing plugins such as ClMail to apply the same transformation as for Claude Code. Codex OpenAI Developer Docs searches and fetches receive built-in renderers. |
 | `dynamicToolCall` | Partial | Direct open-ended calls render generically; statically analyzable `exec` wrappers expand, while opaque JavaScript remains `ToolExecution`. |
 | `collabAgentToolCall` | Partial | Observed spawn/message/list function calls reuse `Task`, `SendMessage`, and `TaskList`; the native public item shape is not decoded directly. |
 | `webSearch` | Adapted | Search-only `web__run` calls become `WebSearch`; exact open-only batches and find-only calls become `WebFetch`. Codex citation/source serialization is normalized before Markdown rendering. Mixed actions remain generic. |
@@ -205,6 +205,7 @@ factories.
 | open-only `web__run` batch | `WebFetch` pairs | Expanded only when refs and result chunks split exactly; output uses the shared Codex web-result normalizer. |
 | find-only `web__run` | `WebFetch` | Static refs and patterns become typed input; a reusable `turn…` ref links back to the card that introduced it, and output uses the shared Codex web-result normalizer. |
 | `mcp__openaiDeveloperDocs__fetch_openai_doc` | `CodexDoc` | Codex-only built-in plugin: URL/anchor parameters stay visible and the returned documentation renders as collapsible Markdown. Aggregated static result objects are projected back into one pair per fetch. |
+| `mcp__openaiDeveloperDocs__search_openai_docs` | `CodexDocSearch` | Codex-only built-in plugin: query/limit parameters stay visible and results render as a compact linked list. Aliased properties in aggregated static result objects are projected back into individual searches; properties removed by Codex output truncation remain explicit omitted results. |
 | `mcp__*`, app, and plugin tools | Original name | Generic built-in rendering, followed by optional plugin transformation. The namespace is intentionally not closed. |
 | static Promise delay | `wait` | Synthetic generic pair with `delay_ms` and an explicit completed result. |
 | `wait`, `write_stdin` command polling | Originating `Bash` | Folded only with a matching live handle and terminal result; otherwise preserved as generic calls. |

@@ -1214,6 +1214,70 @@ def test_openai_docs_object_batch_becomes_three_doc_pairs() -> None:
     ]
 
 
+def test_openai_docs_object_batches_survive_transport_truncation_preamble() -> None:
+    source = """
+        const [a, m] = await Promise.all([
+          tools.mcp__openaiDeveloperDocs__search_openai_docs({query:"approval", limit:5}),
+          tools.mcp__openaiDeveloperDocs__search_openai_docs({query:"MCP", limit:5})
+        ]);
+        text(JSON.stringify({approval:a,mcp:m}));
+    """
+    search_result = {
+        "content": [
+            {
+                "type": "text",
+                "text": json.dumps(
+                    {
+                        "hits": [
+                            {
+                                "url": "https://learn.chatgpt.com/docs/hooks",
+                                "hierarchy": {"lvl1": "Hooks", "lvl2": None},
+                            }
+                        ]
+                    }
+                ),
+            }
+        ]
+    }
+    emitted = (
+        "Warning: truncated output (original token count: 39941)\n"
+        "Total output lines: 1\n\n" + json.dumps({"approval": search_result})
+    )
+    records = [
+        _record(
+            1,
+            "response_item",
+            {
+                "type": "custom_tool_call",
+                "call_id": "docs-search",
+                "name": "exec",
+                "input": source,
+            },
+        ),
+        _output(
+            2,
+            "docs-search",
+            [
+                {
+                    "type": "input_text",
+                    "text": "Script completed\nWall time 0.7 seconds\nOutput:\n",
+                },
+                {"type": "input_text", "text": emitted},
+            ],
+        ),
+    ]
+
+    content = [item for entry in _normalized(records) for item in entry.message.content]
+    uses = [item for item in content if isinstance(item, ToolUseContent)]
+    results = [item for item in content if isinstance(item, ToolResultContent)]
+
+    assert [item.name for item in uses] == ["CodexDocSearch"] * 2
+    assert [item.content for item in results] == [
+        json.dumps(json.loads(search_result["content"][0]["text"]), ensure_ascii=False),
+        "[Output omitted by Codex truncation]",
+    ]
+
+
 def test_promise_batch_result_count_mismatch_stays_workflow() -> None:
     source = (
         "const results = await Promise.all(["

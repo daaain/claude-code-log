@@ -16,8 +16,8 @@
   user shell records, local image inlining, and adjacent duplicate handling.
 - Provider-local tool/result transport normalization with typed Bash, Write,
   Delete, Edit, MultiEdit, TodoWrite, Task, SendMessage, TaskList, WebSearch, and
-  WebFetch reuse; OpenAI Developer Docs fetches render through a Codex-only
-  built-in plugin, while open-ended MCP/plugin names remain transformable by
+  WebFetch reuse; OpenAI Developer Docs searches and fetches render through a
+  Codex-only built-in plugin, while open-ended MCP/plugin names remain transformable by
   external plugins.
 - Conservative async folding for outer code-mode cells and ordered or parallel
   command `wait`/`write_stdin` continuations.
