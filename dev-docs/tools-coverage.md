@@ -169,7 +169,7 @@ Legend:
 | `agentMessage` | Direct | Visible assistant text is normalized and ordered with other entries. |
 | `plan` | Partial | Observed `update_plan` calls become `TodoWrite`; a native plan item shape is not decoded. |
 | `reasoning` | Direct | Readable summaries render as thinking; encrypted reasoning is deliberately never inspected or emitted. |
-| `commandExecution` | Adapted | `exec_command` becomes `Bash`; terminal `wait`/`write_stdin` polling and parallel marker sessions are coalesced when correlation is complete. |
+| `commandExecution` | Adapted | `exec_command` becomes `Bash`; terminal `wait`/`write_stdin` polling and ordered or parallel marker sessions are coalesced when correlation is complete. |
 | `fileChange` | Partial | Static `apply_patch` Add/Delete operations become `Write`/`Delete`; adjacent Update runs become `Edit`/`MultiEdit`, preserving patch order. Moves, dynamic patches, and ambiguous programs remain `Workflow`. |
 | `mcpToolCall` | Adapted | Exact MCP names and forwarded result envelopes are preserved, allowing plugins such as ClMail to apply the same transformation as for Claude Code. Codex OpenAI Developer Docs fetches receive a built-in document renderer. |
 | `dynamicToolCall` | Partial | Direct open-ended calls render generically; statically analyzable `exec` wrappers expand, while dynamic JavaScript remains `Workflow`. |
@@ -235,7 +235,7 @@ Supported composition currently includes:
   including informational MCP completion events and non-chat collaboration
   bookkeeping inside the polling interval;
 - command-session continuation through `wait` and `write_stdin`, including
-  parallel marker sessions;
+  ordered and parallel marker sessions;
 - consolidated output splitting on unique materialized template prefixes;
   missing sections are identified only when Codex explicitly reports
   truncation.

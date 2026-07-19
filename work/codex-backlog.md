@@ -20,7 +20,7 @@
   built-in plugin, while open-ended MCP/plugin names remain transformable by
   external plugins.
 - Conservative async folding for outer code-mode cells and sequential or
-  parallel command `wait`/`write_stdin` continuations.
+  ordered and parallel command `wait`/`write_stdin` continuations.
 - Tree-sitter-only bounded JavaScript analysis for static calls, batches,
   constants/templates/joins, loops/destructuring, delays, provenance, and
   truncated prefixed output, including projection of aggregated static result

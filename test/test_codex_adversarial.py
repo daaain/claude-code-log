@@ -404,6 +404,78 @@ def test_async_bash_does_not_fold_across_task_boundary() -> None:
     ]
 
 
+def test_ordered_session_marker_poll_folds_after_outer_cell_wait() -> None:
+    origin_source = """
+        const r = await tools.exec_command({cmd: "uv run pytest -q -n 0 test/test_tui.py"});
+        text(r.output);
+        if (r.session_id) text(`SESSION_ID=${r.session_id}`);
+    """
+    poll_source = """
+        const r = await tools.write_stdin({session_id: 54193, chars: ""});
+        text(r.output);
+        if (r.session_id) text(`SESSION_ID=${r.session_id}`);
+    """
+    records = [
+        _record(
+            1,
+            "response_item",
+            {
+                "type": "custom_tool_call",
+                "call_id": "origin",
+                "name": "exec",
+                "input": origin_source,
+            },
+        ),
+        _output(2, "origin", "Script running with cell ID 42\nOutput:\n"),
+        _call(3, "wait", "wait", '{"cell_id":"42"}'),
+        _output(
+            4,
+            "wait",
+            [
+                {
+                    "type": "input_text",
+                    "text": "Script completed\nWall time 18.6 seconds\nOutput:\n",
+                },
+                {"type": "input_text", "text": "validation errors ...\n"},
+                {"type": "input_text", "text": "SESSION_ID=54193"},
+            ],
+        ),
+        _record(
+            5,
+            "response_item",
+            {
+                "type": "custom_tool_call",
+                "call_id": "poll",
+                "name": "exec",
+                "input": poll_source,
+            },
+        ),
+        _output(
+            6,
+            "poll",
+            [
+                {
+                    "type": "input_text",
+                    "text": "Script completed\nWall time 0.0 seconds\nOutput:\n",
+                },
+                {"type": "input_text", "text": "63 passed in 29.76s\n"},
+            ],
+        ),
+    ]
+
+    content = [item for entry in _normalized(records) for item in entry.message.content]
+    uses = [item for item in content if isinstance(item, ToolUseContent)]
+    results = [item for item in content if isinstance(item, ToolResultContent)]
+
+    assert [item.name for item in uses] == ["Bash"]
+    assert [item.input["command"] for item in uses] == [
+        "uv run pytest -q -n 0 test/test_tui.py"
+    ]
+    assert [item.content for item in results] == [
+        "validation errors ...\n63 passed in 29.76s\n"
+    ]
+
+
 def test_parallel_marker_sessions_fold_into_their_originating_bash_calls() -> None:
     origin_source = """
         const results = await Promise.all([

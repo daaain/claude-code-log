@@ -808,7 +808,7 @@ class CodexProvider(BaseProvider):
     def _coalesce_marker_command_sessions(
         self, records: list[_DecodedRecord]
     ) -> list[_DecodedRecord]:
-        """Fold parallel ``SESSION_ID=`` polling back into its Bash batch."""
+        """Fold ``SESSION_ID=`` polling back into its originating Bash calls."""
         tool_records = self._tool_record_indexes(records)
         programs: dict[int, _SessionMarkerProgram] = {}
         position = 0
@@ -825,7 +825,7 @@ class CodexProvider(BaseProvider):
         suppressed: set[int] = set()
         replacements: dict[int, _DecodedRecord] = {}
         for origin_position, origin in programs.items():
-            if origin.output_mode != "markers" or not all(
+            if origin.output_mode not in {"ordered", "markers"} or not all(
                 call.name == "Bash" for call in origin.calls
             ):
                 continue
@@ -894,9 +894,14 @@ class CodexProvider(BaseProvider):
             if status is None:
                 continue
             rewritten: list[dict[str, str]] = [status]
-            for index, parts in enumerate(chunks, 1):
-                rewritten.append({"type": "input_text", "text": f"RESULT_{index}"})
-                rewritten.append({"type": "input_text", "text": "".join(parts)})
+            if origin.output_mode == "ordered":
+                if len(chunks) != 1:
+                    continue
+                rewritten.append({"type": "input_text", "text": "".join(chunks[0])})
+            else:
+                for index, parts in enumerate(chunks, 1):
+                    rewritten.append({"type": "input_text", "text": f"RESULT_{index}"})
+                    rewritten.append({"type": "input_text", "text": "".join(parts)})
             result = records[origin.result_index]
             payload = dict(result.payload)
             payload["output"] = rewritten
