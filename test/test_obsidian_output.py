@@ -506,31 +506,33 @@ class TestCombinedFlag:
         assert "combined_transcripts.html" not in index_html
 
     @pytest.mark.parametrize(
-        "fmt,detail",
+        "fmt,depth",
         [
-            ("md", "low"),
-            ("md", "high"),
-            ("html", "low"),
-            ("html", "high"),
+            # Non-default --depth levels (the default `tool` gets no suffix,
+            # so pick levels that DO earn one). The suffix == the --depth name.
+            ("md", "agent"),
+            ("md", "hook"),
+            ("html", "agent"),
+            ("html", "user"),
         ],
     )
     def test_index_session_links_carry_detail_variant_suffix(
         self,
         fmt: str,
-        detail: str,
+        depth: str,
         fake_projects: Path,
         isolated_cache: Path,
         tmp_path: Path,
     ):
-        """Under `--expand-paths --detail low|high`, the index session
-        links MUST carry the `.{detail}.{ext}` infix that matches the
+        """Under `--expand-paths --depth <non-default>`, the index session
+        links MUST carry the `.{depth}.{ext}` infix that matches the
         on-disk filenames — otherwise every link in the bullet-tree /
         HTML folder tree 404s."""
         from click.testing import CliRunner
 
         from claude_code_log.cli import main
 
-        out = tmp_path / f"out-detail-{fmt}-{detail}"
+        out = tmp_path / f"out-depth-{fmt}-{depth}"
         runner = CliRunner()
         result = runner.invoke(
             main,
@@ -542,8 +544,8 @@ class TestCombinedFlag:
                 "--expand-paths",
                 "--format",
                 fmt,
-                "--detail",
-                detail,
+                "--depth",
+                depth,
             ],
         )
         assert result.exit_code == 0, result.output
@@ -554,16 +556,16 @@ class TestCombinedFlag:
 
         # Walk every session file written on disk and assert the index
         # contains a link to its exact filename (relative path).
-        session_files = list(out.rglob(f"session-*.{detail}.{ext}"))
-        assert session_files, f"expected per-session files with .{detail}.{ext} suffix"
+        session_files = list(out.rglob(f"session-*.{depth}.{ext}"))
+        assert session_files, f"expected per-session files with .{depth}.{ext} suffix"
         for sf in session_files:
             rel = sf.relative_to(out).as_posix()
-            # Confirm on-disk filename carries the detail infix.
-            assert sf.name.endswith(f".{detail}.{ext}"), sf
+            # Confirm on-disk filename carries the depth infix.
+            assert sf.name.endswith(f".{depth}.{ext}"), sf
             # And the index points at that same rel-path.
             assert rel in index_text, (
                 f"index missing link to {rel!r}; "
-                f"variant suffix .{detail} likely dropped from index URLs"
+                f"variant suffix .{depth} likely dropped from index URLs"
             )
 
     def test_index_excludes_synthetic_agent_sessions(

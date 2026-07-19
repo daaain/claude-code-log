@@ -31,7 +31,12 @@ class TestTranscriptHTMLSnapshots:
         assert html == html_snapshot
 
     def test_edge_cases_html(self, html_snapshot, test_data_dir):
-        """Snapshot test for edge cases - errors, special chars, long text."""
+        """Snapshot test for edge cases - errors, special chars, long text.
+
+        Uses the library render default (FULL) so system/hook/noise content
+        stays in the snapshot — the CLI default is now HIGH (--depth tool,
+        #159), but generate_html renders everything by default.
+        """
         test_file = test_data_dir / "edge_cases.jsonl"
         messages = load_transcript(test_file)
         html = generate_html(messages, "Edge Cases")

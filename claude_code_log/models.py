@@ -49,21 +49,30 @@ class MessageType(str, Enum):
 class DetailLevel(str, Enum):
     """Output detail level controlling which message types are included.
 
-    Levels form a hierarchy: full > high > low > minimal > user-only.
+    Levels form a hierarchy, most-verbose first:
+    full > high > low > minimal > user-only > session.
+
+    The user-facing ``--depth`` option (#159) names these by the message
+    hierarchy node it stops at (session > user > assistant > agent > tool
+    > hook) rather than by verbosity; see ``DEPTH_TO_DETAIL``. The legacy
+    ``--detail`` option keeps the verbosity names below (deprecated,
+    removed in 2.0). ``session`` is depth-only — it has no ``--detail``
+    spelling.
     """
 
-    FULL = "full"  # Everything
-    HIGH = "high"  # Detailed but cleaned (no system/hook noise)
-    LOW = "low"  # Interaction-focused + key signals
-    MINIMAL = "minimal"  # User + assistant messages only
-    USER_ONLY = "user-only"  # User prompts + steering only (for downstream agents)
+    FULL = "full"  # Everything (--depth hook)
+    HIGH = "high"  # Detailed but cleaned, no system/hook noise (--depth tool; DEFAULT)
+    LOW = "low"  # Interaction-focused + key signals (--depth agent)
+    MINIMAL = "minimal"  # User + assistant messages only (--depth assistant)
+    USER_ONLY = "user-only"  # User prompts + steering only (--depth user)
+    SESSION = "session"  # Session structure only: headers/nav (--depth session)
 
     def includes(self, threshold: "DetailLevel") -> bool:
         """Return True iff this level is verbose enough to show content
         whose ``detail_visibility`` is declared at ``threshold``.
 
         Monotone-down: ``FULL.includes(X)`` is True for every ``X``;
-        ``USER_ONLY.includes(X)`` is True only for ``USER_ONLY`` itself.
+        ``SESSION.includes(X)`` is True only for ``SESSION`` itself.
         """
         return _DETAIL_ORDER[self] <= _DETAIL_ORDER[threshold]
 
@@ -77,6 +86,7 @@ _DETAIL_ORDER: dict[DetailLevel, int] = {
     DetailLevel.LOW: 2,
     DetailLevel.MINIMAL: 3,
     DetailLevel.USER_ONLY: 4,
+    DetailLevel.SESSION: 5,
 }
 
 # Guard against drift: if a new DetailLevel value is added without an
@@ -86,6 +96,35 @@ _DETAIL_ORDER: dict[DetailLevel, int] = {
 if set(_DETAIL_ORDER.keys()) != set(DetailLevel):
     raise RuntimeError(
         f"_DETAIL_ORDER missing entries for: {set(DetailLevel) - set(_DETAIL_ORDER.keys())}"
+    )
+
+# The default output level (#159): ``--depth tool`` / legacy ``--detail
+# high`` — detailed but cleaned of system/hook noise. A bare invocation
+# (no --depth, no --detail) and the no-suffix output filename both mean
+# this level.
+DEFAULT_DETAIL_LEVEL: DetailLevel = DetailLevel.HIGH
+
+# ``--depth`` value  →  internal DetailLevel (#159). The depth scale names
+# the message-hierarchy node the output stops at; the mapping onto the
+# verbosity-named DetailLevel is fixed. ``session`` is depth-only.
+DEPTH_TO_DETAIL: dict[str, DetailLevel] = {
+    "session": DetailLevel.SESSION,
+    "user": DetailLevel.USER_ONLY,
+    "assistant": DetailLevel.MINIMAL,
+    "agent": DetailLevel.LOW,
+    "tool": DetailLevel.HIGH,
+    "hook": DetailLevel.FULL,
+}
+
+# Reverse: DetailLevel → its ``--depth`` name (used for the depth-scheme
+# filename suffix). Total over every DetailLevel since DEPTH_TO_DETAIL is a
+# bijection onto the six levels.
+DETAIL_TO_DEPTH: dict[DetailLevel, str] = {v: k for k, v in DEPTH_TO_DETAIL.items()}
+
+if set(DETAIL_TO_DEPTH.keys()) != set(DetailLevel):
+    raise RuntimeError(
+        f"DEPTH_TO_DETAIL not a bijection over DetailLevel: "
+        f"missing {set(DetailLevel) - set(DETAIL_TO_DEPTH.keys())}"
     )
 
 

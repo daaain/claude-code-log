@@ -81,9 +81,10 @@ def test_markdown_output_dir_writes_variant_keyed_cache_rows(tmp_path: Path):
         silent=True,
     )
 
-    # Variant-specific filenames actually written to the destination.
-    session_name = f"session-{session_id}.low.compact.md"
-    combined_name = "combined_transcripts.low.compact.md"
+    # Variant-specific filenames actually written to the destination
+    # (LOW renders under its --depth name ``.agent``, #159).
+    session_name = f"session-{session_id}.agent.compact.md"
+    combined_name = "combined_transcripts.agent.compact.md"
     assert (dest / session_name).exists()
     assert (dest / combined_name).exists()
 

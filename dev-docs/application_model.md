@@ -64,8 +64,9 @@ the entire `~/.claude/projects/` hierarchy; explicit paths target a
 single transcript or directory. Major flags:
 
 - `--tui` — launch the interactive TUI (§ 2.2).
-- `--detail {full,high,low,minimal,user-only}` — drop content from
-  the rendered output (§ 2.6).
+- `--depth {session,user,assistant,agent,tool,hook}` (default `tool`) —
+  how deep into the message hierarchy to render (§ 2.6). Legacy
+  `--detail {full,high,low,minimal,user-only}` is a deprecated alias.
 - `--from-date "yesterday"`, `--to-date "today"` — natural-language
   date filtering via `dateparser`.
 - `--open-browser` — open the generated `index.html` after rendering.
@@ -239,26 +240,42 @@ external tools (dashboards, query scripts, `jq` pipelines).
 
 ### 2.6 Detail-level filter
 
-The `--detail` flag (and `models.DetailLevel`) lets users dial down
-how much of the transcript renders:
+The `--depth` flag (#159) lets users dial how deep into the message
+hierarchy to render — `session > user > assistant > agent > tool > hook`
+— naming the level by the node the output stops at. It maps onto
+`models.DetailLevel` (which keeps the older verbosity names internally)
+via `models.DEPTH_TO_DETAIL`:
 
-- `full` (default) — everything.
-- `high` — detailed but cleaned: drops system/hook noise while
-  keeping the full conversation and tool I/O.
-- `low` — drops most tool I/O, keeps the conversation plus a curated
-  set of "interaction signal" tools (WebSearch, WebFetch, Task, Agent —
-  the ones that show *what the agent did*, not *what it read*). See
-  `_LOW_KEEP_TOOLS` in [`renderer.py`](../claude_code_log/renderer.py).
-- `minimal` — drops all tool I/O.
-- `user-only` — drops everything except user messages and steering
-  (designed for feeding to downstream agents, e.g. building a
-  requirements doc).
+- `hook` (= `DetailLevel.FULL`) — everything, incl. hooks + system notices.
+- `tool` (= `HIGH`, **default**, `DEFAULT_DETAIL_LEVEL`) — detailed but
+  cleaned: drops system/hook noise while keeping the full conversation
+  and tool I/O.
+- `agent` (= `LOW`) — drops most tool I/O, keeps the conversation plus a
+  curated set of "interaction signal" tools (WebSearch, WebFetch, Task,
+  Agent — the ones that show *what the agent did*, not *what it read*).
+  See `_LOW_KEEP_TOOLS` in [`renderer.py`](../claude_code_log/renderer.py).
+- `assistant` (= `MINIMAL`) — drops all tool I/O (user + assistant only).
+- `user` (= `USER_ONLY`) — drops everything except user messages and
+  steering (for feeding downstream agents, e.g. a requirements doc).
+- `session` (= `SESSION`, depth-only, no `--detail` spelling) — session
+  structure only: session/branch headers + fork landmarks, every message
+  body dropped. Handled by an explicit branch in
+  `_ghost_template_by_detail` (the `visible_at` predicate keeps
+  threshold-less built-ins like `UserTextMessage` visible at every level,
+  so "drop even user messages" can't be expressed via `detail_visibility`).
+
+The legacy `--detail full|high|low|minimal|user-only` is kept as a
+deprecated alias (removed in 2.0) and maps to the same `DetailLevel`s.
+Filenames use a single canonical suffix per level — the `--depth` name
+(`.hook/.agent/.assistant/.user/.session`), with the default `tool`/HIGH
+suffix-less — regardless of which option selected it (so `--detail low`
+and `--depth agent` share the `.agent` file). See `utils.variant_suffix`.
 
 Recaps (`AwaySummaryMessage`) are a cross-cutting exception: they are a
-high-level summary of activity, so they stay visible at *every* level
-(`detail_visibility = USER_ONLY`), including `user-only`. The `--no-recaps`
-flag suppresses them at all levels — giving `--detail user-only --no-recaps`
-for a truly user-only view, or `--detail minimal --no-recaps` to drop the
+high-level summary of activity, so they stay visible at *every* content
+level (`detail_visibility = USER_ONLY`), including `user`. The `--no-recaps`
+flag suppresses them at all levels — giving `--depth user --no-recaps`
+for a truly user-only view, or `--depth assistant --no-recaps` to drop the
 recap/agent redundancy (#179).
 
 Filtering happens in a single *post-render* pass on `TemplateMessage`:

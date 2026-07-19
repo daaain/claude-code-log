@@ -1496,10 +1496,12 @@ class TestUserOnlyCli:
         )
         result = CliRunner().invoke(main, [str(jsonl), "--detail", "user-only"])
         assert result.exit_code == 0, result.output
-        # Output filename carries the variant suffix
-        generated = list(tmp_path.glob("*.user-only.html"))
+        # --detail is still accepted (deprecated alias, #159). Its output
+        # carries the canonical --depth-named suffix (.user), not the old
+        # .user-only — suffixes are single-named per level.
+        generated = list(tmp_path.glob("*.user.html"))
         assert len(generated) == 1, (
-            f"Expected one *.user-only.html, got: {list(tmp_path.iterdir())}"
+            f"Expected one *.user.html, got: {list(tmp_path.iterdir())}"
         )
 
 

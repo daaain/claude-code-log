@@ -4057,6 +4057,16 @@ def _ghost_template_by_detail(
             continue
         visible = _content_visible_at(msg.content, detail)
 
+        # SESSION (#159) — the most minimal level, "session structure only".
+        # ``visible_at`` keeps threshold-less built-ins (UserTextMessage etc.)
+        # visible at every level, so it can't express "drop even user
+        # messages" on its own; override here to keep ONLY session/branch
+        # headers. Non-header content that is a fork point still survives as a
+        # navigational landmark via the ``if not visible`` branch below, so
+        # back-links/anchors don't dangle.
+        if detail == DetailLevel.SESSION:
+            visible = isinstance(msg.content, SessionHeaderMessage)
+
         # LOW keep-list: built-in ToolUseMessage / ToolResultMessage declare
         # ``detail_visibility = LOW``, so the predicate keeps them at LOW;
         # the keep-list then narrows that set to a few specific tool names
