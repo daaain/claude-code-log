@@ -96,6 +96,34 @@ def test_analyzer_joins_constant_string_array_variable() -> None:
     assert batch.calls[0].input == {"cmd": "first | second"}
 
 
+def test_analyzer_recursively_joins_arrays_and_template_strings() -> None:
+    batch = analyze_javascript_tools(
+        r"""
+        const a = "resolved";
+        const body = [
+          "a static string",
+          `${a} template string`,
+          `a template with joined string arrays: ${["a", "b", "c"].join("\n")}`,
+          "should work"
+        ].join("\n");
+        const r = await tools.mcp__clmail__communicate({
+          action: "send",
+          actor: "/workspace/codex",
+          params: {to: "/workspace/clmail/main", body}
+        });
+        text(JSON.stringify(r));
+        """
+    )
+
+    assert batch is not None
+    assert batch.calls[0].input["params"]["body"] == (
+        "a static string\n"
+        "resolved template string\n"
+        "a template with joined string arrays: a\nb\nc\n"
+        "should work"
+    )
+
+
 def test_analyzer_rejects_dynamic_or_sparse_array_join() -> None:
     tail = "; const r = await tools.exec_command({cmd: body}); text(r.output);"
 
