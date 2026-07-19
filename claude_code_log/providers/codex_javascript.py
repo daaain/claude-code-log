@@ -692,7 +692,7 @@ class _StaticEvaluator:
             call_count = len(self.calls)
             if not self._declaration(declaration, iteration_environment):
                 return None
-            result = self._spread_result_object(
+            result = self._mapped_result_object(
                 return_statement.named_children[0], iteration_environment
             )
             if (
@@ -705,22 +705,31 @@ class _StaticEvaluator:
             results.append(result)
         return _Collection(tuple(results))
 
-    def _spread_result_object(
+    def _mapped_result_object(
         self, node: Node, environment: _Environment
     ) -> Optional[_ToolResult]:
-        """Resolve a static metadata object containing one ``...toolResult``."""
+        """Resolve a static metadata object exposing one tool's ``output``.
+
+        Codex emits both ``{name, ...result}`` and explicit projections such
+        as ``{name, exit_code: result.exit_code, output: result.output}``.
+        Only direct, same-named top-level fields from one result are accepted;
+        the ``output`` projection is required because that is the value the
+        shared Bash renderer consumes.
+        """
         if node.type != "object":
             return None
-        result: Optional[_ToolResult] = None
+        call_index: Optional[int] = None
+        exposes_output = False
         keys: set[str] = set()
         for child in node.named_children:
             if child.type == "spread_element":
-                if result is not None or len(child.named_children) != 1:
+                if call_index is not None or len(child.named_children) != 1:
                     return None
                 reference = self._result_reference(child.named_children[0], environment)
-                if reference is None:
+                if reference is None or reference.path:
                     return None
-                result = _ToolResult(reference.call_index, object_key="output")
+                call_index = reference.call_index
+                exposes_output = True
                 continue
             if child.type == "shorthand_property_identifier":
                 key = self.syntax.text(child)
@@ -733,14 +742,29 @@ class _StaticEvaluator:
                 if key_node is None or value_node is None:
                     return None
                 key = self._object_key(key_node)
-                if self._constant(value_node, environment) is _UNKNOWN:
+                reference = self._result_reference(value_node, environment)
+                if reference is not None:
+                    if (
+                        key is None
+                        or reference.path != (key,)
+                        or (
+                            call_index is not None
+                            and call_index != reference.call_index
+                        )
+                    ):
+                        return None
+                    call_index = reference.call_index
+                    exposes_output = exposes_output or key == "output"
+                elif self._constant(value_node, environment) is _UNKNOWN:
                     return None
             else:
                 return None
-            if key is None or key == "output" or key in keys:
+            if key is None or key in keys:
                 return None
             keys.add(key)
-        return result
+        if call_index is None or not exposes_output:
+            return None
+        return _ToolResult(call_index, object_key="output")
 
     def _is_json_stringify(self, node: Node) -> bool:
         function = node.child_by_field_name("function")
@@ -827,9 +851,23 @@ class _StaticEvaluator:
         ):
             return False
         collection = environment.get(self.syntax.text(owner))
-        arrow = arguments.named_children[0]
-        if not isinstance(collection, _Collection) or arrow.type != "arrow_function":
+        callback = arguments.named_children[0]
+        if not isinstance(collection, _Collection):
             return False
+        if callback.type == "identifier" and self.syntax.text(callback) == "text":
+            if (
+                len(self.emission_groups) + len(collection.values)
+                > self.max_expanded_calls
+            ):
+                return False
+            for result in collection.values:
+                self.emission_groups.append(((result, result.object_key),))
+                self.emission_prefixes.append(None)
+            self.output_mode = "ordered"
+            return True
+        if callback.type != "arrow_function":
+            return False
+        arrow = callback
         parameters = arrow.child_by_field_name("parameters")
         body = arrow.child_by_field_name("body")
         if (

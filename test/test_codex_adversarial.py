@@ -1151,6 +1151,65 @@ def test_static_array_map_batch_extracts_spread_command_outputs() -> None:
     assert [item.content for item in results] == ["type error\n", "63 passed\n"]
 
 
+def test_static_array_map_batch_extracts_explicit_command_outputs() -> None:
+    source = """
+        const cmds = [
+          ["guide", "rg --files -g 'AGENTS.md'"],
+          ["status", "git status --short --branch"],
+          ["head", "git log -1 --oneline"]
+        ];
+        const out = await Promise.all(cmds.map(async ([name, cmd]) => {
+          const r = await tools.exec_command({cmd, workdir: "/workspace"});
+          return {name, exit_code: r.exit_code, output: r.output};
+        }));
+        out.forEach(text);
+    """
+    emitted = [
+        {"name": "guide", "exit_code": 1, "output": ""},
+        {"name": "status", "exit_code": 0, "output": "## feature\n"},
+        {"name": "head", "exit_code": 0, "output": "abc1234 Subject\n"},
+    ]
+    records = [
+        _record(
+            1,
+            "response_item",
+            {
+                "type": "custom_tool_call",
+                "call_id": "mapped-explicit",
+                "name": "exec",
+                "input": source,
+            },
+        ),
+        _output(
+            2,
+            "mapped-explicit",
+            [
+                {
+                    "type": "input_text",
+                    "text": "Script completed\nWall time 0.2 seconds\nOutput:\n",
+                },
+                *[{"type": "input_text", "text": json.dumps(item)} for item in emitted],
+            ],
+        ),
+    ]
+
+    content = [item for entry in _normalized(records) for item in entry.message.content]
+    uses = [item for item in content if isinstance(item, ToolUseContent)]
+    results = [item for item in content if isinstance(item, ToolResultContent)]
+
+    assert [item.name for item in uses] == ["Bash"] * 3
+    assert [item.input["command"] for item in uses] == [
+        "rg --files -g 'AGENTS.md'",
+        "git status --short --branch",
+        "git log -1 --oneline",
+    ]
+    assert [item.content for item in results] == [
+        "",
+        "## feature\n",
+        "abc1234 Subject\n",
+    ]
+
+
 def test_openai_docs_object_batch_becomes_three_doc_pairs() -> None:
     source = """
         const [hooks, plugins, marketplace] = await Promise.all([

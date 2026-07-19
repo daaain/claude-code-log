@@ -401,6 +401,99 @@ def test_analyzer_expands_static_array_map_with_result_spread() -> None:
     assert batch.result_object_keys == ("output", "output")
 
 
+def test_analyzer_expands_static_array_map_with_explicit_result_fields() -> None:
+    batch = analyze_javascript_tools(
+        """
+        const cmds = [
+          ["guide", "rg --files -g 'AGENTS.md' -g '!node_modules'"],
+          ["status", "git status --short --branch"],
+          ["head", "git log -1 --oneline"]
+        ];
+        const out = await Promise.all(cmds.map(async ([name, cmd]) => {
+          const r = await tools.exec_command({
+            cmd,
+            workdir: "/workspace/project",
+            yield_time_ms: 10000,
+            max_output_tokens: 12000
+          });
+          return {name, exit_code: r.exit_code, output: r.output};
+        }));
+        out.forEach(text);
+        """
+    )
+
+    assert batch is not None
+    assert [call.name for call in batch.calls] == ["exec_command"] * 3
+    assert [call.input["cmd"] for call in batch.calls] == [
+        "rg --files -g 'AGENTS.md' -g '!node_modules'",
+        "git status --short --branch",
+        "git log -1 --oneline",
+    ]
+    assert batch.result_indexes == [0, 1, 2]
+    assert batch.result_object_keys == ("output", "output", "output")
+    assert batch.output_count == 3
+
+
+def test_analyzer_rejects_aliased_explicit_result_projection() -> None:
+    source = """
+        const cmds = [["status", "git status --short"]];
+        const out = await Promise.all(cmds.map(async ([name, cmd]) => {
+          const r = await tools.exec_command({cmd});
+          return {name, output: r.exit_code};
+        }));
+        out.forEach(text);
+    """
+
+    assert analyze_javascript_tools(source) is None
+
+
+def test_analyzer_rejects_unrecognized_collection_callback() -> None:
+    source = """
+        const cmds = [["status", "git status --short"]];
+        const out = await Promise.all(cmds.map(async ([name, cmd]) => {
+          const r = await tools.exec_command({cmd});
+          return {name, output: r.output};
+        }));
+        out.forEach(console.log);
+    """
+
+    assert analyze_javascript_tools(source) is None
+
+
+def test_analyzer_projects_sequential_calls_from_one_result_object() -> None:
+    batch = analyze_javascript_tools(
+        """
+        const actor = "/workspace/codex";
+        const p = await tools.mcp__clmail__actors({
+          action: "presence", actor, params: {status: "all"}
+        });
+        const m = await tools.mcp__clmail__communicate({
+          action: "list", actor, params: {status: "unread"}
+        });
+        text(JSON.stringify({presence: p, mail: m}));
+        """
+    )
+
+    assert batch is not None
+    assert [call.name for call in batch.calls] == [
+        "mcp__clmail__actors",
+        "mcp__clmail__communicate",
+    ]
+    assert batch.calls[0].input == {
+        "action": "presence",
+        "actor": "/workspace/codex",
+        "params": {"status": "all"},
+    }
+    assert batch.calls[1].input == {
+        "action": "list",
+        "actor": "/workspace/codex",
+        "params": {"status": "unread"},
+    }
+    assert batch.result_indexes == [0, 0]
+    assert batch.result_object_keys == ("presence", "mail")
+    assert batch.output_count == 1
+
+
 def test_analyzer_projects_result_object_shorthand_properties() -> None:
     batch = analyze_javascript_tools(
         """
