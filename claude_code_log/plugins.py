@@ -241,7 +241,12 @@ def load_transformers(*, force_reload: bool = False) -> list[MessageTransformer]
     if _cached_transformers is not None and not force_reload:
         return _cached_transformers
 
-    discovered: list[MessageTransformer] = []
+    # Built-ins use the same public transformer contract as installed plugins,
+    # but are registered explicitly so provider adapters can expose narrowly
+    # scoped internal message types without packaging a second distribution.
+    from .builtin_plugins.codex_docs import builtin_transformers
+
+    discovered: list[MessageTransformer] = list(builtin_transformers())
     for ep in entry_points(group=ENTRY_POINT_GROUP):
         if transformer := _load_single(ep):
             discovered.append(transformer)

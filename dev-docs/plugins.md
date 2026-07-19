@@ -44,9 +44,14 @@ Two motivating use cases drove the design:
   marker (e.g. `[hook] ...`) gets reclassified into a typed wrapper
   so it can render compactly or be hidden at low detail levels.
 
-Plugins are **discovered through entry points**, so just `pip install`
-ing a plugin package wires it in — no edit to `claude-code-log`
-itself.
+External plugins are **discovered through entry points**, so just `pip install`
+ing a plugin package wires it in — no edit to `claude-code-log` itself.
+The core may also register built-in transformers through the same contract for
+provider-private semantic names. For example, the Codex adapter exposes its
+OpenAI Developer Docs fetch as `CodexDoc`, which the built-in transformer
+renders as a URL/anchor request followed by collapsible Markdown. Keeping the
+internal name provider-local prevents the transformer from claiming a
+similarly named MCP call in another provider.
 
 ---
 

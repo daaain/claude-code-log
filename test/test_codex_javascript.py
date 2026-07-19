@@ -357,6 +357,29 @@ def test_analyzer_destructures_mixed_promise_all_results() -> None:
     assert batch.result_indexes == [0, 1, 2]
 
 
+def test_analyzer_projects_result_object_shorthand_properties() -> None:
+    batch = analyze_javascript_tools(
+        """
+        const [hooks, plugins, marketplace] = await Promise.all([
+          tools.mcp__openaiDeveloperDocs__fetch_openai_doc({url: "hooks"}),
+          tools.mcp__openaiDeveloperDocs__fetch_openai_doc({url: "plugins"}),
+          tools.mcp__openaiDeveloperDocs__fetch_openai_doc({url: "marketplace"})
+        ]);
+        text(JSON.stringify({hooks, plugins, marketplace}));
+        """
+    )
+
+    assert batch is not None
+    assert [call.input["url"] for call in batch.calls] == [
+        "hooks",
+        "plugins",
+        "marketplace",
+    ]
+    assert batch.result_indexes == [0, 0, 0]
+    assert batch.result_object_keys == ("hooks", "plugins", "marketplace")
+    assert batch.output_count == 1
+
+
 def test_analyzer_recognizes_parallel_session_markers() -> None:
     batch = analyze_javascript_tools(
         """

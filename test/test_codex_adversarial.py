@@ -890,6 +890,69 @@ def test_destructured_mixed_promise_batch_preserves_call_and_result_order() -> N
     ]
 
 
+def test_openai_docs_object_batch_becomes_three_doc_pairs() -> None:
+    source = """
+        const [hooks, plugins, marketplace] = await Promise.all([
+          tools.mcp__openaiDeveloperDocs__fetch_openai_doc({
+            url: "https://learn.chatgpt.com/docs/hooks", anchor: "#plugin-bundled-hooks"
+          }),
+          tools.mcp__openaiDeveloperDocs__fetch_openai_doc({
+            url: "https://learn.chatgpt.com/docs/build-plugins", anchor: "#bundled-mcp-servers-and-lifecycle-hooks"
+          }),
+          tools.mcp__openaiDeveloperDocs__fetch_openai_doc({
+            url: "https://learn.chatgpt.com/docs/build-plugins", anchor: "#add-a-marketplace-from-the-cli"
+          })
+        ]);
+        text(JSON.stringify({hooks,plugins,marketplace}));
+    """
+    documents = {
+        "hooks": {"content": [{"type": "text", "text": "# Hooks\nHook body"}]},
+        "plugins": {"content": [{"type": "text", "text": "# Plugins\nPlugin body"}]},
+        "marketplace": {
+            "content": [{"type": "text", "text": "# Marketplace\nMarket body"}]
+        },
+    }
+    records = [
+        _record(
+            1,
+            "response_item",
+            {
+                "type": "custom_tool_call",
+                "call_id": "docs",
+                "name": "exec",
+                "input": source,
+            },
+        ),
+        _output(
+            2,
+            "docs",
+            [
+                {
+                    "type": "input_text",
+                    "text": "Script completed\nWall time 0.1 seconds\nOutput:\n",
+                },
+                {"type": "input_text", "text": json.dumps(documents)},
+            ],
+        ),
+    ]
+
+    content = [item for entry in _normalized(records) for item in entry.message.content]
+    uses = [item for item in content if isinstance(item, ToolUseContent)]
+    results = [item for item in content if isinstance(item, ToolResultContent)]
+
+    assert [item.name for item in uses] == ["CodexDoc"] * 3
+    assert [item.id for item in uses] == [
+        "docs:batch:0",
+        "docs:batch:1",
+        "docs:batch:2",
+    ]
+    assert [item.content for item in results] == [
+        "# Hooks\nHook body",
+        "# Plugins\nPlugin body",
+        "# Marketplace\nMarket body",
+    ]
+
+
 def test_promise_batch_result_count_mismatch_stays_workflow() -> None:
     source = (
         "const results = await Promise.all(["

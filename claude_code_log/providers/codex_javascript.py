@@ -55,6 +55,7 @@ class JavaScriptToolBatch:
     result_prefixes: tuple[Optional[str], ...] = ()
     synthetic_results: tuple[Optional[str], ...] = ()
     output_count: int = 0
+    result_object_keys: tuple[Optional[str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -139,7 +140,7 @@ class _StaticEvaluator:
         self.max_expanded_calls = max_expanded_calls
         self.calls: list[JavaScriptToolCall] = []
         self.synthetic_results: list[Optional[str]] = []
-        self.emissions: list[int] = []
+        self.emission_groups: list[tuple[tuple[_ToolResult, Optional[str]], ...]] = []
         self.emission_prefixes: list[Optional[str]] = []
         self.loop_iterations = 0
         self.output_mode: Literal["markers", "ordered"] = "ordered"
@@ -149,10 +150,13 @@ class _StaticEvaluator:
         environment: _Environment = {}
         if not self._statements(self.syntax.root.named_children, environment):
             return None
-        if not self.calls or not self.emissions:
+        if not self.calls or not self.emission_groups:
             return None
 
-        if len(self.calls) == 1 and all(index == 0 for index in self.emissions):
+        if len(self.calls) == 1 and all(
+            len(group) == 1 and group[0][0].call_index == 0
+            for group in self.emission_groups
+        ):
             return JavaScriptToolBatch(
                 self.calls,
                 [0],
@@ -160,18 +164,22 @@ class _StaticEvaluator:
                 self.session_markers,
                 tuple(self.emission_prefixes),
                 tuple(self.synthetic_results),
-                len(self.emissions),
+                len(self.emission_groups),
+                (self.emission_groups[0][0][1],),
             )
-        if len(self.calls) != len(self.emissions) + sum(
+        if len(self.calls) != sum(map(len, self.emission_groups)) + sum(
             result is not None for result in self.synthetic_results
         ):
             return None
 
         result_indexes = [-1] * len(self.calls)
-        for output_index, call_index in enumerate(self.emissions):
-            if result_indexes[call_index] != -1:
-                return None
-            result_indexes[call_index] = output_index
+        result_object_keys: list[Optional[str]] = [None] * len(self.calls)
+        for output_index, group in enumerate(self.emission_groups):
+            for result, object_key in group:
+                if result_indexes[result.call_index] != -1:
+                    return None
+                result_indexes[result.call_index] = output_index
+                result_object_keys[result.call_index] = object_key
         if any(
             result_index == -1 and synthetic is None
             for result_index, synthetic in zip(result_indexes, self.synthetic_results)
@@ -184,7 +192,8 @@ class _StaticEvaluator:
             self.session_markers,
             tuple(self.emission_prefixes),
             tuple(self.synthetic_results),
-            len(self.emissions),
+            len(self.emission_groups),
+            tuple(result_object_keys),
         )
 
     def _statements(self, statements: list[Node], environment: _Environment) -> bool:
@@ -424,14 +433,62 @@ class _StaticEvaluator:
             self.calls.append(tool_call)
             self.synthetic_results.append(None)
         else:
+            object_results = self._result_object_emission(argument, environment)
+            if object_results is not None:
+                self.emission_groups.append(object_results)
+                self.emission_prefixes.append(None)
+                return len(self.emission_groups) <= self.max_expanded_calls
             result = self._result_reference(argument, environment)
         if result is None:
             return False
-        self.emissions.append(result.call_index)
+        self.emission_groups.append(((result, None),))
         self.emission_prefixes.append(
             self._result_prefix(argument, environment, result)
         )
-        return len(self.emissions) <= self.max_expanded_calls
+        return len(self.emission_groups) <= self.max_expanded_calls
+
+    def _result_object_emission(
+        self, node: Node, environment: _Environment
+    ) -> Optional[tuple[tuple[_ToolResult, Optional[str]], ...]]:
+        """Resolve ``JSON.stringify({key: result, shorthand})`` provenance."""
+        if node.type != "call_expression" or not self._is_json_stringify(node):
+            return None
+        arguments = node.child_by_field_name("arguments")
+        if arguments is None or len(arguments.named_children) != 1:
+            return None
+        object_node = arguments.named_children[0]
+        if object_node.type != "object" or not object_node.named_children:
+            return None
+
+        results: list[tuple[_ToolResult, Optional[str]]] = []
+        keys: set[str] = set()
+        for child in object_node.named_children:
+            if child.type == "shorthand_property_identifier":
+                key = self.syntax.text(child)
+                value = environment.get(key)
+                result = value if isinstance(value, _ToolResult) else None
+            elif child.type == "pair":
+                key_node = child.child_by_field_name("key")
+                value_node = child.child_by_field_name("value")
+                if key_node is None or value_node is None:
+                    return None
+                if key_node.type in {"property_identifier", "identifier"}:
+                    key = self.syntax.text(key_node)
+                elif key_node.type == "string":
+                    decoded_key = _decode_string(self.syntax.text(key_node))
+                    if not isinstance(decoded_key, str):
+                        return None
+                    key = decoded_key
+                else:
+                    return None
+                result = self._result_reference(value_node, environment)
+            else:
+                return None
+            if result is None or key in keys:
+                return None
+            keys.add(key)
+            results.append((result, key))
+        return tuple(results)
 
     def _result_prefix(
         self, node: Node, environment: _Environment, result: _ToolResult

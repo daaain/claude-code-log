@@ -33,6 +33,7 @@ class AdaptedToolBatch:
     result_prefixes: tuple[Optional[str], ...] = ()
     synthetic_results: tuple[Optional[str], ...] = ()
     output_count: Optional[int] = None
+    result_object_keys: tuple[Optional[str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -78,6 +79,7 @@ def adapt_codex_tool_batch(source: str) -> Optional[AdaptedToolBatch]:
         adapted: list[AdaptedToolCall] = []
         result_indexes: list[int] = []
         synthetic_results: list[Optional[str]] = []
+        result_object_keys: list[Optional[str]] = []
         expanded_patch = False
         for index, call in enumerate(analyzed.calls):
             expanded = _expand_canonical_call(call.name, call.input)
@@ -86,6 +88,9 @@ def adapt_codex_tool_batch(source: str) -> Optional[AdaptedToolBatch]:
             result_indexes.extend([analyzed.result_indexes[index]] * len(expanded))
             synthetic_results.extend(
                 [analyzed.synthetic_results[index]] * len(expanded)
+            )
+            result_object_keys.extend(
+                [analyzed.result_object_keys[index]] * len(expanded)
             )
         if (len(analyzed.calls) >= 2 or expanded_patch) and all(
             call.name != "Workflow" for call in adapted
@@ -98,6 +103,7 @@ def adapt_codex_tool_batch(source: str) -> Optional[AdaptedToolBatch]:
                 analyzed.result_prefixes,
                 tuple(synthetic_results),
                 analyzed.output_count,
+                tuple(result_object_keys),
             )
     return None
 
@@ -333,6 +339,12 @@ def _workflow(source: str) -> AdaptedToolCall:
 
 
 def _canonicalize(name: str, input_data: dict[str, Any]) -> AdaptedToolCall:
+    if name == "mcp__openaiDeveloperDocs__fetch_openai_doc":
+        url = input_data.get("url")
+        anchor = input_data.get("anchor")
+        if isinstance(url, str) and (anchor is None or isinstance(anchor, str)):
+            return AdaptedToolCall("CodexDoc", input_data)
+
     if name == "apply_patch":
         raw_patch = input_data.get("patch", input_data.get("raw"))
         if isinstance(raw_patch, str):

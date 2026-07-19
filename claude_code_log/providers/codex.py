@@ -1175,6 +1175,7 @@ class CodexProvider(BaseProvider):
                 tuple[Optional[str], ...],
                 tuple[Optional[str], ...],
                 Optional[int],
+                tuple[Optional[str], ...],
             ],
         ] = {}
         outputs: dict[str, tuple[list[dict[str, Any]], str]] = {}
@@ -1199,6 +1200,7 @@ class CodexProvider(BaseProvider):
                             batch.result_prefixes,
                             batch.synthetic_results,
                             batch.output_count,
+                            batch.result_object_keys,
                         )
             elif payload_type in {
                 "function_call_output",
@@ -1222,6 +1224,7 @@ class CodexProvider(BaseProvider):
             result_prefixes,
             synthetic_results,
             output_count,
+            result_object_keys,
         ) in requests.items():
             output = outputs.get(call_id)
             if output is None:
@@ -1240,6 +1243,20 @@ class CodexProvider(BaseProvider):
                 synthetic if synthetic is not None else split[result_indexes[index]]
                 for index, synthetic in enumerate(synthetic_results)
             ]
+            if len(results) != len(result_object_keys):
+                continue
+            extracted_results: list[str] = []
+            for result, object_key in zip(results, result_object_keys):
+                if object_key is None:
+                    extracted_results.append(result)
+                    continue
+                extracted = self._object_batch_result(result, object_key)
+                if extracted is None:
+                    break
+                extracted_results.append(extracted)
+            if len(extracted_results) != len(results):
+                continue
+            results = extracted_results
             status = self._empty_result_status(output[0])
             if status is not None:
                 results = [
@@ -1262,6 +1279,19 @@ class CodexProvider(BaseProvider):
             and re.fullmatch(r"SESSION_ID=[1-9][0-9]*", text) is not None
             for item in items
         )
+
+    def _object_batch_result(self, output: str, key: str) -> Optional[str]:
+        """Extract one statically-proven property from a JSON result object."""
+        try:
+            decoded: Any = json.loads(output)
+        except (ValueError, RecursionError):
+            return None
+        if not isinstance(decoded, dict) or key not in decoded:
+            return None
+        try:
+            return json.dumps(decoded[key], ensure_ascii=False)
+        except (TypeError, ValueError):
+            return None
 
     def _batch_outputs(
         self,
@@ -1821,6 +1851,14 @@ class CodexProvider(BaseProvider):
             acknowledgement = self._todo_acknowledgement(output)
             if acknowledgement is not None:
                 output = acknowledgement
+        if not is_error and tool_name == "CodexDoc":
+            document = (
+                self._openai_doc_result(output)
+                if isinstance(output, list)
+                else self._openai_doc_emission(output)
+            )
+            if document is not None:
+                output = document
         if (
             not is_error
             and tool_name in {"Write", "Edit", "MultiEdit"}
@@ -1840,6 +1878,50 @@ class CodexProvider(BaseProvider):
                 "results": [{"content": []}, output],
             }
         return output, tool_use_result
+
+    def _openai_doc_result(self, items: list[dict[str, Any]]) -> Optional[str]:
+        """Unwrap Codex's successful OpenAI Docs MCP result envelope."""
+        if len(items) != 2:
+            return None
+        status, emitted = items
+        status_text = status.get("text")
+        emitted_text = emitted.get("text")
+        if (
+            status.get("type") not in {"input_text", "output_text", "text"}
+            or not isinstance(status_text, str)
+            or _COMPLETED_COMMAND_RE.fullmatch(status_text) is None
+            or emitted.get("type") not in {"input_text", "output_text", "text"}
+            or not isinstance(emitted_text, str)
+        ):
+            return None
+        return self._openai_doc_emission(emitted_text)
+
+    def _openai_doc_emission(self, emitted_text: str) -> Optional[str]:
+        try:
+            decoded: Any = json.loads(emitted_text)
+        except (ValueError, RecursionError):
+            return None
+        if not isinstance(decoded, dict):
+            return None
+        envelope = cast(dict[str, Any], decoded)
+        if envelope.get("isError") is True:
+            return None
+        raw_content = envelope.get("content")
+        if not isinstance(raw_content, list):
+            return None
+        content = cast(list[Any], raw_content)
+        if len(content) != 1:
+            return None
+        block = content[0]
+        if not isinstance(block, dict):
+            return None
+        text = cast(dict[str, Any], block).get("text")
+        return (
+            text
+            if cast(dict[str, Any], block).get("type") == "text"
+            and isinstance(text, str)
+            else None
+        )
 
     def _list_agents_output(self, content: str) -> Optional[str]:
         try:

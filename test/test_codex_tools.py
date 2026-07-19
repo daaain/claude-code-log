@@ -157,6 +157,40 @@ def test_single_mcp_call_keeps_name_for_plugin_transformers() -> None:
     assert call.input["action"] == "list"
 
 
+def test_codex_openai_docs_mcp_uses_internal_doc_tool() -> None:
+    source = (
+        "const r = await tools.mcp__openaiDeveloperDocs__fetch_openai_doc({"
+        'url: "https://learn.chatgpt.com/docs/hooks", anchor: "#config-shape"});'
+        "text(JSON.stringify(r));"
+    )
+
+    call = adapt_codex_tool_call("exec", {"raw": source}, raw_input=source)
+
+    assert call.name == "CodexDoc"
+    assert call.input == {
+        "url": "https://learn.chatgpt.com/docs/hooks",
+        "anchor": "#config-shape",
+    }
+
+
+def test_codex_openai_docs_object_batch_preserves_result_projection() -> None:
+    source = """
+        const [hooks, plugins, marketplace] = await Promise.all([
+          tools.mcp__openaiDeveloperDocs__fetch_openai_doc({url: "https://learn.chatgpt.com/docs/hooks"}),
+          tools.mcp__openaiDeveloperDocs__fetch_openai_doc({url: "https://learn.chatgpt.com/docs/build-plugins"}),
+          tools.mcp__openaiDeveloperDocs__fetch_openai_doc({url: "https://learn.chatgpt.com/docs/build-plugins", anchor: "#marketplace"})
+        ]);
+        text(JSON.stringify({hooks, plugins, marketplace}));
+    """
+
+    batch = adapt_codex_tool_batch(source)
+
+    assert batch is not None
+    assert [call.name for call in batch.calls] == ["CodexDoc"] * 3
+    assert batch.result_indexes == [0, 0, 0]
+    assert batch.result_object_keys == ("hooks", "plugins", "marketplace")
+
+
 def test_single_mcp_call_resolves_constant_shorthand_input() -> None:
     source = """
         const actor = "/workspace/codex";

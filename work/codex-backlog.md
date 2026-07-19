@@ -16,13 +16,16 @@
   user shell records, local image inlining, and adjacent duplicate handling.
 - Provider-local tool/result transport normalization with typed Bash, Write,
   Edit, MultiEdit, TodoWrite, Task, SendMessage, TaskList, WebSearch, and
-  WebFetch reuse; open-ended MCP/plugin names remain transformable by plugins.
+  WebFetch reuse; OpenAI Developer Docs fetches render through a Codex-only
+  built-in plugin, while open-ended MCP/plugin names remain transformable by
+  external plugins.
 - Conservative async command folding for sequential and parallel
   `wait`/`write_stdin` continuations.
 - Tree-sitter-only bounded JavaScript analysis for static calls, batches,
   constants/templates/joins, loops/destructuring, delays, provenance, and
-  truncated prefixed output. Unsupported programs remain Workflow; the legacy
-  recognizer is not a production fallback.
+  truncated prefixed output, including projection of aggregated static result
+  objects back to their source calls. Unsupported programs remain Workflow;
+  the legacy recognizer is not a production fallback.
 - Cross-provider contracts, adversarial correlation/privacy tests, a sanitized
   schema corpus, and real provider-to-HTML/Markdown export tests.
 
