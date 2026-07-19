@@ -759,6 +759,19 @@ class _StaticEvaluator:
         if node.type == "null":
             return None
         if node.type == "array":
+            children = node.children
+            if not node.named_children:
+                return [] if len(children) == 2 else _UNKNOWN
+            if (
+                len(children) != 2 * len(node.named_children) + 1
+                or children[0].type != "["
+                or children[-1].type != "]"
+                or any(
+                    children[index].type != ","
+                    for index in range(2, len(children) - 1, 2)
+                )
+            ):
+                return _UNKNOWN
             values: list[Any] = []
             for child in node.named_children:
                 value = self._constant(child, environment)
@@ -770,7 +783,38 @@ class _StaticEvaluator:
             return self._object(node, environment)
         if node.type == "template_string":
             return self._template_constant(node, environment)
+        if node.type == "call_expression":
+            return self._array_join(node, environment)
         return _UNKNOWN
+
+    def _array_join(self, node: Node, environment: _Environment) -> Any:
+        """Evaluate a static string array's ``join`` call."""
+        function = node.child_by_field_name("function")
+        arguments = node.child_by_field_name("arguments")
+        if (
+            function is None
+            or function.type != "member_expression"
+            or arguments is None
+            or len(arguments.named_children) != 1
+        ):
+            return _UNKNOWN
+        owner = function.child_by_field_name("object")
+        property_node = function.child_by_field_name("property")
+        if (
+            owner is None
+            or property_node is None
+            or property_node.type != "property_identifier"
+            or self.syntax.text(property_node) != "join"
+        ):
+            return _UNKNOWN
+        values = self._constant(owner, environment)
+        separator = self._constant(arguments.named_children[0], environment)
+        if not isinstance(values, list) or not isinstance(separator, str):
+            return _UNKNOWN
+        items = cast(list[Any], values)
+        if not all(isinstance(value, str) for value in items):
+            return _UNKNOWN
+        return separator.join(cast(list[str], items))
 
     def _template_constant(self, node: Node, environment: _Environment) -> Any:
         parts: list[str] = []

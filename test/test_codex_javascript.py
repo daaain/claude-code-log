@@ -54,6 +54,63 @@ def test_analyzer_resolves_constant_shorthand_tool_input() -> None:
     assert batch.result_indexes == [0]
 
 
+def test_analyzer_joins_static_string_array_in_tool_input() -> None:
+    batch = analyze_javascript_tools(
+        r"""
+        const r = await tools.mcp__clmail__communicate({
+          action: "send",
+          actor: "/workspace/codex",
+          params: {
+            to: "/workspace/clmail/main",
+            subject: "Lifecycle verified",
+            body: [
+              "Automatic delivery is confirmed.",
+              "",
+              "Official Codex hook contract:",
+              "Conclusion: the plugin is viable."
+            ].join("\n")
+          }
+        });
+        text(JSON.stringify(r));
+        """
+    )
+
+    assert batch is not None
+    assert batch.calls[0].input["params"]["body"] == (
+        "Automatic delivery is confirmed.\n\n"
+        "Official Codex hook contract:\n"
+        "Conclusion: the plugin is viable."
+    )
+
+
+def test_analyzer_joins_constant_string_array_variable() -> None:
+    batch = analyze_javascript_tools(
+        r"""
+        const lines = ["first", "second"];
+        const r = await tools.exec_command({cmd: lines.join(" | ")});
+        text(r.output);
+        """
+    )
+
+    assert batch is not None
+    assert batch.calls[0].input == {"cmd": "first | second"}
+
+
+def test_analyzer_rejects_dynamic_or_sparse_array_join() -> None:
+    tail = "; const r = await tools.exec_command({cmd: body}); text(r.output);"
+
+    assert (
+        analyze_javascript_tools('const body = ["a", value].join("\n")' + tail) is None
+    )
+    assert (
+        analyze_javascript_tools('const body = ["a",, "b"].join("\n")' + tail) is None
+    )
+    assert (
+        analyze_javascript_tools('const body = ["a", "b"].join(separator)' + tail)
+        is None
+    )
+
+
 def test_analyzer_materializes_static_promise_delay_before_tool_call() -> None:
     batch = analyze_javascript_tools(
         """

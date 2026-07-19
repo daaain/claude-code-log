@@ -591,6 +591,36 @@ def test_direct_nested_tool_result_matches_native_tool_result_shape(
     assert results[0].is_error is False
 
 
+def test_static_join_body_keeps_nested_tool_plugin_rendering() -> None:
+    payload = {"sent": True, "message_ids": [4813]}
+    source = r"""
+        const r = await tools.mcp__clmail__communicate({
+          action: "send",
+          actor: "/workspace/codex",
+          params: {
+            to: "/workspace/clmail/main",
+            subject: "Lifecycle verified",
+            body: ["Automatic delivery confirmed.", "", "Plugin viable."].join("\n")
+          }
+        });
+        text(JSON.stringify(r));
+    """
+    records = [
+        _call(1, "exec", "exec", source),
+        _output(2, "exec", _forwarded_result_envelope(payload)),
+    ]
+
+    content = [item for entry in _normalized(records) for item in entry.message.content]
+    use = next(item for item in content if isinstance(item, ToolUseContent))
+    result = next(item for item in content if isinstance(item, ToolResultContent))
+
+    assert use.name == "mcp__clmail__communicate"
+    assert use.input["params"]["body"] == (
+        "Automatic delivery confirmed.\n\nPlugin viable."
+    )
+    assert result.content == json.dumps(payload)
+
+
 def test_static_delay_before_nested_tool_becomes_wait_then_tool() -> None:
     payload = {"messages": [{"id": 4812}]}
     source = """
