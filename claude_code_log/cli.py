@@ -100,7 +100,7 @@ def _install_stack_dump_signal() -> None:
     if sigusr1 is None:
         return
     try:
-        faulthandler.register(sigusr1, all_threads=True, chain=False)
+        faulthandler.register(sigusr1, all_threads=True, chain=False)  # ty: ignore[possibly-missing-attribute]
     except (RuntimeError, ValueError, OSError):
         # E.g. signal already taken, no-tty environments, or platforms
         # where faulthandler.register raises. Diagnostics shouldn't

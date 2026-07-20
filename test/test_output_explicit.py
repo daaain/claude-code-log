@@ -168,19 +168,19 @@ class TestIsOutdatedNonRegularFileGuard:
     @_requires_mkfifo
     def test_markdown_is_outdated_on_fifo_returns_true(self, tmp_path: Path):
         fifo = tmp_path / "f"
-        os.mkfifo(fifo)
+        os.mkfifo(fifo)  # ty: ignore[possibly-missing-attribute]
         assert self._call_with_timeout(MarkdownRenderer().is_outdated, fifo) is True
 
     @_requires_mkfifo
     def test_json_is_outdated_on_fifo_returns_true(self, tmp_path: Path):
         fifo = tmp_path / "f"
-        os.mkfifo(fifo)
+        os.mkfifo(fifo)  # ty: ignore[possibly-missing-attribute]
         assert self._call_with_timeout(JsonRenderer().is_outdated, fifo) is True
 
     @_requires_mkfifo
     def test_check_html_version_on_fifo_returns_none(self, tmp_path: Path):
         fifo = tmp_path / "f"
-        os.mkfifo(fifo)
+        os.mkfifo(fifo)  # ty: ignore[possibly-missing-attribute]
         assert self._call_with_timeout(check_html_version, fifo) is None
 
     def test_markdown_is_outdated_on_directory_returns_true(self, tmp_path: Path):

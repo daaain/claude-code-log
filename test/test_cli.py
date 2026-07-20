@@ -649,7 +649,7 @@ class TestStackDumpSignal:
             line = proc.stdout.readline()
             assert line.strip() == b"ready"
 
-            os.kill(proc.pid, signal.SIGUSR1)
+            os.kill(proc.pid, signal.SIGUSR1)  # ty: ignore[possibly-missing-attribute]
 
             # Poll for traceback markers up to a generous deadline. The
             # handler usually fires within a few ms; we allow much more
