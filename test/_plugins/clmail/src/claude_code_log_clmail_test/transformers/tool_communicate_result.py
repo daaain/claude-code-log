@@ -23,7 +23,7 @@ from typing import ClassVar, Optional
 
 from claude_code_log.factories.priorities import TOOL_OUTPUT_GENERIC
 from claude_code_log.models import (
-    DetailLevel,
+    RenderingDepth,
     MessageContent,
     MessageMeta,
     ToolResultMessage,
@@ -61,7 +61,7 @@ class TestClmailCommunicateResultMessage(ToolResultMessage):
 
     # Visible at LOW so a "read the mail thread" flow surfaces the
     # actual reply text in the default summary view.
-    detail_visibility: ClassVar[DetailLevel] = DetailLevel.LOW
+    depth_visibility: ClassVar[RenderingDepth] = RenderingDepth.AGENT
 
     @property
     def has_markdown(self) -> bool:

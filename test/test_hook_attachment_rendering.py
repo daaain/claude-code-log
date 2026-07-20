@@ -6,7 +6,7 @@ Covers:
 - Non-hook attachment types stay structural (factory returns ``None``),
   except ``queued_command``, which is promoted to a steering message.
 - Full-detail HTML rendering surfaces the hook payload.
-- HIGH and below detail levels drop hook attachments.
+- HIGH and below depth levels drop hook attachments.
 - Parent-anchor: the rendered attachment's parent_uuid matches the
   source's ``parentUuid`` (not ``toolUseID``).
 """
@@ -21,7 +21,7 @@ from claude_code_log.html.renderer import HtmlRenderer
 from claude_code_log.html.system_formatters import format_hook_attachment_content
 from claude_code_log.models import (
     AttachmentTranscriptEntry,
-    DetailLevel,
+    RenderingDepth,
     HookAttachmentMessage,
     TranscriptEntry,
     UserSteeringMessage,
@@ -409,12 +409,12 @@ def _hook_messages() -> list[TranscriptEntry]:
     ]
 
 
-class TestEndToEndDetailLevels:
+class TestEndToEndRenderingDepths:
     def test_full_detail_renders_hook_attachment(self) -> None:
         from claude_code_log.renderer import generate_template_messages
 
         roots, _nav, ctx = generate_template_messages(
-            _hook_messages(), detail=DetailLevel.FULL
+            _hook_messages(), depth=RenderingDepth.HOOK
         )
         del roots, _nav  # only inspect ctx.messages
 
@@ -435,15 +435,15 @@ class TestEndToEndDetailLevels:
 
     def test_full_html_includes_hook_payload(self) -> None:
         renderer = HtmlRenderer()
-        renderer.detail = DetailLevel.FULL
+        renderer.depth = RenderingDepth.HOOK
         html = renderer.generate(_hook_messages(), "Hook Attachment Smoke")
-        # Hook content surfaces in the rendered HTML at full detail.
+        # Hook content surfaces in the rendered HTML at full depth.
         assert "registered prompt" in html
         assert "UserPromptSubmit" in html
 
     def test_high_detail_drops_hook_attachment(self) -> None:
         renderer = HtmlRenderer()
-        renderer.detail = DetailLevel.HIGH
+        renderer.depth = RenderingDepth.TOOL
         html = renderer.generate(_hook_messages(), "Hook Attachment HIGH")
         # At HIGH, hook attachments are dropped along with other hook noise.
         assert "registered prompt" not in html
@@ -452,7 +452,7 @@ class TestEndToEndDetailLevels:
 
     def test_low_detail_drops_hook_attachment(self) -> None:
         renderer = HtmlRenderer()
-        renderer.detail = DetailLevel.LOW
+        renderer.depth = RenderingDepth.AGENT
         html = renderer.generate(_hook_messages(), "Hook Attachment LOW")
         assert "registered prompt" not in html
 
@@ -526,7 +526,7 @@ class TestHookAttachmentHierarchy:
         ]
 
         _roots, _nav, ctx = generate_template_messages(
-            messages, detail=DetailLevel.FULL
+            messages, depth=RenderingDepth.HOOK
         )
         del _roots, _nav
 
@@ -570,7 +570,7 @@ class TestHookAttachmentHierarchy:
         ]
 
         _roots, _nav, ctx = generate_template_messages(
-            messages, detail=DetailLevel.FULL
+            messages, depth=RenderingDepth.HOOK
         )
         del _roots, _nav
 
@@ -624,7 +624,7 @@ class TestHookAttachmentsFixture:
         messages = load_transcript(jsonl)
 
         renderer = HtmlRenderer()
-        renderer.detail = DetailLevel.FULL
+        renderer.depth = RenderingDepth.HOOK
         html = renderer.generate(messages, "Hook Attachments Fixture")
 
         # Each hook flavour surfaces its key payload.
@@ -646,7 +646,7 @@ class TestHookAttachmentsFixture:
         messages = load_transcript(jsonl)
 
         renderer = HtmlRenderer()
-        renderer.detail = DetailLevel.HIGH
+        renderer.depth = RenderingDepth.TOOL
         html = renderer.generate(messages, "Hook Attachments HIGH")
 
         assert "prompt registered" not in html

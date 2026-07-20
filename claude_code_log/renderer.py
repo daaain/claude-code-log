@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from .workflow import WorkflowRun
 
 from .models import (
-    DetailLevel,
+    RenderingDepth,
     MessageContent,
     MessageMeta,
     MessageType,
@@ -316,12 +316,12 @@ class TemplateMessage:
         # Fork point preview text (short excerpt of fork point message content)
         self.fork_point_preview: str = ""
 
-        # Set by ``_ghost_template_by_detail`` when this slot is a fork point
-        # whose own message body is filtered out at the current detail level,
+        # Set by ``_ghost_template_by_depth`` when this slot is a fork point
+        # whose own message body is filtered out at the current depth level,
         # but which is kept (not ghosted to None) so the fork point stays a
         # visible, anchorable landmark. The template renders only the
         # fork-point box for such a slot, not the message card (issue #233
-        # follow-up — fork points survive detail filtering like the branches
+        # follow-up — fork points survive depth filtering like the branches
         # they connect, instead of vanishing and orphaning the branches).
         self.fork_only: bool = False
 
@@ -713,7 +713,7 @@ class TemplateSummary:
 def generate_template_messages(
     messages: list[TranscriptEntry],
     session_tree: Optional["SessionTree"] = None,
-    detail: DetailLevel | str = DetailLevel.FULL,
+    depth: RenderingDepth | str = RenderingDepth.HOOK,
     no_recaps: bool = False,
 ) -> Tuple[list[TemplateMessage], list[dict[str, Any]], RenderingContext]:
     """Generate root messages and session navigation from transcript messages.
@@ -725,8 +725,8 @@ def generate_template_messages(
         messages: List of transcript entries to process.
         session_tree: Optional pre-built SessionTree from DAG construction.
             When provided, avoids an expensive DAG rebuild.
-        detail: Output detail level controlling which message types are included.
-            Accepts either a DetailLevel enum or a plain string (e.g. "low").
+        depth: Output depth level controlling which message types are included.
+            Accepts either a RenderingDepth enum or a plain string (e.g. "low").
 
     Returns:
         A tuple of (root_messages, session_nav, context) where:
@@ -736,9 +736,9 @@ def generate_template_messages(
     """
     from .utils import get_warmup_session_ids
 
-    # Normalize plain string to DetailLevel for convenience (e.g. from CLI)
-    if not isinstance(detail, DetailLevel):
-        detail = DetailLevel(detail)
+    # Normalize plain string to RenderingDepth for convenience (e.g. from CLI)
+    if not isinstance(depth, RenderingDepth):
+        depth = RenderingDepth(depth)
 
     # Performance timing
     t_start = time.time()
@@ -777,9 +777,9 @@ def generate_template_messages(
         filtered_messages = _filter_messages(messages)
 
     # Detail-level filtering happens entirely post-render via
-    # ``_ghost_template_by_detail`` (single-axis collapse — Phase 3 of the
-    # ghosting epic). The pre-render ``_filter_by_detail`` is gone; the
-    # per-class ``detail_visibility`` predicate now drives all stripping.
+    # ``_ghost_template_by_depth`` (single-axis collapse — Phase 3 of the
+    # ghosting epic). The pre-render ``_filter_by_depth`` is gone; the
+    # per-class ``depth_visibility`` predicate now drives all stripping.
 
     # Pass 1: Collect session metadata and token tracking
     with log_timing("Collect session info", t_start):
@@ -803,8 +803,8 @@ def generate_template_messages(
         )
 
     # Fold Skill-tool bodies (isMeta slash-command entries) into their
-    # originating tool_use. Runs before the detail filter so the body
-    # survives alongside the tool_use at HIGH — and the now-redundant
+    # originating tool_use. Runs before the depth filter so the body
+    # survives alongside the tool_use at TOOL — and the now-redundant
     # slash-command + "Launching skill" tool_result are dropped once.
     with log_timing("Pair Skill tool_uses", t_start):
         _pair_skill_tool_uses(ctx)
@@ -814,16 +814,16 @@ def generate_template_messages(
         _link_junction_forwards(ctx)
 
     # Detail-level post-render: ghost non-visible slots in place.
-    # ``_ghost_template_by_detail`` sets ``ctx.messages[i] = None``
+    # ``_ghost_template_by_depth`` sets ``ctx.messages[i] = None``
     # for each filtered slot and repairs anchor-target references
     # (``session_first_message``, ``parent_message_index``,
     # ``junction_forward_links``) so dropped fork-points don't leave
     # dead ``#msg-d-{N}`` links.
-    # ``--no-recaps`` suppresses recaps even at FULL, so run the ghost pass
+    # ``--no-recaps`` suppresses recaps even at HOOK, so run the ghost pass
     # whenever filtering OR recap suppression is requested (#179).
-    if detail != DetailLevel.FULL or no_recaps:
-        with log_timing(f"Detail post-render filter ({detail.value})", t_start):
-            _ghost_template_by_detail(ctx, detail, no_recaps=no_recaps)
+    if depth != RenderingDepth.HOOK or no_recaps:
+        with log_timing(f"Detail post-render filter ({depth.value})", t_start):
+            _ghost_template_by_depth(ctx, depth, no_recaps=no_recaps)
 
     # Prepare session navigation data (uses ctx for session header indices)
     session_nav: list[dict[str, Any]] = []
@@ -892,15 +892,15 @@ def generate_template_messages(
     # spawning Task's sidechain with that spawn, fold the answer onto
     # ``TaskOutput.async_final_answer``, and flag the notification
     # ``result_is_duplicate``. The format-specific renderers honour the
-    # flag — at ``DetailLevel.LOW`` they return empty for the
+    # flag — at ``RenderingDepth.AGENT`` they return empty for the
     # duplicate's title and body, so the rendering loop's existing
     # "skip empty messages" elision drops the card without us having
     # to delete + reindex (which would invalidate ancestry classes,
     # backlink fields, and session nav anchors). The notification
     # itself stays in ``ctx.messages`` — only its rendered output
-    # disappears at LOW.
+    # disappears at AGENT.
     with log_timing("Link async notifications", t_start):
-        _link_async_notifications(ctx, detail)
+        _link_async_notifications(ctx, depth)
 
     # Surface the model each agent ran on (issue #246). Runs here — after
     # pairing and async linking — so a spawn card can reach its paired
@@ -1028,7 +1028,7 @@ def _build_uuid_to_render_sid(
     the ``SessionTree`` already knew authoritatively. The loop
     variable carried a latent bug: if a branch's ``first_uuid`` was
     dropped before rendering (structurally, by ``_filter_messages`` —
-    or, before the single-axis collapse, by the pre-render detail
+    or, before the single-axis collapse, by the pre-render depth
     filter), the trigger never fired and subsequent branch messages
     silently inherited the *previous* branch's sid (or ``None``).
 
@@ -3101,7 +3101,7 @@ def _splice_one_workflow_run(
                 WorkflowPhaseMessage(
                     meta=MessageMeta.empty(),
                     title=phase.title,
-                    detail=phase.detail,
+                    depth=phase.depth,
                     agent_count=len(agents),
                 ),
                 parent=attach,
@@ -3181,10 +3181,10 @@ def _graft_agent_sidechannel(
     """
     if not entries:
         return
-    # The side-channel is rendered at the default FULL detail regardless of the
-    # main render's detail level (the splice only fires at FULL/HIGH anyway —
-    # the Workflow tool_use host is dropped at LOW and below). So an agent's
-    # transcript may carry FULL-only content (e.g. system/hook entries) even at
+    # The side-channel is rendered at HOOK depth (everything) regardless of the
+    # main render's depth (the splice only fires at HOOK/TOOL anyway —
+    # the Workflow tool_use host is dropped at AGENT and below). So an agent's
+    # transcript may carry HOOK-only content (e.g. system/hook entries) even at
     # ``--detail high`` (monk PR3 review N2). Acceptable: the side-channel is an
     # opt-in deep-dive under a fold.
     sub_roots, _sub_nav, _sub_ctx = generate_template_messages(entries)
@@ -3295,7 +3295,7 @@ def _recount_spliced_children(
 
 
 def _link_async_notifications(
-    ctx: RenderingContext, detail: DetailLevel = DetailLevel.FULL
+    ctx: RenderingContext, depth: RenderingDepth = RenderingDepth.HOOK
 ) -> None:
     """Stitch the async-agent flow into a single coherent rendering
     (issue #90).
@@ -3332,9 +3332,9 @@ def _link_async_notifications(
     that shows the agent's *work* (not its final summary), and a
     notification reduced to a navigation card.
 
-    The pass splits in two so it stays correct at every detail level:
+    The pass splits in two so it stays correct at every depth level:
 
-    - **Spawn-fold (FULL/HIGH/LOW):** when a notification's
+    - **Spawn-fold (HOOK/TOOL/AGENT):** when a notification's
       ``task_id`` matches a Task/Agent tool_result's ``agent_id``,
       fold the notification's ``result_text`` onto the tool_result's
       ``TaskOutput.async_final_answer`` and flag the notification
@@ -3344,18 +3344,18 @@ def _link_async_notifications(
       doesn't need to match.
     - **Sidechain-only dedup:** when the last sub-assistant text
       matches the notification's ``result_text``, drop it from the
-      tree. This branch is a no-op at LOW/MINIMAL/USER_ONLY where
-      ``_ghost_template_by_detail`` has ghosted the sidechain entries
+      tree. This branch is a no-op at AGENT/ASSISTANT/USER where
+      ``_ghost_template_by_depth`` has ghosted the sidechain entries
       (so they fall out of the rendered tree) — and that's fine,
       because there's no duplicate left to remove.
 
-    At MINIMAL/USER_ONLY the spawn fold is skipped entirely: the
-    Task tool_result is dropped by ``_ghost_template_by_detail``,
+    At ASSISTANT/USER the spawn fold is skipped entirely: the
+    Task tool_result is dropped by ``_ghost_template_by_depth``,
     so there's nothing to fold onto. We leave the notification card
     intact so the agent's answer remains visible somewhere — the
     notification body becomes the only surviving copy.
     """
-    spawn_target_kept = detail not in (DetailLevel.MINIMAL, DetailLevel.USER_ONLY)
+    spawn_target_kept = depth not in (RenderingDepth.ASSISTANT, RenderingDepth.USER)
     # Index notifications by task_id so we can find them in O(1).
     notifications: dict[str, TaskNotificationMessage] = {}
     for tm in _visible(ctx.messages):
@@ -3399,8 +3399,8 @@ def _link_async_notifications(
         # spawning tool_use (where the reader expects the spawn to
         # live in the rendered transcript). pair_first holds that
         # index when the pair was matched. Set this even at
-        # MINIMAL/USER_ONLY — when the spawn is filtered the index is
-        # harmless, and at LOW it lets us link back to the surviving
+        # ASSISTANT/USER — when the spawn is filtered the index is
+        # harmless, and at AGENT it lets us link back to the surviving
         # tool_use card.
         spawn_idx = tm.pair_first if tm.pair_first is not None else tm.message_index
         if spawn_idx is not None:
@@ -3424,7 +3424,7 @@ def _link_async_notifications(
         # result body, drop the duplicate from the sidechain tree so
         # the answer only appears once (folded into the spawn). This
         # branch is the only piece that needs the sidechain — at
-        # LOW/MINIMAL/USER_ONLY ``_ghost_template_by_detail`` ghosts the
+        # AGENT/ASSISTANT/USER ``_ghost_template_by_depth`` ghosts the
         # sidechain entries (excluded from the tree), so
         # ``_last_sidechain_assistant`` returns None and we skip this branch.
         located = _last_sidechain_assistant(tm)
@@ -3784,12 +3784,12 @@ def _filter_messages(messages: list[TranscriptEntry]) -> list[TranscriptEntry]:
 
         # Attachment entries (issue #128): include — pass-2 walker will
         # call ``create_attachment_message`` to surface hook payloads at
-        # full detail (and ``queued_command`` as a steering message).
+        # HOOK depth (and ``queued_command`` as a steering message).
         # The remaining non-hook flavours produce ``None`` and are
         # silently dropped at registration time, mirroring the pre-#128
         # PassthroughTranscriptEntry behaviour. Detail-level filtering
-        # happens later: ``_ghost_template_by_detail`` drops
-        # ``HookAttachmentMessage`` at HIGH and below.
+        # happens later: ``_ghost_template_by_depth`` drops
+        # ``HookAttachmentMessage`` at TOOL and below.
         if isinstance(message, AttachmentTranscriptEntry):
             filtered.append(message)
             continue
@@ -3837,32 +3837,32 @@ def _filter_messages(messages: list[TranscriptEntry]) -> list[TranscriptEntry]:
 
 # -- Detail-level filtering ---------------------------------------------------
 #
-# Pre-render: strip content items from TranscriptEntry based on detail level.
+# Pre-render: strip content items from TranscriptEntry based on depth level.
 # Post-render: remove TemplateMessage types created by factories from text that
 # shouldn't appear at the given level (bash I/O, slash commands, etc.).
 
 # Tool names kept at --detail low (interaction + key signals).
 # ``Agent`` is the teammates-feature spawn name (aliased to TaskInput
 # in the tool factory); it must be paired with ``Task`` so real
-# teammate transcripts keep their spawn-and-result pairs at low detail.
+# teammate transcripts keep their spawn-and-result pairs at AGENT depth.
 _LOW_KEEP_TOOLS = {"WebSearch", "WebFetch", "Task", "Agent"}
 
-# Per-class detail-level filtering lives on the content classes themselves
-# via ``MessageContent.visible_at`` / the ``detail_visibility`` ClassVar
+# Per-class depth-level filtering lives on the content classes themselves
+# via ``MessageContent.visible_at`` / the ``depth_visibility`` ClassVar
 # (see ``models.py`` and ``dev-docs/plugins.md`` §6). The thin wrapper
 # below survives only because it is called from many sites in this
-# module; new code should call ``content.visible_at(detail)`` directly.
+# module; new code should call ``content.visible_at(depth)`` directly.
 
 
-def _content_visible_at(content: "MessageContent", detail: DetailLevel) -> bool:
-    """Return True iff ``content`` is visible at the given detail level.
+def _content_visible_at(content: "MessageContent", depth: RenderingDepth) -> bool:
+    """Return True iff ``content`` is visible at the given depth level.
 
     Thin delegate to :meth:`MessageContent.visible_at`, which reads the
-    class-side ``detail_visibility`` ClassVar via the monotone-down
-    ordering on :class:`DetailLevel`. Plugin classes participate
+    class-side ``depth_visibility`` ClassVar via the monotone-down
+    ordering on :class:`RenderingDepth`. Plugin classes participate
     automatically through the same predicate.
     """
-    return content.visible_at(detail)
+    return content.visible_at(depth)
 
 
 _LAUNCHING_SKILL_PREFIX = "Launching skill:"
@@ -4004,7 +4004,7 @@ def _drop_anchor_refs_into_ghosts(ctx: RenderingContext) -> None:
     cached before ghosting runs: ``session_first_message`` and each branch
     header's ``parent_message_index``. See ``_pair_skill_tool_uses`` for
     why junction forward links are out of scope. Phase 2 of the ghosting
-    epic adds a broader ``_repair_stale_anchor_refs`` for the detail-filter
+    epic adds a broader ``_repair_stale_anchor_refs`` for the depth-filter
     ghost path; this is the skill-fold-scoped counterpart.
     """
     ctx.session_first_message = {
@@ -4021,18 +4021,18 @@ def _drop_anchor_refs_into_ghosts(ctx: RenderingContext) -> None:
             msg.content.parent_message_index = None
 
 
-def _ghost_template_by_detail(
+def _ghost_template_by_depth(
     ctx: RenderingContext,
-    detail: DetailLevel,
+    depth: RenderingDepth,
     no_recaps: bool = False,
 ) -> None:
-    """Ghost (set to None) ctx.messages slots that aren't visible at ``detail``.
+    """Ghost (set to None) ctx.messages slots that aren't visible at ``depth``.
 
     Visibility is computed by :func:`_content_visible_at`, which delegates
-    to each content class's ``visible_at`` predicate / ``detail_visibility``
-    ClassVar. At ``LOW``, the ``_LOW_KEEP_TOOLS`` allowlist narrows
+    to each content class's ``visible_at`` predicate / ``depth_visibility``
+    ClassVar. At ``AGENT``, the ``_LOW_KEEP_TOOLS`` allowlist narrows
     built-in tool messages further to a specific set of tool names. At
-    ``MINIMAL`` / ``LOW`` / ``USER_ONLY`` sidechain messages are also
+    ``ASSISTANT`` / ``AGENT`` / ``USER`` sidechain messages are also
     dropped.
 
     After ghosting, anchor-target references that pointed to now-ghosted
@@ -4055,22 +4055,32 @@ def _ghost_template_by_detail(
     for idx, msg in enumerate(ctx.messages):
         if msg is None:
             continue
-        visible = _content_visible_at(msg.content, detail)
+        visible = _content_visible_at(msg.content, depth)
 
-        # LOW keep-list: built-in ToolUseMessage / ToolResultMessage declare
-        # ``detail_visibility = LOW``, so the predicate keeps them at LOW;
+        # SESSION (#159) — the most minimal level, "session structure only".
+        # ``visible_at`` keeps threshold-less built-ins (UserTextMessage etc.)
+        # visible at every level, so it can't express "drop even user
+        # messages" on its own; override here to keep ONLY session/branch
+        # headers. Non-header content that is a fork point still survives as a
+        # navigational landmark via the ``if not visible`` branch below, so
+        # back-links/anchors don't dangle.
+        if depth == RenderingDepth.SESSION:
+            visible = isinstance(msg.content, SessionHeaderMessage)
+
+        # AGENT keep-list: built-in ToolUseMessage / ToolResultMessage declare
+        # ``depth_visibility = AGENT``, so the predicate keeps them at AGENT;
         # the keep-list then narrows that set to a few specific tool names
         # (Web/Task/Agent). Plugin subclasses that declare *their own*
-        # ``detail_visibility`` opt out — their declared visibility is
+        # ``depth_visibility`` opt out — their declared visibility is
         # authoritative, letting a plugin (e.g. clmail communicate) be
-        # visible at LOW without core needing to update _LOW_KEEP_TOOLS.
-        # Detection: the class introduces ``detail_visibility`` in its own
+        # visible at AGENT without core needing to update _LOW_KEEP_TOOLS.
+        # Detection: the class introduces ``depth_visibility`` in its own
         # ``__dict__`` AND is not one of the built-in bases (which declare
-        # the LOW baseline that this keep-list is designed to narrow).
-        if visible and detail == DetailLevel.LOW:
+        # the AGENT baseline that this keep-list is designed to narrow).
+        if visible and depth == RenderingDepth.AGENT:
             content_cls = type(msg.content)
             declares_own_visibility = (
-                "detail_visibility" in content_cls.__dict__
+                "depth_visibility" in content_cls.__dict__
                 and content_cls not in (ToolUseMessage, ToolResultMessage)
             )
             if (
@@ -4082,20 +4092,21 @@ def _ghost_template_by_detail(
                     visible = False
 
         if visible and (
-            detail in (DetailLevel.MINIMAL, DetailLevel.LOW, DetailLevel.USER_ONLY)
+            depth
+            in (RenderingDepth.ASSISTANT, RenderingDepth.AGENT, RenderingDepth.USER)
             and msg.is_sidechain
         ):
             visible = False
 
         # ``--no-recaps`` (#179): recaps are otherwise visible at every level
-        # (AwaySummaryMessage.detail_visibility == USER_ONLY); this is the
-        # explicit opt-out, applied regardless of detail level.
+        # (AwaySummaryMessage.depth_visibility == USER); this is the
+        # explicit opt-out, applied regardless of depth level.
         if visible and no_recaps and isinstance(msg.content, AwaySummaryMessage):
             visible = False
 
         if not visible:
             # A fork point is navigational structure, not message content: the
-            # branches it connects (session headers) always survive detail
+            # branches it connects (session headers) always survive depth
             # filtering, so the fork point must too — otherwise the branches
             # render with no visible fork point above them and the back-links
             # have nothing to anchor to (#233 follow-up). Keep the slot as a
@@ -4108,8 +4119,8 @@ def _ghost_template_by_detail(
             # ``_link_junction_forwards``, which runs before this pass.
             #
             # Load-bearing invariant: this no-dead-anchor guarantee depends on
-            # branch session headers ALWAYS surviving detail filtering
-            # (``SessionHeaderMessage`` declares no ``detail_visibility`` →
+            # branch session headers ALWAYS surviving depth filtering
+            # (``SessionHeaderMessage`` declares no ``depth_visibility`` →
             # ``visible_at`` is True at every level). If a branch could be
             # ghosted, a 2-branch fork could drop below 2 survivors →
             # ``_repair_stale_anchor_refs`` empties ``junction_forward_links``
@@ -4117,7 +4128,7 @@ def _ghost_template_by_detail(
             # with no ``id='msg-d-N'`` and a still-visible sibling branch's
             # back-link would dangle. Pinned by
             # ``test_branch_headers_always_visible_keeps_fork_anchored`` so a
-            # future ``SessionHeaderMessage.detail_visibility`` trips a test
+            # future ``SessionHeaderMessage.depth_visibility`` trips a test
             # rather than silently activating a dead anchor (monk review note).
             if msg.junction_forward_links:
                 msg.fork_only = True
@@ -4367,10 +4378,10 @@ def _build_branch_header(
                 parent_msg_idx = msg.message_index
                 break
     # When the fork point itself isn't visible (e.g. a content-less system
-    # node ghosted at reduced detail), leave ``parent_msg_idx`` None so the
+    # node ghosted at reduced depth), leave ``parent_msg_idx`` None so the
     # branch header renders "from ⟂ Fork point" as plain text — NOT retargeted
     # at the parent session header, which produced a misleading anchor that
-    # jumped to the wrong place (issue #233). At full detail the #233
+    # jumped to the wrong place (issue #233). At HOOK depth the #233
     # placeholder keeps the fork point visible, so this fallback is only
     # reached in the genuinely-unresolvable case.
     original_sid = b_hier.get("original_session_id", message.sessionId)
@@ -4494,8 +4505,8 @@ def _fork_placeholder_content(message: SystemTranscriptEntry) -> SystemMessage:
     ``_fork_point_preview`` (which already walks up *past* system hosts) treats
     it as the expected fork host. The label is the raw ``(subtype)`` — honest
     about what the otherwise-invisible node is, and general across subtypes.
-    ``SystemMessage.detail_visibility`` is ``FULL``, so the placeholder ghosts
-    at reduced detail just like any system entry; the fork anchor then degrades
+    ``SystemMessage.depth_visibility`` is ``HOOK``, so the placeholder ghosts
+    at reduced depth just like any system entry; the fork anchor then degrades
     to no-link (handled in ``_build_branch_header`` / the nav), not a wrong one.
     """
     return SystemMessage(
@@ -4553,7 +4564,7 @@ def _render_messages(
     #     meta.session_id at read time).
     # Replaces the pre-D11 ``current_render_session`` loop variable.
     # See ``_build_uuid_to_render_sid`` for the latent-bug fix this
-    # closes at non-FULL detail.
+    # closes at non-HOOK depth.
     uuid_to_render_sid = _build_uuid_to_render_sid(session_hierarchy)
 
     # uuid → entry map for branch-preview scanning. ``_build_branch_header``
@@ -4705,7 +4716,7 @@ def _render_messages(
             and not is_agent_session(msg_session_id)
         ):
             # Ensure the branch's PARENT trunk session header is
-            # registered FIRST. At non-FULL detail every trunk
+            # registered FIRST. At non-HOOK depth every trunk
             # message of the branch's parent session can be
             # filtered out, leaving a branch descendant as the
             # first surviving entry for that trunk session. Without
@@ -5176,11 +5187,11 @@ class Renderer:
     - Subclasses override methods to implement format-specific rendering
     """
 
-    detail: DetailLevel = DetailLevel.FULL
+    depth: RenderingDepth = RenderingDepth.HOOK
     compact: bool = False
-    # When True, suppress ``※ recap`` (away_summary) messages at every detail
+    # When True, suppress ``※ recap`` (away_summary) messages at every depth
     # level (#179). Recaps are otherwise always visible (see
-    # ``AwaySummaryMessage.detail_visibility``).
+    # ``AwaySummaryMessage.depth_visibility``).
     no_recaps: bool = False
 
     # Output format identifier consulted by the class-side dispatch path
@@ -5375,7 +5386,7 @@ class Renderer:
         self, content: WorkflowPhaseMessage, _: TemplateMessage
     ) -> str:
         # Format-neutral header label for a spliced workflow phase card
-        # (#174 PR3). The agent count + detail render in the body.
+        # (#174 PR3). The agent count + depth render in the body.
         return f"Phase: {content.title}" if content.title else "Phase"
 
     def title_WorkflowAgentMessage(
@@ -5542,7 +5553,7 @@ class Renderer:
 def get_renderer(
     format: str,
     image_export_mode: Optional[str] = None,
-    detail: DetailLevel = DetailLevel.FULL,
+    depth: RenderingDepth = RenderingDepth.HOOK,
     compact: bool = False,
     no_timestamps: bool = False,
     no_recaps: bool = False,
@@ -5553,13 +5564,13 @@ def get_renderer(
         format: The output format ("html", "md", or "markdown").
         image_export_mode: Image export mode ("placeholder", "embedded", "referenced").
             If None, defaults to "embedded" for HTML and "referenced" for Markdown.
-        detail: Output detail level controlling which message types are included.
+        depth: Output depth level controlling which message types are included.
         compact: If True, merge consecutive same-type headings (Markdown only).
         no_timestamps: If True, suppress per-message timestamp lines
             in Markdown output (issue #160). Ignored for HTML/JSON
             since they don't emit those lines.
         no_recaps: If True, suppress ``※ recap`` (away_summary) messages at
-            every detail level (issue #179). Recaps are otherwise always
+            every depth level (issue #179). Recaps are otherwise always
             visible.
 
     Returns:
@@ -5586,7 +5597,7 @@ def get_renderer(
         renderer = JsonRenderer()
     else:
         raise ValueError(f"Unsupported format: {format}")
-    renderer.detail = detail
+    renderer.depth = depth
     renderer.compact = compact
     renderer.no_recaps = no_recaps
     return renderer

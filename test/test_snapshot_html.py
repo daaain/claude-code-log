@@ -31,7 +31,12 @@ class TestTranscriptHTMLSnapshots:
         assert html == html_snapshot
 
     def test_edge_cases_html(self, html_snapshot, test_data_dir):
-        """Snapshot test for edge cases - errors, special chars, long text."""
+        """Snapshot test for edge cases - errors, special chars, long text.
+
+        Uses the library render default (FULL) so system/hook/noise content
+        stays in the snapshot — the CLI default is now HIGH (--depth tool,
+        #159), but generate_html renders everything by default.
+        """
         test_file = test_data_dir / "edge_cases.jsonl"
         messages = load_transcript(test_file)
         html = generate_html(messages, "Edge Cases")
@@ -108,20 +113,20 @@ class TestAsyncAgentsHTMLSnapshots:
 
         Regression guard for the "fold lost at low" report (mail #2620 →
         Plan A): the spawn-fold is now sourced from the notification's
-        ``result_text``, so it survives the LOW detail level where
+        ``result_text``, so it survives the LOW depth level where
         sidechain entries are stripped pre-render. The locked-in shape
         confirms the ``Result (from async notification)`` fold is
         still rendered under the ``Async agent launched successfully``
         stub at LOW.
         """
         from claude_code_log.html.renderer import HtmlRenderer
-        from claude_code_log.models import DetailLevel
+        from claude_code_log.models import RenderingDepth
 
         async_dir = test_data_dir / "async_agents"
         main_jsonl = async_dir / "eb000000-0000-4000-8000-000000000001.jsonl"
         messages = load_transcript(main_jsonl)
         renderer = HtmlRenderer()
-        renderer.detail = DetailLevel.LOW
+        renderer.depth = RenderingDepth.AGENT
         html = renderer.generate(messages, "Async Agents Fixture (LOW)")
         assert html == html_snapshot
 

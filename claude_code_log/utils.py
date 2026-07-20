@@ -8,7 +8,8 @@ from typing import Optional
 
 from .models import (
     ContentItem,
-    DetailLevel,
+    DEFAULT_DEPTH,
+    RenderingDepth,
     TextContent,
     TranscriptEntry,
     UserTranscriptEntry,
@@ -27,15 +28,22 @@ from .factories import (
 # Per-level output file naming
 #
 # Variants of the same project render to distinct filenames so each
-# variant has its own on-disk artifact and its own cache row. Examples:
+# variant has its own on-disk artifact and its own cache row. The DEFAULT
+# level (``--depth tool`` / legacy ``--detail high``, ==
+# ``DEFAULT_DEPTH``) gets NO suffix. Other levels earn one, named by
+# the ``--depth`` scale regardless of which option selected the level (#159
+# — the deprecated ``--detail low`` renders to the same ``.agent`` file as
+# ``--depth agent``):
 #
-#   --detail full                          → combined_transcripts.html
-#   --detail low                           → combined_transcripts.low.html
-#   --detail low --compact (md only)       → combined_transcripts.low.compact.md
-#   --compact (md only)                    → combined_transcripts.compact.md
+#   (default: --depth tool / --detail high)  → combined_transcripts.html
+#   --depth agent  (== --detail low)         → combined_transcripts.agent.html
+#   --depth hook   (== --detail full)        → combined_transcripts.hook.html
+#   --depth session                          → combined_transcripts.session.html
+#   --depth agent --compact (md only)        → combined_transcripts.agent.compact.md
+#   --compact (md only)                      → combined_transcripts.compact.md
 #
 # Pagination composes after the variant suffix:
-#   combined_transcripts.low_2.html        (detail=low, page 2)
+#   combined_transcripts.agent_2.html      (depth=agent, page 2)
 #
 # `_compact` only participates in the suffix for Markdown output — HTML
 # rendering ignores the flag, so `--compact --format html` is a silent
@@ -46,7 +54,7 @@ VARIANT_ENTRY_RE = re.compile(r"^combined_transcripts((?:\.[a-z-]+)*)\.html$")
 
 
 def variant_suffix(
-    detail: DetailLevel | str = DetailLevel.FULL,
+    depth: RenderingDepth | str = DEFAULT_DEPTH,
     compact: bool = False,
     format: str = "html",
     no_timestamps: bool = False,
@@ -55,17 +63,26 @@ def variant_suffix(
     """Compute the filename infix for a given render variant.
 
     Returns the empty string for the default variant
-    (full detail, no compact). Otherwise returns a dot-prefixed
-    suffix that is inserted after the basename and before the page
-    number / extension.
+    (``DEFAULT_DEPTH`` == ``--depth tool`` / ``--detail high``, no
+    compact). Otherwise returns a dot-prefixed suffix that is inserted
+    after the basename and before the page number / extension.
+
+    Non-default depths are named by the ``--depth`` scale
+    (``.hook/.agent/.session/…``) regardless of whether the depth was
+    selected via ``--depth`` or the deprecated ``--detail`` — a single
+    canonical name per depth, so cache keys and filenames never diverge
+    for the same content. (Legacy ``--detail`` names like ``.low`` are not
+    preserved on the filename; ``--detail`` itself is deprecated. See
+    #159.)
     """
-    # `DetailLevel` inherits from `str`, so `isinstance(detail, str)` is
-    # always True — narrow only on `DetailLevel` to coerce plain strings.
-    if not isinstance(detail, DetailLevel):
-        detail = DetailLevel(detail)
+    # `RenderingDepth` inherits from `str`, so `isinstance(depth, str)` is
+    # always True — narrow only on `RenderingDepth` to coerce plain strings.
+    if not isinstance(depth, RenderingDepth):
+        depth = RenderingDepth(depth)
     parts: list[str] = []
-    if detail != DetailLevel.FULL:
-        parts.append(detail.value)
+    if depth != DEFAULT_DEPTH:
+        # The enum value IS the --depth name, so it's the suffix directly.
+        parts.append(depth.value)
     # `--no-recaps` filters *messages* out of the rendered tree, so it
     # affects EVERY format (html/md/json) — unlike compact/no-timestamps
     # below. It must earn a suffix slot regardless of format, else a

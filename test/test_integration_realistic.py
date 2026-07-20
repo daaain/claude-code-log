@@ -1977,17 +1977,17 @@ class TestExperimentsWorktreesTeammates:
         silently dropped out of low-detail rendering.
 
         The fixture has six ``Agent`` spawns total (wave-1 + wave-2
-        alice/bob/carol). All six must survive at LOW detail — the
+        alice/bob/carol). All six must survive at LOW depth — the
         nested-spawn assistant entries are surfaced via
         ``_collect_agent_anchors`` so the DAG walker doesn't drop
         them when the parent fork lands on the dead-end side.
         """
-        from claude_code_log.models import DetailLevel
+        from claude_code_log.models import RenderingDepth
         from claude_code_log.converter import convert_jsonl_to
 
         project = self._project_dir(temp_projects_copy)
         out_path = convert_jsonl_to(
-            "html", project, silent=True, detail=DetailLevel.LOW
+            "html", project, silent=True, depth=RenderingDepth.AGENT
         )
         html = out_path.read_text(encoding="utf-8")
 
@@ -2020,12 +2020,12 @@ class TestExperimentsWorktreesTeammates:
         in both halves of the contract: LOW keeps the Agent pair, but
         MINIMAL goes further and strips every tool.
         """
-        from claude_code_log.models import DetailLevel
+        from claude_code_log.models import RenderingDepth
         from claude_code_log.converter import convert_jsonl_to
 
         project = self._project_dir(temp_projects_copy)
         out_path = convert_jsonl_to(
-            "html", project, silent=True, detail=DetailLevel.MINIMAL
+            "html", project, silent=True, depth=RenderingDepth.ASSISTANT
         )
         html = out_path.read_text(encoding="utf-8")
 

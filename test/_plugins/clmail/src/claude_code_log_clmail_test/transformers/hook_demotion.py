@@ -5,7 +5,7 @@ Exercises the user-side branch of the plugin contract:
 - ``applies_to = (UserTextMessage,)`` MRO filter
 - Reads ``content.items`` to access the user's text
 - Returns a plugin-defined ``MessageContent`` subclass
-- The subclass declares ``detail_visibility`` and carries its own
+- The subclass declares ``depth_visibility`` and carries its own
   ``format_markdown`` / ``title`` methods (Strategy 2 of
   ``_dispatch_format``)
 """
@@ -18,7 +18,7 @@ from typing import ClassVar, Optional
 
 from claude_code_log.factories.priorities import HOOK_NOTIFICATION
 from claude_code_log.models import (
-    DetailLevel,
+    RenderingDepth,
     MessageContent,
     MessageMeta,
     UserTextMessage,
@@ -44,7 +44,7 @@ class TestHookNotificationMessage(UserTextMessage):
     text: str = ""
 
     # Plugin-owned visibility: dropped at HIGH and below.
-    detail_visibility: ClassVar[DetailLevel] = DetailLevel.FULL
+    depth_visibility: ClassVar[RenderingDepth] = RenderingDepth.HOOK
 
     @property
     def message_type(self) -> str:

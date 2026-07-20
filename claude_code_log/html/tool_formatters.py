@@ -1700,12 +1700,12 @@ def format_workflow_input(workflow_input: WorkflowToolInput) -> str:
 
 
 def format_workflow_phase_content(content: WorkflowPhaseMessage) -> str:
-    """Format a spliced workflow *phase* card body: the phase ``detail`` plus
+    """Format a spliced workflow *phase* card body: the phase ``depth`` plus
     its agent count. The phase title is the card heading (``title_content``)."""
     parts: list[str] = []
-    if content.detail:
+    if content.depth:
         parts.append(
-            f"<span class='workflow-phase-detail'>{escape_html(content.detail)}</span>"
+            f"<span class='workflow-phase-detail'>{escape_html(content.depth)}</span>"
         )
     if content.agent_count:
         unit = "agent" if content.agent_count == 1 else "agents"

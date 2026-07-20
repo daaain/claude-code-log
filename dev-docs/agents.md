@@ -98,23 +98,23 @@ deliberately discarded.
 identification and tree building. For every Task tool_result whose
 `metadata.agent_id` matches a `TaskNotificationMessage.task_id`, it:
 
-- **Spawn-fold (FULL/HIGH/LOW):** sets
+- **Spawn-fold (HOOK/TOOL/AGENT):** sets
   `tool_result.output.async_final_answer = notification.result_text`
   and flags `notification.result_is_duplicate = True`. The
   formatter then renders a "Result (from async notification)"
   collapsible below the launch stub on the spawn card, and reduces
   the notification card to a backlink stub. Sourcing the fold from
   the notification (not from the sidechain assistant) is what makes
-  the fold survive at LOW where sidechain entries are stripped
+  the fold survive at AGENT where sidechain entries are stripped
   pre-render.
-- **Sidechain dedup (FULL/HIGH only):** when the last sub-assistant
+- **Sidechain dedup (HOOK/TOOL only):** when the last sub-assistant
   text matches the notification's `result_text`, drops the duplicate
-  from the sidechain tree. No-op at LOW (sidechain already gone).
+  from the sidechain tree. No-op at AGENT (sidechain already gone).
 
-At `DetailLevel.LOW` the format-specific renderers honor the flag
+At `RenderingDepth.AGENT` the format-specific renderers honor the flag
 by **ghosting** the duplicate notification — `format_TaskNotificationMessage`
 and `title_TaskNotificationMessage` (in both `HtmlRenderer` and
-`MarkdownRenderer`) return `""` when `self.detail == LOW and
+`MarkdownRenderer`) return `""` when `self.detail == AGENT and
 content.result_is_duplicate`. The rendering loop's existing
 "skip empty messages" elision (HTML's
 `if title or html or msg.children:` and Markdown's
@@ -125,7 +125,7 @@ card from the visible output. The notification stays in
 `SessionHeaderMessage.parent_message_index`), and session navigation
 anchors all stay valid — no index-remap cascade required.
 
-### 2.4 Detail-level matrix
+### 2.4 Depth matrix
 
 | level     | spawn-fold visible | notification card | answer visible |
 |-----------|--------------------|-------------------|----------------|
@@ -135,9 +135,9 @@ anchors all stay valid — no index-remap cascade required.
 | minimal   | no (Task tool_result filtered) | yes (body kept) | yes (notification body) |
 | user-only | no (Task tool_result filtered) | yes (body kept) | yes (notification body) |
 
-The answer is visible exactly once at every detail level. At
-MINIMAL/USER_ONLY the spawn-fold is skipped (the Task tool_result
-itself is ghosted by `_ghost_template_by_detail`), so the
+The answer is visible exactly once at every depth. At
+ASSISTANT/USER the spawn-fold is skipped (the Task tool_result
+itself is ghosted by `_ghost_template_by_depth`), so the
 notification card retains its body as the surviving copy.
 
 ### 2.5 Key files
@@ -156,16 +156,16 @@ notification card retains its body as the surviving copy.
 - `html/async_formatter.py` — notification card HTML +
   TaskOutput poll card HTML.
 - `html/renderer.py::HtmlRenderer.format_TaskNotificationMessage` /
-  `title_TaskNotificationMessage` — return `""` at LOW for
+  `title_TaskNotificationMessage` — return `""` at AGENT for
   duplicate-flagged notifications (ghost mechanism).
 - `html/tool_formatters.py::format_task_output` — renders
   `async_final_answer` as a collapsible below the launch stub.
 - `markdown/renderer.py::MarkdownRenderer.format_TaskNotificationMessage` /
-  `title_TaskNotificationMessage` — same ghost-at-LOW gate.
+  `title_TaskNotificationMessage` — same ghost-at-AGENT gate.
   Plus `format_TaskOutput`, `format_TaskOutputResult`, and titles.
 - `html/utils.py::CSS_CLASS_REGISTRY` —
   `TaskNotificationMessage: ["user", "task-notification"]` so the
-  runtime "User" filter toggle keeps the card visible at FULL/HIGH.
+  runtime "User" filter toggle keeps the card visible at HOOK/TOOL.
 
 ### 2.6 Test fixture
 
@@ -177,8 +177,8 @@ The notification's `<result>` matches the last sub-assistant verbatim
 so the Phase 3 fold + dedup fires.
 
 Tests live in `test/test_async_agents.py` (parser unit tests, factory
-dispatch, rendering pipeline assertions, detail-level invariants —
-including the LOW regression guard for the fold).
+dispatch, rendering pipeline assertions, depth invariants —
+including the AGENT regression guard for the fold).
 
 ## 3. Teammates (#91)
 
@@ -212,7 +212,7 @@ its `workflow_agent` card.
 
 See [workflows.md](workflows.md) for the full as-built reference
 (on-disk layout, parse model, taskId linkage, splice mechanics,
-detail-level behaviour).
+depth behaviour).
 
 ## 5. Nested agent hierarchies (#213)
 

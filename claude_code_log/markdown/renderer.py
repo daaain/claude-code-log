@@ -33,7 +33,7 @@ from ..models import (
     BashOutputMessage,
     CommandOutputMessage,
     CompactedSummaryMessage,
-    DetailLevel,
+    RenderingDepth,
     HookAttachmentMessage,
     HookSummaryMessage,
     ImageContent,
@@ -1232,11 +1232,11 @@ class MarkdownRenderer(Renderer):
     def format_WorkflowPhaseMessage(
         self, content: WorkflowPhaseMessage, _: TemplateMessage
     ) -> str:
-        """Format → a spliced workflow phase card body: detail + agent count
+        """Format → a spliced workflow phase card body: depth + agent count
         (issue #174 PR3). The phase title is the heading (``title_content``)."""
         bits: list[str] = []
-        if content.detail:
-            bits.append(_protect_html_tags(content.detail))
+        if content.depth:
+            bits.append(_protect_html_tags(content.depth))
         if content.agent_count:
             unit = "agent" if content.agent_count == 1 else "agents"
             bits.append(f"_{content.agent_count} {unit}_")
@@ -1490,14 +1490,14 @@ class MarkdownRenderer(Renderer):
         duplicate of the spawning Task's last sub-assistant, the body
         is dropped and only metadata + a "Spawn" reference remains so
         the Markdown reader still has navigation context without
-        doubling the result content. At ``DetailLevel.LOW`` the
+        doubling the result content. At ``RenderingDepth.AGENT`` the
         whole card is "ghosted" (returns ``""``) — paired with
         ``title_TaskNotificationMessage`` returning ``""`` too,
         ``_render_message``'s "no title, no content" elision drops
         the entry from the rendered output without touching
         ``ctx.messages``.
         """
-        if self.detail == DetailLevel.LOW and content.result_is_duplicate:
+        if self.depth == RenderingDepth.AGENT and content.result_is_duplicate:
             return ""
         lines: list[str] = []
         if content.task_id:
@@ -2027,11 +2027,11 @@ class MarkdownRenderer(Renderer):
         """Title → '🔄 Async result · *<summary>*' for an async-agent
         completion notification (issue #90).
 
-        Empty at ``DetailLevel.LOW`` for duplicate-flagged
+        Empty at ``RenderingDepth.AGENT`` for duplicate-flagged
         notifications — pairs with
         ``format_TaskNotificationMessage`` to "ghost" the entry.
         """
-        if self.detail == DetailLevel.LOW and content.result_is_duplicate:
+        if self.depth == RenderingDepth.AGENT and content.result_is_duplicate:
             return ""
         if content.summary:
             return f"🔄 Async result · *{self._escape_stars(content.summary)}*"
@@ -2350,7 +2350,7 @@ class MarkdownRenderer(Renderer):
         root_messages, session_nav, ctx = generate_template_messages(
             messages,
             session_tree=session_tree,
-            detail=self.detail,
+            depth=self.depth,
             no_recaps=self.no_recaps,
         )
         self._ctx = ctx
@@ -2400,13 +2400,13 @@ class MarkdownRenderer(Renderer):
             or (msg.sessionId or "").startswith(agent_prefix)
         ]
         # Back-link points at the same variant's combined file so users
-        # don't bounce between detail levels when navigating. Suppressed
+        # don't bounce between depth levels when navigating. Suppressed
         # under `--combined no` where the combined file is never written.
         if cache_manager is not None and not suppress_combined_link:
             from ..utils import variant_suffix as _variant_suffix
 
             suffix = _variant_suffix(
-                self.detail, self.compact, "md", self.no_timestamps, self.no_recaps
+                self.depth, self.compact, "md", self.no_timestamps, self.no_recaps
             )
             combined_link = f"combined_transcripts{suffix}.md"
         else:

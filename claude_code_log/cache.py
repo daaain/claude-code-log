@@ -128,7 +128,7 @@ class ProjectCache(BaseModel):
 # ========== Helper Functions ==========
 
 
-# Lone HIGH surrogates (U+D800–U+DBFF) are not in surrogateescape's
+# Lone TOOL surrogates (U+D800–U+DBFF) are not in surrogateescape's
 # back-mapping range (which only covers low surrogates U+DC80–U+DCFF
 # produced from raw byte decoding), so the surrogateescape-encode step
 # in scrub_surrogates would raise on them. Pre-substitute high
@@ -1478,7 +1478,7 @@ class CacheManager:
 
         Args:
             page_number: Page number (1-indexed).
-            variant_suffix: Detail/compact variant infix (e.g. ``""``,
+            variant_suffix: Depth/compact variant infix (e.g. ``""``,
                 ``".low"``, ``".low.compact"``). Each variant has its
                 own pagination cache row.
         """
@@ -1593,7 +1593,7 @@ class CacheManager:
         """Update or insert page cache entry.
 
         Args:
-            variant_suffix: Detail/compact variant infix (e.g. ``""``,
+            variant_suffix: Depth/compact variant infix (e.g. ``""``,
                 ``".low"``). Each variant owns its own cache row; the
                 UNIQUE constraint is on (project_id, variant_suffix,
                 page_number).
@@ -1681,7 +1681,7 @@ class CacheManager:
         Args:
             page_number: The page number to check.
             page_size_config: The current page size configuration.
-            variant_suffix: Detail/compact variant infix; each variant's
+            variant_suffix: Depth/compact variant infix; each variant's
                 cache is checked independently.
             output_dir: Directory the rendered page lives in. Defaults to
                 the source project directory (legacy in-place layout);

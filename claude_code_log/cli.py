@@ -738,19 +738,38 @@ def _validate_git_link_template(template: str) -> None:
     help="Export a single session by ID (full ID or prefix). Project path is optional — looks up the session globally via cache.",
 )
 @click.option(
+    "--depth",
+    type=click.Choice(
+        ["session", "user", "assistant", "agent", "tool", "hook"],
+        case_sensitive=False,
+    ),
+    default=None,
+    help=(
+        "How deep into the message hierarchy to render "
+        "(session > user > assistant > agent > tool > hook); output stops "
+        "at the named level. DEFAULT: tool. "
+        "session: session structure only (headers/nav); "
+        "user: user prompts and steering only; "
+        "assistant: user + assistant messages; "
+        "agent: + sub-agents and key tool signals; "
+        "tool: + tools, cleaned of system/hook noise (default); "
+        "hook: everything, including hooks and system notices. "
+        "Mutually exclusive with the deprecated --detail."
+    ),
+)
+@click.option(
     "--detail",
     type=click.Choice(
         ["full", "high", "low", "minimal", "user-only"], case_sensitive=False
     ),
-    default="full",
+    default=None,
     help=(
-        "Detail level for output. "
-        "full: everything; "
-        "high: detailed but cleaned (no system/hook noise); "
-        "low: interaction-focused + key signals; "
-        "minimal: user + assistant messages only; "
-        "user-only: only user prompts and steering (for feeding to "
-        "downstream agents, e.g. building a requirements doc)."
+        "DEPRECATED (removed in 2.0) — prefer --depth. Detail level for "
+        "output. full (=--depth hook): everything; "
+        "high (=--depth tool): detailed but cleaned (no system/hook noise); "
+        "low (=--depth agent): interaction-focused + key signals; "
+        "minimal (=--depth assistant): user + assistant messages only; "
+        "user-only (=--depth user): only user prompts and steering."
     ),
 )
 @click.option(
@@ -789,10 +808,10 @@ def _validate_git_link_template(template: str) -> None:
     is_flag=True,
     help=(
         "Suppress '※ recap' (away-summary) messages. Recaps are otherwise "
-        "shown at every detail level — they are themselves a high-level "
+        "shown at every depth level — they are themselves a high-level "
         "summary of activity (#179). Use this to get a 'really user-only' "
-        "view (--detail user-only --no-recaps) or to drop the recap/agent "
-        "redundancy at --detail minimal."
+        "view (--depth user --no-recaps) or to drop the recap/agent "
+        "redundancy at --depth assistant."
     ),
 )
 @click.option(
@@ -825,7 +844,8 @@ def main(
     jobs: Optional[int],
     provider: Optional[str],
     session_id: Optional[str],
-    detail: str,
+    depth: Optional[str],
+    detail: Optional[str],
     compact: bool,
     git_link: Optional[str],
     no_timestamps: bool,
@@ -1036,9 +1056,28 @@ def main(
             err=True,
         )
 
-    from .models import DetailLevel
+    from .models import DEFAULT_DEPTH, DETAIL_ALIASES, RenderingDepth
 
-    detail_level = DetailLevel(detail.lower())
+    # Resolve the RenderingDepth from --depth (preferred) or the deprecated
+    # --detail (#159). Both default to None so an explicit choice is
+    # detectable; they are mutually exclusive. The --depth names ARE the
+    # RenderingDepth values; --detail's legacy names map via DETAIL_ALIASES.
+    if depth is not None and detail is not None:
+        raise click.UsageError(
+            "--depth and --detail are mutually exclusive; --detail is the "
+            "deprecated alias — prefer --depth."
+        )
+    if detail is not None:
+        click.echo(
+            "Warning: --detail is deprecated and will be removed in 2.0; "
+            "prefer --depth (session|user|assistant|agent|tool|hook).",
+            err=True,
+        )
+        depth_level = DETAIL_ALIASES[detail.lower()]
+    elif depth is not None:
+        depth_level = RenderingDepth(depth.lower())
+    else:
+        depth_level = DEFAULT_DEPTH
 
     try:
         if provider is not None:
@@ -1094,7 +1133,7 @@ def main(
                     output_format,
                     title,
                     image_export_mode,
-                    detail_level,
+                    depth_level,
                     compact,
                     no_timestamps,
                     no_recaps,
@@ -1284,7 +1323,7 @@ def main(
                         tmpdir / f"session.{get_file_extension(output_format)}",
                         False,  # use_cache: one-off stream, don't touch cache
                         "embedded",  # inline images; the temp dir is discarded
-                        detail=detail_level,
+                        depth=depth_level,
                         compact=compact,
                         no_timestamps=no_timestamps,
                         no_recaps=no_recaps,
@@ -1299,7 +1338,7 @@ def main(
                 output,
                 not no_cache,
                 image_export_mode,
-                detail=detail_level,
+                depth=depth_level,
                 compact=compact,
                 no_timestamps=no_timestamps,
                 no_recaps=no_recaps,
@@ -1356,7 +1395,7 @@ def main(
                 output_format,
                 image_export_mode,
                 page_size=page_size,
-                detail=detail_level,
+                depth=depth_level,
                 compact=compact,
                 output_dir=output_dir_for_projects,
                 expand_paths=expand_paths,
@@ -1430,7 +1469,7 @@ def main(
                     silent=True,
                     image_export_mode="embedded",
                     page_size=page_size,
-                    detail=detail_level,
+                    depth=depth_level,
                     compact=compact,
                     update_cache=False,
                     write_combined=True,
@@ -1457,7 +1496,7 @@ def main(
             not no_cache,
             image_export_mode=image_export_mode,
             page_size=page_size,
-            detail=detail_level,
+            depth=depth_level,
             compact=compact,
             # User's `-o` path is a one-off export, not a cached artifact:
             # don't occupy a cache slot keyed by an arbitrary destination.

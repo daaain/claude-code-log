@@ -53,15 +53,18 @@ class TestCombinedTranscriptLink:
                 messages, session_id, "Test Session", cache_manager
             )
 
-            # Verify combined transcript link elements are present
+            # Verify combined transcript link elements are present.
+            # generate_session_html renders at the library default (FULL), so
+            # the same-variant combined link carries FULL's suffix (.hook, the
+            # --depth name for full depth; #159) — not the bare default file.
             assert "← View All Sessions (Combined Transcript)" in html
-            assert 'href="combined_transcripts.html"' in html
+            assert 'href="combined_transcripts.hook.html"' in html
 
             # Verify the navigation structure
             assert '<div class="navigation">' in html
             assert (
-                '<a href="combined_transcripts.html" class="combined-transcript-link">'
-                in html
+                '<a href="combined_transcripts.hook.html"'
+                ' class="combined-transcript-link">' in html
             )
 
     def test_combined_link_exception_handling(self):

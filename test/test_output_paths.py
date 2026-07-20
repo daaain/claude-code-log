@@ -2,7 +2,7 @@
 
 Covers:
 
-- `variant_suffix()` matrix across (detail, compact, format).
+- `variant_suffix()` matrix across (depth, compact, format).
 - `VARIANT_ENTRY_RE` regex acceptance/rejection.
 - `_get_page_html_path(n, suffix)` composition with pagination.
 - Converter integration: combined / session / --session-id paths all
@@ -34,7 +34,7 @@ from claude_code_log.converter import (
     generate_single_session_file,
     process_projects_hierarchy,
 )
-from claude_code_log.models import DetailLevel
+from claude_code_log.models import RenderingDepth
 from claude_code_log.utils import VARIANT_ENTRY_RE, variant_suffix
 
 
@@ -45,54 +45,62 @@ from claude_code_log.utils import VARIANT_ENTRY_RE, variant_suffix
 
 class TestVariantSuffix:
     def test_default_is_empty(self) -> None:
-        assert variant_suffix(DetailLevel.FULL, False, "html") == ""
-        assert variant_suffix(DetailLevel.FULL, False, "md") == ""
+        # The default level is now HIGH (== --depth tool), #159 — it gets no
+        # suffix. FULL is no longer the default, so it earns one.
+        assert variant_suffix(RenderingDepth.TOOL, False, "html") == ""
+        assert variant_suffix(RenderingDepth.TOOL, False, "md") == ""
+        assert variant_suffix(RenderingDepth.HOOK, False, "html") == ".hook"
 
     def test_detail_only(self) -> None:
-        assert variant_suffix(DetailLevel.HIGH, False, "html") == ".high"
-        assert variant_suffix(DetailLevel.LOW, False, "html") == ".low"
-        assert variant_suffix(DetailLevel.MINIMAL, False, "md") == ".minimal"
-        assert variant_suffix(DetailLevel.USER_ONLY, False, "html") == ".user-only"
-        assert variant_suffix(DetailLevel.USER_ONLY, False, "md") == ".user-only"
+        # Suffixes are the --depth names of the level (single canonical name),
+        # regardless of whether --depth or the deprecated --detail selected it.
+        assert variant_suffix(RenderingDepth.TOOL, False, "html") == ""  # default
+        assert variant_suffix(RenderingDepth.AGENT, False, "html") == ".agent"
+        assert variant_suffix(RenderingDepth.ASSISTANT, False, "md") == ".assistant"
+        assert variant_suffix(RenderingDepth.USER, False, "html") == ".user"
+        assert variant_suffix(RenderingDepth.HOOK, False, "md") == ".hook"
+        assert variant_suffix(RenderingDepth.SESSION, False, "html") == ".session"
 
     def test_compact_markdown_only(self) -> None:
         # Compact contributes for Markdown output.
-        assert variant_suffix(DetailLevel.FULL, True, "md") == ".compact"
-        assert variant_suffix(DetailLevel.FULL, True, "markdown") == ".compact"
-        assert variant_suffix(DetailLevel.LOW, True, "md") == ".low.compact"
+        assert variant_suffix(RenderingDepth.TOOL, True, "md") == ".compact"  # default
+        assert variant_suffix(RenderingDepth.TOOL, True, "markdown") == ".compact"
+        assert variant_suffix(RenderingDepth.AGENT, True, "md") == ".agent.compact"
+        assert variant_suffix(RenderingDepth.HOOK, True, "md") == ".hook.compact"
         # HTML silently drops the compact component.
-        assert variant_suffix(DetailLevel.FULL, True, "html") == ""
-        assert variant_suffix(DetailLevel.LOW, True, "html") == ".low"
+        assert variant_suffix(RenderingDepth.TOOL, True, "html") == ""
+        assert variant_suffix(RenderingDepth.AGENT, True, "html") == ".agent"
 
     def test_no_recaps_all_formats(self) -> None:
         # --no-recaps filters messages, so unlike compact/no-timestamps it
         # earns a suffix slot for EVERY format (html/md/json), else the
         # variant collides with the plain export on filename + cache key (#179).
-        assert variant_suffix(DetailLevel.FULL, False, "html", no_recaps=True) == (
+        # Anchored on the default level (HIGH), which is otherwise suffix-less.
+        assert variant_suffix(RenderingDepth.TOOL, False, "html", no_recaps=True) == (
             ".no-recaps"
         )
-        assert variant_suffix(DetailLevel.FULL, False, "json", no_recaps=True) == (
+        assert variant_suffix(RenderingDepth.TOOL, False, "json", no_recaps=True) == (
             ".no-recaps"
         )
-        assert variant_suffix(DetailLevel.FULL, False, "md", no_recaps=True) == (
+        assert variant_suffix(RenderingDepth.TOOL, False, "md", no_recaps=True) == (
             ".no-recaps"
         )
-        # Composes with detail (and stays ahead of the markdown-only flags).
+        # Composes with depth (and stays ahead of the markdown-only flags).
         assert (
-            variant_suffix(DetailLevel.USER_ONLY, False, "html", no_recaps=True)
-            == ".user-only.no-recaps"
+            variant_suffix(RenderingDepth.USER, False, "html", no_recaps=True)
+            == ".user.no-recaps"
         )
         assert (
             variant_suffix(
-                DetailLevel.USER_ONLY, True, "md", no_timestamps=True, no_recaps=True
+                RenderingDepth.USER, True, "md", no_timestamps=True, no_recaps=True
             )
-            == ".user-only.no-recaps.compact.no-timestamps"
+            == ".user.no-recaps.compact.no-timestamps"
         )
 
-    def test_string_detail_accepted(self) -> None:
+    def test_string_depth_accepted(self) -> None:
         # The CLI passes the already-normalised enum, but convenience callers
-        # may pass the string form.
-        assert variant_suffix("low", False, "html") == ".low"
+        # may pass the string form — a RenderingDepth value (== --depth name).
+        assert variant_suffix("agent", False, "html") == ".agent"
 
 
 # ---------------------------------------------------------------------------
@@ -249,17 +257,19 @@ class TestConverterVariantPaths:
     def test_low_variant_encodes_suffix(self, tmp_path: Path) -> None:
         _write_session(tmp_path / "sess1.jsonl", "sess1")
         output_path = convert_jsonl_to(
-            "html", tmp_path, silent=True, detail=DetailLevel.LOW
+            "html", tmp_path, silent=True, depth=RenderingDepth.AGENT
         )
-        assert output_path.name == "combined_transcripts.low.html"
+        assert output_path.name == "combined_transcripts.agent.html"
         assert output_path.exists()
 
     def test_low_and_full_coexist(self, tmp_path: Path) -> None:
         _write_session(tmp_path / "sess1.jsonl", "sess1")
         full = convert_jsonl_to("html", tmp_path, silent=True)
-        low = convert_jsonl_to("html", tmp_path, silent=True, detail=DetailLevel.LOW)
+        low = convert_jsonl_to(
+            "html", tmp_path, silent=True, depth=RenderingDepth.AGENT
+        )
         assert full.name == "combined_transcripts.html"
-        assert low.name == "combined_transcripts.low.html"
+        assert low.name == "combined_transcripts.agent.html"
         assert full.exists() and low.exists()
         assert full != low
 
@@ -280,10 +290,10 @@ class TestConverterVariantPaths:
             "md",
             tmp_path,
             silent=True,
-            detail=DetailLevel.LOW,
+            depth=RenderingDepth.AGENT,
             compact=True,
         )
-        assert path.name == "combined_transcripts.low.compact.md"
+        assert path.name == "combined_transcripts.agent.compact.md"
         assert path.exists()
 
     def test_individual_session_files_pick_up_suffix(self, tmp_path: Path) -> None:
@@ -292,9 +302,9 @@ class TestConverterVariantPaths:
             "html",
             tmp_path,
             silent=True,
-            detail=DetailLevel.LOW,
+            depth=RenderingDepth.AGENT,
         )
-        assert (tmp_path / "session-sess1.low.html").exists()
+        assert (tmp_path / "session-sess1.agent.html").exists()
         assert not (tmp_path / "session-sess1.html").exists()
 
     def test_explicit_output_path_honoured(self, tmp_path: Path) -> None:
@@ -305,7 +315,7 @@ class TestConverterVariantPaths:
             tmp_path,
             explicit,
             silent=True,
-            detail=DetailLevel.LOW,
+            depth=RenderingDepth.AGENT,
         )
         # User's literal path wins: no suffix appended.
         assert result == explicit
@@ -320,9 +330,9 @@ class TestConverterVariantPaths:
             tmp_path,
             "sess1",
             use_cache=True,
-            detail=DetailLevel.LOW,
+            depth=RenderingDepth.AGENT,
         )
-        assert out.name == "session-sess1.low.html"
+        assert out.name == "session-sess1.agent.html"
 
     def test_single_file_input_variant_suffix(self, tmp_path: Path) -> None:
         jsonl = tmp_path / "sess1.jsonl"
@@ -331,9 +341,11 @@ class TestConverterVariantPaths:
             "html",
             jsonl,
             silent=True,
-            detail=DetailLevel.HIGH,
+            depth=RenderingDepth.AGENT,
         )
-        assert out.name == "sess1.high.html"
+        # HIGH is now the default (bare) level, so use a non-default level
+        # (LOW → .agent) to exercise the single-file suffix path.
+        assert out.name == "sess1.agent.html"
         assert out.exists()
 
 
@@ -357,7 +369,9 @@ class TestCacheVariantCoexistence:
         full_ino = full_stat.st_ino
 
         # Render LOW — must NOT touch the FULL file's cache row.
-        low = convert_jsonl_to("html", tmp_path, silent=True, detail=DetailLevel.LOW)
+        low = convert_jsonl_to(
+            "html", tmp_path, silent=True, depth=RenderingDepth.AGENT
+        )
         assert low.exists()
         assert full1.exists()
 
@@ -371,7 +385,9 @@ class TestCacheVariantCoexistence:
     def test_low_render_does_not_delete_full_pages(self, tmp_path: Path) -> None:
         _write_session(tmp_path / "sess1.jsonl", "sess1")
         full = convert_jsonl_to("html", tmp_path, silent=True)
-        low = convert_jsonl_to("html", tmp_path, silent=True, detail=DetailLevel.LOW)
+        low = convert_jsonl_to(
+            "html", tmp_path, silent=True, depth=RenderingDepth.AGENT
+        )
         # Both exist and are distinct files.
         assert full.exists() and low.exists() and full != low
 
@@ -388,14 +404,14 @@ class TestSessionBackLink:
             "html",
             tmp_path,
             silent=True,
-            detail=DetailLevel.LOW,
+            depth=RenderingDepth.AGENT,
         )
-        session_file = tmp_path / "session-sess1.low.html"
+        session_file = tmp_path / "session-sess1.agent.html"
         # Explicit UTF-8: the HTML contains emoji glyphs (🤷, 🤖, 📦);
         # Python on Windows otherwise defaults to cp1252 and crashes.
         html = session_file.read_text(encoding="utf-8")
         # Should link to the LOW combined file, not the bare default.
-        assert "combined_transcripts.low.html" in html
+        assert "combined_transcripts.agent.html" in html
         # The bare default may still occur as text elsewhere; ensure it is
         # not the back-link target on its own.
         assert 'href="combined_transcripts.html"' not in html
@@ -422,9 +438,10 @@ class TestEnumerateProjectVariants:
         variants = _enumerate_project_variants(tmp_path, "project")
         suffixes = [v["suffix"] for v in variants]
         labels = [v["label"] for v in variants]
-        # Default first.
+        # Default first — labeled "Tool" (the empty-suffix default level is
+        # now tool/HIGH, #159; the old .full variant is a named entry).
         assert suffixes[0] == ""
-        assert labels[0] == "Full"
+        assert labels[0] == "Tool"
         # All four entries present, no paginated trailers.
         assert sorted(suffixes) == ["", ".high", ".low", ".user-only"]
         # Hyphenated label renders with a space (UI polish).
@@ -644,10 +661,10 @@ class TestPaginatedVariantCoexistence:
             tmp_path,
             silent=True,
             page_size=2,
-            detail=DetailLevel.LOW,
+            depth=RenderingDepth.AGENT,
         )
-        assert low_page1.name == "combined_transcripts.low.html"
-        low_page2 = tmp_path / "combined_transcripts.low_2.html"
+        assert low_page1.name == "combined_transcripts.agent.html"
+        low_page2 = tmp_path / "combined_transcripts.agent_2.html"
         assert low_page2.exists()
         # FULL's page files must be untouched.
         assert full_page1.exists()

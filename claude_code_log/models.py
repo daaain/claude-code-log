@@ -46,47 +46,75 @@ class MessageType(str, Enum):
     SYSTEM_ERROR = "system-error"
 
 
-class DetailLevel(str, Enum):
-    """Output detail level controlling which message types are included.
+class RenderingDepth(str, Enum):
+    """How deep into the message hierarchy to render (#159).
 
-    Levels form a hierarchy: full > high > low > minimal > user-only.
+    Depths name the message-hierarchy node the output stops at, ordered
+    most-content-first (deepest to shallowest):
+    hook > tool > agent > assistant > user > session.
+
+    The ``--depth`` CLI option uses these names directly. The deprecated
+    ``--detail`` option (removed in 2.0) maps its legacy verbosity names
+    onto them via ``DETAIL_ALIASES``. ``session`` is depth-only — it has
+    no ``--detail`` spelling.
+
+    Enum values ARE the ``--depth`` names, so they double as the filename
+    suffix (see ``utils.variant_suffix``).
     """
 
-    FULL = "full"  # Everything
-    HIGH = "high"  # Detailed but cleaned (no system/hook noise)
-    LOW = "low"  # Interaction-focused + key signals
-    MINIMAL = "minimal"  # User + assistant messages only
-    USER_ONLY = "user-only"  # User prompts + steering only (for downstream agents)
+    HOOK = "hook"  # Everything, incl. hooks + system notices (--detail full)
+    TOOL = "tool"  # Detailed but cleaned, no system/hook noise (--detail high; DEFAULT)
+    AGENT = "agent"  # Interaction-focused + key tool signals (--detail low)
+    ASSISTANT = "assistant"  # User + assistant messages only (--detail minimal)
+    USER = "user"  # User prompts + steering only (--detail user-only)
+    SESSION = "session"  # Session structure only: headers/nav (depth-only)
 
-    def includes(self, threshold: "DetailLevel") -> bool:
-        """Return True iff this level is verbose enough to show content
-        whose ``detail_visibility`` is declared at ``threshold``.
+    def includes(self, threshold: "RenderingDepth") -> bool:
+        """Return True iff this depth is deep enough to show content whose
+        ``depth_visibility`` is declared at ``threshold``.
 
-        Monotone-down: ``FULL.includes(X)`` is True for every ``X``;
-        ``USER_ONLY.includes(X)`` is True only for ``USER_ONLY`` itself.
+        Monotone: ``HOOK.includes(X)`` is True for every ``X``;
+        ``SESSION.includes(X)`` is True only for ``SESSION`` itself.
         """
-        return _DETAIL_ORDER[self] <= _DETAIL_ORDER[threshold]
+        return _DEPTH_ORDER[self] <= _DEPTH_ORDER[threshold]
 
 
-# Verbosity ordering: lower index = more verbose. The ``DetailLevel.includes``
-# predicate (and ``MessageContent.visible_at``) treats a level as "verbose
-# enough" iff ``order[current] <= order[threshold]``.
-_DETAIL_ORDER: dict[DetailLevel, int] = {
-    DetailLevel.FULL: 0,
-    DetailLevel.HIGH: 1,
-    DetailLevel.LOW: 2,
-    DetailLevel.MINIMAL: 3,
-    DetailLevel.USER_ONLY: 4,
+# Depth ordering: lower index = deeper (more content). ``RenderingDepth.includes``
+# (and ``MessageContent.visible_at``) treats a depth as "deep enough" iff
+# ``order[current] <= order[threshold]``.
+_DEPTH_ORDER: dict[RenderingDepth, int] = {
+    RenderingDepth.HOOK: 0,
+    RenderingDepth.TOOL: 1,
+    RenderingDepth.AGENT: 2,
+    RenderingDepth.ASSISTANT: 3,
+    RenderingDepth.USER: 4,
+    RenderingDepth.SESSION: 5,
 }
 
-# Guard against drift: if a new DetailLevel value is added without an
+# Guard against drift: if a new RenderingDepth value is added without an
 # entry here, ``includes`` would raise KeyError silently on first use.
 # Fail loudly at import time instead. Uses ``if ... raise`` rather than
 # ``assert`` so the check survives ``python -O`` / ``PYTHONOPTIMIZE``.
-if set(_DETAIL_ORDER.keys()) != set(DetailLevel):
+if set(_DEPTH_ORDER.keys()) != set(RenderingDepth):
     raise RuntimeError(
-        f"_DETAIL_ORDER missing entries for: {set(DetailLevel) - set(_DETAIL_ORDER.keys())}"
+        f"_DEPTH_ORDER missing entries for: {set(RenderingDepth) - set(_DEPTH_ORDER.keys())}"
     )
+
+# The default output depth (#159): ``--depth tool`` — detailed but cleaned
+# of system/hook noise. A bare invocation (no --depth, no --detail) and the
+# no-suffix output filename both mean this depth.
+DEFAULT_DEPTH: RenderingDepth = RenderingDepth.TOOL
+
+# Deprecated ``--detail`` value → ``RenderingDepth`` (#159). ``--detail`` is
+# removed in 2.0; until then its legacy verbosity names map onto the depth
+# scale. ``session`` has no ``--detail`` spelling.
+DETAIL_ALIASES: dict[str, RenderingDepth] = {
+    "full": RenderingDepth.HOOK,
+    "high": RenderingDepth.TOOL,
+    "low": RenderingDepth.AGENT,
+    "minimal": RenderingDepth.ASSISTANT,
+    "user-only": RenderingDepth.USER,
+}
 
 
 # =============================================================================
@@ -476,15 +504,15 @@ class MessageContent:
         """
         return False
 
-    def visible_at(self, detail: DetailLevel) -> bool:
-        """Return True iff this content is visible at ``detail``.
+    def visible_at(self, depth: RenderingDepth) -> bool:
+        """Return True iff this content is visible at ``depth``.
 
         Resolution: each subclass MAY declare a class-level
-        ``detail_visibility: ClassVar[DetailLevel]`` that names the LEAST
+        ``depth_visibility: ClassVar[RenderingDepth]`` that names the LEAST
         verbose level at which it should still render. The predicate is
-        monotone-down — a class declared at ``HIGH`` is visible at
-        ``FULL`` and ``HIGH`` and dropped at ``LOW`` and below
-        (see :meth:`DetailLevel.includes`).
+        monotone-down — a class declared at ``TOOL`` is visible at
+        ``HOOK`` and ``TOOL`` and dropped at ``AGENT`` and below
+        (see :meth:`RenderingDepth.includes`).
 
         Classes without a declared threshold are always visible — useful
         for built-ins like ``UserTextMessage`` that have no level-based
@@ -492,10 +520,10 @@ class MessageContent:
         their base via normal ClassVar inheritance unless they declare
         their own (documented contract — see ``dev-docs/plugins.md``).
         """
-        threshold = getattr(type(self), "detail_visibility", None)
+        threshold = getattr(type(self), "depth_visibility", None)
         if threshold is None:
             return True
-        return detail.includes(threshold)
+        return depth.includes(threshold)
 
 
 @dataclass
@@ -505,8 +533,8 @@ class SystemMessage(MessageContent):
     Used for info, warning, and error system messages.
     """
 
-    # System info/warning/error noise — visible only at FULL.
-    detail_visibility: ClassVar[DetailLevel] = DetailLevel.FULL
+    # System info/warning/error noise — visible only at HOOK.
+    depth_visibility: ClassVar[RenderingDepth] = RenderingDepth.HOOK
 
     level: str  # "info", "warning", "error"
     text: str  # Raw text content (may contain ANSI codes)
@@ -536,8 +564,8 @@ class HookSummaryMessage(MessageContent):
     Used for subtype="stop_hook_summary" system messages.
     """
 
-    # Hook noise — visible only at FULL.
-    detail_visibility: ClassVar[DetailLevel] = DetailLevel.FULL
+    # Hook noise — visible only at HOOK.
+    depth_visibility: ClassVar[RenderingDepth] = RenderingDepth.HOOK
 
     has_output: bool
     hook_errors: list[str]  # Error messages from hooks
@@ -559,12 +587,12 @@ class AwaySummaryMessage(MessageContent):
     """
 
     # Recaps are a high-level summary of activity, so they stay visible at
-    # EVERY detail level — including user-only, where "user said this, agent
+    # EVERY depth level — including user-only, where "user said this, agent
     # did that (just the recap)" is exactly the wanted view (#179). Declared at
-    # the least-verbose threshold (USER_ONLY) via the class-attribute
-    # detail-visibility mechanism. Suppress them explicitly with ``--no-recaps``
-    # (handled in ``_ghost_template_by_detail``), not by lowering this.
-    detail_visibility: ClassVar[DetailLevel] = DetailLevel.USER_ONLY
+    # the least-verbose threshold (USER) via the class-attribute
+    # depth-visibility mechanism. Suppress them explicitly with ``--no-recaps``
+    # (handled in ``_ghost_template_by_depth``), not by lowering this.
+    depth_visibility: ClassVar[RenderingDepth] = RenderingDepth.USER
 
     text: str  # Recap prose; may contain light markdown.
 
@@ -586,8 +614,8 @@ class HookAttachmentMessage(MessageContent):
     ran for a single Stop event). This one represents an individual
     hook invocation captured by the harness as an attachment, with
     full payload (command, exit code, stdout/stderr, duration). Visible
-    only at ``DetailLevel.FULL``; dropped at HIGH and below alongside
-    other hook noise (see ``detail_visibility`` below).
+    only at ``RenderingDepth.HOOK``; dropped at TOOL and below alongside
+    other hook noise (see ``depth_visibility`` below).
 
     ``kind`` distinguishes the attachment flavour:
 
@@ -603,8 +631,8 @@ class HookAttachmentMessage(MessageContent):
       but with non-zero ``exitCode``.
     """
 
-    # Hook attachment noise — visible only at FULL.
-    detail_visibility: ClassVar[DetailLevel] = DetailLevel.FULL
+    # Hook attachment noise — visible only at HOOK.
+    depth_visibility: ClassVar[RenderingDepth] = RenderingDepth.HOOK
 
     kind: str  # success / additional_context / blocking_error / non_blocking_error
     hook_event: str = ""  # PostToolUse / UserPromptSubmit / Stop / SessionStart / ...
@@ -638,8 +666,8 @@ class SlashCommandMessage(MessageContent):
     command-contents tags parsed from the text.
     """
 
-    # Slash-command framing — visible only at FULL.
-    detail_visibility: ClassVar[DetailLevel] = DetailLevel.FULL
+    # Slash-command framing — visible only at HOOK.
+    depth_visibility: ClassVar[RenderingDepth] = RenderingDepth.HOOK
 
     command_name: str
     command_args: str
@@ -657,8 +685,8 @@ class CommandOutputMessage(MessageContent):
     These are user messages containing local-command-stdout tags.
     """
 
-    # Local-command output — visible only at FULL.
-    detail_visibility: ClassVar[DetailLevel] = DetailLevel.FULL
+    # Local-command output — visible only at HOOK.
+    depth_visibility: ClassVar[RenderingDepth] = RenderingDepth.HOOK
 
     stdout: str
     is_markdown: bool  # True if content appears to be markdown
@@ -675,8 +703,8 @@ class BashInputMessage(MessageContent):
     These are user messages containing bash-input tags.
     """
 
-    # Inline bash — kept through HIGH, dropped at LOW and below.
-    detail_visibility: ClassVar[DetailLevel] = DetailLevel.HIGH
+    # Inline bash — kept through TOOL, dropped at AGENT and below.
+    depth_visibility: ClassVar[RenderingDepth] = RenderingDepth.TOOL
 
     command: str
 
@@ -692,8 +720,8 @@ class BashOutputMessage(MessageContent):
     These are user messages containing bash-stdout and/or bash-stderr tags.
     """
 
-    # Inline bash output — kept through HIGH, dropped at LOW and below.
-    detail_visibility: ClassVar[DetailLevel] = DetailLevel.HIGH
+    # Inline bash output — kept through TOOL, dropped at AGENT and below.
+    depth_visibility: ClassVar[RenderingDepth] = RenderingDepth.TOOL
 
     stdout: Optional[str] = None  # Raw stdout content (may contain ANSI codes)
     stderr: Optional[str] = None  # Raw stderr content (may contain ANSI codes)
@@ -717,8 +745,8 @@ class CompactedSummaryMessage(MessageContent):
     format_compacted_summary_content() in html/user_formatters.py.
     """
 
-    # /compact framing — visible only at FULL.
-    detail_visibility: ClassVar[DetailLevel] = DetailLevel.FULL
+    # /compact framing — visible only at HOOK.
+    depth_visibility: ClassVar[RenderingDepth] = RenderingDepth.HOOK
 
     summary_text: str
 
@@ -740,8 +768,8 @@ class UserMemoryMessage(MessageContent):
     format_user_memory_content() in html/user_formatters.py.
     """
 
-    # Memory-input framing — visible only at FULL.
-    detail_visibility: ClassVar[DetailLevel] = DetailLevel.FULL
+    # Memory-input framing — visible only at HOOK.
+    depth_visibility: ClassVar[RenderingDepth] = RenderingDepth.HOOK
 
     memory_text: str
 
@@ -759,8 +787,8 @@ class UserSlashCommandMessage(MessageContent):
     Formatted by format_user_slash_command_content() in html/user_formatters.py.
     """
 
-    # Slash-command expansion framing — visible only at FULL.
-    detail_visibility: ClassVar[DetailLevel] = DetailLevel.FULL
+    # Slash-command expansion framing — visible only at HOOK.
+    depth_visibility: ClassVar[RenderingDepth] = RenderingDepth.HOOK
 
     text: str
 
@@ -986,9 +1014,9 @@ class AssistantTextMessage(MessageContent):
     Empty items list indicates no content.
     """
 
-    # Assistant prose — visible at MINIMAL and above; dropped only at
-    # USER_ONLY (which keeps user prompts + steering only).
-    detail_visibility: ClassVar[DetailLevel] = DetailLevel.MINIMAL
+    # Assistant prose — visible at ASSISTANT and above; dropped only at
+    # USER (which keeps user prompts + steering only).
+    depth_visibility: ClassVar[RenderingDepth] = RenderingDepth.ASSISTANT
 
     # Interleaved content items preserving original order
     items: list[  # pyright: ignore[reportUnknownVariableType]
@@ -1018,8 +1046,8 @@ class ThinkingMessage(MessageContent):
     for parsing JSONL). This dataclass is for rendering purposes.
     """
 
-    # Thinking blocks — kept through HIGH, dropped at LOW and below.
-    detail_visibility: ClassVar[DetailLevel] = DetailLevel.HIGH
+    # Thinking blocks — kept through TOOL, dropped at AGENT and below.
+    depth_visibility: ClassVar[RenderingDepth] = RenderingDepth.TOOL
 
     thinking: str
     signature: Optional[str] = None
@@ -1048,8 +1076,8 @@ class UnknownMessage(MessageContent):
     specific handlers. Stores the type name for display purposes.
     """
 
-    # Unknown content — visible only at FULL.
-    detail_visibility: ClassVar[DetailLevel] = DetailLevel.FULL
+    # Unknown content — visible only at HOOK.
+    depth_visibility: ClassVar[RenderingDepth] = RenderingDepth.HOOK
 
     type_name: str  # The name/description of the unknown type
 
@@ -1116,10 +1144,10 @@ class ToolResultMessage(MessageContent):
     needed for rendering, such as the associated tool name and file path.
     """
 
-    # Tool results — kept through LOW (narrowed there by the orthogonal
-    # tool-name keep-list in ``_ghost_template_by_detail``), dropped at
-    # MINIMAL and below.
-    detail_visibility: ClassVar[DetailLevel] = DetailLevel.LOW
+    # Tool results — kept through AGENT (narrowed there by the orthogonal
+    # tool-name keep-list in ``_ghost_template_by_depth``), dropped at
+    # ASSISTANT and below.
+    depth_visibility: ClassVar[RenderingDepth] = RenderingDepth.AGENT
 
     tool_use_id: str
     output: (
@@ -1147,10 +1175,10 @@ class ToolUseMessage(MessageContent):
     Falls back to the original ToolUseContent when no specialized parser exists.
     """
 
-    # Tool invocations — kept through LOW (narrowed there by the orthogonal
-    # tool-name keep-list in ``_ghost_template_by_detail``), dropped at
-    # MINIMAL and below.
-    detail_visibility: ClassVar[DetailLevel] = DetailLevel.LOW
+    # Tool invocations — kept through AGENT (narrowed there by the orthogonal
+    # tool-name keep-list in ``_ghost_template_by_depth``), dropped at
+    # ASSISTANT and below.
+    depth_visibility: ClassVar[RenderingDepth] = RenderingDepth.AGENT
 
     input: "ToolInput"  # Specialized (BashInput, etc.) or ToolUseContent fallback
     tool_use_id: str  # From ToolUseContent.id
@@ -1177,7 +1205,7 @@ class WorkflowPhaseMessage(MessageContent):
     """
 
     title: str = ""
-    detail: str = ""
+    depth: str = ""
     agent_count: int = 0
 
     @property

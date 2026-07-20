@@ -104,14 +104,14 @@ class JsonRenderer(Renderer):
         root_messages, session_nav, _ = generate_template_messages(
             messages,
             session_tree=session_tree,
-            detail=self.detail,
+            depth=self.depth,
             no_recaps=self.no_recaps,
         )
 
         payload: dict[str, Any] = {
             "version": get_library_version(),
             "title": title or "Claude Transcript",
-            "detail": self.detail.value,
+            "depth": self.depth.value,
             "compact": self.compact,
             "sessions": session_nav,
             "messages": [self._message_to_dict(m) for m in root_messages],
@@ -149,7 +149,7 @@ class JsonRenderer(Renderer):
             from ..utils import variant_suffix as _variant_suffix
 
             suffix = _variant_suffix(
-                self.detail, self.compact, "json", no_recaps=self.no_recaps
+                self.depth, self.compact, "json", no_recaps=self.no_recaps
             )
             combined_link = f"combined_transcripts{suffix}.json"
 

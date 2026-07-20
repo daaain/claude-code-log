@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 
 from claude_code_log.converter import render_normalized_session_file
-from claude_code_log.models import DetailLevel
+from claude_code_log.models import RenderingDepth
 
 
 class FakeRenderer:
@@ -37,7 +37,7 @@ def test_normalized_renderer_dispatches_options_title_and_creates_parent(
         "abcdef123456",
         output,
         format="md",
-        detail=DetailLevel.MINIMAL,
+        depth=RenderingDepth.ASSISTANT,
         compact=True,
         no_timestamps=True,
         no_recaps=True,
@@ -49,7 +49,7 @@ def test_normalized_renderer_dispatches_options_title_and_creates_parent(
         (
             ("md", None),
             {
-                "detail": DetailLevel.MINIMAL,
+                "depth": RenderingDepth.ASSISTANT,
                 "compact": True,
                 "no_timestamps": True,
                 "no_recaps": True,

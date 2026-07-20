@@ -42,7 +42,7 @@ Two motivating use cases drove the design:
   bespoke `format_markdown`.
 - **Hook-style demotion.** A `UserTextMessage` whose body matches a
   marker (e.g. `[hook] ...`) gets reclassified into a typed wrapper
-  so it can render compactly or be hidden at low detail levels.
+  so it can render compactly or be hidden at low depths.
 
 Plugins are **discovered through entry points**, so just `pip install`
 ing a plugin package wires it in — no edit to `claude-code-log`
@@ -211,14 +211,14 @@ renderer's dispatcher consults them after the renderer's own
 ```python
 from dataclasses import dataclass
 from typing import ClassVar, Optional
-from claude_code_log.models import DetailLevel, ToolUseMessage
+from claude_code_log.models import RenderingDepth, ToolUseMessage
 from claude_code_log.plugins import escape_html, safe_markdown_inline
 
 @dataclass
 class MyToolMessage(ToolUseMessage):
     """Plugin-defined subclass; carries its own render methods."""
 
-    detail_visibility: ClassVar[DetailLevel] = DetailLevel.LOW
+    depth_visibility: ClassVar[RenderingDepth] = RenderingDepth.AGENT
 
     def format_markdown(self, _renderer, _message) -> str:
         # ``action`` is transcript-derived (untrusted — see §4.2). Interpolated
@@ -437,44 +437,44 @@ class's built-in renderer behaviour to take over.
 
 ---
 
-## 6. `detail_visibility`
+## 6. `depth_visibility`
 
-`claude-code-log` filters messages per the `--detail` flag. Levels
+`claude-code-log` filters messages per the `--depth` flag. Levels
 in order of decreasing verbosity:
 
 ```
-FULL > HIGH > LOW > MINIMAL > USER_ONLY
+HOOK > TOOL > AGENT > ASSISTANT > USER
 ```
 
-Your plugin class declares a `ClassVar[DetailLevel]` to opt into
+Your plugin class declares a `ClassVar[RenderingDepth]` to opt into
 class-based visibility:
 
 ```python
-detail_visibility: ClassVar[DetailLevel] = DetailLevel.LOW
+depth_visibility: ClassVar[RenderingDepth] = RenderingDepth.AGENT
 ```
 
 **Semantics: monotone-down.** The message is visible iff the
-current detail level is *at least as verbose as* the declared
+current depth is *at least as verbose as* the declared
 minimum. With the ordering above:
 
 | Declared | Visible at |
 |---|---|
-| `FULL` | `FULL` only |
-| `HIGH` | `FULL`, `HIGH` |
-| `LOW` | `FULL`, `HIGH`, `LOW` |
-| `MINIMAL` | `FULL`, `HIGH`, `LOW`, `MINIMAL` |
-| `USER_ONLY` | all levels |
+| `HOOK` | `HOOK` only |
+| `TOOL` | `HOOK`, `TOOL` |
+| `AGENT` | `HOOK`, `TOOL`, `AGENT` |
+| `ASSISTANT` | `HOOK`, `TOOL`, `AGENT`, `ASSISTANT` |
+| `USER` | all levels |
 
-The order is pinned in a `_DETAIL_ORDER` map next to `DetailLevel` in
+The order is pinned in a `_DEPTH_ORDER` map next to `RenderingDepth` in
 `models.py` (so a future reorder of the enum can't silently flip
 semantics), guarded by a module-load assertion that every
-`DetailLevel` value is mapped. The predicate itself lives on each
+`RenderingDepth` value is mapped. The predicate itself lives on each
 content class as `MessageContent.visible_at(detail)` and consults the
-class-side `detail_visibility` ClassVar via `DetailLevel.includes`.
+class-side `depth_visibility` ClassVar via `RenderingDepth.includes`.
 
 **Opt-in nature.** Most built-in `MessageContent` classes declare their
-own `detail_visibility` (e.g. `ToolUseMessage = LOW`, `SystemMessage =
-FULL`), and a plugin class subclassing such a built-in inherits the
+own `depth_visibility` (e.g. `ToolUseMessage = AGENT`, `SystemMessage =
+HOOK`), and a plugin class subclassing such a built-in inherits the
 parent's threshold through normal ClassVar inheritance unless it
 declares its own. A handful of built-ins (`UserTextMessage`,
 `TeammateMessage`, `TaskNotificationMessage`, `SessionHeaderMessage`)
@@ -490,31 +490,31 @@ visibility is authoritative.
 
 **Practical guide.** Pick based on user-perceived value:
 
-- `FULL` only — debug/dev signal that clutters normal viewing.
-- `HIGH` — interesting but optional; user has opted into detail.
-- `LOW` — should appear in the default summary view (the typical
+- `HOOK` only — debug/dev signal that clutters normal viewing.
+- `TOOL` — interesting but optional; user has opted into detail.
+- `AGENT` — should appear in the default summary view (the typical
   choice for tool-rendering plugins; bypasses the `_LOW_KEEP_TOOLS`
   allowlist that core would otherwise check).
-- `MINIMAL` — essential context (sparingly).
-- `USER_ONLY` — visible even in user-only views (almost never the
+- `ASSISTANT` — essential context (sparingly).
+- `USER` — visible even in user-only views (almost never the
   right choice for a tool/hook plugin; reserved for user-originated
   content).
 
-**`HIGH` vs `FULL` for hook-style content** — the two reference
+**`TOOL` vs `HOOK` for hook-style content** — the two reference
 plugins make different choices here, deliberately:
 
-- `hook_demotion.py` (this repo's test plugin) uses `FULL` —
+- `hook_demotion.py` (this repo's test plugin) uses `HOOK` —
   surfaces only in the most-verbose view. Right when the hook
   notification is pure noise reduction for typical reviewers.
 - A real-world plugin (e.g. for clmail-style hook notifications a
-  reviewer wants to *see when they fired*) typically picks `HIGH`
-  — surfaces in `HIGH` *and* `FULL`, hidden at `LOW` and below.
+  reviewer wants to *see when they fired*) typically picks `TOOL`
+  — surfaces in `TOOL` *and* `HOOK`, hidden at `AGENT` and below.
   Right when the hook firing itself is signal worth keeping in the
   detail view.
 
-The rule of thumb: ask "would a reviewer skimming at `HIGH` want
-to know this happened?" If yes, pick `HIGH`. If only at the
-debug-the-transcript level, pick `FULL`.
+The rule of thumb: ask "would a reviewer skimming at `TOOL` want
+to know this happened?" If yes, pick `TOOL`. If only at the
+debug-the-transcript level, pick `HOOK`.
 
 ---
 
@@ -713,11 +713,11 @@ modifies plugins (including injecting directly via
 `_cached_transformers`) must `reset_cache()` afterward — process-wide
 state otherwise leaks across tests.
 
-**`detail_visibility` is checked via `hasattr` for the LOW keep-list
-opt-out.** This means inheriting `detail_visibility` from a future
+**`depth_visibility` is checked via `hasattr` for the AGENT keep-list
+opt-out.** This means inheriting `depth_visibility` from a future
 core-migrated parent class behaves the same as declaring it
 yourself: the keep-list is bypassed. Usually what you want; mention
-it if you're debugging a "why is my plugin visible at LOW even though
+it if you're debugging a "why is my plugin visible at AGENT even though
 the tool isn't in `_LOW_KEEP_TOOLS`?" question.
 
 **Markdown-shaped HTML and the `.markdown` CSS scope.** The
@@ -790,7 +790,7 @@ NOT already wrap. Synthesis classes leave `has_markdown` alone.
 | Protocol + loader + dispatch | [`claude_code_log/plugins.py`](../claude_code_log/plugins.py) |
 | Priority constants | [`claude_code_log/factories/priorities.py`](../claude_code_log/factories/priorities.py) |
 | Renderer dispatch | `Renderer._dispatch_format`, `Renderer._dispatch_title`, `HtmlRenderer._class_dispatch_format` in [`renderer.py`](../claude_code_log/renderer.py) / [`html/renderer.py`](../claude_code_log/html/renderer.py) |
-| Visibility predicate | `MessageContent.visible_at`, `DetailLevel.includes`, `_DETAIL_ORDER` in [`models.py`](../claude_code_log/models.py); `_ghost_template_by_detail` (post-render driver) in [`renderer.py`](../claude_code_log/renderer.py) |
+| Visibility predicate | `MessageContent.visible_at`, `RenderingDepth.includes`, `_DEPTH_ORDER` in [`models.py`](../claude_code_log/models.py); `_ghost_template_by_depth` (post-render driver) in [`renderer.py`](../claude_code_log/renderer.py) |
 | Reference plugin (canonical example) | [`test/_plugins/clmail/`](../test/_plugins/clmail/) + [`README.md`](../test/_plugins/clmail/README.md) |
 | Test suite (four layers) | [`test/test_plugin_system.py`](../test/test_plugin_system.py) |
 | Design discussion | [`work/tool-renderer-plugins.md`](../work/tool-renderer-plugins.md) |

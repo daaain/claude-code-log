@@ -62,10 +62,19 @@ class TestTemplateRendering:
 
     def test_edge_cases_render(self):
         """Test that edge cases render without errors."""
+        from claude_code_log.models import RenderingDepth
+
         test_data_path = Path(__file__).parent / "test_data" / "edge_cases.jsonl"
 
-        # Convert to HTML
-        html_file = convert_jsonl_to_html(test_data_path)
+        # Render at FULL: this fixture exercises full-detail edge content —
+        # slash-command framing (SlashCommandMessage) and local-command
+        # output (CommandOutputMessage) are ``depth_visibility = FULL``, so
+        # the new HIGH default (--depth tool, #159) intentionally cleans them.
+        # ``use_cache=False`` avoids a stale shared test_data/*.html masking a
+        # wrong-level render between runs.
+        html_file = convert_jsonl_to_html(
+            test_data_path, depth=RenderingDepth.HOOK, use_cache=False
+        )
         html_content = html_file.read_text(encoding="utf-8")
 
         # Basic checks
