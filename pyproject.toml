@@ -63,6 +63,13 @@ markers = [
 [tool.ty.environment]
 # Use custom stubs for untyped libraries
 extra-paths = ["stubs"]
+# Check against all platforms (mirrors pyright's pythonPlatform = "All") rather
+# than the host, so ty is deterministic regardless of who runs it. POSIX-only
+# stdlib members used behind runtime guards (faulthandler.register,
+# signal.SIGUSR1, os.mkfifo) then read as "possibly missing on win32" and carry
+# a targeted `# ty: ignore[possibly-missing-attribute]` at each guarded site,
+# instead of being hard `unresolved-attribute` errors on a Windows host (#276).
+python-platform = "all"
 
 [tool.ty.src]
 # docs/gen_pages.py is a build-time mkdocs-gen-files script: it imports
