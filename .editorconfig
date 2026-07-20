@@ -1,0 +1,25 @@
+# EditorConfig — https://editorconfig.org
+# Baseline whitespace hygiene, observed by most editors/IDEs. See the
+# "Code Quality" section of CONTRIBUTING.md.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+# Markdown: a line ending in two spaces is a hard line break — trimming it
+# would silently rewrite content, so leave trailing whitespace alone here.
+[*.md]
+trim_trailing_whitespace = false
+
+# Syrupy snapshots: the serializer indents *every* line of the embedded block,
+# including blank ones, so blank lines legitimately carry trailing whitespace.
+# Never trim — regenerate with `pytest --snapshot-update -n0` instead.
+[*.ambr]
+trim_trailing_whitespace = false
+
+[*.py]
+indent_style = space
+indent_size = 4

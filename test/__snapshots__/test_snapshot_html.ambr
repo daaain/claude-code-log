@@ -301,6 +301,18 @@
       display: block;
   }
   
+  /* Blockquotes in any rendered Markdown (mistune otherwise emits an
+   * unstyled <blockquote> indistinguishable from surrounding text).
+   * `.markdown` covers every rendered-Markdown surface — assistant text,
+   * thinking, tool results, teammate messages, system output; `.user-md`
+   * covers user prose, which uses its own wrapper class. */
+  .user-md blockquote,
+  .markdown blockquote {
+      border-left: 4px solid #cdcdcd;
+      padding-left: 1em;
+      margin-left: 1em;
+  }
+  
   .user-content .user-raw {
       display: none;
   }
@@ -7065,6 +7077,18 @@
       display: block;
   }
   
+  /* Blockquotes in any rendered Markdown (mistune otherwise emits an
+   * unstyled <blockquote> indistinguishable from surrounding text).
+   * `.markdown` covers every rendered-Markdown surface — assistant text,
+   * thinking, tool results, teammate messages, system output; `.user-md`
+   * covers user prose, which uses its own wrapper class. */
+  .user-md blockquote,
+  .markdown blockquote {
+      border-left: 4px solid #cdcdcd;
+      padding-left: 1em;
+      margin-left: 1em;
+  }
+  
   .user-content .user-raw {
       display: none;
   }
@@ -13724,6 +13748,18 @@
       display: block;
   }
   
+  /* Blockquotes in any rendered Markdown (mistune otherwise emits an
+   * unstyled <blockquote> indistinguishable from surrounding text).
+   * `.markdown` covers every rendered-Markdown surface — assistant text,
+   * thinking, tool results, teammate messages, system output; `.user-md`
+   * covers user prose, which uses its own wrapper class. */
+  .user-md blockquote,
+  .markdown blockquote {
+      border-left: 4px solid #cdcdcd;
+      padding-left: 1em;
+      margin-left: 1em;
+  }
+  
   .user-content .user-raw {
       display: none;
   }
@@ -16139,6 +16175,18 @@
   
   .user-content .user-md {
       display: block;
+  }
+  
+  /* Blockquotes in any rendered Markdown (mistune otherwise emits an
+   * unstyled <blockquote> indistinguishable from surrounding text).
+   * `.markdown` covers every rendered-Markdown surface — assistant text,
+   * thinking, tool results, teammate messages, system output; `.user-md`
+   * covers user prose, which uses its own wrapper class. */
+  .user-md blockquote,
+  .markdown blockquote {
+      border-left: 4px solid #cdcdcd;
+      padding-left: 1em;
+      margin-left: 1em;
   }
   
   .user-content .user-raw {
@@ -23021,6 +23069,18 @@
   
   .user-content .user-md {
       display: block;
+  }
+  
+  /* Blockquotes in any rendered Markdown (mistune otherwise emits an
+   * unstyled <blockquote> indistinguishable from surrounding text).
+   * `.markdown` covers every rendered-Markdown surface — assistant text,
+   * thinking, tool results, teammate messages, system output; `.user-md`
+   * covers user prose, which uses its own wrapper class. */
+  .user-md blockquote,
+  .markdown blockquote {
+      border-left: 4px solid #cdcdcd;
+      padding-left: 1em;
+      margin-left: 1em;
   }
   
   .user-content .user-raw {
@@ -30185,6 +30245,18 @@
       display: block;
   }
   
+  /* Blockquotes in any rendered Markdown (mistune otherwise emits an
+   * unstyled <blockquote> indistinguishable from surrounding text).
+   * `.markdown` covers every rendered-Markdown surface — assistant text,
+   * thinking, tool results, teammate messages, system output; `.user-md`
+   * covers user prose, which uses its own wrapper class. */
+  .user-md blockquote,
+  .markdown blockquote {
+      border-left: 4px solid #cdcdcd;
+      padding-left: 1em;
+      margin-left: 1em;
+  }
+  
   .user-content .user-raw {
       display: none;
   }
@@ -37298,6 +37370,18 @@
       display: block;
   }
   
+  /* Blockquotes in any rendered Markdown (mistune otherwise emits an
+   * unstyled <blockquote> indistinguishable from surrounding text).
+   * `.markdown` covers every rendered-Markdown surface — assistant text,
+   * thinking, tool results, teammate messages, system output; `.user-md`
+   * covers user prose, which uses its own wrapper class. */
+  .user-md blockquote,
+  .markdown blockquote {
+      border-left: 4px solid #cdcdcd;
+      padding-left: 1em;
+      margin-left: 1em;
+  }
+  
   .user-content .user-raw {
       display: none;
   }
@@ -44354,6 +44438,18 @@
   
   .user-content .user-md {
       display: block;
+  }
+  
+  /* Blockquotes in any rendered Markdown (mistune otherwise emits an
+   * unstyled <blockquote> indistinguishable from surrounding text).
+   * `.markdown` covers every rendered-Markdown surface — assistant text,
+   * thinking, tool results, teammate messages, system output; `.user-md`
+   * covers user prose, which uses its own wrapper class. */
+  .user-md blockquote,
+  .markdown blockquote {
+      border-left: 4px solid #cdcdcd;
+      padding-left: 1em;
+      margin-left: 1em;
   }
   
   .user-content .user-raw {

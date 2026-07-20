@@ -1232,27 +1232,27 @@ class SessionBrowser(App[Optional[str]]):
         padding: 0;
         height: 100%;
     }
-    
+
     #stats-container {
         height: auto;
         min-height: 3;
         max-height: 5;
         border: solid $primary;
     }
-    
+
     .stat-label {
         color: $primary;
         text-style: bold;
     }
-    
+
     .stat-value {
         color: $accent;
     }
-    
+
     #sessions-table {
         height: 1fr;
     }
-    
+
     #expanded-content {
         display: none;
         height: 1fr;
