@@ -42,7 +42,7 @@ from .base import (
     make_user_entry,
 )
 from .codex_tools import AdaptedToolCall, adapt_codex_tool_batch, adapt_codex_tool_call
-from .codex_javascript import analyze_javascript_tools
+from .codex_quickjs import analyze_javascript_tools
 from .codex_messages import format_codex_user_message, parse_codex_user_shell_command
 from .codex_web import normalize_codex_web_result
 

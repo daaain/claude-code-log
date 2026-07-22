@@ -1,43 +1,32 @@
-"""Tree-sitter parsing and bounded Codex JavaScript analysis."""
+"""Sandboxed QuickJS execution of bounded Codex JavaScript tool wrappers.
+
+These are the spec-by-example cases for ``codex_quickjs`` (which replaced the
+tree-sitter ``codex_javascript`` analyzer): each snippet is *executed* in a
+sandboxed engine and the instrumented recording is mapped back to a tool batch.
+"""
 
 from pytest import MonkeyPatch
 
-from claude_code_log.providers import codex_javascript
-from claude_code_log.providers.codex_javascript import (
-    analyze_javascript_tools,
-    parse_javascript,
-)
+from claude_code_log.providers import codex_quickjs
+from claude_code_log.providers.codex_quickjs import analyze_javascript_tools
 
 
-def test_analyzer_fails_closed_on_unexpected_parser_error(
+def test_analyzer_fails_closed_on_unexpected_engine_error(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    def fail_parse(_source: str) -> None:
-        raise RuntimeError("synthetic parser failure")
+    """Any unexpected engine/mapper exception fails closed to None.
 
-    monkeypatch.setattr(codex_javascript, "parse_javascript", fail_parse)
+    Analog of the old parser-error guard: the tree-sitter ``parse_javascript``
+    hook is gone; the fail-closed boundary is now the engine run. Force it to
+    raise and confirm the raw-script fallback still stays visible.
+    """
+
+    def fail_run(_source: str) -> None:
+        raise RuntimeError("synthetic engine failure")
+
+    monkeypatch.setattr(codex_quickjs, "_run_snippet", fail_run)
 
     assert analyze_javascript_tools("const valid = true;") is None
-
-
-def test_parse_javascript_retains_exact_utf8_node_ranges() -> None:
-    syntax = parse_javascript('const subject = "Ready 😎";')
-
-    assert syntax is not None
-    declaration = syntax.root.named_children[0]
-    declarator = declaration.named_children[0]
-    value = declarator.child_by_field_name("value")
-    assert value is not None
-    assert syntax.text(value) == '"Ready 😎"'
-
-
-def test_parse_javascript_rejects_recovered_syntax() -> None:
-    assert parse_javascript("const result = await tools.exec_command({") is None
-
-
-def test_parse_javascript_enforces_source_and_node_limits() -> None:
-    assert parse_javascript("const value = 1;", max_source_bytes=5) is None
-    assert parse_javascript("const value = 1;", max_syntax_nodes=2) is None
 
 
 def test_analyzer_resolves_constant_shorthand_tool_input() -> None:
@@ -278,12 +267,29 @@ def test_analyzer_unrolls_destructured_rows_in_static_for_of_loop() -> None:
     )
 
 
-def test_analyzer_rejects_dynamic_or_oversized_loops_without_partial_results() -> None:
+def test_analyzer_rejects_dynamic_loops_without_partial_results() -> None:
+    """A loop over a runtime-only iterable (undefined ``ids``) throws in the
+    engine and fails closed — its calls never materialize statically."""
     dynamic = """
         for (const id of ids) {
           const r = await tools.exec_command({cmd: id});
           text(r.output);
         }
+    """
+
+    assert analyze_javascript_tools(dynamic) is None
+
+
+def test_analyzer_expands_static_loop_beyond_legacy_iteration_cap() -> None:
+    """Sanctioned capability gain over the tree-sitter analyzer: a *static*
+    loop that exceeds the old ``max_loop_iterations`` cap now CAPTURES.
+
+    Under execution, loop bounds are enforced by the engine's time/memory
+    limits rather than a fixed iteration count, so a fully-static 3-iteration
+    loop materializes all three calls even when ``max_loop_iterations=2`` — a
+    value the old parser would have rejected. Runaway loops are still bounded
+    (they hit the time limit and fail closed); only statically-terminating
+    loops are expanded.
     """
     oversized = """
         for (const id of [1, 2, 3]) {
@@ -292,8 +298,11 @@ def test_analyzer_rejects_dynamic_or_oversized_loops_without_partial_results() -
         }
     """
 
-    assert analyze_javascript_tools(dynamic) is None
-    assert analyze_javascript_tools(oversized, max_loop_iterations=2) is None
+    batch = analyze_javascript_tools(oversized, max_loop_iterations=2)
+
+    assert batch is not None
+    assert [call.input["id"] for call in batch.calls] == [1, 2, 3]
+    assert batch.result_indexes == [0, 1, 2]
 
 
 def test_analyzer_rejects_dynamic_tool_arguments_without_legacy_fallback() -> None:

@@ -516,10 +516,12 @@ def _correlate(
             introduced_new = True
             if emi.prefix and result_prefixes[i] is None:
                 result_prefixes[i] = emi.prefix
+            # object_key is set ONLY for JSON-object emissions that need a
+            # sub-key extracted from the serialized output row (bundle /
+            # projection). A bare ``text(r.output)`` output row is already the
+            # raw result text — leave its key None so it is used as-is.
             if ref.object_key is not None:
                 result_object_keys[i] = ref.object_key
-            elif ref.path:
-                result_object_keys[i] = ref.path[-1]
         if introduced_new:
             seen_rows.add(row)
             output_row += 1

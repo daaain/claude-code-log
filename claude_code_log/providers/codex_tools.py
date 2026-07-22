@@ -15,7 +15,7 @@ import json
 import re
 from typing import Any, Literal, Optional, cast
 
-from .codex_javascript import analyze_javascript_tools
+from .codex_quickjs import analyze_javascript_tools
 
 
 @dataclass(frozen=True)
