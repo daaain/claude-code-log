@@ -153,6 +153,7 @@ dependencies = [
     { name = "packaging" },
     { name = "pydantic" },
     { name = "pygments" },
+    { name = "quickjs-ng" },
     { name = "textual" },
     { name = "toml" },
     { name = "tree-sitter" },
@@ -191,6 +192,7 @@ requires-dist = [
     { name = "packaging", specifier = ">=25.0" },
     { name = "pydantic", specifier = ">=2.12.0" },
     { name = "pygments", specifier = ">=2.19.2" },
+    { name = "quickjs-ng", specifier = ">=0.15.1.1" },
     { name = "textual", specifier = ">=6.5.0" },
     { name = "toml", specifier = ">=0.10.2" },
     { name = "tree-sitter", specifier = ">=0.26.0,<0.27.0" },
@@ -1273,6 +1275,33 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/eb/2e/79c822141bfd05a853236b504869ebc6b70159afc570e1d5a20641782eaa/pyyaml_env_tag-1.1.tar.gz", hash = "sha256:2eb38b75a2d21ee0475d6d97ec19c63287a7e140231e4214969d0eac923cd7ff", size = 5737, upload-time = "2025-05-13T15:24:01.64Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/04/11/432f32f8097b03e3cd5fe57e88efb685d964e2e5178a48ed61e841f7fdce/pyyaml_env_tag-1.1-py3-none-any.whl", hash = "sha256:17109e1a528561e32f026364712fee1264bc2ea6715120891174ed1b980d2e04", size = 4722, upload-time = "2025-05-13T15:23:59.629Z" },
+]
+
+[[package]]
+name = "quickjs-ng"
+version = "0.15.1.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/dc/0f/5b54f3cc785cd548bc30bca49a802aae24a7c38b0b51e49dba975fd78b82/quickjs_ng-0.15.1.1.tar.gz", hash = "sha256:b3a482dea35e8c05a051c80f26a8b1672b4907ede586df57296c9cb3b03e775b", size = 511054, upload-time = "2026-07-01T10:33:31.215Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a0/e8/6d73d1b01fd87646997181d4872cb4ad13bdbcbc1448fb06a79084824063/quickjs_ng-0.15.1.1-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:99b3f98ef92a83fded3a5d97d958290a69d7a6e9875a0c996214ee2a7e1a2190", size = 507909, upload-time = "2026-07-01T10:33:00.161Z" },
+    { url = "https://files.pythonhosted.org/packages/0a/9b/af806537b285e8372f380516a444d89f2c07f5c55dc7a04e18eac7695944/quickjs_ng-0.15.1.1-cp310-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:1ead859fd37215d1868d9e31905040e90e70de55a810c923366d57e3b623938b", size = 2371251, upload-time = "2026-07-01T10:33:01.884Z" },
+    { url = "https://files.pythonhosted.org/packages/b2/ab/726f6ee85e16c838663397a28d429fc39917b73d6bcbf8c7c477fe999428/quickjs_ng-0.15.1.1-cp310-abi3-manylinux2014_i686.manylinux_2_17_i686.manylinux_2_28_i686.whl", hash = "sha256:fea6bf38d85b579adfd57e1dd1898e285fff97b79d129febfefe177d1c3bb8ce", size = 2329825, upload-time = "2026-07-01T10:33:03.572Z" },
+    { url = "https://files.pythonhosted.org/packages/a6/59/2a5b27670db4d7910b8fcebb26fedcffcc585c44a0a47b28d44d1b6547bd/quickjs_ng-0.15.1.1-cp310-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:83a01f65b94ab34bde55d21e718278d194a18e956866f2c8f1066451c6a8c4b7", size = 2453416, upload-time = "2026-07-01T10:33:05.107Z" },
+    { url = "https://files.pythonhosted.org/packages/e4/21/1b106a15f1bdafd130292b4042186e5d6513427cec6213e36c7740e6311f/quickjs_ng-0.15.1.1-cp310-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:ae658ae6eb8e5ff813bf2a1b839fead2640cf0d0e203ba8527b2af83f16f90ec", size = 2351272, upload-time = "2026-07-01T10:33:07.158Z" },
+    { url = "https://files.pythonhosted.org/packages/c5/db/52ca95f9a5865b8fbba396e16613346c94dfbbc2b99c391c023fe0178169/quickjs_ng-0.15.1.1-cp310-abi3-musllinux_1_2_i686.whl", hash = "sha256:c5328cc70171b1dbe571aa1729905188ee96480e360c3c77a9c5ce6df1881776", size = 2351267, upload-time = "2026-07-01T10:33:09.359Z" },
+    { url = "https://files.pythonhosted.org/packages/bf/7c/6737debdff8dfedcc4936fd452be90ce3303eb79fb77246ec5348621f795/quickjs_ng-0.15.1.1-cp310-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:989d5237015e233d5dd95a3b258aa66e3ba236c03f2c7036fb8b91d5f7c5f740", size = 2443534, upload-time = "2026-07-01T10:33:11.027Z" },
+    { url = "https://files.pythonhosted.org/packages/54/f9/0bbb8a3287686eca2808247c3c4dd7276103d1920589a7529800e42f3a16/quickjs_ng-0.15.1.1-cp310-abi3-win32.whl", hash = "sha256:c929745696a3716ef201c884d86fc7a8ad46fda87ca8d07cadfd61898656a2d5", size = 364740, upload-time = "2026-07-01T10:33:12.776Z" },
+    { url = "https://files.pythonhosted.org/packages/e7/cf/8e48cd7d4492959145ec1f225271d161d296d4dfdb95a4e48035e5e34350/quickjs_ng-0.15.1.1-cp310-abi3-win_amd64.whl", hash = "sha256:edd692386ce90d9ce674a68e36e29c9e7a194de3cc1fc752c21fcaaf60183689", size = 500292, upload-time = "2026-07-01T10:33:14.147Z" },
+    { url = "https://files.pythonhosted.org/packages/bd/d2/8fd02db3b5400718da1f821dc2cc3c5dc521045a62989a35549069e49f24/quickjs_ng-0.15.1.1-pp310-pypy310_pp73-macosx_11_0_arm64.whl", hash = "sha256:535bd2021a0735ecdf563bd619382c060a7920b6888e52646f1a3b2543f1c636", size = 462206, upload-time = "2026-07-01T10:33:15.485Z" },
+    { url = "https://files.pythonhosted.org/packages/2b/cb/4388fae606d664dcd95fcda821a0a8be22edb15ee78a9f0fbdeeda77721b/quickjs_ng-0.15.1.1-pp310-pypy310_pp73-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:03388d4abebbd8877f8114a6476dc7584d588be60b5357a586b9a22f868dd9b0", size = 506660, upload-time = "2026-07-01T10:33:16.92Z" },
+    { url = "https://files.pythonhosted.org/packages/42/e1/3993a31ef0cb908216b43e30bdc52495a2483f7ca6270fac4da0d259ddd0/quickjs_ng-0.15.1.1-pp310-pypy310_pp73-manylinux2014_i686.manylinux_2_17_i686.manylinux_2_28_i686.whl", hash = "sha256:aa49d20fa72adb65bf5cc676be3947233704f85e4ddd0d340bd2993d38ac4e7f", size = 576603, upload-time = "2026-07-01T10:33:18.296Z" },
+    { url = "https://files.pythonhosted.org/packages/81/47/32dcad69398372a4346e0fc3dd02cdbbf20bacf40f77266d7dfecb315e77/quickjs_ng-0.15.1.1-pp310-pypy310_pp73-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:03ed1da0bbeb565737a73b58488a7d32505e4994149685777a5470f8f1d503a6", size = 536286, upload-time = "2026-07-01T10:33:21.02Z" },
+    { url = "https://files.pythonhosted.org/packages/17/c1/5f10705071c8a4ec17ee4c64a770e11baabdf16d489bb3e554c7bbc54c0a/quickjs_ng-0.15.1.1-pp310-pypy310_pp73-win_amd64.whl", hash = "sha256:0a3aec28df88dd64a209065df8c49c4849f7cfb505973cdfd1cff02b0263a515", size = 500547, upload-time = "2026-07-01T10:33:22.546Z" },
+    { url = "https://files.pythonhosted.org/packages/ba/7c/257e4fd393b3e8488d9cfdacdd96611b480dc9a42038fcaea0d77ae85636/quickjs_ng-0.15.1.1-pp311-pypy311_pp73-macosx_11_0_arm64.whl", hash = "sha256:83e3e5efb58a5d4cb991559e3d543a8dd5dcfc384e0655a2dad83c168af009a2", size = 462102, upload-time = "2026-07-01T10:33:23.95Z" },
+    { url = "https://files.pythonhosted.org/packages/5e/65/541e961359057782066830978b8d573341b731113a56b4c8ac54890d837c/quickjs_ng-0.15.1.1-pp311-pypy311_pp73-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:eeba6b42e471793c29f9d6af1c8b900f56454cb37b395e547acb47aee150c0af", size = 506661, upload-time = "2026-07-01T10:33:25.423Z" },
+    { url = "https://files.pythonhosted.org/packages/ae/c6/266dc2782da1c50307c4857330e2af067eb3d89c8828865f421fc04d4cce/quickjs_ng-0.15.1.1-pp311-pypy311_pp73-manylinux2014_i686.manylinux_2_17_i686.manylinux_2_28_i686.whl", hash = "sha256:9aad3cc3dcc7301981e8f16efc33a2425e9723379a68aafac78b54113bf7501b", size = 576601, upload-time = "2026-07-01T10:33:26.802Z" },
+    { url = "https://files.pythonhosted.org/packages/15/17/6ec0d7acce09d15d8042ce307277072303b46941f30632ea80be50b14dd8/quickjs_ng-0.15.1.1-pp311-pypy311_pp73-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:e485010af2199b363a2cbc0213cbdbe43c10027d25d3e4452b201e7ef44673b8", size = 536285, upload-time = "2026-07-01T10:33:28.292Z" },
+    { url = "https://files.pythonhosted.org/packages/7b/be/be4db7df4043e076e11ea42d1d517a350bfed6fdbaafcc53141a0b38d4f8/quickjs_ng-0.15.1.1-pp311-pypy311_pp73-win_amd64.whl", hash = "sha256:4914272574d08c898343508a57cd8fdd36832e2a1df8adc7407921a7b5042303", size = 500549, upload-time = "2026-07-01T10:33:29.665Z" },
 ]
 
 [[package]]
