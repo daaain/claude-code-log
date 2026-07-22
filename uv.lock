@@ -190,7 +190,7 @@ requires-dist = [
     { name = "packaging", specifier = ">=25.0" },
     { name = "pydantic", specifier = ">=2.12.0" },
     { name = "pygments", specifier = ">=2.19.2" },
-    { name = "quickjs-ng", specifier = ">=0.15.1.1" },
+    { name = "quickjs-ng", specifier = ">=0.15.1.1,<0.16" },
     { name = "textual", specifier = ">=6.5.0" },
     { name = "toml", specifier = ">=0.10.2" },
 ]

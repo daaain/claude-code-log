@@ -191,3 +191,72 @@ def test_run_snippet_is_the_fail_closed_boundary(monkeypatch: MonkeyPatch) -> No
 
     monkeypatch.setattr(codex_quickjs, "_build_batch", boom)
     assert analyze_javascript_tools("const r = await tools.a({x: 1}); text(r);") is None
+
+
+# --------------------------------------------------------------------------
+# Correlation / consistency guards — pin the fail-closed legs that hold even
+# when a snippet's recording is internally self-consistent (a forged wait ref,
+# a throw after clean emissions, or a run that never resolves). Each of these
+# would materialize a WRONG batch if its guard were neutralized.
+# --------------------------------------------------------------------------
+def test_forged_reference_to_a_wait_record_fails_closed() -> None:
+    # A setTimeout registers a synthetic "wait" record at index 0; a forged
+    # emission references it. Without the is-wait leg of the bounds guard this
+    # cross-attributes the wait to an output row and builds a bogus batch.
+    assert (
+        analyze_javascript_tools(
+            "setTimeout(() => {}, 100);"
+            "const r = await tools.a({x: 1});"
+            f'text(r.output); text("{_R0}");'
+        )
+        is None
+    )
+
+
+def test_throw_after_consistent_emissions_fails_closed() -> None:
+    # Records and texts are internally consistent, but the run throws before
+    # completing. The errors leg of the done/errors guard must still reject it.
+    assert (
+        analyze_javascript_tools(
+            'const r = await tools.a({x: 1}); text(r.output);throw new Error("boom");'
+        )
+        is None
+    )
+
+
+def test_never_resolving_run_fails_closed() -> None:
+    # A run that never settles leaves __done false (no hang: the pending-job
+    # pump drains and stops). The done leg of the guard must reject it.
+    assert (
+        analyze_javascript_tools(
+            "const r = await tools.a({x: 1}); text(r.output);"
+            "await new Promise(() => {});"
+        )
+        is None
+    )
+
+
+# --------------------------------------------------------------------------
+# Static caps — source-byte and expanded-call bounds (spec: keep these red).
+# --------------------------------------------------------------------------
+def test_oversized_source_fails_closed() -> None:
+    # Source larger than MAX_SOURCE_BYTES (64 KB) is rejected before execution.
+    padding = "x" * (65 * 1024)
+    source = (
+        f'const pad = "{padding}"; const r = await tools.a({{x: 1}}); text(r.output);'
+    )
+    assert len(source.encode("utf-8")) > 64 * 1024
+    assert analyze_javascript_tools(source) is None
+
+
+def test_batch_exceeding_expanded_call_cap_fails_closed() -> None:
+    # A fully-static 129-iteration loop materializes 129 real calls, over the
+    # 128 MAX_EXPANDED_CALLS bound → fail closed (pins the >128 contract; the
+    # records-level and param-level caps are redundant defense in depth).
+    ids = ", ".join(str(i) for i in range(129))
+    source = (
+        f"for (const i of [{ids}]) {{"
+        "  const r = await tools.a({i}); text(r.output);"
+        "}"
+    )
+    assert analyze_javascript_tools(source) is None

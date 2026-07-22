@@ -40,6 +40,15 @@ MAX_EXPANDED_CALLS = 128
 _MEMORY_LIMIT_BYTES = 64 * 1024 * 1024
 _TIME_LIMIT_SECONDS = 2
 _MAX_PENDING_JOBS = 100_000
+_MAX_STACK_BYTES = 512 * 1024
+
+# Per-string materialization cap (generation-layer bound). ``__safe`` already
+# caps object depth/breadth; without a length cap a ~90-byte snippet can
+# synthesize a multi-megabyte string ("=".repeat(5e6)) that lands in the
+# generated HTML regardless of display folding. Cap each recorded string,
+# mirroring the breadth caps, with a visible truncation marker.
+_MAX_STRING_CHARS = 64 * 1024
+_TRUNCATION_MARKER = "…<truncated>"
 
 # Provenance delimiter. A private-use codepoint (U+E000): it cannot plausibly
 # appear in legit JSONL-embedded source, AND — unlike a control char such as
@@ -76,14 +85,20 @@ class JavaScriptToolBatch:
 
 # --------------------------------------------------------------------------
 # Instrumentation prelude (validated 2026-07-22) — pure JS, no host callables.
-# The literal  delimiter is spliced in from Python so there's one source
-# of truth for the sentinel char.
+# The sentinel delimiter and string cap are spliced in from the Python
+# constants below (@@SENTINEL@@ / @@MAXSTR@@), so those constants are the
+# single source of truth for both the Python and JS sides.
 # --------------------------------------------------------------------------
-PRELUDE = r"""
+_PRELUDE_TEMPLATE = r"""
 globalThis.__records = [];
 globalThis.__texts = [];
 globalThis.__errors = [];
-const __D = "";
+const __D = "@@SENTINEL@@";
+const __MAXSTR = @@MAXSTR@@;
+const __MARK = "@@MARK@@";
+function __cap(s) {
+  return s.length > __MAXSTR ? s.slice(0, __MAXSTR) + __MARK : s;
+}
 
 function __makeMagic(sentinel) {
   // Arrow fn target: still callable (apply trap fires) but has no
@@ -124,8 +139,9 @@ function __safe(value, depth, seen) {
   depth = depth || 0;
   if (depth > 6) return "<deep>";
   const t = typeof value;
-  if (value === null || t === "number" || t === "boolean" || t === "string")
+  if (value === null || t === "number" || t === "boolean")
     return value;
+  if (t === "string") return __cap(value);
   if (t === "undefined") return "<undefined>";
   if (t === "function")
     return value.__sentinel ? __D + value.__sentinel + __D : "<function>";
@@ -142,7 +158,7 @@ function __safe(value, depth, seen) {
     }
     return out;
   }
-  return String(value);
+  return __cap(String(value));
 }
 
 globalThis.tools = new Proxy({}, {
@@ -171,6 +187,12 @@ globalThis.console = {
 };
 """
 
+PRELUDE = (
+    _PRELUDE_TEMPLATE.replace("@@SENTINEL@@", _S)
+    .replace("@@MAXSTR@@", str(_MAX_STRING_CHARS))
+    .replace("@@MARK@@", _TRUNCATION_MARKER)
+)
+
 
 def _wrap(code: str) -> str:
     """Wrap the snippet in an async IIFE that records unhandled errors."""
@@ -193,10 +215,13 @@ def _run_snippet(code: str) -> Optional[dict[str, Any]]:
     try:
         ctx.set_memory_limit(_MEMORY_LIMIT_BYTES)
         ctx.set_time_limit(_TIME_LIMIT_SECONDS)
+        ctx.set_max_stack_size(_MAX_STACK_BYTES)
     except Exception:
-        # Binding without a limit setter: proceed, the pending-job bound below
-        # still prevents an unbounded microtask storm.
-        pass
+        # The time limit is what bounds a synchronous ``while (true)`` inside
+        # ``ctx.eval`` — the pending-job bound only covers ``execute_pending_job``.
+        # So if the limit setters are unavailable we must NOT run untrusted code;
+        # fail closed rather than risk a hang.
+        return None
     try:
         ctx.eval(PRELUDE)
         ctx.eval(_wrap(code))
