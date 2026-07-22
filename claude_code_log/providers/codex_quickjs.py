@@ -24,7 +24,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, cast
 
 import quickjs
 
@@ -86,7 +86,9 @@ globalThis.__errors = [];
 const __D = "";
 
 function __makeMagic(sentinel) {
-  const fn = function () {};
+  // Arrow fn target: still callable (apply trap fires) but has no
+  // `prototype` own key, so the ownKeys trap need not report target keys.
+  const fn = () => {};
   const wrap = () => __D + sentinel + __D;
   const magic = new Proxy(fn, {
     get(t, prop) {
@@ -103,6 +105,17 @@ function __makeMagic(sentinel) {
     },
     apply(t, self, args) { return __makeMagic(sentinel + "()"); },
     has() { return true; },
+    // Object spread ({name, ...r}) enumerates own keys. A magic result has no
+    // statically-knowable shape, so we expose a single canonical "output" key —
+    // the field the shared Bash renderer consumes. This degrades a spread to a
+    // whole-result projection rather than reproducing unknowable JS key sets.
+    ownKeys() { return ["output"]; },
+    getOwnPropertyDescriptor(t, prop) {
+      if (prop === "output")
+        return { enumerable: true, configurable: true,
+                 value: __makeMagic(sentinel + ".output") };
+      return undefined;
+    },
   });
   return magic;
 }
@@ -254,8 +267,80 @@ def _refs_from_string(
     return out
 
 
+def _project_result_object(obj: dict[str, Any]) -> Optional[_Emission]:
+    """Project a metadata object bundling tool results into an emission.
+
+    Two recognized shapes, distinguished by whether a result-referencing field
+    holds a *whole* result (path ``()``) or a *field* of one (path ``(key,)``):
+
+    - **Bundle** ``{presence: p, mail: m}`` — each field is a whole result under
+      its own key; several calls collapse into one output row, keyed per field.
+    - **Projection** ``{name, ...r}`` / ``{name, exit_code: r.exit_code,
+      output: r.output}`` — one call's fields projected (the spread degrades to
+      a single ``output`` key via the prelude). Mirrors the tree-sitter
+      ``_mapped_result_object``: one ``output``-keyed ref, ``output`` required,
+      leading static fields become a JSON prefix.
+
+    Mixed or malformed shapes fail closed to ``None``.
+    """
+    whole: list[tuple[str, _Ref]] = []  # field -> whole-result ref (path ())
+    projected: list[tuple[str, _Ref]] = []  # field -> field-of-result ref
+    prefix: Optional[str] = None
+    seen_keys = 0
+    for raw_key, val in obj.items():
+        key = str(raw_key)
+        if isinstance(val, str) and _S in val:
+            got = _refs_from_string(val)
+            if got is None or len(got) != 1:
+                return None  # composed / multi-ref field — not a clean shape.
+            ref = got[0]
+            if ref.path == ():
+                whole.append((key, ref))
+            elif ref.path == (key,):
+                projected.append((key, ref))
+            else:
+                return None  # e.g. ``output: r.exit_code`` — mismatched field.
+        else:
+            if _contains_sentinel(val):
+                return None  # nested/composed sentinel — not a flat projection.
+            if seen_keys == 0:
+                try:
+                    prefix = json.dumps(
+                        {key: val}, ensure_ascii=False, separators=(",", ":")
+                    )[:-1]
+                except (TypeError, ValueError):
+                    return None
+        seen_keys += 1
+
+    if whole and not projected:
+        # Bundle: one whole-result ref per field, all sharing one output row.
+        return _Emission(
+            raw="",
+            prefix="",
+            refs=[_Ref(ref.call_index, (), object_key=key) for key, ref in whole],
+            literal_only=False,
+        )
+    if projected and not whole:
+        # Projection: collapse to one call's ``output`` field + static prefix.
+        call_index = projected[0][1].call_index
+        if any(ref.call_index != call_index for _, ref in projected):
+            return None
+        if not any(key == "output" for key, _ in projected):
+            return None
+        return _Emission(
+            raw="",
+            prefix=prefix or "",
+            refs=[_Ref(call_index, ("output",), object_key="output")],
+            literal_only=False,
+        )
+    return None
+
+
 def _decompose(text_value: Any) -> Optional[_Emission]:
     """Decompose one recorded text() value into its emission shape."""
+    if isinstance(text_value, dict):
+        # text(obj) pushed a whole object (e.g. out.forEach(text)) — project it.
+        return _project_result_object(cast("dict[str, Any]", text_value))
     if not isinstance(text_value, str):
         # console.log(array) etc. — opaque, non-correlatable literal.
         return _Emission(raw="", prefix="", refs=[], literal_only=True)
@@ -264,7 +349,7 @@ def _decompose(text_value: Any) -> Optional[_Emission]:
 
     # JSON.stringify(...) emissions decode as valid JSON whose leaf strings hold
     # the sentinels: a bare string (clean full-result emission) or an object
-    # (per-key result projection). Non-JSON forms are literal prefix + refs.
+    # (result projection). Non-JSON forms are literal prefix + refs.
     try:
         decoded = json.loads(text_value)
     except Exception:
@@ -277,16 +362,7 @@ def _decompose(text_value: Any) -> Optional[_Emission]:
         return _Emission(raw=text_value, prefix="", refs=refs, literal_only=False)
 
     if isinstance(decoded, dict):
-        refs: list[_Ref] = []
-        for key, val in decoded.items():
-            if isinstance(val, str) and _S in val:
-                got = _refs_from_string(val, object_key=str(key))
-                if got is None:
-                    return None
-                refs.extend(got)
-        if not refs:
-            return None
-        return _Emission(raw=text_value, prefix="", refs=refs, literal_only=False)
+        return _project_result_object(cast("dict[str, Any]", decoded))
 
     # Literal form: prefix<sentinel>[...]. Reject if any sentinel is non-call.
     refs = _refs_from_string(text_value)
@@ -312,9 +388,11 @@ def _contains_sentinel(value: Any) -> bool:
     if isinstance(value, str):
         return _S in value
     if isinstance(value, list):
-        return any(_contains_sentinel(v) for v in value)
+        return any(_contains_sentinel(v) for v in cast("list[Any]", value))
     if isinstance(value, dict):
-        return any(_contains_sentinel(v) for v in value.values())
+        return any(
+            _contains_sentinel(v) for v in cast("dict[str, Any]", value).values()
+        )
     return False
 
 
@@ -323,15 +401,22 @@ def _coerce_call(record: dict[str, Any]) -> Optional[_CallInfo]:
     args = record.get("args")
     if not isinstance(name, str) or not isinstance(args, list):
         return None
+    args = cast("list[Any]", args)
     if name == "__wait":
-        delay = args[0].get("delay_ms") if args and isinstance(args[0], dict) else None
+        first = args[0] if args else None
+        delay = (
+            cast("dict[str, Any]", first).get("delay_ms")
+            if isinstance(first, dict)
+            else None
+        )
         if not isinstance(delay, (int, float)) or isinstance(delay, bool):
             return None
         return _CallInfo(
             "wait", {"delay_ms": int(delay)}, is_wait=True, delay_ms=int(delay)
         )
-    arg0 = args[0] if args else {}
+    arg0: Any = args[0] if args else {}
     if isinstance(arg0, dict):
+        arg0 = cast("dict[str, Any]", arg0)
         if _contains_sentinel(arg0):
             # Argument still embeds an unresolved call result (inter-call data
             # dependency) — fail closed rather than emit a half-value.
@@ -353,12 +438,16 @@ def _build_batch(report: dict[str, Any]) -> Optional[JavaScriptToolBatch]:
     raw_texts = report.get("texts")
     if not isinstance(raw_records, list) or not isinstance(raw_texts, list):
         return None
+    raw_records = cast("list[Any]", raw_records)
+    raw_texts = cast("list[Any]", raw_texts)
     if not raw_records or len(raw_records) > MAX_EXPANDED_CALLS:
         return None
 
     calls: list[_CallInfo] = []
     for rec in raw_records:
-        info = _coerce_call(rec)
+        if not isinstance(rec, dict):
+            return None
+        info = _coerce_call(cast("dict[str, Any]", rec))
         if info is None:
             return None
         calls.append(info)
