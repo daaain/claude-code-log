@@ -287,7 +287,15 @@ Projects built on top of `claude-code-log`:
   - a Claude Code slash [Command](https://github.com/lifeinchords/claude-code-skills/blob/main/.claude/commands/archive-session.md) `/archive-session` for explicit in-chat invocation
   - a Claude Code PreCompact [Hook](https://github.com/lifeinchords/claude-code-skills/blob/main/.claude/hooks/pre-compact-archive.sh) that auto-archives transcripts and subagent logs right before context compaction
 
-Cross-platform (macOS and Windows/MSYS).
+  Cross-platform (macOS and Windows/MSYS).
+
+- **[claude-history-mcp](https://github.com/sydasif/claude-history-mcp)** by [@sydasif](https://github.com/sydasif). MCP server that lets Claude Code query its own session history — search messages, list sessions, retrieve transcripts, and analyze usage patterns across all your projects.
+
+  - Reads from `~/.claude/projects/**/*.jsonl` (session transcripts) and `~/.claude/history.jsonl` (command history)
+  - Caches data in a local SQLite database with incremental mtime tracking
+  - Exposes 7 MCP tools and 2 resources via FastMCP (stdio transport)
+  - Natural language date filtering ("yesterday", "last week", etc.)
+  - Install: `claude mcp add claude-history --scope user -- uvx --from git+https://github.com/sydasif/claude-history-mcp claude-history-mcp`
 
 ## TODO
 
@@ -296,7 +304,7 @@ Cross-platform (macOS and Windows/MSYS).
 - convert images to WebP as screenshots are often huge PNGs – this might be time consuming to keep redoing (so would also need some caching) and need heavy dependencies with compilation (unless there are fast pure Python conversation libraries? Or WASM?)
 - add special formatting for built-in tools: Glob, Grep, LS, MultiEdit, NotebookRead, NotebookEdit, WebFetch, TodoRead, WebSearch
 - add `ccusage` like daily summary and maybe some textual summary too based on Claude generate session summaries?
-– import logs from @claude Github Actions
+  – import logs from @claude Github Actions
 - stream logs from @claude Github Actions, see [octotail](https://github.com/getbettr/octotail)
 - wrap up CLI as Github Action to run after Cladue Github Action and process [output](https://github.com/anthropics/claude-code-base-action?tab=readme-ov-file#outputs)
 - feed the filtered user messages to headless claude CLI to distill the user intent from the session
