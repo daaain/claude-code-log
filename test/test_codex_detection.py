@@ -189,3 +189,71 @@ def test_load_session_from_path_loads_standalone_rollout() -> None:
 def test_load_session_from_path_missing_file_raises(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError):
         list(CodexProvider().load_session_from_path(tmp_path / "nope.jsonl"))
+
+
+# --------------------------------------------------------------------------
+# CLI dispatch: a rollout INPUT_PATH renders via the provider, never empty.
+# --------------------------------------------------------------------------
+_FIXTURE_ROLLOUT = Path(
+    "test/test_data/codex/sessions/2026/01/02/"
+    "rollout-2026-01-02T03-04-05-11111111-1111-4111-8111-111111111111.jsonl"
+)
+
+
+@pytest.mark.parametrize(
+    ("fmt", "ext"), [("html", "html"), ("md", "md"), ("json", "json")]
+)
+def test_rollout_input_path_renders_via_codex(
+    tmp_path: Path, fmt: str, ext: str
+) -> None:
+    """A bare rollout INPUT_PATH (no --provider) auto-detects to codex and
+    renders the actual conversation — asserting CONTENT, not just a non-empty
+    file, because a wrong render key silently produced a full-size-but-empty
+    page (regression pin)."""
+    from click.testing import CliRunner
+
+    from claude_code_log.cli import main
+
+    out = tmp_path / f"rollout.{ext}"
+    result = CliRunner().invoke(
+        main, [str(_FIXTURE_ROLLOUT), "-o", str(out), "--format", fmt]
+    )
+    assert result.exit_code == 0, result.output
+    assert "synthetic files" in out.read_text(encoding="utf-8")
+
+
+def test_rollout_that_yields_no_messages_errors_loudly(tmp_path: Path) -> None:
+    """A detected rollout that produces no renderable messages must fail LOUDLY,
+    never fall through to a near-empty page (the worst gap)."""
+    from click.testing import CliRunner
+
+    from claude_code_log.cli import main
+
+    rollout = _write(tmp_path / "rollout-empty.jsonl", [_SESSION_META])
+    result = CliRunner().invoke(main, [str(rollout), "-o", str(tmp_path / "e.html")])
+    assert result.exit_code != 0
+    assert "no renderable messages" in result.output
+
+
+def test_non_rollout_file_is_left_to_the_claude_path(tmp_path: Path) -> None:
+    """A non-rollout .jsonl is NOT hijacked by auto-detection — it must reach
+    the Claude parser unchanged (byte-stability of the default path)."""
+    from click.testing import CliRunner
+
+    from claude_code_log.cli import main
+
+    claude = _write(
+        tmp_path / "session.jsonl",
+        [
+            {
+                "type": "user",
+                "uuid": "u1",
+                "sessionId": "s1",
+                "timestamp": "2025-01-01T00:00:00Z",
+                "message": {"role": "user", "content": "hello claude"},
+            }
+        ],
+    )
+    result = CliRunner().invoke(main, [str(claude), "-o", str(tmp_path / "c.html")])
+    # It reaches the Claude path (no provider hijack, no loud provider error).
+    assert "no renderable messages" not in result.output

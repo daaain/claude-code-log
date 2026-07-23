@@ -1422,6 +1422,67 @@ def main(
                 click.launch(str(output_path))
             return
 
+        # Provider auto-detection (silent-empty pin): a Codex rollout handed as
+        # an INPUT_PATH must route to the provider pipeline, not the Claude
+        # parser, which skips every record and renders a near-empty page. A bare
+        # rollout FILE with no --provider is auto-detected here; --provider and
+        # rollout DIRECTORIES arrive with the wholesale slice.
+        if provider is None and input_path.is_file():
+            from .providers import discover_providers
+
+            registry = discover_providers()
+            detected = registry.detect_provider_for_path(input_path)
+            if detected is not None:
+                selected = registry.get_provider(detected)
+                assert selected is not None
+                detected_messages = list(selected.load_session_from_path(input_path))
+                if not detected_messages:
+                    raise click.UsageError(
+                        f"{input_path} was detected as a {detected} session but "
+                        "produced no renderable messages; it may be truncated or "
+                        "malformed."
+                    )
+                # generate_session filters entries by sessionId, so the render
+                # key MUST be the session's own id (the thread id carried on the
+                # entries), not the filename stem — a mismatch silently drops
+                # every message, i.e. the exact empty-page bug this branch fixes.
+                session_key = detected_messages[0].sessionId or input_path.stem
+                detected_title = f"{detected.title()}: {session_key}"
+
+                def render_detected(destination: Path) -> Path:
+                    return render_normalized_session_file(
+                        detected_messages,
+                        session_key,
+                        destination,
+                        output_format,
+                        detected_title,
+                        image_export_mode,
+                        depth_level,
+                        compact,
+                        no_timestamps,
+                        no_recaps,
+                    )
+
+                extension = get_file_extension(output_format)
+                if _is_stdout_target(output):
+                    _render_to_stdout(
+                        input_path,
+                        lambda tmpdir: render_detected(tmpdir / f"session.{extension}"),
+                    )
+                    return
+                filename = f"session-{session_key}.{extension}"
+                if output is None:
+                    destination = Path.cwd() / filename
+                elif _output_path_is_file(output):
+                    destination = output
+                else:
+                    destination = output / filename
+                output_path = render_detected(destination)
+                click.echo(f"Successfully rendered {detected} session to {output_path}")
+                if open_browser:
+                    click.launch(str(output_path))
+                return
+
         # Original single file/directory processing logic
         should_convert = False
 

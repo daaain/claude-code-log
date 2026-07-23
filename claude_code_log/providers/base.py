@@ -233,5 +233,18 @@ class BaseProvider(ABC):
         """
         return False
 
+    def load_session_from_path(
+        self, path: Path, max_messages: Optional[int] = None
+    ) -> Iterator[TranscriptEntry]:
+        """Load a single session file handed in directly as an INPUT_PATH.
+
+        Only providers that participate in INPUT_PATH detection (``detect_path``)
+        need this. The default raises: a provider that never claims a path will
+        never be asked to load one.
+        """
+        raise NotImplementedError(
+            f"{self.get_provider_name()} cannot load a session directly by path"
+        )
+
     def get_session_stats(self, session_id: str) -> dict[str, Any]:
         return {}
