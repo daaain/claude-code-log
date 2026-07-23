@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Optional, cast
 from ..factories.priorities import TOOL_INPUT_GENERIC, TOOL_OUTPUT_GENERIC
 from ..html.tool_formatters import render_params_table
 from ..models import (
-    DetailLevel,
+    RenderingDepth,
     MessageContent,
     MessageMeta,
     ToolResultContent,
@@ -161,7 +161,7 @@ def _search_result_markdown(content: ToolResultMessage) -> Optional[str]:
 class CodexDocInputMessage(ToolUseMessage):
     """Codex docs request with the URL and anchor kept prominent."""
 
-    detail_visibility: ClassVar[DetailLevel] = DetailLevel.LOW
+    depth_visibility: ClassVar[RenderingDepth] = RenderingDepth.AGENT
 
     def format_html(self, _renderer: Renderer, _message: TemplateMessage) -> str:
         return render_params_table(_input_params(self) or {})
@@ -182,7 +182,7 @@ class CodexDocInputMessage(ToolUseMessage):
 class CodexDocResultMessage(ToolResultMessage):
     """OpenAI documentation body rendered as collapsible Markdown."""
 
-    detail_visibility: ClassVar[DetailLevel] = DetailLevel.LOW
+    depth_visibility: ClassVar[RenderingDepth] = RenderingDepth.AGENT
 
     @property
     def has_markdown(self) -> bool:
@@ -210,7 +210,7 @@ class CodexDocResultMessage(ToolResultMessage):
 class CodexDocSearchInputMessage(ToolUseMessage):
     """OpenAI documentation search with its query kept prominent."""
 
-    detail_visibility: ClassVar[DetailLevel] = DetailLevel.LOW
+    depth_visibility: ClassVar[RenderingDepth] = RenderingDepth.AGENT
 
     def format_html(self, _renderer: Renderer, _message: TemplateMessage) -> str:
         return render_params_table(_search_input_params(self) or {})
@@ -232,7 +232,7 @@ class CodexDocSearchInputMessage(ToolUseMessage):
 class CodexDocSearchResultMessage(ToolResultMessage):
     """OpenAI documentation search hits rendered as a compact link list."""
 
-    detail_visibility: ClassVar[DetailLevel] = DetailLevel.LOW
+    depth_visibility: ClassVar[RenderingDepth] = RenderingDepth.AGENT
 
     @property
     def has_markdown(self) -> bool:
