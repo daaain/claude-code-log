@@ -112,6 +112,15 @@ def _render_provider_input_file(
     from .providers import discover_providers
     from .utils import output_path_is_file
 
+    # Directory rendering (a mini sessions root) lands with the wholesale
+    # walker; until then a claimed directory errors loudly rather than falling
+    # through to the empty Claude parse (interim; the matrix must not lie).
+    if input_path.is_dir():
+        raise click.UsageError(
+            f"{input_path} is a {provider_name} sessions directory; directory "
+            "rendering lands with the wholesale walker. For now point at a single "
+            f"rollout file, or use --provider {provider_name} --session-id <id>."
+        )
     selected = discover_providers().get_provider(provider_name)
     if selected is None:
         raise click.UsageError(f"Unknown provider: {provider_name}")
@@ -1516,12 +1525,12 @@ def main(
                 click.launch(str(output_path))
             return
 
-        # Provider auto-detection (silent-empty pin): a Codex rollout handed as
-        # an INPUT_PATH must route to the provider pipeline, not the Claude
-        # parser, which skips every record and renders a near-empty page. A bare
-        # rollout FILE with no --provider is auto-detected here; --provider and
-        # rollout DIRECTORIES arrive with the wholesale slice.
-        if provider is None and input_path.is_file():
+        # Provider auto-detection (silent-empty pin): a rollout handed as an
+        # INPUT_PATH must route to the provider pipeline, not the Claude parser,
+        # which skips every record and renders a near-empty page. Files render;
+        # a rollout DIRECTORY errors loudly for now (the wholesale walker lands
+        # directory rendering) — either way it never falls to the empty parse.
+        if provider is None and input_path.exists():
             from .providers import discover_providers
 
             detected = discover_providers().detect_provider_for_path(input_path)

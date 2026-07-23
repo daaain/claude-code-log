@@ -250,6 +250,29 @@ def test_explicit_provider_renders_rollout_file(tmp_path: Path) -> None:
     assert "synthetic files" in out.read_text(encoding="utf-8")
 
 
+def test_rollout_directory_errors_loudly_until_walker_lands(tmp_path: Path) -> None:
+    """Interim guard: a directory of rollouts must NOT fall through to the empty
+    Claude parse before the wholesale walker lands. Both auto-detect and
+    explicit --provider error loudly (the matrix must not silently lie)."""
+    from click.testing import CliRunner
+
+    from claude_code_log.cli import main
+
+    nested = tmp_path / "sessions" / "2026" / "01"
+    nested.mkdir(parents=True)
+    _write(nested / "rollout-abcd.jsonl", [_SESSION_META, {"type": "message"}])
+
+    auto = CliRunner().invoke(main, [str(tmp_path), "-o", str(tmp_path / "a.html")])
+    assert auto.exit_code != 0
+    assert "sessions directory" in auto.output and "wholesale walker" in auto.output
+
+    explicit = CliRunner().invoke(
+        main, ["--provider", "codex", str(tmp_path), "-o", str(tmp_path / "e.html")]
+    )
+    assert explicit.exit_code != 0
+    assert "sessions directory" in explicit.output
+
+
 def test_non_rollout_file_is_left_to_the_claude_path(tmp_path: Path) -> None:
     """A non-rollout .jsonl is NOT hijacked by auto-detection — it must reach
     the Claude parser unchanged (byte-stability of the default path)."""
