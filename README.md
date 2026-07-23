@@ -280,7 +280,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, testing, and archi
 
 ## Community Extensions
 
-Projects built on top of `claude-code-log`:
+Projects that wrap or extend the `claude-code-log` CLI:
 
 - **[archive-session](https://github.com/lifeinchords/claude-code-skills#archive-session-skill--slash-command--optional-hook)** by [@lifeinchords](https://github.com/lifeinchords). Wraps the CLI as three integration surfaces:
   - a Claude Code [Skill](https://github.com/lifeinchords/claude-code-skills/blob/main/.claude/skills/archive-session/SKILL.md)
@@ -289,14 +289,11 @@ Projects built on top of `claude-code-log`:
 
   Cross-platform (macOS and Windows/MSYS).
 
-- **[claude-history-mcp](https://github.com/sydasif/claude-history-mcp)** by [@sydasif](https://github.com/sydasif). MCP server that lets Claude Code query its own session history — search messages, list sessions, retrieve transcripts, and analyze usage patterns across all your projects.
+## Related Projects
 
-  - Reads from `~/.claude/projects/**/*.jsonl` (session transcripts) and `~/.claude/history.jsonl` (command history)
-  - Caches data in a local SQLite database with incremental mtime tracking
-  - Exposes 7 MCP tools and 2 resources via FastMCP (stdio transport)
-  - Natural language date filtering ("yesterday", "last week", etc.)
-  - Install: `claude mcp add claude-history --scope user -- uvx --from git+https://github.com/sydasif/claude-history-mcp@79c7803312ee8242d1d8b83d25d8aaba6cb6b62a claude-history-mcp`
-  - ⚠️ **Trust & Privacy Note**: This MCP server reads your local Claude Code session transcripts and command history. Review the source at `github.com/sydasif/claude-history-mcp` before installing. It runs locally via stdio and does not send data externally.
+Tools that read the same `~/.claude` transcript data for different interfaces:
+
+- **[claude-history-mcp](https://github.com/sydasif/claude-history-mcp)** by [@sydasif](https://github.com/sydasif). Agent-facing MCP server for programmatic history queries — search messages, list sessions, retrieve transcripts, and analyze usage patterns. Reads from `~/.claude/projects/**/*.jsonl` and `~/.claude/history.jsonl`, caches in SQLite, exposes 7 MCP tools + 2 resources via FastMCP (stdio transport).
 
 ## TODO
 
