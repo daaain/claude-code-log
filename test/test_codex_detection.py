@@ -235,6 +235,21 @@ def test_rollout_that_yields_no_messages_errors_loudly(tmp_path: Path) -> None:
     assert "no renderable messages" in result.output
 
 
+def test_explicit_provider_renders_rollout_file(tmp_path: Path) -> None:
+    """`--provider codex <rollout>` renders that file directly (fence relaxed
+    from the old blanket INPUT_PATH rejection), asserting real content."""
+    from click.testing import CliRunner
+
+    from claude_code_log.cli import main
+
+    out = tmp_path / "explicit.html"
+    result = CliRunner().invoke(
+        main, ["--provider", "codex", str(_FIXTURE_ROLLOUT), "-o", str(out)]
+    )
+    assert result.exit_code == 0, result.output
+    assert "synthetic files" in out.read_text(encoding="utf-8")
+
+
 def test_non_rollout_file_is_left_to_the_claude_path(tmp_path: Path) -> None:
     """A non-rollout .jsonl is NOT hijacked by auto-detection — it must reach
     the Claude parser unchanged (byte-stability of the default path)."""

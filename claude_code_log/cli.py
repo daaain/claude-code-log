@@ -30,6 +30,7 @@ from .cache import (
     get_cache_db_path,
     get_library_version,
 )
+from .models import RenderingDepth
 
 
 # Output values that mean "stream the rendered document to stdout" (issue
@@ -87,6 +88,77 @@ def _render_to_stdout(
         # Fallback (e.g. a text-only stdout shim): decode best-effort.
         sys.stdout.write(content.decode("utf-8", errors="replace"))
     click.echo(f"Successfully converted {input_path} to stdout", err=True)
+
+
+def _render_provider_input_file(
+    provider_name: str,
+    input_path: Path,
+    output: "Optional[Path]",
+    output_format: str,
+    image_export_mode: "Optional[str]",
+    depth: RenderingDepth,
+    compact: bool,
+    no_timestamps: bool,
+    no_recaps: bool,
+    open_browser: bool,
+) -> None:
+    """Render a single provider session file handed in as an INPUT_PATH.
+
+    Shared by the explicit ``--provider <p> <file>`` path and the no-flag
+    auto-detected-rollout path. Fails LOUDLY if a provider claimed the file but
+    it yields no renderable messages, so a rollout can never fall through to a
+    near-empty page (the silent-empty gap).
+    """
+    from .providers import discover_providers
+    from .utils import output_path_is_file
+
+    selected = discover_providers().get_provider(provider_name)
+    if selected is None:
+        raise click.UsageError(f"Unknown provider: {provider_name}")
+    messages = list(selected.load_session_from_path(input_path))
+    if not messages:
+        raise click.UsageError(
+            f"{input_path} was detected as a {provider_name} session but produced "
+            "no renderable messages; it may be truncated or malformed."
+        )
+    # generate_session filters entries by sessionId, so the render key MUST be
+    # the session's own id (the thread id carried on the entries), not the
+    # filename stem — a mismatch silently drops every message (the empty-page bug).
+    session_key = messages[0].sessionId or input_path.stem
+    title = f"{provider_name.title()}: {session_key}"
+
+    def render(destination: Path) -> Path:
+        return render_normalized_session_file(
+            messages,
+            session_key,
+            destination,
+            output_format,
+            title,
+            image_export_mode,
+            depth,
+            compact,
+            no_timestamps,
+            no_recaps,
+        )
+
+    extension = get_file_extension(output_format)
+    if _is_stdout_target(output):
+        _render_to_stdout(
+            input_path,
+            lambda tmpdir: render(tmpdir / f"session.{extension}"),
+        )
+        return
+    filename = f"session-{session_key}.{extension}"
+    if output is None:
+        destination = Path.cwd() / filename
+    elif output_path_is_file(output):
+        destination = output
+    else:
+        destination = output / filename
+    output_path = render(destination)
+    click.echo(f"Successfully rendered {provider_name} session to {output_path}")
+    if open_browser:
+        click.launch(str(output_path))
 
 
 def _install_stack_dump_signal() -> None:
@@ -872,15 +944,18 @@ def main(
     # Configure logging to show warnings and above
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
 
-    # Provider sessions are an intentionally narrow first slice. Keep them
-    # away from the Claude project/cache pipeline and reject options whose
-    # meaning would otherwise be silently ambiguous.
+    # Provider mode currently renders ONE session — by --session-id (export) or
+    # by INPUT_PATH (a rollout file). Wholesale, cache, and Claude-only flags are
+    # not supported yet and are rejected loudly (never a silent no-op).
     if provider is not None:
-        if session_id is None:
-            raise click.UsageError("--provider requires --session-id.")
+        if input_path is not None and session_id is not None:
+            raise click.UsageError(
+                "--provider with an INPUT_PATH renders that path; drop "
+                "--session-id (or drop the INPUT_PATH to export a session by id)."
+            )
+        if input_path is None and session_id is None:
+            raise click.UsageError("--provider requires --session-id or an INPUT_PATH.")
         conflicts: list[str] = []
-        if input_path is not None:
-            conflicts.append("INPUT_PATH")
         for enabled, flag in (
             (all_projects, "--all-projects"),
             (tui, "--tui"),
@@ -907,8 +982,9 @@ def main(
                 conflicts.append(flag)
         if conflicts:
             raise click.UsageError(
-                f"--provider does not support {', '.join(conflicts)}; "
-                "provider mode exports one session only."
+                f"--provider does not yet support {', '.join(conflicts)}; "
+                "provider mode currently renders one session "
+                "(by --session-id or INPUT_PATH)."
             )
 
     # Resolve --combined default and back-compat with --no-individual-sessions.
@@ -1083,7 +1159,25 @@ def main(
         if provider is not None:
             from .providers import SessionInfo, discover_providers
 
-            assert session_id is not None  # enforced by provider-mode validation
+            # Explicit --provider with an INPUT_PATH renders that file directly
+            # (distinct from --session-id export below). The fence guarantees not
+            # both are set.
+            if input_path is not None:
+                _render_provider_input_file(
+                    provider,
+                    input_path,
+                    output,
+                    output_format,
+                    image_export_mode,
+                    depth_level,
+                    compact,
+                    no_timestamps,
+                    no_recaps,
+                    open_browser,
+                )
+                return
+
+            assert session_id is not None  # fence guarantees this in export mode
             provider_session_id = session_id
             registry = discover_providers()
             selected = registry.get_provider(provider)
@@ -1430,57 +1524,20 @@ def main(
         if provider is None and input_path.is_file():
             from .providers import discover_providers
 
-            registry = discover_providers()
-            detected = registry.detect_provider_for_path(input_path)
+            detected = discover_providers().detect_provider_for_path(input_path)
             if detected is not None:
-                selected = registry.get_provider(detected)
-                assert selected is not None
-                detected_messages = list(selected.load_session_from_path(input_path))
-                if not detected_messages:
-                    raise click.UsageError(
-                        f"{input_path} was detected as a {detected} session but "
-                        "produced no renderable messages; it may be truncated or "
-                        "malformed."
-                    )
-                # generate_session filters entries by sessionId, so the render
-                # key MUST be the session's own id (the thread id carried on the
-                # entries), not the filename stem — a mismatch silently drops
-                # every message, i.e. the exact empty-page bug this branch fixes.
-                session_key = detected_messages[0].sessionId or input_path.stem
-                detected_title = f"{detected.title()}: {session_key}"
-
-                def render_detected(destination: Path) -> Path:
-                    return render_normalized_session_file(
-                        detected_messages,
-                        session_key,
-                        destination,
-                        output_format,
-                        detected_title,
-                        image_export_mode,
-                        depth_level,
-                        compact,
-                        no_timestamps,
-                        no_recaps,
-                    )
-
-                extension = get_file_extension(output_format)
-                if _is_stdout_target(output):
-                    _render_to_stdout(
-                        input_path,
-                        lambda tmpdir: render_detected(tmpdir / f"session.{extension}"),
-                    )
-                    return
-                filename = f"session-{session_key}.{extension}"
-                if output is None:
-                    destination = Path.cwd() / filename
-                elif _output_path_is_file(output):
-                    destination = output
-                else:
-                    destination = output / filename
-                output_path = render_detected(destination)
-                click.echo(f"Successfully rendered {detected} session to {output_path}")
-                if open_browser:
-                    click.launch(str(output_path))
+                _render_provider_input_file(
+                    detected,
+                    input_path,
+                    output,
+                    output_format,
+                    image_export_mode,
+                    depth_level,
+                    compact,
+                    no_timestamps,
+                    no_recaps,
+                    open_browser,
+                )
                 return
 
         # Original single file/directory processing logic
