@@ -34,7 +34,12 @@ from .utils import (
     render_user_markdown_collapsible,
     resolve_memory_body_links,
 )
-from ..utils import ARTIFACT_FAVICON_TEXT_MAX, is_safe_web_url, strip_error_tags
+from ..utils import (
+    ARTIFACT_FAVICON_TEXT_MAX,
+    is_safe_web_url,
+    split_websearch_queries,
+    strip_error_tags,
+)
 from ..workflow import resolve_workflow_header, resolve_workflow_script
 from ..models import (
     AskUserQuestionInput,
@@ -43,6 +48,8 @@ from ..models import (
     AskUserQuestionOutput,
     BashInput,
     BashOutput,
+    DeleteInput,
+    DeleteOutput,
     EditInput,
     EditOutput,
     CronCreateInput,
@@ -67,6 +74,8 @@ from ..models import (
     TaskStopOutput,
     TodoWriteInput,
     ToolResultContent,
+    ToolExecutionInput,
+    ToolExecutionOutput,
     WebSearchInput,
     WebSearchOutput,
     ArtifactInput,
@@ -283,6 +292,10 @@ def format_websearch_input(search_input: WebSearchInput) -> str:
     Only shows the query if it exceeds 100 chars (truncated in title).
     Otherwise returns empty since the full query is already in the title.
     """
+    queries = split_websearch_queries(search_input.query)
+    if len(queries) > 1:
+        items = "".join(f"<li>{escape_html(query)}</li>" for query in queries)
+        return f'<ul class="websearch-queries">{items}</ul>'
     if len(search_input.query) <= 100:
         return ""
     escaped_query = escape_html(search_input.query)
@@ -312,6 +325,14 @@ def _websearch_as_markdown(output: WebSearchOutput) -> str:
     return "\n".join(parts)
 
 
+def _web_source_anchors(refs: list[str]) -> str:
+    """Expose safe Codex web result handles as linkable card anchors."""
+    return "".join(
+        f"<span id='web-ref-{escape_html(ref)}' class='web-result-anchor'></span>"
+        for ref in refs
+    )
+
+
 def format_websearch_output(output: WebSearchOutput) -> str:
     """Format WebSearch tool result as collapsible markdown.
 
@@ -322,7 +343,8 @@ def format_websearch_output(output: WebSearchOutput) -> str:
     markdown block, rendered as collapsible content.
     """
     markdown_content = _websearch_as_markdown(output)
-    return render_markdown_collapsible(markdown_content, "websearch-results")
+    rendered = render_markdown_collapsible(markdown_content, "websearch-results")
+    return f"{_web_source_anchors(output.source_refs)}{rendered}"
 
 
 # -- TodoWrite Tool -----------------------------------------------------------
@@ -488,7 +510,12 @@ def format_write_output(output: WriteOutput) -> str:
         HTML string with the acknowledgment message
     """
     escaped_message = escape_html(output.message)
-    return f"<pre>{escaped_message} ...</pre>"
+    return f"<pre>{escaped_message}</pre>"
+
+
+def format_delete_output(output: DeleteOutput) -> str:
+    """Format a Delete tool result as its status line."""
+    return f"<pre>{escape_html(output.message)}</pre>"
 
 
 def format_bash_output(output: BashOutput) -> str:
@@ -708,6 +735,11 @@ def format_write_input(write_input: WriteInput) -> str:
     )
 
 
+def format_delete_input(_delete_input: DeleteInput) -> str:
+    """The deleted path is already carried by the tool title."""
+    return ""
+
+
 # -- Edit Tools (Edit/Multiedit) ----------------------------------------------
 
 
@@ -860,7 +892,8 @@ def format_webfetch_output(output: WebFetchOutput) -> str:
     # Render the result as markdown in a collapsible section
     content_html = render_markdown_collapsible(output.result, "webfetch-result")
 
-    return f"{badge_html}{content_html}"
+    anchors = _web_source_anchors(output.source_refs)
+    return f"{anchors}{badge_html}{content_html}"
 
 
 # -- Artifact Tool ------------------------------------------------------------
@@ -1696,6 +1729,54 @@ def format_workflow_input(workflow_input: WorkflowToolInput) -> str:
     return f"{prefix}{body}"
 
 
+def format_tool_execution_input(tool_input: ToolExecutionInput) -> str:
+    """Render opaque Codex JavaScript without Workflow-specific semantics."""
+    return render_file_content_collapsible(
+        tool_input.script,
+        "tool-execution.js",
+        "tool-execution-script",
+        line_threshold=12,
+        preview_line_count=6,
+    )
+
+
+def format_tool_execution_output(output: ToolExecutionOutput) -> str:
+    """Render transport status followed by a table of emitted results."""
+    parts = [
+        "<div class='tool-execution-status'>"
+        + "<br>".join(escape_html(line) for line in output.status.splitlines())
+        + "</div>"
+    ]
+    rows: list[str] = []
+    for index, item in enumerate(output.items, 1):
+        item_type = item.get("type")
+        text = item.get("text")
+        if item_type in {"input_text", "output_text", "text"} and isinstance(text, str):
+            content: str | list[dict[str, Any]] = text
+        else:
+            content = [item]
+        rendered = format_tool_result_content_raw(
+            ToolResultContent(
+                type="tool_result",
+                tool_use_id="tool-execution",
+                content=content,
+            )
+        )
+        rows.append(
+            "<tr>"
+            f"<th scope='row' class='tool-execution-result-label'>Result {index}</th>"
+            f"<td class='tool-execution-result-value'>{rendered}</td>"
+            "</tr>"
+        )
+    if rows:
+        parts.append(
+            "<table class='tool-execution-results'>"
+            f"<tbody>{''.join(rows)}</tbody>"
+            "</table>"
+        )
+    return "".join(parts)
+
+
 # -- Workflow run tree: phase + agent cards (issue #174 PR3) -------------------
 
 
@@ -1790,6 +1871,7 @@ __all__ = [
     "format_todowrite_input",
     "format_read_input",
     "format_write_input",
+    "format_delete_input",
     "format_edit_input",
     "format_multiedit_input",
     "format_bash_input",
@@ -1801,6 +1883,8 @@ __all__ = [
     "format_artifact_output",
     "format_webfetch_input",
     "format_workflow_input",
+    "format_tool_execution_input",
+    "format_tool_execution_output",
     "format_workflow_phase_content",
     "format_workflow_agent_content",
     "format_monitor_input",
@@ -1811,6 +1895,7 @@ __all__ = [
     # Tool output formatters (called by HtmlRenderer.format_{OutputClass})
     "format_read_output",
     "format_write_output",
+    "format_delete_output",
     "format_edit_output",
     "format_bash_output",
     "format_task_output",

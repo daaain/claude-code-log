@@ -24,6 +24,7 @@ from ..models import (
     AskUserQuestionInput,
     AskUserQuestionItem,
     BashInput,
+    DeleteInput,
     EditInput,
     ExitPlanModeInput,
     GlobInput,
@@ -38,6 +39,7 @@ from ..models import (
     TaskListInput,
     TaskOutputInput,
     TaskStopInput,
+    ToolExecutionInput,
     WorkflowToolInput,
     TaskUpdateInput,
     TeamCreateInput,
@@ -68,6 +70,7 @@ from ..models import (
     AskUserQuestionAnswer,
     AskUserQuestionOutput,
     BashOutput,
+    DeleteOutput,
     EditOutput,
     ExitPlanModeOutput,
     MonitorOutput,
@@ -79,6 +82,7 @@ from ..models import (
     TaskOutput,
     TaskOutputResult,
     TaskStopOutput,
+    ToolExecutionOutput,
     TaskUpdateOutput,
     TeamCreateOutput,
     TeamDeleteOutput,
@@ -99,6 +103,7 @@ TOOL_INPUT_MODELS: dict[str, type[BaseModel]] = {
     "Bash": BashInput,
     "Read": ReadInput,
     "Write": WriteInput,
+    "Delete": DeleteInput,
     "Edit": EditInput,
     "MultiEdit": MultiEditInput,
     "Glob": GlobInput,
@@ -142,6 +147,7 @@ TOOL_INPUT_MODELS: dict[str, type[BaseModel]] = {
     "TaskStop": TaskStopInput,
     # Dynamic Workflow orchestrator (issue #174): input.script is JS.
     "Workflow": WorkflowToolInput,
+    "ToolExecution": ToolExecutionInput,
 }
 
 
@@ -431,12 +437,60 @@ def parse_write_output(
     if not lines[0]:
         return None
 
-    first_line = lines[0]
+    first_line = _transport_status_summary(content) or lines[0]
     return WriteOutput(
         file_path=file_path,
         success=True,  # If we got content, write succeeded
         message=first_line,
     )
+
+
+def parse_delete_output(
+    tool_result: ToolResultContent, file_path: Optional[str]
+) -> Optional[DeleteOutput]:
+    """Parse a Delete result's first status line."""
+    if not file_path:
+        return None
+    if not (content := _extract_tool_result_text(tool_result)):
+        return None
+    first_line = _transport_status_summary(content) or content.split("\n", 1)[0]
+    if not first_line:
+        return None
+    return DeleteOutput(file_path=file_path, success=True, message=first_line)
+
+
+def _transport_status_summary(text: str) -> Optional[str]:
+    """Keep completion and wall-time lines, dropping the empty Output label."""
+    lines = text.splitlines()
+    if not lines or lines[0] != "Script completed":
+        return None
+    status: list[str] = []
+    for line in lines:
+        if line == "Output:":
+            break
+        if line:
+            status.append(line)
+    return "\n".join(status) if status else None
+
+
+def parse_toolexecution_output(
+    tool_result: ToolResultContent, file_path: Optional[str]
+) -> Optional[ToolExecutionOutput]:
+    """Separate an opaque Codex execution's status from emitted values."""
+    del file_path
+    if not isinstance(tool_result.content, list) or not tool_result.content:
+        return None
+    first, *items = tool_result.content
+    first_type = first.get("type")
+    first_text = first.get("text")
+    if first_type not in {"input_text", "output_text", "text"} or not isinstance(
+        first_text, str
+    ):
+        return None
+    status = _transport_status_summary(first_text)
+    if status is None:
+        return None
+    return ToolExecutionOutput(status=status, items=items)
 
 
 def parse_task_output(
@@ -792,7 +846,20 @@ def _parse_websearch_from_structured(
     if len(results) > 1 and isinstance(results[1], str):
         summary = results[1].strip() or None
 
-    return WebSearchOutput(query=query, links=links, preamble=None, summary=summary)
+    source_refs_raw = tool_use_result.get("sourceRefs", [])
+    source_refs = (
+        [ref for ref in cast(list[Any], source_refs_raw) if isinstance(ref, str)]
+        if isinstance(source_refs_raw, list)
+        else []
+    )
+
+    return WebSearchOutput(
+        query=query,
+        links=links,
+        preamble=None,
+        summary=summary,
+        source_refs=source_refs,
+    )
 
 
 def _parse_websearch_from_text(text: str) -> Optional[WebSearchOutput]:
@@ -905,16 +972,24 @@ def parse_webfetch_output(
     if tool_use_result is not None and isinstance(tool_use_result, dict):
         url = tool_use_result.get("url")
         result = tool_use_result.get("result")
+        is_codex_web_result = tool_use_result.get("codexWebResult") is True
+        source_refs_raw = tool_use_result.get("sourceRefs", [])
+        source_refs = (
+            [ref for ref in cast(list[Any], source_refs_raw) if isinstance(ref, str)]
+            if isinstance(source_refs_raw, list)
+            else []
+        )
 
-        # Both url and result are required
-        if url and result:
+        # Claude supplies a URL; Codex's ref-based open/find actions may not.
+        if result and (url or is_codex_web_result):
             return WebFetchOutput(
-                url=str(url),
+                url=str(url or ""),
                 result=str(result),
                 bytes=tool_use_result.get("bytes"),
                 code=tool_use_result.get("code"),
                 code_text=tool_use_result.get("codeText"),
                 duration_ms=tool_use_result.get("durationMs"),
+                source_refs=source_refs,
             )
         # Structured data present but incomplete — don't fall through
         return None
@@ -1477,6 +1552,8 @@ TOOL_OUTPUT_PARSERS: dict[str, ToolOutputParser] = {
     "Read": parse_read_output,
     "Edit": parse_edit_output,
     "Write": parse_write_output,
+    "Delete": parse_delete_output,
+    "ToolExecution": parse_toolexecution_output,
     "Bash": parse_bash_output,
     "Task": parse_task_output,
     "Agent": parse_task_output,  # Teammates spawn tool — same parse shape
@@ -1638,7 +1715,7 @@ def create_tool_result_message(
         tool_use_from_ctx = tool_use_context[tool_result.tool_use_id]
         result_tool_name = tool_use_from_ctx.name
         if (
-            result_tool_name in ("Read", "Edit", "Write")
+            result_tool_name in ("Read", "Edit", "Write", "Delete")
             and "file_path" in tool_use_from_ctx.input
         ):
             result_file_path = tool_use_from_ctx.input["file_path"]

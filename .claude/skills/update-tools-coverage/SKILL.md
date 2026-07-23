@@ -1,17 +1,20 @@
 ---
 name: update-tools-coverage
-description: Refresh dev-docs/tools-coverage.md against the upstream Claude Code tools reference. Use when checkpointing tool-renderer coverage, after adding/removing a tool renderer, or when the upstream tools list may have changed.
+description: Refresh dev-docs/tools-coverage.md against the upstream Claude Code tools reference and the Codex app-server item schema. Use when checkpointing tool-renderer/provider coverage, after adding/removing a renderer or Codex adapter, or when either upstream taxonomy may have changed.
 ---
 
 # Update Tool Coverage
 
 Keeps [`dev-docs/tools-coverage.md`](../../../dev-docs/tools-coverage.md) in
-sync with two sources of truth:
+sync with the upstream contracts and our implementation:
 
 1. **Upstream** — the documented tool list at
    <https://code.claude.com/docs/en/tools-reference>.
 2. **Us** — `TOOL_INPUT_MODELS` / `TOOL_OUTPUT_PARSERS` in
    [`claude_code_log/factories/tool_factory.py`](../../../claude_code_log/factories/tool_factory.py).
+3. **Codex** — the installed version's generated app-server `ThreadItem`
+   schema, plus the rollout adapters in `providers/codex.py`,
+   `providers/codex_tools.py`, and `providers/codex_javascript.py`.
 
 The doc grades each documented tool **Full** (typed input + typed output),
 **Input only** (typed input, generic output), or **Generic** (no registry
@@ -19,7 +22,7 @@ entry → params-table + raw-`<pre>` fallback), and separately lists tools we
 support that upstream no longer documents (renames like `Task`→`Agent`,
 supersessions like `MultiEdit`, legacy aliases, undocumented features).
 
-## Procedure
+## Claude Code procedure
 
 1. **Fetch the upstream tool names.** WebFetch the reference and ask only
    for the tool-table names (the page is ~80 KB; a targeted prompt keeps it
@@ -59,6 +62,40 @@ supersessions like `MultiEdit`, legacy aliases, undocumented features).
      support level is machine-derived.
 
 4. **Re-run the helper** to confirm `in sync [OK]`.
+
+## Codex procedure
+
+Codex function/MCP/plugin names are open-ended, so do not try to create a
+closed upstream function-name list. Check two separate tables instead:
+
+1. Generate the public semantic item schema for the installed Codex version:
+
+   ```bash
+   codex --version
+   codex app-server generate-json-schema --out /tmp/codex-app-server-schema
+   ```
+
+2. Read `definitions.ThreadItem.oneOf` in
+   `/tmp/codex-app-server-schema/codex_app_server_protocol.v2.schemas.json`.
+   Reconcile added/removed variants with "Codex provider coverage / Public
+   item families" and update its version, date, and totals.
+   Run the local drift checker after editing:
+
+   ```bash
+   uv run python .claude/skills/update-tools-coverage/check_codex_coverage.py \
+     /tmp/codex-app-server-schema/codex_app_server_protocol.v2.schemas.json
+   ```
+
+3. Reconcile concrete call mappings with `_canonicalize()` in
+   `providers/codex_tools.py`, result/batch reconstruction in
+   `providers/codex.py`, and the `test/test_codex_*` contracts.
+4. Reconcile the static-JavaScript list with the whitelisted transfer
+   functions in `providers/codex_javascript.py`. Never describe legacy-regex
+   support as production fallback: it is retained only as an explicit test
+   comparison baseline.
+
+The generated schema is version-specific and the rollout format is not a
+public wire contract. State both facts in the documentation snapshot.
 
 ## Guardrails
 

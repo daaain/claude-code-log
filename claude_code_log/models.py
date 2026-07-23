@@ -1292,6 +1292,12 @@ class WriteInput(BaseModel):
     content: str
 
 
+class DeleteInput(BaseModel):
+    """Input parameters for the Delete tool."""
+
+    file_path: str
+
+
 class EditInput(BaseModel):
     """Input parameters for the Edit tool."""
 
@@ -1701,11 +1707,18 @@ class WorkflowToolInput(BaseModel):
     model_config = {"extra": "allow"}
 
 
+class ToolExecutionInput(BaseModel):
+    """Opaque JavaScript executed by Codex's generic ``exec`` transport."""
+
+    script: str
+
+
 # Union of all typed tool inputs
 ToolInput = Union[
     BashInput,
     ReadInput,
     WriteInput,
+    DeleteInput,
     EditInput,
     MultiEditInput,
     GlobInput,
@@ -1732,6 +1745,7 @@ ToolInput = Union[
     TaskOutputInput,
     TaskStopInput,
     WorkflowToolInput,
+    ToolExecutionInput,
     ToolUseContent,  # Generic fallback when no specialized parser
 ]
 
@@ -1771,6 +1785,23 @@ class WriteOutput:
     file_path: str
     success: bool
     message: str  # First line acknowledgment (truncated from full output)
+
+
+@dataclass
+class DeleteOutput:
+    """Parsed Delete tool output, symmetric with DeleteInput."""
+
+    file_path: str
+    success: bool
+    message: str
+
+
+@dataclass
+class ToolExecutionOutput:
+    """Structured transport status and opaque emitted result items."""
+
+    status: str
+    items: list[dict[str, Any]]
 
 
 @dataclass
@@ -2070,6 +2101,7 @@ class WebSearchOutput:
     links: list[WebSearchLink]
     preamble: Optional[str] = None  # Text before the Links (usually query header)
     summary: Optional[str] = None  # Markdown analysis after the links
+    source_refs: list[str] = field(default_factory=list[str])
 
 
 @dataclass
@@ -2086,6 +2118,7 @@ class WebFetchOutput:
     code: Optional[int] = None  # HTTP status code
     code_text: Optional[str] = None  # HTTP status text (e.g., "OK")
     duration_ms: Optional[int] = None  # Time taken in milliseconds
+    source_refs: list[str] = field(default_factory=list[str])
 
 
 @dataclass
@@ -2240,6 +2273,8 @@ class TaskStopOutput:
 ToolOutput = Union[
     ReadOutput,
     WriteOutput,
+    DeleteOutput,
+    ToolExecutionOutput,
     EditOutput,
     BashOutput,
     TaskOutput,

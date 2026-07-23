@@ -3,12 +3,18 @@
 import pytest
 
 from claude_code_log.factories.tool_factory import create_tool_input, create_tool_output
+from claude_code_log.html.tool_formatters import format_tool_execution_output
 from claude_code_log.models import (
     BashInput,
+    DeleteInput,
+    DeleteOutput,
     EditInput,
     SendMessageInput,
     TaskInput,
     ToolResultContent,
+    ToolExecutionInput,
+    ToolExecutionOutput,
+    WriteInput,
 )
 from claude_code_log.providers.codex_tools import (
     adapt_codex_tool_batch,
@@ -52,20 +58,20 @@ def test_apply_patch_exec_reuses_edit_renderer() -> None:
     assert isinstance(create_tool_input(call.name, call.input), EditInput)
 
 
-def test_direct_add_patch_reuses_edit_renderer() -> None:
+def test_direct_single_add_patch_reuses_write_renderer() -> None:
     patch = "*** Begin Patch\n*** Add File: added.txt\n+hello\n*** End Patch"
 
     call = adapt_codex_tool_call("apply_patch", {"raw": patch}, raw_input=patch)
 
-    assert call.name == "Edit"
+    assert call.name == "Write"
     assert call.input == {
         "file_path": "added.txt",
-        "old_string": "",
-        "new_string": "hello\n",
+        "content": "hello\n",
     }
+    assert isinstance(create_tool_input(call.name, call.input), WriteInput)
 
 
-def test_delete_patch_without_body_has_visible_deletion() -> None:
+def test_delete_patch_without_body_reuses_delete_renderer() -> None:
     patch = "*** Begin Patch\n*** Delete File: obsolete.txt\n*** End Patch"
     source = (
         f"const patch = {__import__('json').dumps(patch)}; "
@@ -74,10 +80,25 @@ def test_delete_patch_without_body_has_visible_deletion() -> None:
 
     call = adapt_codex_tool_call("exec", {"raw": source}, raw_input=source)
 
-    assert call.name == "Edit"
-    assert call.input["file_path"] == "obsolete.txt"
-    assert call.input["old_string"] == "[deleted file]\n"
-    assert call.input["new_string"] == ""
+    assert call.name == "Delete"
+    assert call.input == {"file_path": "obsolete.txt"}
+    assert isinstance(create_tool_input(call.name, call.input), DeleteInput)
+
+
+def test_delete_result_keeps_first_transport_status_line() -> None:
+    result = ToolResultContent(
+        type="tool_result",
+        tool_use_id="delete",
+        content="Script completed\nWall time: 0.6 seconds\nOutput:\n",
+    )
+
+    output = create_tool_output("Delete", result, "/tmp/obsolete.txt")
+
+    assert output == DeleteOutput(
+        file_path="/tmp/obsolete.txt",
+        success=True,
+        message="Script completed\nWall time: 0.6 seconds",
+    )
 
 
 def test_multi_file_patch_reuses_multiedit_renderer() -> None:
@@ -104,6 +125,45 @@ def test_multi_file_patch_reuses_multiedit_renderer() -> None:
     }
 
 
+def test_mixed_patch_batch_splits_file_operations_without_reordering() -> None:
+    patch = (
+        "*** Begin Patch\n"
+        "*** Update File: first.txt\n@@\n-old\n+new\n"
+        "*** Delete File: obsolete.txt\n"
+        "*** Add File: created.txt\n+created\n"
+        "*** Update File: last.txt\n@@\n-before\n+after\n"
+        "*** End Patch"
+    )
+    source = (
+        f"const patch = {__import__('json').dumps(patch)};\n"
+        "text(await tools.apply_patch(patch));"
+    )
+
+    batch = adapt_codex_tool_batch(source)
+
+    assert batch is not None
+    assert batch.result_indexes == [0, 0, 0, 0]
+    assert [call.name for call in batch.calls] == [
+        "Edit",
+        "Delete",
+        "Write",
+        "Edit",
+    ]
+    assert [call.input["file_path"] for call in batch.calls] == [
+        "first.txt",
+        "obsolete.txt",
+        "created.txt",
+        "last.txt",
+    ]
+    assert batch.calls[0].input == {
+        "file_path": "first.txt",
+        "old_string": "old\n",
+        "new_string": "new\n",
+    }
+    assert batch.calls[1].input == {"file_path": "obsolete.txt"}
+    assert batch.calls[2].input["content"] == "created\n"
+
+
 def test_single_mcp_call_keeps_name_for_plugin_transformers() -> None:
     call = adapt_codex_tool_call(
         "exec",
@@ -117,13 +177,88 @@ def test_single_mcp_call_keeps_name_for_plugin_transformers() -> None:
     assert call.input["action"] == "list"
 
 
+def test_codex_openai_docs_mcp_uses_internal_doc_tool() -> None:
+    source = (
+        "const r = await tools.mcp__openaiDeveloperDocs__fetch_openai_doc({"
+        'url: "https://learn.chatgpt.com/docs/hooks", anchor: "#config-shape"});'
+        "text(JSON.stringify(r));"
+    )
+
+    call = adapt_codex_tool_call("exec", {"raw": source}, raw_input=source)
+
+    assert call.name == "CodexDoc"
+    assert call.input == {
+        "url": "https://learn.chatgpt.com/docs/hooks",
+        "anchor": "#config-shape",
+    }
+
+
+def test_codex_openai_docs_object_batch_preserves_result_projection() -> None:
+    source = """
+        const [hooks, plugins, marketplace] = await Promise.all([
+          tools.mcp__openaiDeveloperDocs__fetch_openai_doc({url: "https://learn.chatgpt.com/docs/hooks"}),
+          tools.mcp__openaiDeveloperDocs__fetch_openai_doc({url: "https://learn.chatgpt.com/docs/build-plugins"}),
+          tools.mcp__openaiDeveloperDocs__fetch_openai_doc({url: "https://learn.chatgpt.com/docs/build-plugins", anchor: "#marketplace"})
+        ]);
+        text(JSON.stringify({hooks, plugins, marketplace}));
+    """
+
+    batch = adapt_codex_tool_batch(source)
+
+    assert batch is not None
+    assert [call.name for call in batch.calls] == ["CodexDoc"] * 3
+    assert batch.result_indexes == [0, 0, 0]
+    assert batch.result_object_keys == ("hooks", "plugins", "marketplace")
+
+
+def test_codex_openai_docs_search_batch_preserves_aliased_results() -> None:
+    source = """
+        const [a, m] = await Promise.all([
+          tools.mcp__openaiDeveloperDocs__search_openai_docs({query: "Codex approval policy", limit: 5}),
+          tools.mcp__openaiDeveloperDocs__search_openai_docs({query: "Codex MCP streamable HTTP", limit: 5})
+        ]);
+        text(JSON.stringify({approval: a, mcp: m}));
+    """
+
+    batch = adapt_codex_tool_batch(source)
+
+    assert batch is not None
+    assert [call.name for call in batch.calls] == ["CodexDocSearch"] * 2
+    assert [call.input["query"] for call in batch.calls] == [
+        "Codex approval policy",
+        "Codex MCP streamable HTTP",
+    ]
+    assert batch.result_indexes == [0, 0]
+    assert batch.result_object_keys == ("approval", "mcp")
+
+
+def test_single_mcp_call_resolves_constant_shorthand_input() -> None:
+    source = """
+        const actor = "/workspace/codex";
+        const to = "/workspace/clmail/alice";
+        const r = await tools.mcp__clmail__communicate({
+          action: "send", actor, params: {to, subject: "Ready"}
+        });
+        text(r);
+    """
+
+    call = adapt_codex_tool_call("exec", {"raw": source}, raw_input=source)
+
+    assert call.name == "mcp__clmail__communicate"
+    assert call.input == {
+        "action": "send",
+        "actor": "/workspace/codex",
+        "params": {"to": "/workspace/clmail/alice", "subject": "Ready"},
+    }
+
+
 def test_multi_call_exec_remains_visible_as_workflow() -> None:
     source = (
         'const a = await tools.exec_command({cmd: "one"}); '
         'const b = await tools.exec_command({cmd: "two"}); text(a); text(b);'
     )
     call = adapt_codex_tool_call("exec", {"raw": source}, raw_input=source)
-    assert call.name == "Workflow"
+    assert call.name == "ToolExecution"
     assert call.input == {"script": source}
 
 
@@ -188,16 +323,15 @@ def test_sequential_calls_can_emit_after_all_invocations() -> None:
     source = (
         "const a = await tools.exec_command({"
         'cmd:"codex plugin list --json",'
-        'workdir:"/home/cboos/Workspace/github/daain/claude-code-log/codex",'
+        'workdir:"/workspace/project",'
         'sandbox_permissions:"require_escalated",'
-        'justification:"Allow reading the installed Codex plugin registry to verify '
-        'the ClMail test installation?",'
+        'justification:"Allow reading the synthetic plugin registry?",'
         'prefix_rule:["codex","plugin","list"],'
         "yield_time_ms:30000,max_output_tokens:5000});\n"
         "const b = await tools.exec_command({"
-        'cmd:"find /home/cboos/.codex/plugins/cache/clmail-local/clmail/6.13.2 '
+        'cmd:"find /home/user/.codex/plugins/cache/example-plugin/1.2.3 '
         '-maxdepth 4 -type f -print",'
-        'workdir:"/home/cboos/Workspace/github/daain/claude-code-log/codex",'
+        'workdir:"/workspace/project",'
         "yield_time_ms:10000,max_output_tokens:3000});\n"
         "text(a.output); text(b.output);"
     )
@@ -208,7 +342,7 @@ def test_sequential_calls_can_emit_after_all_invocations() -> None:
     assert batch.result_indexes == [0, 1]
     assert [call.input["command"] for call in batch.calls] == [
         "codex plugin list --json",
-        "find /home/cboos/.codex/plugins/cache/clmail-local/clmail/6.13.2 "
+        "find /home/user/.codex/plugins/cache/example-plugin/1.2.3 "
         "-maxdepth 4 -type f -print",
     ]
 
@@ -226,6 +360,35 @@ def test_sequential_calls_correlate_outputs_by_result_variable() -> None:
     assert batch.result_indexes == [1, 0]
 
 
+def test_static_for_of_expands_distinct_tool_calls() -> None:
+    source = """
+        for (const id of [4745, 4746, 4756]) {
+          const r = await tools.mcp__clmail__communicate({
+            action: "read",
+            actor: "/workspace/codex",
+            params: {id}
+          });
+          text(JSON.stringify(r));
+        }
+    """
+
+    batch = adapt_codex_tool_batch(source)
+
+    assert batch is not None
+    assert batch.output_mode == "ordered"
+    assert batch.result_indexes == [0, 1, 2]
+    assert [call.name for call in batch.calls] == [
+        "mcp__clmail__communicate",
+        "mcp__clmail__communicate",
+        "mcp__clmail__communicate",
+    ]
+    assert [call.input["params"] for call in batch.calls] == [
+        {"id": 4745},
+        {"id": 4746},
+        {"id": 4756},
+    ]
+
+
 def test_all_tools_plus_one_command_is_compound_workflow() -> None:
     source = (
         "const matches = ALL_TOOLS.filter(x => x.name.includes('git')); "
@@ -235,7 +398,7 @@ def test_all_tools_plus_one_command_is_compound_workflow() -> None:
 
     call = adapt_codex_tool_call("exec", {"raw": source}, raw_input=source)
 
-    assert call.name == "Workflow"
+    assert call.name == "ToolExecution"
     assert call.input == {"script": source}
 
 
@@ -257,7 +420,7 @@ def test_one_tool_with_unrelated_output_emission_is_workflow() -> None:
     )
 
     assert adapt_codex_tool_call("exec", {"raw": source}, raw_input=source).name == (
-        "Workflow"
+        "ToolExecution"
     )
 
 
@@ -266,7 +429,7 @@ def test_dynamic_exec_falls_back_to_workflow() -> None:
         "const args = getArgs(); const r = await tools.exec_command(args); text(r);"
     )
     call = adapt_codex_tool_call("exec", {"raw": source}, raw_input=source)
-    assert call.name == "Workflow"
+    assert call.name == "ToolExecution"
 
 
 def test_collaboration_calls_reuse_task_and_message_renderers() -> None:
@@ -360,6 +523,25 @@ def test_plan_and_search_reuse_specialized_renderers() -> None:
     assert search.input == {"query": "synthetic query"}
 
 
+def test_find_only_web_run_reuses_webfetch_renderer() -> None:
+    find = adapt_codex_tool_call(
+        "web__run",
+        {
+            "find": [
+                {"ref_id": "turn12view0", "pattern": "collabToolCall"},
+                {"ref_id": "turn12view0", "pattern": "parentThreadId"},
+            ],
+            "response_length": "long",
+        },
+    )
+
+    assert find.name == "WebFetch"
+    assert find.input == {
+        "url": "turn12view0",
+        "prompt": "Find: collabToolCall • parentThreadId",
+    }
+
+
 def test_list_agents_reuses_task_list_renderer() -> None:
     call = adapt_codex_tool_call("list_agents", {"path_prefix": "/root"})
 
@@ -376,7 +558,49 @@ def test_unknown_tool_stays_generic() -> None:
 def test_tool_like_text_inside_string_is_not_unwrapped() -> None:
     source = 'text("example: tools.exec_command({cmd: \\"unsafe\\"})");'
     call = adapt_codex_tool_call("exec", {"raw": source}, raw_input=source)
-    assert call.name == "Workflow"
+    assert call.name == "ToolExecution"
+
+
+def test_opaque_exec_uses_typed_tool_execution_pair() -> None:
+    source = 'text("opaque");'
+    call = adapt_codex_tool_call("exec", {"raw": source}, raw_input=source)
+
+    assert call.name == "ToolExecution"
+    assert create_tool_input(call.name, call.input) == ToolExecutionInput(script=source)
+
+    result = ToolResultContent(
+        type="tool_result",
+        tool_use_id="opaque",
+        content=[
+            {
+                "type": "input_text",
+                "text": "Script completed\nWall time 0.2 seconds\nOutput:\n",
+            },
+            {"type": "input_text", "text": '{"ok": true}'},
+            {"type": "future_result", "value": 42},
+        ],
+    )
+    output = create_tool_output("ToolExecution", result)
+
+    assert output == ToolExecutionOutput(
+        status="Script completed\nWall time 0.2 seconds",
+        items=[
+            {"type": "input_text", "text": '{"ok": true}'},
+            {"type": "future_result", "value": 42},
+        ],
+    )
+    assert isinstance(output, ToolExecutionOutput)
+    rendered = format_tool_execution_output(output)
+    assert "Script completed<br>Wall time 0.2 seconds" in rendered
+    assert "<table class='tool-execution-results'>" in rendered
+    assert (
+        "<th scope='row' class='tool-execution-result-label'>Result 1</th>" in rendered
+    )
+    assert (
+        "<th scope='row' class='tool-execution-result-label'>Result 2</th>" in rendered
+    )
+    assert rendered.count("class='tool-execution-result-value'") == 2
+    assert "tool-result-json" in rendered
 
 
 def test_adapted_exec_selects_existing_bash_model() -> None:
@@ -407,8 +631,8 @@ def test_codex_todo_success_result_hides_exec_transport() -> None:
     assert output.content == "Todo list updated."
 
 
-@pytest.mark.parametrize("tool_name", ["Edit", "MultiEdit"])
-def test_codex_edit_success_result_hides_exec_transport(tool_name: str) -> None:
+@pytest.mark.parametrize("tool_name", ["Write", "Delete", "Edit", "MultiEdit"])
+def test_codex_file_success_result_keeps_exec_status(tool_name: str) -> None:
     content = [
         {
             "type": "input_text",
@@ -421,7 +645,16 @@ def test_codex_edit_success_result_hides_exec_transport(tool_name: str) -> None:
         content, tool_name=tool_name, is_error=False
     )
 
-    assert normalized == "File updated successfully."
+    assert normalized == "Script completed\nWall time: 0.0 seconds\nOutput:\n"
+
+
+@pytest.mark.parametrize("tool_name", ["Write", "Delete", "Edit", "MultiEdit"])
+def test_codex_bare_empty_patch_result_is_not_rewritten(tool_name: str) -> None:
+    normalized, _ = CodexProvider()._adapt_tool_result(
+        "{}", tool_name=tool_name, is_error=False
+    )
+
+    assert normalized == "{}"
 
 
 def test_unfamiliar_todo_result_stays_generic() -> None:
@@ -445,3 +678,11 @@ def test_codex_todo_error_transport_is_not_collapsed() -> None:
         content, tool_name="TodoWrite", is_error=True
     )
     assert normalized == content
+
+
+def test_codex_write_error_result_is_not_collapsed() -> None:
+    normalized, _ = CodexProvider()._adapt_tool_result(
+        "{}", tool_name="Write", is_error=True
+    )
+
+    assert normalized == "{}"

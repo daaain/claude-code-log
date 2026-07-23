@@ -24,6 +24,7 @@ from ..utils import (
     format_timestamp,
     generate_unified_diff,
     is_safe_web_url,
+    split_websearch_queries,
     strip_error_tags,
 )
 from ..models import (
@@ -54,6 +55,7 @@ from ..models import (
     # Tool input types
     AskUserQuestionInput,
     BashInput,
+    DeleteInput,
     EditInput,
     ExitPlanModeInput,
     GlobInput,
@@ -72,6 +74,7 @@ from ..models import (
     TeamDeleteInput,
     TodoWriteInput,
     ToolUseContent,
+    ToolExecutionInput,
     SkillInput,
     WebSearchInput,
     ArtifactInput,
@@ -93,6 +96,7 @@ from ..models import (
     # Tool output types
     AskUserQuestionOutput,
     BashOutput,
+    DeleteOutput,
     EditOutput,
     ExitPlanModeOutput,
     GlobOutput,
@@ -106,6 +110,7 @@ from ..models import (
     TeamCreateOutput,
     TeamDeleteOutput,
     ToolResultContent,
+    ToolExecutionOutput,
     WebSearchOutput,
     ArtifactOutput,
     WebFetchOutput,
@@ -1063,6 +1068,10 @@ class MarkdownRenderer(Renderer):
         content = self._code_fence(input.content, self._lang_from_path(input.file_path))
         return self._collapsible(summary, content)
 
+    def format_DeleteInput(self, _input: DeleteInput, _: TemplateMessage) -> str:
+        """The deleted path is already carried by the title."""
+        return ""
+
     def format_EditInput(self, input: EditInput, _: TemplateMessage) -> str:
         """Format → '```diff\\n...\\n```'."""
         # Diff is visible; result goes in collapsible in format_EditOutput
@@ -1125,10 +1134,12 @@ class MarkdownRenderer(Renderer):
         # Title contains "Exiting plan mode", body is empty
         return ""
 
-    def format_WebSearchInput(self, _input: WebSearchInput, _: TemplateMessage) -> str:
-        """Format → '' (query shown in title)."""
-        # Query is shown in the title, body is empty
-        return ""
+    def format_WebSearchInput(self, input: WebSearchInput, _: TemplateMessage) -> str:
+        """Format → parallel queries as a list; single query stays title-only."""
+        queries = split_websearch_queries(input.query)
+        if len(queries) == 1:
+            return ""
+        return "\n".join(f"- {safe_markdown_inline(query)}" for query in queries)
 
     def format_WebFetchInput(self, input: WebFetchInput, _: TemplateMessage) -> str:
         """Format → '' (url in title, prompt if long)."""
@@ -1228,6 +1239,48 @@ class MarkdownRenderer(Renderer):
         if script.strip():
             parts.append(self._code_fence(script, "js"))
         return "\n\n".join(parts)
+
+    def format_ToolExecutionInput(
+        self, input: ToolExecutionInput, _: TemplateMessage
+    ) -> str:
+        """Render opaque Codex JavaScript without Workflow semantics."""
+        return self._code_fence(input.script, "js")
+
+    def format_ToolExecutionOutput(
+        self, output: ToolExecutionOutput, _: TemplateMessage
+    ) -> str:
+        """Render transport status followed by labelled result emissions."""
+        parts = [output.status]
+        for index, item in enumerate(output.items, 1):
+            parts.append(f"**Result {index}:**")
+            item_type = item.get("type")
+            text = item.get("text")
+            if item_type in {"input_text", "output_text", "text"} and isinstance(
+                text, str
+            ):
+                try:
+                    decoded: Any = json.loads(text)
+                except (ValueError, RecursionError):
+                    parts.append(self._code_fence(text))
+                else:
+                    parts.append(
+                        self._code_fence(
+                            json.dumps(decoded, indent=2, ensure_ascii=False), "json"
+                        )
+                    )
+            else:
+                parts.append(
+                    self._code_fence(
+                        json.dumps(item, indent=2, ensure_ascii=False), "json"
+                    )
+                )
+        return "\n\n".join(parts)
+
+    def title_ToolExecutionInput(
+        self, _input: ToolExecutionInput, _: TemplateMessage
+    ) -> str:
+        """Title opaque Codex JavaScript distinctly from Workflow."""
+        return "⚙️ ToolExecution"
 
     def format_WorkflowPhaseMessage(
         self, content: WorkflowPhaseMessage, _: TemplateMessage
@@ -1577,6 +1630,10 @@ class MarkdownRenderer(Renderer):
 
     def format_WriteOutput(self, output: WriteOutput, _: TemplateMessage) -> str:
         """Format → '✓ Wrote N bytes'."""
+        return f"✓ {output.message}"
+
+    def format_DeleteOutput(self, output: DeleteOutput, _: TemplateMessage) -> str:
+        """Format → deletion status line."""
         return f"✓ {output.message}"
 
     def format_EditOutput(self, output: EditOutput, _: TemplateMessage) -> str:
@@ -1947,6 +2004,10 @@ class MarkdownRenderer(Renderer):
             return f"🧠 Write memory `{memory_short_path(input.file_path)}`"
         return f"✍️  Write `{Path(input.file_path).name}`"
 
+    def title_DeleteInput(self, input: DeleteInput, _: TemplateMessage) -> str:
+        """Title → '🗑️ Delete `filename`'."""
+        return f"🗑️ Delete `{Path(input.file_path).name}`"
+
     def title_EditInput(self, input: EditInput, _: TemplateMessage) -> str:
         """Title → '✏️  Edit `filename`', or '🧠 Edit memory `short-path`' for
         an auto-memory path (#192)."""
@@ -2057,7 +2118,9 @@ class MarkdownRenderer(Renderer):
 
     def title_WebSearchInput(self, input: WebSearchInput, _: TemplateMessage) -> str:
         """Title → '🔎 WebSearch `query`'."""
-        return f"🔎 WebSearch `{input.query}`"
+        queries = split_websearch_queries(input.query)
+        summary = f"{queries[0]} (...)" if len(queries) > 1 else input.query
+        return f"🔎 WebSearch `{summary}`"
 
     def title_WebFetchInput(self, input: WebFetchInput, _: TemplateMessage) -> str:
         """Title → '🌐 WebFetch `url`' (truncated if > 60 chars)."""

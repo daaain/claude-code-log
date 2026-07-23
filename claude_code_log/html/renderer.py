@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 from typing import TYPE_CHECKING, Any, Optional, Tuple, cast
 
 if TYPE_CHECKING:
@@ -39,6 +40,7 @@ from ..models import (
     AskUserQuestionInput,
     AskUserQuestionItem,
     BashInput,
+    DeleteInput,
     EditInput,
     ExitPlanModeInput,
     GlobInput,
@@ -56,6 +58,7 @@ from ..models import (
     TeamDeleteInput,
     TodoWriteInput,
     ToolUseContent,
+    ToolExecutionInput,
     SkillInput,
     WebSearchInput,
     ArtifactInput,
@@ -75,6 +78,7 @@ from ..models import (
     # Tool output types
     AskUserQuestionOutput,
     BashOutput,
+    DeleteOutput,
     EditOutput,
     ExitPlanModeOutput,
     ReadOutput,
@@ -88,6 +92,7 @@ from ..models import (
     TeamCreateOutput,
     TeamDeleteOutput,
     ToolResultContent,
+    ToolExecutionOutput,
     WebSearchOutput,
     ArtifactOutput,
     WebFetchOutput,
@@ -107,7 +112,7 @@ from ..renderer_timings import (
     report_timing_statistics,
     set_timing_var,
 )
-from ..utils import format_timestamp
+from ..utils import format_timestamp, split_websearch_queries
 from .system_formatters import (
     format_away_summary_content,
     format_hook_attachment_content,
@@ -157,6 +162,8 @@ from .tool_formatters import (
     format_askuserquestion_output,
     format_bash_input,
     format_bash_output,
+    format_delete_input,
+    format_delete_output,
     format_edit_input,
     format_edit_output,
     format_exitplanmode_input,
@@ -170,6 +177,8 @@ from .tool_formatters import (
     format_taskstop_output,
     format_todowrite_input,
     format_tool_result_content_raw,
+    format_tool_execution_input,
+    format_tool_execution_output,
     format_grep_input,
     format_websearch_input,
     format_websearch_output,
@@ -631,6 +640,10 @@ class HtmlRenderer(Renderer):
         """Format → file path + syntax-highlighted content preview."""
         return format_write_input(input)
 
+    def format_DeleteInput(self, input: DeleteInput, _: TemplateMessage) -> str:
+        """Format → empty body; the path is shown in the title."""
+        return format_delete_input(input)
+
     def format_EditInput(self, input: EditInput, _: TemplateMessage) -> str:
         """Format → file path + diff of old_string/new_string."""
         return format_edit_input(input)
@@ -753,6 +766,10 @@ class HtmlRenderer(Renderer):
         """Format → status message (e.g. 'Wrote 42 bytes')."""
         return format_write_output(output)
 
+    def format_DeleteOutput(self, output: DeleteOutput, _: TemplateMessage) -> str:
+        """Format → deletion status message."""
+        return format_delete_output(output)
+
     def format_EditOutput(self, output: EditOutput, _: TemplateMessage) -> str:
         """Format → status message (e.g. 'Applied edit')."""
         return format_edit_output(output)
@@ -852,6 +869,24 @@ class HtmlRenderer(Renderer):
     ) -> str:
         """Format → meta header (name/description/phases) + highlighted JS script."""
         return format_workflow_input(input)
+
+    def format_ToolExecutionInput(
+        self, input: ToolExecutionInput, _: TemplateMessage
+    ) -> str:
+        """Format opaque Codex JavaScript as an execution snippet."""
+        return format_tool_execution_input(input)
+
+    def format_ToolExecutionOutput(
+        self, output: ToolExecutionOutput, _: TemplateMessage
+    ) -> str:
+        """Format execution status and labelled result emissions."""
+        return format_tool_execution_output(output)
+
+    def title_ToolExecutionInput(
+        self, _input: ToolExecutionInput, message: TemplateMessage
+    ) -> str:
+        """Title → code-oriented execution, distinct from Workflow."""
+        return self._tool_title(message, "⚙️")
 
     def format_WebFetchOutput(self, output: WebFetchOutput, _: TemplateMessage) -> str:
         """Format → collapsible markdown with metadata badge."""
@@ -1149,6 +1184,10 @@ class HtmlRenderer(Renderer):
             )
         return self._tool_title(message, "📝", input.file_path)
 
+    def title_DeleteInput(self, input: DeleteInput, message: TemplateMessage) -> str:
+        """Title → '🗑️ Delete <file_path>'."""
+        return self._tool_title(message, "🗑️", input.file_path)
+
     def title_ReadInput(self, input: ReadInput, message: TemplateMessage) -> str:
         """Title → '📄 Read <file_path>[, lines N-M]', or
         '🧠 Read memory <short-path>[, lines N-M]' when the path is inside an
@@ -1216,12 +1255,23 @@ class HtmlRenderer(Renderer):
         self, input: WebSearchInput, message: TemplateMessage
     ) -> str:
         """Title → '🔎 WebSearch <query>'."""
-        return self._tool_title(message, "🔎", input.query)
+        queries = split_websearch_queries(input.query)
+        summary = f"{queries[0]} (...)" if len(queries) > 1 else input.query
+        return self._tool_title(message, "🔎", summary)
 
     def title_WebFetchInput(
         self, input: WebFetchInput, message: TemplateMessage
     ) -> str:
         """Title → '🌐 WebFetch <url>'."""
+        if re.fullmatch(r"turn\d+(?:search|view)\d+", input.url):
+            content = cast(ToolUseMessage, message.content)
+            tool_name = escape_html(content.tool_name)
+            ref = escape_html(input.url)
+            return (
+                f"🌐 {tool_name} "
+                f"<a class='web-ref-link' href='#web-ref-{ref}'>"
+                f"<span class='tool-summary'>{ref}</span></a>"
+            )
         return self._tool_title(message, "🌐", input.url)
 
     def title_ArtifactInput(

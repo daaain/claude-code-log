@@ -4,7 +4,7 @@ Codex persists many calls inside a ``custom_tool_call`` named ``exec`` whose
 input is a small JavaScript orchestration program.  This module unwraps static
 ``tools.<name>({...})`` invocations with JSON-compatible object literals when
 their emitted outputs can be correlated unambiguously.  Dynamic programs
-remain visible as ``Workflow`` tools, and anything unknown retains its original
+remain visible as ``ToolExecution`` tools, and anything unknown retains its original
 name and input for the generic renderer.
 """
 
@@ -14,6 +14,8 @@ from dataclasses import dataclass
 import json
 import re
 from typing import Any, Literal, Optional, cast
+
+from .codex_javascript import analyze_javascript_tools
 
 
 @dataclass(frozen=True)
@@ -27,6 +29,11 @@ class AdaptedToolBatch:
     calls: list[AdaptedToolCall]
     output_mode: Literal["markers", "ordered"]
     result_indexes: list[int]
+    session_markers: bool = False
+    result_prefixes: tuple[Optional[str], ...] = ()
+    synthetic_results: tuple[Optional[str], ...] = ()
+    output_count: Optional[int] = None
+    result_object_keys: tuple[Optional[str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -57,24 +64,88 @@ def adapt_codex_tool_call(
 ) -> AdaptedToolCall:
     """Map a raw Codex tool call to a shared canonical tool when safe."""
     if name == "exec" and isinstance(raw_input, str):
-        calls = _find_static_tool_calls(raw_input)
-        if len(calls) != 1:
-            return _workflow(raw_input)
-        if calls[0].name == "apply_patch":
-            patch = _decode_apply_patch_exec(raw_input, calls[0])
-            adapted = _canonicalize_patch(patch) if patch is not None else None
-            return adapted if adapted is not None else _workflow(raw_input)
-        if not _is_simple_result_forwarder(raw_input, calls[0]):
-            return _workflow(raw_input)
-        decoded = _decode_object_literal(calls[0].argument)
-        if decoded is None:
-            return _workflow(raw_input)
-        return _canonicalize(calls[0].name, decoded)
+        analyzed = analyze_javascript_tools(raw_input)
+        if analyzed is not None and len(analyzed.calls) == 1:
+            call = analyzed.calls[0]
+            return _canonicalize(call.name, call.input)
+        return _tool_execution(raw_input)
     return _canonicalize(name, input_data)
 
 
 def adapt_codex_tool_batch(source: str) -> Optional[AdaptedToolBatch]:
     """Decode static multi-tool programs whose outputs remain correlatable."""
+    analyzed = analyze_javascript_tools(source)
+    if analyzed is not None:
+        adapted: list[AdaptedToolCall] = []
+        result_indexes: list[int] = []
+        synthetic_results: list[Optional[str]] = []
+        result_object_keys: list[Optional[str]] = []
+        expanded_patch = False
+        for index, call in enumerate(analyzed.calls):
+            expanded = _expand_canonical_call(call.name, call.input)
+            expanded_patch = expanded_patch or len(expanded) > 1
+            adapted.extend(expanded)
+            result_indexes.extend([analyzed.result_indexes[index]] * len(expanded))
+            synthetic_results.extend(
+                [analyzed.synthetic_results[index]] * len(expanded)
+            )
+            result_object_keys.extend(
+                [analyzed.result_object_keys[index]] * len(expanded)
+            )
+        if (len(analyzed.calls) >= 2 or expanded_patch) and all(
+            call.name != "Workflow" for call in adapted
+        ):
+            return AdaptedToolBatch(
+                adapted,
+                analyzed.output_mode,
+                result_indexes,
+                analyzed.session_markers,
+                analyzed.result_prefixes,
+                tuple(synthetic_results),
+                analyzed.output_count,
+                tuple(result_object_keys),
+            )
+    return None
+
+
+def _expand_canonical_call(
+    name: str, input_data: dict[str, Any]
+) -> list[AdaptedToolCall]:
+    if name == "apply_patch":
+        raw_patch = input_data.get("patch", input_data.get("raw"))
+        if isinstance(raw_patch, str):
+            expanded = _expand_patch(raw_patch)
+            if expanded is not None:
+                return expanded
+    return [_canonicalize(name, input_data)]
+
+
+def adapt_codex_tool_call_legacy(
+    name: str,
+    input_data: dict[str, Any],
+    *,
+    raw_input: Any = None,
+) -> AdaptedToolCall:
+    """Run the pre-Tree-sitter recognizer explicitly as a comparison baseline."""
+    if name == "exec" and isinstance(raw_input, str):
+        calls = _find_static_tool_calls(raw_input)
+        if len(calls) != 1:
+            return _tool_execution(raw_input)
+        if calls[0].name == "apply_patch":
+            patch = _decode_apply_patch_exec(raw_input, calls[0])
+            adapted = _canonicalize_patch(patch) if patch is not None else None
+            return adapted if adapted is not None else _tool_execution(raw_input)
+        if not _is_simple_result_forwarder(raw_input, calls[0]):
+            return _tool_execution(raw_input)
+        decoded = _decode_object_literal(calls[0].argument)
+        if decoded is None:
+            return _tool_execution(raw_input)
+        return _canonicalize(calls[0].name, decoded)
+    return _canonicalize(name, input_data)
+
+
+def adapt_codex_tool_batch_legacy(source: str) -> Optional[AdaptedToolBatch]:
+    """Run the pre-Tree-sitter batch recognizer explicitly for comparison."""
     calls = _find_static_tool_calls(source)
     if len(calls) < 2:
         return None
@@ -263,11 +334,25 @@ def _is_result_expression(expression: str, result_name: str) -> bool:
     )
 
 
-def _workflow(source: str) -> AdaptedToolCall:
-    return AdaptedToolCall("Workflow", {"script": _scrub_opaque_literals(source)})
+def _tool_execution(source: str) -> AdaptedToolCall:
+    return AdaptedToolCall("ToolExecution", {"script": _scrub_opaque_literals(source)})
 
 
 def _canonicalize(name: str, input_data: dict[str, Any]) -> AdaptedToolCall:
+    if name == "mcp__openaiDeveloperDocs__fetch_openai_doc":
+        url = input_data.get("url")
+        anchor = input_data.get("anchor")
+        if isinstance(url, str) and (anchor is None or isinstance(anchor, str)):
+            return AdaptedToolCall("CodexDoc", input_data)
+
+    if name == "mcp__openaiDeveloperDocs__search_openai_docs":
+        query = input_data.get("query")
+        limit = input_data.get("limit")
+        if isinstance(query, str) and (
+            limit is None or isinstance(limit, int) and not isinstance(limit, bool)
+        ):
+            return AdaptedToolCall("CodexDocSearch", input_data)
+
     if name == "apply_patch":
         raw_patch = input_data.get("patch", input_data.get("raw"))
         if isinstance(raw_patch, str):
@@ -349,6 +434,32 @@ def _canonicalize(name: str, input_data: dict[str, Any]) -> AdaptedToolCall:
             if text_queries and len(text_queries) == len(query_items):
                 return AdaptedToolCall("WebSearch", {"query": " • ".join(text_queries)})
 
+        finds = input_data.get("find")
+        other_actions = set(input_data) - {"find", "response_length"}
+        if isinstance(finds, list) and not other_actions:
+            find_items = cast(list[Any], finds)
+            refs: list[str] = []
+            patterns: list[str] = []
+            for raw_find in find_items:
+                if not isinstance(raw_find, dict):
+                    break
+                find = cast(dict[str, Any], raw_find)
+                ref_id = find.get("ref_id")
+                pattern = find.get("pattern")
+                if not isinstance(ref_id, str) or not isinstance(pattern, str):
+                    break
+                if ref_id not in refs:
+                    refs.append(ref_id)
+                patterns.append(pattern)
+            if patterns and len(patterns) == len(find_items):
+                return AdaptedToolCall(
+                    "WebFetch",
+                    {
+                        "url": " • ".join(refs),
+                        "prompt": "Find: " + " • ".join(patterns),
+                    },
+                )
+
     return AdaptedToolCall(name, input_data)
 
 
@@ -399,7 +510,55 @@ def _decode_apply_patch_exec(source: str, call: _StaticCall) -> Optional[str]:
 
 
 def _canonicalize_patch(patch: str) -> Optional[AdaptedToolCall]:
-    """Represent apply_patch operations with the Edit/MultiEdit renderers."""
+    """Represent static apply_patch operations with shared file renderers."""
+    operations = _patch_operations(patch)
+    if operations is None:
+        return None
+    if len(operations) == 1:
+        operation, edit = operations[0]
+        if operation == "Add":
+            return _write_call(edit)
+        if operation == "Delete":
+            return _delete_call(edit)
+        return AdaptedToolCall("Edit", edit)
+    return _multiedit_call([edit for _, edit in operations])
+
+
+def _expand_patch(patch: str) -> Optional[list[AdaptedToolCall]]:
+    """Split Add/Delete operations from edits without changing patch order."""
+    operations = _patch_operations(patch)
+    if operations is None:
+        return None
+    if not any(operation in {"Add", "Delete"} for operation, _ in operations):
+        canonical = _canonicalize_patch(patch)
+        return [canonical] if canonical is not None else None
+
+    expanded: list[AdaptedToolCall] = []
+    edits: list[dict[str, str]] = []
+
+    def flush_edits() -> None:
+        if len(edits) == 1:
+            expanded.append(AdaptedToolCall("Edit", edits[0]))
+        elif edits:
+            expanded.append(_multiedit_call(list(edits)))
+        edits.clear()
+
+    for operation, edit in operations:
+        if operation == "Add":
+            flush_edits()
+            expanded.append(_write_call(edit))
+        elif operation == "Delete":
+            flush_edits()
+            expanded.append(_delete_call(edit))
+        else:
+            edits.append(edit)
+    flush_edits()
+    return expanded
+
+
+def _patch_operations(
+    patch: str,
+) -> Optional[list[tuple[str, dict[str, str]]]]:
     lines = patch.splitlines()
     if len(lines) < 3 or lines[0] != "*** Begin Patch" or lines[-1] != "*** End Patch":
         return None
@@ -414,7 +573,7 @@ def _canonicalize_patch(patch: str) -> Optional[AdaptedToolCall]:
     ]
     if not headers or headers[0][0] != 1:
         return None
-    edits: list[dict[str, str]] = []
+    operations: list[tuple[str, dict[str, str]]] = []
     for position, (header_index, header) in enumerate(headers):
         body_end = (
             headers[position + 1][0] if position + 1 < len(headers) else len(lines) - 1
@@ -426,9 +585,22 @@ def _canonicalize_patch(patch: str) -> Optional[AdaptedToolCall]:
         )
         if edit is None:
             return None
-        edits.append(edit)
-    if len(edits) == 1:
-        return AdaptedToolCall("Edit", edits[0])
+        operations.append((header.group(1), edit))
+    return operations
+
+
+def _write_call(edit: dict[str, str]) -> AdaptedToolCall:
+    return AdaptedToolCall(
+        "Write",
+        {"file_path": edit["file_path"], "content": edit["new_string"]},
+    )
+
+
+def _delete_call(edit: dict[str, str]) -> AdaptedToolCall:
+    return AdaptedToolCall("Delete", {"file_path": edit["file_path"]})
+
+
+def _multiedit_call(edits: list[dict[str, str]]) -> AdaptedToolCall:
     return AdaptedToolCall(
         "MultiEdit",
         {
@@ -450,9 +622,7 @@ def _patch_edit(operation: str, path: str, body: list[str]) -> Optional[dict[str
     elif operation == "Delete":
         if body and any(not line.startswith("-") for line in body):
             return None
-        old_string = (
-            _patch_text([line[1:] for line in body]) if body else "[deleted file]\n"
-        )
+        old_string = _patch_text([line[1:] for line in body]) if body else ""
         new_string = ""
     else:
         old_lines: list[str] = []

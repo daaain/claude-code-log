@@ -1358,6 +1358,36 @@
       vertical-align: top;
   }
   
+  /* Opaque Codex executions can emit several independent values. Keep their
+     ordinal labels in a stable column and neutralise the generic collapsible's
+     card-level pull-up inside result cells. */
+  .tool-execution-results {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 0.5em;
+  }
+  
+  .tool-execution-results tr {
+      border-bottom: 1px solid var(--tool-param-sep-color);
+  }
+  
+  .tool-execution-result-label {
+      width: 8em;
+      padding: 4px;
+      color: var(--text-secondary);
+      text-align: left;
+      vertical-align: top;
+  }
+  
+  .tool-execution-result-value {
+      padding: 4px;
+      vertical-align: top;
+  }
+  
+  .tool-execution-result-value .collapsible-details {
+      margin-top: 0;
+  }
+  
   .tool-param-structured {
       margin: 0;
       background-color: var(--bg-neutral);
@@ -1365,11 +1395,10 @@
       border-radius: 3px;
   }
   
-  /* Nested tables produced by the recursive params renderer: keep the
-     flat look but let the key column shrink (index/short keys) so depth
-     doesn't eat horizontal space. */
+  /* Nested tables produced by the recursive params renderer retain the
+     same readable key-column width at every depth. */
   .tool-params-nested .tool-param-key {
-      width: auto;
+      width: 8em;
       min-width: 4em;
   }
   
@@ -8134,6 +8163,36 @@
       vertical-align: top;
   }
   
+  /* Opaque Codex executions can emit several independent values. Keep their
+     ordinal labels in a stable column and neutralise the generic collapsible's
+     card-level pull-up inside result cells. */
+  .tool-execution-results {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 0.5em;
+  }
+  
+  .tool-execution-results tr {
+      border-bottom: 1px solid var(--tool-param-sep-color);
+  }
+  
+  .tool-execution-result-label {
+      width: 8em;
+      padding: 4px;
+      color: var(--text-secondary);
+      text-align: left;
+      vertical-align: top;
+  }
+  
+  .tool-execution-result-value {
+      padding: 4px;
+      vertical-align: top;
+  }
+  
+  .tool-execution-result-value .collapsible-details {
+      margin-top: 0;
+  }
+  
   .tool-param-structured {
       margin: 0;
       background-color: var(--bg-neutral);
@@ -8141,11 +8200,10 @@
       border-radius: 3px;
   }
   
-  /* Nested tables produced by the recursive params renderer: keep the
-     flat look but let the key column shrink (index/short keys) so depth
-     doesn't eat horizontal space. */
+  /* Nested tables produced by the recursive params renderer retain the
+     same readable key-column width at every depth. */
   .tool-params-nested .tool-param-key {
-      width: auto;
+      width: 8em;
       min-width: 4em;
   }
   
@@ -17234,6 +17292,36 @@
       vertical-align: top;
   }
   
+  /* Opaque Codex executions can emit several independent values. Keep their
+     ordinal labels in a stable column and neutralise the generic collapsible's
+     card-level pull-up inside result cells. */
+  .tool-execution-results {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 0.5em;
+  }
+  
+  .tool-execution-results tr {
+      border-bottom: 1px solid var(--tool-param-sep-color);
+  }
+  
+  .tool-execution-result-label {
+      width: 8em;
+      padding: 4px;
+      color: var(--text-secondary);
+      text-align: left;
+      vertical-align: top;
+  }
+  
+  .tool-execution-result-value {
+      padding: 4px;
+      vertical-align: top;
+  }
+  
+  .tool-execution-result-value .collapsible-details {
+      margin-top: 0;
+  }
+  
   .tool-param-structured {
       margin: 0;
       background-color: var(--bg-neutral);
@@ -17241,11 +17329,10 @@
       border-radius: 3px;
   }
   
-  /* Nested tables produced by the recursive params renderer: keep the
-     flat look but let the key column shrink (index/short keys) so depth
-     doesn't eat horizontal space. */
+  /* Nested tables produced by the recursive params renderer retain the
+     same readable key-column width at every depth. */
   .tool-params-nested .tool-param-key {
-      width: auto;
+      width: 8em;
       min-width: 4em;
   }
   
@@ -24128,6 +24215,36 @@
       vertical-align: top;
   }
   
+  /* Opaque Codex executions can emit several independent values. Keep their
+     ordinal labels in a stable column and neutralise the generic collapsible's
+     card-level pull-up inside result cells. */
+  .tool-execution-results {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 0.5em;
+  }
+  
+  .tool-execution-results tr {
+      border-bottom: 1px solid var(--tool-param-sep-color);
+  }
+  
+  .tool-execution-result-label {
+      width: 8em;
+      padding: 4px;
+      color: var(--text-secondary);
+      text-align: left;
+      vertical-align: top;
+  }
+  
+  .tool-execution-result-value {
+      padding: 4px;
+      vertical-align: top;
+  }
+  
+  .tool-execution-result-value .collapsible-details {
+      margin-top: 0;
+  }
+  
   .tool-param-structured {
       margin: 0;
       background-color: var(--bg-neutral);
@@ -24135,11 +24252,10 @@
       border-radius: 3px;
   }
   
-  /* Nested tables produced by the recursive params renderer: keep the
-     flat look but let the key column shrink (index/short keys) so depth
-     doesn't eat horizontal space. */
+  /* Nested tables produced by the recursive params renderer retain the
+     same readable key-column width at every depth. */
   .tool-params-nested .tool-param-key {
-      width: auto;
+      width: 8em;
       min-width: 4em;
   }
   
@@ -31302,6 +31418,36 @@
       vertical-align: top;
   }
   
+  /* Opaque Codex executions can emit several independent values. Keep their
+     ordinal labels in a stable column and neutralise the generic collapsible's
+     card-level pull-up inside result cells. */
+  .tool-execution-results {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 0.5em;
+  }
+  
+  .tool-execution-results tr {
+      border-bottom: 1px solid var(--tool-param-sep-color);
+  }
+  
+  .tool-execution-result-label {
+      width: 8em;
+      padding: 4px;
+      color: var(--text-secondary);
+      text-align: left;
+      vertical-align: top;
+  }
+  
+  .tool-execution-result-value {
+      padding: 4px;
+      vertical-align: top;
+  }
+  
+  .tool-execution-result-value .collapsible-details {
+      margin-top: 0;
+  }
+  
   .tool-param-structured {
       margin: 0;
       background-color: var(--bg-neutral);
@@ -31309,11 +31455,10 @@
       border-radius: 3px;
   }
   
-  /* Nested tables produced by the recursive params renderer: keep the
-     flat look but let the key column shrink (index/short keys) so depth
-     doesn't eat horizontal space. */
+  /* Nested tables produced by the recursive params renderer retain the
+     same readable key-column width at every depth. */
   .tool-params-nested .tool-param-key {
-      width: auto;
+      width: 8em;
       min-width: 4em;
   }
   
@@ -38427,6 +38572,36 @@
       vertical-align: top;
   }
   
+  /* Opaque Codex executions can emit several independent values. Keep their
+     ordinal labels in a stable column and neutralise the generic collapsible's
+     card-level pull-up inside result cells. */
+  .tool-execution-results {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 0.5em;
+  }
+  
+  .tool-execution-results tr {
+      border-bottom: 1px solid var(--tool-param-sep-color);
+  }
+  
+  .tool-execution-result-label {
+      width: 8em;
+      padding: 4px;
+      color: var(--text-secondary);
+      text-align: left;
+      vertical-align: top;
+  }
+  
+  .tool-execution-result-value {
+      padding: 4px;
+      vertical-align: top;
+  }
+  
+  .tool-execution-result-value .collapsible-details {
+      margin-top: 0;
+  }
+  
   .tool-param-structured {
       margin: 0;
       background-color: var(--bg-neutral);
@@ -38434,11 +38609,10 @@
       border-radius: 3px;
   }
   
-  /* Nested tables produced by the recursive params renderer: keep the
-     flat look but let the key column shrink (index/short keys) so depth
-     doesn't eat horizontal space. */
+  /* Nested tables produced by the recursive params renderer retain the
+     same readable key-column width at every depth. */
   .tool-params-nested .tool-param-key {
-      width: auto;
+      width: 8em;
       min-width: 4em;
   }
   
@@ -45497,6 +45671,36 @@
       vertical-align: top;
   }
   
+  /* Opaque Codex executions can emit several independent values. Keep their
+     ordinal labels in a stable column and neutralise the generic collapsible's
+     card-level pull-up inside result cells. */
+  .tool-execution-results {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 0.5em;
+  }
+  
+  .tool-execution-results tr {
+      border-bottom: 1px solid var(--tool-param-sep-color);
+  }
+  
+  .tool-execution-result-label {
+      width: 8em;
+      padding: 4px;
+      color: var(--text-secondary);
+      text-align: left;
+      vertical-align: top;
+  }
+  
+  .tool-execution-result-value {
+      padding: 4px;
+      vertical-align: top;
+  }
+  
+  .tool-execution-result-value .collapsible-details {
+      margin-top: 0;
+  }
+  
   .tool-param-structured {
       margin: 0;
       background-color: var(--bg-neutral);
@@ -45504,11 +45708,10 @@
       border-radius: 3px;
   }
   
-  /* Nested tables produced by the recursive params renderer: keep the
-     flat look but let the key column shrink (index/short keys) so depth
-     doesn't eat horizontal space. */
+  /* Nested tables produced by the recursive params renderer retain the
+     same readable key-column width at every depth. */
   .tool-params-nested .tool-param-key {
-      width: auto;
+      width: 8em;
       min-width: 4em;
   }
   
