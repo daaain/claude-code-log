@@ -70,6 +70,12 @@ families and the provider contract are in
   lineage and strips inherited history but `load_session()` emits one thread.
 - Decide how native image-view results should render, independently of the
   already-supported user-message image references.
+- Codex token accounting → index totals. The wholesale walker emits zero
+  input/output/cache token totals per project because Codex rollouts carry no
+  token accounting the provider currently surfaces; the index token summary is
+  therefore always blank for Codex projects. If/when token counts are extracted
+  from rollout records, thread them into the walker's project summaries so the
+  index totals populate like the Claude path.
 
 ## Tool and static-analysis candidates
 
