@@ -246,5 +246,35 @@ class BaseProvider(ABC):
             f"{self.get_provider_name()} cannot load a session directly by path"
         )
 
+    def discover_sessions_under(self, root: Path) -> Iterator[SessionInfo]:
+        """Discover sessions within an arbitrary *root* directory.
+
+        The wholesale walker calls this for both the provider's own data dir
+        and a directory handed in as an INPUT_PATH (a mini sessions root).
+        Unlike :meth:`discover_sessions` (which is pinned to ``get_data_dir``),
+        the root is explicit, so one code path serves both. Sibling context
+        within *root* (e.g. fork-prefix stripping) is honored, unlike the
+        standalone :meth:`load_session_from_path`.
+
+        Default raises: only providers that support wholesale rendering
+        override this.
+        """
+        raise NotImplementedError(
+            f"{self.get_provider_name()} does not support wholesale rendering"
+        )
+
+    def load_session_under(
+        self, root: Path, session_id: str, max_messages: Optional[int] = None
+    ) -> Iterator[TranscriptEntry]:
+        """Load one session by id within an explicit *root* (see
+        :meth:`discover_sessions_under`), with sibling context.
+
+        Default raises: only providers that support wholesale rendering
+        override this.
+        """
+        raise NotImplementedError(
+            f"{self.get_provider_name()} does not support wholesale rendering"
+        )
+
     def get_session_stats(self, session_id: str) -> dict[str, Any]:
         return {}

@@ -217,6 +217,13 @@ def _contained_rollouts(root: Path) -> Iterator[Path]:
 class CodexProvider(BaseProvider):
     """Read active Codex rollout files from ``$CODEX_HOME/sessions``."""
 
+    def __init__(self) -> None:
+        # Memoize the thread-id → paths index per resolved sessions root so a
+        # wholesale run (discovery + per-session loads) reads each rollout's
+        # header once instead of O(sessions) times. Safe within a single CLI
+        # run — the sessions tree does not change mid-render.
+        self._index_cache: dict[Path, dict[str, list[Path]]] = {}
+
     def detect_path(self, path: Path) -> bool:
         """A Codex rollout file, or a directory containing at least one."""
         if path.is_file():
@@ -241,17 +248,28 @@ class CodexProvider(BaseProvider):
         sessions_dir = codex_home / "sessions"
         return codex_home if sessions_dir.is_dir() else None
 
-    def discover_sessions(self) -> Iterator[SessionInfo]:
+    def _sessions_root(self) -> Optional[Path]:
         data_dir = self.get_data_dir()
-        if data_dir is None:
-            return
+        return data_dir / "sessions" if data_dir is not None else None
 
+    def discover_sessions(self) -> Iterator[SessionInfo]:
+        sessions_root = self._sessions_root()
+        if sessions_root is None:
+            return
+        yield from self._discover_in(sessions_root)
+
+    def discover_sessions_under(self, root: Path) -> Iterator[SessionInfo]:
+        """Discover sessions within an arbitrary root (INPUT_PATH dir or the
+        data dir), honoring sibling fork-prefix context within *root*."""
+        yield from self._discover_in(root)
+
+    def _discover_in(self, sessions_root: Path) -> Iterator[SessionInfo]:
         # A duplicated thread id is corrupt/ambiguous.  Discovery remains
         # useful and deterministic by retaining the lexicographically first
         # path; loading that id reports the ambiguity instead of guessing.
         identities: dict[str, CodexSessionIdentity] = {}
-        index = self._session_index(data_dir)
-        for path in self._rollout_paths(data_dir):
+        index = self._session_index(sessions_root)
+        for path in self._rollout_paths(sessions_root):
             identity = self._read_identity(path)
             if identity.thread_id in identities:
                 logger.warning(
@@ -280,16 +298,27 @@ class CodexProvider(BaseProvider):
     def load_session(
         self, session_id: str, max_messages: Optional[int] = None
     ) -> Iterator[TranscriptEntry]:
+        sessions_root = self._sessions_root()
+        if sessions_root is None:
+            raise ValueError("Codex data directory not found")
+        yield from self._load_in(sessions_root, session_id, max_messages)
+
+    def load_session_under(
+        self, root: Path, session_id: str, max_messages: Optional[int] = None
+    ) -> Iterator[TranscriptEntry]:
+        """Load one session by id within an explicit *root* (a mini sessions
+        tree or the data dir), with sibling fork-prefix stripping."""
+        yield from self._load_in(root, session_id, max_messages)
+
+    def _load_in(
+        self, sessions_root: Path, session_id: str, max_messages: Optional[int]
+    ) -> Iterator[TranscriptEntry]:
         if not session_id or _SESSION_ID_RE.fullmatch(session_id) is None:
             raise ValueError(f"Invalid session_id: {session_id}")
         if max_messages is not None and max_messages <= 0:
             return
 
-        data_dir = self.get_data_dir()
-        if data_dir is None:
-            raise ValueError("Codex data directory not found")
-
-        index = self._session_index(data_dir)
+        index = self._session_index(sessions_root)
         if session_id not in index:
             raise FileNotFoundError(f"Codex session {session_id} not found")
         paths = index[session_id]
@@ -321,26 +350,37 @@ class CodexProvider(BaseProvider):
         records = list(self._decode_records(path))
         yield from self._normalize_records(identity, records, max_messages)
 
-    def _rollout_paths(self, data_dir: Path) -> list[Path]:
+    def _rollout_paths(self, sessions_root: Path) -> list[Path]:
         # Recursive discovery supports both current date shards and old flat
         # layouts.  archived_sessions is deliberately outside this v1 root.
-        sessions_dir = data_dir / "sessions"
-        sessions_root = sessions_dir.resolve()
+        # ``sessions_root`` is the directory to walk directly: the data dir's
+        # ``sessions/`` subdir, or a directory handed in as an INPUT_PATH.
+        resolved_root = sessions_root.resolve()
         paths: set[Path] = set()
-        for path in sessions_dir.rglob(_ROLLOUT_GLOB):
+        for path in sessions_root.rglob(_ROLLOUT_GLOB):
             try:
                 resolved = path.resolve()
-                if path.is_file() and resolved.is_relative_to(sessions_root):
+                if path.is_file() and resolved.is_relative_to(resolved_root):
                     paths.add(resolved)
             except OSError:
                 continue
         return sorted(paths)
 
-    def _session_index(self, data_dir: Path) -> dict[str, list[Path]]:
+    def _session_index(self, sessions_root: Path) -> dict[str, list[Path]]:
+        # Memoized per resolved root: discovery and every per-session load in a
+        # wholesale run share one index build (see ``_index_cache``).
+        try:
+            cache_key = sessions_root.resolve()
+        except OSError:
+            cache_key = sessions_root
+        cached = self._index_cache.get(cache_key)
+        if cached is not None:
+            return cached
         index: dict[str, list[Path]] = {}
-        for path in self._rollout_paths(data_dir):
+        for path in self._rollout_paths(sessions_root):
             identity = self._read_identity(path)
             index.setdefault(identity.thread_id, []).append(path)
+        self._index_cache[cache_key] = index
         return index
 
     def _with_inherited_prefix(
