@@ -1,6 +1,7 @@
 """Provider registry for auto-discovery and management."""
 
 import logging
+from pathlib import Path
 from typing import Dict, Iterator, List, Optional, Type
 
 from .base import BaseProvider, SessionInfo
@@ -78,6 +79,27 @@ class ProviderRegistry:
         provider = self._providers.get(provider_name)
         if provider and provider.is_available():
             yield from provider.discover_sessions()
+
+    def detect_provider_for_path(self, path: Path) -> Optional[str]:
+        """Return the single provider name that recognizes *path* via its cheap
+        ``detect_path`` sniff, or ``None`` if none do.
+
+        Detection is independent of ``is_available`` — an INPUT_PATH rollout may
+        be handed in even when the provider's own data dir is absent. If more
+        than one provider claims the path the choice is ambiguous, so raise and
+        tell the caller to disambiguate with ``--provider`` (DECIDED #2).
+        """
+        matches = [
+            name
+            for name, provider in sorted(self._providers.items())
+            if provider.detect_path(path)
+        ]
+        if len(matches) > 1:
+            raise ValueError(
+                "INPUT_PATH matches multiple providers "
+                f"({', '.join(matches)}); pass --provider to disambiguate"
+            )
+        return matches[0] if matches else None
 
     def load_session(
         self, provider_name: str, session_id: str, max_messages: Optional[int] = None

@@ -303,6 +303,24 @@ class CodexProvider(BaseProvider):
         )
         yield from self._normalize_records(identity, records, max_messages)
 
+    def load_session_from_path(
+        self, path: Path, max_messages: Optional[int] = None
+    ) -> Iterator[TranscriptEntry]:
+        """Load a single rollout file directly by path (an INPUT_PATH),
+        independent of the configured data dir.
+
+        There is no sibling index, so inherited-prefix stripping is a no-op and
+        the file renders standalone — the right behavior for "render that one
+        rollout" without discovering an ambient sessions tree around it.
+        """
+        if max_messages is not None and max_messages <= 0:
+            return
+        if not path.is_file():
+            raise FileNotFoundError(f"Codex rollout not found: {path}")
+        identity = self._read_identity(path)
+        records = list(self._decode_records(path))
+        yield from self._normalize_records(identity, records, max_messages)
+
     def _rollout_paths(self, data_dir: Path) -> list[Path]:
         # Recursive discovery supports both current date shards and old flat
         # layouts.  archived_sessions is deliberately outside this v1 root.

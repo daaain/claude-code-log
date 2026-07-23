@@ -10,9 +10,14 @@ directory containment) on synthetic fixtures — no real transcript content.
 
 import json
 from pathlib import Path
+from typing import Iterator, Optional
 
-from claude_code_log.providers.base import BaseProvider
+import pytest
+
+from claude_code_log.models import TranscriptEntry
+from claude_code_log.providers.base import BaseProvider, SessionInfo
 from claude_code_log.providers.codex import CodexProvider
+from claude_code_log.providers.registry import ProviderRegistry
 
 _SESSION_META = {
     "type": "session_meta",
@@ -113,3 +118,74 @@ def test_base_provider_default_is_no_detection(tmp_path: Path) -> None:
 
     path = _write(tmp_path / "rollout-x.jsonl", [_SESSION_META])
     assert _Dummy().detect_path(path) is False
+
+
+# --------------------------------------------------------------------------
+# Registry routing + standalone-path load.
+# --------------------------------------------------------------------------
+class _AlwaysDetects(BaseProvider):
+    """A stub provider that claims every path (to force an ambiguous match)."""
+
+    def get_provider_name(self) -> str:
+        return "stub"
+
+    def get_session_format(self) -> str:
+        return "stub"
+
+    def get_data_dir(self) -> Optional[Path]:
+        return None
+
+    def discover_sessions(self) -> Iterator[SessionInfo]:
+        return iter(())
+
+    def load_session(
+        self, session_id: str, max_messages: Optional[int] = None
+    ) -> Iterator[TranscriptEntry]:
+        return iter(())
+
+    def detect_path(self, path: Path) -> bool:
+        return True
+
+
+def _registry(*providers: BaseProvider) -> ProviderRegistry:
+    registry = ProviderRegistry()
+    for provider in providers:
+        registry.register(provider)
+    return registry
+
+
+def test_registry_detects_codex_for_rollout(tmp_path: Path) -> None:
+    registry = _registry(CodexProvider())
+    path = _write(tmp_path / "rollout-x.jsonl", [_SESSION_META])
+    assert registry.detect_provider_for_path(path) == "codex"
+
+
+def test_registry_returns_none_for_claude_transcript(tmp_path: Path) -> None:
+    # Detection is independent of is_available; a non-rollout still yields None
+    # (falls through to the Claude default path).
+    registry = _registry(CodexProvider())
+    path = _write(tmp_path / "session.jsonl", [{"type": "user"}])
+    assert registry.detect_provider_for_path(path) is None
+
+
+def test_registry_raises_on_ambiguous_match(tmp_path: Path) -> None:
+    registry = _registry(CodexProvider(), _AlwaysDetects())
+    path = _write(tmp_path / "rollout-x.jsonl", [_SESSION_META])
+    with pytest.raises(ValueError, match="multiple providers"):
+        registry.detect_provider_for_path(path)
+
+
+def test_load_session_from_path_loads_standalone_rollout() -> None:
+    fixture = Path(
+        "test/test_data/codex/sessions/2026/01/02/"
+        "rollout-2026-01-02T03-04-05-11111111-1111-4111-8111-111111111111.jsonl"
+    )
+    entries = list(CodexProvider().load_session_from_path(fixture))
+    assert entries, "standalone rollout should yield entries, not an empty page"
+    roles = {getattr(getattr(e, "message", None), "role", None) for e in entries}
+    assert "user" in roles and "assistant" in roles
+
+
+def test_load_session_from_path_missing_file_raises(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError):
+        list(CodexProvider().load_session_from_path(tmp_path / "nope.jsonl"))
