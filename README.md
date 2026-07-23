@@ -295,7 +295,8 @@ Projects built on top of `claude-code-log`:
   - Caches data in a local SQLite database with incremental mtime tracking
   - Exposes 7 MCP tools and 2 resources via FastMCP (stdio transport)
   - Natural language date filtering ("yesterday", "last week", etc.)
-  - Install: `claude mcp add claude-history --scope user -- uvx --from git+https://github.com/sydasif/claude-history-mcp claude-history-mcp`
+  - Install: `claude mcp add claude-history --scope user -- uvx --from git+https://github.com/sydasif/claude-history-mcp@79c7803312ee8242d1d8b83d25d8aaba6cb6b62a claude-history-mcp`
+  - ⚠️ **Trust & Privacy Note**: This MCP server reads your local Claude Code session transcripts and command history. Review the source at `github.com/sydasif/claude-history-mcp` before installing. It runs locally via stdio and does not send data externally.
 
 ## TODO
 
@@ -304,7 +305,7 @@ Projects built on top of `claude-code-log`:
 - convert images to WebP as screenshots are often huge PNGs – this might be time consuming to keep redoing (so would also need some caching) and need heavy dependencies with compilation (unless there are fast pure Python conversation libraries? Or WASM?)
 - add special formatting for built-in tools: Glob, Grep, LS, MultiEdit, NotebookRead, NotebookEdit, WebFetch, TodoRead, WebSearch
 - add `ccusage` like daily summary and maybe some textual summary too based on Claude generate session summaries?
-  – import logs from @claude Github Actions
+  - import logs from @claude GitHub Actions
 - stream logs from @claude Github Actions, see [octotail](https://github.com/getbettr/octotail)
 - wrap up CLI as Github Action to run after Cladue Github Action and process [output](https://github.com/anthropics/claude-code-base-action?tab=readme-ov-file#outputs)
 - feed the filtered user messages to headless claude CLI to distill the user intent from the session
