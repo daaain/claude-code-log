@@ -12,6 +12,7 @@ import time
 from collections.abc import Iterator
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 import traceback
 from typing import Any, Dict, List, Optional, TYPE_CHECKING, cast
@@ -2748,12 +2749,17 @@ def render_normalized_session_file(
     compact: bool = False,
     no_timestamps: bool = False,
     no_recaps: bool = False,
+    suppress_combined_link: bool = False,
 ) -> Path:
     """Render already-normalized provider entries to one output file.
 
     Unlike :func:`generate_single_session_file`, this helper has no Claude
     project-directory or cache assumptions. Providers own discovery and
     normalization; the shared renderer only needs transcript entries.
+
+    ``suppress_combined_link`` omits the per-session "Back to combined
+    transcript" affordance — set it when no combined page is written for the
+    project (``--combined no``) so the back-link can't 404.
     """
     renderer = get_renderer(
         format,
@@ -2769,11 +2775,240 @@ def render_normalized_session_file(
         title or f"Session {session_id[:8]}",
         cache_manager=None,
         output_dir=output.parent,
+        suppress_combined_link=suppress_combined_link,
     )
     assert content is not None
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(content, encoding="utf-8", errors="replace")
     return output
+
+
+def _provider_project_dirname(cwd: Optional[Path]) -> str:
+    """Stable per-cwd output subdir name, mirroring Claude's dashed encoding
+    (``/proj/a`` → ``-proj-a``). Sessions without a cwd share one bucket so the
+    index always has a home for them (DECIDED #3)."""
+    if cwd is None:
+        return "no-project"
+    return str(cwd).replace("/", "-").replace("\\", "-")
+
+
+def _entry_timestamp_range(
+    messages: List[TranscriptEntry],
+) -> tuple[Optional[str], Optional[str]]:
+    """Earliest/latest ISO timestamp across entries (ignoring blanks)."""
+    stamps = sorted(ts for m in messages if (ts := getattr(m, "timestamp", None)))
+    return (stamps[0], stamps[-1]) if stamps else (None, None)
+
+
+def _first_user_text(messages: List[TranscriptEntry]) -> Optional[str]:
+    """First user message's text, for the index card summary/preview."""
+    for message in messages:
+        if getattr(message, "type", None) != "user":
+            continue
+        content = getattr(getattr(message, "message", None), "content", None)
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            for item in cast(List[Any], content):
+                text = getattr(item, "text", None)
+                if isinstance(text, str) and text:
+                    return text
+    return None
+
+
+def render_provider_wholesale(
+    provider_name: str,
+    sessions_root: Optional[Path],
+    output_root: Path,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    output_format: str = "html",
+    image_export_mode: Optional[str] = None,
+    depth: RenderingDepth = DEFAULT_DEPTH,
+    compact: bool = False,
+    no_timestamps: bool = False,
+    no_recaps: bool = False,
+    write_combined: bool = True,
+    write_individual: bool = True,
+    silent: bool = False,
+) -> Path:
+    """Render every session of one provider under ``sessions_root`` into a
+    project hierarchy — per-session pages, a per-project combined page, and a
+    master index — reusing the shared renderers.
+
+    Provider-neutral: discovery and loading come from the provider's
+    root-scoped seams (:meth:`BaseProvider.discover_sessions_under` /
+    :meth:`load_session_under`); sessions are grouped into "projects" by their
+    ``cwd`` (DECIDED #3). ``sessions_root`` ``None`` walks the provider's own
+    data-dir sessions root; a directory selects a mini sessions root (an
+    INPUT_PATH). Output lands under ``output_root`` (the caller resolves the
+    default ``<provider_home>/claude-code-log/`` and any ``-o`` override).
+
+    Cache participation and paginated combined pages are intentionally out of
+    this milestone — the combined page is a single unpaginated document, like
+    :func:`render_normalized_session_file` (both pass ``cache_manager=None``).
+    """
+    from .providers import SessionInfo, discover_providers
+
+    registry = discover_providers()
+    provider = registry.get_provider(provider_name)
+    if provider is None:
+        raise ValueError(f"Unknown provider: {provider_name}")
+
+    if sessions_root is None:
+        data_dir = provider.get_data_dir()
+        if data_dir is None:
+            raise FileNotFoundError(
+                f"No {provider_name} data directory found; set the provider home "
+                "or pass a directory to render."
+            )
+        sessions_root = data_dir / "sessions"
+
+    infos = list(provider.discover_sessions_under(sessions_root))
+
+    # Group by cwd (DECIDED #3). The no-cwd bucket (key None) sorts last.
+    groups: dict[Optional[str], list[SessionInfo]] = {}
+    for info in infos:
+        key = str(info.project_path) if info.project_path is not None else None
+        groups.setdefault(key, []).append(info)
+
+    from .utils import variant_suffix as _variant_suffix
+
+    ext = get_file_extension(output_format)
+    suffix = _variant_suffix(depth, compact, output_format, no_timestamps, no_recaps)
+
+    project_summaries: list[dict[str, Any]] = []
+
+    for group_key in sorted(groups, key=lambda k: (k is None, k or "")):
+        group_infos = sorted(groups[group_key], key=lambda i: i.session_id)
+        cwd = Path(group_key) if group_key is not None else None
+        project_dirname = _provider_project_dirname(cwd)
+        dest_dir = output_root / project_dirname
+        working_directories = [group_key] if group_key is not None else []
+        project_title = get_project_display_name(project_dirname, working_directories)
+
+        session_dicts: list[dict[str, Any]] = []
+        combined_messages: list[TranscriptEntry] = []
+        last_modified = 0.0
+
+        for info in group_infos:
+            messages = list(provider.load_session_under(sessions_root, info.session_id))
+            if from_date or to_date:
+                messages = filter_messages_by_date(messages, from_date, to_date)
+            if not messages:
+                continue
+
+            session_key = info.session_id
+            session_title = info.title or f"{provider_name.title()}: {session_key}"
+            if write_individual:
+                render_normalized_session_file(
+                    messages,
+                    session_key,
+                    dest_dir / f"session-{session_key}{suffix}.{ext}",
+                    output_format,
+                    session_title,
+                    image_export_mode,
+                    depth,
+                    compact,
+                    no_timestamps,
+                    no_recaps,
+                    suppress_combined_link=not write_combined,
+                )
+            combined_messages.extend(messages)
+
+            first_ts, last_ts = _entry_timestamp_range(messages)
+            first_user = _first_user_text(messages)
+            if info.updated_at:
+                try:
+                    last_modified = max(
+                        last_modified,
+                        datetime.fromisoformat(info.updated_at).timestamp(),
+                    )
+                except ValueError:
+                    pass
+            session_dicts.append(
+                {
+                    "id": session_key,
+                    "summary": info.title or first_user or session_key,
+                    "timestamp_range": format_timestamp_range(
+                        first_ts or "", last_ts or ""
+                    ),
+                    "first_timestamp": first_ts,
+                    "last_timestamp": last_ts,
+                    "message_count": len(messages),
+                    "first_user_message": first_user
+                    or "[No user message found in session.]",
+                    "file": f"{project_dirname}/session-{session_key}{suffix}.{ext}",
+                }
+            )
+
+        if not session_dicts:
+            continue  # everything in this project was empty / filtered out
+
+        combined_name = f"combined_transcripts{suffix}.{ext}"
+        if write_combined:
+            combined_renderer = get_renderer(
+                output_format,
+                image_export_mode,
+                depth=depth,
+                compact=compact,
+                no_timestamps=no_timestamps,
+                no_recaps=no_recaps,
+            )
+            combined_content = combined_renderer.generate(
+                combined_messages,
+                project_title,
+                output_dir=dest_dir,
+            )
+            assert combined_content is not None
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            (dest_dir / combined_name).write_text(
+                combined_content, encoding="utf-8", errors="replace"
+            )
+
+        first_ts_all, last_ts_all = _entry_timestamp_range(combined_messages)
+        project_summaries.append(
+            {
+                "name": project_dirname,
+                "path": dest_dir,
+                "html_file": f"{project_dirname}/{combined_name}",
+                "html_variants": [],
+                "jsonl_count": len(session_dicts),
+                "message_count": len(combined_messages),
+                "last_modified": last_modified,
+                # Codex has no token accounting yet; emit zero totals so the
+                # index-summary dict is shape-identical to the Claude path
+                # (the contract the drift pin locks) rather than relying on the
+                # renderer's ``.get(..., 0)`` fallbacks.
+                "total_input_tokens": 0,
+                "total_output_tokens": 0,
+                "total_cache_creation_tokens": 0,
+                "total_cache_read_tokens": 0,
+                "latest_timestamp": last_ts_all or "",
+                "earliest_timestamp": first_ts_all or "",
+                "working_directories": working_directories,
+                "is_archived": False,
+                "combined_suppressed": not write_combined,
+                "sessions": session_dicts,
+                "team_names": [],
+            }
+        )
+
+    renderer = get_renderer(output_format, image_export_mode)
+    index_content = renderer.generate_projects_index(
+        project_summaries, from_date, to_date
+    )
+    assert index_content is not None
+    index_path = output_root / get_index_filename(output_format)
+    output_root.mkdir(parents=True, exist_ok=True)
+    index_path.write_text(index_content, encoding="utf-8", errors="replace")
+
+    if not silent:
+        print(
+            f"Processed {len(project_summaries)} {provider_name} project(s) "
+            f"and created index at {index_path}"
+        )
+    return index_path
 
 
 def _get_cleanup_period_days() -> Optional[int]:
