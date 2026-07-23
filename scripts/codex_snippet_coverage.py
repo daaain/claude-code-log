@@ -24,6 +24,7 @@ point it at your own rollouts:
 from __future__ import annotations
 
 import argparse
+import glob
 import hashlib
 import json
 import sys
@@ -49,13 +50,33 @@ _SELFCHECK_SNIPPETS: list[str] = [
 
 
 def _iter_exec_snippets(paths: list[Path]) -> Iterator[str]:
-    """Yield ``exec`` snippet sources from rollout JSONL files under paths."""
+    """Yield ``exec`` snippet sources from rollout JSONL files under paths.
+
+    Each argument may be a file, a directory (searched recursively for
+    ``*.jsonl``), or a shell-style glob pattern (``**`` supported). A pattern or
+    path that resolves to nothing is reported on stderr rather than silently
+    skipped, so ``'sessions/**/*.jsonl'`` matching zero files is not mistaken
+    for a real 0% run.
+    """
     files: list[Path] = []
     for path in paths:
-        if path.is_dir():
-            files.extend(sorted(path.rglob("*.jsonl")))
-        elif path.is_file():
-            files.append(path)
+        pattern = str(path)
+        if glob.has_magic(pattern):
+            expanded = [Path(match) for match in glob.glob(pattern, recursive=True)]
+            if not expanded:
+                print(f"warning: glob {pattern!r} matched nothing", file=sys.stderr)
+        else:
+            expanded = [path]
+        for candidate in expanded:
+            if candidate.is_dir():
+                files.extend(sorted(candidate.rglob("*.jsonl")))
+            elif candidate.is_file():
+                files.append(candidate)
+            else:
+                print(
+                    f"warning: {str(candidate)!r} is not a file or directory",
+                    file=sys.stderr,
+                )
     for file in files:
         try:
             lines = file.read_text(encoding="utf-8").splitlines()
