@@ -16,6 +16,7 @@ import pytest
 
 from claude_code_log.models import (
     AssistantTranscriptEntry,
+    TranscriptEntry,
     UserTranscriptEntry,
 )
 from claude_code_log.providers.agy import AgyProvider
@@ -27,7 +28,7 @@ PARENT_ID = "22222222-2222-4222-8222-222222222222"
 CHILD_ID = "33333333-3333-4333-8333-333333333333"
 
 
-def _visible_text(entries: list[object]) -> list[str]:
+def _visible_text(entries: list[TranscriptEntry]) -> list[str]:
     texts: list[str] = []
     for entry in entries:
         if not isinstance(entry, (UserTranscriptEntry, AssistantTranscriptEntry)):

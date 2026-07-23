@@ -110,10 +110,12 @@ def test_base_provider_default_is_no_detection(tmp_path: Path) -> None:
         def get_data_dir(self) -> Path | None:
             return None
 
-        def discover_sessions(self):  # type: ignore[no-untyped-def]
+        def discover_sessions(self) -> Iterator[SessionInfo]:
             return iter(())
 
-        def load_session(self, session_id, max_messages=None):  # type: ignore[no-untyped-def]
+        def load_session(
+            self, session_id: str, max_messages: Optional[int] = None
+        ) -> Iterator[TranscriptEntry]:
             return iter(())
 
     path = _write(tmp_path / "rollout-x.jsonl", [_SESSION_META])
@@ -250,27 +252,36 @@ def test_explicit_provider_renders_rollout_file(tmp_path: Path) -> None:
     assert "synthetic files" in out.read_text(encoding="utf-8")
 
 
-def test_rollout_directory_errors_loudly_until_walker_lands(tmp_path: Path) -> None:
-    """Interim guard: a directory of rollouts must NOT fall through to the empty
-    Claude parse before the wholesale walker lands. Both auto-detect and
-    explicit --provider error loudly (the matrix must not silently lie)."""
+def test_rollout_directory_renders_via_walker(tmp_path: Path) -> None:
+    """A directory of rollouts must NOT fall through to the empty Claude parse:
+    both auto-detect and explicit --provider now render the whole tree via the
+    wholesale walker (an index + per-session pages), never a near-empty page."""
     from click.testing import CliRunner
 
     from claude_code_log.cli import main
 
-    nested = tmp_path / "sessions" / "2026" / "01"
-    nested.mkdir(parents=True)
-    _write(nested / "rollout-abcd.jsonl", [_SESSION_META, {"type": "message"}])
-
-    auto = CliRunner().invoke(main, [str(tmp_path), "-o", str(tmp_path / "a.html")])
-    assert auto.exit_code != 0
-    assert "sessions directory" in auto.output and "wholesale walker" in auto.output
-
-    explicit = CliRunner().invoke(
-        main, ["--provider", "codex", str(tmp_path), "-o", str(tmp_path / "e.html")]
+    tree = tmp_path / "sessions" / "2026" / "01"
+    tree.mkdir(parents=True)
+    _write(
+        tree / "rollout-abcd.jsonl",
+        [
+            _SESSION_META,
+            {"type": "event_msg", "payload": {"type": "user_message", "message": "hi"}},
+        ],
     )
-    assert explicit.exit_code != 0
-    assert "sessions directory" in explicit.output
+
+    auto_out = tmp_path / "auto"
+    auto = CliRunner().invoke(main, [str(tmp_path / "sessions"), "-o", str(auto_out)])
+    assert auto.exit_code == 0, auto.output
+    assert (auto_out / "index.html").exists()
+
+    explicit_out = tmp_path / "explicit"
+    explicit = CliRunner().invoke(
+        main,
+        ["--provider", "codex", str(tmp_path / "sessions"), "-o", str(explicit_out)],
+    )
+    assert explicit.exit_code == 0, explicit.output
+    assert (explicit_out / "index.html").exists()
 
 
 def test_non_rollout_file_is_left_to_the_claude_path(tmp_path: Path) -> None:

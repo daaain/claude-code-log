@@ -223,7 +223,7 @@ def test_index_summary_dict_shape_matches_claude_path(
     captured: list[list[dict[str, object]]] = []
     original = HtmlRenderer.generate_projects_index
 
-    def _spy(self: HtmlRenderer, project_summaries, *args, **kwargs):  # type: ignore[no-untyped-def]
+    def _spy(self, project_summaries, *args, **kwargs):
         captured.append(project_summaries)
         return original(self, project_summaries, *args, **kwargs)
 
@@ -250,10 +250,125 @@ def test_index_summary_dict_shape_matches_claude_path(
         f"walker-only={walker_keys - claude_keys}"
     )
 
-    claude_session_keys = set(claude_summaries[0]["sessions"][0])  # type: ignore[index]
-    walker_session_keys = set(walker_summaries[0]["sessions"][0])  # type: ignore[index]
+    claude_session_keys = set(claude_summaries[0]["sessions"][0])
+    walker_session_keys = set(walker_summaries[0]["sessions"][0])
     assert claude_session_keys == walker_session_keys, (
         "session-summary dict drift — "
         f"claude-only={claude_session_keys - walker_session_keys}, "
         f"walker-only={walker_session_keys - claude_session_keys}"
     )
+
+
+# --------------------------------------------------------------------------
+# CLI dispatch: --provider wholesale reaches the walker; output-root rules.
+# --------------------------------------------------------------------------
+def _codex_home_with_sessions(tmp_path: Path) -> Path:
+    """A throwaway CODEX_HOME whose sessions/ tree holds two cwd-projects."""
+    home = tmp_path / "codex-home"
+    sessions = home / "sessions" / "2026" / "01"
+    _rollout(sessions, "a.jsonl", "10000000-0000-4000-8000-000000000001", "/proj/a")
+    _rollout(sessions, "b.jsonl", "20000000-0000-4000-8000-000000000002", "/proj/b")
+    return home
+
+
+def test_cli_bare_provider_runs_wholesale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from click.testing import CliRunner
+
+    from claude_code_log.cli import main
+
+    monkeypatch.setenv("CODEX_HOME", str(_codex_home_with_sessions(tmp_path)))
+    out = tmp_path / "out"
+    result = CliRunner().invoke(main, ["--provider", "codex", "-o", str(out)])
+    assert result.exit_code == 0, result.output
+    assert (out / "index.html").exists()
+    assert (out / "-proj-a" / "combined_transcripts.html").exists()
+    assert (out / "-proj-b" / "combined_transcripts.html").exists()
+
+
+def test_cli_provider_projects_dir_overrides_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--projects-dir selects the sessions root to walk (a subset/copy)."""
+    from click.testing import CliRunner
+
+    from claude_code_log.cli import main
+
+    # No CODEX_HOME needed — the explicit root is the fixture sessions tree.
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    out = tmp_path / "out"
+    result = CliRunner().invoke(
+        main,
+        ["--provider", "codex", "--projects-dir", str(SESSIONS_ROOT), "-o", str(out)],
+    )
+    assert result.exit_code == 0, result.output
+    assert (out / SYNTHETIC_PROJECT_DIR / "combined_transcripts.html").exists()
+
+
+def test_cli_provider_default_output_root_is_under_codex_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """DECIDED #4: with no -o, output lands at <codex_home>/claude-code-log/,
+    never inside the pristine sessions tree."""
+    from click.testing import CliRunner
+
+    from claude_code_log.cli import main
+
+    home = _codex_home_with_sessions(tmp_path)
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    result = CliRunner().invoke(main, ["--provider", "codex"])
+    assert result.exit_code == 0, result.output
+    assert (home / "claude-code-log" / "index.html").exists()
+    # The sessions tree itself is untouched.
+    assert not list((home / "sessions").rglob("index.html"))
+
+
+def test_cli_provider_wholesale_rejects_file_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A wholesale run writes many files; a file-shaped -o is a loud error."""
+    from click.testing import CliRunner
+
+    from claude_code_log.cli import main
+
+    monkeypatch.setenv("CODEX_HOME", str(_codex_home_with_sessions(tmp_path)))
+    result = CliRunner().invoke(
+        main, ["--provider", "codex", "-o", str(tmp_path / "one.html")]
+    )
+    assert result.exit_code != 0
+    assert "directory, not a file" in result.output
+
+
+def test_cli_provider_wholesale_rejects_claude_only_flags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Claude-only projection flags stay illegal in provider mode — loudly."""
+    from click.testing import CliRunner
+
+    from claude_code_log.cli import main
+
+    monkeypatch.setenv("CODEX_HOME", str(_codex_home_with_sessions(tmp_path)))
+    out = tmp_path / "out"
+    for flag in ("--expand-paths", "--tui"):
+        result = CliRunner().invoke(main, ["--provider", "codex", flag, "-o", str(out)])
+        assert result.exit_code != 0, f"{flag} should be rejected"
+        assert "does not support" in result.output and flag in result.output
+
+
+@pytest.mark.parametrize("extra", [["--page-size", "5"], ["--jobs", "2"]])
+def test_cli_provider_wholesale_rejects_pagination_and_jobs_for_now(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, extra: list[str]
+) -> None:
+    """Pagination and job-parallelism ride on cache machinery not yet wired for
+    the provider walker, so they must be rejected loudly — never accepted and
+    silently ignored."""
+    from click.testing import CliRunner
+
+    from claude_code_log.cli import main
+
+    monkeypatch.setenv("CODEX_HOME", str(_codex_home_with_sessions(tmp_path)))
+    out = tmp_path / "out"
+    result = CliRunner().invoke(main, ["--provider", "codex", "-o", str(out), *extra])
+    assert result.exit_code != 0
+    assert "does not support" in result.output and extra[0] in result.output
