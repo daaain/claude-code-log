@@ -66,6 +66,20 @@ _TRUNCATED_OUTPUT_PREAMBLE_RE = re.compile(
 )
 _TRUNCATED_OUTPUT_MARKER_RE = re.compile(r"…[0-9]+ tokens truncated…")
 _TRUNCATED_OUTPUT_PLACEHOLDER = "[Output omitted by Codex truncation]"
+# Truncation recovery only ever yields the FINAL top-level property (the
+# closing-brace tail check below), so at most a handful of reverse matches can
+# succeed — every earlier one is a nested same-key occurrence inside that final
+# value. Cap the reverse ``raw_decode`` attempts to a small constant so a
+# hostile truncated output with many ``"key":`` occurrences cannot drive the
+# loop quadratic (nested same-key inputs re-parse the surviving subtree at each
+# match). K=16 covers any realistic nesting with wide margin; exceeding it just
+# falls back to the truncation placeholder — never wrong data.
+_MAX_TRUNCATION_RECOVERY_ATTEMPTS = 16
+# Anchored, non-slicing check that the value's tail is exactly the outer
+# closing brace. ``re.match(output, pos)`` scans from ``pos`` without
+# materializing ``output[pos:]`` and short-circuits in O(1) on the common
+# failing char (``,`` / ``"``), so it does not add a per-match O(N) slice.
+_OUTER_BRACE_TAIL_RE = re.compile(r"\s*\}\s*\Z")
 _IMAGE_TAG_RE = re.compile(r"</?image(?:\s[^>]*)?>", re.IGNORECASE)
 _IMAGE_OPEN_TAG_RE = re.compile(r"<image(?P<attributes>\s[^>]*)?>", re.IGNORECASE)
 _IMAGE_NAME_RE = re.compile(
@@ -1384,17 +1398,19 @@ class CodexProvider(BaseProvider):
         encoded_key = json.dumps(key, ensure_ascii=False)
         matches = list(re.finditer(re.escape(encoded_key) + r"\s*:\s*", output))
         decoder = json.JSONDecoder()
-        for match in reversed(matches):
+        for attempt, match in enumerate(reversed(matches)):
+            if attempt >= _MAX_TRUNCATION_RECOVERY_ATTEMPTS:
+                break  # bound the loop against quadratic hostile inputs.
             try:
                 value, end = decoder.raw_decode(output, match.end())
             except (ValueError, RecursionError):
                 continue
-            remainder = output[end:].lstrip()
             # Only the final top-level property is recoverable without trusting
             # the damaged nesting/string state that precedes it.  Requiring
             # exactly the outer closing brace also avoids selecting a same-name
-            # property from a nested surviving object.
-            if remainder.rstrip() != "}":
+            # property from a nested surviving object.  The anchored regex checks
+            # this from ``end`` without slicing the (potentially huge) tail.
+            if _OUTER_BRACE_TAIL_RE.match(output, end) is None:
                 continue
             return self._batch_result_value(value)
         return None
