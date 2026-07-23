@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 from dataclasses import dataclass
+from fnmatch import fnmatch
 import json
 import logging
 import mimetypes
@@ -167,8 +168,62 @@ class _SessionMarkerProgram:
     output_mode: str
 
 
+def _looks_like_rollout_file(path: Path) -> bool:
+    """Cheap check: does *path* look like a Codex rollout JSONL file?
+
+    A positive filename match (``rollout-*.jsonl``) short-circuits; otherwise a
+    single first-line sniff for the ``session_meta`` header (modern ``type``
+    field, or the legacy no-``type``/``id`` flat header). Never parses the body.
+    """
+    if not path.is_file():
+        return False
+    if fnmatch(path.name, _ROLLOUT_GLOB):
+        return True
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                try:
+                    raw = json.loads(stripped)
+                except json.JSONDecodeError:
+                    return False
+                if not isinstance(raw, dict):
+                    return False
+                raw_dict = cast("dict[str, Any]", raw)
+                return raw_dict.get("type") == "session_meta" or (
+                    "type" not in raw_dict and bool(raw_dict.get("id"))
+                )
+    except OSError:
+        return False
+    return False
+
+
+def _contained_rollouts(root: Path) -> Iterator[Path]:
+    """Yield ``rollout-*.jsonl`` files under *root*, resolving symlinks but
+    keeping containment (mirrors ``_rollout_paths``): a symlink escaping *root*
+    is skipped, so an INPUT_PATH directory can't pull in outside files."""
+    resolved_root = root.resolve()
+    for candidate in root.rglob(_ROLLOUT_GLOB):
+        try:
+            resolved = candidate.resolve()
+            if candidate.is_file() and resolved.is_relative_to(resolved_root):
+                yield resolved
+        except OSError:
+            continue
+
+
 class CodexProvider(BaseProvider):
     """Read active Codex rollout files from ``$CODEX_HOME/sessions``."""
+
+    def detect_path(self, path: Path) -> bool:
+        """A Codex rollout file, or a directory containing at least one."""
+        if path.is_file():
+            return _looks_like_rollout_file(path)
+        if path.is_dir():
+            return any(True for _ in _contained_rollouts(path))
+        return False
 
     def get_provider_name(self) -> str:
         return "codex"

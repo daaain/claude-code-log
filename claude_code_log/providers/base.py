@@ -222,5 +222,16 @@ class BaseProvider(ABC):
         data_dir = self.get_data_dir()
         return data_dir is not None and data_dir.exists()
 
+    def detect_path(self, path: Path) -> bool:
+        """Cheaply decide whether an INPUT_PATH belongs to this provider.
+
+        Default: no auto-detection. A provider that can recognize its own
+        session files by a cheap check (a filename pattern or a first-line
+        sniff) overrides this so an INPUT_PATH routes to the provider pipeline
+        instead of the Claude parser (which would silently skip the records and
+        emit a near-empty page). Implementations MUST NOT fully parse the file.
+        """
+        return False
+
     def get_session_stats(self, session_id: str) -> dict[str, Any]:
         return {}
