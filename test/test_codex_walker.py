@@ -729,6 +729,51 @@ def test_cli_clear_output_without_date_clears_and_exits(
     assert not list(out.rglob("session-*.html"))
 
 
+def test_cli_all_projects_flag_runs_wholesale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--provider codex --all-projects` is an accepted synonym for bare
+    wholesale — it walks the data dir into the project hierarchy, identically to
+    bare `--provider codex` (was execution-verified only)."""
+    from click.testing import CliRunner
+
+    from claude_code_log.cli import main
+
+    monkeypatch.setenv("CODEX_HOME", str(_codex_home_with_sessions(tmp_path)))
+    out = tmp_path / "out"
+    result = CliRunner().invoke(
+        main, ["--provider", "codex", "--all-projects", "-o", str(out)]
+    )
+    assert result.exit_code == 0, result.output
+    assert (out / "index.html").exists()
+    assert (out / "-proj-a" / "combined_transcripts.html").exists()
+    assert (out / "-proj-b" / "combined_transcripts.html").exists()
+
+
+def test_cli_nonexistent_input_path_with_provider_errors_loudly(
+    tmp_path: Path,
+) -> None:
+    """A nonexistent INPUT_PATH + --provider routes to single-file mode (a
+    nonexistent path is not a directory) and errors loudly with rollout-not-found
+    — never a silent empty render (was execution-verified only)."""
+    from click.testing import CliRunner
+
+    from claude_code_log.cli import main
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "--provider",
+            "codex",
+            str(tmp_path / "does-not-exist"),
+            "-o",
+            str(tmp_path / "out"),
+        ],
+    )
+    assert result.exit_code != 0
+    assert "Codex rollout not found" in result.output
+
+
 def test_cli_unknown_provider_is_clean_usage_error(tmp_path: Path) -> None:
     """An unknown --provider is a clean UsageError (exit 2), not a broad-except
     'Error converting file' (exit 1)."""
