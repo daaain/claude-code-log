@@ -108,6 +108,20 @@ families and the provider contract are in
 - Keep consolidated-output recovery conservative: split only on unique static
   materialized boundaries, and never invent a missing result unless Codex
   explicitly reports truncation.
+- Laundered-row cross-read hole in the interleaving relaxation — uniqueness
+  tightening. `_relax_interleaved` attributes a provenance-laundered row to a
+  call by execution slot and checks reads only GLOBALLY (every call read
+  somewhere), so a row that actually read a different call could be
+  mis-attributed if its slot-call is satisfied by a dead read. The membership
+  fix (slot-call must be read in that row's window) is defeated because the dead
+  read lands in-window. The unbeaten variant: scope reads per emission window
+  (the same `after`-counter mechanism used for texts) and require the window's
+  DISTINCT read-set to be exactly `{slot call}` — a laundered row that reads two
+  calls in its window (one dead) is then non-unique and fails closed, while a
+  legitimate laundered row reads exactly its own call. Likely zero-regression on
+  the recovered set but unmeasurable without building it; the hole needs dead
+  code to reach, so it is documented (see the `_relax_interleaved` docstring)
+  rather than guarded for now.
 
 ## Internal architecture debt
 
