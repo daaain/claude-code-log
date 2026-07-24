@@ -144,7 +144,6 @@ dev = [
     "pytest-asyncio>=0.25.3",
     "pytest-cov>=5.0.0",
     "coverage[toml]>=7.9",  # [run] core setting (added in 7.9); older coverage warns 'unrecognized option' and silently falls back to the slow default core
-    "ruff>=0.11.2",
     "pytest-xdist[psutil]>=3.6.1",
     "pyright>=1.1.408",
     "vulture>=2.14",
@@ -155,6 +154,7 @@ dev = [
     # the canonical example for third-party plugin authors. See
     # test/_plugins/clmail/README.md.
     "claude-code-log-clmail-test",
+    "ruff>=0.16.0",
 ]
 
 docs = [

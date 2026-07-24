@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Public library API for claude-code-log.
 
@@ -8,7 +7,7 @@ CLI, TUI, or rendering dependencies.
 """
 
 from pathlib import Path
-from typing import Optional, cast
+from typing import cast
 
 from .cache import CacheManager, SessionCacheData
 from .converter import (
@@ -20,25 +19,19 @@ from .factories import create_transcript_entry
 from .models import TranscriptEntry
 from .parser import extract_text_content, parse_timestamp
 
-
 __all__ = [
-    # Core loading
-    "load_transcript",
-    "load_directory_transcripts",
-    # Cache management
     "CacheManager",
     "SessionCacheData",
-    "ensure_fresh_cache",
-    # Parsing utilities
-    "create_transcript_entry",
-    "extract_text_content",
-    "parse_timestamp",
-    # Project discovery
-    "discover_projects",
-    "find_history_file",
-    "load_history_file",
-    # Types
     "TranscriptEntry",
+    "create_transcript_entry",
+    "discover_projects",
+    "ensure_fresh_cache",
+    "extract_text_content",
+    "find_history_file",
+    "load_directory_transcripts",
+    "load_history_file",
+    "load_transcript",
+    "parse_timestamp",
 ]
 
 
@@ -63,7 +56,7 @@ def discover_projects(projects_dir: Path) -> list[Path]:
     return projects
 
 
-def find_history_file() -> Optional[Path]:
+def find_history_file() -> Path | None:
     """Find the global history.jsonl file.
 
     Returns:
@@ -86,6 +79,7 @@ def load_history_file(file_path: Path, cache: CacheManager) -> int:
         Number of new rows inserted.
     """
     import json
+
     from .cache import scrub_surrogates
 
     if not file_path.is_file():
@@ -113,7 +107,9 @@ def load_history_file(file_path: Path, cache: CacheManager) -> int:
                     "display": scrub_surrogates(str(display_val)) or "",
                     "project": str(project_val) or "",
                     "sessionId": str(session_id_val) or "",
-                    "timestamp": int(timestamp_val) if isinstance(timestamp_val, (int, float)) else 0,
+                    "timestamp": int(timestamp_val)
+                    if isinstance(timestamp_val, (int, float))
+                    else 0,
                 }
             )
     if not commands:

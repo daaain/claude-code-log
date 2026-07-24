@@ -2,18 +2,18 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from html import unescape
 import json
 import re
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, cast
+from dataclasses import dataclass
+from html import unescape
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from ..factories.priorities import TOOL_INPUT_GENERIC, TOOL_OUTPUT_GENERIC
 from ..html.tool_formatters import render_params_table
 from ..models import (
-    RenderingDepth,
     MessageContent,
     MessageMeta,
+    RenderingDepth,
     ToolResultContent,
     ToolResultMessage,
     ToolUseContent,
@@ -35,7 +35,7 @@ TOOL_NAME = "CodexDoc"
 SEARCH_TOOL_NAME = "CodexDocSearch"
 
 
-def _input_params(content: ToolUseMessage) -> Optional[dict[str, str]]:
+def _input_params(content: ToolUseMessage) -> dict[str, str] | None:
     if not isinstance(content.input, ToolUseContent):
         return None
     raw = content.input.input
@@ -51,14 +51,14 @@ def _input_params(content: ToolUseMessage) -> Optional[dict[str, str]]:
     return params
 
 
-def _result_body(content: ToolResultMessage) -> Optional[str]:
+def _result_body(content: ToolResultMessage) -> str | None:
     if content.is_error or not isinstance(content.output, ToolResultContent):
         return None
     body = content.output.content
     return body if isinstance(body, str) and body else None
 
 
-def _search_input_params(content: ToolUseMessage) -> Optional[dict[str, Any]]:
+def _search_input_params(content: ToolUseMessage) -> dict[str, Any] | None:
     if not isinstance(content.input, ToolUseContent):
         return None
     raw = content.input.input
@@ -79,7 +79,7 @@ def _search_input_params(content: ToolUseMessage) -> Optional[dict[str, Any]]:
 _SEARCH_HIT_START_RE = re.compile(r'\{\s*"url"\s*:')
 
 
-def _search_hits(body: str) -> Optional[list[dict[str, Any]]]:
+def _search_hits(body: str) -> list[dict[str, Any]] | None:
     """Decode hits, salvaging complete objects from Codex-truncated JSON."""
     try:
         decoded: Any = json.loads(body)
@@ -112,7 +112,7 @@ def _search_hits(body: str) -> Optional[list[dict[str, Any]]]:
     return recovered or None
 
 
-def _search_result_markdown(content: ToolResultMessage) -> Optional[str]:
+def _search_result_markdown(content: ToolResultMessage) -> str | None:
     body = _result_body(content)
     if body is None:
         return None
@@ -263,7 +263,7 @@ class CodexDocInputTransformer:
 
     def transform(
         self, content: MessageContent, meta: MessageMeta
-    ) -> Optional[MessageContent]:
+    ) -> MessageContent | None:
         del meta
         if (
             not isinstance(content, ToolUseMessage)
@@ -287,7 +287,7 @@ class CodexDocResultTransformer:
 
     def transform(
         self, content: MessageContent, meta: MessageMeta
-    ) -> Optional[MessageContent]:
+    ) -> MessageContent | None:
         del meta
         if (
             not isinstance(content, ToolResultMessage)
@@ -312,7 +312,7 @@ class CodexDocSearchInputTransformer:
 
     def transform(
         self, content: MessageContent, meta: MessageMeta
-    ) -> Optional[MessageContent]:
+    ) -> MessageContent | None:
         del meta
         if (
             not isinstance(content, ToolUseMessage)
@@ -336,7 +336,7 @@ class CodexDocSearchResultTransformer:
 
     def transform(
         self, content: MessageContent, meta: MessageMeta
-    ) -> Optional[MessageContent]:
+    ) -> MessageContent | None:
         del meta
         if (
             not isinstance(content, ToolResultMessage)
