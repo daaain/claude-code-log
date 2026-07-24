@@ -217,43 +217,55 @@ factories.
 | unknown direct function | Original name | Faithful generic params/result rendering. |
 | unsupported `exec` JavaScript | `ToolExecution` | Original script remains visible without claiming native Workflow semantics. Results retain completion and wall-time status, followed by labelled generic result sections; opaque payloads are scrubbed. There is no legacy recognizer fallback. |
 
-### Static `exec` JavaScript analysis
+### `exec` JavaScript analysis
 
 Codex often persists tool orchestration as JavaScript inside a custom `exec`
-call. `providers/codex_javascript.py` parses it with Tree-sitter and performs a
-bounded abstract interpretation; transcript code is never executed.
+call. `providers/codex_quickjs.py` **executes** it in a sandboxed QuickJS
+engine (`quickjs-ng`) with instrumented `tools` / `text()` stand-ins that
+record what the snippet actually did; the recording is mapped back to a tool
+batch. Because arguments are captured *after* the snippet's own JS evaluated
+them, expression-built values (string `concat`, templates, `.join()`,
+`reduce`, ternaries, computed numerics, conditional branches) resolve for free
+— the fragile static-expansion whitelist of the former Tree-sitter analyzer is
+gone.
 
-Supported composition currently includes:
+Safety model: **no host callables** are registered (attack surface = the
+QuickJS interpreter only). Per-snippet bounds — memory, wall-time, stack, a
+pending-job cap, a 64 KB source cap, a 128 expanded-call cap, and a per-string
+materialization cap — bound hostile inputs (infinite loops, allocation bombs,
+deep recursion, string amplification). Provenance rides on an in-band
+private-use sentinel (U+E000). Any failure — syntax error, engine exception,
+a cap hit, a run that throws or never resolves, or a shape the mapper cannot
+correlate — fails closed to `None`, so the raw-script `ToolExecution` fallback
+stays visible.
 
-- recursive string/number/boolean/null, object, array, and template constants;
-- immutable `const` substitution and object shorthand;
-- static string-array `.join()` calls, including joins nested inside template
-  substitutions or other joins;
-- direct awaited calls, sequential batches, and heterogeneous
-  `Promise.all()` batches with identifier or array destructuring;
+The report → batch mapper recognizes:
+
+- direct awaited calls, sequential batches, and heterogeneous `Promise.all()`
+  batches with identifier or array destructuring;
 - result provenance through direct references, property paths,
-  `JSON.stringify()`, result-derived templates, and static object projections
-  such as `JSON.stringify({first, second})` and renamed projections such as
-  `JSON.stringify({approval: first, mcp: second})`;
-- bounded `for...of` expansion over static arrays, including destructured
-  rows and loop-local calls/emissions;
-- bounded `Promise.all(staticArray.map(async ...))` expansion with destructured
-  rows, one loop-local call, and static metadata plus a spread result envelope;
+  `JSON.stringify()`, result-derived templates, and object emissions — both a
+  whole-result **bundle** (`JSON.stringify({first, second})`, keyed per field)
+  and a single-call **projection** (`{name, ...r}` spread, or explicit
+  `{name, output: r.output}`), collapsed to the canonical `output` field;
+- `for...of` expansion over static or computed arrays, including destructured
+  rows and loop-local calls/emissions, and `Promise.all(array.map(async ...))`;
 - ordered, reversed, and marker-delimited result correlation;
-- static Promise/`setTimeout` delays represented as `wait` calls;
-- outer `exec` cell continuations coalesced before static call expansion,
-  including informational MCP completion events and non-chat collaboration
-  bookkeeping inside the polling interval;
+- `setTimeout` / Promise delays represented as `wait` calls;
+- outer `exec` cell continuations coalesced before call expansion, including
+  informational MCP completion events and collaboration bookkeeping inside the
+  polling interval;
 - command-session continuation through `wait` and `write_stdin`, including
   ordered and parallel marker sessions;
 - consolidated output splitting on unique materialized template prefixes and
   projected JSON objects after a Codex truncation preamble; missing sections
   are identified only when Codex explicitly reports truncation.
 
-Dynamic identifiers, mutation, unsupported branches/loops, computed tool
-names, ambiguous emissions, repeated/absent output separators, parse recovery,
-and expansion-limit violations remain `ToolExecution`. False negatives are an
-acceptable compatibility cost; false reconstruction is not.
+Inter-call data dependencies (an unresolved result flowing into a later call's
+argument), forged sentinels, ambiguous emissions, repeated/absent output
+separators, `ALL_TOOLS`-registry pipelines (no static membership yet), and
+cap/engine failures remain `ToolExecution`. False negatives are an acceptable
+compatibility cost; false reconstruction is not.
 
 ### Refreshing the Codex census
 

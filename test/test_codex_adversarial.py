@@ -1488,6 +1488,44 @@ def test_sequential_object_batch_recovers_intact_tail_after_truncation() -> None
     ]
 
 
+def test_truncated_recovery_is_bounded_against_quadratic_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A hostile truncated output with many same-key occurrences must not drive
+    ``_truncated_object_batch_result`` quadratic.
+
+    Nested ``{"k":`` repetition is the strongest reproducer: each reversed match
+    re-parses the surviving subtree, so the unbounded loop makes ~N ``raw_decode``
+    calls (seconds of wall time at ~40 KB). Pin the bound directly via a
+    ``raw_decode`` call-count spy rather than a flaky wall-clock assert — this
+    provably reaches the cap. Mutation check: remove the cap and ``calls`` climbs
+    to ~20000, flipping the assert RED.
+    """
+    provider = CodexProvider()
+    calls = {"n": 0}
+    real = json.JSONDecoder.raw_decode
+
+    def counting(self: json.JSONDecoder, s: str, idx: int = 0) -> tuple[object, int]:
+        calls["n"] += 1
+        return real(self, s, idx)
+
+    monkeypatch.setattr(json.JSONDecoder, "raw_decode", counting)
+    pathological = '{"k":' * 20000 + "0"  # 20k nested same-key matches
+    assert provider._truncated_object_batch_result(pathological, "k") is None
+    assert calls["n"] <= 16  # bounded; unpatched code calls ~20000
+
+
+def test_truncated_recovery_still_returns_final_property() -> None:
+    """The bound must not regress legitimate recovery of the final intact
+    property from a genuinely truncated object (over-tight-K tripwire)."""
+    provider = CodexProvider()
+    out = '{"presence":{"content":"cut broken,"mail":{"messages":[],"count":0}}'
+    assert (
+        provider._truncated_object_batch_result(out, "mail")
+        == '{"messages": [], "count": 0}'
+    )
+
+
 def test_openai_docs_object_batch_becomes_three_doc_pairs() -> None:
     source = """
         const [hooks, plugins, marketplace] = await Promise.all([
