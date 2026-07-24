@@ -8,7 +8,7 @@ CLI, TUI, or rendering dependencies.
 """
 
 from pathlib import Path
-from typing import Optional
+from typing import Optional, cast
 
 from .cache import CacheManager, SessionCacheData
 from .converter import (
@@ -51,7 +51,7 @@ def discover_projects(projects_dir: Path) -> list[Path]:
     Returns:
         List of project directory paths (each containing *.jsonl files)
     """
-    projects = []
+    projects: list[Path] = []
     if not projects_dir.exists():
         return projects
 
@@ -91,7 +91,7 @@ def load_history_file(file_path: Path, cache: CacheManager) -> int:
     if not file_path.is_file():
         return 0
 
-    commands = []
+    commands: list[dict[str, str | int]] = []
     with file_path.open(encoding="utf-8", errors="replace") as f:
         for line in f:
             line = line.strip()
@@ -103,12 +103,17 @@ def load_history_file(file_path: Path, cache: CacheManager) -> int:
                 continue
             if not isinstance(data, dict):
                 continue
+            typed_data = cast(dict[str, object], data)
+            display_val = typed_data.get("display", "")
+            project_val = typed_data.get("project", "")
+            session_id_val = typed_data.get("sessionId", "")
+            timestamp_val = typed_data.get("timestamp", 0)
             commands.append(
                 {
-                    "display": scrub_surrogates(data.get("display", "")) or "",
-                    "project": data.get("project", ""),
-                    "sessionId": data.get("sessionId", ""),
-                    "timestamp": data.get("timestamp", 0),
+                    "display": scrub_surrogates(str(display_val)) or "",
+                    "project": str(project_val) or "",
+                    "sessionId": str(session_id_val) or "",
+                    "timestamp": int(timestamp_val) if isinstance(timestamp_val, (int, float)) else 0,
                 }
             )
     if not commands:
