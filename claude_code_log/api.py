@@ -33,6 +33,10 @@ __all__ = [
     "create_transcript_entry",
     "extract_text_content",
     "parse_timestamp",
+    # Project discovery
+    "discover_projects",
+    "find_history_file",
+    "load_history_file",
     # Types
     "TranscriptEntry",
 ]
@@ -66,7 +70,7 @@ def find_history_file() -> Optional[Path]:
         Path to ~/.claude/history.jsonl if it exists, None otherwise.
     """
     history = Path.home() / ".claude" / "history.jsonl"
-    return history if history.exists() else None
+    return history if history.is_file() else None
 
 
 def load_history_file(file_path: Path, cache: CacheManager) -> int:
@@ -93,6 +97,8 @@ def load_history_file(file_path: Path, cache: CacheManager) -> int:
             try:
                 data = json.loads(line)
             except json.JSONDecodeError:
+                continue
+            if not isinstance(data, dict):
                 continue
             commands.append(
                 {
