@@ -81,6 +81,11 @@ class JavaScriptToolBatch:
     synthetic_results: tuple[Optional[str], ...] = ()
     output_count: int = 0
     result_object_keys: tuple[Optional[str], ...] = ()
+    # True only for the single-call whole-output fallback (a lone call whose
+    # emissions didn't correlate). Lets the adapter keep Workflow-family calls
+    # (spawn_agent → Task) on their scrubbed-opaque fallback instead of exposing
+    # the payload; a cleanly-correlated single call leaves this False.
+    whole_output_fallback: bool = False
 
 
 # --------------------------------------------------------------------------
@@ -93,6 +98,7 @@ _PRELUDE_TEMPLATE = r"""
 globalThis.__records = [];
 globalThis.__texts = [];
 globalThis.__errors = [];
+globalThis.__reads = [];
 const __D = "@@SENTINEL@@";
 const __MAXSTR = @@MAXSTR@@;
 const __MARK = "@@MARK@@";
@@ -100,11 +106,20 @@ function __cap(s) {
   return s.length > __MAXSTR ? s.slice(0, __MAXSTR) + __MARK : s;
 }
 
+// Record that call R<i>'s result was actually consumed — a real property read
+// (r.output, r.items[0]) or a coercion (JSON.parse(r), `${r}`). Distinguishes a
+// snippet that reads-then-launders a result (its output row IS that call's
+// result) from one that merely prints an unrelated literal (result untouched).
+function __noteRead(sentinel) {
+  const m = /^R(\d+)/.exec(sentinel);
+  if (m) __reads.push(m[1] | 0);
+}
+
 function __makeMagic(sentinel) {
   // Arrow fn target: still callable (apply trap fires) but has no
   // `prototype` own key, so the ownKeys trap need not report target keys.
   const fn = () => {};
-  const wrap = () => __D + sentinel + __D;
+  const wrap = () => { __noteRead(sentinel); return __D + sentinel + __D; };
   const magic = new Proxy(fn, {
     get(t, prop) {
       if (prop === "__sentinel") return sentinel;
@@ -116,6 +131,7 @@ function __makeMagic(sentinel) {
       if (prop === "then") return undefined;
       if (prop === "length") return 0;
       if (typeof prop === "symbol") return undefined;
+      __noteRead(sentinel);
       return __makeMagic(sentinel + "." + String(prop));
     },
     apply(t, self, args) { return __makeMagic(sentinel + "()"); },
@@ -172,7 +188,10 @@ globalThis.tools = new Proxy({}, {
   },
 });
 
-globalThis.text = (v) => { __texts.push(__safe(v)); };
+// Each emission records __records.length at fire time (calls-made-so-far), so
+// the interleaving relaxation can attribute a laundered loop row to the call it
+// followed.
+globalThis.text = (v) => { __texts.push({ v: __safe(v), after: __records.length }); };
 globalThis.ALL_TOOLS = __makeMagic("ALL_TOOLS");
 globalThis.setTimeout = (fn, ms) => {
   __records.push({ name: "__wait", args: [{ delay_ms: ms }] });
@@ -182,8 +201,8 @@ globalThis.setTimeout = (fn, ms) => {
 globalThis.clearTimeout = () => {};
 globalThis.exit = () => { throw { __exit: true }; };
 globalThis.console = {
-  log: (...a) => __texts.push(__safe(a.length === 1 ? a[0] : a)),
-  error: (...a) => __texts.push(__safe(a.length === 1 ? a[0] : a)),
+  log: (...a) => __texts.push({ v: __safe(a.length === 1 ? a[0] : a), after: __records.length }),
+  error: (...a) => __texts.push({ v: __safe(a.length === 1 ? a[0] : a), after: __records.length }),
 };
 """
 
@@ -232,7 +251,7 @@ def _run_snippet(code: str) -> Optional[dict[str, Any]]:
                 return None
         report = ctx.eval(
             "JSON.stringify({records:__records,texts:__texts,"
-            "errors:__errors,done:__done})"
+            "errors:__errors,done:__done,reads:__reads})"
         )
         return json.loads(report)
     except Exception:
@@ -276,6 +295,12 @@ class _Emission:
     prefix: str  # literal text before the first sentinel
     refs: list[_Ref]  # call refs embedded, in order (object_key set for JSON obj)
     literal_only: bool  # no sentinel at all
+    # Number of tool records made before this emission fired (``__records.length``
+    # at ``text()`` time). Set by ``_build_batch`` from the prelude's per-text
+    # bookkeeping; used only by the interleaving relaxation to attribute a
+    # provenance-laundered loop emission to the call it followed. ``None`` when
+    # the position is unknown (e.g. projected object emissions).
+    after: Optional[int] = None
 
 
 def _refs_from_string(
@@ -477,21 +502,93 @@ def _build_batch(report: dict[str, Any]) -> Optional[JavaScriptToolBatch]:
             return None
         calls.append(info)
 
+    single_call = len(calls) == 1 and not calls[0].is_wait
+
     emissions: list[_Emission] = []
+    decompose_failed = False
     for tv in raw_texts:
-        emi = _decompose(tv)
-        if emi is None:
+        # Each recorded text() is ``{v, after}`` (value + calls-made-so-far).
+        if not isinstance(tv, dict):
             return None
+        entry = cast("dict[str, Any]", tv)
+        raw_after = entry.get("after")
+        after = raw_after if isinstance(raw_after, int) else None
+        emi = _decompose(entry.get("v"))
+        if emi is None:
+            # A single-call snippet doesn't need its emissions to decompose (its
+            # whole output is that one call's result); everything else fails
+            # closed on an undecomposable emission.
+            if single_call:
+                decompose_failed = True
+                break
+            return None
+        emi.after = after
         emissions.append(emi)
 
-    return _correlate(calls, emissions)
+    raw_reads = report.get("reads")
+    reads: set[int] = set()
+    if isinstance(raw_reads, list):
+        for r in cast("list[Any]", raw_reads):
+            if isinstance(r, int) and not isinstance(r, bool):
+                reads.add(r)
+
+    if not decompose_failed:
+        correlated = _correlate(calls, emissions, reads)
+        if correlated is not None:
+            return correlated
+
+    # Single-call fallback: exactly one (non-wait) tool call has no output-split
+    # ambiguity by construction — whatever the snippet did (laundered the
+    # result, emitted nothing, emitted an undecomposable object), the single
+    # paired function_call_output is that call's result. The single-call render
+    # path (adapt_codex_tool_call → canonicalize + whole-output pairing) needs no
+    # correlation, so recover it here. Clean / session-marker single calls are
+    # already returned by ``_correlate`` above with their richer mapping.
+    if single_call:
+        # Per-call tuples MUST be call-length (one element here): the batch
+        # consumer (adapt_codex_tool_batch) indexes result_prefixes /
+        # synthetic_results / result_object_keys by call position before it even
+        # checks the call count, so an empty default would raise IndexError.
+        return JavaScriptToolBatch(
+            calls=[JavaScriptToolCall(calls[0].name, calls[0].input)],
+            result_indexes=[0],
+            result_prefixes=(None,),
+            synthetic_results=(None,),
+            output_count=1,
+            result_object_keys=(None,),
+            whole_output_fallback=True,
+        )
+    return None
+
+
+def _finish_batch(
+    calls: list[_CallInfo],
+    result_indexes: list[int],
+    output_mode: "Literal['markers', 'ordered']",
+    session_markers: bool,
+    result_prefixes: list[Optional[str]],
+    synthetic_results: list[Optional[str]],
+    output_count: int,
+    result_object_keys: list[Optional[str]],
+) -> JavaScriptToolBatch:
+    return JavaScriptToolBatch(
+        calls=[JavaScriptToolCall(c.name, c.input) for c in calls],
+        result_indexes=result_indexes,
+        output_mode=output_mode,
+        session_markers=session_markers,
+        result_prefixes=tuple(result_prefixes),
+        synthetic_results=tuple(synthetic_results),
+        output_count=output_count,
+        result_object_keys=tuple(result_object_keys),
+    )
 
 
 def _correlate(
-    calls: list[_CallInfo], emissions: list[_Emission]
+    calls: list[_CallInfo], emissions: list[_Emission], reads: set[int]
 ) -> Optional[JavaScriptToolBatch]:
     """Assign each non-wait call the output row of the emission that reads it."""
     n = len(calls)
+    real_idxs = [i for i, c in enumerate(calls) if not c.is_wait]
     result_indexes = [-1] * n
     result_prefixes: list[Optional[str]] = [None] * n
     synthetic_results: list[Optional[str]] = [None] * n
@@ -505,6 +602,14 @@ def _correlate(
     session_markers = False
     output_row = 0
     seen_rows: set[int] = set()
+    # Content rows whose provenance was laundered (a real output row carrying no
+    # sentinel because snippet logic consumed the marker: ``JSON.parse`` threw,
+    # ``indexOf`` missed it, ...). Deferred — a relaxation may still attribute
+    # them; a bare fail-closed here is what dropped these to the raw fallback.
+    laundered: list[_Emission] = []
+    # Every content row in emission order (sentinel-bearing AND laundered), for
+    # the interleaving relaxation's positional attribution of a mixed loop.
+    content: list[_Emission] = []
 
     for emi in emissions:
         if emi.literal_only:
@@ -512,9 +617,9 @@ def _correlate(
                 output_mode = "markers"
                 continue
             if emi.raw.strip():
-                # A non-marker literal with no call ref: a synthetic string the
-                # tree-sitter version wouldn't correlate → fail closed.
-                return None
+                laundered.append(emi)
+                content.append(emi)
+                continue
             continue
 
         # Session marker: "SESSION_ID=<sentinel .session_id>".
@@ -526,6 +631,7 @@ def _correlate(
             session_markers = True
             continue
 
+        content.append(emi)
         row = output_row
         introduced_new = False
         for ref in emi.refs:
@@ -552,22 +658,92 @@ def _correlate(
             output_row += 1
 
     output_count = len(seen_rows)
+    unmapped = [i for i in real_idxs if result_indexes[i] == -1]
 
+    if not unmapped and not laundered:
+        return _finish_batch(
+            calls,
+            result_indexes,
+            output_mode,
+            session_markers,
+            result_prefixes,
+            synthetic_results,
+            output_count,
+            result_object_keys,
+        )
+
+    # Interleaving relaxation: an ordered loop that emits one content row per
+    # call — sentinel-bearing where the snippet kept the result, laundered where
+    # it consumed the sentinel — is attributable by execution position even when
+    # provenance is partial. (Single-call snippets are recovered earlier, in
+    # ``_build_batch``, and never reach here.) Markers/session shapes are not
+    # loop rows, so they stay on the strict path.
+    if laundered and output_mode == "ordered" and not session_markers:
+        relaxed = _relax_interleaved(calls, real_idxs, content, reads)
+        if relaxed is not None:
+            return relaxed
+    return None
+
+
+def _relax_interleaved(
+    calls: list[_CallInfo],
+    real_idxs: list[int],
+    content: list[_Emission],
+    reads: set[int],
+) -> Optional[JavaScriptToolBatch]:
+    """Attribute an ordered mixed/laundered loop's rows to calls by position.
+
+    Requires one content row per non-wait call, all in execution order, all
+    read. Each row ``j`` must have fired immediately after the call it belongs
+    to (``after`` == ``real_idxs[j] + 1``); a sentinel-bearing row must ALSO
+    self-identify that same call by a single clean whole-result ref (no prefix,
+    no object-key projection) — any disagreement between the sentinel and the
+    position is a conflict and fails closed. Count mismatch, unread call,
+    non-monotone order, missing ``after``, or a composed sentinel row → None.
+    """
+    m = len(content)
+    if (
+        m < 2
+        or m != len(real_idxs)
+        or not all(i in reads for i in real_idxs)
+        or any(e.after is None for e in content)
+    ):
+        return None
+
+    for j, emi in enumerate(content):
+        target = real_idxs[j]
+        if emi.after != target + 1:
+            return None  # not emitted immediately after its call — out of order.
+        if not emi.literal_only:
+            # Sentinel-bearing row: must be exactly ``text(r.output)`` for THIS
+            # call — one whole-result ref, no prefix, no projected key.
+            if (
+                len(emi.refs) != 1
+                or emi.refs[0].call_index != target
+                or emi.refs[0].object_key is not None
+                or emi.prefix
+            ):
+                return None
+
+    result_indexes = [-1] * len(calls)
+    synthetic_results: list[Optional[str]] = [None] * len(calls)
     for i, c in enumerate(calls):
-        if not c.is_wait and result_indexes[i] == -1:
-            return None  # un-emitted call → we'd drop its output; fail closed.
-
-    js_calls = [JavaScriptToolCall(c.name, c.input) for c in calls]
-    return JavaScriptToolBatch(
-        calls=js_calls,
-        result_indexes=result_indexes,
-        output_mode=output_mode,
-        session_markers=session_markers,
-        result_prefixes=tuple(result_prefixes),
-        synthetic_results=tuple(synthetic_results),
-        output_count=output_count,
-        result_object_keys=tuple(result_object_keys),
+        if c.is_wait:
+            synthetic_results[i] = f"Waited {c.delay_ms} ms"
+    for j, i in enumerate(real_idxs):
+        result_indexes[i] = j
+    return _finish_batch(
+        calls,
+        result_indexes,
+        "ordered",
+        False,
+        [None] * len(calls),
+        synthetic_results,
+        m,
+        [None] * len(calls),
     )
+
+    return None
 
 
 def analyze_javascript_tools(

@@ -1000,7 +1000,12 @@ def test_direct_nested_tool_result_propagates_mcp_error() -> None:
     assert result.is_error is True
 
 
-def test_workflow_result_retains_nested_tool_transport() -> None:
+def test_single_communicate_call_maps_and_retains_nested_tool_transport() -> None:
+    # A single mcp call (plus an unrelated "prefix" literal) is a single-call
+    # snippet: it maps to the tool, and the whole paired output — the forwarded
+    # result envelope — is retained verbatim as that call's result (widened
+    # single-call recovery; the transport is preserved, just rendered as the
+    # mcp tool rather than the raw ToolExecution fallback).
     payload = {"sent": True, "message_ids": [4730]}
     output = _forwarded_result_envelope(payload)
     source = (
@@ -1012,8 +1017,28 @@ def test_workflow_result_retains_nested_tool_transport() -> None:
     content = [item for entry in _normalized(records) for item in entry.message.content]
     uses = [item for item in content if isinstance(item, ToolUseContent)]
     result = next(item for item in content if isinstance(item, ToolResultContent))
-    assert [item.name for item in uses] == ["ToolExecution"]
-    assert result.content == output
+    assert [item.name for item in uses] == ["mcp__clmail__communicate"]
+    # The forwarded result payload (the nested transport) is retained — extracted
+    # from the envelope as the mcp call's result rather than the raw script dump.
+    assert '"sent": true' in result.content
+    assert '"message_ids": [4730]' in result.content
+
+
+def test_widened_single_call_exec_renders_without_crashing() -> None:
+    # End-to-end through the real _tool_batches consumer: a single-call snippet
+    # whose result feeds a for-of loop (the widened whole-output class) must
+    # render as the tool, never raise. Regression pin for the batch-adapter
+    # IndexError on the new single-call batch shape.
+    source = (
+        "const r = await tools.mcp__clmail__terminal({}); "
+        "for (const c of (r.content || [])) text(c.text);"
+    )
+    output = [{"type": "input_text", "text": "Script completed\nOutput:\nline\n"}]
+    records = [_call(1, "exec", "exec", source), _output(2, "exec", output)]
+
+    content = [item for entry in _normalized(records) for item in entry.message.content]
+    uses = [item for item in content if isinstance(item, ToolUseContent)]
+    assert [item.name for item in uses] == ["mcp__clmail__terminal"]
 
 
 def test_inherited_prefix_requires_strong_parent_suffix_evidence() -> None:
@@ -1031,16 +1056,19 @@ def test_inherited_prefix_requires_strong_parent_suffix_evidence() -> None:
     )
 
 
-def test_assignment_and_emission_text_in_comments_or_strings_is_not_structural() -> (
-    None
-):
+def test_commented_tool_is_not_a_second_call_single_call_maps() -> None:
+    # The commented-out call is NOT counted (only the one real exec_command is),
+    # so this is a single-call snippet and maps to the tool via whole-output
+    # widening — even though its only emission is an unrelated "result" literal.
+    # (Pre-widening this stayed ToolExecution; the pin now proves the comment
+    # isn't miscounted AND that one real call renders.)
     source = (
         "// const result = await tools.exec_command(\n"
         'await tools.exec_command({cmd: "git status"}); text("result");'
     )
 
-    assert adapt_codex_tool_call("exec", {"raw": source}, raw_input=source).name == (
-        "ToolExecution"
+    assert (
+        adapt_codex_tool_call("exec", {"raw": source}, raw_input=source).name == "Bash"
     )
 
 
@@ -2112,13 +2140,18 @@ def test_static_for_of_unwraps_each_nested_mcp_result_like_a_direct_call() -> No
             "ToolExecution",
         ),
         (
+            # A single call whose only emission is an unread literal (the
+            # template word "result", not ${result}) still maps: one call, whole
+            # output is its result.
             'const result = await tools.exec_command({cmd: "real"}); text(`result`);',
-            "ToolExecution",
+            "Bash",
         ),
         (
+            # An undecomposable nested emission no longer blocks a single call —
+            # its whole paired output is that one call's result.
             'const result = await tools.exec_command({cmd: "real"}); '
             "text({nested: [result.output, {ok: true}]} );",
-            "ToolExecution",
+            "Bash",
         ),
     ],
     ids=[

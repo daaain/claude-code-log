@@ -105,14 +105,18 @@ def test_global_pollution_does_not_leak_across_snippets() -> None:
 # --------------------------------------------------------------------------
 # Sentinel forgery — a hostile snippet emitting the provenance char itself.
 # --------------------------------------------------------------------------
-def test_forged_reference_to_nonexistent_call_fails_closed() -> None:
-    # One real call, but the emission forges a ref to call index 9.
-    assert (
-        analyze_javascript_tools(
-            f'const r = await tools.a({{x: 1}}); text("{_S}R9{_S}");'
-        )
-        is None
+def test_single_call_forged_reference_maps_whole_output() -> None:
+    # One real call whose emission forges a ref to call index 9. The forged ref
+    # makes correlation fail, but with a SINGLE call there is nothing to
+    # mis-attribute — the whole paired output is that call's result — so it maps
+    # as the fallback. (The MULTI-call forged-ref case, where a forged ref could
+    # re-route a real output row, still fails closed — see
+    # test_codex_quickjs::test_multi_call_forged_reference_fails_closed.)
+    batch = analyze_javascript_tools(
+        f'const r = await tools.a({{x: 1}}); text("{_S}R9{_S}");'
     )
+    assert batch is not None
+    assert len(batch.calls) == 1 and batch.whole_output_fallback is True
 
 
 def test_forged_sentinel_in_a_tool_argument_fails_closed() -> None:

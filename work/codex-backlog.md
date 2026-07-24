@@ -84,6 +84,14 @@ families and the provider contract are in
   round-trip is proven byte-stable for Codex entries. The combined page is also
   a single unpaginated document; wire `_generate_paginated_html` (cache-coupled)
   and flip `--page-size`/`--jobs` from loud-rejected to honored at the same time.
+- Unify the spawn_agent/Task scrub policy. There is a clean-vs-laundered seam:
+  a cleanly-correlated single `spawn_agent` renders as a Task tool with its
+  message shown, while a laundered/unrelated-emission one is kept on the
+  scrubbed-opaque ToolExecution fallback (single-call widening excludes
+  Workflow-family). That makes the scrub boundary depend on JS shape, not
+  content — an artifact, not a defensible privacy contract. Decide one policy:
+  shown-everywhere with opaque-literal scrubbing of the canonicalized inputs, or
+  scrubbed-everywhere. cboos's ruling to take later.
 
 ## Tool and static-analysis candidates
 

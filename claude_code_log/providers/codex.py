@@ -1411,7 +1411,19 @@ class CodexProvider(BaseProvider):
             ):
                 source = record.payload.get("input")
                 if isinstance(source, str):
-                    batch = adapt_codex_tool_batch(source)
+                    # Defense-in-depth: a batch-adapter bug must degrade this
+                    # exec to its raw fallback, never crash the whole transcript
+                    # render. The adapter's own contract (never raise on any
+                    # analyze output) is pinned in the tests; this guard keeps a
+                    # contract violation from being fatal in production.
+                    try:
+                        batch = adapt_codex_tool_batch(source)
+                    except Exception:
+                        logger.warning(
+                            "Codex batch adapter raised on an exec snippet; "
+                            "falling back to raw rendering"
+                        )
+                        batch = None
                     if batch is not None:
                         requests[call_id] = (
                             batch.calls,
