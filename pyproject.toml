@@ -24,7 +24,7 @@ dependencies = [
     "toml>=0.10.2",
     "textual>=6.5.0",
     "packaging>=25.0",
-    "gitpython>=3.1.45",
+    "gitpython>=3.1.52",
     "pygments>=2.19.2",
     "quickjs-ng>=0.15.1.1,<0.16",
 ]
