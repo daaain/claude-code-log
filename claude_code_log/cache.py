@@ -826,7 +826,12 @@ class CacheManager:
                 VALUES (?, ?, ?, ?)
                 """,
                 [
-                    (cmd["display"], cmd["project"], cmd["sessionId"], cmd["timestamp"])
+                    (
+                        cmd.get("display", ""),
+                        cmd.get("project", ""),
+                        cmd.get("sessionId", ""),
+                        cmd.get("timestamp", 0),
+                    )
                     for cmd in commands
                 ],
             )

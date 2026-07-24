@@ -6,8 +6,6 @@ These tests ensure the stable public API doesn't break across versions.
 External consumers like claude-history-mcp depend on these functions.
 """
 
-import json
-import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -38,14 +36,18 @@ class TestDiscoverProjects:
         project2 = projects_dir / "project-2"
         project2.mkdir()
         (project2 / "session-1.jsonl").write_text('{"type": "user"}', encoding="utf-8")
-        (project2 / "session-2.jsonl").write_text('{"type": "assistant"}', encoding="utf-8")
+        (project2 / "session-2.jsonl").write_text(
+            '{"type": "assistant"}', encoding="utf-8"
+        )
 
         # Create empty directory (not a project)
         (projects_dir / "empty-dir").mkdir()
 
         # Create hidden directory (should be skipped)
         (projects_dir / ".hidden-project").mkdir()
-        (projects_dir / ".hidden-project" / "session.jsonl").write_text('{"type": "user"}', encoding="utf-8")
+        (projects_dir / ".hidden-project" / "session.jsonl").write_text(
+            '{"type": "user"}', encoding="utf-8"
+        )
 
         result = discover_projects(projects_dir)
 
@@ -91,7 +93,9 @@ class TestDiscoverProjects:
         # Directory with JSONL - should be included
         project_with_jsonl = projects_dir / "with-jsonl"
         project_with_jsonl.mkdir()
-        (project_with_jsonl / "session.jsonl").write_text('{"type": "user"}', encoding="utf-8")
+        (project_with_jsonl / "session.jsonl").write_text(
+            '{"type": "user"}', encoding="utf-8"
+        )
 
         # Directory without JSONL - should be skipped
         project_without = projects_dir / "without-jsonl"
@@ -153,16 +157,19 @@ class TestLoadHistoryFile:
             '{"display": "cmd1", "project": "proj1", "sessionId": "sess1", "timestamp": 1000}\n'
             '{"display": "cmd2", "project": "proj2", "sessionId": "sess2", "timestamp": 2000}\n'
             '{"display": "cmd3", "project": "proj1", "sessionId": "sess3", "timestamp": 3000}\n',
-            encoding="utf-8"
+            encoding="utf-8",
         )
 
-        cache = CacheManager(tmp_path / "project", "1.0.0", db_path=tmp_path / "test-cache.db")
+        cache = CacheManager(
+            tmp_path / "project", "1.0.0", db_path=tmp_path / "test-cache.db"
+        )
         count = load_history_file(history_file, cache)
 
         assert count == 3
 
         # Verify data was stored in history_commands table
         import sqlite3
+
         conn = sqlite3.connect(tmp_path / "test-cache.db")
         conn.row_factory = sqlite3.Row
         cursor = conn.execute("SELECT * FROM history_commands")
@@ -179,12 +186,14 @@ class TestLoadHistoryFile:
         history_file = tmp_path / "history.jsonl"
         history_file.write_text(
             '{"display": "valid1", "project": "p1", "sessionId": "s1", "timestamp": 1000}\n'
-            'not valid json\n'
+            "not valid json\n"
             '{"display": "valid2", "project": "p2", "sessionId": "s2", "timestamp": 2000}\n',
-            encoding="utf-8"
+            encoding="utf-8",
         )
 
-        cache = CacheManager(tmp_path / "project", "1.0.0", db_path=tmp_path / "test-cache.db")
+        cache = CacheManager(
+            tmp_path / "project", "1.0.0", db_path=tmp_path / "test-cache.db"
+        )
         count = load_history_file(history_file, cache)
 
         assert count == 2  # Only 2 valid JSON lines
@@ -196,14 +205,16 @@ class TestLoadHistoryFile:
             '{"display": "valid", "project": "p1", "sessionId": "s1", "timestamp": 1000}\n'
             '["array", "not", "object"]\n'
             '"just a string"\n'
-            '123\n'
-            'null\n'
-            'true\n'
+            "123\n"
+            "null\n"
+            "true\n"
             '{"display": "valid2", "project": "p2", "sessionId": "s2", "timestamp": 2000}\n',
-            encoding="utf-8"
+            encoding="utf-8",
         )
 
-        cache = CacheManager(tmp_path / "project", "1.0.0", db_path=tmp_path / "test-cache.db")
+        cache = CacheManager(
+            tmp_path / "project", "1.0.0", db_path=tmp_path / "test-cache.db"
+        )
         count = load_history_file(history_file, cache)
 
         assert count == 2  # Only the two dict objects
@@ -215,10 +226,12 @@ class TestLoadHistoryFile:
             '{"display": "cmd1"}\n'  # Missing project, sessionId, timestamp
             '{"display": "cmd2", "project": "p2"}\n'  # Missing sessionId, timestamp
             '{"display": "cmd3", "project": "p3", "sessionId": "s3", "timestamp": 3000}\n',
-            encoding="utf-8"
+            encoding="utf-8",
         )
 
-        cache = CacheManager(tmp_path / "project", "1.0.0", db_path=tmp_path / "test-cache.db")
+        cache = CacheManager(
+            tmp_path / "project", "1.0.0", db_path=tmp_path / "test-cache.db"
+        )
         count = load_history_file(history_file, cache)
 
         assert count == 3  # All three should be inserted (with defaults for missing)
@@ -231,20 +244,33 @@ class TestLoadHistoryFile:
             b'{"display": "cmd with \\ud800 surrogate", "project": "p1", "sessionId": "s1", "timestamp": 1000}\n'
         )
 
-        cache = CacheManager(tmp_path / "project", "1.0.0", db_path=tmp_path / "test-cache.db")
+        cache = CacheManager(
+            tmp_path / "project", "1.0.0", db_path=tmp_path / "test-cache.db"
+        )
         count = load_history_file(history_file, cache)
 
         assert count == 1
-        cached = cache.get_cached_project_data()
-        # The surrogate should be replaced with replacement char
-        assert cached is not None
+
+        import sqlite3
+
+        conn = sqlite3.connect(tmp_path / "test-cache.db")
+        conn.row_factory = sqlite3.Row
+        cursor = conn.execute("SELECT display FROM history_commands")
+        row = cursor.fetchone()
+        conn.close()
+
+        assert row is not None
+        assert "�" in row["display"]
+        assert "\ud800" not in row["display"]
 
     def test_returns_zero_for_empty_file(self, tmp_path: Path):
         """Returns 0 for empty history file."""
         history_file = tmp_path / "history.jsonl"
         history_file.write_text("", encoding="utf-8")
 
-        cache = CacheManager(tmp_path / "project", "1.0.0", db_path=tmp_path / "test-cache.db")
+        cache = CacheManager(
+            tmp_path / "project", "1.0.0", db_path=tmp_path / "test-cache.db"
+        )
         count = load_history_file(history_file, cache)
 
         assert count == 0
@@ -254,10 +280,12 @@ class TestLoadHistoryFile:
         history_file = tmp_path / "history.jsonl"
         history_file.write_text(
             '{"display": "cmd1", "project": "p1", "sessionId": "s1", "timestamp": 1000}\n',
-            encoding="utf-8"
+            encoding="utf-8",
         )
 
-        cache = CacheManager(tmp_path / "project", "1.0.0", db_path=tmp_path / "test-cache.db")
+        cache = CacheManager(
+            tmp_path / "project", "1.0.0", db_path=tmp_path / "test-cache.db"
+        )
 
         count1 = load_history_file(history_file, cache)
         count2 = load_history_file(history_file, cache)
@@ -268,7 +296,9 @@ class TestLoadHistoryFile:
     def test_handles_missing_file_gracefully(self, tmp_path: Path):
         """Returns 0 when history file doesn't exist."""
         history_file = tmp_path / "nonexistent.jsonl"
-        cache = CacheManager(tmp_path / "project", "1.0.0", db_path=tmp_path / "test-cache.db")
+        cache = CacheManager(
+            tmp_path / "project", "1.0.0", db_path=tmp_path / "test-cache.db"
+        )
 
         # Should not raise, just return 0
         count = load_history_file(history_file, cache)
@@ -402,7 +432,9 @@ class TestCacheManagerPublicAPI:
             uuid="user1",
             timestamp="2023-01-01T10:00:00Z",
             type="user",
-            message=UserMessageModel(role="user", content=[TextContent(type="text", text="Hello")]),
+            message=UserMessageModel(
+                role="user", content=[TextContent(type="text", text="Hello")]
+            ),
         )
 
         # Cache only file1
@@ -439,7 +471,9 @@ class TestCacheManagerPublicAPI:
             uuid="user1",
             timestamp="2023-01-01T10:00:00Z",
             type="user",
-            message=UserMessageModel(role="user", content=[TextContent(type="text", text="Hello")]),
+            message=UserMessageModel(
+                role="user", content=[TextContent(type="text", text="Hello")]
+            ),
         )
 
         cache.save_cached_entries(jsonl_file, [entry])
@@ -482,6 +516,7 @@ class TestAPIExports:
     def test_version_is_accessible(self):
         """Package version is accessible."""
         from claude_code_log import __version__
+
         assert isinstance(__version__, str)
         assert len(__version__) > 0
 
