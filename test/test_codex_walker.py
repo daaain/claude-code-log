@@ -582,6 +582,23 @@ def test_cli_provider_clear_output_never_touches_sessions_tree(
     assert after == before  # sessions tree byte-identical, every rollout intact
 
 
+def test_cli_wholesale_for_provider_without_support_errors_loudly(
+    tmp_path: Path,
+) -> None:
+    """A provider that doesn't implement the wholesale seams (agy) must fail
+    LOUDLY, never crash or silently render nothing — the base default raises and
+    the CLI surfaces it."""
+    from click.testing import CliRunner
+
+    from claude_code_log.cli import main
+
+    result = CliRunner().invoke(
+        main, ["--provider", "agy", "-o", str(tmp_path / "out")]
+    )
+    assert result.exit_code != 0
+    assert "does not support wholesale rendering" in result.output
+
+
 def test_cli_single_session_still_rejects_cache_flags(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
