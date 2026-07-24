@@ -587,13 +587,21 @@ def test_cli_wholesale_for_provider_without_support_errors_loudly(
 ) -> None:
     """A provider that doesn't implement the wholesale seams (agy) must fail
     LOUDLY, never crash or silently render nothing — the base default raises and
-    the CLI surfaces it."""
+    the CLI surfaces it.
+
+    --projects-dir supplies an explicit sessions root so the walker reaches
+    discover_sessions_under (the NotImplementedError) deterministically, rather
+    than short-circuiting on whether an agy data dir happens to exist in the
+    environment (it does on a dev box, not on CI)."""
     from click.testing import CliRunner
 
     from claude_code_log.cli import main
 
+    root = tmp_path / "sessions"
+    root.mkdir()
     result = CliRunner().invoke(
-        main, ["--provider", "agy", "-o", str(tmp_path / "out")]
+        main,
+        ["--provider", "agy", "--projects-dir", str(root), "-o", str(tmp_path / "out")],
     )
     assert result.exit_code != 0
     assert "does not support wholesale rendering" in result.output
