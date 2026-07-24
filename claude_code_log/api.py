@@ -88,6 +88,9 @@ def load_history_file(file_path: Path, cache: CacheManager) -> int:
     import json
     from .cache import scrub_surrogates
 
+    if not file_path.is_file():
+        return 0
+
     commands = []
     with file_path.open(encoding="utf-8", errors="replace") as f:
         for line in f:

@@ -807,6 +807,32 @@ class CacheManager:
             self._update_last_updated(conn)
             conn.commit()
 
+    def insert_history_commands(self, commands: List[Dict[str, Any]]) -> int:
+        """Insert command history records, ignoring duplicates via UNIQUE constraint.
+
+        Args:
+            commands: List of dicts with keys: display, project, sessionId, timestamp
+
+        Returns:
+            Number of new rows inserted (duplicates ignored).
+        """
+        if not commands:
+            return 0
+
+        with self._get_connection() as conn:
+            cursor = conn.executemany(
+                """
+                INSERT OR IGNORE INTO history_commands (display, project, session_id, timestamp_epoch)
+                VALUES (?, ?, ?, ?)
+                """,
+                [
+                    (cmd["display"], cmd["project"], cmd["sessionId"], cmd["timestamp"])
+                    for cmd in commands
+                ],
+            )
+            conn.commit()
+            return cursor.rowcount
+
     def update_session_cache(self, session_data: Dict[str, SessionCacheData]) -> None:
         """Update cached session information."""
         if self._project_id is None:
