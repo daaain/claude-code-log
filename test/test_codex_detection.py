@@ -80,6 +80,16 @@ def test_does_not_detect_directory_without_rollouts(tmp_path: Path) -> None:
     assert CodexProvider().detect_path(tmp_path) is False
 
 
+def test_detects_directory_with_sniff_only_named_rollout(tmp_path: Path) -> None:
+    # A rollout recognised only by the session_meta sniff (non-rollout name)
+    # inside a directory must be detected — symmetric with the single-file sniff,
+    # so a directory of such files can't silent-empty through the Claude parser.
+    nested = tmp_path / "sub"
+    nested.mkdir()
+    _write(nested / "codex-session.jsonl", [_SESSION_META, {"type": "message"}])
+    assert CodexProvider().detect_path(tmp_path) is True
+
+
 def test_directory_discovery_keeps_symlink_containment(tmp_path: Path) -> None:
     # A rollout reachable only via a symlink escaping the root must not count —
     # mirrors the loader's containment rule so an INPUT_PATH dir can't pull in

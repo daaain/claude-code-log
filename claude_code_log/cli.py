@@ -218,18 +218,23 @@ def _run_provider_wholesale(
     ``sessions_root`` None walks the provider's own data dir; a directory
     (an INPUT_PATH dir, or ``--projects-dir``) selects a mini sessions root.
 
-    ``--clear-cache`` / ``--clear-output`` are standalone cleanup ops (clear
-    then exit, mirroring the Claude path), scoped to the provider output root so
-    the pristine sessions tree is never touched (DECIDED #4).
+    ``--clear-cache`` / ``--clear-output`` are scoped to the provider output
+    root so the pristine sessions tree is never touched (DECIDED #4). Mirroring
+    the Claude path, they clear-and-exit on their own, but when a date filter is
+    also given they clear then fall through to REGENERATE the filtered view
+    (else ``--clear-output --from-date`` would leave an empty directory).
     """
     output_root = _resolve_provider_output_root(provider_name, output)
 
+    dated = from_date is not None or to_date is not None
     if clear_cache:
         _clear_provider_cache(output_root)
-        return
+        if not dated:
+            return
     if clear_output:
         _clear_provider_output(output_root, output_format)
-        return
+        if not dated:
+            return
 
     index_path = render_provider_wholesale(
         provider_name,
@@ -1094,6 +1099,17 @@ def main(
         and (input_path is None or input_path.is_dir())
     )
     if provider is not None:
+        # Validate the provider name up front so an unknown one is a clean
+        # UsageError (exit 2), consistent with the other flag errors, instead of
+        # surfacing later as a broad-except "Error converting file" (exit 1).
+        from .providers import discover_providers as _discover_providers
+
+        _known = _discover_providers().get_all_providers()
+        if provider not in _known:
+            raise click.UsageError(
+                f"Unknown provider: {provider}. Available providers: "
+                f"{', '.join(_known) or 'none'}."
+            )
         if input_path is not None and session_id is not None:
             raise click.UsageError(
                 "--provider with an INPUT_PATH renders that path; drop "

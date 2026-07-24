@@ -599,6 +599,150 @@ def test_cli_wholesale_for_provider_without_support_errors_loudly(
     assert "does not support wholesale rendering" in result.output
 
 
+# --------------------------------------------------------------------------
+# Review round: silent-divergence edges (monk MOD/LOW findings).
+# --------------------------------------------------------------------------
+def _sniff_only_rollout(path: Path, thread_id: str, cwd: str) -> Path:
+    """A rollout whose NAME does not match rollout-*.jsonl but whose first line
+    is a session_meta header (detected by sniff, not glob)."""
+    records = [
+        {
+            "timestamp": "2026-01-02T00:00:00Z",
+            "type": "session_meta",
+            "payload": {"id": thread_id, "cwd": cwd},
+        },
+        {
+            "timestamp": "2026-01-02T00:00:01Z",
+            "type": "event_msg",
+            "payload": {"type": "user_message", "message": "sniff-only hello"},
+        },
+    ]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(json.dumps(r) for r in records) + "\n", encoding="utf-8")
+    return path
+
+
+def test_cli_sniff_only_directory_renders_not_silent_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A directory whose rollouts are recognised only by the session_meta sniff
+    (non-rollout filenames) must render via the walker, NOT fall through to an
+    empty Claude parse — symmetric with the single-file sniff path. Covers both
+    auto-detect and explicit --provider."""
+    from click.testing import CliRunner
+
+    from claude_code_log.cli import main
+
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    tree = tmp_path / "tree"
+    _sniff_only_rollout(
+        tree / "codex-session.jsonl", "10000000-0000-4000-8000-000000000001", "/proj/s"
+    )
+
+    auto_out = tmp_path / "auto"
+    auto = CliRunner().invoke(main, [str(tree), "-o", str(auto_out)])
+    assert auto.exit_code == 0, auto.output
+    assert "sniff-only hello" in (
+        auto_out / "-proj-s" / "combined_transcripts.html"
+    ).read_text(encoding="utf-8")
+
+    explicit_out = tmp_path / "explicit"
+    explicit = CliRunner().invoke(
+        main, ["--provider", "codex", str(tree), "-o", str(explicit_out)]
+    )
+    assert explicit.exit_code == 0, explicit.output
+    assert (explicit_out / "-proj-s" / "combined_transcripts.html").exists()
+
+
+def test_cli_empty_provider_directory_errors_loudly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A directory with no discoverable sessions must fail LOUDLY, never write
+    an empty index and exit 0 (silent empty-success)."""
+    from click.testing import CliRunner
+
+    from claude_code_log.cli import main
+
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    # A plain (non-rollout, non-sniff) .jsonl must not count.
+    (empty / "notes.jsonl").write_text(
+        json.dumps({"type": "user", "message": "hi"}) + "\n", encoding="utf-8"
+    )
+    result = CliRunner().invoke(
+        main, ["--provider", "codex", str(empty), "-o", str(tmp_path / "out")]
+    )
+    assert result.exit_code != 0
+    assert "No codex sessions found" in result.output
+
+
+def test_cli_provider_clear_output_with_date_regenerates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--clear-output WITH a date filter clears then REGENERATES the filtered
+    view (mirroring the Claude path), rather than clearing and leaving an empty
+    directory."""
+    from click.testing import CliRunner
+
+    from claude_code_log.cli import main
+
+    monkeypatch.setenv("CODEX_HOME", str(_codex_home_with_sessions(tmp_path)))
+    out = tmp_path / "out"
+    CliRunner().invoke(main, ["--provider", "codex", "-o", str(out)])
+    assert list(out.rglob("session-*.html"))
+
+    # A from-date that includes all fixture content: clear + rebuild.
+    result = CliRunner().invoke(
+        main,
+        [
+            "--provider",
+            "codex",
+            "--clear-output",
+            "--from-date",
+            "2020-01-01",
+            "-o",
+            str(out),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert (out / "index.html").exists()
+    assert list(out.rglob("session-*.html"))  # regenerated, not left empty
+
+
+def test_cli_clear_output_without_date_clears_and_exits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Contrast: with NO date filter, --clear-output clears and exits (no
+    regeneration), so the directory is left empty."""
+    from click.testing import CliRunner
+
+    from claude_code_log.cli import main
+
+    monkeypatch.setenv("CODEX_HOME", str(_codex_home_with_sessions(tmp_path)))
+    out = tmp_path / "out"
+    CliRunner().invoke(main, ["--provider", "codex", "-o", str(out)])
+    result = CliRunner().invoke(
+        main, ["--provider", "codex", "--clear-output", "-o", str(out)]
+    )
+    assert result.exit_code == 0, result.output
+    assert not (out / "index.html").exists()
+    assert not list(out.rglob("session-*.html"))
+
+
+def test_cli_unknown_provider_is_clean_usage_error(tmp_path: Path) -> None:
+    """An unknown --provider is a clean UsageError (exit 2), not a broad-except
+    'Error converting file' (exit 1)."""
+    from click.testing import CliRunner
+
+    from claude_code_log.cli import main
+
+    result = CliRunner().invoke(
+        main, ["--provider", "bogus", "-o", str(tmp_path / "out")]
+    )
+    assert result.exit_code == 2
+    assert "Unknown provider: bogus" in result.output
+
+
 def test_cli_single_session_still_rejects_cache_flags(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

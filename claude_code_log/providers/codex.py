@@ -201,14 +201,24 @@ def _looks_like_rollout_file(path: Path) -> bool:
 
 
 def _contained_rollouts(root: Path) -> Iterator[Path]:
-    """Yield ``rollout-*.jsonl`` files under *root*, resolving symlinks but
-    keeping containment (mirrors ``_rollout_paths``): a symlink escaping *root*
-    is skipped, so an INPUT_PATH directory can't pull in outside files."""
+    """Yield rollout files under *root*, resolving symlinks but keeping
+    containment (mirrors ``_rollout_paths``): a symlink escaping *root* is
+    skipped, so an INPUT_PATH directory can't pull in outside files.
+
+    A file counts as a rollout by the SAME rule ``_looks_like_rollout_file``
+    applies to a single file — the ``rollout-*.jsonl`` name, else a first-line
+    ``session_meta`` sniff — so a directory of sniff-only-named rollouts is
+    discovered exactly as the equivalent standalone file is, never silently
+    dropped to an empty Claude parse."""
     resolved_root = root.resolve()
-    for candidate in root.rglob(_ROLLOUT_GLOB):
+    for candidate in root.rglob("*.jsonl"):
         try:
             resolved = candidate.resolve()
-            if candidate.is_file() and resolved.is_relative_to(resolved_root):
+            if (
+                candidate.is_file()
+                and resolved.is_relative_to(resolved_root)
+                and _looks_like_rollout_file(candidate)
+            ):
                 yield resolved
         except OSError:
             continue
@@ -356,12 +366,20 @@ class CodexProvider(BaseProvider):
         # layouts.  archived_sessions is deliberately outside this v1 root.
         # ``sessions_root`` is the directory to walk directly: the data dir's
         # ``sessions/`` subdir, or a directory handed in as an INPUT_PATH.
+        # Match by ``_looks_like_rollout_file`` (name OR first-line sniff), the
+        # same rule single-file detection uses, so a sniff-only-named rollout in
+        # a directory is discovered — not silently dropped. Real data dirs hold
+        # only ``rollout-*.jsonl``, which short-circuits on the name (no read).
         resolved_root = sessions_root.resolve()
         paths: set[Path] = set()
-        for path in sessions_root.rglob(_ROLLOUT_GLOB):
+        for path in sessions_root.rglob("*.jsonl"):
             try:
                 resolved = path.resolve()
-                if path.is_file() and resolved.is_relative_to(resolved_root):
+                if (
+                    path.is_file()
+                    and resolved.is_relative_to(resolved_root)
+                    and _looks_like_rollout_file(path)
+                ):
                     paths.add(resolved)
             except OSError:
                 continue

@@ -2898,6 +2898,16 @@ def render_provider_wholesale(
         sessions_root = data_dir / "sessions"
 
     infos = list(provider.discover_sessions_under(sessions_root))
+    if not infos:
+        # No sessions discovered under an explicitly-targeted root. Fail LOUDLY
+        # rather than write an empty index and exit 0 — a silent empty-success
+        # here is indistinguishable from "rendered a rollout as nothing", the
+        # exact gap the modalities work closes. (A non-empty tree that is merely
+        # filtered to nothing by --from/--to still renders an empty index; that
+        # is a deliberate, legible filter result, not this.)
+        raise FileNotFoundError(
+            f"No {provider_name} sessions found under {sessions_root}."
+        )
 
     # Group by cwd (DECIDED #3). The no-cwd bucket (key None) sorts last.
     groups: dict[Optional[str], list[SessionInfo]] = {}

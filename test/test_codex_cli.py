@@ -51,6 +51,11 @@ class FakeRegistry:
     def get_provider(self, name: str):
         return self.provider if name == "codex" else None
 
+    def get_all_providers(self) -> list[str]:
+        # The CLI validates --provider against this up front (clean UsageError
+        # for an unknown name). The stub only knows "codex" when it has one.
+        return ["codex"] if self.provider is not None else []
+
 
 @pytest.fixture
 def provider(monkeypatch: pytest.MonkeyPatch) -> FakeProvider:
