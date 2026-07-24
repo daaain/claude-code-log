@@ -117,7 +117,10 @@ def test_discover_under_groups_by_cwd(tmp_path: Path) -> None:
     infos = list(CodexProvider().discover_sessions_under(tmp_path))
     by_cwd: dict[str | None, int] = {}
     for info in infos:
-        key = str(info.project_path) if info.project_path is not None else None
+        # as_posix() so the grouping key is separator-stable across platforms
+        # (str(WindowsPath("/proj/a")) is "\\proj\\a"); the recorded cwds are
+        # POSIX paths and the counts are what this pins.
+        key = info.project_path.as_posix() if info.project_path is not None else None
         by_cwd[key] = by_cwd.get(key, 0) + 1
 
     assert by_cwd == {"/proj/a": 2, "/proj/b": 2, None: 1}
