@@ -372,3 +372,229 @@ def test_cli_provider_wholesale_rejects_pagination_and_jobs_for_now(
     result = CliRunner().invoke(main, ["--provider", "codex", "-o", str(out), *extra])
     assert result.exit_code != 0
     assert "does not support" in result.output and extra[0] in result.output
+
+
+# --------------------------------------------------------------------------
+# M3 cache participation: render-skip, byte-stability, --no-cache.
+#
+# These use a content-TAMPER probe rather than mtimes: after a render we
+# overwrite each page with a sentinel, render again, and check which sentinels
+# survive. A surviving sentinel == the page was skipped; a replaced sentinel ==
+# the page was re-rendered. This is robust against coarse filesystem mtime
+# resolution and parallel-run timing.
+# --------------------------------------------------------------------------
+_TAMPER = "<!-- TAMPERED-SENTINEL -->"
+
+
+def _tamper_all(out: Path) -> list[Path]:
+    # Append (don't overwrite): the version marker lives in the first few lines
+    # and drives the staleness check — clobbering it would force a re-render and
+    # defeat the probe. Appending leaves the marker intact, so a skipped page
+    # keeps the sentinel while a re-rendered page (full overwrite) loses it.
+    pages = sorted(out.rglob("*.html"))
+    for page in pages:
+        with page.open("a", encoding="utf-8") as handle:
+            handle.write("\n" + _TAMPER + "\n")
+    return pages
+
+
+def _survived(page: Path) -> bool:
+    return _TAMPER in page.read_text(encoding="utf-8")
+
+
+def test_walker_cache_db_lives_under_output_root(tmp_path: Path) -> None:
+    out = tmp_path / "ccl"
+    render_provider_wholesale("codex", SESSIONS_ROOT, out, silent=True)
+    assert (out / "claude-code-log-cache.db").exists()
+    # DECIDED #4: nothing is written into the sessions tree.
+    assert not list(SESSIONS_ROOT.rglob("claude-code-log-cache.db"))
+
+
+def test_walker_warm_run_is_byte_stable(tmp_path: Path) -> None:
+    out = tmp_path / "ccl"
+    render_provider_wholesale("codex", SESSIONS_ROOT, out, silent=True)
+    cold = {
+        str(p.relative_to(out)): p.read_bytes() for p in sorted(out.rglob("*.html"))
+    }
+
+    render_provider_wholesale("codex", SESSIONS_ROOT, out, silent=True)
+    warm = {
+        str(p.relative_to(out)): p.read_bytes() for p in sorted(out.rglob("*.html"))
+    }
+
+    assert set(cold) == set(warm)
+    assert all(cold[k] == warm[k] for k in cold)  # byte-stable warm vs cold
+
+
+def test_walker_warm_run_skips_unchanged_pages(tmp_path: Path) -> None:
+    out = tmp_path / "ccl"
+    render_provider_wholesale("codex", SESSIONS_ROOT, out, silent=True)
+    _tamper_all(out)
+
+    render_provider_wholesale("codex", SESSIONS_ROOT, out, silent=True)
+
+    for page in sorted(out.rglob("*.html")):
+        rel = str(page.relative_to(out))
+        if rel == "index.html":
+            assert not _survived(page), "index must always be regenerated"
+        else:
+            assert _survived(page), f"{rel} should have been skipped (cache hit)"
+
+
+def test_walker_cache_rerenders_only_changed_session(tmp_path: Path) -> None:
+    tree = tmp_path / "sessions"
+    a = _rollout(tree, "a.jsonl", "10000000-0000-4000-8000-000000000001", "/proj/a")
+    _rollout(tree, "b.jsonl", "20000000-0000-4000-8000-000000000002", "/proj/b")
+    out = tmp_path / "ccl"
+
+    render_provider_wholesale("codex", tree, out, silent=True)
+    _tamper_all(out)
+
+    # Grow session A's transcript (a new visible message → message-count drift,
+    # which the cache detects regardless of the 1s mtime tolerance window).
+    records = a.read_text(encoding="utf-8").rstrip("\n").split("\n")
+    records.append(
+        json.dumps(
+            {
+                "timestamp": "2026-01-02T00:00:03Z",
+                "type": "event_msg",
+                "payload": {"type": "agent_message", "message": "one more turn"},
+            }
+        )
+    )
+    a.write_text("\n".join(records) + "\n", encoding="utf-8")
+
+    render_provider_wholesale("codex", tree, out, silent=True)
+
+    a_page = out / "-proj-a/session-10000000-0000-4000-8000-000000000001.html"
+    b_page = out / "-proj-b/session-20000000-0000-4000-8000-000000000002.html"
+    assert not _survived(a_page)  # changed session was re-rendered
+    assert _survived(b_page)  # untouched session was skipped
+    # A's project combined page also re-renders; B's does not.
+    assert not _survived(out / "-proj-a/combined_transcripts.html")
+    assert _survived(out / "-proj-b/combined_transcripts.html")
+
+
+def test_walker_no_cache_rewrites_every_run(tmp_path: Path) -> None:
+    out = tmp_path / "ccl"
+    render_provider_wholesale("codex", SESSIONS_ROOT, out, use_cache=False, silent=True)
+    _tamper_all(out)
+    render_provider_wholesale("codex", SESSIONS_ROOT, out, use_cache=False, silent=True)
+
+    # No cache DB is created, and every page is rewritten (no sentinel survives).
+    assert not (out / "claude-code-log-cache.db").exists()
+    for page in sorted(out.rglob("*.html")):
+        assert not _survived(page), f"{page.relative_to(out)} should be rewritten"
+
+
+# --------------------------------------------------------------------------
+# M3 CLI flag flips: --no-cache / --clear-cache / --clear-output.
+# --------------------------------------------------------------------------
+def _snapshot_tree(root: Path) -> dict[str, bytes]:
+    return {
+        str(p.relative_to(root)): p.read_bytes()
+        for p in sorted(root.rglob("*"))
+        if p.is_file()
+    }
+
+
+def test_cli_provider_no_cache_renders_without_db(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from click.testing import CliRunner
+
+    from claude_code_log.cli import main
+
+    monkeypatch.setenv("CODEX_HOME", str(_codex_home_with_sessions(tmp_path)))
+    out = tmp_path / "out"
+    result = CliRunner().invoke(
+        main, ["--provider", "codex", "--no-cache", "-o", str(out)]
+    )
+    assert result.exit_code == 0, result.output
+    assert (out / "index.html").exists()
+    assert not (out / "claude-code-log-cache.db").exists()
+
+
+def test_cli_provider_clear_cache_removes_db(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from click.testing import CliRunner
+
+    from claude_code_log.cli import main
+
+    monkeypatch.setenv("CODEX_HOME", str(_codex_home_with_sessions(tmp_path)))
+    out = tmp_path / "out"
+    CliRunner().invoke(main, ["--provider", "codex", "-o", str(out)])
+    assert (out / "claude-code-log-cache.db").exists()
+
+    result = CliRunner().invoke(
+        main, ["--provider", "codex", "--clear-cache", "-o", str(out)]
+    )
+    assert result.exit_code == 0, result.output
+    assert not (out / "claude-code-log-cache.db").exists()
+    assert "Cleared provider cache" in result.output
+
+
+def test_cli_provider_clear_output_removes_generated_files_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from click.testing import CliRunner
+
+    from claude_code_log.cli import main
+
+    monkeypatch.setenv("CODEX_HOME", str(_codex_home_with_sessions(tmp_path)))
+    out = tmp_path / "out"
+    CliRunner().invoke(main, ["--provider", "codex", "-o", str(out)])
+    assert (out / "index.html").exists()
+    assert list(out.rglob("session-*.html"))
+
+    result = CliRunner().invoke(
+        main, ["--provider", "codex", "--clear-output", "-o", str(out)]
+    )
+    assert result.exit_code == 0, result.output
+    assert not (out / "index.html").exists()
+    assert not list(out.rglob("session-*.html"))
+    assert not list(out.rglob("combined_transcripts*.html"))
+
+
+def test_cli_provider_clear_output_never_touches_sessions_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """DECIDED #4 pin: --clear-output removes generated files under the output
+    root only; the pristine sessions tree is byte-identical afterwards and every
+    rollout still present."""
+    from click.testing import CliRunner
+
+    from claude_code_log.cli import main
+
+    home = _codex_home_with_sessions(tmp_path)
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    sessions = home / "sessions"
+    before = _snapshot_tree(sessions)
+    assert before  # sanity: the tree has rollouts
+
+    # Default output root is <codex_home>/claude-code-log/ (no -o).
+    CliRunner().invoke(main, ["--provider", "codex"])
+    result = CliRunner().invoke(main, ["--provider", "codex", "--clear-output"])
+    assert result.exit_code == 0, result.output
+
+    after = _snapshot_tree(sessions)
+    assert after == before  # sessions tree byte-identical, every rollout intact
+
+
+def test_cli_single_session_still_rejects_cache_flags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cache flags remain illegal in single-session mode (they only apply to
+    the wholesale hierarchy)."""
+    from click.testing import CliRunner
+
+    from claude_code_log.cli import main
+
+    monkeypatch.setenv("CODEX_HOME", str(_codex_home_with_sessions(tmp_path)))
+    result = CliRunner().invoke(
+        main,
+        ["--provider", "codex", "--session-id", "10000000", "--no-cache"],
+    )
+    assert result.exit_code != 0
+    assert "does not support" in result.output and "--no-cache" in result.output

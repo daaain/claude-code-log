@@ -28,6 +28,9 @@ class SessionInfo:
     project_path: Optional[Path] = None
     message_count: int = 0
     total_tokens: int = 0
+    # Absolute path to the session's source file, when it has a single one.
+    # The wholesale walker keys source-mtime cache staleness off this.
+    source_path: Optional[Path] = None
 
 
 def extract_text(content: Any) -> str:

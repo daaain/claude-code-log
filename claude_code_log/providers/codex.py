@@ -288,6 +288,7 @@ class CodexProvider(BaseProvider):
                 created_at=identity.created_at or file_mtime_iso(identity.path),
                 updated_at=file_mtime_iso(identity.path),
                 project_path=identity.cwd,
+                source_path=identity.path,
                 parent_thread_id=identity.parent_thread_id,
                 forked_from_id=identity.forked_from_id,
                 spawn_call_id=identity.spawn_call_id,

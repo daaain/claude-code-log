@@ -208,14 +208,29 @@ def _run_provider_wholesale(
     write_individual: bool,
     from_date: "Optional[str]",
     to_date: "Optional[str]",
+    no_cache: bool,
+    clear_cache: bool,
+    clear_output: bool,
     open_browser: bool,
 ) -> None:
     """Render a whole provider sessions tree into a project hierarchy.
 
     ``sessions_root`` None walks the provider's own data dir; a directory
     (an INPUT_PATH dir, or ``--projects-dir``) selects a mini sessions root.
+
+    ``--clear-cache`` / ``--clear-output`` are standalone cleanup ops (clear
+    then exit, mirroring the Claude path), scoped to the provider output root so
+    the pristine sessions tree is never touched (DECIDED #4).
     """
     output_root = _resolve_provider_output_root(provider_name, output)
+
+    if clear_cache:
+        _clear_provider_cache(output_root)
+        return
+    if clear_output:
+        _clear_provider_output(output_root, output_format)
+        return
+
     index_path = render_provider_wholesale(
         provider_name,
         sessions_root,
@@ -230,10 +245,57 @@ def _run_provider_wholesale(
         no_recaps=no_recaps,
         write_combined=write_combined,
         write_individual=write_individual,
+        use_cache=not no_cache,
         silent=False,
     )
     if open_browser:
         click.launch(str(index_path))
+
+
+def _clear_provider_cache(output_root: Path) -> None:
+    """Delete the provider wholesale cache DB (and its WAL/SHM sidecars) under
+    the output root. Never touches the sessions tree — the DB lives beside the
+    generated output, not inside the sources."""
+    from .cache import get_cache_db_path
+
+    db = get_cache_db_path(output_root)
+    removed = False
+    for path in (db, db.with_name(db.name + "-wal"), db.with_name(db.name + "-shm")):
+        if path.exists():
+            try:
+                path.unlink()
+                removed = True
+            except OSError as exc:
+                click.echo(f"  Warning: failed to delete {path}: {exc}")
+    click.echo(
+        f"Cleared provider cache database: {db}"
+        if removed
+        else f"No provider cache database at {db}."
+    )
+
+
+def _clear_provider_output(output_root: Path, output_format: str) -> None:
+    """Remove generated output files under the provider output root only.
+
+    Scoped by known generated filenames (index + per-project
+    ``combined_transcripts*`` / ``session-*``), so unrelated files — and every
+    file in the sessions tree, which lives elsewhere — are left untouched."""
+    file_ext = get_file_extension(output_format)
+    removed = 0
+    if output_root.is_dir():
+        index_file = output_root / get_index_filename(output_format)
+        if index_file.exists():
+            index_file.unlink()
+            removed += 1
+        for project_dir in output_root.iterdir():
+            if not project_dir.is_dir():
+                continue
+            for generated in _list_generated_outputs(project_dir, file_ext):
+                generated.unlink()
+                removed += 1
+    click.echo(
+        f"Cleared {removed} generated {file_ext.upper()} file(s) under {output_root}."
+    )
 
 
 def _install_stack_dump_signal() -> None:
@@ -1047,20 +1109,11 @@ def main(
         ):
             if enabled:
                 conflicts.append(flag)
-        # Cache flags: provider wholesale does not yet participate in the cache
-        # (separate milestone); reject rather than silently ignore.
-        for enabled, flag in (
-            (no_cache, "--no-cache"),
-            (clear_cache, "--clear-cache"),
-            (clear_output, "--clear-output"),
-        ):
-            if enabled:
-                conflicts.append(flag)
         if provider_wholesale:
-            # Wholesale honors --combined, date range, -o/-f, --open-browser.
-            # Pagination (--page-size) and job-parallelism (--jobs) ride on the
-            # cache machinery that lands in a later milestone, so reject them
-            # loudly rather than accept-and-silently-ignore (no silent no-ops).
+            # Wholesale honors --combined, date range, -o/-f, --open-browser, and
+            # the cache flags (--no-cache/--clear-cache/--clear-output). Only
+            # pagination (--page-size) and job-parallelism (--jobs) remain
+            # deferred, so reject those loudly rather than accept-and-ignore.
             if jobs is not None:
                 conflicts.append("--jobs")
             if (
@@ -1070,13 +1123,16 @@ def main(
                 conflicts.append("--page-size")
         else:
             # export / single-file render one session; the wholesale-only flags
-            # (multi-project hierarchy, pagination, date range) don't apply.
+            # (multi-project hierarchy, pagination, date range, cache) don't apply.
             for enabled, flag in (
                 (all_projects, "--all-projects"),
                 (projects_dir is not None, "--projects-dir"),
                 (no_individual_sessions, "--no-individual-sessions"),
                 (from_date is not None, "--from-date"),
                 (to_date is not None, "--to-date"),
+                (no_cache, "--no-cache"),
+                (clear_cache, "--clear-cache"),
+                (clear_output, "--clear-output"),
             ):
                 if enabled:
                     conflicts.append(flag)
@@ -1296,6 +1352,9 @@ def main(
                     write_individual,
                     from_date,
                     to_date,
+                    no_cache,
+                    clear_cache,
+                    clear_output,
                     open_browser,
                 )
                 return
@@ -1682,6 +1741,9 @@ def main(
                         write_individual,
                         from_date,
                         to_date,
+                        no_cache,
+                        clear_cache,
+                        clear_output,
                         open_browser,
                     )
                     return

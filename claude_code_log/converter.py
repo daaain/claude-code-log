@@ -37,6 +37,7 @@ from .cache import (
     CacheManager,
     SessionCacheData,
     get_all_cached_projects,
+    get_cache_db_path,
     get_library_version,
 )
 from .parser import parse_timestamp
@@ -2816,6 +2817,32 @@ def _first_user_text(messages: List[TranscriptEntry]) -> Optional[str]:
     return None
 
 
+def _wholesale_should_render(
+    cache: Optional[CacheManager],
+    output_name: str,
+    session_id: Optional[str],
+    dest_dir: Path,
+    source_changed: bool,
+) -> bool:
+    """Whether a wholesale output file must be (re)written.
+
+    Conservative render-skip: with no cache, always render. Otherwise render on
+    ANY staleness signal — the source rollout changed since the last run, or
+    ``is_transcript_stale`` reports the on-disk file missing / version-stale /
+    message-count-drifted. Skip only when both agree the file is current; a skip
+    leaves the byte-identical file in place (rendering is deterministic, so
+    warm output equals cold output either way).
+    """
+    if cache is None:
+        return True
+    if source_changed:
+        return True
+    stale, _reason = cache.is_transcript_stale(
+        output_name, session_id=session_id, output_dir=dest_dir
+    )
+    return stale
+
+
 def render_provider_wholesale(
     provider_name: str,
     sessions_root: Optional[Path],
@@ -2830,6 +2857,7 @@ def render_provider_wholesale(
     no_recaps: bool = False,
     write_combined: bool = True,
     write_individual: bool = True,
+    use_cache: bool = True,
     silent: bool = False,
 ) -> Path:
     """Render every session of one provider under ``sessions_root`` into a
@@ -2844,9 +2872,14 @@ def render_provider_wholesale(
     INPUT_PATH). Output lands under ``output_root`` (the caller resolves the
     default ``<provider_home>/claude-code-log/`` and any ``-o`` override).
 
-    Cache participation and paginated combined pages are intentionally out of
-    this milestone — the combined page is a single unpaginated document, like
-    :func:`render_normalized_session_file` (both pass ``cache_manager=None``).
+    With ``use_cache`` the run participates in a SQLite cache under
+    ``output_root`` (``claude-code-log-cache.db``, honoring
+    ``CLAUDE_CODE_LOG_CACHE_PATH``): unchanged sessions/combined pages are
+    skipped by source mtime + output staleness, keyed on the synthetic output
+    project dir so the pristine sessions tree is never touched. Paginated
+    combined pages remain out of scope (the combined page is a single
+    unpaginated document); byte-stability across warm/cold runs is guaranteed
+    by deterministic rendering regardless.
     """
     from .providers import SessionInfo, discover_providers
 
@@ -2876,6 +2909,11 @@ def render_provider_wholesale(
 
     ext = get_file_extension(output_format)
     suffix = _variant_suffix(depth, compact, output_format, no_timestamps, no_recaps)
+    library_version = get_library_version()
+    cache_db_path = get_cache_db_path(output_root) if use_cache else None
+    # The cache DB lives directly under output_root, so the root must exist
+    # before the first CacheManager opens it (also where the index is written).
+    output_root.mkdir(parents=True, exist_ok=True)
 
     project_summaries: list[dict[str, Any]] = []
 
@@ -2887,34 +2925,96 @@ def render_provider_wholesale(
         working_directories = [group_key] if group_key is not None else []
         project_title = get_project_display_name(project_dirname, working_directories)
 
-        session_dicts: list[dict[str, Any]] = []
-        combined_messages: list[TranscriptEntry] = []
-        last_modified = 0.0
-
+        # Phase 1 — load every session in the project fresh. v1 always re-parses
+        # rollouts (cache-backed load is a documented deferral); only rendering
+        # is skipped when unchanged.
+        loaded: list[tuple[SessionInfo, list[TranscriptEntry]]] = []
         for info in group_infos:
             messages = list(provider.load_session_under(sessions_root, info.session_id))
             if from_date or to_date:
                 messages = filter_messages_by_date(messages, from_date, to_date)
-            if not messages:
-                continue
+            if messages:
+                loaded.append((info, messages))
 
+        if not loaded:
+            continue  # everything in this project was empty / filtered out
+
+        combined_messages: list[TranscriptEntry] = [
+            m for _info, msgs in loaded for m in msgs
+        ]
+
+        # Phase 2 — populate the cache and capture the pre-render modified set.
+        cache: Optional[CacheManager] = None
+        modified_sources: set[Path] = set()
+        session_counts: dict[str, int] = {}
+        if use_cache:
+            cache = CacheManager(dest_dir, library_version, db_path=cache_db_path)
+            source_paths = [
+                info.source_path for info, _ in loaded if info.source_path is not None
+            ]
+            with cache.batch():
+                # get_modified_files reads the PRIOR run's mtimes, so it must run
+                # before save_cached_entries overwrites them.
+                modified_sources = {
+                    p.resolve() for p in cache.get_modified_files(source_paths)
+                }
+                merged_session_data: dict[str, SessionCacheData] = {}
+                for info, messages in loaded:
+                    if info.source_path is not None:
+                        # DEFERRED (tracked in work/codex-backlog.md): populating
+                        # the messages table gives schema uniformity and a future
+                        # cache-backed-load flip. v1 never LOADS from it — the
+                        # walker always re-parses rollouts (cheap, and it avoids a
+                        # serialization round-trip fidelity risk). subagents_fp=""
+                        # because codex has no sidecar tree, so the fingerprint
+                        # stays stable across runs.
+                        cache.save_cached_entries(
+                            info.source_path, messages, subagents_fp=""
+                        )
+                    merged_session_data.update(compute_session_data(messages))
+                cache.update_session_cache(merged_session_data)
+                cache.update_project_aggregates(
+                    **compute_project_aggregates(combined_messages)
+                )
+            session_counts = {
+                sid: sd.message_count for sid, sd in merged_session_data.items()
+            }
+
+        # Phase 3 — build index cards and render per-session pages (skipping
+        # unchanged ones).
+        session_dicts: list[dict[str, Any]] = []
+        last_modified = 0.0
+        for info, messages in loaded:
             session_key = info.session_id
             session_title = info.title or f"{provider_name.title()}: {session_key}"
             if write_individual:
-                render_normalized_session_file(
-                    messages,
-                    session_key,
-                    dest_dir / f"session-{session_key}{suffix}.{ext}",
-                    output_format,
-                    session_title,
-                    image_export_mode,
-                    depth,
-                    compact,
-                    no_timestamps,
-                    no_recaps,
-                    suppress_combined_link=not write_combined,
+                output_name = f"session-{session_key}{suffix}.{ext}"
+                source_changed = (
+                    info.source_path is not None
+                    and info.source_path.resolve() in modified_sources
                 )
-            combined_messages.extend(messages)
+                if _wholesale_should_render(
+                    cache, output_name, session_key, dest_dir, source_changed
+                ):
+                    render_normalized_session_file(
+                        messages,
+                        session_key,
+                        dest_dir / output_name,
+                        output_format,
+                        session_title,
+                        image_export_mode,
+                        depth,
+                        compact,
+                        no_timestamps,
+                        no_recaps,
+                        suppress_combined_link=not write_combined,
+                    )
+                    if cache is not None:
+                        cache.update_html_cache(
+                            output_name,
+                            session_key,
+                            session_counts.get(session_key, len(messages)),
+                        )
 
             first_ts, last_ts = _entry_timestamp_range(messages)
             first_user = _first_user_text(messages)
@@ -2942,29 +3042,32 @@ def render_provider_wholesale(
                 }
             )
 
-        if not session_dicts:
-            continue  # everything in this project was empty / filtered out
-
         combined_name = f"combined_transcripts{suffix}.{ext}"
         if write_combined:
-            combined_renderer = get_renderer(
-                output_format,
-                image_export_mode,
-                depth=depth,
-                compact=compact,
-                no_timestamps=no_timestamps,
-                no_recaps=no_recaps,
-            )
-            combined_content = combined_renderer.generate(
-                combined_messages,
-                project_title,
-                output_dir=dest_dir,
-            )
-            assert combined_content is not None
-            dest_dir.mkdir(parents=True, exist_ok=True)
-            (dest_dir / combined_name).write_text(
-                combined_content, encoding="utf-8", errors="replace"
-            )
+            # Any changed session in the project invalidates the combined page.
+            if _wholesale_should_render(
+                cache, combined_name, None, dest_dir, bool(modified_sources)
+            ):
+                combined_renderer = get_renderer(
+                    output_format,
+                    image_export_mode,
+                    depth=depth,
+                    compact=compact,
+                    no_timestamps=no_timestamps,
+                    no_recaps=no_recaps,
+                )
+                combined_content = combined_renderer.generate(
+                    combined_messages,
+                    project_title,
+                    output_dir=dest_dir,
+                )
+                assert combined_content is not None
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                (dest_dir / combined_name).write_text(
+                    combined_content, encoding="utf-8", errors="replace"
+                )
+                if cache is not None:
+                    cache.update_html_cache(combined_name, None, len(combined_messages))
 
         first_ts_all, last_ts_all = _entry_timestamp_range(combined_messages)
         project_summaries.append(
