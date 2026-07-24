@@ -673,6 +673,25 @@ def test_interleaving_out_of_order_fails_closed() -> None:
     )
 
 
+def test_interleaving_sentinel_position_conflict_fails_closed() -> None:
+    """A strict-interleaved sequence where an output row's execution SLOT and its
+    surviving sentinel DISAGREE about which call it belongs to must fail closed —
+    the sentinel is the ground truth, so a slot-vs-sentinel conflict means the
+    positional attribution is wrong. Here row 2 sits in call ``c``'s slot but its
+    sentinel references call ``a``; without the conflict guard the laundered
+    middle row would be mis-attributed (idx [0, 1, 2])."""
+    assert (
+        analyze_javascript_tools(
+            "const a = await tools.getA({}); text(a.output);"
+            " const b = await tools.getB({});"
+            " let d; try { d = JSON.parse(b.output); } catch (e) { d = 0; }"
+            ' text(d ? d.n : "z");'
+            " const c = await tools.getC({}); void c.output; text(a.output);"
+        )
+        is None
+    )
+
+
 def test_interleaved_mixed_provenance_is_recovered() -> None:
     """A multi-call sequence that keeps the sentinel on one row and launders the
     next is attributed by position: the sentinel row self-identifies its call

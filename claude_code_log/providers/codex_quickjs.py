@@ -700,6 +700,16 @@ def _relax_interleaved(
     no object-key projection) — any disagreement between the sentinel and the
     position is a conflict and fails closed. Count mismatch, unread call,
     non-monotone order, missing ``after``, or a composed sentinel row → None.
+
+    Known contrived limitation: the read check is GLOBAL (every call read
+    *somewhere*), not per-row — a *laundered* row carries no sentinel to
+    cross-check, so it is placed purely by slot. A snippet whose row j reads a
+    DIFFERENT call than ``real_idxs[j]`` yet still satisfies the global check via
+    a **dead** read of ``real_idxs[j]`` would be mis-attributed. Reaching it
+    requires an unused read of the slot-call (a real snippet uses what it reads,
+    which would add another content row and trip the count check), and reads
+    can't be shown dead in this static model — so this is accepted rather than
+    guarded against.
     """
     m = len(content)
     if (
