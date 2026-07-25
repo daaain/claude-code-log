@@ -1232,20 +1232,31 @@ def main(
     # through the single-file path which doesn't honour these flags).
     from .utils import output_path_is_file as _output_path_is_file
 
+    # Provider wholesale honours --expand-paths/--filter-path (it defaults its
+    # own output root and forwards the flags), so the Claude-path "these are
+    # no-ops here" warnings would LIE for it — announce "ignoring" for a run that
+    # actually projects. Exempt provider_wholesale from both; keep them verbatim
+    # for every other mode, where they remain correct.
     will_run_all_projects = all_projects or input_path is None
     if (expand_paths or filter_path) and tui:
         click.echo(
             "Warning: --expand-paths / --filter-path are ignored in --tui mode.",
             err=True,
         )
-    elif (expand_paths or filter_path) and not will_run_all_projects:
+    elif (
+        (expand_paths or filter_path)
+        and not will_run_all_projects
+        and not provider_wholesale
+    ):
         click.echo(
             "Warning: --expand-paths / --filter-path require --all-projects "
             "(or omitting INPUT_PATH); ignoring.",
             err=True,
         )
-    elif (expand_paths or filter_path) and (
-        output is None or _output_path_is_file(output)
+    elif (
+        (expand_paths or filter_path)
+        and not provider_wholesale
+        and (output is None or _output_path_is_file(output))
     ):
         click.echo(
             "Warning: --expand-paths / --filter-path require --output to be a "

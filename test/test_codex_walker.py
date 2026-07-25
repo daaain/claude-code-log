@@ -450,6 +450,61 @@ def test_cli_provider_expand_paths_flips_combined_default_to_no(
     assert list(override_out.rglob("combined_transcripts.html"))  # explicit override
 
 
+def test_cli_provider_expand_paths_no_output_does_not_warn_ignoring(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The natural invocation — `--provider codex --all-projects --expand-paths`
+    with NO -o — must NOT print the Claude-path "ignoring" warning. Provider
+    wholesale defaults its own output root (<provider_home>/claude-code-log/) and
+    honours the flags, so the warning would LIE about a run that actually
+    projects. Regression for the stale-warning bug (every verification run had
+    passed -o, so nothing exercised the default-output path).
+
+    Mutation-check (main 6335): drop the `not provider_wholesale` exemption on the
+    --output warning in cli.py → this test goes RED (the false warning returns).
+    """
+    from click.testing import CliRunner
+
+    from claude_code_log.cli import main
+
+    home = _codex_home_with_sessions(tmp_path)  # sessions with cwds /proj/a,/proj/b
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    result = CliRunner().invoke(
+        main, ["--provider", "codex", "--all-projects", "--expand-paths"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "ignoring" not in result.output  # no false "ignoring" warning
+    # ...and the expansion actually happened, under the DEFAULT output root:
+    # /proj/a projects to <home>/claude-code-log/proj/a (combined defaults to
+    # "no" under --expand-paths, so per-session files are the evidence).
+    projected = home / "claude-code-log" / "proj" / "a"
+    assert list(projected.glob("session-*.html")), result.output
+
+
+def test_cli_expand_paths_still_warns_where_it_is_a_real_no_op(tmp_path: Path) -> None:
+    """Guard-removal protection: exempting provider_wholesale must not silently
+    delete the warning where it is still CORRECT. A non-provider --expand-paths
+    run with a file-suffixed --output really IS a no-op (single-file path), so it
+    must still warn."""
+    from click.testing import CliRunner
+
+    from claude_code_log.cli import main
+
+    src = tmp_path / "session.jsonl"
+    _make_claude_session(src, "s1")
+    result = CliRunner().invoke(
+        main,
+        [
+            "--all-projects",
+            "--expand-paths",
+            "-o",
+            str(tmp_path / "out.html"),
+            str(src),
+        ],
+    )
+    assert "ignoring" in result.output  # still fires for the Claude path
+
+
 def test_cli_provider_projects_dir_overrides_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
