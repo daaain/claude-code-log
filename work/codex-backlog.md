@@ -122,6 +122,26 @@ families and the provider contract are in
   the recovered set but unmeasurable without building it; the hole needs dead
   code to reach, so it is documented (see the `_relax_interleaved` docstring)
   rather than guarded for now.
+- Prelude instrumentation integrity — the correlation bookkeeping is
+  snippet-writable. `_PRELUDE_TEMPLATE` declares `__records`, `__texts`,
+  `__errors`, and `__reads` as plain `globalThis` arrays, and the instrumentation
+  hooks (`__noteRead` and the tool/text recorders) push into them directly. An
+  analyzed snippet can therefore write these globals itself: forged
+  `__records`/`__texts` entries fabricate tool calls or emitted rows in the
+  rendered transcript, and forged `__reads` entries influence the read-gated
+  attribution in `_relax_interleaved`. This is a different class from the
+  cross-read hole above — that is an attribution ambiguity reachable only by dead
+  code with no hostile intent; this is direct hostile writes to the bookkeeping.
+  The fix is uniform, not per-array: move all four behind a closure and expose
+  only a single non-enumerable, non-writable extraction hook. Hardening `__reads`
+  alone would shut the narrow door while leaving the wider `__records`/`__texts`
+  forgery open, so piecemeal hardening is not worth doing. Threat model that
+  bounds the priority: the snippet originates in the user's own transcript, and
+  the QuickJS sandbox and evaluation caps hold, so the worst outcome is
+  misleading rendered output for the user viewing their own session — not sandbox
+  escape, code execution, or data exfiltration. Deferred on that bound; revisit
+  if the analyzer ever runs on untrusted third-party rollouts or the extraction
+  surface grows.
 
 ## Internal architecture debt
 
