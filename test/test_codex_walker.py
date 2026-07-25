@@ -481,28 +481,52 @@ def test_cli_provider_expand_paths_no_output_does_not_warn_ignoring(
     assert list(projected.glob("session-*.html")), result.output
 
 
-def test_cli_expand_paths_still_warns_where_it_is_a_real_no_op(tmp_path: Path) -> None:
-    """Guard-removal protection: exempting provider_wholesale must not silently
-    delete the warning where it is still CORRECT. A non-provider --expand-paths
-    run with a file-suffixed --output really IS a no-op (single-file path), so it
-    must still warn."""
+def test_cli_expand_paths_still_warns_missing_all_projects(tmp_path: Path) -> None:
+    """Guard-removal protection for the FIRST exemption branch. A non-provider
+    --expand-paths run without --all-projects (single INPUT_PATH file) really IS
+    a no-op, so the 'require --all-projects' warning must still fire. Asserts a
+    clean exit (0) so the warning is checked on a valid run, not an error path
+    (CR's point — but on an invocation that actually succeeds)."""
     from click.testing import CliRunner
 
     from claude_code_log.cli import main
 
     src = tmp_path / "session.jsonl"
     _make_claude_session(src, "s1")
+    result = CliRunner().invoke(main, ["--expand-paths", str(src)])
+    assert result.exit_code == 0, result.output
+    assert "require --all-projects" in result.output
+
+
+def test_cli_expand_paths_still_warns_file_output(tmp_path: Path) -> None:
+    """Guard-removal protection for the SECOND exemption branch. A non-provider
+    --expand-paths run whose --output has a file suffix really IS a no-op (the
+    single-file path), so the 'require --output to be a directory' warning must
+    still fire. Uses --projects-dir with one project (no INPUT_PATH → the
+    --all-projects branch is skipped) so the third branch is reached and the run
+    exits 0. Together with the sibling above, BOTH provider_wholesale exemptions
+    are guarded — a future edit that over-exempts only one branch reds the
+    matching pin (monk's exempt-all mutation reds both)."""
+    from click.testing import CliRunner
+
+    from claude_code_log.cli import main
+
+    projects_dir = tmp_path / "projects"
+    project = projects_dir / "-tmp-projX"
+    project.mkdir(parents=True)
+    _make_claude_session(project / "session.jsonl", "s1")
     result = CliRunner().invoke(
         main,
         [
-            "--all-projects",
+            "--projects-dir",
+            str(projects_dir),
             "--expand-paths",
             "-o",
             str(tmp_path / "out.html"),
-            str(src),
         ],
     )
-    assert "ignoring" in result.output  # still fires for the Claude path
+    assert result.exit_code == 0, result.output
+    assert "require --output" in result.output
 
 
 def test_cli_provider_projects_dir_overrides_root(
