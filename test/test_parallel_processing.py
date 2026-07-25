@@ -158,3 +158,44 @@ def test_pool_failure_falls_back_to_sequential(
     out = capsys.readouterr().out
     assert "falling back to sequential processing" in out
     _assert_all_outputs_exist(projects_dir)
+
+
+def _plan(project_dir: Path, **overrides) -> converter._ProjectPlan:
+    kwargs = dict(
+        use_cache=True,
+        library_version="0.0.0",
+        variant="",
+        combined_ext="html",
+        combined_name="combined_transcripts.html",
+        output_dir=None,
+        expand_paths=False,
+        filter_path=None,
+        write_combined=True,
+        page_size=0,
+    )
+    kwargs.update(overrides)
+    plan = converter._plan_project(project_dir, **kwargs)
+    assert plan is not None
+    return plan
+
+
+def test_plan_needs_work_without_cache_for_individual_sessions(
+    tmp_path: Path,
+) -> None:
+    """Individual-session-only run with no cache must still be planned as work.
+
+    With `use_cache=False` there is no cache manager, so `modified_files`
+    and `stale_sessions` are always empty; treating that as "nothing to
+    do" skipped every per-session file while the index still linked to
+    them (issue #274).
+    """
+    project_dir = _build_projects_dir(tmp_path, "no-cache") / "-proj-alpha"
+
+    plan = _plan(
+        project_dir,
+        use_cache=False,
+        write_combined=False,
+        generate_individual_sessions=True,
+    )
+
+    assert plan.needs_work is True
