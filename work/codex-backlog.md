@@ -70,6 +70,20 @@ families and the provider contract are in
   lineage and strips inherited history but `load_session()` emits one thread.
 - Decide how native image-view results should render, independently of the
   already-supported user-message image references.
+- Codex token accounting → index totals. The wholesale walker emits zero
+  input/output/cache token totals per project because Codex rollouts carry no
+  token accounting the provider currently surfaces; the index token summary is
+  therefore always blank for Codex projects. If/when token counts are extracted
+  from rollout records, thread them into the walker's project summaries so the
+  index totals populate like the Claude path.
+- Cache-backed load + paginated combined for the wholesale walker. v1
+  participates in the SQLite cache for render-SKIP only: `render_provider_wholesale`
+  populates the messages table via `save_cached_entries` for schema uniformity
+  but never LOADS from it — every run re-parses rollouts (cheap, and it avoids a
+  serialization round-trip fidelity risk). Flip to cache-backed load once the
+  round-trip is proven byte-stable for Codex entries. The combined page is also
+  a single unpaginated document; wire `_generate_paginated_html` (cache-coupled)
+  and flip `--page-size`/`--jobs` from loud-rejected to honored at the same time.
 
 ## Tool and static-analysis candidates
 

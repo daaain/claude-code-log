@@ -28,6 +28,9 @@ class SessionInfo:
     project_path: Optional[Path] = None
     message_count: int = 0
     total_tokens: int = 0
+    # Absolute path to the session's source file, when it has a single one.
+    # The wholesale walker keys source-mtime cache staleness off this.
+    source_path: Optional[Path] = None
 
 
 def extract_text(content: Any) -> str:
@@ -221,6 +224,60 @@ class BaseProvider(ABC):
     def is_available(self) -> bool:
         data_dir = self.get_data_dir()
         return data_dir is not None and data_dir.exists()
+
+    def detect_path(self, path: Path) -> bool:
+        """Cheaply decide whether an INPUT_PATH belongs to this provider.
+
+        Default: no auto-detection. A provider that can recognize its own
+        session files by a cheap check (a filename pattern or a first-line
+        sniff) overrides this so an INPUT_PATH routes to the provider pipeline
+        instead of the Claude parser (which would silently skip the records and
+        emit a near-empty page). Implementations MUST NOT fully parse the file.
+        """
+        return False
+
+    def load_session_from_path(
+        self, path: Path, max_messages: Optional[int] = None
+    ) -> Iterator[TranscriptEntry]:
+        """Load a single session file handed in directly as an INPUT_PATH.
+
+        Only providers that participate in INPUT_PATH detection (``detect_path``)
+        need this. The default raises: a provider that never claims a path will
+        never be asked to load one.
+        """
+        raise NotImplementedError(
+            f"{self.get_provider_name()} cannot load a session directly by path"
+        )
+
+    def discover_sessions_under(self, root: Path) -> Iterator[SessionInfo]:
+        """Discover sessions within an arbitrary *root* directory.
+
+        The wholesale walker calls this for both the provider's own data dir
+        and a directory handed in as an INPUT_PATH (a mini sessions root).
+        Unlike :meth:`discover_sessions` (which is pinned to ``get_data_dir``),
+        the root is explicit, so one code path serves both. Sibling context
+        within *root* (e.g. fork-prefix stripping) is honored, unlike the
+        standalone :meth:`load_session_from_path`.
+
+        Default raises: only providers that support wholesale rendering
+        override this.
+        """
+        raise NotImplementedError(
+            f"{self.get_provider_name()} does not support wholesale rendering"
+        )
+
+    def load_session_under(
+        self, root: Path, session_id: str, max_messages: Optional[int] = None
+    ) -> Iterator[TranscriptEntry]:
+        """Load one session by id within an explicit *root* (see
+        :meth:`discover_sessions_under`), with sibling context.
+
+        Default raises: only providers that support wholesale rendering
+        override this.
+        """
+        raise NotImplementedError(
+            f"{self.get_provider_name()} does not support wholesale rendering"
+        )
 
     def get_session_stats(self, session_id: str) -> dict[str, Any]:
         return {}

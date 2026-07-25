@@ -19,6 +19,7 @@ from .converter import (
     ensure_fresh_cache,
     generate_single_session_file,
     render_normalized_session_file,
+    render_provider_wholesale,
     get_file_extension,
     get_index_filename,
     process_projects_hierarchy,
@@ -30,6 +31,7 @@ from .cache import (
     get_cache_db_path,
     get_library_version,
 )
+from .models import RenderingDepth
 
 
 # Output values that mean "stream the rendered document to stdout" (issue
@@ -87,6 +89,218 @@ def _render_to_stdout(
         # Fallback (e.g. a text-only stdout shim): decode best-effort.
         sys.stdout.write(content.decode("utf-8", errors="replace"))
     click.echo(f"Successfully converted {input_path} to stdout", err=True)
+
+
+def _render_provider_input_file(
+    provider_name: str,
+    input_path: Path,
+    output: "Optional[Path]",
+    output_format: str,
+    image_export_mode: "Optional[str]",
+    depth: RenderingDepth,
+    compact: bool,
+    no_timestamps: bool,
+    no_recaps: bool,
+    open_browser: bool,
+) -> None:
+    """Render a single provider session file handed in as an INPUT_PATH.
+
+    Shared by the explicit ``--provider <p> <file>`` path and the no-flag
+    auto-detected-rollout path. Fails LOUDLY if a provider claimed the file but
+    it yields no renderable messages, so a rollout can never fall through to a
+    near-empty page (the silent-empty gap).
+    """
+    from .providers import discover_providers
+    from .utils import output_path_is_file
+
+    # A directory INPUT_PATH is a mini sessions root and is routed to the
+    # wholesale walker by the dispatcher before it reaches here, so this helper
+    # only ever sees a single rollout file.
+    selected = discover_providers().get_provider(provider_name)
+    if selected is None:
+        raise click.UsageError(f"Unknown provider: {provider_name}")
+    messages = list(selected.load_session_from_path(input_path))
+    if not messages:
+        raise click.UsageError(
+            f"{input_path} was detected as a {provider_name} session but produced "
+            "no renderable messages; it may be truncated or malformed."
+        )
+    # generate_session filters entries by sessionId, so the render key MUST be
+    # the session's own id (the thread id carried on the entries), not the
+    # filename stem — a mismatch silently drops every message (the empty-page bug).
+    session_key = messages[0].sessionId or input_path.stem
+    title = f"{provider_name.title()}: {session_key}"
+
+    def render(destination: Path) -> Path:
+        return render_normalized_session_file(
+            messages,
+            session_key,
+            destination,
+            output_format,
+            title,
+            image_export_mode,
+            depth,
+            compact,
+            no_timestamps,
+            no_recaps,
+        )
+
+    extension = get_file_extension(output_format)
+    if _is_stdout_target(output):
+        _render_to_stdout(
+            input_path,
+            lambda tmpdir: render(tmpdir / f"session.{extension}"),
+        )
+        return
+    filename = f"session-{session_key}.{extension}"
+    if output is None:
+        destination = Path.cwd() / filename
+    elif output_path_is_file(output):
+        destination = output
+    else:
+        destination = output / filename
+    output_path = render(destination)
+    click.echo(f"Successfully rendered {provider_name} session to {output_path}")
+    if open_browser:
+        click.launch(str(output_path))
+
+
+def _resolve_provider_output_root(provider_name: str, output: "Optional[Path]") -> Path:
+    """Resolve where a provider wholesale run writes its project hierarchy.
+
+    An explicit ``-o DIR`` wins (a file-shaped ``-o`` is rejected — wholesale
+    writes many files). Otherwise the default is ``<provider_home>/claude-code-log/``
+    (DECIDED #4: the sessions tree stays pristine, so output never lands inside
+    it). If the provider has no discoverable home, there is nowhere to default
+    to — fail loudly asking for ``-o``.
+    """
+    from .providers import discover_providers
+    from .utils import output_path_is_file
+
+    if output is not None:
+        if output_path_is_file(output):
+            raise click.UsageError(
+                f"provider wholesale rendering writes many files; pass -o as a "
+                f"directory, not a file ({output})."
+            )
+        return output
+    provider = discover_providers().get_provider(provider_name)
+    data_dir = provider.get_data_dir() if provider is not None else None
+    if data_dir is None:
+        raise click.UsageError(
+            f"no {provider_name} home found to place output; pass -o DIR to "
+            "choose an output directory."
+        )
+    return data_dir / "claude-code-log"
+
+
+def _run_provider_wholesale(
+    provider_name: str,
+    sessions_root: "Optional[Path]",
+    output: "Optional[Path]",
+    output_format: str,
+    image_export_mode: "Optional[str]",
+    depth: RenderingDepth,
+    compact: bool,
+    no_timestamps: bool,
+    no_recaps: bool,
+    write_combined: bool,
+    write_individual: bool,
+    from_date: "Optional[str]",
+    to_date: "Optional[str]",
+    no_cache: bool,
+    clear_cache: bool,
+    clear_output: bool,
+    open_browser: bool,
+) -> None:
+    """Render a whole provider sessions tree into a project hierarchy.
+
+    ``sessions_root`` None walks the provider's own data dir; a directory
+    (an INPUT_PATH dir, or ``--projects-dir``) selects a mini sessions root.
+
+    ``--clear-cache`` / ``--clear-output`` are scoped to the provider output
+    root so the pristine sessions tree is never touched (DECIDED #4). Mirroring
+    the Claude path, they clear-and-exit on their own, but when a date filter is
+    also given they clear then fall through to REGENERATE the filtered view
+    (else ``--clear-output --from-date`` would leave an empty directory).
+    """
+    output_root = _resolve_provider_output_root(provider_name, output)
+
+    dated = from_date is not None or to_date is not None
+    if clear_cache:
+        _clear_provider_cache(output_root)
+        if not dated:
+            return
+    if clear_output:
+        _clear_provider_output(output_root, output_format)
+        if not dated:
+            return
+
+    index_path = render_provider_wholesale(
+        provider_name,
+        sessions_root,
+        output_root,
+        from_date=from_date,
+        to_date=to_date,
+        output_format=output_format,
+        image_export_mode=image_export_mode,
+        depth=depth,
+        compact=compact,
+        no_timestamps=no_timestamps,
+        no_recaps=no_recaps,
+        write_combined=write_combined,
+        write_individual=write_individual,
+        use_cache=not no_cache,
+        silent=False,
+    )
+    if open_browser:
+        click.launch(str(index_path))
+
+
+def _clear_provider_cache(output_root: Path) -> None:
+    """Delete the provider wholesale cache DB (and its WAL/SHM sidecars) under
+    the output root. Never touches the sessions tree — the DB lives beside the
+    generated output, not inside the sources."""
+    from .cache import get_cache_db_path
+
+    db = get_cache_db_path(output_root)
+    removed = False
+    for path in (db, db.with_name(db.name + "-wal"), db.with_name(db.name + "-shm")):
+        if path.exists():
+            try:
+                path.unlink()
+                removed = True
+            except OSError as exc:
+                click.echo(f"  Warning: failed to delete {path}: {exc}")
+    click.echo(
+        f"Cleared provider cache database: {db}"
+        if removed
+        else f"No provider cache database at {db}."
+    )
+
+
+def _clear_provider_output(output_root: Path, output_format: str) -> None:
+    """Remove generated output files under the provider output root only.
+
+    Scoped by known generated filenames (index + per-project
+    ``combined_transcripts*`` / ``session-*``), so unrelated files — and every
+    file in the sessions tree, which lives elsewhere — are left untouched."""
+    file_ext = get_file_extension(output_format)
+    removed = 0
+    if output_root.is_dir():
+        index_file = output_root / get_index_filename(output_format)
+        if index_file.exists():
+            index_file.unlink()
+            removed += 1
+        for project_dir in output_root.iterdir():
+            if not project_dir.is_dir():
+                continue
+            for generated in _list_generated_outputs(project_dir, file_ext):
+                generated.unlink()
+                removed += 1
+    click.echo(
+        f"Cleared {removed} generated {file_ext.upper()} file(s) under {output_root}."
+    )
 
 
 def _install_stack_dump_signal() -> None:
@@ -872,43 +1086,89 @@ def main(
     # Configure logging to show warnings and above
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
 
-    # Provider sessions are an intentionally narrow first slice. Keep them
-    # away from the Claude project/cache pipeline and reject options whose
-    # meaning would otherwise be silently ambiguous.
+    # Provider mode has three sub-modes:
+    #   * export     — `--session-id <id>`: render one session by id
+    #   * single-file — INPUT_PATH is a rollout FILE: render that one session
+    #   * wholesale  — no id, and no INPUT_PATH (or an INPUT_PATH directory):
+    #                  walk the whole sessions tree into a project hierarchy
+    # Each rejects the flags that don't apply to it LOUDLY (never a silent
+    # no-op); the matrix in test_codex_cli.py pins which combos are legal.
+    provider_wholesale = (
+        provider is not None
+        and session_id is None
+        and (input_path is None or input_path.is_dir())
+    )
     if provider is not None:
-        if session_id is None:
-            raise click.UsageError("--provider requires --session-id.")
+        # Validate the provider name up front so an unknown one is a clean
+        # UsageError (exit 2), consistent with the other flag errors, instead of
+        # surfacing later as a broad-except "Error converting file" (exit 1).
+        from .providers import discover_providers as _discover_providers
+
+        _known = _discover_providers().get_all_providers()
+        if provider not in _known:
+            raise click.UsageError(
+                f"Unknown provider: {provider}. Available providers: "
+                f"{', '.join(_known) or 'none'}."
+            )
+        if input_path is not None and session_id is not None:
+            raise click.UsageError(
+                "--provider with an INPUT_PATH renders that path; drop "
+                "--session-id (or drop the INPUT_PATH to export a session by id)."
+            )
+        # Always illegal in provider mode: Claude-only projection semantics and
+        # the TUI (provider TUI support is out of scope, tracked in the backlog).
         conflicts: list[str] = []
-        if input_path is not None:
-            conflicts.append("INPUT_PATH")
         for enabled, flag in (
-            (all_projects, "--all-projects"),
             (tui, "--tui"),
-            (projects_dir is not None, "--projects-dir"),
             (expand_paths, "--expand-paths"),
             (filter_path is not None, "--filter-path"),
-            (no_individual_sessions, "--no-individual-sessions"),
-            (from_date is not None, "--from-date"),
-            (to_date is not None, "--to-date"),
-            (no_cache, "--no-cache"),
-            (clear_cache, "--clear-cache"),
-            (clear_output, "--clear-output"),
         ):
             if enabled:
                 conflicts.append(flag)
-        for parameter, flag in (
-            ("combined", "--combined"),
-            ("page_size", "--page-size"),
-        ):
+        if provider_wholesale:
+            # Wholesale honors --combined, date range, -o/-f, --open-browser, and
+            # the cache flags (--no-cache/--clear-cache/--clear-output). Only
+            # pagination (--page-size) and job-parallelism (--jobs) remain
+            # deferred, so reject those loudly rather than accept-and-ignore.
+            if jobs is not None:
+                conflicts.append("--jobs")
             if (
-                ctx.get_parameter_source(parameter)
+                ctx.get_parameter_source("page_size")
                 is not click.core.ParameterSource.DEFAULT
             ):
-                conflicts.append(flag)
+                conflicts.append("--page-size")
+        else:
+            # export / single-file render one session; the wholesale-only flags
+            # (multi-project hierarchy, pagination, date range, cache) don't apply.
+            for enabled, flag in (
+                (all_projects, "--all-projects"),
+                (projects_dir is not None, "--projects-dir"),
+                (no_individual_sessions, "--no-individual-sessions"),
+                (from_date is not None, "--from-date"),
+                (to_date is not None, "--to-date"),
+                (no_cache, "--no-cache"),
+                (clear_cache, "--clear-cache"),
+                (clear_output, "--clear-output"),
+            ):
+                if enabled:
+                    conflicts.append(flag)
+            for parameter, flag in (
+                ("combined", "--combined"),
+                ("page_size", "--page-size"),
+            ):
+                if (
+                    ctx.get_parameter_source(parameter)
+                    is not click.core.ParameterSource.DEFAULT
+                ):
+                    conflicts.append(flag)
         if conflicts:
+            detail = (
+                "provider wholesale rendering"
+                if provider_wholesale
+                else "provider single-session rendering (--session-id / a rollout file)"
+            )
             raise click.UsageError(
-                f"--provider does not support {', '.join(conflicts)}; "
-                "provider mode exports one session only."
+                f"--provider does not support {', '.join(conflicts)} with {detail}."
             )
 
     # Resolve --combined default and back-compat with --no-individual-sessions.
@@ -1083,7 +1343,57 @@ def main(
         if provider is not None:
             from .providers import SessionInfo, discover_providers
 
-            assert session_id is not None  # enforced by provider-mode validation
+            # Wholesale: no --session-id, and either no INPUT_PATH (walk the
+            # provider's data dir) or an INPUT_PATH directory / --projects-dir
+            # (a mini sessions root). Renders the whole project hierarchy.
+            if provider_wholesale:
+                sessions_root = (
+                    input_path
+                    if input_path is not None
+                    else projects_dir
+                    if projects_dir is not None
+                    else None
+                )
+                _run_provider_wholesale(
+                    provider,
+                    sessions_root,
+                    output,
+                    output_format,
+                    image_export_mode,
+                    depth_level,
+                    compact,
+                    no_timestamps,
+                    no_recaps,
+                    write_combined,
+                    write_individual,
+                    from_date,
+                    to_date,
+                    no_cache,
+                    clear_cache,
+                    clear_output,
+                    open_browser,
+                )
+                return
+
+            # Explicit --provider with an INPUT_PATH FILE renders that file
+            # directly (distinct from --session-id export below). The fence
+            # guarantees not both id and INPUT_PATH are set.
+            if input_path is not None:
+                _render_provider_input_file(
+                    provider,
+                    input_path,
+                    output,
+                    output_format,
+                    image_export_mode,
+                    depth_level,
+                    compact,
+                    no_timestamps,
+                    no_recaps,
+                    open_browser,
+                )
+                return
+
+            assert session_id is not None  # fence guarantees this in export mode
             provider_session_id = session_id
             registry = discover_providers()
             selected = registry.get_provider(provider)
@@ -1421,6 +1731,51 @@ def main(
             if open_browser:
                 click.launch(str(output_path))
             return
+
+        # Provider auto-detection (silent-empty pin): a rollout handed as an
+        # INPUT_PATH must route to the provider pipeline, not the Claude parser,
+        # which skips every record and renders a near-empty page. A single file
+        # renders that session; a DIRECTORY of rollouts renders the whole tree
+        # via the wholesale walker — either way it never falls to the empty parse.
+        if provider is None and input_path.exists():
+            from .providers import discover_providers
+
+            detected = discover_providers().detect_provider_for_path(input_path)
+            if detected is not None:
+                if input_path.is_dir():
+                    _run_provider_wholesale(
+                        detected,
+                        input_path,
+                        output,
+                        output_format,
+                        image_export_mode,
+                        depth_level,
+                        compact,
+                        no_timestamps,
+                        no_recaps,
+                        write_combined,
+                        write_individual,
+                        from_date,
+                        to_date,
+                        no_cache,
+                        clear_cache,
+                        clear_output,
+                        open_browser,
+                    )
+                    return
+                _render_provider_input_file(
+                    detected,
+                    input_path,
+                    output,
+                    output_format,
+                    image_export_mode,
+                    depth_level,
+                    compact,
+                    no_timestamps,
+                    no_recaps,
+                    open_browser,
+                )
+                return
 
         # Original single file/directory processing logic
         should_convert = False

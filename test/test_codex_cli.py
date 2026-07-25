@@ -51,6 +51,11 @@ class FakeRegistry:
     def get_provider(self, name: str):
         return self.provider if name == "codex" else None
 
+    def get_all_providers(self) -> list[str]:
+        # The CLI validates --provider against this up front (clean UsageError
+        # for an unknown name). The stub only knows "codex" when it has one.
+        return ["codex"] if self.provider is not None else []
+
 
 @pytest.fixture
 def provider(monkeypatch: pytest.MonkeyPatch) -> FakeProvider:
@@ -127,7 +132,9 @@ def test_provider_directory_output_creates_nested_destination(
 @pytest.mark.parametrize(
     ("args", "message"),
     [
-        (["--provider", "codex"], "requires --session-id"),
+        # NB: bare ``--provider codex`` (no id, no INPUT_PATH) is no longer
+        # rejected — it now runs the wholesale walker (see the walker CLI tests).
+        # These rows are the combos that stay illegal in single-session mode.
         (
             ["some-project", "--provider", "codex", "--session-id", "0123"],
             "INPUT_PATH",
