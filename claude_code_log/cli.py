@@ -212,6 +212,8 @@ def _run_provider_wholesale(
     clear_cache: bool,
     clear_output: bool,
     open_browser: bool,
+    expand_paths: bool,
+    filter_path: "Optional[str]",
 ) -> None:
     """Render a whole provider sessions tree into a project hierarchy.
 
@@ -251,6 +253,8 @@ def _run_provider_wholesale(
         write_combined=write_combined,
         write_individual=write_individual,
         use_cache=not no_cache,
+        expand_paths=expand_paths,
+        filter_path=filter_path,
         silent=False,
     )
     if open_browser:
@@ -1115,21 +1119,22 @@ def main(
                 "--provider with an INPUT_PATH renders that path; drop "
                 "--session-id (or drop the INPUT_PATH to export a session by id)."
             )
-        # Always illegal in provider mode: Claude-only projection semantics and
-        # the TUI (provider TUI support is out of scope, tracked in the backlog).
+        # The TUI is always illegal in provider mode (provider TUI support is out
+        # of scope, tracked in the backlog). --expand-paths/--filter-path used to
+        # be always-illegal too ("Claude-only projection semantics"), but they are
+        # well-defined for wholesale: provider projects are synthetic group-by-cwd,
+        # so the group key IS the real cwd and the flat name expands unambiguously.
+        # They stay illegal for single-session export (one session has no
+        # multi-project projection to apply).
         conflicts: list[str] = []
-        for enabled, flag in (
-            (tui, "--tui"),
-            (expand_paths, "--expand-paths"),
-            (filter_path is not None, "--filter-path"),
-        ):
-            if enabled:
-                conflicts.append(flag)
+        if tui:
+            conflicts.append("--tui")
         if provider_wholesale:
-            # Wholesale honors --combined, date range, -o/-f, --open-browser, and
-            # the cache flags (--no-cache/--clear-cache/--clear-output). Only
-            # pagination (--page-size) and job-parallelism (--jobs) remain
-            # deferred, so reject those loudly rather than accept-and-ignore.
+            # Wholesale honors --expand-paths/--filter-path (Obsidian projection),
+            # --combined, date range, -o/-f, --open-browser, and the cache flags
+            # (--no-cache/--clear-cache/--clear-output). Only pagination
+            # (--page-size) and job-parallelism (--jobs) remain deferred, so reject
+            # those loudly rather than accept-and-ignore.
             if jobs is not None:
                 conflicts.append("--jobs")
             if (
@@ -1139,8 +1144,11 @@ def main(
                 conflicts.append("--page-size")
         else:
             # export / single-file render one session; the wholesale-only flags
-            # (multi-project hierarchy, pagination, date range, cache) don't apply.
+            # (multi-project hierarchy + projection, pagination, date range, cache)
+            # don't apply.
             for enabled, flag in (
+                (expand_paths, "--expand-paths"),
+                (filter_path is not None, "--filter-path"),
                 (all_projects, "--all-projects"),
                 (projects_dir is not None, "--projects-dir"),
                 (no_individual_sessions, "--no-individual-sessions"),
@@ -1372,6 +1380,8 @@ def main(
                     clear_cache,
                     clear_output,
                     open_browser,
+                    expand_paths,
+                    filter_path,
                 )
                 return
 
@@ -1761,6 +1771,8 @@ def main(
                         clear_cache,
                         clear_output,
                         open_browser,
+                        expand_paths,
+                        filter_path,
                     )
                     return
                 _render_provider_input_file(

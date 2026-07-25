@@ -150,6 +150,85 @@ def test_walker_groups_by_cwd(tmp_path: Path) -> None:
     assert len(a_sessions) == 2
 
 
+# --------------------------------------------------------------------------
+# --expand-paths / --filter-path (Obsidian projection over group-by-cwd).
+# --------------------------------------------------------------------------
+def test_walker_expand_paths_projects_to_real_tree(tmp_path: Path) -> None:
+    """--expand-paths projects each cwd-project under its REAL path (not the flat
+    -proj-a name), with output-root-relative POSIX index links. The no-cwd bucket
+    has no path to expand and stays flat."""
+    tree = tmp_path / "sessions"
+    _rollout(tree, "a/one.jsonl", "10000000-0000-4000-8000-000000000001", "/proj/a")
+    _rollout(tree, "b/one.jsonl", "20000000-0000-4000-8000-000000000001", "/proj/b")
+    _rollout(tree, "c/orphan.jsonl", "30000000-0000-4000-8000-000000000001", None)
+
+    out = tmp_path / "ccl"
+    index = render_provider_wholesale(
+        "codex", tree, out, expand_paths=True, silent=True
+    )
+
+    assert (out / "proj" / "a" / "combined_transcripts.html").exists()
+    assert (out / "proj" / "b" / "combined_transcripts.html").exists()
+    assert not (out / "-proj-a").exists()  # not the flat name
+    assert (out / "no-project" / "combined_transcripts.html").exists()  # stays flat
+
+    index_text = index.read_text(encoding="utf-8")
+    # Links are relative to the output root, POSIX-separated, into the tree.
+    assert "proj/a/combined_transcripts.html" in index_text
+    assert "proj/b/combined_transcripts.html" in index_text
+    assert "no-project/combined_transcripts.html" in index_text
+
+
+def test_walker_filter_path_trims_matches_and_excludes_the_rest(
+    tmp_path: Path,
+) -> None:
+    """--filter-path with --expand-paths trims the matched prefix from the
+    destination and drops projects outside it."""
+    tree = tmp_path / "sessions"
+    _rollout(tree, "a/one.jsonl", "10000000-0000-4000-8000-000000000001", "/home/me/a")
+    _rollout(tree, "b/one.jsonl", "20000000-0000-4000-8000-000000000001", "/other/b")
+
+    out = tmp_path / "ccl"
+    render_provider_wholesale(
+        "codex", tree, out, expand_paths=True, filter_path="/home/me", silent=True
+    )
+    assert (out / "a" / "combined_transcripts.html").exists()  # prefix trimmed
+    assert not (out / "other").exists()  # outside the filter → excluded
+    assert not (out / "b").exists()
+
+
+def test_walker_filter_path_skips_the_no_cwd_bucket(tmp_path: Path) -> None:
+    """A no-cwd session can't satisfy an absolute --filter-path prefix, so the
+    bucket is skipped rather than routed through a lossy flat-name decode."""
+    tree = tmp_path / "sessions"
+    _rollout(tree, "a/one.jsonl", "10000000-0000-4000-8000-000000000001", "/home/me/a")
+    _rollout(tree, "c/orphan.jsonl", "30000000-0000-4000-8000-000000000001", None)
+
+    out = tmp_path / "ccl"
+    render_provider_wholesale(
+        "codex", tree, out, expand_paths=True, filter_path="/home/me", silent=True
+    )
+    assert (out / "a" / "combined_transcripts.html").exists()
+    assert not (out / "no-project").exists()
+
+
+def test_walker_expand_paths_rerenders_despite_flat_cache(tmp_path: Path) -> None:
+    """The wholesale cache identity is the OUTPUT dir (M3 decision). Expanding
+    paths changes the dest dir → changes the cache key → the first expanded run
+    re-renders every session even though a prior flat run is warm. This is
+    by-design, pinned so it can't later read as a cache bug."""
+    tree = tmp_path / "sessions"
+    _rollout(tree, "a/one.jsonl", "10000000-0000-4000-8000-000000000001", "/proj/a")
+
+    out = tmp_path / "ccl"
+    render_provider_wholesale("codex", tree, out, silent=True)  # warm the flat cache
+    assert (out / "-proj-a" / "combined_transcripts.html").exists()
+
+    render_provider_wholesale("codex", tree, out, expand_paths=True, silent=True)
+    # Different dest dir → rendered afresh, not skipped by the flat-keyed cache.
+    assert (out / "proj" / "a" / "combined_transcripts.html").exists()
+
+
 def test_walker_combined_no_suppresses_combined_page(tmp_path: Path) -> None:
     out = tmp_path / "ccl"
     render_provider_wholesale(
@@ -287,6 +366,54 @@ def test_cli_bare_provider_runs_wholesale(
     assert (out / "-proj-b" / "combined_transcripts.html").exists()
 
 
+def test_cli_provider_expand_paths_flips_combined_default_to_no(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The shared ``combined = "no" if expand_paths else "yes"`` default (Obsidian
+    mode) now reaches provider wholesale — the point of the feature. With no
+    --combined, --expand-paths yields per-session files and NO combined page; an
+    explicit --combined=yes still writes the combined page. Default and override
+    independently anchored."""
+    from click.testing import CliRunner
+
+    from claude_code_log.cli import main
+
+    monkeypatch.setenv("CODEX_HOME", str(_codex_home_with_sessions(tmp_path)))
+
+    default_out = tmp_path / "default"
+    r = CliRunner().invoke(
+        main,
+        [
+            "--provider",
+            "codex",
+            "--all-projects",
+            "--expand-paths",
+            "-o",
+            str(default_out),
+        ],
+    )
+    assert r.exit_code == 0, r.output
+    assert not list(default_out.rglob("combined_transcripts.html"))  # default → no
+    assert list(default_out.rglob("session-*.html"))  # per-session still written
+
+    override_out = tmp_path / "override"
+    r2 = CliRunner().invoke(
+        main,
+        [
+            "--provider",
+            "codex",
+            "--all-projects",
+            "--expand-paths",
+            "--combined",
+            "yes",
+            "-o",
+            str(override_out),
+        ],
+    )
+    assert r2.exit_code == 0, r2.output
+    assert list(override_out.rglob("combined_transcripts.html"))  # explicit override
+
+
 def test_cli_provider_projects_dir_overrides_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -340,20 +467,51 @@ def test_cli_provider_wholesale_rejects_file_output(
     assert "directory, not a file" in result.output
 
 
-def test_cli_provider_wholesale_rejects_claude_only_flags(
+def test_cli_provider_wholesale_accepts_projection_flags_but_tui_stays_illegal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Claude-only projection flags stay illegal in provider mode — loudly."""
+    """--tui stays always-illegal in provider mode. --expand-paths/--filter-path
+    were Claude-only too, but are now legal for wholesale (provider projects are
+    synthetic group-by-cwd, so the flat name expands unambiguously) — while still
+    rejected for single-session export, which has no multi-project projection."""
     from click.testing import CliRunner
 
     from claude_code_log.cli import main
 
     monkeypatch.setenv("CODEX_HOME", str(_codex_home_with_sessions(tmp_path)))
-    out = tmp_path / "out"
-    for flag in ("--expand-paths", "--tui"):
-        result = CliRunner().invoke(main, ["--provider", "codex", flag, "-o", str(out)])
-        assert result.exit_code != 0, f"{flag} should be rejected"
-        assert "does not support" in result.output and flag in result.output
+
+    # --tui: always rejected in provider mode.
+    tui = CliRunner().invoke(
+        main, ["--provider", "codex", "--tui", "-o", str(tmp_path / "t")]
+    )
+    assert tui.exit_code != 0
+    assert "does not support" in tui.output and "--tui" in tui.output
+
+    # --expand-paths (and --filter-path with it): ACCEPTED for wholesale — the
+    # run proceeds past the fence and renders, no "does not support" error.
+    accepted = CliRunner().invoke(
+        main,
+        [
+            "--provider",
+            "codex",
+            "--all-projects",
+            "--expand-paths",
+            "--filter-path",
+            "/",
+            "-o",
+            str(tmp_path / "w"),
+        ],
+    )
+    assert accepted.exit_code == 0, accepted.output
+    assert "does not support" not in accepted.output
+
+    # ...but REJECTED for single-session export (--session-id).
+    for flag in (["--expand-paths"], ["--filter-path", "/abs"]):
+        result = CliRunner().invoke(
+            main, ["--provider", "codex", "--session-id", "nope", *flag]
+        )
+        assert result.exit_code != 0, f"{flag} should be rejected for single-session"
+        assert "does not support" in result.output and flag[0] in result.output
 
 
 @pytest.mark.parametrize("extra", [["--page-size", "5"], ["--jobs", "2"]])

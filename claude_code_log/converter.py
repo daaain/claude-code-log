@@ -2858,6 +2858,8 @@ def render_provider_wholesale(
     write_combined: bool = True,
     write_individual: bool = True,
     use_cache: bool = True,
+    expand_paths: bool = False,
+    filter_path: Optional[str] = None,
     silent: bool = False,
 ) -> Path:
     """Render every session of one provider under ``sessions_root`` into a
@@ -2880,6 +2882,15 @@ def render_provider_wholesale(
     combined pages remain out of scope (the combined page is a single
     unpaginated document); byte-stability across warm/cold runs is guaranteed
     by deterministic rendering regardless.
+
+    ``expand_paths`` / ``filter_path`` apply Obsidian-mode projection (#151):
+    because provider projects are synthetic group-by-cwd, the flat project name
+    IS an encoded real cwd, so ``project_destination`` projects it under
+    ``output_root`` (and ``filter_path`` trims/excludes) exactly as the Claude
+    path does. The no-cwd bucket has no path to expand — it stays flat, and is
+    skipped under ``filter_path``. Expanding changes the destination dirs, hence
+    the cache keys, so the first expanded run re-renders every session (by
+    design — the cache identity is the output dir, not the source).
     """
     from .providers import SessionInfo, discover_providers
 
@@ -2915,7 +2926,7 @@ def render_provider_wholesale(
         key = str(info.project_path) if info.project_path is not None else None
         groups.setdefault(key, []).append(info)
 
-    from .utils import variant_suffix as _variant_suffix
+    from .utils import project_destination, variant_suffix as _variant_suffix
 
     ext = get_file_extension(output_format)
     suffix = _variant_suffix(depth, compact, output_format, no_timestamps, no_recaps)
@@ -2931,8 +2942,32 @@ def render_provider_wholesale(
         group_infos = sorted(groups[group_key], key=lambda i: i.session_id)
         cwd = Path(group_key) if group_key is not None else None
         project_dirname = _provider_project_dirname(cwd)
-        dest_dir = output_root / project_dirname
         working_directories = [group_key] if group_key is not None else []
+
+        # Destination resolution (Obsidian projection, #151 semantics reused).
+        # The no-cwd bucket has no real path to expand: keep it flat under
+        # --expand-paths, and skip it under --filter-path (it can't satisfy an
+        # absolute prefix, and routing "no-project" through the lossy
+        # flat-name decode would fabricate a bogus tree). Real cwds route
+        # through project_destination, feeding the known cwd as the cached
+        # working dir so the decode is authoritative, not a guess.
+        if group_key is None:
+            if filter_path:
+                continue
+            dest_dir: Optional[Path] = output_root / project_dirname
+        else:
+            dest_dir = project_destination(
+                Path(project_dirname),
+                output_dir=output_root,
+                expand_paths=expand_paths,
+                filter_path=filter_path,
+                cached_working_directories=[group_key],
+            )
+            if dest_dir is None:
+                continue  # --filter-path excluded this project
+        # Index links must be relative to the output root; as_posix() keeps the
+        # separator stable across platforms (the Windows trap #296 already hit).
+        rel_dest = dest_dir.relative_to(output_root).as_posix()
         project_title = get_project_display_name(project_dirname, working_directories)
 
         # Phase 1 — load every session in the project fresh. v1 always re-parses
@@ -3048,7 +3083,7 @@ def render_provider_wholesale(
                     "message_count": len(messages),
                     "first_user_message": first_user
                     or "[No user message found in session.]",
-                    "file": f"{project_dirname}/session-{session_key}{suffix}.{ext}",
+                    "file": f"{rel_dest}/session-{session_key}{suffix}.{ext}",
                 }
             )
 
@@ -3084,7 +3119,7 @@ def render_provider_wholesale(
             {
                 "name": project_dirname,
                 "path": dest_dir,
-                "html_file": f"{project_dirname}/{combined_name}",
+                "html_file": f"{rel_dest}/{combined_name}",
                 "html_variants": [],
                 "jsonl_count": len(session_dicts),
                 "message_count": len(combined_messages),
@@ -3108,8 +3143,14 @@ def render_provider_wholesale(
         )
 
     renderer = get_renderer(output_format, image_export_mode)
+    # Under --expand-paths (Obsidian mode), HTML and Markdown render the index
+    # as a nested folder tree mirroring the projected hierarchy; JSON keeps a
+    # flat list (tree shape isn't meaningful) and does not accept the kwarg.
+    index_kwargs: dict[str, Any] = {}
+    if expand_paths and output_format in ("md", "markdown", "html"):
+        index_kwargs["expand_paths_tree"] = True
     index_content = renderer.generate_projects_index(
-        project_summaries, from_date, to_date
+        project_summaries, from_date, to_date, **index_kwargs
     )
     assert index_content is not None
     index_path = output_root / get_index_filename(output_format)
