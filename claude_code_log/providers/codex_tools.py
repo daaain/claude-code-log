@@ -17,6 +17,10 @@ from typing import Any, Literal, Optional, cast
 
 from .codex_quickjs import analyze_javascript_tools
 
+# Canonical names whose payloads are kept on the scrubbed-opaque ToolExecution
+# fallback rather than exposed by the single-call whole-output recovery.
+_WORKFLOW_FAMILY = frozenset({"Task", "Workflow"})
+
 
 @dataclass(frozen=True)
 class AdaptedToolCall:
@@ -67,7 +71,14 @@ def adapt_codex_tool_call(
         analyzed = analyze_javascript_tools(raw_input)
         if analyzed is not None and len(analyzed.calls) == 1:
             call = analyzed.calls[0]
-            return _canonicalize(call.name, call.input)
+            canonical = _canonicalize(call.name, call.input)
+            # Workflow-family calls (spawn_agent → Task) recovered ONLY by the
+            # single-call whole-output fallback stay on their scrubbed-opaque
+            # ToolExecution fallback rather than exposing the agent payload. A
+            # cleanly-correlated single call keeps its canonical mapping.
+            if analyzed.whole_output_fallback and canonical.name in _WORKFLOW_FAMILY:
+                return _tool_execution(raw_input)
+            return canonical
         return _tool_execution(raw_input)
     return _canonicalize(name, input_data)
 

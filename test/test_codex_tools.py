@@ -389,7 +389,13 @@ def test_static_for_of_expands_distinct_tool_calls() -> None:
     ]
 
 
-def test_all_tools_plus_one_command_is_compound_workflow() -> None:
+def test_all_tools_plus_one_command_maps_the_single_command() -> None:
+    # ALL_TOOLS.filter is tool INTROSPECTION, not a tool call — the snippet makes
+    # exactly one real call (exec_command), so single-call widening renders it as
+    # that command (whole output, incl. the introspection JSON, is its result).
+    # NB this retires the old "ALL_TOOLS ⇒ compound ToolExecution" classification
+    # for the one-real-call case; a genuinely compound program (≥2 calls) still
+    # falls back.
     source = (
         "const matches = ALL_TOOLS.filter(x => x.name.includes('git')); "
         'const git = await tools.exec_command({cmd: "git status"}); '
@@ -398,8 +404,7 @@ def test_all_tools_plus_one_command_is_compound_workflow() -> None:
 
     call = adapt_codex_tool_call("exec", {"raw": source}, raw_input=source)
 
-    assert call.name == "ToolExecution"
-    assert call.input == {"script": source}
+    assert call.name == "Bash"
 
 
 def test_one_tool_with_multiple_result_emissions_reuses_renderer() -> None:
@@ -413,14 +418,18 @@ def test_one_tool_with_multiple_result_emissions_reuses_renderer() -> None:
     )
 
 
-def test_one_tool_with_unrelated_output_emission_is_workflow() -> None:
+def test_one_tool_with_unrelated_output_emission_maps_whole_output() -> None:
+    # A single tool call has no output-split ambiguity: whatever the snippet
+    # printed (here a "prefix" literal alongside the result), the whole paired
+    # output is that one call's result, so it renders as the tool — not the raw
+    # ToolExecution fallback (widened single-call recovery).
     source = (
         'const result = await tools.exec_command({cmd: "git status"}); '
         'text("prefix"); text(result.output);'
     )
 
-    assert adapt_codex_tool_call("exec", {"raw": source}, raw_input=source).name == (
-        "ToolExecution"
+    assert (
+        adapt_codex_tool_call("exec", {"raw": source}, raw_input=source).name == "Bash"
     )
 
 
@@ -686,3 +695,46 @@ def test_codex_write_error_result_is_not_collapsed() -> None:
     )
 
     assert normalized == "{}"
+
+
+# --------------------------------------------------------------------------
+# Layer contract: adapt_codex_tool_batch must NEVER raise on any analyze
+# output, including the widened single-call whole-output batch shape. The
+# consumer indexes the per-call tuples by position before checking the call
+# count, so a batch whose tuples don't match its call count would IndexError
+# and crash the whole transcript render. These distilled single-call shapes
+# (synthesized from the widened class — a lone call whose result feeds a
+# derived/looping emission) pin that the new batch shape survives the old
+# consumer. Fixtures are synthetic; no private content.
+# --------------------------------------------------------------------------
+_WIDENED_SINGLE_CALL_SHAPES = [
+    # mcp result iterated with for-of over r.content
+    "const r = await tools.mcp__clmail__terminal({}); "
+    "for (const c of (r.content || [])) text(c.text);",
+    # result object walked with Object.entries
+    "const r = await tools.fetch_workflow_job_logs({id: 1}); "
+    "for (const [k, v] of Object.entries(r.logs || {})) text(k + ': ' + v);",
+    # result text split into headings
+    'const r = await tools.fetch_openai_doc({q: "x"}); '
+    'const hs = String(r.output).split("\\n").filter((l) => l.startsWith("#")); '
+    "text(hs.join(String.fromCharCode(10)));",
+    # laundered single call (JSON.parse-catch)
+    "const r = await tools.mcp__x__list({}); "
+    "let d; try { d = JSON.parse(r.output); } catch (e) { d = []; } "
+    "text(JSON.stringify(d));",
+]
+
+
+@pytest.mark.parametrize("source", _WIDENED_SINGLE_CALL_SHAPES)
+def test_batch_adapter_never_raises_on_widened_single_call_shape(source: str) -> None:
+    # Contract: the batch adapter returns None for a single call (it needs >=2),
+    # but crucially it must not raise reaching that decision.
+    assert adapt_codex_tool_batch(source) is None
+
+
+@pytest.mark.parametrize("source", _WIDENED_SINGLE_CALL_SHAPES)
+def test_single_call_adapter_maps_widened_shape_without_raising(source: str) -> None:
+    # The single-call adapter recovers the tool (or, when the call name is
+    # unknown, its raw fallback) — the point is it never raises.
+    call = adapt_codex_tool_call("exec", {"raw": source}, raw_input=source)
+    assert isinstance(call.name, str) and call.name

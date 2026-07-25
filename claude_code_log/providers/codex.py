@@ -1411,7 +1411,26 @@ class CodexProvider(BaseProvider):
             ):
                 source = record.payload.get("input")
                 if isinstance(source, str):
-                    batch = adapt_codex_tool_batch(source)
+                    # Defense-in-depth: a batch-adapter bug must degrade this
+                    # exec to its raw fallback, never crash the whole transcript
+                    # render. The adapter's own contract (never raise on any
+                    # analyze output) is pinned in the tests; this guard keeps a
+                    # contract violation from being fatal in production.
+                    try:
+                        batch = adapt_codex_tool_batch(source)
+                    except Exception:
+                        # Name WHICH exec faulted (call_id) and carry WHAT broke
+                        # (exc_info): this guard exists to diagnose an adapter
+                        # contract violation, so a non-specific warning defeats
+                        # its purpose — it was exactly this path that hid a
+                        # consumer IndexError until a corpus probe surfaced it.
+                        logger.warning(
+                            "Codex batch adapter raised on exec snippet %s; "
+                            "falling back to raw rendering",
+                            call_id,
+                            exc_info=True,
+                        )
+                        batch = None
                     if batch is not None:
                         requests[call_id] = (
                             batch.calls,

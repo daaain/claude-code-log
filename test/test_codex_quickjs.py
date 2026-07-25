@@ -448,7 +448,11 @@ def test_analyzer_expands_static_array_map_with_explicit_result_fields() -> None
     assert batch.output_count == 3
 
 
-def test_analyzer_rejects_aliased_explicit_result_projection() -> None:
+def test_single_call_aliased_projection_maps_whole_output() -> None:
+    # ``cmds`` has ONE entry, so this is a single exec call. The aliased
+    # projection (``output: r.exit_code``) can't correlate cleanly, but with one
+    # call there is nothing to mis-attribute — the whole output is its result, so
+    # it maps as the fallback rather than staying the raw ToolExecution.
     source = """
         const cmds = [["status", "git status --short"]];
         const out = await Promise.all(cmds.map(async ([name, cmd]) => {
@@ -458,10 +462,14 @@ def test_analyzer_rejects_aliased_explicit_result_projection() -> None:
         out.forEach(text);
     """
 
-    assert analyze_javascript_tools(source) is None
+    batch = analyze_javascript_tools(source)
+    assert batch is not None
+    assert len(batch.calls) == 1 and batch.whole_output_fallback is True
 
 
-def test_analyzer_rejects_unrecognized_collection_callback() -> None:
+def test_single_call_unrecognized_collection_callback_maps_whole_output() -> None:
+    # Same single-call shape emitted via ``console.log``; an unrecognized
+    # collection callback no longer blocks a lone call from mapping.
     source = """
         const cmds = [["status", "git status --short"]];
         const out = await Promise.all(cmds.map(async ([name, cmd]) => {
@@ -471,7 +479,9 @@ def test_analyzer_rejects_unrecognized_collection_callback() -> None:
         out.forEach(console.log);
     """
 
-    assert analyze_javascript_tools(source) is None
+    batch = analyze_javascript_tools(source)
+    assert batch is not None
+    assert len(batch.calls) == 1 and batch.whole_output_fallback is True
 
 
 def test_analyzer_projects_sequential_calls_from_one_result_object() -> None:
@@ -561,3 +571,171 @@ def test_analyzer_recognizes_single_session_marker() -> None:
     assert batch is not None
     assert batch.session_markers is True
     assert batch.result_indexes == [0]
+
+
+# --------------------------------------------------------------------------
+# Provenance-laundering relaxations: a snippet that READS a call result but
+# transforms the sentinel away before text() (JSON.parse throwing on it,
+# indexOf missing it) leaves the output row carrying no provenance. Two
+# unambiguous shapes are recovered; everything else stays fail-closed. Fixtures
+# are synthetic (no private content).
+# --------------------------------------------------------------------------
+def test_single_call_json_parse_launder_is_recovered() -> None:
+    """JSON.parse(r.output) throws on the sentinel → catch → text('[]'). One
+    call, one read output row → the whole paired output is that call's result."""
+    batch = analyze_javascript_tools(
+        "const r = await tools.mcp__x__list({});"
+        " let d; try { d = JSON.parse(r.output); } catch (e) { d = []; }"
+        " text(JSON.stringify(d));"
+    )
+    assert batch is not None
+    assert [c.name for c in batch.calls] == ["mcp__x__list"]
+    assert batch.result_indexes == [0]
+    assert batch.output_count == 1
+
+
+def test_single_call_indexof_launder_is_recovered() -> None:
+    """indexOf on the sentinel string is false → text('(not found)')."""
+    batch = analyze_javascript_tools(
+        'const r = await tools.mcp__x__search({q: "hi"});'
+        " const raw = String(r.output);"
+        ' text(raw.indexOf("needle") >= 0 ? raw : "(not found)");'
+    )
+    assert batch is not None
+    assert batch.result_indexes == [0]
+    assert batch.output_count == 1
+
+
+def test_single_call_maps_whole_output_regardless_of_emission() -> None:
+    """A single (non-wait) tool call has no output-split ambiguity by
+    construction — the one paired output is its result — so it maps as the
+    whole-output FALLBACK no matter what the snippet emitted: an unread literal,
+    a header + laundered result (multi-emission), or nothing at all."""
+    for source in (
+        'await tools.exec_command({cmd: "git status"}); text("result");',  # unread
+        'const r = await tools.mcp__x__list({}); text("Results:");'  # multi-emission
+        " let d; try { d = JSON.parse(r.output); } catch (e) { d = []; }"
+        " text(String(d.length));",
+        'await tools.exec_command({cmd: "ls"});',  # zero-emission
+    ):
+        batch = analyze_javascript_tools(source)
+        assert batch is not None, source
+        assert len(batch.calls) == 1
+        assert batch.result_indexes == [0]
+        assert batch.whole_output_fallback is True
+
+
+def test_interleaving_laundered_loop_is_recovered() -> None:
+    """A for-of loop that launders each iteration's result (JSON.parse-catch per
+    call) emits one laundered row per call, in order — attributed positionally by
+    the recorded calls-made-so-far."""
+    batch = analyze_javascript_tools(
+        'for (const id of ["a", "b", "c"]) {'
+        "  const r = await tools.mcp__x__get({id});"
+        "  let d; try { d = JSON.parse(r.output); } catch (e) { d = null; }"
+        '  text(d && d.name ? d.name : "(none)");'
+        "}"
+    )
+    assert batch is not None
+    assert [c.name for c in batch.calls] == ["mcp__x__get"] * 3
+    assert batch.result_indexes == [0, 1, 2]
+    assert batch.output_count == 3
+
+
+def test_interleaving_count_mismatch_fails_closed() -> None:
+    """Three calls (all read) but only two laundered rows → the row↔call
+    bijection is broken, so it fails closed rather than guess."""
+    assert (
+        analyze_javascript_tools(
+            'const r0 = await tools.get({id: "a"});'
+            ' const r1 = await tools.get({id: "b"});'
+            ' const r2 = await tools.get({id: "c"});'
+            " let a; try { a = JSON.parse(r0.output); } catch (e) { a = 0; }"
+            " let b; try { b = JSON.parse(r1.output); } catch (e) { b = 0; }"
+            " let c; try { c = JSON.parse(r2.output); } catch (e) { c = 0; }"
+            " text(String(a)); text(String(b));"
+        )
+        is None
+    )
+
+
+def test_interleaving_out_of_order_fails_closed() -> None:
+    """Two calls but the laundered rows are emitted in reverse order → the
+    positional (monotone ``after``) check fails, so it stays fail-closed."""
+    assert (
+        analyze_javascript_tools(
+            'const r0 = await tools.get({id: "a"});'
+            ' const r1 = await tools.get({id: "b"});'
+            ' const s1 = String(r1.output); text(s1.indexOf("x") >= 0 ? s1 : "(a)");'
+            ' const s0 = String(r0.output); text(s0.indexOf("x") >= 0 ? s0 : "(b)");'
+        )
+        is None
+    )
+
+
+def test_interleaving_sentinel_position_conflict_fails_closed() -> None:
+    """A strict-interleaved sequence where an output row's execution SLOT and its
+    surviving sentinel DISAGREE about which call it belongs to must fail closed —
+    the sentinel is the ground truth, so a slot-vs-sentinel conflict means the
+    positional attribution is wrong. Here row 2 sits in call ``c``'s slot but its
+    sentinel references call ``a``; without the conflict guard the laundered
+    middle row would be mis-attributed (idx [0, 1, 2])."""
+    assert (
+        analyze_javascript_tools(
+            "const a = await tools.getA({}); text(a.output);"
+            " const b = await tools.getB({});"
+            " let d; try { d = JSON.parse(b.output); } catch (e) { d = 0; }"
+            ' text(d ? d.n : "z");'
+            " const c = await tools.getC({}); void c.output; text(a.output);"
+        )
+        is None
+    )
+
+
+def test_interleaved_mixed_provenance_is_recovered() -> None:
+    """A multi-call sequence that keeps the sentinel on one row and launders the
+    next is attributed by position: the sentinel row self-identifies its call
+    AND agrees with its execution slot, the laundered row is placed by slot."""
+    batch = analyze_javascript_tools(
+        "const r0 = await tools.getA({});"
+        " text(r0.output);"
+        " const r1 = await tools.getB({});"
+        " let d; try { d = JSON.parse(r1.output); } catch (e) { d = null; }"
+        ' text(d ? d.n : "(none)");'
+    )
+    assert batch is not None
+    assert [c.name for c in batch.calls] == ["getA", "getB"]
+    assert batch.result_indexes == [0, 1]
+    assert batch.output_count == 2
+
+
+def test_multi_call_with_an_unread_call_fails_closed() -> None:
+    """A multi-call loop that emits a STATIC literal each iteration (never
+    reading the call result) leaves every call unread — nothing attributable —
+    so it fails closed rather than pair unrelated literals to calls."""
+    assert (
+        analyze_javascript_tools(
+            'for (const id of ["a", "b", "c"]) {'
+            "  await tools.get({id});"
+            '  text("static");'
+            "}"
+        )
+        is None
+    )
+
+
+def test_multi_call_forged_reference_fails_closed() -> None:
+    """Load-bearing: with two real calls, an emission forging a ref to a
+    nonexistent call index must fail closed (a forged ref could otherwise
+    re-route a real output row). Only single-call snippets — where there is
+    nothing to mis-attribute — recover unconditionally."""
+    from claude_code_log.providers.codex_quickjs import _S
+
+    assert (
+        analyze_javascript_tools(
+            "const r0 = await tools.a({x: 1});"
+            " const r1 = await tools.b({y: 2});"
+            f' text(r0.output); text("{_S}R9{_S}");'
+        )
+        is None
+    )

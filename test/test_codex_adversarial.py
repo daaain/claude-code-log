@@ -1000,7 +1000,12 @@ def test_direct_nested_tool_result_propagates_mcp_error() -> None:
     assert result.is_error is True
 
 
-def test_workflow_result_retains_nested_tool_transport() -> None:
+def test_single_communicate_call_maps_and_retains_nested_tool_transport() -> None:
+    # A single mcp call (plus an unrelated "prefix" literal) is a single-call
+    # snippet: it maps to the tool, and the whole paired output — the forwarded
+    # result envelope — is retained verbatim as that call's result (widened
+    # single-call recovery; the transport is preserved, just rendered as the
+    # mcp tool rather than the raw ToolExecution fallback).
     payload = {"sent": True, "message_ids": [4730]}
     output = _forwarded_result_envelope(payload)
     source = (
@@ -1012,8 +1017,86 @@ def test_workflow_result_retains_nested_tool_transport() -> None:
     content = [item for entry in _normalized(records) for item in entry.message.content]
     uses = [item for item in content if isinstance(item, ToolUseContent)]
     result = next(item for item in content if isinstance(item, ToolResultContent))
-    assert [item.name for item in uses] == ["ToolExecution"]
-    assert result.content == output
+    assert [item.name for item in uses] == ["mcp__clmail__communicate"]
+    # The forwarded result payload (the nested transport) is retained — extracted
+    # from the envelope as the mcp call's result rather than the raw script dump.
+    assert '"sent": true' in result.content
+    assert '"message_ids": [4730]' in result.content
+
+
+def test_widened_single_call_exec_renders_without_crashing() -> None:
+    # End-to-end through the real _tool_batches consumer: a single-call snippet
+    # whose result feeds a for-of loop (the widened whole-output class) must
+    # render as the tool, never raise. Regression pin for the batch-adapter
+    # IndexError on the new single-call batch shape.
+    source = (
+        "const r = await tools.mcp__clmail__terminal({}); "
+        "for (const c of (r.content || [])) text(c.text);"
+    )
+    output = [{"type": "input_text", "text": "Script completed\nOutput:\nline\n"}]
+    records = [_call(1, "exec", "exec", source), _output(2, "exec", output)]
+
+    content = [item for entry in _normalized(records) for item in entry.message.content]
+    uses = [item for item in content if isinstance(item, ToolUseContent)]
+    assert [item.name for item in uses] == ["mcp__clmail__terminal"]
+
+
+def test_batch_adapter_fault_warning_carries_call_id_and_exception(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The defense-in-depth guard around adapt_codex_tool_batch already survived
+    # an adapter fault (degrade to raw, never crash — pinned above). This pins
+    # the *diagnosability* of that survival: the warning must name WHICH exec
+    # faulted (call_id) and carry WHAT broke (the exception via exc_info).
+    # Without both, the guard hides exactly the class of bug it exists to catch
+    # (the consumer IndexError a corpus probe once surfaced). Mutation: drop
+    # call_id or exc_info from the warning and the respective assertion fails.
+    import claude_code_log.providers.codex as codex_module
+
+    def _boom(_source: str) -> object:
+        raise RuntimeError("synthetic adapter fault")
+
+    monkeypatch.setattr(codex_module, "adapt_codex_tool_batch", _boom)
+    caplog.set_level(logging.WARNING)
+
+    # A custom_tool_call exec with a string input is what reaches the batch
+    # adapter (a bare function_call takes the single-call path instead). A
+    # two-call Promise.all would expand to >=2 tool-uses via the batch path;
+    # under the fault it must degrade to exactly ONE raw fallback tool-use.
+    source = (
+        "const results = await Promise.all(["
+        'tools.exec_command({cmd: "one"}), '
+        'tools.exec_command({cmd: "two"})]); '
+        "results.forEach((r) => text(r.output));"
+    )
+    records = [
+        _record(
+            1,
+            "response_item",
+            {
+                "type": "custom_tool_call",
+                "call_id": "call-XYZ",
+                "name": "exec",
+                "input": source,
+            },
+        ),
+        _output(2, "call-XYZ", [{"type": "input_text", "text": "out"}]),
+    ]
+
+    content = [item for entry in _normalized(records) for item in entry.message.content]
+    uses = [item for item in content if isinstance(item, ToolUseContent)]
+    assert len(uses) == 1  # degraded to a single raw fallback, no crash, no batch
+
+    warnings = [
+        record for record in caplog.records if record.levelno == logging.WARNING
+    ]
+    assert any("call-XYZ" in record.getMessage() for record in warnings)
+    assert any(
+        record.exc_info is not None
+        and "synthetic adapter fault" in str(record.exc_info[1])
+        for record in warnings
+    )
 
 
 def test_inherited_prefix_requires_strong_parent_suffix_evidence() -> None:
@@ -1031,16 +1114,19 @@ def test_inherited_prefix_requires_strong_parent_suffix_evidence() -> None:
     )
 
 
-def test_assignment_and_emission_text_in_comments_or_strings_is_not_structural() -> (
-    None
-):
+def test_commented_tool_is_not_a_second_call_single_call_maps() -> None:
+    # The commented-out call is NOT counted (only the one real exec_command is),
+    # so this is a single-call snippet and maps to the tool via whole-output
+    # widening — even though its only emission is an unrelated "result" literal.
+    # (Pre-widening this stayed ToolExecution; the pin now proves the comment
+    # isn't miscounted AND that one real call renders.)
     source = (
         "// const result = await tools.exec_command(\n"
         'await tools.exec_command({cmd: "git status"}); text("result");'
     )
 
-    assert adapt_codex_tool_call("exec", {"raw": source}, raw_input=source).name == (
-        "ToolExecution"
+    assert (
+        adapt_codex_tool_call("exec", {"raw": source}, raw_input=source).name == "Bash"
     )
 
 
@@ -2112,13 +2198,18 @@ def test_static_for_of_unwraps_each_nested_mcp_result_like_a_direct_call() -> No
             "ToolExecution",
         ),
         (
+            # A single call whose only emission is an unread literal (the
+            # template word "result", not ${result}) still maps: one call, whole
+            # output is its result.
             'const result = await tools.exec_command({cmd: "real"}); text(`result`);',
-            "ToolExecution",
+            "Bash",
         ),
         (
+            # An undecomposable nested emission no longer blocks a single call —
+            # its whole paired output is that one call's result.
             'const result = await tools.exec_command({cmd: "real"}); '
             "text({nested: [result.output, {ok: true}]} );",
-            "ToolExecution",
+            "Bash",
         ),
     ],
     ids=[

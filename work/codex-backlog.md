@@ -84,6 +84,14 @@ families and the provider contract are in
   round-trip is proven byte-stable for Codex entries. The combined page is also
   a single unpaginated document; wire `_generate_paginated_html` (cache-coupled)
   and flip `--page-size`/`--jobs` from loud-rejected to honored at the same time.
+- Unify the spawn_agent/Task scrub policy. There is a clean-vs-laundered seam:
+  a cleanly-correlated single `spawn_agent` renders as a Task tool with its
+  message shown, while a laundered/unrelated-emission one is kept on the
+  scrubbed-opaque ToolExecution fallback (single-call widening excludes
+  Workflow-family). That makes the scrub boundary depend on JS shape, not
+  content — an artifact, not a defensible privacy contract. Decide one policy:
+  shown-everywhere with opaque-literal scrubbing of the canonicalized inputs, or
+  scrubbed-everywhere. cboos's ruling to take later.
 
 ## Tool and static-analysis candidates
 
@@ -100,6 +108,45 @@ families and the provider contract are in
 - Keep consolidated-output recovery conservative: split only on unique static
   materialized boundaries, and never invent a missing result unless Codex
   explicitly reports truncation.
+- Laundered-row cross-read hole in the interleaving relaxation — uniqueness
+  tightening. `_relax_interleaved` attributes a provenance-laundered row to a
+  call by execution slot and checks reads only GLOBALLY (every call read
+  somewhere), so a row that actually read a different call could be
+  mis-attributed if its slot-call is satisfied by a dead read. The membership
+  fix (slot-call must be read in that row's window) is defeated because the dead
+  read lands in-window. The unbeaten variant: scope reads per emission window
+  (the same `after`-counter mechanism used for texts) and require the window's
+  DISTINCT read-set to be exactly `{slot call}` — a laundered row that reads two
+  calls in its window (one dead) is then non-unique and fails closed, while a
+  legitimate laundered row reads exactly its own call. Likely zero-regression on
+  the recovered set but unmeasurable without building it; the hole needs dead
+  code to reach, so it is documented (see the `_relax_interleaved` docstring)
+  rather than guarded for now.
+- Prelude instrumentation integrity — the correlation bookkeeping is
+  snippet-writable. `_PRELUDE_TEMPLATE` declares `__records`, `__texts`,
+  `__errors`, and `__reads` as plain `globalThis` arrays, and the instrumentation
+  hooks (`__noteRead` and the tool/text recorders) push into them directly. An
+  analyzed snippet can therefore write these globals itself: forged
+  `__records`/`__texts` entries fabricate tool calls or emitted rows in the
+  rendered transcript, and forged `__reads` entries influence the read-gated
+  attribution in `_relax_interleaved`. This is a different class from the
+  cross-read hole above — that is an attribution ambiguity reachable only by dead
+  code with no hostile intent; this is direct hostile writes to the bookkeeping.
+  The fix is uniform, not per-array: move all four behind a closure and expose
+  only a single non-enumerable, non-writable extraction hook that returns a
+  detached snapshot — serialized data, or a deep copy / frozen structure — and
+  never a live reference to the closure-owned arrays. The descriptor flags seal
+  only the binding, not the array a hook hands back: returning the live arrays
+  would let a snippet call the hook and push forged entries straight into them,
+  reintroducing the same forgery the closure was meant to prevent. Hardening
+  `__reads` alone would shut the narrow door while leaving the wider
+  `__records`/`__texts` forgery open, so piecemeal hardening is not worth doing. Threat model that
+  bounds the priority: the snippet originates in the user's own transcript, and
+  the QuickJS sandbox and evaluation caps hold, so the worst outcome is
+  misleading rendered output for the user viewing their own session — not sandbox
+  escape, code execution, or data exfiltration. Deferred on that bound; revisit
+  if the analyzer ever runs on untrusted third-party rollouts or the extraction
+  surface grows.
 
 ## Internal architecture debt
 
