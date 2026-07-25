@@ -41,6 +41,10 @@ uvx claude-code-log@latest --tui
 - **Date range filtering** — natural language (`"today"`, `"last week"`)
 - **Detail levels & compact mode** — `--detail` and `--compact` for LLM-friendly Markdown
 - **Server-side Markdown** — syntax-highlighted rendering via mistune
+- **Obsidian / vault output** — `--expand-paths` mirrors each project under its real
+  on-disk path and defaults `--combined` to `no` (per-session files only); a prior
+  combined run's files are left in place, so pass `--clear-output` to sweep them.
+  Works for provider wholesale renders too (e.g. `--provider codex`)
 
 ## Where to go next
 

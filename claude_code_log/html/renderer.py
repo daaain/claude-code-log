@@ -1747,6 +1747,7 @@ class HtmlRenderer(Renderer):
         from_date: Optional[str] = None,
         to_date: Optional[str] = None,
         expand_paths_tree: bool = False,
+        provider_label: Optional[str] = None,
     ) -> str:
         """Generate an HTML projects index page.
 
@@ -1757,8 +1758,11 @@ class HtmlRenderer(Renderer):
                 render the project list as a nested folder hierarchy that
                 mirrors the projected directory tree, instead of a flat
                 grid of cards.
+            provider_label: Provider name for the title (None → Claude).
         """
-        title = title_for_projects_index(project_summaries, from_date, to_date)
+        title = title_for_projects_index(
+            project_summaries, from_date, to_date, provider_label
+        )
         template_projects, template_summary = prepare_projects_index(project_summaries)
 
         project_tree: Optional[dict[str, Any]] = None

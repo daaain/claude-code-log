@@ -3143,12 +3143,15 @@ def render_provider_wholesale(
         )
 
     renderer = get_renderer(output_format, image_export_mode)
-    # Under --expand-paths (Obsidian mode), HTML and Markdown render the index
-    # as a nested folder tree mirroring the projected hierarchy; JSON keeps a
-    # flat list (tree shape isn't meaningful) and does not accept the kwarg.
+    # HTML/Markdown accept title/tree kwargs; JSON keeps a flat structured list
+    # and accepts neither. Under --expand-paths (Obsidian mode) the index renders
+    # as a nested folder tree mirroring the projected hierarchy; the provider
+    # label titles the page for the right provider (not "Claude Code").
     index_kwargs: dict[str, Any] = {}
-    if expand_paths and output_format in ("md", "markdown", "html"):
-        index_kwargs["expand_paths_tree"] = True
+    if output_format in ("md", "markdown", "html"):
+        index_kwargs["provider_label"] = provider_name.title()
+        if expand_paths:
+            index_kwargs["expand_paths_tree"] = True
     index_content = renderer.generate_projects_index(
         project_summaries, from_date, to_date, **index_kwargs
     )

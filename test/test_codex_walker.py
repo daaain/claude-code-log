@@ -229,6 +229,42 @@ def test_walker_expand_paths_rerenders_despite_flat_cache(tmp_path: Path) -> Non
     assert (out / "proj" / "a" / "combined_transcripts.html").exists()
 
 
+# --------------------------------------------------------------------------
+# Index labelling: disambiguate colliding basenames, provider-aware title.
+# --------------------------------------------------------------------------
+def test_walker_index_disambiguates_colliding_worktree_labels(tmp_path: Path) -> None:
+    """The real field-test defect: two worktrees both named ``codex`` rendered a
+    single duplicated label and read as one project split in two. The index now
+    disambiguates them by their differing parent component."""
+    tree = tmp_path / "sessions"
+    _rollout(
+        tree,
+        "a/one.jsonl",
+        "10000000-0000-4000-8000-000000000001",
+        "/home/me/projA/codex",
+    )
+    _rollout(
+        tree,
+        "b/one.jsonl",
+        "20000000-0000-4000-8000-000000000001",
+        "/home/me/projB/codex",
+    )
+    out = tmp_path / "ccl"
+    index = render_provider_wholesale("codex", tree, out, silent=True)
+    text = index.read_text(encoding="utf-8")
+    assert "projA/codex" in text
+    assert "projB/codex" in text
+
+
+def test_walker_index_title_reflects_provider(tmp_path: Path) -> None:
+    """The index of a Codex render must not be titled "Claude Code Projects"."""
+    out = tmp_path / "ccl"
+    index = render_provider_wholesale("codex", SESSIONS_ROOT, out, silent=True)
+    text = index.read_text(encoding="utf-8")
+    assert "Codex Projects" in text
+    assert "Claude Code Projects" not in text
+
+
 def test_walker_combined_no_suppresses_combined_page(tmp_path: Path) -> None:
     out = tmp_path / "ccl"
     render_provider_wholesale(
