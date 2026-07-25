@@ -753,8 +753,6 @@ def _relax_interleaved(
         [None] * len(calls),
     )
 
-    return None
-
 
 def analyze_javascript_tools(
     source: str,

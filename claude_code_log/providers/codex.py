@@ -1419,9 +1419,16 @@ class CodexProvider(BaseProvider):
                     try:
                         batch = adapt_codex_tool_batch(source)
                     except Exception:
+                        # Name WHICH exec faulted (call_id) and carry WHAT broke
+                        # (exc_info): this guard exists to diagnose an adapter
+                        # contract violation, so a non-specific warning defeats
+                        # its purpose — it was exactly this path that hid a
+                        # consumer IndexError until a corpus probe surfaced it.
                         logger.warning(
-                            "Codex batch adapter raised on an exec snippet; "
-                            "falling back to raw rendering"
+                            "Codex batch adapter raised on exec snippet %s; "
+                            "falling back to raw rendering",
+                            call_id,
+                            exc_info=True,
                         )
                         batch = None
                     if batch is not None:

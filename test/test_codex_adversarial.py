@@ -1041,6 +1041,64 @@ def test_widened_single_call_exec_renders_without_crashing() -> None:
     assert [item.name for item in uses] == ["mcp__clmail__terminal"]
 
 
+def test_batch_adapter_fault_warning_carries_call_id_and_exception(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The defense-in-depth guard around adapt_codex_tool_batch already survived
+    # an adapter fault (degrade to raw, never crash — pinned above). This pins
+    # the *diagnosability* of that survival: the warning must name WHICH exec
+    # faulted (call_id) and carry WHAT broke (the exception via exc_info).
+    # Without both, the guard hides exactly the class of bug it exists to catch
+    # (the consumer IndexError a corpus probe once surfaced). Mutation: drop
+    # call_id or exc_info from the warning and the respective assertion fails.
+    import claude_code_log.providers.codex as codex_module
+
+    def _boom(_source: str) -> object:
+        raise RuntimeError("synthetic adapter fault")
+
+    monkeypatch.setattr(codex_module, "adapt_codex_tool_batch", _boom)
+    caplog.set_level(logging.WARNING)
+
+    # A custom_tool_call exec with a string input is what reaches the batch
+    # adapter (a bare function_call takes the single-call path instead). A
+    # two-call Promise.all would expand to >=2 tool-uses via the batch path;
+    # under the fault it must degrade to exactly ONE raw fallback tool-use.
+    source = (
+        "const results = await Promise.all(["
+        'tools.exec_command({cmd: "one"}), '
+        'tools.exec_command({cmd: "two"})]); '
+        "results.forEach((r) => text(r.output));"
+    )
+    records = [
+        _record(
+            1,
+            "response_item",
+            {
+                "type": "custom_tool_call",
+                "call_id": "call-XYZ",
+                "name": "exec",
+                "input": source,
+            },
+        ),
+        _output(2, "call-XYZ", [{"type": "input_text", "text": "out"}]),
+    ]
+
+    content = [item for entry in _normalized(records) for item in entry.message.content]
+    uses = [item for item in content if isinstance(item, ToolUseContent)]
+    assert len(uses) == 1  # degraded to a single raw fallback, no crash, no batch
+
+    warnings = [
+        record for record in caplog.records if record.levelno == logging.WARNING
+    ]
+    assert any("call-XYZ" in record.getMessage() for record in warnings)
+    assert any(
+        record.exc_info is not None
+        and "synthetic adapter fault" in str(record.exc_info[1])
+        for record in warnings
+    )
+
+
 def test_inherited_prefix_requires_strong_parent_suffix_evidence() -> None:
     provider = CodexProvider()
     shared = _event(1, "assistant", "Done.")
