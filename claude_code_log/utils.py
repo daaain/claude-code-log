@@ -158,6 +158,44 @@ def _is_temp_path(path_str: str) -> bool:
     return any(pattern in path_str for pattern in temp_patterns)
 
 
+def best_working_dir(
+    project_dir_name: str, working_directories: Optional[list[str]] = None
+) -> tuple[str, Optional[Path]]:
+    """Return a project's ``(display basename, best working-dir Path)``.
+
+    The basename is exactly what :func:`get_project_display_name` shows; the
+    ``Path`` is the least-nested real working directory it was derived from, or
+    ``None`` when there is no usable working dir and the name falls back to the
+    decoded project directory. The collision-disambiguation pass in
+    ``prepare_projects_index`` needs that ``Path`` to walk parent components, so
+    this sibling exposes it without touching ``get_project_display_name``'s
+    signature (a widely-called helper).
+
+    Args:
+        project_dir_name: The Claude project directory name (e.g.,
+            "-Users-dain-workspace-claude-code-log").
+        working_directories: List of working directories from cache data.
+    """
+    if working_directories:
+        # Filter out temporary paths (pytest, macOS temp dirs, etc.)
+        real_dirs = [wd for wd in working_directories if not _is_temp_path(wd)]
+        if real_dirs:
+            # Sort by 1) path depth (fewer parts = less nested), 2) recency
+            # (lower index = more recent). Least nested wins, ties by recency.
+            paths_with_indices = [(Path(wd), i) for i, wd in enumerate(real_dirs)]
+            best_path, _ = min(
+                paths_with_indices, key=lambda p: (len(p[0].parts), p[1])
+            )
+            return best_path.name, best_path
+
+    # Fall back to converting the project directory name; no meaningful parent
+    # path exists in this branch.
+    display_name = project_dir_name
+    if display_name.startswith("-"):
+        display_name = display_name[1:].replace("-", "/")
+    return display_name, None
+
+
 def get_project_display_name(
     project_dir_name: str, working_directories: Optional[list[str]] = None
 ) -> str:
@@ -170,30 +208,7 @@ def get_project_display_name(
     Returns:
         The project display name (e.g., "claude-code-log")
     """
-    if working_directories:
-        # Filter out temporary paths (pytest, macOS temp dirs, etc.)
-        real_dirs = [wd for wd in working_directories if not _is_temp_path(wd)]
-
-        # If all directories were filtered out, fall back to project_dir_name conversion
-        if not real_dirs:
-            display_name = project_dir_name
-            if display_name.startswith("-"):
-                display_name = display_name[1:].replace("-", "/")
-            return display_name
-
-        # Convert to Path objects with their original indices for tracking recency
-        paths_with_indices = [(Path(wd), i) for i, wd in enumerate(real_dirs)]
-
-        # Sort by: 1) path depth (fewer parts = less nested), 2) recency (lower index = more recent)
-        # This gives us the least nested path, with ties broken by recency
-        best_path, _ = min(paths_with_indices, key=lambda p: (len(p[0].parts), p[1]))
-        return best_path.name
-    else:
-        # Fall back to converting project directory name
-        display_name = project_dir_name
-        if display_name.startswith("-"):
-            display_name = display_name[1:].replace("-", "/")
-        return display_name
+    return best_working_dir(project_dir_name, working_directories)[0]
 
 
 def path_looks_absolute(s: str) -> bool:

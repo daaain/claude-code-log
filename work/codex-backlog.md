@@ -92,6 +92,13 @@ families and the provider contract are in
   content — an artifact, not a defensible privacy contract. Decide one policy:
   shown-everywhere with opaque-literal scrubbing of the canonicalized inputs, or
   scrubbed-everywhere. cboos's ruling to take later.
+- Standalone user-docs page for provider wholesale + Obsidian output. The
+  `--expand-paths` / `--filter-path` / `--combined` interactions, synthetic
+  group-by-cwd projects, and `--clear-output` stale-sweep are currently surfaced
+  as a feature-list bullet plus the live-generated CLI reference. If the surface
+  keeps growing, a dedicated how-to page (flat vs expanded layout, migration)
+  may be worth carving out — kept out of the flags/labels PR to avoid widening
+  its diff with a structural docs decision.
 
 ## Tool and static-analysis candidates
 

@@ -79,6 +79,7 @@ from .factories import (
 from .factories.attachment_factory import create_attachment_message
 from .utils import (
     format_timestamp,
+    best_working_dir,
     format_timestamp_range,
     get_parent_session_id,
     get_project_display_name,
@@ -5073,6 +5074,62 @@ def _surface_agent_models(ctx: RenderingContext) -> None:
 # -- Project Index Generation -------------------------------------------------
 
 
+def _non_anchor_parts(path: Path) -> list[str]:
+    """``path``'s components with the filesystem anchor (``/`` or ``C:\\``)
+    dropped, so a disambiguation label never leads with a bare separator."""
+    parts = list(path.parts)
+    if parts and parts[0] == path.anchor:
+        parts = parts[1:]
+    return parts
+
+
+def _path_suffix_label(path: Path, depth: int) -> str:
+    """The last ``depth`` non-anchor components of ``path`` as a ``/``-joined
+    label (``/home/joe/x/codex`` at depth 2 → ``x/codex``)."""
+    parts = _non_anchor_parts(path)
+    if not parts:
+        return path.name
+    return "/".join(parts[-depth:])
+
+
+def _disambiguate_display_names(projects: list["TemplateProject"]) -> None:
+    """Make colliding project display names unique in place.
+
+    Two projects whose least-nested working directories share a basename
+    (e.g. two worktrees both named ``codex``, or several ``main`` worktrees)
+    otherwise render identical labels and read as one project split in two.
+    For each colliding basename, prepend parent path components ONE AT A TIME
+    until the group is separated (``frontend/app`` vs ``backend/app``, never the
+    whole path).
+
+    A strict no-op when every basename is already unique — groups of one are
+    left untouched — so a collision-free index (the overwhelming common case,
+    including all existing snapshots) renders byte-identically. Only projects
+    with a real working-dir path participate; fallback-named projects keep their
+    decoded name.
+    """
+    from collections import defaultdict
+
+    groups: dict[str, list[tuple[TemplateProject, Path]]] = defaultdict(list)
+    for tp in projects:
+        _name, best = best_working_dir(tp.name, tp.working_directories)
+        if best is not None:
+            groups[tp.display_name].append((tp, best))
+
+    for members in groups.values():
+        if len(members) < 2:
+            continue  # unique basename → leave the label bare
+        max_depth = max(len(_non_anchor_parts(bp)) for _, bp in members)
+        depth = 1
+        while depth < max_depth:
+            labels = [_path_suffix_label(bp, depth) for _, bp in members]
+            if len(set(labels)) == len(labels):
+                break  # every member is now distinct
+            depth += 1
+        for tp, bp in members:
+            tp.display_name = _path_suffix_label(bp, depth)
+
+
 def prepare_projects_index(
     project_summaries: list[dict[str, Any]],
 ) -> tuple[list["TemplateProject"], "TemplateSummary"]:
@@ -5091,6 +5148,9 @@ def prepare_projects_index(
 
     # Convert to template-friendly format
     template_projects = [TemplateProject(project) for project in sorted_projects]
+    # Disambiguate any colliding basename labels across the full set (no-op
+    # unless a real collision exists → existing output stays byte-identical).
+    _disambiguate_display_names(template_projects)
     template_summary = TemplateSummary(project_summaries)
 
     return template_projects, template_summary
@@ -5100,6 +5160,7 @@ def title_for_projects_index(
     project_summaries: list[dict[str, Any]],
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
+    provider_label: Optional[str] = None,
 ) -> str:
     """Generate a title for the projects index page.
 
@@ -5110,11 +5171,15 @@ def title_for_projects_index(
         project_summaries: List of project summary dictionaries.
         from_date: Optional start date filter string.
         to_date: Optional end date filter string.
+        provider_label: Optional provider name for the title (e.g. "Codex"). When
+            None (the default, Claude path) the title reads "Claude Code
+            Projects" as before, keeping existing output byte-identical.
 
     Returns:
         A title string for the projects index page.
     """
-    title = "Claude Code Projects"
+    base = f"{provider_label} Projects" if provider_label else "Claude Code Projects"
+    title = base
 
     if project_summaries:
         # Collect all working directories from all projects
@@ -5133,7 +5198,7 @@ def title_for_projects_index(
 
             if len(working_paths) == 1:
                 # Single working directory - use its name
-                title = f"Claude Code Projects - {working_paths[0].name}"
+                title = f"{base} - {working_paths[0].name}"
             else:
                 # Multiple working directories - try to find common parent
                 try:
@@ -5154,7 +5219,7 @@ def title_for_projects_index(
 
                         if len(common_parts) > 1:  # More than just root "/"
                             common_path = Path(*common_parts)
-                            title = f"Claude Code Projects - {common_path.name}"
+                            title = f"{base} - {common_path.name}"
                 except Exception:
                     # Fall back to default title if path analysis fails
                     pass

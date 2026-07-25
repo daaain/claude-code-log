@@ -212,6 +212,8 @@ def _run_provider_wholesale(
     clear_cache: bool,
     clear_output: bool,
     open_browser: bool,
+    expand_paths: bool,
+    filter_path: "Optional[str]",
 ) -> None:
     """Render a whole provider sessions tree into a project hierarchy.
 
@@ -251,6 +253,8 @@ def _run_provider_wholesale(
         write_combined=write_combined,
         write_individual=write_individual,
         use_cache=not no_cache,
+        expand_paths=expand_paths,
+        filter_path=filter_path,
         silent=False,
     )
     if open_browser:
@@ -873,7 +877,8 @@ def _validate_git_link_template(template: str) -> None:
         "Control combined-vs-individual transcript generation: "
         "'yes' = both combined and per-session files (default for --all-projects); "
         "'no' = only per-session files (recommended for Obsidian / vault use — "
-        "combined is dead weight); "
+        "combined is dead weight; note a prior 'yes' run's combined files are "
+        "not deleted, use --clear-output to sweep them); "
         "'only' = only the combined file (= --no-individual-sessions). "
         "When unset, defaults to 'no' under --expand-paths (Obsidian mode), "
         "else 'yes'."
@@ -1115,21 +1120,22 @@ def main(
                 "--provider with an INPUT_PATH renders that path; drop "
                 "--session-id (or drop the INPUT_PATH to export a session by id)."
             )
-        # Always illegal in provider mode: Claude-only projection semantics and
-        # the TUI (provider TUI support is out of scope, tracked in the backlog).
+        # The TUI is always illegal in provider mode (provider TUI support is out
+        # of scope, tracked in the backlog). --expand-paths/--filter-path used to
+        # be always-illegal too ("Claude-only projection semantics"), but they are
+        # well-defined for wholesale: provider projects are synthetic group-by-cwd,
+        # so the group key IS the real cwd and the flat name expands unambiguously.
+        # They stay illegal for single-session export (one session has no
+        # multi-project projection to apply).
         conflicts: list[str] = []
-        for enabled, flag in (
-            (tui, "--tui"),
-            (expand_paths, "--expand-paths"),
-            (filter_path is not None, "--filter-path"),
-        ):
-            if enabled:
-                conflicts.append(flag)
+        if tui:
+            conflicts.append("--tui")
         if provider_wholesale:
-            # Wholesale honors --combined, date range, -o/-f, --open-browser, and
-            # the cache flags (--no-cache/--clear-cache/--clear-output). Only
-            # pagination (--page-size) and job-parallelism (--jobs) remain
-            # deferred, so reject those loudly rather than accept-and-ignore.
+            # Wholesale honors --expand-paths/--filter-path (Obsidian projection),
+            # --combined, date range, -o/-f, --open-browser, and the cache flags
+            # (--no-cache/--clear-cache/--clear-output). Only pagination
+            # (--page-size) and job-parallelism (--jobs) remain deferred, so reject
+            # those loudly rather than accept-and-ignore.
             if jobs is not None:
                 conflicts.append("--jobs")
             if (
@@ -1139,8 +1145,11 @@ def main(
                 conflicts.append("--page-size")
         else:
             # export / single-file render one session; the wholesale-only flags
-            # (multi-project hierarchy, pagination, date range, cache) don't apply.
+            # (multi-project hierarchy + projection, pagination, date range, cache)
+            # don't apply.
             for enabled, flag in (
+                (expand_paths, "--expand-paths"),
+                (filter_path is not None, "--filter-path"),
                 (all_projects, "--all-projects"),
                 (projects_dir is not None, "--projects-dir"),
                 (no_individual_sessions, "--no-individual-sessions"),
@@ -1223,20 +1232,31 @@ def main(
     # through the single-file path which doesn't honour these flags).
     from .utils import output_path_is_file as _output_path_is_file
 
+    # Provider wholesale honours --expand-paths/--filter-path (it defaults its
+    # own output root and forwards the flags), so the Claude-path "these are
+    # no-ops here" warnings would LIE for it — announce "ignoring" for a run that
+    # actually projects. Exempt provider_wholesale from both; keep them verbatim
+    # for every other mode, where they remain correct.
     will_run_all_projects = all_projects or input_path is None
     if (expand_paths or filter_path) and tui:
         click.echo(
             "Warning: --expand-paths / --filter-path are ignored in --tui mode.",
             err=True,
         )
-    elif (expand_paths or filter_path) and not will_run_all_projects:
+    elif (
+        (expand_paths or filter_path)
+        and not will_run_all_projects
+        and not provider_wholesale
+    ):
         click.echo(
             "Warning: --expand-paths / --filter-path require --all-projects "
             "(or omitting INPUT_PATH); ignoring.",
             err=True,
         )
-    elif (expand_paths or filter_path) and (
-        output is None or _output_path_is_file(output)
+    elif (
+        (expand_paths or filter_path)
+        and not provider_wholesale
+        and (output is None or _output_path_is_file(output))
     ):
         click.echo(
             "Warning: --expand-paths / --filter-path require --output to be a "
@@ -1372,6 +1392,8 @@ def main(
                     clear_cache,
                     clear_output,
                     open_browser,
+                    expand_paths,
+                    filter_path,
                 )
                 return
 
@@ -1761,6 +1783,8 @@ def main(
                         clear_cache,
                         clear_output,
                         open_browser,
+                        expand_paths,
+                        filter_path,
                     )
                     return
                 _render_provider_input_file(
