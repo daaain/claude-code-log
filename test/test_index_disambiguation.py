@@ -83,6 +83,53 @@ def test_partial_collision_leaves_the_unique_one_bare() -> None:
 
 
 # --------------------------------------------------------------------------
+# B.1 degenerate-edge regression guards
+# --------------------------------------------------------------------------
+def test_same_cwd_members_degrade_without_raising() -> None:
+    """Two distinct project dirs recording the SAME cwd have identical basename
+    AND parent chain, so disambiguation cannot separate them. It must terminate
+    at the max depth with a stable (still-colliding) label — not hang, not
+    raise."""
+    labels = _labels(
+        [
+            _summary("-a", ["/x/codex"]),
+            _summary("-b", ["/x/codex"]),
+        ]
+    )
+    # Both degrade to the full non-anchor path; still colliding, but stable and
+    # exception-free (status-quo collision, not a manufactured one).
+    assert labels == {"-a": "x/codex", "-b": "x/codex"}
+
+
+def test_fallback_named_project_in_a_collision_is_excluded_not_crashed() -> None:
+    """A project with no usable working dir (fallback name, best_path=None) that
+    shares a display basename with a real-dir project must be EXCLUDED from
+    disambiguation, never routed through it. The ``best is not None`` filter is
+    load-bearing for CRASH-safety, not just labelling: without it,
+    ``_path_suffix_label(None, ...)`` hits ``None.parts`` → AttributeError and
+    takes down the whole index pass. Today nothing puts a fallback project
+    through disambiguation, so this guards a latent crash.
+
+    Mutation check (run manually, main/monk 6306/6307): drop ``if best is not
+    None`` in ``_disambiguate_display_names`` → this test RAISES (AttributeError).
+    If removing the filter leaves it green, it is pinning something else.
+    """
+    # "codex" (no leading dash, empty working dirs) → fallback display "codex",
+    # best_path None. "-x-codex" with a real cwd → display "codex", best_path
+    # /x/codex. Same display basename ⇒ same group.
+    projects, _summary_obj = prepare_projects_index(
+        [
+            _summary("codex", []),  # fallback-named, best_path=None
+            _summary("-x-codex", ["/x/codex"]),  # real-dir, best_path=/x/codex
+        ]
+    )
+    labels = {p.name: p.display_name for p in projects}
+    # No exception raised; the fallback keeps its decoded name and the real-dir
+    # project is a singleton group (fallback excluded) → stays bare.
+    assert labels == {"codex": "codex", "-x-codex": "codex"}
+
+
+# --------------------------------------------------------------------------
 # B.2 provider-aware title
 # --------------------------------------------------------------------------
 def test_title_defaults_to_claude_and_reflects_provider_label() -> None:
