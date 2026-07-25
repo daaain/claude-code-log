@@ -133,9 +133,14 @@ families and the provider contract are in
   cross-read hole above — that is an attribution ambiguity reachable only by dead
   code with no hostile intent; this is direct hostile writes to the bookkeeping.
   The fix is uniform, not per-array: move all four behind a closure and expose
-  only a single non-enumerable, non-writable extraction hook. Hardening `__reads`
-  alone would shut the narrow door while leaving the wider `__records`/`__texts`
-  forgery open, so piecemeal hardening is not worth doing. Threat model that
+  only a single non-enumerable, non-writable extraction hook that returns a
+  detached snapshot — serialized data, or a deep copy / frozen structure — and
+  never a live reference to the closure-owned arrays. The descriptor flags seal
+  only the binding, not the array a hook hands back: returning the live arrays
+  would let a snippet call the hook and push forged entries straight into them,
+  reintroducing the same forgery the closure was meant to prevent. Hardening
+  `__reads` alone would shut the narrow door while leaving the wider
+  `__records`/`__texts` forgery open, so piecemeal hardening is not worth doing. Threat model that
   bounds the priority: the snippet originates in the user's own transcript, and
   the QuickJS sandbox and evaluation caps hold, so the worst outcome is
   misleading rendered output for the user viewing their own session — not sandbox
