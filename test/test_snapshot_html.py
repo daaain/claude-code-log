@@ -61,6 +61,29 @@ class TestTranscriptHTMLSnapshots:
         html = html_file.read_text(encoding="utf-8")
         assert html == html_snapshot
 
+    def test_steering_chronological_order_html(
+        self, html_snapshot, test_data_dir, tmp_path
+    ):
+        """End-to-end guard for #295: a mid-conversation `remove` steering
+        entry rendered through the dir/combined path.
+
+        UUID-less queue-ops carry no uuid, so the DAG builder drops them and
+        directory-mode loading re-adds them; before the fix they were appended
+        at the END, so this steering op (07:00:02, between a1 and u2) rendered
+        after the last assistant message. That whole bug class was invisible to
+        the snapshot suite — no existing fixture contained a queue-operation —
+        so this fixture exists specifically so any future reordering of the
+        composition moves this snapshot and has to be explained.
+        """
+        shutil.copy(
+            test_data_dir / "session_id_steering_order.jsonl",
+            tmp_path / "session_id_steering_order.jsonl",
+        )
+
+        html_file = convert_jsonl_to_html(tmp_path, use_cache=False)
+        html = html_file.read_text(encoding="utf-8")
+        assert html == html_snapshot
+
 
 class TestSessionHTMLSnapshots:
     """Snapshot tests for individual session HTML output."""
