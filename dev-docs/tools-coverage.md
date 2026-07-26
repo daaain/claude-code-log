@@ -272,12 +272,22 @@ compatibility cost; false reconstruction is not.
 Codex records token usage as cumulative `token_count` events
 (`payload.info.total_token_usage`), one emitted after nearly every agent-loop
 step — unlike Claude, which carries per-assistant-message `usage`. The provider
-surfaces **session and project totals** to the wholesale index (project cards
-and per-session rows); the extraction is:
+surfaces these totals in two places: the **project-card token summary** on the
+wholesale index, and the **per-session token fields on the session cache**
+(`total_input_tokens` etc., which `sessions` has carried since the initial
+schema — so this is Claude-schema parity, not Codex-only state). Per-session
+token **rows on the index are deliberately NOT shown** — the Claude index does
+not render them either (the project-summary session dicts carry no
+`token_summary` key, and the drift pin
+`test_index_summary_dict_shape_matches_claude_path` locks the two shapes
+together), so adding them is a Claude-path UX change deferred to its own
+follow-up (see `work/codex-backlog.md`). The extraction is:
 
-- `providers/base.ProviderTokenTotals` — the four index columns a
-  session-level provider can fill. `cache_creation` is deliberately absent
-  (Codex has no such concept; an omitted column ≠ a zero one).
+- `providers/base.ProviderTokenTotals` — the token figures a session-level
+  provider surfaces: billable `input`, `cache_read`, `output`, and the
+  authoritative `total`. `cache_creation` is deliberately absent (Codex has no
+  such concept; an omitted column ≠ a zero one), so of the index's four token
+  columns the project card shows three and never a "Cache Creation" one.
 - `codex._token_totals_from_records` — takes the **last** cumulative record as
   the session total (the values are cumulative and monotonic, so the final one
   subsumes every prior turn; compaction lowers the live context window but does
@@ -289,8 +299,9 @@ and per-session rows); the extraction is:
   column; folding them back into `input` would double-count. `total_tokens` is
   carried through authoritatively (never recomputed — a degenerate record with
   zero components but a non-zero total keeps its stored total).
-- `converter.render_provider_wholesale` threads per-session totals directly
-  into the index project-card and session-row summaries, **bypassing** the
+- `converter.render_provider_wholesale` sums each session's cumulative total
+  into the index **project-card** totals (`_sum_provider_token_totals`) and
+  writes the per-session totals onto the **session cache**, **bypassing** the
   per-message `usage` accumulators (`compute_session_data` /
   `compute_project_aggregates`) that a cumulative figure must never flow
   through.
