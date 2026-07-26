@@ -41,6 +41,7 @@ from ..models import (
     SessionHeaderMessage,
     SlashCommandMessage,
     SystemMessage,
+    SystemReminderContent,
     TaskNotificationMessage,
     TeammateMessage,
     TextContent,
@@ -845,7 +846,14 @@ class MarkdownRenderer(Renderer):
         """
         parts: list[str] = []
         for item in content.items:
-            if isinstance(item, ImageContent):
+            if isinstance(item, SystemReminderContent):
+                # Blockquote each reminder so extracting it out of the text does
+                # not drop content that previously rendered inline in Markdown.
+                for reminder in item.reminders:
+                    lines = reminder.splitlines() or [reminder]
+                    quoted = "\n".join(f"> {line}" for line in lines)
+                    parts.append(f"> 🤖 *System reminder:*\n{quoted}")
+            elif isinstance(item, ImageContent):
                 parts.append(self._format_image(item))
             elif isinstance(item, TextContent):
                 if item.text.strip():

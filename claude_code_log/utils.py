@@ -18,6 +18,7 @@ from .factories import (
     IDE_DIAGNOSTICS_PATTERN,
     IDE_OPENED_FILE_PATTERN,
     IDE_SELECTION_PATTERN,
+    SYSTEM_REMINDER_PATTERN,
     is_command_message,
     is_local_command_output,
     is_system_message,
@@ -518,6 +519,16 @@ def should_use_as_session_starter(text_content: str) -> bool:
     if is_system_message(text_content):
         return False
 
+    # Skip messages that are ENTIRELY a system reminder (e.g. a bare `/cd`
+    # notice with no CLAUDE.md tail) — the reminder is an annotation, not a
+    # meaningful opener, so the next real user message becomes the starter
+    # (issue #275).
+    if (
+        "<system-reminder>" in text_content
+        and not SYSTEM_REMINDER_PATTERN.sub("", text_content).strip()
+    ):
+        return False
+
     # Skip command messages except for 'init' commands
     if "<command-name>" in text_content:
         return "<command-name>init" in text_content
@@ -552,8 +563,12 @@ def create_session_preview(text_content: str) -> str:
     legacy emissions are normalised to the ``/cmd`` shape so previews
     stay consistent in mixed transcripts). #129.
     """
+    # Drop any <system-reminder> block so the preview shows the real content
+    # that follows it (e.g. a CLAUDE.md), never the raw reminder tags (#275).
+    preview_content = SYSTEM_REMINDER_PATTERN.sub("", text_content).strip()
+
     # Strip command-tag XML soup down to ``/cmd`` or inner-text shape.
-    preview_content = simplify_command_tags(text_content)
+    preview_content = simplify_command_tags(preview_content)
 
     # Apply compact IDE tag indicators BEFORE truncation
     preview_content = _compact_ide_tags_for_preview(preview_content)

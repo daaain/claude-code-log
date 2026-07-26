@@ -35,6 +35,7 @@ from ..models import (
     ImageContent,
     MessageMeta,
     SlashCommandMessage,
+    SystemReminderContent,
     TaskNotificationMessage,
     TeammateMessage,
     TextContent,
@@ -311,6 +312,13 @@ IDE_DIAGNOSTICS_PATTERN = re.compile(
     re.DOTALL,
 )
 
+# Canonical <system-reminder> matcher (issue #275). Shared with utils.py's
+# session-preview helpers (which strip the block so raw tags never reach the
+# index), the same way the IDE patterns above are shared.
+SYSTEM_REMINDER_PATTERN = re.compile(
+    r"<system-reminder>(.*?)</system-reminder>", re.DOTALL
+)
+
 
 def create_ide_notification_content(text: str) -> Optional[IdeNotificationContent]:
     """Create IdeNotificationContent from text containing IDE tags.
@@ -375,6 +383,27 @@ def create_ide_notification_content(text: str) -> Optional[IdeNotificationConten
         diagnostics=diagnostics,
         remaining_text=remaining_text.strip(),
     )
+
+
+def extract_system_reminder_content(
+    text: str,
+) -> tuple[Optional[SystemReminderContent], str]:
+    """Peel ``<system-reminder>`` block(s) out of user-message text.
+
+    A user message may carry a system reminder (e.g. the ``/cd`` notice) and
+    real content after it (e.g. a CLAUDE.md). The reminder is extracted as an
+    annotation while the remaining text renders as ordinary user content —
+    mirroring :func:`create_ide_notification_content`.
+
+    Returns ``(SystemReminderContent | None, remaining_text)``. When no reminder
+    block is present, returns ``(None, text)`` unchanged so a reminder-free
+    message is byte-identical to before this feature.
+    """
+    reminders = [m.group(1).strip() for m in SYSTEM_REMINDER_PATTERN.finditer(text)]
+    if not reminders:
+        return None, text
+    remaining_text = SYSTEM_REMINDER_PATTERN.sub("", text)
+    return SystemReminderContent(reminders=reminders), remaining_text
 
 
 # =============================================================================
@@ -581,13 +610,21 @@ def _classify_user_message(
     }
 
     # Build items list preserving order, extracting IDE notifications from text
-    items: list[TextContent | ImageContent | IdeNotificationContent] = []
+    items: list[
+        TextContent | ImageContent | IdeNotificationContent | SystemReminderContent
+    ] = []
     image_number = 0
 
     for item in content_list:
         # Check for text content
         if hasattr(item, "text"):
             item_text: str = getattr(item, "text")
+
+            # Peel <system-reminder> block(s) first as an annotation; the rest
+            # continues through IDE extraction and renders as user content.
+            reminder_content, item_text = extract_system_reminder_content(item_text)
+            if reminder_content is not None:
+                items.append(reminder_content)
 
             if ide_content := create_ide_notification_content(item_text):
                 # Add IDE notification item first
@@ -616,7 +653,9 @@ def _as_image_content(item: ContentItem) -> Optional[ImageContent]:
 
 
 def _append_text_with_images(
-    items: list[TextContent | ImageContent | IdeNotificationContent],
+    items: list[
+        TextContent | ImageContent | IdeNotificationContent | SystemReminderContent
+    ],
     text: str,
     images: list[ImageContent],
 ) -> None:
