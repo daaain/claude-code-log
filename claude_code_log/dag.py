@@ -1144,3 +1144,170 @@ def build_dag_from_entries(
     build_dag(nodes, sidechain_uuids=sidechain_uuids)
     sessions = extract_session_dag_lines(nodes)
     return build_session_tree(nodes, sessions)
+
+
+# =============================================================================
+# Step 6: Abandoned-branch pruning (--branches main)
+# =============================================================================
+
+
+def _line_group_key(dag_line: SessionDAGLine) -> str:
+    """Group a DAG-line with the trunk it forked from.
+
+    Within-session forks get synthetic ids (``s1@abcd1234``) and carry the
+    trunk id in ``original_session_id``; the trunk itself carries none.
+    """
+    return dag_line.original_session_id or dag_line.session_id
+
+
+def _path_length(
+    line_id: str,
+    sessions: dict[str, SessionDAGLine],
+    memo: dict[str, int],
+) -> int:
+    """Messages from the conversation root through the end of ``line_id``.
+
+    A fork does not restate the history it grew from, so a branch's true
+    length is its parent's length *up to the fork point* plus its own.
+    """
+    if line_id in memo:
+        return memo[line_id]
+    memo[line_id] = 0  # cycle guard
+    dag_line = sessions[line_id]
+    prefix = 0
+    parent_id = dag_line.parent_session_id
+    if dag_line.is_branch and parent_id is not None and parent_id in sessions:
+        parent = sessions[parent_id]
+        if dag_line.attachment_uuid in parent.uuids:
+            prefix = parent.uuids.index(dag_line.attachment_uuid) + 1
+            # The fork point's own history counts, but only once.
+            prefix += _path_length(parent_id, sessions, memo) - len(parent.uuids)
+    total = prefix + len(dag_line.uuids)
+    memo[line_id] = total
+    return total
+
+
+def select_main_lines(
+    sessions: dict[str, SessionDAGLine],
+) -> dict[str, SessionDAGLine]:
+    """Drop within-session fork branches that were rewound and abandoned.
+
+    Claude Code's ``/rewind`` (and editing an earlier prompt) does not delete
+    anything: it appends a new message whose ``parentUuid`` points at an
+    *earlier* message, so the transcript becomes a tree and the abandoned
+    attempt stays in the file. Anthropic never marks those dead branches —
+    ``isSidechain`` stays ``False`` on every node (anthropics/claude-code#24471)
+    — so they cannot be filtered by flag; the shape of the graph is the only
+    signal available.
+
+    This keeps, per trunk, the single root→leaf path carrying the most
+    messages, and truncates each ancestor at the fork point it was left at.
+    Sidechains (subagent transcripts) never compete: they are real work
+    branching off the trunk, and are kept whenever their anchor survives.
+
+    Longest path — not latest timestamp — is deliberate. The newest leaf in a
+    real transcript is routinely a stray ``attachment`` or a one-line prompt
+    typed after a rewind, so "most recent" selects a stub. Longest path picks
+    the thread the session actually spent its time on.
+    """
+    groups: dict[str, list[str]] = {}
+    for line_id, dag_line in sessions.items():
+        if dag_line.is_sidechain:
+            continue
+        groups.setdefault(_line_group_key(dag_line), []).append(line_id)
+
+    memo: dict[str, int] = {}
+    kept: dict[str, SessionDAGLine] = {}
+
+    for group_lines in groups.values():
+        if len(group_lines) == 1:
+            kept[group_lines[0]] = sessions[group_lines[0]]
+            continue
+        winner = max(
+            group_lines,
+            key=lambda lid: (
+                _path_length(lid, sessions, memo),
+                sessions[lid].first_timestamp,
+            ),
+        )
+        # Walk the winner back to the trunk, truncating each ancestor at
+        # the fork point its surviving child grew from.
+        chain: list[str] = []
+        cursor: Optional[str] = winner
+        guard: set[str] = set()
+        while cursor is not None and cursor not in guard:
+            guard.add(cursor)
+            chain.append(cursor)
+            current = sessions[cursor]
+            if not current.is_branch:
+                break
+            cursor = current.parent_session_id
+            if cursor is not None and cursor not in sessions:
+                cursor = None
+        chain.reverse()
+
+        for index, line_id in enumerate(chain):
+            dag_line = sessions[line_id]
+            child_id = chain[index + 1] if index + 1 < len(chain) else None
+            if child_id is None:
+                kept[line_id] = dag_line
+                continue
+            fork_uuid = sessions[child_id].attachment_uuid
+            if fork_uuid is None or fork_uuid not in dag_line.uuids:
+                kept[line_id] = dag_line
+                continue
+            cut = dag_line.uuids.index(fork_uuid) + 1
+            kept[line_id] = SessionDAGLine(
+                session_id=dag_line.session_id,
+                uuids=dag_line.uuids[:cut],
+                first_timestamp=dag_line.first_timestamp,
+                parent_session_id=dag_line.parent_session_id,
+                attachment_uuid=dag_line.attachment_uuid,
+                is_branch=dag_line.is_branch,
+                original_session_id=dag_line.original_session_id,
+                is_sidechain=dag_line.is_sidechain,
+            )
+
+    # Re-admit sidechains whose anchor message survived the prune.
+    surviving_uuids = {uuid for dl in kept.values() for uuid in dl.uuids}
+    for line_id, dag_line in sessions.items():
+        if not dag_line.is_sidechain:
+            continue
+        anchor = dag_line.attachment_uuid
+        if anchor is None or anchor in surviving_uuids:
+            kept[line_id] = dag_line
+
+    dropped = len(sessions) - len(kept)
+    if dropped:
+        logger.debug("Pruned %d abandoned fork branch(es)", dropped)
+    return kept
+
+
+def main_line_uuids(
+    entries: list[TranscriptEntry],
+    sidechain_uuids: set[str] | None = None,
+) -> set[str]:
+    """UUIDs surviving :func:`select_main_lines` for ``entries``."""
+    nodes = build_message_index(entries)
+    build_dag(nodes, sidechain_uuids=sidechain_uuids)
+    sessions = extract_session_dag_lines(nodes)
+    kept = select_main_lines(sessions)
+    return {uuid for dag_line in kept.values() for uuid in dag_line.uuids}
+
+
+def filter_to_main_line(
+    entries: list[TranscriptEntry],
+    sidechain_uuids: set[str] | None = None,
+) -> list[TranscriptEntry]:
+    """Return ``entries`` with abandoned rewind branches removed.
+
+    Entries without a ``uuid`` (summaries, ai-titles, queue operations) do
+    not participate in the DAG and are passed through untouched.
+    """
+    keep = main_line_uuids(entries, sidechain_uuids=sidechain_uuids)
+    result: list[TranscriptEntry] = []
+    for entry in entries:
+        uuid = getattr(entry, "uuid", None)
+        if uuid is None or uuid in keep:
+            result.append(entry)
+    return result

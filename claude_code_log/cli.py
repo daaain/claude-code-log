@@ -101,6 +101,7 @@ def _render_provider_input_file(
     compact: bool,
     no_timestamps: bool,
     no_recaps: bool,
+    branches: str,
     open_browser: bool,
 ) -> None:
     """Render a single provider session file handed in as an INPUT_PATH.
@@ -204,6 +205,7 @@ def _run_provider_wholesale(
     compact: bool,
     no_timestamps: bool,
     no_recaps: bool,
+    branches: str,
     write_combined: bool,
     write_individual: bool,
     from_date: "Optional[str]",
@@ -1034,6 +1036,20 @@ def _validate_git_link_template(template: str) -> None:
     ),
 )
 @click.option(
+    "--branches",
+    type=click.Choice(["all", "main"]),
+    default="all",
+    show_default=True,
+    help=(
+        "Which conversation branches to render. Rewinding (/rewind, or "
+        "editing an earlier prompt) forks the transcript instead of "
+        "deleting anything, so abandoned attempts stay in the JSONL and "
+        "are rendered as extra 'Branch' sections. 'main' keeps only the "
+        "longest root-to-leaf path per trunk, dropping the attempts that "
+        "were rewound away."
+    ),
+)
+@click.option(
     "--debug",
     is_flag=True,
     default=False,
@@ -1069,6 +1085,7 @@ def main(
     git_link: Optional[str],
     no_timestamps: bool,
     no_recaps: bool,
+    branches: str,
     debug: bool,
 ) -> None:
     """Convert Claude transcript JSONL files to HTML or Markdown.
@@ -1384,6 +1401,7 @@ def main(
                     compact,
                     no_timestamps,
                     no_recaps,
+                    branches,
                     write_combined,
                     write_individual,
                     from_date,
@@ -1411,6 +1429,7 @@ def main(
                     compact,
                     no_timestamps,
                     no_recaps,
+                    branches,
                     open_browser,
                 )
                 return
@@ -1659,6 +1678,7 @@ def main(
                         compact=compact,
                         no_timestamps=no_timestamps,
                         no_recaps=no_recaps,
+                        branches=branches,
                     ),
                 )
                 return
@@ -1674,6 +1694,7 @@ def main(
                 compact=compact,
                 no_timestamps=no_timestamps,
                 no_recaps=no_recaps,
+                branches=branches,
             )
             click.echo(f"Successfully exported session to {output_path}")
             if open_browser:
@@ -1735,6 +1756,7 @@ def main(
                 write_combined=write_combined,
                 no_timestamps=no_timestamps,
                 no_recaps=no_recaps,
+                branches=branches,
                 jobs=jobs,
             )
 
@@ -1775,6 +1797,7 @@ def main(
                         compact,
                         no_timestamps,
                         no_recaps,
+                        branches,
                         write_combined,
                         write_individual,
                         from_date,
@@ -1797,6 +1820,7 @@ def main(
                     compact,
                     no_timestamps,
                     no_recaps,
+                    branches,
                     open_browser,
                 )
                 return
@@ -1854,6 +1878,7 @@ def main(
                     write_combined=True,
                     no_timestamps=no_timestamps,
                     no_recaps=no_recaps,
+                    branches=branches,
                     force_regenerate=True,
                 ),
             )
@@ -1883,6 +1908,7 @@ def main(
             write_combined=write_combined,
             no_timestamps=no_timestamps,
             no_recaps=no_recaps,
+            branches=branches,
             # An explicit `-o` *file* always regenerates: the version-marker
             # skip only knows the embedded version, not which source produced
             # the file, so it would keep stale content at a user-chosen path
