@@ -124,11 +124,18 @@ uv run pytest test/test_snapshot_html.py -v
 uv run pytest test/test_snapshot_html.py -n0 --snapshot-update
 ```
 
-> **Warning — don't let `--snapshot-update` run with `-n auto`.** Syrupy
-> and pytest-xdist race when writing snapshot files in parallel: the
-> `.ambr` file ends up truncated (observed: ~6000 lines silently
-> deleted on a single run, leaving the file structurally broken but
-> still passing on next read). Run `--snapshot-update` serially.
+> **`--snapshot-update` must run serially (`-n0`) — a guard now enforces
+> this.** Syrupy and pytest-xdist race when writing snapshot files in
+> parallel, and it corrupts `.ambr` files in more than one way: once ~6000
+> lines were silently *truncated*, and separately a run *deleted and
+> rewrote* entries in a fixture that wasn't touched — each time leaving a
+> structurally-broken file that still passed on the next read (the second
+> instance also produced a false "the suite has non-isolated rendering
+> state" conclusion). Because `pyproject.toml` defaults to `-n auto`, a
+> `conftest.py` guard (`pytest_configure`) now fails fast if
+> `--snapshot-update` is combined with more than one xdist worker, pointing
+> you at `-n0`. Ordinary parallel test runs (no update) are unaffected, so
+> CI is untouched.
 
 When snapshot tests fail:
 1. Review the diff to verify changes are intentional
