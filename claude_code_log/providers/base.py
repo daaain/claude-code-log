@@ -34,7 +34,10 @@ class ProviderTokenTotals:
     that back session totals the identity ``input + cache_read + output ==
     total`` holds, but degenerate records (all components zero, non-zero
     total) do occur in the per-step stream, and there the stored total is the
-    only trustworthy figure.
+    only trustworthy figure. It is **currently unconsumed by the render/cache
+    paths** (the four displayed columns come from input/cache_read/output); it
+    is kept as the reconstruction anchor the tests validate and the reserve a
+    future per-turn layer would need.
     """
 
     input_tokens: int  # billable non-cached input = input_tokens - cached

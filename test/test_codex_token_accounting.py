@@ -237,6 +237,27 @@ def test_none_when_no_token_count(tmp_path: Path) -> None:
     assert _token_totals_from_records(_decoded(path)) is None  # type: ignore[arg-type]
 
 
+def test_monotonicity_violation_omits_totals(tmp_path: Path) -> None:
+    """Cumulative total_tokens must never decrease. If it does (a hypothetical
+    future counter reset mid-session), the totals are OMITTED — not the
+    post-reset tail ('last', which understates) nor the pre-reset peak ('max',
+    which is also wrong). Fail closed: a wrong number is worse than an absent
+    one. Nothing in the corpus exercises this (0 violations measured), so the
+    guard fires only on a spec change."""
+    path = _rollout_with_tokens(
+        tmp_path,
+        "s/reset.jsonl",
+        "10000000-0000-4000-8000-000000000004",
+        "/p",
+        [
+            _usage(1000, 200, 50, 10, 1050),
+            _usage(2000, 400, 90, 20, 2090),
+            _usage(300, 60, 20, 5, 320),  # DECREASE: 320 < 2090 → omit
+        ],
+    )
+    assert _token_totals_from_records(_decoded(path)) is None  # type: ignore[arg-type]
+
+
 # --------------------------------------------------------------------------
 # session_token_totals — provider seam, post-strip consistency
 # --------------------------------------------------------------------------

@@ -70,18 +70,30 @@ families and the provider contract are in
   lineage and strips inherited history but `load_session()` emits one thread.
 - Decide how native image-view results should render, independently of the
   already-supported user-message image references.
-- Per-session token rows on the index (both providers). The session-nav macro
-  already renders `{% if summary.token_summary %}` (`index.html:45-48`) and the
-  cache has stored per-session token totals since the initial schema, on BOTH
-  paths — the key is simply never populated into the project-summary session
-  dicts, so no index shows per-session token rows today. Feeding it on both
-  paths is small and needs no template work, but it is a CLAUDE-path UX change
-  (every user's index cards gain per-session token rows) and intentionally
-  updates the Claude index snapshot — so it belongs in its own PR where that
-  snapshot delta is the reviewable point, NOT bundled into Codex token
-  accounting (which keeps its "0 `.ambr` changes" byte-stability signal). The
-  drift pin `test_index_summary_dict_shape_matches_claude_path` stays green
-  because both paths gain the key together.
+- Index token-display gaps (both providers, pre-existing — two faces of one
+  thing). Current parity: per-session token totals are CACHED for both formats,
+  but project totals are DISPLAYED on the HTML index only. Not a Codex-specific
+  hole.
+  1. **Per-session token ROWS on the HTML index.** The session-nav macro already
+     renders `{% if summary.token_summary %}` (`index.html:45-48`) and the cache
+     has stored per-session token totals since the initial schema on BOTH paths
+     — the key is simply never populated into the project-summary session dicts,
+     so no index shows per-session token rows today. Feeding it is small and
+     needs no template work, but it is a CLAUDE-path UX change (every user's
+     cards gain per-session rows) that intentionally updates the Claude index
+     snapshot — its own PR, where that snapshot delta is the reviewable point,
+     NOT bundled into Codex token accounting (which keeps its "0 `.ambr`
+     changes" byte-stability signal). The drift pin
+     `test_index_summary_dict_shape_matches_claude_path` stays green because
+     both paths gain the key together.
+  2. **Markdown index token display (a feature, not a fix).** `token_summary` is
+     consumed only by the HTML index template (`index.html:45-48`, `:90-91`);
+     the Markdown projects-index emits project/session/message counts only, so
+     project token totals never render on the MD index — for Codex OR Claude.
+     The surface has never existed in the Markdown renderer. This matters for
+     the vault/Obsidian workflow specifically: `--expand-paths` defaults
+     `--combined=no` for Obsidian use, so anyone rendering a vault in Markdown
+     gets no token totals at all.
 - Codex per-turn / per-message token accounting. Session and project token
   totals now populate the wholesale index (project cards; per-session totals
   are stored on the session cache — parity with the Claude schema — pending the

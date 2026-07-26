@@ -235,8 +235,11 @@ def _token_totals_from_records(
     monotonic over the session, so the last one already subsumes every prior
     turn. Compaction lowers the live context window but does NOT reset the
     cumulative counter, so "last record" stays correct across a compacted
-    session. Returns ``None`` when the session emitted no ``token_count`` (a
-    pre-accounting rollout) — the totals are then OMITTED, not zeroed.
+    session. That monotonicity is ENFORCED, not merely assumed — if
+    ``total_tokens`` ever decreases the guard below omits the session's totals.
+    Returns ``None`` when the session emitted no ``token_count`` (a
+    pre-accounting rollout) or when monotonicity is violated — the totals are
+    then OMITTED, not zeroed, and never a guessed-through wrong number.
 
     WHY SESSION-LEVEL ONLY (evidenced design limit — do not "fix" into
     per-message numbers):
@@ -258,6 +261,7 @@ def _token_totals_from_records(
     whole-session total.
     """
     last_usage: Optional[dict[str, Any]] = None
+    prev_total: Optional[int] = None
     for record in records:
         if record.kind != "event_msg":
             continue
@@ -266,9 +270,32 @@ def _token_totals_from_records(
         info = record.payload.get("info")
         if not isinstance(info, dict):
             continue
-        usage = cast(dict[str, Any], info).get("total_token_usage")
-        if isinstance(usage, dict):
-            last_usage = cast(dict[str, Any], usage)
+        usage_raw = cast(dict[str, Any], info).get("total_token_usage")
+        if not isinstance(usage_raw, dict):
+            continue
+        usage = cast(dict[str, Any], usage_raw)
+        # Monotonicity guard. total_token_usage is cumulative, so total_tokens
+        # must never decrease. If it does, the cumulative-counter assumption has
+        # broken (e.g. a future Codex build that resets the counter mid-session),
+        # and NO single record is the honest total — "last" would understate,
+        # and max() would report a pre-reset peak; both are confidently wrong.
+        # Fail closed: omit the session's totals and warn, exactly as a
+        # pre-accounting rollout (no token_count) is omitted. A wrong number is
+        # worse than an absent one. Enforced, not merely assumed — monk and I
+        # measured 0 violations across the corpus, so this fires only on a
+        # future spec change, loudly.
+        total_raw = usage.get("total_tokens")
+        total = total_raw if isinstance(total_raw, int) else 0
+        if prev_total is not None and total < prev_total:
+            logger.warning(
+                "Codex token_count total_tokens decreased (%d < %d); cumulative "
+                "monotonicity broken — omitting session totals",
+                total,
+                prev_total,
+            )
+            return None
+        prev_total = total
+        last_usage = usage
     if last_usage is None:
         return None
     return _map_cumulative_usage(last_usage)
