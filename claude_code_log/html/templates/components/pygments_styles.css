@@ -105,6 +105,9 @@
     font-style: italic;
     font-size: 80%;
     color: var(--color-text-secondary);
+    /* Reminders can be long and multi-line (e.g. a continued-session block);
+       preserve their newlines rather than collapsing to one run. */
+    white-space: pre-wrap;
 }
 
 /* Edit tool result specific styles */

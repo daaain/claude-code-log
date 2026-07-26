@@ -385,27 +385,6 @@ def create_ide_notification_content(text: str) -> Optional[IdeNotificationConten
     )
 
 
-def extract_system_reminder_content(
-    text: str,
-) -> tuple[Optional[SystemReminderContent], str]:
-    """Peel ``<system-reminder>`` block(s) out of user-message text.
-
-    A user message may carry a system reminder (e.g. the ``/cd`` notice) and
-    real content after it (e.g. a CLAUDE.md). The reminder is extracted as an
-    annotation while the remaining text renders as ordinary user content —
-    mirroring :func:`create_ide_notification_content`.
-
-    Returns ``(SystemReminderContent | None, remaining_text)``. When no reminder
-    block is present, returns ``(None, text)`` unchanged so a reminder-free
-    message is byte-identical to before this feature.
-    """
-    reminders = [m.group(1).strip() for m in SYSTEM_REMINDER_PATTERN.finditer(text)]
-    if not reminders:
-        return None, text
-    remaining_text = SYSTEM_REMINDER_PATTERN.sub("", text)
-    return SystemReminderContent(reminders=reminders), remaining_text
-
-
 # =============================================================================
 # Compacted Summary and User Memory Creation
 # =============================================================================
@@ -620,32 +599,49 @@ def _classify_user_message(
         if hasattr(item, "text"):
             item_text: str = getattr(item, "text")
 
-            # Peel <system-reminder> block(s) first as an annotation; the rest
-            # continues through IDE extraction and renders as user content.
-            # The annotation is prepended regardless of the reminder's original
-            # position in the text — a deliberate simplification, since a real
-            # reminder (the /cd notice) leads the message and any CLAUDE.md
-            # follows it. A mid/trailing reminder would hoist to the top.
-            reminder_content, item_text = extract_system_reminder_content(item_text)
-            if reminder_content is not None:
-                items.append(reminder_content)
-
-            if ide_content := create_ide_notification_content(item_text):
-                # Add IDE notification item first
-                items.append(ide_content)
-                remaining_text: str = ide_content.remaining_text
-            else:
-                remaining_text = item_text
-
-            # Add remaining text as TextContent if non-empty
-            if remaining_text.strip():
-                _append_text_with_images(items, remaining_text, images)
+            # Split <system-reminder> block(s) out as annotations, emitting each
+            # at its ORIGINAL position so surrounding user content keeps its
+            # order. Positional (not prepended) because ~14% of real reminder
+            # messages carry user text BEFORE the reminder — including the
+            # "session continued" shape — and some carry multiple reminders
+            # (issue #275). Each inter-reminder text segment still flows through
+            # IDE-notification extraction and image handling.
+            cursor = 0
+            for match in SYSTEM_REMINDER_PATTERN.finditer(item_text):
+                _append_user_text_segment(
+                    items, item_text[cursor : match.start()], images
+                )
+                items.append(SystemReminderContent(reminders=[match.group(1).strip()]))
+                cursor = match.end()
+            _append_user_text_segment(items, item_text[cursor:], images)
         elif (image := _as_image_content(item)) is not None:
             image_number += 1
             if image_number not in referenced_images:
                 items.append(image)
 
     return UserTextMessage(items=items, meta=meta)
+
+
+def _append_user_text_segment(
+    items: list[
+        TextContent | ImageContent | IdeNotificationContent | SystemReminderContent
+    ],
+    text: str,
+    images: list[ImageContent],
+) -> None:
+    """Process one plain-text segment (between system reminders) into ``items``:
+    peel an IDE notification if present, then append the remaining text with
+    image references resolved. A no-op for empty/whitespace-only segments — the
+    boundary before a leading reminder or after a trailing one."""
+    if not text:
+        return
+    if ide_content := create_ide_notification_content(text):
+        items.append(ide_content)
+        remaining_text = ide_content.remaining_text
+    else:
+        remaining_text = text
+    if remaining_text.strip():
+        _append_text_with_images(items, remaining_text, images)
 
 
 def _as_image_content(item: ContentItem) -> Optional[ImageContent]:
