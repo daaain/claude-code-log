@@ -15,13 +15,18 @@ Synthetic fixtures only (no private data — see the #295 spec).
 import json
 from pathlib import Path
 
+from pydantic import TypeAdapter
+
 from claude_code_log.converter import (
+    _splice_queue_ops_chronologically,
     compute_session_data,
     convert_jsonl_to_html,
     generate_single_session_file,
     load_directory_transcripts,
 )
-from claude_code_log.models import QueueOperationTranscriptEntry
+from claude_code_log.models import QueueOperationTranscriptEntry, TranscriptEntry
+
+_ENTRY = TypeAdapter(TranscriptEntry)
 
 _SID = "sess-order-1"
 
@@ -231,3 +236,65 @@ def test_timestamp_tie_places_queue_ops_after_same_timestamp_entry(tmp_path):
         f"tie-break wrong: a1@{i_a1}, STEER_ONE@{i_q1}, STEER_TWO@{i_q2}, "
         f"u2@{i_u2} — same-timestamp queue-ops must follow a1 in file order"
     )
+
+
+def _asst(uuid: str, ts: str):
+    """A minimal parsed assistant entry (only sessionId+timestamp matter here)."""
+    return _ENTRY.validate_python(
+        {
+            "type": "assistant",
+            "uuid": uuid,
+            "parentUuid": None,
+            "isSidechain": False,
+            "userType": "external",
+            "cwd": "/tmp",
+            "sessionId": _SID,
+            "version": "2.1.207",
+            "timestamp": ts,
+            "message": {
+                "id": "msg-" + uuid,
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-opus-4",
+                "content": [{"type": "text", "text": "x"}],
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        }
+    )
+
+
+def test_non_monotonic_session_anchors_by_timestamp_not_list_order():
+    """Directly pin the per-session ``sort()`` on a FORK-INVERTED session
+    (issue #295 review).
+
+    Every other fixture is timestamp-monotonic, so the sort is a no-op on them
+    and deleting it stays green. But the sort is what makes the ``bisect``
+    anchor correct when a session's DAG entries are out of timestamp order
+    (real forks produce thousands of such inversions). Here the list order is
+    07:00:10, 07:00:30, 07:00:20 — global order ≠ chronological — and the
+    queue-op at 07:00:25 must anchor to its true chronological predecessor
+    (the 07:00:20 entry), landing last. Without the sort, ``bisect`` on the
+    unsorted list wrongly anchors it after the 07:00:10 entry.
+
+    Needs 3+ same-session entries: a 2-entry inversion still bisects to the
+    right slot unsorted (per the review), so it would not discriminate.
+    """
+    e10 = _asst("e10", "2026-07-11T07:00:10.000Z")
+    e30 = _asst("e30", "2026-07-11T07:00:30.000Z")
+    e20 = _asst("e20", "2026-07-11T07:00:20.000Z")
+    dag_ordered = [e10, e30, e20]  # non-monotonic (fork inversion)
+    qop = QueueOperationTranscriptEntry(
+        type="queue-operation",
+        operation="remove",
+        timestamp="2026-07-11T07:00:25.000Z",
+        sessionId=_SID,
+        content="steer",
+    )
+
+    result = _splice_queue_ops_chronologically(dag_ordered, [qop])
+    order = [getattr(m, "uuid", None) or "QOP" for m in result]
+
+    assert order == ["e10", "e30", "e20", "QOP"], order
+    # Discriminating assertion: the queue-op must follow its chronological
+    # predecessor (07:00:20). Fails if the per-session sort is removed.
+    assert order.index("QOP") > order.index("e20")
