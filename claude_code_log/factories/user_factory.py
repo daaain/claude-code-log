@@ -622,6 +622,10 @@ def _classify_user_message(
 
             # Peel <system-reminder> block(s) first as an annotation; the rest
             # continues through IDE extraction and renders as user content.
+            # The annotation is prepended regardless of the reminder's original
+            # position in the text — a deliberate simplification, since a real
+            # reminder (the /cd notice) leads the message and any CLAUDE.md
+            # follows it. A mid/trailing reminder would hoist to the top.
             reminder_content, item_text = extract_system_reminder_content(item_text)
             if reminder_content is not None:
                 items.append(reminder_content)

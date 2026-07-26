@@ -522,7 +522,9 @@ def should_use_as_session_starter(text_content: str) -> bool:
     # Skip messages that are ENTIRELY a system reminder (e.g. a bare `/cd`
     # notice with no CLAUDE.md tail) — the reminder is an annotation, not a
     # meaningful opener, so the next real user message becomes the starter
-    # (issue #275).
+    # (issue #275). Assumes reminders are well-formed and closed (as real ones
+    # are): the `in` guard and the `sub()`-strip agree only for closed tags, so
+    # a malformed unclosed `<system-reminder>` is intentionally not special-cased.
     if (
         "<system-reminder>" in text_content
         and not SYSTEM_REMINDER_PATTERN.sub("", text_content).strip()

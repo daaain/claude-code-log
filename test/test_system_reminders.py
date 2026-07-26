@@ -134,6 +134,28 @@ def test_html_one_div_per_reminder() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Markdown mirror path (N1): the reminder must be rendered, not dropped
+# ---------------------------------------------------------------------------
+def test_markdown_renders_reminder_as_blockquote_not_dropped() -> None:
+    """The HTML/MD mirror pair: Markdown deliberately renders the reminder as a
+    blockquote rather than dropping it (IDE notifications ARE dropped in MD;
+    peeling the reminder out must not lose content that rendered inline before).
+    Pins that decision so a future refactor can't silently revert it."""
+    from claude_code_log.markdown.renderer import MarkdownRenderer
+    from claude_code_log.renderer import TemplateMessage
+
+    model = _user_message(
+        "<system-reminder>cwd changed to /main</system-reminder>\n\n# Project\nreal content"
+    )
+    md = MarkdownRenderer().format_content(TemplateMessage(model))
+    assert "System reminder" in md  # reminder survives in Markdown
+    assert "🤖" in md
+    assert "> " in md  # rendered as a blockquote
+    assert "real content" in md  # remaining content preserved
+    assert "<system-reminder>" not in md  # no raw tag
+
+
+# ---------------------------------------------------------------------------
 # Session-starter / preview edge (must not surface raw reminder tags on index)
 # ---------------------------------------------------------------------------
 def test_reminder_only_message_is_not_a_session_starter() -> None:
