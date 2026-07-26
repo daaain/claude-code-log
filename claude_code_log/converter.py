@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Convert Claude transcript JSONL files to HTML."""
 
+import bisect
 import contextlib
 import itertools
 import json
@@ -9,6 +10,7 @@ import multiprocessing
 import os
 import re
 import time
+from collections import defaultdict
 from collections.abc import Iterator
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -844,6 +846,88 @@ def _integrate_agent_entries(messages: list[TranscriptEntry]) -> None:
         msg.sessionId = f"{msg.sessionId}#agent-{agent_id}"
 
 
+def _splice_queue_ops_chronologically(
+    dag_ordered: list[TranscriptEntry],
+    queue_ops: list["QueueOperationTranscriptEntry"],
+) -> list[TranscriptEntry]:
+    """Splice UUID-less queue-operation entries into chronological position
+    within their own session's DAG entries (issue #295).
+
+    Queue-ops carry a ``timestamp`` + ``sessionId`` but no ``uuid``, so the DAG
+    builder can't place them; they were previously appended at the end of the
+    transcript, which rendered a mid-conversation ``remove`` (steering) entry
+    *after* the last assistant message — the visible #295 symptom, in both the
+    ``--session-id`` export and the default combined directory render.
+
+    A session's DAG entries are NEITHER contiguous in ``dag_ordered`` (forks
+    splice other sessions between them) NOR timestamp-monotonic (fork branches
+    reorder), so each queue-op is anchored to a specific ENTRY, not a block
+    position: the same-session DAG entry with the greatest ``(timestamp,
+    index)`` whose timestamp is ``<=`` the queue-op's, inserted immediately
+    after it. A queue-op earlier than all of its session's entries is inserted
+    before the session's first entry.
+
+    **Timestamp-tie rule (the common path — ~30% of real-archive queue-ops
+    share a timestamp with a DAG entry, so this is not an edge case):** because
+    the per-session list is sorted by ``(timestamp, index)`` and searched with
+    ``bisect_right`` on the timestamp alone, the anchor is the *highest-indexed*
+    same-timestamp entry — the queue-op lands after every entry sharing its
+    timestamp. Multiple queue-ops resolving to the same anchor keep their
+    original (file) order. Deterministic; never relies on unsorted iteration.
+    """
+    if not queue_ops:
+        return dag_ordered
+
+    # Per-session sorted (timestamp, index) of DAG entries + first index.
+    sess_stamped: dict[str, list[tuple[str, int]]] = defaultdict(list)
+    sess_first: dict[str, int] = {}
+    for i, entry in enumerate(dag_ordered):
+        s = getattr(entry, "sessionId", None)
+        if not isinstance(s, str):
+            continue
+        sess_first.setdefault(s, i)
+        t = getattr(entry, "timestamp", None)
+        if isinstance(t, str) and t:
+            sess_stamped[s].append((t, i))
+    for s in sess_stamped:
+        sess_stamped[s].sort()
+
+    # Sentinel index strictly greater than any real index, so that bisecting on
+    # ``(timestamp, sentinel)`` lands after every same-timestamp entry — that's
+    # the tie-break (anchor to the highest-indexed same-timestamp entry).
+    sentinel = len(dag_ordered)
+
+    after: dict[int, list[TranscriptEntry]] = defaultdict(list)
+    before_first: dict[int, list[TranscriptEntry]] = defaultdict(list)
+    orphans: list[TranscriptEntry] = []  # no same-session DAG anchor
+    for qop in queue_ops:  # original (file) order → stable among ties
+        s = qop.sessionId  # typed str on QueueOperationTranscriptEntry
+        t = qop.timestamp
+        stamped = sess_stamped.get(s)
+        if not stamped or not t:
+            orphans.append(qop)
+            continue
+        # Last same-session entry with timestamp <= t (ties resolved after all
+        # same-timestamp entries via the sentinel index). ``str(t)`` keeps the
+        # search key's element type aligned with ``stamped``'s ``tuple[str, int]``
+        # (the truthiness guard above otherwise narrows it and trips ty).
+        pos = bisect.bisect_right(stamped, (str(t), sentinel)) - 1
+        if pos < 0:
+            before_first[sess_first[s]].append(qop)
+        else:
+            after[stamped[pos][1]].append(qop)
+
+    out: list[TranscriptEntry] = []
+    for i, entry in enumerate(dag_ordered):
+        if i in before_first:
+            out.extend(before_first[i])
+        out.append(entry)
+        if i in after:
+            out.extend(after[i])
+    out.extend(orphans)  # preserve prior append behaviour for the anchorless
+    return out
+
+
 def load_directory_transcripts(
     directory_path: Path,
     cache_manager: Optional["CacheManager"] = None,
@@ -895,19 +979,21 @@ def load_directory_transcripts(
         )
         dag_ordered = traverse_session_tree(tree)
 
-    # Re-add summaries/ai-titles/queue-ops (excluded from DAG since they
-    # lack uuid).
-    non_dag_entries: list[TranscriptEntry] = [
+    # Re-add UUID-less entries excluded from the DAG. They split by whether
+    # they carry a timestamp:
+    #   * queue-operations have timestamp+sessionId -> splice into chronological
+    #     position within their session (#295 — appending them at the end
+    #     rendered mid-conversation steering after the last assistant message);
+    #   * summaries/ai-titles have no timestamp -> stay appended as session
+    #     metadata (the renderer consumes them out-of-band; they are never
+    #     rendered as trailing conversation messages).
+    queue_ops: list[QueueOperationTranscriptEntry] = [
+        e for e in all_messages if isinstance(e, QueueOperationTranscriptEntry)
+    ]
+    metadata_entries: list[TranscriptEntry] = [
         e
         for e in all_messages
-        if isinstance(
-            e,
-            (
-                SummaryTranscriptEntry,
-                AiTitleTranscriptEntry,
-                QueueOperationTranscriptEntry,
-            ),
-        )
+        if isinstance(e, (SummaryTranscriptEntry, AiTitleTranscriptEntry))
     ]
 
     # Discover + parse any dynamic-workflow runs under this directory and stash
@@ -920,7 +1006,9 @@ def load_directory_transcripts(
     # Resolve {tool_use_id: run} once, at full-session scope (BEFORE the renderer
     # paginates), so a Workflow tool_use links to its run even when its
     # tool_result lands on a different page (#174 PR3, pagination-boundary fix).
-    all_entries = dag_ordered + non_dag_entries
+    all_entries = (
+        _splice_queue_ops_chronologically(dag_ordered, queue_ops) + metadata_entries
+    )
     tree.workflow_links = map_workflow_runs_by_tool_use(
         all_entries, list(tree.workflow_runs.values())
     )
