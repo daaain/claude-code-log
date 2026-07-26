@@ -565,9 +565,18 @@ def create_session_preview(text_content: str) -> str:
     legacy emissions are normalised to the ``/cmd`` shape so previews
     stay consistent in mixed transcripts). #129.
     """
-    # Drop any <system-reminder> block so the preview shows the real content
-    # that follows it (e.g. a CLAUDE.md), never the raw reminder tags (#275).
-    preview_content = SYSTEM_REMINDER_PATTERN.sub("", text_content).strip()
+    # Drop any <system-reminder> block AND the whitespace hugging it, replacing
+    # the lot with a single space so the real content around it never welds
+    # together (``before<reminder>x</reminder>after`` → ``before after``) and a
+    # mid-text reminder leaves no double gap. ``.strip()`` then trims the edge
+    # space a leading/trailing reminder leaves behind (#275). ``.pattern`` reuses
+    # the canonical matcher; DOTALL lets ``.*?`` span a multi-line reminder body.
+    preview_content = re.sub(
+        r"\s*" + SYSTEM_REMINDER_PATTERN.pattern + r"\s*",
+        " ",
+        text_content,
+        flags=re.DOTALL,
+    ).strip()
 
     # Strip command-tag XML soup down to ``/cmd`` or inner-text shape.
     preview_content = simplify_command_tags(preview_content)

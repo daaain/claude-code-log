@@ -116,9 +116,11 @@ def test_multiple_reminders_each_emitted_in_place() -> None:
         "SystemReminderContent",
         "TextContent",
     ]
+    assert "start" in _text(model.items[0])
     assert _reminders(model.items[1]) == ["first"]
     assert "mid" in _text(model.items[2])
     assert _reminders(model.items[3]) == ["second"]
+    assert "end" in _text(model.items[4])
 
 
 def test_reminder_only_message_yields_just_the_annotation() -> None:
@@ -231,6 +233,19 @@ def test_reminder_plus_content_is_a_starter_and_preview_strips_tags() -> None:
     assert "real content" in preview
     assert "<system-reminder>" not in preview
     assert "</system-reminder>" not in preview
+
+
+def test_preview_text_before_and_after_reminder_does_not_weld_words() -> None:
+    """The text-before+after shape is real (measured: 3 of 21 corpus reminder
+    messages, one with 12 KB of tail). Stripping the reminder must not weld the
+    surrounding words together on the index preview — the most-read surface."""
+    preview = create_session_preview(
+        "before text<system-reminder>note</system-reminder>after text"
+    )
+    assert "before text after text" in preview  # single space, not "textafter"
+    assert "beforeafter" not in preview
+    assert "  " not in preview  # no double gap where the reminder was
+    assert "<system-reminder>" not in preview
 
 
 def test_reminder_free_preview_is_unchanged() -> None:
