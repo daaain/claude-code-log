@@ -42,6 +42,13 @@ class TestTranscriptHTMLSnapshots:
         html = generate_html(messages, "Edge Cases")
         assert html == html_snapshot
 
+    def test_system_reminder_html(self, html_snapshot, test_data_dir):
+        """End-to-end snapshot for <system-reminder> user annotations (#275)."""
+        test_file = test_data_dir / "system_reminder.jsonl"
+        messages = load_transcript(test_file)
+        html = generate_html(messages, "System Reminders")
+        assert html == html_snapshot
+
     def test_multi_session_html(self, html_snapshot, test_data_dir, tmp_path):
         """Snapshot test for multi-session combined output."""
         shutil.copy(

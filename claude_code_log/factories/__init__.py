@@ -35,6 +35,7 @@ from .user_factory import (
     IDE_DIAGNOSTICS_PATTERN,
     IDE_OPENED_FILE_PATTERN,
     IDE_SELECTION_PATTERN,
+    SYSTEM_REMINDER_PATTERN,
 )
 from .assistant_factory import (
     # Assistant message creation
@@ -117,6 +118,7 @@ __all__ = [
     "IDE_DIAGNOSTICS_PATTERN",
     "IDE_OPENED_FILE_PATTERN",
     "IDE_SELECTION_PATTERN",
+    "SYSTEM_REMINDER_PATTERN",
     # Assistant message creation
     "create_assistant_message",
     "create_thinking_message",

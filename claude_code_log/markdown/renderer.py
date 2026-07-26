@@ -41,6 +41,7 @@ from ..models import (
     SessionHeaderMessage,
     SlashCommandMessage,
     SystemMessage,
+    SystemReminderContent,
     TaskNotificationMessage,
     TeammateMessage,
     TextContent,
@@ -845,7 +846,18 @@ class MarkdownRenderer(Renderer):
         """
         parts: list[str] = []
         for item in content.items:
-            if isinstance(item, ImageContent):
+            if isinstance(item, SystemReminderContent):
+                # Blockquote each reminder so extracting it out of the text does
+                # not drop content that previously rendered inline in Markdown.
+                # Protect raw HTML-like tags first (same posture as the
+                # TextContent path below): a reminder containing e.g. <script>
+                # must not survive as live HTML in generated Markdown.
+                for reminder in item.reminders:
+                    safe_reminder = _protect_html_tags(reminder)
+                    lines = safe_reminder.splitlines() or [safe_reminder]
+                    quoted = "\n".join(f"> {line}" for line in lines)
+                    parts.append(f"> 🤖 *System reminder:*\n{quoted}")
+            elif isinstance(item, ImageContent):
                 parts.append(self._format_image(item))
             elif isinstance(item, TextContent):
                 if item.text.strip():

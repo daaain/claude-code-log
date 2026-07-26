@@ -35,6 +35,7 @@ from ..models import (
     ImageContent,
     MessageMeta,
     SlashCommandMessage,
+    SystemReminderContent,
     TaskNotificationMessage,
     TeammateMessage,
     TextContent,
@@ -311,6 +312,13 @@ IDE_DIAGNOSTICS_PATTERN = re.compile(
     re.DOTALL,
 )
 
+# Canonical <system-reminder> matcher (issue #275). Shared with utils.py's
+# session-preview helpers (which strip the block so raw tags never reach the
+# index), the same way the IDE patterns above are shared.
+SYSTEM_REMINDER_PATTERN = re.compile(
+    r"<system-reminder>(.*?)</system-reminder>", re.DOTALL
+)
+
 
 def create_ide_notification_content(text: str) -> Optional[IdeNotificationContent]:
     """Create IdeNotificationContent from text containing IDE tags.
@@ -581,7 +589,9 @@ def _classify_user_message(
     }
 
     # Build items list preserving order, extracting IDE notifications from text
-    items: list[TextContent | ImageContent | IdeNotificationContent] = []
+    items: list[
+        TextContent | ImageContent | IdeNotificationContent | SystemReminderContent
+    ] = []
     image_number = 0
 
     for item in content_list:
@@ -589,22 +599,49 @@ def _classify_user_message(
         if hasattr(item, "text"):
             item_text: str = getattr(item, "text")
 
-            if ide_content := create_ide_notification_content(item_text):
-                # Add IDE notification item first
-                items.append(ide_content)
-                remaining_text: str = ide_content.remaining_text
-            else:
-                remaining_text = item_text
-
-            # Add remaining text as TextContent if non-empty
-            if remaining_text.strip():
-                _append_text_with_images(items, remaining_text, images)
+            # Split <system-reminder> block(s) out as annotations, emitting each
+            # at its ORIGINAL position so surrounding user content keeps its
+            # order. Positional (not prepended) because ~14% of real reminder
+            # messages carry user text BEFORE the reminder — including the
+            # "session continued" shape — and some carry multiple reminders
+            # (issue #275). Each inter-reminder text segment still flows through
+            # IDE-notification extraction and image handling.
+            cursor = 0
+            for match in SYSTEM_REMINDER_PATTERN.finditer(item_text):
+                _append_user_text_segment(
+                    items, item_text[cursor : match.start()], images
+                )
+                items.append(SystemReminderContent(reminders=[match.group(1).strip()]))
+                cursor = match.end()
+            _append_user_text_segment(items, item_text[cursor:], images)
         elif (image := _as_image_content(item)) is not None:
             image_number += 1
             if image_number not in referenced_images:
                 items.append(image)
 
     return UserTextMessage(items=items, meta=meta)
+
+
+def _append_user_text_segment(
+    items: list[
+        TextContent | ImageContent | IdeNotificationContent | SystemReminderContent
+    ],
+    text: str,
+    images: list[ImageContent],
+) -> None:
+    """Process one plain-text segment (between system reminders) into ``items``:
+    peel an IDE notification if present, then append the remaining text with
+    image references resolved. A no-op for empty/whitespace-only segments — the
+    boundary before a leading reminder or after a trailing one."""
+    if not text:
+        return
+    if ide_content := create_ide_notification_content(text):
+        items.append(ide_content)
+        remaining_text = ide_content.remaining_text
+    else:
+        remaining_text = text
+    if remaining_text.strip():
+        _append_text_with_images(items, remaining_text, images)
 
 
 def _as_image_content(item: ContentItem) -> Optional[ImageContent]:
@@ -616,7 +653,9 @@ def _as_image_content(item: ContentItem) -> Optional[ImageContent]:
 
 
 def _append_text_with_images(
-    items: list[TextContent | ImageContent | IdeNotificationContent],
+    items: list[
+        TextContent | ImageContent | IdeNotificationContent | SystemReminderContent
+    ],
     text: str,
     images: list[ImageContent],
 ) -> None:

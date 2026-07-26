@@ -844,20 +844,39 @@ class IdeNotificationContent:
 
 
 @dataclass
+class SystemReminderContent:
+    """Content for ``<system-reminder>`` blocks embedded within user messages.
+
+    This is NOT a MessageContent subclass — like IdeNotificationContent it's an
+    item within UserTextMessage.items, alongside TextContent and ImageContent.
+    A user message may carry a system reminder (e.g. the ``/cd`` working-directory
+    notice) AND real content after it (e.g. a CLAUDE.md), so the reminder is
+    peeled out as an annotation while the remaining text renders as user content.
+
+    ``reminders`` holds each reminder block's inner text (a message may carry
+    more than one). Format-neutral: stores text, not HTML.
+    """
+
+    reminders: list[str]
+
+
+@dataclass
 class UserTextMessage(MessageContent):
-    """Content for user text with interleaved images and IDE notifications.
+    """Content for user text with interleaved images, IDE notifications, and
+    system reminders.
 
     The `items` field preserves the original order of content:
     - TextContent: Text portions of the message
     - ImageContent: Inline images
     - IdeNotificationContent: IDE notification tags (extracted from text)
+    - SystemReminderContent: <system-reminder> blocks (extracted from text)
 
     Empty items list indicates no content.
     """
 
     # Interleaved content items preserving original order
     items: list[  # pyright: ignore[reportUnknownVariableType]
-        TextContent | ImageContent | IdeNotificationContent
+        TextContent | ImageContent | IdeNotificationContent | SystemReminderContent
     ] = field(default_factory=list)
 
     @property

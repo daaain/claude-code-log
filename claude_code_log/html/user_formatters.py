@@ -24,6 +24,7 @@ from ..models import (
     IdeSelection,
     ImageContent,
     SlashCommandMessage,
+    SystemReminderContent,
     UserMemoryMessage,
     UserSlashCommandMessage,
     UserTextMessage,
@@ -265,6 +266,8 @@ def format_user_text_model_content(
         if isinstance(item, IdeNotificationContent):
             notifications = format_ide_notification_content(item)
             parts.extend(notifications)
+        elif isinstance(item, SystemReminderContent):
+            parts.extend(format_system_reminder_content(item))
         elif isinstance(item, ImageContent):
             parts.append(formatter(item))
         else:  # TextContent
@@ -417,6 +420,8 @@ def format_workflow_sidechannel_user_content(
     for item in content.items:
         if isinstance(item, IdeNotificationContent):
             parts.extend(format_ide_notification_content(item))
+        elif isinstance(item, SystemReminderContent):
+            parts.extend(format_system_reminder_content(item))
         elif isinstance(item, ImageContent):
             parts.append(formatter(item))
         else:  # TextContent
@@ -561,6 +566,19 @@ def format_ide_notification_content(content: IdeNotificationContent) -> list[str
         notifications.extend(_format_diagnostic(diagnostic))
 
     return notifications
+
+
+def format_system_reminder_content(content: SystemReminderContent) -> list[str]:
+    """Format ``<system-reminder>`` blocks as annotation HTML.
+
+    One 🤖 annotation block per reminder, reusing the Read-tool reminder styling
+    (see ``.system-reminder`` in pygments_styles.css) but in the user-message
+    context. Escaped — reminder text can contain ``<>``.
+    """
+    return [
+        f"<div class='system-reminder'>🤖 <em>{escape_html(reminder)}</em></div>"
+        for reminder in content.reminders
+    ]
 
 
 # =============================================================================

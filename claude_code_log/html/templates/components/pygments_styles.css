@@ -93,6 +93,23 @@
     color: var(--color-text-secondary);
 }
 
+/* System reminders embedded in a user message (e.g. the /cd notice, issue
+   #275). Same visual as the Read-tool reminder above, scoped to the user
+   context so the tool-result rule is left untouched. */
+.user .system-reminder {
+    margin-top: 0.5em;
+    padding: 0.5em;
+    background: var(--color-bg-secondary);
+    border-left: 3px solid var(--color-blue);
+    border-radius: 4px;
+    font-style: italic;
+    font-size: 80%;
+    color: var(--color-text-secondary);
+    /* Reminders can be long and multi-line (e.g. a continued-session block);
+       preserve their newlines rather than collapsing to one run. */
+    white-space: pre-wrap;
+}
+
 /* Edit tool result specific styles */
 .edit-tool-result {
     margin: 0.5em 0;

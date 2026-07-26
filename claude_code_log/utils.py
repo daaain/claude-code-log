@@ -18,6 +18,7 @@ from .factories import (
     IDE_DIAGNOSTICS_PATTERN,
     IDE_OPENED_FILE_PATTERN,
     IDE_SELECTION_PATTERN,
+    SYSTEM_REMINDER_PATTERN,
     is_command_message,
     is_local_command_output,
     is_system_message,
@@ -518,6 +519,18 @@ def should_use_as_session_starter(text_content: str) -> bool:
     if is_system_message(text_content):
         return False
 
+    # Skip messages that are ENTIRELY a system reminder (e.g. a bare `/cd`
+    # notice with no CLAUDE.md tail) — the reminder is an annotation, not a
+    # meaningful opener, so the next real user message becomes the starter
+    # (issue #275). Assumes reminders are well-formed and closed (as real ones
+    # are): the `in` guard and the `sub()`-strip agree only for closed tags, so
+    # a malformed unclosed `<system-reminder>` is intentionally not special-cased.
+    if (
+        "<system-reminder>" in text_content
+        and not SYSTEM_REMINDER_PATTERN.sub("", text_content).strip()
+    ):
+        return False
+
     # Skip command messages except for 'init' commands
     if "<command-name>" in text_content:
         return "<command-name>init" in text_content
@@ -552,8 +565,21 @@ def create_session_preview(text_content: str) -> str:
     legacy emissions are normalised to the ``/cmd`` shape so previews
     stay consistent in mixed transcripts). #129.
     """
+    # Drop any <system-reminder> block AND the whitespace hugging it, replacing
+    # the lot with a single space so the real content around it never welds
+    # together (``before<reminder>x</reminder>after`` → ``before after``) and a
+    # mid-text reminder leaves no double gap. ``.strip()`` then trims the edge
+    # space a leading/trailing reminder leaves behind (#275). ``.pattern`` reuses
+    # the canonical matcher; DOTALL lets ``.*?`` span a multi-line reminder body.
+    preview_content = re.sub(
+        r"\s*" + SYSTEM_REMINDER_PATTERN.pattern + r"\s*",
+        " ",
+        text_content,
+        flags=re.DOTALL,
+    ).strip()
+
     # Strip command-tag XML soup down to ``/cmd`` or inner-text shape.
-    preview_content = simplify_command_tags(text_content)
+    preview_content = simplify_command_tags(preview_content)
 
     # Apply compact IDE tag indicators BEFORE truncation
     preview_content = _compact_ide_tags_for_preview(preview_content)
