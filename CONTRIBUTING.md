@@ -125,17 +125,58 @@ uv run pytest test/test_snapshot_html.py -n0 --snapshot-update
 ```
 
 > **`--snapshot-update` must run serially (`-n0`) — a guard now enforces
-> this.** Syrupy and pytest-xdist race when writing snapshot files in
-> parallel, and it corrupts `.ambr` files in more than one way: once ~6000
-> lines were silently *truncated*, and separately a run *deleted and
-> rewrote* entries in a fixture that wasn't touched — each time leaving a
-> structurally-broken file that still passed on the next read (the second
-> instance also produced a false "the suite has non-isolated rendering
-> state" conclusion). Because `pyproject.toml` defaults to `-n auto`, a
-> `conftest.py` guard (`pytest_configure`) now fails fast if
-> `--snapshot-update` is combined with more than one xdist worker, pointing
-> you at `-n0`. Ordinary parallel test runs (no update) are unaffected, so
-> CI is untouched.
+> this.** Syrupy and pytest-xdist misbehave when writing the shared `.ambr`
+> files in parallel, on two observed occasions. Once, a raced update
+> silently *truncated* ~6000 lines, leaving a structurally-broken file that
+> still passed on the next read — a confirmed corruption. Separately, a
+> parallel `--snapshot-update` with a stale `__pycache__` produced a diff in
+> which an *untouched* fixture appeared to regenerate with structure it had
+> never carried (fold-bar / children markup); re-run serially with a purged
+> cache, the same operation was cleanly additive and that structure did not
+> appear. The mechanism of the second case isn't pinned down (the large
+> deletion count first quoted for it turned out to be alignment noise — see
+> "Recognising the race" below), but an operation that makes an untouched
+> fixture look different is dangerous regardless, and "vanished under `-n0`"
+> is the reproducible part. Because `pyproject.toml` defaults to `-n auto`,
+> this unsafe combination is the *default*, so a `conftest.py` guard
+> (`pytest_configure`) now fails fast when `--snapshot-update` is combined
+> with more than one xdist worker, pointing you at `-n0`. Ordinary parallel
+> runs (no update) are unaffected — CI is untouched.
+
+**Recognising the race in a diff.** The guard prevents the mistake going
+forward, but you may still meet a suspicious `.ambr` diff — reviewing a PR
+that carries snapshot changes, or reading a historical diff from before the
+guard existed. The rule of thumb:
+
+> Any negative in an `.ambr` diff is the race's signature — a purely
+> additive fixture is `+N/-0`; deletions mean either an intentional content
+> change you can name, or the race.
+
+To tell which, check at the **block level**, not the raw git diff: compare
+the set of snapshot names (a race removes or rewrites blocks you didn't
+touch) and diff each block's content. Inserting a snapshot or changing
+embedded CSS realigns shared boilerplate and can show hundreds of
+"deletions" with **zero content lost** — a third case, benign, that is
+neither a content change nor the race. A real `-275` was exactly this:
+block-level inspection found one snapshot added, none removed or renamed,
+and seven blocks each `+3` for a single `white-space: pre-wrap` rule, with
+zero content deleted. Confirm either way with a read-only `-n0` run after
+purging stale bytecode — if every snapshot passes, the committed file
+matches what the code renders and is not a raced artifact:
+
+```bash
+find . -name __pycache__ -type d -prune -exec rm -rf {} +
+uv run pytest test/test_snapshot_html.py -n0
+# all pass → the committed .ambr matches the render (not a raced file)
+```
+
+When you do intend to regenerate, run `--snapshot-update` serially; a purely
+additive result (`+N/-0`, e.g. "8 snapshots passed. 1 snapshot generated.")
+is the healthy signature:
+
+```bash
+uv run pytest test/test_snapshot_html.py -n0 --snapshot-update
+```
 
 When snapshot tests fail:
 1. Review the diff to verify changes are intentional
