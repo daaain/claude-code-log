@@ -267,6 +267,54 @@ separators, `ALL_TOOLS`-registry pipelines (no static membership yet), and
 cap/engine failures remain `ToolExecution`. False negatives are an acceptable
 compatibility cost; false reconstruction is not.
 
+### Token accounting
+
+Codex records token usage as cumulative `token_count` events
+(`payload.info.total_token_usage`), one emitted after nearly every agent-loop
+step — unlike Claude, which carries per-assistant-message `usage`. The provider
+surfaces **session and project totals** to the wholesale index (project cards
+and per-session rows); the extraction is:
+
+- `providers/base.ProviderTokenTotals` — the four index columns a
+  session-level provider can fill. `cache_creation` is deliberately absent
+  (Codex has no such concept; an omitted column ≠ a zero one).
+- `codex._token_totals_from_records` — takes the **last** cumulative record as
+  the session total (the values are cumulative and monotonic, so the final one
+  subsumes every prior turn; compaction lowers the live context window but does
+  not reset the counter). Returns `None` — totals **omitted, not zeroed** —
+  for pre-accounting rollouts with no `token_count`.
+- `codex._map_cumulative_usage` — maps `input = input_tokens − cached`,
+  `cache_read = cached_input_tokens`, `output = output_tokens` (already
+  includes reasoning). The subtraction keeps the cached tokens in exactly one
+  column; folding them back into `input` would double-count. `total_tokens` is
+  carried through authoritatively (never recomputed — a degenerate record with
+  zero components but a non-zero total keeps its stored total).
+- `converter.render_provider_wholesale` threads per-session totals directly
+  into the index project-card and session-row summaries, **bypassing** the
+  per-message `usage` accumulators (`compute_session_data` /
+  `compute_project_aggregates`) that a cumulative figure must never flow
+  through.
+
+**Why only session/project granularity — an evidenced design limit, not a
+TODO.** The argument is structural, not statistical. A `token_count` delta
+(`last_token_usage`) measures everything consumed since the *previous*
+`token_count`, and one agent-loop step bundles reasoning + assistant text + a
+tool call + its (often large, cached) tool result under a single delta. That
+window contains more than one rendered thing, so the delta cannot be
+attributed to any single message the transcript renders — no matter which
+record the step happens to end on. The corpus distribution only *confirms* that
+steps overwhelmingly end on tool work: measured post-inherited-prefix-strip
+(the records that actually render), n=4138 events across 34 sessions, ~75.6% of
+`token_count` events follow a tool-execution step (`custom_tool_call_output`,
+`mcp_tool_call_end`, `function_call_output`, `patch_apply_end`,
+`web_search_end`, `sub_agent_activity`) and ~22.5% follow an assistant/agent
+message — but even that 22.5% is not attributable, because the message shares
+its delta with the reasoning before it and the next turn's cached context
+re-read. Per-message (and even per-turn) attribution is therefore not
+recoverable from this stream, so the session cumulative is the finest honest
+unit. Account-level fields in the same payload (`rate_limits`,
+`model_context_window`) are never read into output.
+
 ### Refreshing the Codex census
 
 The Codex manual states that generated app-server schemas match the installed

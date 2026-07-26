@@ -70,12 +70,36 @@ families and the provider contract are in
   lineage and strips inherited history but `load_session()` emits one thread.
 - Decide how native image-view results should render, independently of the
   already-supported user-message image references.
-- Codex token accounting → index totals. The wholesale walker emits zero
-  input/output/cache token totals per project because Codex rollouts carry no
-  token accounting the provider currently surfaces; the index token summary is
-  therefore always blank for Codex projects. If/when token counts are extracted
-  from rollout records, thread them into the walker's project summaries so the
-  index totals populate like the Claude path.
+- Per-session token rows on the index (both providers). The session-nav macro
+  already renders `{% if summary.token_summary %}` (`index.html:45-48`) and the
+  cache has stored per-session token totals since the initial schema, on BOTH
+  paths — the key is simply never populated into the project-summary session
+  dicts, so no index shows per-session token rows today. Feeding it on both
+  paths is small and needs no template work, but it is a CLAUDE-path UX change
+  (every user's index cards gain per-session token rows) and intentionally
+  updates the Claude index snapshot — so it belongs in its own PR where that
+  snapshot delta is the reviewable point, NOT bundled into Codex token
+  accounting (which keeps its "0 `.ambr` changes" byte-stability signal). The
+  drift pin `test_index_summary_dict_shape_matches_claude_path` stays green
+  because both paths gain the key together.
+- Codex per-turn / per-message token accounting. Session and project token
+  totals now populate the wholesale index (project cards; per-session totals
+  are stored on the session cache — parity with the Claude schema — pending the
+  per-session-row display item above),
+  extracted from the LAST cumulative `token_count` record per session — see
+  `providers/base.ProviderTokenTotals`, `codex._token_totals_from_records` /
+  `_map_cumulative_usage`, and the threading in `render_provider_wholesale`.
+  What remains deferred is FINER-grained attribution (per-turn, per-message).
+  It is an evidenced design limit, not a TODO: Codex emits a `token_count`
+  after nearly every agent-loop step — measured over the real corpus (n=4138
+  events, 34 sessions) ~75.6% follow a tool-execution step and only ~22.5%
+  follow an assistant/agent message — so the per-step delta (`last_token_usage`)
+  spans reasoning + tool I/O + the next turn's cached re-read and does not slice
+  onto the messages the transcript renders. The session cumulative is the
+  finest honest unit. Do NOT "fix" this into per-message numbers without a way
+  to attribute a delta to exactly one rendered message; the impossibility is
+  documented at `codex._token_totals_from_records` and in
+  `dev-docs/tools-coverage.md`.
 - Cache-backed load + paginated combined for the wholesale walker. v1
   participates in the SQLite cache for render-SKIP only: `render_provider_wholesale`
   populates the messages table via `save_cached_entries` for schema uniformity

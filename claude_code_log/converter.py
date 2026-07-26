@@ -22,7 +22,10 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING, cast
 import dateparser
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from .cache import CacheManager
+    from .providers.base import ProviderTokenTotals
 
 from .utils import (
     coalesce_trunk_session_id,
@@ -2931,6 +2934,39 @@ def _wholesale_should_render(
     return stale
 
 
+def _sum_provider_token_totals(
+    totals: "Iterable[Optional[ProviderTokenTotals]]",
+) -> dict[str, int]:
+    """Sum per-session cumulative totals into the four index-summary token
+    keys. ``None`` sessions (no ``token_count``) contribute nothing.
+
+    Each :class:`ProviderTokenTotals` is ALREADY a whole-session cumulative
+    figure, so summing across the DISTINCT sessions of a project is correct —
+    what must never be summed is the per-step deltas WITHIN one session, which
+    is why the provider returns one cumulative value per session, not a stream.
+
+    ``total_cache_creation_tokens`` is kept at 0 purely so the emitted dict is
+    shape-identical to the Claude path (the drift pin's contract). Codex has no
+    cache-creation concept and the renderer omits a zero column, so nothing
+    labelled "Cache Creation" ever renders — absent, not "0".
+    """
+    total_input = 0
+    total_output = 0
+    total_cache_read = 0
+    for totals_item in totals:
+        if totals_item is None:
+            continue
+        total_input += totals_item.input_tokens
+        total_output += totals_item.output_tokens
+        total_cache_read += totals_item.cache_read_tokens
+    return {
+        "total_input_tokens": total_input,
+        "total_output_tokens": total_output,
+        "total_cache_creation_tokens": 0,
+        "total_cache_read_tokens": total_cache_read,
+    }
+
+
 def render_provider_wholesale(
     provider_name: str,
     sessions_root: Optional[Path],
@@ -3076,6 +3112,23 @@ def render_provider_wholesale(
             m for _info, msgs in loaded for m in msgs
         ]
 
+        # Token accounting (#296 deferral). Codex-style providers record
+        # cumulative session totals in the rollout rather than per-assistant-
+        # message ``usage``, so the message-usage accumulators
+        # (compute_session_data / compute_project_aggregates) see zero here.
+        # Pull each session's cumulative total from the provider seam and apply
+        # it directly — a cumulative figure must bypass that per-message
+        # summation, never flow through it (that path would double-count). The
+        # default seam returns None, so a provider without session-level totals
+        # leaves every surface exactly as before.
+        session_totals: dict[str, Optional[ProviderTokenTotals]] = {
+            info.session_id: provider.session_token_totals(
+                sessions_root, info.session_id
+            )
+            for info, _ in loaded
+        }
+        project_token_totals = _sum_provider_token_totals(session_totals.values())
+
         # Phase 2 — populate the cache and capture the pre-render modified set.
         cache: Optional[CacheManager] = None
         modified_sources: set[Path] = set()
@@ -3105,10 +3158,25 @@ def render_provider_wholesale(
                             info.source_path, messages, subagents_fp=""
                         )
                     merged_session_data.update(compute_session_data(messages))
+                # Replace the zero message-usage token totals with the
+                # provider's cumulative session totals (see the seam above).
+                # Keyed by session_id — Codex messages carry sessionId, so
+                # compute_session_data already keys each session that way.
+                for info, _ in loaded:
+                    session_total = session_totals.get(info.session_id)
+                    session_datum = merged_session_data.get(info.session_id)
+                    if session_total is not None and session_datum is not None:
+                        session_datum.total_input_tokens = session_total.input_tokens
+                        session_datum.total_output_tokens = session_total.output_tokens
+                        session_datum.total_cache_creation_tokens = 0
+                        session_datum.total_cache_read_tokens = (
+                            session_total.cache_read_tokens
+                        )
                 cache.update_session_cache(merged_session_data)
-                cache.update_project_aggregates(
-                    **compute_project_aggregates(combined_messages)
-                )
+                project_aggregates = compute_project_aggregates(combined_messages)
+                # Cumulative project totals override the (zero) per-message sum.
+                project_aggregates.update(project_token_totals)
+                cache.update_project_aggregates(**project_aggregates)
             session_counts = {
                 sid: sd.message_count for sid, sd in merged_session_data.items()
             }
@@ -3172,6 +3240,12 @@ def render_provider_wholesale(
                     "first_user_message": first_user
                     or "[No user message found in session.]",
                     "file": f"{rel_dest}/session-{session_key}{suffix}.{ext}",
+                    # NOTE: no per-session token_summary key here — the Claude
+                    # index project-card session list carries none either, and
+                    # the drift pin (test_index_summary_dict_shape_matches_claude_path)
+                    # locks the two session-dict shapes together. Per-session
+                    # cumulative totals are stored on the session cache instead
+                    # (durability); the project card shows the rolled-up total.
                 }
             )
 
@@ -3212,14 +3286,12 @@ def render_provider_wholesale(
                 "jsonl_count": len(session_dicts),
                 "message_count": len(combined_messages),
                 "last_modified": last_modified,
-                # Codex has no token accounting yet; emit zero totals so the
-                # index-summary dict is shape-identical to the Claude path
-                # (the contract the drift pin locks) rather than relying on the
-                # renderer's ``.get(..., 0)`` fallbacks.
-                "total_input_tokens": 0,
-                "total_output_tokens": 0,
-                "total_cache_creation_tokens": 0,
-                "total_cache_read_tokens": 0,
+                # Project-card token totals — the cumulative session totals
+                # summed across the project's sessions (#296 deferral closed).
+                # ``_sum_provider_token_totals`` keeps the dict shape-identical
+                # to the Claude path (all four keys, cache_creation pinned 0 and
+                # never displayed) so the drift pin's contract still holds.
+                **project_token_totals,
                 "latest_timestamp": last_ts_all or "",
                 "earliest_timestamp": first_ts_all or "",
                 "working_directories": working_directories,

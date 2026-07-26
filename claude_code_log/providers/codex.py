@@ -34,6 +34,7 @@ from claude_code_log.models import (
 
 from .base import (
     BaseProvider,
+    ProviderTokenTotals,
     SessionInfo,
     file_mtime_iso,
     make_assistant_entry,
@@ -224,6 +225,87 @@ def _contained_rollouts(root: Path) -> Iterator[Path]:
             continue
 
 
+def _token_totals_from_records(
+    records: list[_DecodedRecord],
+) -> Optional[ProviderTokenTotals]:
+    """Session token totals from the LAST cumulative ``token_count`` record.
+
+    The session total is the final ``payload.info.total_token_usage``, never a
+    sum of the per-step deltas: each ``total_token_usage`` is cumulative and
+    monotonic over the session, so the last one already subsumes every prior
+    turn. Compaction lowers the live context window but does NOT reset the
+    cumulative counter, so "last record" stays correct across a compacted
+    session. Returns ``None`` when the session emitted no ``token_count`` (a
+    pre-accounting rollout) — the totals are then OMITTED, not zeroed.
+
+    WHY SESSION-LEVEL ONLY (evidenced design limit — do not "fix" into
+    per-message numbers):
+    The argument is STRUCTURAL, not statistical. A ``token_count`` delta
+    (``last_token_usage``) measures everything consumed since the *previous*
+    ``token_count`` — and one agent-loop step bundles reasoning + assistant
+    text + a tool call + its (often large, cached) tool result under a single
+    delta. The window contains more than one rendered thing, so a delta cannot
+    be attributed to any one message the transcript renders, regardless of
+    which record the step happens to end on. The corpus distribution merely
+    confirms that steps overwhelmingly end on tool work: measured post-
+    inherited-prefix-strip (the records that actually render), n=4138 events
+    across 34 sessions, ~75.6% of ``token_count`` events follow a tool-
+    execution step and ~22.5% follow an assistant/agent message — but even the
+    22.5% are not attributable, because that message shares its delta with the
+    reasoning and the next turn's cached context re-read. Per-message (and even
+    per-turn) attribution is therefore not recoverable from this stream; the
+    session cumulative is the finest honest unit, which is why this returns a
+    whole-session total.
+    """
+    last_usage: Optional[dict[str, Any]] = None
+    for record in records:
+        if record.kind != "event_msg":
+            continue
+        if record.payload.get("type") != "token_count":
+            continue
+        info = record.payload.get("info")
+        if not isinstance(info, dict):
+            continue
+        usage = cast(dict[str, Any], info).get("total_token_usage")
+        if isinstance(usage, dict):
+            last_usage = cast(dict[str, Any], usage)
+    if last_usage is None:
+        return None
+    return _map_cumulative_usage(last_usage)
+
+
+def _map_cumulative_usage(usage: dict[str, Any]) -> ProviderTokenTotals:
+    """Map a Codex ``total_token_usage`` dict onto the index's token columns.
+
+    THE SUBTRACTION PIN: billable input EXCLUDES the cached portion, and
+    ``cache_read`` is the sole home of the cached tokens. A future edit that
+    folded ``cached`` back into ``input`` here (or dropped the subtraction)
+    would double-count the cached tokens — index totals would balloon by the
+    cache-read column. Keep ``input = input_tokens - cached`` and
+    ``cache_read = cached`` disjoint. ``max(..., 0)`` guards a malformed record
+    where ``cached > input``.
+
+    ``total_tokens`` is carried through from the record, authoritative and
+    never recomputed (a degenerate record with zero components but a non-zero
+    total must keep its stored total). ``output`` already includes
+    ``reasoning_output_tokens``, so reasoning is not added again.
+    """
+
+    def _as_int(value: Any) -> int:
+        return value if isinstance(value, int) else 0
+
+    input_tokens = _as_int(usage.get("input_tokens"))
+    cached = _as_int(usage.get("cached_input_tokens"))
+    output_tokens = _as_int(usage.get("output_tokens"))
+    total_tokens = _as_int(usage.get("total_tokens"))
+    return ProviderTokenTotals(
+        input_tokens=max(input_tokens - cached, 0),
+        cache_read_tokens=cached,
+        output_tokens=output_tokens,
+        total_tokens=total_tokens,
+    )
+
+
 class CodexProvider(BaseProvider):
     """Read active Codex rollout files from ``$CODEX_HOME/sessions``."""
 
@@ -360,6 +442,36 @@ class CodexProvider(BaseProvider):
         identity = self._read_identity(path)
         records = list(self._decode_records(path))
         yield from self._normalize_records(identity, records, max_messages)
+
+    def session_token_totals(
+        self, root: Path, session_id: str
+    ) -> Optional[ProviderTokenTotals]:
+        """Cumulative token totals for one Codex session, read from its
+        ``token_count`` events.
+
+        Resolution mirrors :meth:`_load_in` — same index lookup and the same
+        ``_without_inherited_prefix`` strip — so the totals are computed over
+        exactly the records this session renders. A fork must not inherit its
+        parent's cumulative ``token_count`` (currently ``inherited_prefix_records``
+        is 0 in observed corpora, but computing post-strip keeps this correct
+        by construction rather than by that coincidence).
+
+        Returns ``None`` — totals OMITTED, not zeroed — when the session has no
+        ``token_count`` events (pre-accounting rollouts) or cannot be resolved
+        unambiguously. A totals lookup must never crash a wholesale render, so
+        ambiguity is a soft miss here, unlike the hard errors :meth:`_load_in`
+        raises.
+        """
+        index = self._session_index(root)
+        paths = index.get(session_id)
+        if not paths or len(paths) != 1:
+            return None
+        identity = self._with_inherited_prefix(self._read_identity(paths[0]), index)
+        records = self._without_inherited_prefix(
+            list(self._decode_records(identity.path)),
+            identity.inherited_prefix_records,
+        )
+        return _token_totals_from_records(records)
 
     def _rollout_paths(self, sessions_root: Path) -> list[Path]:
         # Recursive discovery supports both current date shards and old flat
