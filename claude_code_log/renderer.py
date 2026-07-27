@@ -76,7 +76,10 @@ from .factories import (
     create_user_message,
     ToolItemResult,
 )
-from .factories.attachment_factory import create_attachment_message
+from .factories.attachment_factory import (
+    create_attachment_message,
+    queued_command_prompt_items,
+)
 from .utils import (
     format_timestamp,
     best_working_dir,
@@ -4598,19 +4601,17 @@ def _render_messages(
             isinstance(entry, AttachmentTranscriptEntry)
             and (entry.attachment or {}).get("type") == "queued_command"
         ):
-            # Only count a ``queued_command`` that will actually render — i.e.
-            # it carries a usable prompt (mirrors the guard in
-            # ``attachment_factory._create_queued_command_message``). Otherwise
-            # a promptless attachment would seed the budget and drop the paired
-            # ``remove`` that still holds the steering text.
-            # NB: with the text-keyed budget below this guard is no longer
-            # load-bearing (a promptless qc would key under ``""`` and can't
-            # match a content-bearing ``remove``) — kept as belt-and-suspenders
-            # and to avoid a spurious ``""`` count feeding the imbalance
-            # warning.
-            qc_prompt = (entry.attachment or {}).get("prompt")
-            if isinstance(qc_prompt, str) and qc_prompt.strip():
-                text = _steering_match_text(qc_prompt)
+            # Only count a ``queued_command`` that will actually render.
+            # ``queued_command_prompt_items`` is the SAME predicate the factory
+            # applies, shared rather than mirrored so the budget can't drift
+            # from what gets emitted: a promptless attachment must not seed the
+            # budget and drop the paired ``remove`` that still holds the
+            # steering text. It also accepts a *list* prompt — an image-bearing
+            # steering delivery — whose text is what the paired ``remove``
+            # carries, so such a pair now matches instead of orphaning.
+            qc_prompt = queued_command_prompt_items(entry.attachment or {})
+            if qc_prompt is not None and qc_prompt.pairable:
+                text = _steering_match_text(qc_prompt.items)
                 key = (entry.sessionId, entry.version, text)
                 renderable_qc_count[key] = renderable_qc_count.get(key, 0) + 1
                 qc_versions.add((entry.sessionId, entry.version))
@@ -4629,8 +4630,19 @@ def _render_messages(
     # exhausted (or absent), further removes with that text are *rendered* as
     # legacy steering rather than dropped. This makes suppression LOSSLESS and
     # order-independent: we hide exactly the removes that have a matching card
-    # (no duplicate), and any orphan removes — the 1:1 pairing does break in
-    # real archives, e.g. a 2.1.160 file with 34 removes / 29 qc — still render.
+    # (no duplicate), and any orphan remove still renders.
+    #
+    # This comment used to cite "a 2.1.160 file with 34 removes / 29 qc" as
+    # proof the 1:1 pairing breaks in real archives. That was a raw record
+    # count: at 2.1.160 EVERY remove carries ``content: null`` (34/34 across
+    # the local corpus on 2026-07-28), and null removes are dropped by
+    # ``_filter_messages`` before this loop, so they can neither pair nor
+    # orphan. Such a count does not measure the pairing performed here. In the
+    # one case investigated end to end (#294) the pairing was exactly 1:1 —
+    # 232/232 — and the orphans came from cards this pass failed to count.
+    # Whether it can break for real is still open, so the lossless design
+    # stays; what changed is that we no longer assert a violation we have not
+    # observed.
     qc_budget: dict[tuple[str, str, str], int] = dict(renderable_qc_count)
     # (session, version) keys already warned about, so the imbalance is logged
     # at most once per key rather than per orphan remove.
@@ -4672,8 +4684,14 @@ def _render_messages(
                 continue
             # No matching queued_command (or its budget is spent) → this is an
             # orphan remove. Fall through to render it (lossless). If the session
-            # DID have cards under this version, the 1:1 pairing broke — flag it
-            # once per (session, version).
+            # DID have cards under this version, say so — but only as what we
+            # actually observed. The earlier wording asserted the
+            # remove↔queued_command pairing was "violated"; that is a claim
+            # about the data we cannot make from here, and it was wrong in the
+            # case that prompted it (#294): the pairing was intact and it was
+            # our own pre-pass that failed to count an image-bearing card.
+            # A card we render but cannot pair warns for itself, naming the
+            # shape, in ``attachment_factory.queued_command_prompt_items``.
             version_key = (message.sessionId, inferred_version)
             if (
                 inferred_version
@@ -4682,11 +4700,12 @@ def _render_messages(
             ):
                 warned_qc_imbalance.add(version_key)
                 logger.warning(
-                    "steering suppression imbalance in session %s under version "
-                    "%s: a 'remove' op has no matching queued_command card — "
-                    "rendering it as legacy steering (content preserved). The "
-                    "remove↔queued_command 1:1 pairing appears violated (seen in "
-                    "real archives).",
+                    "steering 'remove' op in session %s under version %s has no "
+                    "counted queued_command card — rendering it as legacy "
+                    "steering (content preserved). Either the archive holds an "
+                    "unpaired 'remove', or a card was rendered that the "
+                    "suppression pre-pass could not pair; a preceding "
+                    "'not pairable' warning, if any, names the shape.",
                     message.sessionId,
                     inferred_version,
                 )

@@ -304,22 +304,35 @@ class TestMixedVersion:
 
     @staticmethod
     def _imbalance_warnings(caplog):
+        """Orphan-remove warnings emitted by the suppression pass.
+
+        Matches on ``has no counted queued_command card`` — the clause
+        that states what the renderer observed. The message deliberately
+        no longer claims the archive's remove↔queued_command pairing is
+        "violated": in #294 it was intact and the pre-pass was at fault.
+        """
         import logging
 
         return [
             rec
             for rec in caplog.records
-            if "steering suppression imbalance" in rec.message
+            if "has no counted queued_command card" in rec.message
             and rec.levelno == logging.WARNING
         ]
 
     def test_orphan_removes_render_losslessly(self, caplog):
-        """The remove↔queued_command 1:1 pairing is not airtight in real
-        archives (observed: a 2.1.160 file with 34 removes / 29 qc). When a
-        (session, version) has MORE removes than renderable queued_command
-        cards, suppression must be lossless: hide exactly the removes with a
-        matching card (no duplicate), and RENDER the orphan removes rather
-        than drop their steering text. The broken invariant is logged once."""
+        """When a (session, version) has MORE removes than countable
+        queued_command cards, suppression must be lossless: hide exactly
+        the removes with a matching card (no duplicate), and RENDER the
+        orphan removes rather than drop their steering text. The orphan is
+        logged once per (session, version).
+
+        Whether a real archive's remove↔queued_command pairing can break
+        on its own is unsettled — the "2.1.160 file with 34 removes / 29
+        qc" once cited here counted null-content removes that never reach
+        the suppression pass (see the note in renderer.py). Losslessness
+        is required regardless: an uncounted card produces the same shape,
+        and that is what #294 turned out to be."""
         import logging
 
         with caplog.at_level(logging.WARNING, logger="claude_code_log.renderer"):
@@ -382,3 +395,221 @@ class TestMixedVersion:
         # The paired text renders exactly once (via the qc), NOT duplicated.
         assert html.count("paired-STEER") == 2
         assert len(self._imbalance_warnings(caplog)) == 1
+
+
+# --------------------------------------------------------------------------
+# (d) Non-string prompt shapes (#294)
+# --------------------------------------------------------------------------
+# A steering delivery that carries an image is written with ``prompt`` as a
+# LIST of content blocks rather than a string. Both the suppression pre-pass
+# and the attachment factory used to accept only ``str``, so such a card was
+# dropped (losing the image outright) while its paired legacy ``remove``
+# rendered the text alone — and the renderer then blamed the archive for a
+# broken 1:1 pairing that was in fact intact.
+
+# Smallest valid PNG (1x1, transparent) — synthetic, no real capture.
+_PNG_1X1 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAE"
+    "hQGAhKmMIQAAAABJRU5ErkJggg=="
+)
+
+
+def _image_block(data=_PNG_1X1, media_type="image/png"):
+    return {
+        "type": "image",
+        "source": {"type": "base64", "media_type": media_type, "data": data},
+    }
+
+
+class TestNonStringPromptShapes:
+    @staticmethod
+    def _shape_warnings(caplog):
+        import logging
+
+        return [
+            rec
+            for rec in caplog.records
+            if "is not pairable" in rec.message and rec.levelno == logging.WARNING
+        ]
+
+    def test_image_prompt_renders_image_and_suppresses_remove(self, caplog):
+        """A text+image ``prompt`` list pairs with its legacy ``remove``
+        exactly like a string prompt: ONE steering card, carrying the
+        image, and no orphan-remove warning.
+
+        This is the #294 defect. Mutation-check: restore the old guard in
+        ``attachment_factory.queued_command_prompt_items`` (return ``None``
+        unless ``isinstance(prompt, str)``) and this test goes RED three
+        ways — the ``<img`` disappears, the card count stays 1 but comes
+        from the *remove* instead of the attachment (``qc1 &rarr; u2``
+        vanishes), and an orphan warning fires.
+        """
+        import logging
+
+        with caplog.at_level(logging.WARNING):
+            html = _render(
+                [
+                    _user("u1", None, "start"),
+                    _assistant("a1", "u1", "working"),
+                    _remove("look at this screenshot"),
+                    _user("u2", "a1", "next real prompt"),
+                    _queued_command(
+                        "qc1",
+                        "u2",
+                        [
+                            {"type": "text", "text": "look at this screenshot"},
+                            _image_block(),
+                        ],
+                    ),
+                    _assistant("a2", "qc1", "ok"),
+                ]
+            )
+
+        # Exactly one steering card — the remove was suppressed, so the
+        # text is not duplicated.
+        assert html.count("User (steering)") == 1
+        assert html.count("look at this screenshot") == 2  # card + timeline
+        # It is the ATTACHMENT's card (DAG-anchored), not the uuid-less remove.
+        assert "qc1 &rarr; u2" in html
+        # The image survives to the page — the content the old guard dropped.
+        assert f'<img src="data:image/png;base64,{_PNG_1X1}"' in html
+        # The pairing is intact, so nothing is reported.
+        assert self._shape_warnings(caplog) == []
+        assert TestMixedVersion._imbalance_warnings(caplog) == []
+
+    def test_image_only_prompt_is_not_pairable_and_keeps_remove_visible(self, caplog):
+        """An image with no text renders, but cannot seed the budget: the
+        budget keys on text, and there is none. Failing closed means the
+        paired ``remove`` (which does carry text) stays visible rather
+        than being suppressed by a card that cannot be shown to match it.
+        """
+        import logging
+
+        with caplog.at_level(logging.WARNING):
+            html = _render(
+                [
+                    _user("u1", None, "start"),
+                    _assistant("a1", "u1", "working"),
+                    _remove("do not lose this text"),
+                    _user("u2", "a1", "next real prompt"),
+                    _queued_command("qc1", "u2", [_image_block()]),
+                    _assistant("a2", "qc1", "ok"),
+                ]
+            )
+
+        # Both survive: the image card AND the text-bearing remove.
+        assert f'<img src="data:image/png;base64,{_PNG_1X1}"' in html
+        assert "do not lose this text" in html
+        assert html.count("User (steering)") == 2
+        # Said out loud, naming the shape.
+        warnings = self._shape_warnings(caplog)
+        assert len(warnings) == 1
+        assert "list[image]" in warnings[0].message
+
+    def test_unknown_prompt_shape_renders_and_names_the_shape(self, caplog):
+        """A shape we do not understand must fail closed *visibly*: render
+        the payload rather than drop it, name the shape in the log, and
+        leave the paired ``remove`` alone.
+
+        Silently dropping is the failure mode this guards against — it is
+        indistinguishable from there having been no steering delivery.
+        """
+        import logging
+
+        with caplog.at_level(logging.WARNING):
+            html = _render(
+                [
+                    _user("u1", None, "start"),
+                    _assistant("a1", "u1", "working"),
+                    _remove("legacy carrier text"),
+                    _user("u2", "a1", "next real prompt"),
+                    # A dict: not a shape Claude Code writes today.
+                    _queued_command("qc1", "u2", {"unexpected": "payload-42"}),
+                    _assistant("a2", "qc1", "ok"),
+                ]
+            )
+
+        # Nothing vanished: the odd payload is on the page, and so is the
+        # remove's text.
+        assert "payload-42" in html
+        assert "legacy carrier text" in html
+        # Diagnosable from the log line alone — the shape is named.
+        warnings = self._shape_warnings(caplog)
+        assert len(warnings) == 1
+        assert "dict" in warnings[0].message
+
+    def test_promptless_attachment_stays_silent(self, caplog):
+        """A ``queued_command`` with no ``prompt`` key at all renders
+        nothing and warns nothing — there is no content to lose, so it is
+        not a shape problem. Pins the boundary of the new warning so it
+        cannot start firing on the ordinary promptless attachment.
+        """
+        import logging
+
+        with caplog.at_level(logging.WARNING):
+            html = _render(
+                [
+                    _user("u1", None, "start"),
+                    _assistant("a1", "u1", "working"),
+                    _remove("carried by the remove"),
+                    _user("u2", "a1", "next real prompt"),
+                    _queued_command("qc1", "u2", None),
+                    _assistant("a2", "qc1", "ok"),
+                ]
+            )
+
+        assert "carried by the remove" in html
+        assert self._shape_warnings(caplog) == []
+
+    @reference_plugin_required
+    def test_transformed_list_prompt_matches_the_string_path(self, caplog):
+        """A list prompt whose text a transformer rewrites must behave
+        exactly like the same text as a plain string.
+
+        This is the discriminating case for drift between the budget key
+        and the rendered card: the key is built from the RAW extracted
+        text, before any transformer runs, and the legacy ``remove``
+        carries that same raw text — so the pair still matches even though
+        what renders is the demoted ``[testhook]`` marker rather than a
+        steering card. Asserting the two paths produce the SAME counts
+        pins that, where a fixed expected number would only pin today's
+        template.
+
+        If the list path ever hand-built its items past
+        ``create_user_message``, the marker would become a steering card
+        here and the two paths would diverge.
+
+        Note: the demotion drops the image along with the rest of the
+        original content — the transformer returns its own rendering, and
+        the string path has always been returned unchanged in the same
+        way. That is the plugin's call, not the steering path's.
+        """
+        import logging
+
+        prompt_text = "[testhook] monk blocked — permission prompt"
+        marker = "monk blocked — permission prompt"
+
+        def build(prompt):
+            return [
+                _user("u1", None, "start"),
+                _assistant("a1", "u1", "working"),
+                _remove(prompt_text),
+                _user("u2", "a1", "next real prompt"),
+                _queued_command("qc1", "u2", prompt),
+                _assistant("a2", "qc1", "ok"),
+            ]
+
+        with caplog.at_level(logging.WARNING):
+            as_string = _render(build(prompt_text))
+            as_list = _render(
+                build([{"type": "text", "text": prompt_text}, _image_block()])
+            )
+
+        # Demoted to the marker, not promoted to a steering card — and the
+        # remove paired away, so the marker is not rendered twice.
+        assert marker in as_list
+        assert as_list.count("User (steering)") == 0
+        # The list path is indistinguishable from the string path.
+        assert as_list.count(marker) == as_string.count(marker)
+        assert as_list.count("User (steering)") == as_string.count("User (steering)")
+        assert TestMixedVersion._imbalance_warnings(caplog) == []

@@ -16,18 +16,26 @@ in DAG, hidden from rendering" behaviour. New attachment flavours can
 grow their own factory branch here as needed.
 """
 
-from typing import Any, Optional, cast
+import logging
+from typing import Any, NamedTuple, Optional, cast
 
 from ..models import (
     AttachmentTranscriptEntry,
+    ContentItem,
     HookAttachmentMessage,
+    ImageContent,
     MessageContent,
     TextContent,
     UserSteeringMessage,
     UserTextMessage,
 )
+from ..parser import extract_text_content
 from .meta_factory import create_meta
+from .transcript_factory import USER_CONTENT_TYPES, create_message_content
 from .user_factory import create_user_message
+
+
+logger = logging.getLogger(__name__)
 
 
 # Attachment ``type`` values produced when a Claude Code hook fires.
@@ -70,6 +78,99 @@ def _coerce_int(value: Any) -> Optional[int]:
     return None
 
 
+class QueuedCommandPrompt(NamedTuple):
+    """A ``queued_command`` prompt normalized for rendering and pairing.
+
+    Attributes:
+        items: Content items to render. Never empty.
+        pairable: Whether ``items`` yields text the steering-suppression
+            budget can pair a legacy ``remove`` against. False means the
+            paired ``remove`` must stay visible — see
+            :func:`queued_command_prompt_items`.
+        shape: The prompt shape actually seen, for diagnostics
+            (``"str"``, ``"list[image,text]"``, ``"dict"``, ...).
+    """
+
+    items: list[ContentItem]
+    pairable: bool
+    shape: str
+
+
+def _describe_prompt_shape(prompt: Any) -> str:
+    """Name the shape of a ``prompt`` payload for a diagnostic message.
+
+    A bare ``type()`` name is not enough for the list case — the useful
+    detail is *which block types* it held, since that is what a future
+    novel shape will differ in.
+    """
+    if isinstance(prompt, list):
+        blocks = cast(list[Any], prompt)
+        kinds: set[str] = set()
+        for block in blocks:
+            if isinstance(block, dict):
+                block_map = cast(dict[str, Any], block)
+                kinds.add(str(block_map.get("type", "?")))
+            else:
+                kinds.add(type(block).__name__)
+        return f"list[{','.join(sorted(kinds))}]" if kinds else "list[]"
+    return type(prompt).__name__
+
+
+def queued_command_prompt_items(
+    payload: dict[str, Any],
+) -> Optional[QueuedCommandPrompt]:
+    """Normalize a ``queued_command`` payload's ``prompt`` to content items.
+
+    ``prompt`` is a plain string for a text-only steering delivery, but a
+    *list* of content blocks when the steering message carries an image
+    (``[{"type": "text", ...}, {"type": "image", ...}]``) — the shape a
+    pasted screenshot produces. A string yields the single ``TextContent``
+    the pre-list code built by hand, so text-only steering is unaffected.
+
+    Any *other* shape is still rendered, from its ``str()``, rather than
+    dropped: silently discarding a steering delivery is indistinguishable
+    from there having been none. Such a prompt comes back with
+    ``pairable=False`` and the caller is expected to say so out loud —
+    see :func:`_create_queued_command_message`.
+
+    ``pairable`` is exactly "has non-empty text", because text is the only
+    thing the suppression budget can key on. An image-only delivery is
+    renderable but not pairable; its paired ``remove``, which carries no
+    matching text either, simply stays visible.
+
+    Returns ``None`` only when there is nothing at all to render (no
+    ``prompt`` key, or an empty/whitespace one) — the one case where
+    dropping the card loses nothing.
+
+    Shared by :func:`_create_queued_command_message` and the renderer's
+    steering-suppression pre-pass so the two cannot disagree: the
+    pre-pass seeds the budget from the ``pairable`` cards only, and every
+    card the factory emits that it did *not* count leaves the paired
+    legacy ``remove`` visible.
+    """
+    prompt = payload.get("prompt")
+    if prompt is None:
+        return None
+    shape = _describe_prompt_shape(prompt)
+
+    items: list[ContentItem]
+    if isinstance(prompt, (str, list)):
+        items = create_message_content(prompt, USER_CONTENT_TYPES)
+    else:
+        # Fail closed, visibly: keep the payload as text so the delivery
+        # shows up in the page instead of vanishing.
+        items = [TextContent(type="text", text=str(prompt))]
+
+    text = extract_text_content(items).strip()
+    if not text and not any(isinstance(item, ImageContent) for item in items):
+        return None
+    return QueuedCommandPrompt(
+        items=items,
+        pairable=bool(text) and isinstance(prompt, (str, list)),
+        shape=shape,
+    )
+
+
 def _create_queued_command_message(
     transcript: AttachmentTranscriptEntry,
     payload: dict[str, Any],
@@ -92,18 +193,35 @@ def _create_queued_command_message(
     keep the ``user steering`` CSS treatment; a transformed/other
     classification is returned unchanged.
     """
-    prompt = payload.get("prompt")
-    if not isinstance(prompt, str) or not prompt.strip():
+    prompt = queued_command_prompt_items(payload)
+    if prompt is None:
         return None
 
+    if not prompt.pairable:
+        # Rendered, but the suppression pre-pass could not count it, so the
+        # paired legacy ``remove`` stays visible. Name the shape we actually
+        # saw: the next novel prompt shape should be diagnosable from this
+        # line alone, without re-deriving it from an archive.
+        logger.warning(
+            "queued_command prompt shape %s is not pairable (session %s, "
+            "version %s): rendering the steering card, but its legacy "
+            "'remove' cannot be matched and will render too. Only a str or "
+            "a list of blocks with text can be paired.",
+            prompt.shape,
+            transcript.sessionId,
+            transcript.version,
+        )
+
     meta = create_meta(transcript)
-    chunk: list[Any] = [TextContent(type="text", text=prompt)]
-    result = create_user_message(meta, chunk, prompt, is_slash_command=False)
+    result = create_user_message(
+        meta, prompt.items, extract_text_content(prompt.items), is_slash_command=False
+    )
     # Defensive only: create_user_message never returns None for a non-empty
-    # text chunk (it returns None solely on an empty content_list / the empty
+    # chunk (it returns None solely on an empty content_list / the empty
     # is_slash_command path, neither reachable here). Kept to guard against a
     # future change to its contract — the effective render condition upstream
-    # is exactly this ``prompt.strip()``, so pre-pass and factory can't drift.
+    # is exactly ``queued_command_prompt_items``, so pre-pass and factory
+    # can't drift.
     if result is None:
         return None
 
