@@ -20,12 +20,17 @@ Each test is written so neutering its target guard turns it RED (e.g. folding
 
 import json
 from pathlib import Path
+from typing import Any
 
 from claude_code_log.converter import (
     _sum_provider_token_totals,
     render_provider_wholesale,
 )
-from claude_code_log.providers.base import ProviderTokenTotals
+from claude_code_log.providers.base import (
+    BaseProvider,
+    ProviderTokenTotals,
+    SessionInfo,
+)
 from claude_code_log.providers.codex import (
     CodexProvider,
     _map_cumulative_usage,
@@ -80,10 +85,16 @@ def _rollout_with_tokens(
     rel: str,
     thread_id: str,
     cwd: str | None,
-    token_totals: list[dict[str, int]],
+    token_totals: list[dict[str, Any]],
 ) -> Path:
     """Write a rollout whose token_count events carry the given cumulative
-    totals in order (the LAST one is the session total)."""
+    totals in order (the LAST one is the session total).
+
+    Values are ``Any``, not ``int``: the malformed-record tests deliberately
+    feed a string / bool / absent ``total_tokens`` to exercise the skip, and a
+    fixture builder that could only express well-formed input could not
+    express the bug being pinned.
+    """
     payload: dict[str, object] = {"id": thread_id, "timestamp": "2026-01-02T00:00:00Z"}
     if cwd is not None:
         payload["cwd"] = cwd
@@ -426,3 +437,260 @@ def test_wholesale_never_leaks_account_level_data(tmp_path: Path) -> None:
         "limit_id",
     ):
         assert term not in html, f"account-level term leaked: {term}"
+
+
+# --------------------------------------------------------------------------
+# Review follow-ups: malformed totals, and the asymmetric project override
+# --------------------------------------------------------------------------
+# Both were raised in review on the open PR. Neither is reachable from the
+# real corpus — every ``token_count`` there carries a valid int total, and the
+# only non-Codex provider has no per-message usage to lose — so both need
+# synthetic pins.
+
+
+def test_malformed_total_does_not_omit_the_session(tmp_path: Path, caplog) -> None:
+    """A record whose ``total_tokens`` is absent or not an int must be SKIPPED,
+    not coerced to 0.
+
+    Coercing made a data-quality problem look like a counter reset: 0 compares
+    less than the running total, the monotonicity guard fired, and the whole
+    session's totals were omitted. The session here is strictly increasing —
+    110 then 1100 — with one malformed record wedged between, so nothing about
+    the counter is actually broken.
+
+    Mutation-check: restore ``total = total_raw if isinstance(total_raw, int)
+    else 0`` (dropping the skip) and this goes RED — the guard fires on the
+    malformed record and ``session_token_totals`` returns None.
+    """
+    import logging
+
+    records = [
+        _usage(100, 20, 10, 0, 110),
+        {"input_tokens": 500, "cached_input_tokens": 100, "output_tokens": 50},
+        _usage(1000, 200, 100, 0, 1100),
+    ]
+    root = tmp_path / "sessions"
+    _rollout_with_tokens(
+        root, "a/one.jsonl", "10000000-0000-4000-8000-00000000000a", "/proj/a", records
+    )
+
+    with caplog.at_level(logging.WARNING):
+        totals = CodexProvider().session_token_totals(
+            root, "10000000-0000-4000-8000-00000000000a"
+        )
+
+    # Not omitted: the valid records still describe the session.
+    assert totals is not None
+    # And the LAST VALID record wins — the malformed one is out of last-record
+    # selection too, so its zero components never reach _map_cumulative_usage.
+    assert totals.input_tokens == 800
+    assert totals.cache_read_tokens == 200
+    assert totals.output_tokens == 100
+    assert totals.total_tokens == 1100
+
+    # Degraded visibly, naming what was seen.
+    warnings = [
+        r.message for r in caplog.records if "total_tokens was" in r.getMessage()
+    ]
+    assert len(warnings) == 1
+    assert "absent" in caplog.text
+    # The monotonicity guard did NOT fire — that message must be absent.
+    assert "monotonicity broken" not in caplog.text
+
+
+def test_malformed_total_names_the_type_it_saw(tmp_path: Path, caplog) -> None:
+    """The warning names the actual shape, so the next surprise is diagnosable
+    from the log line. A JSON string total reports ``str``.
+
+    ``True`` is reported as ``bool`` rather than silently accepted as the int
+    1 — ``bool`` is an ``int`` subclass, so a bare ``isinstance(x, int)``
+    would let it through and record a session total of 1.
+    """
+    import logging
+
+    root = tmp_path / "sessions"
+    _rollout_with_tokens(
+        root,
+        "a/one.jsonl",
+        "10000000-0000-4000-8000-00000000000b",
+        "/proj/a",
+        [
+            _usage(100, 20, 10, 0, 110),
+            {**_usage(0, 0, 0, 0, 0), "total_tokens": "1200"},
+            {**_usage(0, 0, 0, 0, 0), "total_tokens": True},
+        ],
+    )
+
+    with caplog.at_level(logging.WARNING):
+        totals = CodexProvider().session_token_totals(
+            root, "10000000-0000-4000-8000-00000000000b"
+        )
+
+    assert totals is not None
+    assert totals.total_tokens == 110  # the only well-formed record
+    assert "bool" in caplog.text
+    assert "str" in caplog.text
+
+
+def test_real_counter_reset_still_omits_totals(tmp_path: Path, caplog) -> None:
+    """The boundary of the change: skipping malformed records must not have
+    disarmed the guard for a GENUINE decrease between two valid records."""
+    import logging
+
+    root = tmp_path / "sessions"
+    _rollout_with_tokens(
+        root,
+        "a/one.jsonl",
+        "10000000-0000-4000-8000-00000000000c",
+        "/proj/a",
+        [_usage(1000, 200, 100, 0, 1100), _usage(100, 20, 10, 0, 110)],
+    )
+
+    with caplog.at_level(logging.WARNING):
+        totals = CodexProvider().session_token_totals(
+            root, "10000000-0000-4000-8000-00000000000c"
+        )
+
+    assert totals is None
+    assert "monotonicity broken" in caplog.text
+
+
+class _PerMessageUsageProvider(BaseProvider):
+    """A provider whose usage lives ON THE MESSAGES, with NO cumulative seam.
+
+    This is the discriminating fixture for the project-aggregate override.
+    The obvious candidate — the other real non-Codex provider — cannot express
+    the bug: it has no token accounting at all, so its per-message totals are
+    already zero and overwriting them with zeros is a no-op. A test built on it
+    passes whether or not the guard exists.
+
+    So this double reports real per-assistant-message ``usage`` (the Claude
+    shape, which the ordinary accumulators do sum) and inherits
+    ``session_token_totals`` from the base — i.e. ``None``, the DEFAULT that
+    every provider but Codex has.
+    """
+
+    SESSION_ID = "40000000-0000-4000-8000-000000000001"
+
+    def get_provider_name(self) -> str:
+        return "permsg"
+
+    def get_session_format(self) -> str:
+        return "permsg"
+
+    def get_data_dir(self):
+        return None
+
+    def discover_sessions(self):
+        return iter(())
+
+    def load_session(self, session_id, max_messages=None):
+        return iter(())
+
+    def _info(self, root: Path) -> SessionInfo:
+        return SessionInfo(
+            provider="permsg",
+            session_id=self.SESSION_ID,
+            project_path=Path("/proj/permsg"),
+            source_path=root / "permsg.jsonl",
+        )
+
+    def discover_sessions_under(self, root: Path):
+        yield self._info(root)
+
+    def load_session_under(self, root: Path, session_id, max_messages=None):
+        from claude_code_log.factories.transcript_factory import create_transcript_entry
+
+        for index in (1, 2):
+            entry = create_transcript_entry(
+                {
+                    "type": "assistant",
+                    "uuid": f"m{index}",
+                    "parentUuid": None,
+                    "isSidechain": False,
+                    "userType": "external",
+                    "cwd": "/proj/permsg",
+                    "sessionId": self.SESSION_ID,
+                    "version": "1.0.0",
+                    "timestamp": f"2026-07-11T07:0{index}:00.000Z",
+                    "requestId": f"req-{index}",
+                    "message": {
+                        "id": f"msg-{index}",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "test-model",
+                        "content": [{"type": "text", "text": f"reply {index}"}],
+                        "usage": {
+                            "input_tokens": 100,
+                            "output_tokens": 10,
+                            "cache_read_input_tokens": 5,
+                        },
+                    },
+                }
+            )
+            if entry is not None:
+                yield entry
+
+
+def _render_permsg(tmp_path: Path, monkeypatch, *, use_cache: bool) -> str:
+    from claude_code_log.providers.registry import ProviderRegistry
+
+    registry = ProviderRegistry()
+    registry.register(_PerMessageUsageProvider())
+    # render_provider_wholesale imports this lazily from the package, so the
+    # package attribute is the one that must be patched.
+    monkeypatch.setattr(
+        "claude_code_log.providers.discover_providers", lambda: registry
+    )
+    root = tmp_path / "sessions"
+    root.mkdir(parents=True, exist_ok=True)
+    # The cache keys source-mtime staleness off SessionInfo.source_path, so the
+    # file must exist even though this double parses nothing from it.
+    (root / "permsg.jsonl").write_text("", encoding="utf-8")
+    index = render_provider_wholesale(
+        "permsg", root, tmp_path / "out", use_cache=use_cache, silent=True
+    )
+    return index.read_text(encoding="utf-8")
+
+
+def test_project_card_keeps_per_message_totals_without_cumulative_seam(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A provider with no ``session_token_totals`` seam must keep its
+    per-message project totals on the index card.
+
+    ``_sum_provider_token_totals`` returns an ALL-ZERO dict when every session
+    returned None, and the override used to apply it unconditionally — zeroing
+    real aggregates. Two messages x (input 100, output 10, cache_read 5).
+
+    Mutation-check: drop the ``has_provider_token_totals`` guard at either
+    project-level site and this goes RED (the card renders no token line at
+    all, because a zero column is omitted rather than printed as 0).
+    """
+    html = _render_permsg(tmp_path, monkeypatch, use_cache=False)
+    assert "Input: 200 | Output: 20 | Cache Read: 10" in html
+
+
+def test_cached_project_aggregates_keep_per_message_totals(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The cache-side sibling of the same override, which writes the durable
+    project aggregates. Guarded symmetrically with the session-level override
+    twelve lines above it, which was already gated on ``is not None``."""
+    from claude_code_log.cache import (
+        CacheManager,
+        get_cache_db_path,
+        get_library_version,
+    )
+
+    _render_permsg(tmp_path, monkeypatch, use_cache=True)
+    out = tmp_path / "out"
+    session_page = next(out.rglob(f"session-{_PerMessageUsageProvider.SESSION_ID}*"))
+    cache = CacheManager(
+        session_page.parent, get_library_version(), db_path=get_cache_db_path(out)
+    )
+    project_cache = cache.get_cached_project_data()
+    assert project_cache is not None
+    assert project_cache.total_input_tokens == 200
+    assert project_cache.total_output_tokens == 20
+    assert project_cache.total_cache_read_tokens == 10

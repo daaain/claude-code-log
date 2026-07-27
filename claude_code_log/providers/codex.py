@@ -262,6 +262,7 @@ def _token_totals_from_records(
     """
     last_usage: Optional[dict[str, Any]] = None
     prev_total: Optional[int] = None
+    malformed_total_shapes: list[str] = []
     for record in records:
         if record.kind != "event_msg":
             continue
@@ -284,8 +285,24 @@ def _token_totals_from_records(
         # worse than an absent one. Enforced, not merely assumed — monk and I
         # measured 0 violations across the corpus, so this fires only on a
         # future spec change, loudly.
+        # A record whose ``total_tokens`` is absent or not an int tells us
+        # nothing about the ordering. Coercing it to 0 (the pre-review
+        # behaviour) made it look like a counter reset, so a single malformed
+        # record tripped the guard below and omitted the WHOLE session's totals
+        # for what is a data-quality problem, not a broken counter. Skip it
+        # instead — out of the comparison AND out of last-record selection,
+        # since ``_map_cumulative_usage`` treats the stored total as
+        # authoritative and would carry a fabricated 0 through — and say so
+        # once at the end, naming the shape actually seen. ``bool`` is excluded
+        # deliberately: it is an ``int`` subclass, so a JSON ``true`` would
+        # otherwise pass as the total 1.
         total_raw = usage.get("total_tokens")
-        total = total_raw if isinstance(total_raw, int) else 0
+        if not isinstance(total_raw, int) or isinstance(total_raw, bool):
+            malformed_total_shapes.append(
+                "absent" if total_raw is None else type(total_raw).__name__
+            )
+            continue
+        total = total_raw
         if prev_total is not None and total < prev_total:
             logger.warning(
                 "Codex token_count total_tokens decreased (%d < %d); cumulative "
@@ -296,6 +313,16 @@ def _token_totals_from_records(
             return None
         prev_total = total
         last_usage = usage
+    if malformed_total_shapes:
+        # Degrade visibly: the totals we return are real, but they are drawn
+        # from fewer records than the session actually holds.
+        logger.warning(
+            "Codex token_count: skipped %d record(s) whose total_tokens was "
+            "not an integer (saw: %s); session totals come from the remaining "
+            "records",
+            len(malformed_total_shapes),
+            ", ".join(sorted(set(malformed_total_shapes))),
+        )
     if last_usage is None:
         return None
     return _map_cumulative_usage(last_usage)

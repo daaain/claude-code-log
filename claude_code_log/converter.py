@@ -2967,6 +2967,32 @@ def _sum_provider_token_totals(
     }
 
 
+# The four token keys a project card carries, in the shape
+# ``_sum_provider_token_totals`` emits. Named once so the provider path and
+# the per-message fallback cannot drift apart.
+_PROJECT_TOKEN_KEYS = (
+    "total_input_tokens",
+    "total_output_tokens",
+    "total_cache_creation_tokens",
+    "total_cache_read_tokens",
+)
+
+
+def _project_token_totals_from_messages(
+    messages: List[TranscriptEntry],
+) -> dict[str, int]:
+    """Per-message project token totals, in the project-card key shape.
+
+    The fallback for a provider with no cumulative ``session_token_totals``
+    seam: its usage lives on the messages, exactly as Claude's does, so the
+    ordinary accumulator is the right source. Kept to the four token keys so
+    it can be spread into the card dict interchangeably with
+    ``_sum_provider_token_totals``.
+    """
+    aggregates = compute_project_aggregates(messages)
+    return {key: int(aggregates.get(key, 0) or 0) for key in _PROJECT_TOKEN_KEYS}
+
+
 def render_provider_wholesale(
     provider_name: str,
     sessions_root: Optional[Path],
@@ -3128,6 +3154,17 @@ def render_provider_wholesale(
             for info, _ in loaded
         }
         project_token_totals = _sum_provider_token_totals(session_totals.values())
+        # Did the provider actually supply cumulative totals? When it did not —
+        # every seam returned ``None``, which is the DEFAULT — the sum above is
+        # an all-zero dict, and applying it would REPLACE a provider's real
+        # per-message aggregates with zeros. The session-level override below
+        # is already gated on ``session_total is not None``; the two
+        # project-level uses must be gated symmetrically, or a provider that
+        # reports usage per message but has no cumulative seam silently loses
+        # its project totals.
+        has_provider_token_totals = any(
+            total is not None for total in session_totals.values()
+        )
 
         # Phase 2 — populate the cache and capture the pre-render modified set.
         cache: Optional[CacheManager] = None
@@ -3174,8 +3211,11 @@ def render_provider_wholesale(
                         )
                 cache.update_session_cache(merged_session_data)
                 project_aggregates = compute_project_aggregates(combined_messages)
-                # Cumulative project totals override the (zero) per-message sum.
-                project_aggregates.update(project_token_totals)
+                # Cumulative project totals override the (zero) per-message sum
+                # — but only when the provider supplied any; see
+                # ``has_provider_token_totals``.
+                if has_provider_token_totals:
+                    project_aggregates.update(project_token_totals)
                 cache.update_project_aggregates(**project_aggregates)
             session_counts = {
                 sid: sd.message_count for sid, sd in merged_session_data.items()
@@ -3291,7 +3331,15 @@ def render_provider_wholesale(
                 # ``_sum_provider_token_totals`` keeps the dict shape-identical
                 # to the Claude path (all four keys, cache_creation pinned 0 and
                 # never displayed) so the drift pin's contract still holds.
-                **project_token_totals,
+                # Sibling of the cache-side override above and gated the same
+                # way: with no cumulative seam this dict is all zeros, so fall
+                # back to the per-message aggregate rather than zeroing the
+                # card. Computed lazily — the fallback never runs for Codex.
+                **(
+                    project_token_totals
+                    if has_provider_token_totals
+                    else _project_token_totals_from_messages(combined_messages)
+                ),
                 "latest_timestamp": last_ts_all or "",
                 "earliest_timestamp": first_ts_all or "",
                 "working_directories": working_directories,
