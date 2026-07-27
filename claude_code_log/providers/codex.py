@@ -263,6 +263,7 @@ def _token_totals_from_records(
     last_usage: Optional[dict[str, Any]] = None
     prev_total: Optional[int] = None
     malformed_total_shapes: list[str] = []
+    first_malformed_at: Optional[str] = None
     for record in records:
         if record.kind != "event_msg":
             continue
@@ -301,6 +302,11 @@ def _token_totals_from_records(
             malformed_total_shapes.append(
                 "absent" if total_raw is None else type(total_raw).__name__
             )
+            if first_malformed_at is None:
+                # Enough to open the rollout at the offending record instead of
+                # re-scanning it. One warning per session stays O(1), but a bare
+                # count would leave the reader nothing to search on.
+                first_malformed_at = record.timestamp or "(no timestamp)"
             continue
         total = total_raw
         if prev_total is not None and total < prev_total:
@@ -318,10 +324,11 @@ def _token_totals_from_records(
         # from fewer records than the session actually holds.
         logger.warning(
             "Codex token_count: skipped %d record(s) whose total_tokens was "
-            "not an integer (saw: %s); session totals come from the remaining "
-            "records",
+            "not an integer (saw: %s; first at %s); session totals come from "
+            "the remaining records",
             len(malformed_total_shapes),
             ", ".join(sorted(set(malformed_total_shapes))),
+            first_malformed_at,
         )
     if last_usage is None:
         return None

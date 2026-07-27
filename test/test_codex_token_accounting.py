@@ -488,12 +488,18 @@ def test_malformed_total_does_not_omit_the_session(tmp_path: Path, caplog) -> No
     assert totals.output_tokens == 100
     assert totals.total_tokens == 1100
 
-    # Degraded visibly, naming what was seen.
+    # Degraded visibly, naming what was seen — ONE line per session (a
+    # pathological file must not emit thousands), but carrying the count AND
+    # the first offending record's timestamp, so the reader can open the
+    # rollout at that record instead of re-scanning it. The malformed record
+    # is the second token_count, at ...:04Z.
     warnings = [
         r.message for r in caplog.records if "total_tokens was" in r.getMessage()
     ]
     assert len(warnings) == 1
     assert "absent" in caplog.text
+    assert "skipped 1 record" in caplog.text
+    assert "2026-01-02T00:00:04Z" in caplog.text
     # The monotonicity guard did NOT fire — that message must be absent.
     assert "monotonicity broken" not in caplog.text
 
