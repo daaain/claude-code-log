@@ -238,7 +238,7 @@ def test_timestamp_tie_places_queue_ops_after_same_timestamp_entry(tmp_path):
     )
 
 
-def _asst(uuid: str, ts: str):
+def _asst(uuid: str, ts: str, sid: str = _SID):
     """A minimal parsed assistant entry (only sessionId+timestamp matter here)."""
     return _ENTRY.validate_python(
         {
@@ -248,7 +248,7 @@ def _asst(uuid: str, ts: str):
             "isSidechain": False,
             "userType": "external",
             "cwd": "/tmp",
-            "sessionId": _SID,
+            "sessionId": sid,
             "version": "2.1.207",
             "timestamp": ts,
             "message": {
@@ -298,3 +298,58 @@ def test_non_monotonic_session_anchors_by_timestamp_not_list_order():
     # Discriminating assertion: the queue-op must follow its chronological
     # predecessor (07:00:20). Fails if the per-session sort is removed.
     assert order.index("QOP") > order.index("e20")
+
+
+def _qop(ts: str, content: str, sid: str = _SID) -> QueueOperationTranscriptEntry:
+    return QueueOperationTranscriptEntry(
+        type="queue-operation",
+        operation="remove",
+        timestamp=ts,
+        sessionId=sid,
+        content=content,
+    )
+
+
+def test_queue_op_predating_its_session_lands_before_that_session_first_entry():
+    """Pin the ``pos < 0`` branch: a queue-op older than every entry of its own
+    session anchors to nothing, and must be placed immediately before that
+    session's FIRST entry — not at the front of the whole list, and not
+    appended at the end (the pre-fix behaviour).
+
+    The fixture is deliberately multi-session and leads with the *other*
+    session, which is what makes it discriminating: "before this session's
+    first entry" (index 1) and "at the front of the list" (index 0) are
+    different positions here, so an implementation that confuses the two
+    fails. With a single-session fixture both collapse to index 0 and the
+    test would pass either way.
+    """
+    other = _asst("other", "2026-07-11T07:00:00.000Z", sid="sess-order-2")
+    e10 = _asst("e10", "2026-07-11T07:00:10.000Z")
+    e20 = _asst("e20", "2026-07-11T07:00:20.000Z")
+    dag_ordered = [other, e10, e20]
+    # 07:00:05 predates both _SID entries, but NOT the other session's entry.
+    qop = _qop("2026-07-11T07:00:05.000Z", "steer")
+
+    result = _splice_queue_ops_chronologically(dag_ordered, [qop])
+    order = [getattr(m, "uuid", None) or "QOP" for m in result]
+
+    assert order == ["other", "QOP", "e10", "e20"], order
+
+
+def test_queue_op_with_no_session_entries_is_preserved_not_dropped():
+    """Pin the anchorless fallback: a queue-op whose session has no DAG entries
+    at all (its transcript file absent, filtered out by a date range, …) has
+    nowhere to anchor. It must still be emitted — appended, as before the fix.
+
+    This is a no-op-shaped assertion, so it is pinned against *loss*: the
+    failure it guards is a future refactor that quietly drops what it cannot
+    place. Asserting the count as well as the position keeps it honest.
+    """
+    e10 = _asst("e10", "2026-07-11T07:00:10.000Z")
+    orphan = _qop("2026-07-11T07:00:15.000Z", "steer", sid="sess-order-absent")
+
+    result = _splice_queue_ops_chronologically([e10], [orphan])
+    order = [getattr(m, "uuid", None) or "QOP" for m in result]
+
+    assert len(result) == 2, f"anchorless queue-op dropped: {order}"
+    assert order == ["e10", "QOP"], order
