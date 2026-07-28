@@ -665,6 +665,15 @@ appended in place. A block can therefore never be inlined *and* appended, nor
 dropped by a pass that never rendered it — which is what a placeholder buried
 in a `<system-reminder>` or an IDE-notification prefix used to cause.
 
+An up-front scan of the **raw** item text does survive, but only to decide
+whether an absent-field message's numbering is contiguous, and the asymmetry
+is deliberate: a raw scan can only *widen* the set of numbers, a wider set can
+only make contiguity harder to satisfy, so it can over-fail-close and never
+over-substitute. Using post-split text there would be the unsafe choice — a
+hidden placeholder would be invisible to the contiguity check while still
+being a real reference. Consumption deliberately does **not** use that scan,
+and that asymmetry is the fix.
+
 When the association cannot be established the placeholder renders literally,
 the block stays detached, and a warning names the condition — an unknown paste
 id, lists that are not parallel, a repeated id, a malformed field. A visible
