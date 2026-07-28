@@ -165,9 +165,12 @@ def test_image_steering_suppression_composes_with_chronological_splice(tmp_path)
     the paired remove is suppressed, not duplicated — proving #294's count and
     #303's ordering compose on the shared seam."""
     d = _write(tmp_path, _entries())
+    # encoding is explicit because the rendered page is UTF-8 and Windows
+    # would otherwise decode it with the locale codec (cp1252), which fails on
+    # the first non-Latin-1 byte. Matches test_session_id_ordering.py.
     html = Path(
         convert_jsonl_to_html(d, tmp_path / "out", use_cache=False, silent=True)
-    ).read_text()
+    ).read_text(encoding="utf-8")
 
     # The image-bearing card renders (the #294 fix), and its paired remove is
     # suppressed — exactly one steering card, not a duplicate legacy one.
