@@ -235,7 +235,13 @@ class TestParseUserMessageContentRegular:
         assert content_model is None
 
     def test_numbered_image_references_control_image_placement(self):
-        """Claude image blocks render where their text references occur."""
+        """Claude image blocks render where their text references occur.
+
+        The reference numbers are paste ids, so the association comes from
+        ``imagePasteIds`` — here it happens to coincide with block order, which
+        is what lets this case exercise placement on its own. ``[Image #3]``
+        names no recorded paste id and stays literal.
+        """
         first = ImageContent(
             type="image",
             source=ImageSource(type="base64", media_type="image/png", data="first"),
@@ -254,7 +260,10 @@ class TestParseUserMessageContentRegular:
         ]
 
         content_model = create_user_message(
-            MessageMeta.empty(), content_list, extract_text_content(content_list)
+            MessageMeta.empty(),
+            content_list,
+            extract_text_content(content_list),
+            image_paste_ids=[1, 2],
         )
 
         assert isinstance(content_model, UserTextMessage)

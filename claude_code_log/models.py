@@ -258,6 +258,19 @@ class UserTranscriptEntry(BaseTranscriptEntry):
     message: UserMessageModel
     toolUseResult: Optional[ToolUseResult] = None
     agentId: Optional[str] = None  # From toolUseResult when present
+    # Paste ids for the image blocks in ``message.content``, in block order:
+    # the ``[Image #N]`` placeholder in the text refers to the block at
+    # ``imagePasteIds.index(N)``. N is a paste counter, NOT a position — it
+    # resets when the CLI restarts inside a session that outlives it, and it
+    # increments on delete-and-repaste, so the same N can name different
+    # images within one session and nothing may be keyed at session scope.
+    # Old transcripts do not carry it (see _image_reference_mapping for what
+    # is then left to go on, and dev-docs/messages.md for the sampling).
+    #
+    # Deliberately untyped: a malformed value has to reach the resolver to be
+    # reported, because a ValidationError here would drop the whole entry
+    # (the loader skips any line whose model validation raises).
+    imagePasteIds: Optional[Any] = None
     # Present on isMeta=True entries produced by a Skill tool invocation —
     # carries the id of the originating tool_use so the renderer can fold
     # the skill body into that tool_use block. See issue #93.
