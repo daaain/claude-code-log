@@ -716,9 +716,16 @@ def _image_reference_mapping(
     """
     if paste_ids is None:
         # Old transcripts recorded no association, so the positional reading
-        # is the only one available. It is trustworthy exactly when the
-        # numbering is 1..k with no gaps and no more numbers than blocks —
-        # the shape a paste counter that has reset or skipped cannot produce.
+        # is the only one available. Use it only for 1..k with no gaps and no
+        # more numbers than blocks — not because a paste counter cannot
+        # produce that shape (one that has just reset produces exactly it),
+        # but because on that shape the two readings COINCIDE and we do not
+        # have to know which regime we are in: paste ids are distinct, >= 1
+        # and recorded in ascending block order, so a list containing 1..k
+        # must carry them in its first k slots, making index(N) == N-1. The
+        # ascending premise is measured, not guaranteed — see
+        # dev-docs/messages.md. A gap or a number above the block count
+        # breaks the coincidence, and those fail closed.
         if not numbers:
             return {}, []
         if numbers == list(range(1, len(numbers) + 1)) and len(numbers) <= len(images):

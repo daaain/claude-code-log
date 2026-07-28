@@ -289,6 +289,23 @@ class TestLegacyTranscripts:
 
         assert _tags(model) == ["<b>", "just ", "<a>"]
 
+    def test_the_two_readings_coincide_wherever_the_fallback_fires(self):
+        """The fallback's justification, pinned.
+
+        It is *not* that a paste counter cannot produce ``1..k`` — one that
+        has just reset produces exactly that. It is that on ``1..k`` the
+        recorded reading and the positional reading give the same answer, so
+        the renderer need not know which regime it is in. That holds because
+        paste ids are distinct, ``>= 1`` and ascending in block order, which
+        forces ``1..k`` into the first ``k`` slots.
+        """
+        for ids in ([1, 2], [1, 2, 3], [1, 2, 9], [1, 2, 3, 40]):
+            blocks = [_image(f"b{i}") for i in range(len(ids))]
+            text = TextContent(type="text", text="[Image #2] then [Image #1]")
+            with_ids = _tags(_render([*blocks, text], paste_ids=ids))
+            without = _tags(_render([*blocks, text]))
+            assert with_ids == without, ids
+
     def test_a_gap_means_the_numbering_is_not_positional(
         self, caplog: pytest.LogCaptureFixture
     ):

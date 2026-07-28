@@ -674,8 +674,25 @@ costing the whole entry.
 
 Old transcripts carry no `imagePasteIds`, so position is the only evidence
 available there. It is used only when the numbering is `1..k` with no gaps and
-no more numbers than blocks — a shape a counter that has reset or skipped
-cannot produce.
+no more numbers than blocks.
+
+**Why that condition, stated correctly.** Not "a reset counter cannot produce
+`1..k`" — one that has just reset produces exactly that. The condition is
+chosen because on that shape **the two readings coincide**, so the renderer
+does not have to know which regime produced the numbering. Paste ids are
+distinct, `>= 1`, and recorded in ascending block order; a list containing
+`1..k` must therefore hold them in its first `k` slots, which makes
+`ids.index(N)` and `N-1` the same answer. A gap, or a number above the block
+count, breaks the coincidence — and those fail closed.
+
+The ascending premise is **measured, not guaranteed by the format**: 180/180
+distinct messages carrying the field have strictly ascending ids, no
+duplicates, none below 1 (2026-07-28 archive). Scored the other way — pretend
+the field were absent and run the fallback against the recorded ids as ground
+truth — it fires on 24 of the 110 placeholder-bearing messages, refuses the
+other 86, and is correct on all 24. That is evidence from the era that *has*
+the field; the era where the fallback actually applies has no ground truth by
+construction, which is the limit of the argument.
 
 **How old is "old" — measured, with its limits.** In one real archive scanned
 on 2026-07-28 (5,606 transcript files), every image-bearing message that
