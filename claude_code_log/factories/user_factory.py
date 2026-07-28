@@ -679,6 +679,25 @@ def _build_image_refs(
     """Build the placeholder→block mapping, warning about anything it refuses
     to map. Every refusal is named separately so a reader can tell an old
     transcript apart from a malformed one."""
+    # A chunk carrying no image blocks. This happens when
+    # ``chunk_message_content`` splits a record between a block and the text
+    # that references it — a tool_result or thinking block lands between them,
+    # so the text segment sees an empty list rather than the record's blocks.
+    #
+    # This early return is a WARNING suppressor, not the thing that prevents a
+    # substitution. Deleting it changes no rendering (measured): the block-count
+    # bounds below — ``len(numbers) <= len(images)`` on the legacy path,
+    # ``len(ids) != len(images)`` on the recorded one — already refuse
+    # everything when there are no blocks. What deleting it costs is a warning
+    # on every split segment, blaming the transcript for our own chunking.
+    #
+    # That redundancy is load-bearing for a different reason: it is why a
+    # partial block list cannot make this resolver substitute where the older
+    # positional code would not have. Both refuse, for the same underlying
+    # reason — you cannot reference a block that is not in the list you were
+    # handed. No mutation of either mechanism can be pinned by a test here,
+    # because each shields the other; that is a property to keep, not a gap
+    # to fill.
     if not images:
         return _ImageRefs(images, {})
 

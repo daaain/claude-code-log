@@ -694,6 +694,19 @@ other 86, and is correct on all 24. That is evidence from the era that *has*
 the field; the era where the fallback actually applies has no ground truth by
 construction, which is the limit of the argument.
 
+**What this does NOT cover: a chunk-split record.**
+`chunk_message_content` gives `tool_use` / `tool_result` / `thinking` blocks
+their own chunks, so a record whose image block and referencing text are
+separated by one of those yields a text segment that sees **no** image blocks.
+The placeholder then stays literal and the block is appended from its own
+chunk — on this renderer and on every renderer before it, because both refuse
+for the same underlying reason: you cannot reference a block that is not in
+the list you were handed. Two independent mechanisms produce that refusal (an
+early return on the empty list, and the block-count bounds), which is why no
+test pins it — each shields the other from mutation. Zero records in a
+5,606-file archive have image blocks *and* a special block, so this is a
+property to preserve rather than a behaviour anyone relies on.
+
 **How old is "old" — measured, with its limits.** In one real archive scanned
 on 2026-07-28 (5,606 transcript files), every image-bearing message that
 contained an `[Image #N]` placeholder carried the field, across versions
