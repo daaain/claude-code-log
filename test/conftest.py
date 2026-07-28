@@ -15,6 +15,58 @@ from test.snapshot_serializers import (
 )
 
 
+# ========== Guard: --snapshot-update must not run under xdist parallelism ==========
+# syrupy and pytest-xdist race on the shared ``.ambr`` files when snapshots are
+# updated with more than one worker, on two observed occasions. One raced update
+# silently TRUNCATED ~6000 lines, leaving a structurally-broken file that still
+# passed on the next read — a confirmed corruption. Separately, a parallel update
+# with a stale ``__pycache__`` made an *untouched* fixture appear to regenerate
+# with markup it had never carried; that one's mechanism was never pinned down,
+# but it did not survive a serial re-run with purged bytecode.
+# ``pyproject.toml`` defaults to ``-n auto --dist=worksteal``, so the unsafe
+# combination is the DEFAULT unless this guard stops it. The fix is always to
+# regenerate serially with ``-n0``. See CONTRIBUTING.md.
+
+
+def _snapshot_update_xdist_conflict(
+    *, is_worker: bool, update_snapshots: bool, workers: int
+) -> Optional[str]:
+    """Return an error message if this is an unsafe ``--snapshot-update`` ×
+    xdist-parallel combination, else ``None``.
+
+    Pure and side-effect-free so the decision is unit-testable in isolation;
+    :func:`pytest_configure` wraps it. Only the xdist *controller* gates
+    (``is_worker`` False): a single worker (``workers <= 1``) or ``-n0``
+    (``workers == 0``) writes serially and is safe, and a parallel run that
+    is *not* updating snapshots (``update_snapshots`` False) never writes.
+    """
+    if is_worker or not update_snapshots or workers <= 1:
+        return None
+    return (
+        f"Refusing to run --snapshot-update under pytest-xdist with {workers} "
+        "workers: parallel writes to the shared .ambr snapshot files race and "
+        "can silently truncate snapshot content (one observed run dropped "
+        "~6000 lines), leaving a broken file that still passes on the next "
+        "read. Regenerate serially instead:\n\n"
+        "    uv run pytest <targets> -n0 --snapshot-update\n"
+    )
+
+
+def pytest_configure(config: "Config") -> None:
+    """Fail fast on an unsafe ``--snapshot-update`` × parallel-xdist run.
+
+    Runs in the controller before workers spawn, so a bad invocation aborts
+    with a clear message rather than corrupting ``.ambr`` files.
+    """
+    message = _snapshot_update_xdist_conflict(
+        is_worker=hasattr(config, "workerinput"),
+        update_snapshots=bool(getattr(config.option, "update_snapshots", False)),
+        workers=getattr(config.option, "numprocesses", None) or 0,
+    )
+    if message:
+        raise pytest.UsageError(message)
+
+
 # ========== Collection cost control ==========
 # Browser test modules import `playwright` and TUI modules import `textual`
 # at module top level. pytest imports every test module during collection and
