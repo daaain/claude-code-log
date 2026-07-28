@@ -34,6 +34,7 @@ from claude_code_log.models import (
 
 from .base import (
     BaseProvider,
+    LoadedSession,
     ProviderTokenTotals,
     SessionInfo,
     file_mtime_iso,
@@ -464,13 +465,24 @@ class CodexProvider(BaseProvider):
         tree or the data dir), with sibling fork-prefix stripping."""
         yield from self._load_in(root, session_id, max_messages)
 
-    def _load_in(
-        self, sessions_root: Path, session_id: str, max_messages: Optional[int]
-    ) -> Iterator[TranscriptEntry]:
+    def _resolve_and_decode(
+        self, sessions_root: Path, session_id: str
+    ) -> tuple[CodexSessionIdentity, list[_DecodedRecord]]:
+        """Resolve ``session_id`` under ``sessions_root`` and decode its rollout
+        once, returning the identity and the post-inherited-prefix records.
+
+        The single expensive step in every path that reads a session: one
+        rollout decode. :meth:`_load_in` and :meth:`load_session_with_totals`
+        share it so a caller that needs both entries and totals pays for one
+        decode rather than two.
+
+        Raises (rather than soft-missing) on an unresolvable or ambiguous id,
+        matching the loader's contract; :meth:`session_token_totals` keeps its
+        own tolerant resolution, since a totals lookup must never crash a
+        render.
+        """
         if not session_id or _SESSION_ID_RE.fullmatch(session_id) is None:
             raise ValueError(f"Invalid session_id: {session_id}")
-        if max_messages is not None and max_messages <= 0:
-            return
 
         index = self._session_index(sessions_root)
         if session_id not in index:
@@ -480,11 +492,53 @@ class CodexProvider(BaseProvider):
             raise ValueError(f"Multiple Codex rollouts have thread id {session_id}")
 
         identity = self._with_inherited_prefix(self._read_identity(paths[0]), index)
-        records = list(self._decode_records(identity.path))
         records = self._without_inherited_prefix(
-            records, identity.inherited_prefix_records
+            list(self._decode_records(identity.path)),
+            identity.inherited_prefix_records,
         )
+        return identity, records
+
+    def _load_in(
+        self, sessions_root: Path, session_id: str, max_messages: Optional[int]
+    ) -> Iterator[TranscriptEntry]:
+        if max_messages is not None and max_messages <= 0:
+            # Still validate the id, so an invalid one raises regardless of
+            # max_messages — the check used to precede this early return.
+            if not session_id or _SESSION_ID_RE.fullmatch(session_id) is None:
+                raise ValueError(f"Invalid session_id: {session_id}")
+            return
+
+        identity, records = self._resolve_and_decode(sessions_root, session_id)
         yield from self._normalize_records(identity, records, max_messages)
+
+    def load_session_with_totals(
+        self, root: Path, session_id: str, max_messages: Optional[int] = None
+    ) -> LoadedSession:
+        """Entries and cumulative totals from a SINGLE rollout decode.
+
+        The base implementation would call the loader and then
+        :meth:`session_token_totals`, and the two repeat the same index lookup,
+        identity resolution, decode and prefix strip — measured at +118 decodes
+        and +636 MB re-decoded across a 34-rollout archive, purely to recompute
+        what the first pass had already produced. Only the *tail* differs:
+        normalize for entries, last cumulative ``token_count`` for totals.
+
+        Totals are computed **before** normalizing, deliberately: the normalize
+        passes are free to transform their input, and computing totals first
+        means correctness here does not depend on whether they do. Do not
+        reorder these two lines.
+        """
+        if max_messages is not None and max_messages <= 0:
+            if not session_id or _SESSION_ID_RE.fullmatch(session_id) is None:
+                raise ValueError(f"Invalid session_id: {session_id}")
+            return LoadedSession(entries=[], token_totals=None)
+
+        identity, records = self._resolve_and_decode(root, session_id)
+        totals = _token_totals_from_records(records)
+        entries: list[TranscriptEntry] = list(
+            self._normalize_records(identity, records, max_messages)
+        )
+        return LoadedSession(entries=entries, token_totals=totals)
 
     def load_session_from_path(
         self, path: Path, max_messages: Optional[int] = None

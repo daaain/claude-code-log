@@ -3123,13 +3123,29 @@ def render_provider_wholesale(
         # Phase 1 — load every session in the project fresh. v1 always re-parses
         # rollouts (cache-backed load is a documented deferral); only rendering
         # is skipped when unchanged.
+        # Entries and cumulative token totals come back from ONE provider call:
+        # a provider reading both from the same file (Codex) would otherwise
+        # re-parse it for the totals, which measured +118 rollout decodes and
+        # +636 MB re-decoded over a 34-rollout archive. The base implementation
+        # of the seam is the old call pair, so providers that don't override it
+        # behave exactly as before.
+        #
+        # The totals ride along with the entries rather than being collected
+        # separately, because they must stay subject to the SAME survival test:
+        # a session emptied by --from-date/--to-date contributes no messages and
+        # must likewise contribute no tokens. Hoisting the totals out of this
+        # filter would let a filtered-out session inflate the project totals —
+        # a behaviour change that no decode count would reveal.
         loaded: list[tuple[SessionInfo, list[TranscriptEntry]]] = []
+        loaded_totals: dict[str, Optional[ProviderTokenTotals]] = {}
         for info in group_infos:
-            messages = list(provider.load_session_under(sessions_root, info.session_id))
+            session = provider.load_session_with_totals(sessions_root, info.session_id)
+            messages = session.entries
             if from_date or to_date:
                 messages = filter_messages_by_date(messages, from_date, to_date)
             if messages:
                 loaded.append((info, messages))
+                loaded_totals[info.session_id] = session.token_totals
 
         if not loaded:
             continue  # everything in this project was empty / filtered out
@@ -3148,10 +3164,7 @@ def render_provider_wholesale(
         # default seam returns None, so a provider without session-level totals
         # leaves every surface exactly as before.
         session_totals: dict[str, Optional[ProviderTokenTotals]] = {
-            info.session_id: provider.session_token_totals(
-                sessions_root, info.session_id
-            )
-            for info, _ in loaded
+            info.session_id: loaded_totals[info.session_id] for info, _ in loaded
         }
         project_token_totals = _sum_provider_token_totals(session_totals.values())
         # Did the provider actually supply cumulative totals? When it did not —

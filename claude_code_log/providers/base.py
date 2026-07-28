@@ -46,6 +46,21 @@ class ProviderTokenTotals:
     total_tokens: int  # record's authoritative total; never recomputed
 
 
+@dataclass(frozen=True)
+class LoadedSession:
+    """One session's rendered entries together with its cumulative token
+    totals, as returned by :meth:`BaseProvider.load_session_with_totals`.
+
+    The pair travels together because the caller needs both and a provider may
+    be able to produce both from a single parse. ``token_totals`` is ``None``
+    for the providers (and the sessions) that record none — omitted, never
+    zeroed, since a zero total is a different claim from an absent one.
+    """
+
+    entries: list[TranscriptEntry]
+    token_totals: Optional[ProviderTokenTotals]
+
+
 @dataclass
 class SessionInfo:
     provider: str
@@ -323,5 +338,31 @@ class BaseProvider(ABC):
         (Codex) overrides this so the wholesale/index path can surface them
         directly, bypassing the per-message summation that would otherwise
         double-count a cumulative figure.
+
+        Still the seam for a totals-only lookup. The wholesale walker uses
+        :meth:`load_session_with_totals` instead, so that a provider whose
+        totals live in the same source it just parsed need not re-read it.
         """
         return None
+
+    def load_session_with_totals(
+        self, root: Path, session_id: str, max_messages: Optional[int] = None
+    ) -> LoadedSession:
+        """Entries *and* cumulative token totals for one session, in one call.
+
+        The wholesale walker needs both, and for a provider that reads them
+        from the same file this is the difference between parsing that file
+        once and parsing it twice — the second parse being work the first
+        already did and discarded, not a recomputation worth caching (the
+        decoded records of one real archive reach 124 MB for a single session,
+        so any cache here would need a byte budget rather than an entry count).
+
+        **The default is exactly the pair of calls the walker used to make**,
+        so a provider that does not override this cannot change behaviour by
+        the seam existing. Override it only when the two can genuinely share
+        work; leave it alone otherwise.
+        """
+        return LoadedSession(
+            entries=list(self.load_session_under(root, session_id, max_messages)),
+            token_totals=self.session_token_totals(root, session_id),
+        )
