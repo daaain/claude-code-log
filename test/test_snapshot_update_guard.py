@@ -13,9 +13,18 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from test.conftest import _snapshot_update_xdist_conflict as _conflict
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# Bound the child pytest run. One of these cases spawns real xdist workers, so
+# an indefinite wait is a plausible failure rather than a theoretical one — and
+# a hang here would burn a CI runner until the job-level timeout killed it, with
+# no message saying which test was stuck. Generous enough that a slow machine
+# never trips it; the point is to fail by name rather than to enforce a budget.
+_CHILD_TIMEOUT_S = 300
 
 
 # ---------------------------------------------------------------------------
@@ -61,21 +70,31 @@ def _run_pytest(tmp_path: Path, *args: str) -> subprocess.CompletedProcess[str]:
     (tmp_path / "conftest.py").write_text(_CONFTEST, encoding="utf-8")
     (tmp_path / "test_trivial.py").write_text(_TEST, encoding="utf-8")
     env = {**os.environ, "PYTHONPATH": str(_REPO_ROOT)}
-    return subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pytest",
-            str(tmp_path),
-            *args,
-            "-p",
-            "no:cacheprovider",
-        ],
-        capture_output=True,
-        text=True,
-        env=env,
-        cwd=str(tmp_path),  # rootdir = tmp_path, so repo pyproject addopts don't apply
-    )
+    argv = [
+        sys.executable,
+        "-m",
+        "pytest",
+        str(tmp_path),
+        *args,
+        "-p",
+        "no:cacheprovider",
+    ]
+    try:
+        return subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=_CHILD_TIMEOUT_S,
+            cwd=str(tmp_path),  # rootdir = tmp_path, so repo addopts don't apply
+        )
+    except subprocess.TimeoutExpired as exc:
+        # Turn an indefinite hang into a named failure that says what was run.
+        pytest.fail(
+            f"child pytest did not finish within {_CHILD_TIMEOUT_S}s: "
+            f"{' '.join(argv[1:])}"
+        )
+        raise AssertionError from exc  # unreachable; pytest.fail raises
 
 
 def test_execution_snapshot_update_parallel_errors(tmp_path):

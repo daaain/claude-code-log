@@ -148,16 +148,17 @@ forward, but you may still meet a suspicious `.ambr` diff — reviewing a PR
 that carries snapshot changes, or reading a historical diff from before the
 guard existed. The rule of thumb:
 
-> Any negative in an `.ambr` diff is the race's signature — a purely
-> additive fixture is `+N/-0`; deletions mean either an intentional content
-> change you can name, or the race.
+> A negative in an `.ambr` diff is a signal to **investigate**, not a
+> verdict. A purely additive regeneration is `+N/-0`, so deletions mean one
+> of three things: an intentional content change you can name, a benign
+> realignment of shared boilerplate, or the race.
 
 To tell which, check at the **block level**, not the raw git diff: compare
 the set of snapshot names (a race removes or rewrites blocks you didn't
 touch) and diff each block's content. Inserting a snapshot or changing
 embedded CSS realigns shared boilerplate and can show hundreds of
-"deletions" with **zero content lost** — a third case, benign, that is
-neither a content change nor the race. A real `-275` was exactly this:
+"deletions" with **zero content lost** — that is the benign case, and it is
+the one a raw `-N` most often turns out to be. A real `-275` was exactly this:
 block-level inspection found one snapshot added, none removed or renamed,
 and seven blocks each `+3` for a single `white-space: pre-wrap` rule, with
 zero content deleted. Confirm either way with a read-only `-n0` run after
