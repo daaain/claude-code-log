@@ -20,6 +20,13 @@ the ``remove``'s inferred version at all; that is what lands the orphan under
 ``_VB``. But the imbalance warning is gated on ``version_key in qc_versions``
 — it fires only for a version that actually had a counted card — and ``_VB``
 has none. So the minimal discriminating fixture *cannot* produce a warning.
+
+That gate is deliberate rather than incidental, which is the other half of why
+padding the fixture would be the wrong fix: an orphaned ``remove`` under a
+version with no counted cards at all is far more likely to be an archive
+artifact than a miscount of ours, so warning there would be noise. The warning
+is scoped to the case where we have positive evidence the pass should have
+paired something.
 The suppression count is the cleaner signal anyway: it is the behaviour, where
 the warning is only our report of it. The "warnings 2 -> 0" shape needs an
 orphan landing under a version that also carries text cards, which the real
