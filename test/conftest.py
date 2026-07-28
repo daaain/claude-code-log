@@ -17,14 +17,15 @@ from test.snapshot_serializers import (
 
 # ========== Guard: --snapshot-update must not run under xdist parallelism ==========
 # syrupy and pytest-xdist race on the shared ``.ambr`` files when snapshots are
-# updated with more than one worker: concurrent writes have TWICE silently
-# corrupted a snapshot file — once ~6000 lines truncated, once a `-274` delete
-# with unrelated structural rewrites — each leaving a structurally-broken file
-# that still passed on the next read, and the second time producing a *false*
-# "the suite has non-isolated rendering state" conclusion. ``pyproject.toml``
-# defaults to ``-n auto --dist=worksteal``, so the unsafe combination is the
-# DEFAULT unless this guard stops it. The fix is always to regenerate serially
-# with ``-n0``. See CONTRIBUTING.md.
+# updated with more than one worker, on two observed occasions. One raced update
+# silently TRUNCATED ~6000 lines, leaving a structurally-broken file that still
+# passed on the next read — a confirmed corruption. Separately, a parallel update
+# with a stale ``__pycache__`` made an *untouched* fixture appear to regenerate
+# with markup it had never carried; that one's mechanism was never pinned down,
+# but it did not survive a serial re-run with purged bytecode.
+# ``pyproject.toml`` defaults to ``-n auto --dist=worksteal``, so the unsafe
+# combination is the DEFAULT unless this guard stops it. The fix is always to
+# regenerate serially with ``-n0``. See CONTRIBUTING.md.
 
 
 def _snapshot_update_xdist_conflict(
@@ -44,9 +45,9 @@ def _snapshot_update_xdist_conflict(
     return (
         f"Refusing to run --snapshot-update under pytest-xdist with {workers} "
         "workers: parallel writes to the shared .ambr snapshot files race and "
-        "can silently DELETE or truncate snapshot content (observed twice), "
-        "leaving a broken file that still passes on the next read. Regenerate "
-        "serially instead:\n\n"
+        "can silently truncate snapshot content (one observed run dropped "
+        "~6000 lines), leaving a broken file that still passes on the next "
+        "read. Regenerate serially instead:\n\n"
         "    uv run pytest <targets> -n0 --snapshot-update\n"
     )
 

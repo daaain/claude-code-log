@@ -1,11 +1,11 @@
 """The ``--snapshot-update`` × xdist-parallel guard (see test/conftest.py).
 
 syrupy and pytest-xdist race on the shared ``.ambr`` files when snapshots are
-updated with more than one worker; it has twice silently corrupted a snapshot
-file. ``pyproject.toml`` defaults to ``-n auto``, so the unsafe combination is
-the default unless the guard rejects it. These tests pin the decision (pure
-function) and prove the end-to-end behaviour by executing real pytest
-subprocesses.
+updated with more than one worker; one raced update silently truncated ~6000
+lines of a snapshot file. ``pyproject.toml`` defaults to ``-n auto``, so the
+unsafe combination is the default unless the guard rejects it. These tests pin
+the decision (pure function) and prove the end-to-end behaviour by executing
+real pytest subprocesses.
 """
 
 import os
