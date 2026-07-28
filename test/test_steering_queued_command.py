@@ -190,10 +190,10 @@ class TestModernQueuedCommand:
             [
                 _user("u1", None, "start"),
                 _assistant("a1", "u1", "working"),
-                _remove("[testhook] monk blocked — permission prompt"),
+                _remove("[testhook] deploy blocked — approval required"),
                 _user("u2", "a1", "next real prompt"),
                 _queued_command(
-                    "qc1", "u2", "[testhook] monk blocked — permission prompt"
+                    "qc1", "u2", "[testhook] deploy blocked — approval required"
                 ),
                 _assistant("a2", "qc1", "ok"),
             ]
@@ -201,7 +201,7 @@ class TestModernQueuedCommand:
 
         # Demoted → rendered as the marker, present exactly once, and NOT
         # promoted to a (would-be empty) steering card.
-        assert "monk blocked — permission prompt" in html
+        assert "deploy blocked — approval required" in html
         assert html.count("User (steering)") == 0
 
     def test_promptless_queued_command_does_not_suppress_remove(self):
@@ -586,8 +586,8 @@ class TestNonStringPromptShapes:
         """
         import logging
 
-        prompt_text = "[testhook] monk blocked — permission prompt"
-        marker = "monk blocked — permission prompt"
+        prompt_text = "[testhook] deploy blocked — approval required"
+        marker = "deploy blocked — approval required"
 
         def build(prompt):
             return [
