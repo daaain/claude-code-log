@@ -60,6 +60,46 @@ These files test:
 - **Edge cases**: Empty files, naming ambiguity, path conversion
 - **CLI operations** with custom projects directory
 
+## Asserting against a full rendered page
+
+`generate_html()` returns a **whole document** — the inlined stylesheets, the
+scripts and the page chrome, all of it ahead of any message content. So a
+substring assertion over that output is **ambiguous by default**, and
+`str.index` / `str.find` return the *earliest* hit, which is very often in the
+CSS.
+
+This is not hypothetical. A test asserting that one image rendered before
+another used the bare words `first` and `second` as its image payloads:
+
+```python
+assert html.index("second") < html.index("first")   # ← cannot fail
+```
+
+`--text-secondary` sits at `claude_code_log/html/templates/components/global_styles.css:87`
+and `.header > span:first-child` at `:180`, both in the `<head>`. The assertion
+compared those two CSS offsets, held for every input, and would have passed
+with the feature it was pinning entirely removed.
+
+**So for any ordering, position or presence claim over a rendered page:**
+
+1. Use tokens that cannot occur in a template, stylesheet, script or prose —
+   not English words, and not anything resembling a CSS identifier.
+2. **Assert the token is unique**, in the test:
+
+   ```python
+   assert html.count("ZZBLOCKALPHAZZ") == 1
+   ```
+
+   Keep this even when the tokens obviously look unique. It is what stops a
+   future stylesheet or template edit silently re-ambiguating the assertion —
+   `first` and `second` were unique-looking too. The one-time check becomes a
+   standing guard so nobody has to remember.
+3. When an assertion is the *only* thing pinning a claim, check that it can
+   fail on its own: neutralise the feature **and** relax the test's other
+   assertions, so that assertion is the only one that could fail — then confirm
+   it does. A green mutation only tells you *some* assertion fired; read which
+   one.
+
 ## Template Tests (`test_template_rendering.py`)
 
 Comprehensive unit tests that verify:
