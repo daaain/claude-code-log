@@ -94,6 +94,14 @@ with the feature it was pinning entirely removed.
    future stylesheet or template edit silently re-ambiguating the assertion —
    `first` and `second` were unique-looking too. The one-time check becomes a
    standing guard so nobody has to remember.
+
+   **Assert the count you actually expect, not always `1`.** Some counts are
+   legitimately higher and the guard is still worth having: **user message text
+   appears twice**, because the renderer emits a markdown view *and* a raw
+   view of the same message, so `count(...) == 2` is correct there and
+   `index()` anchors on the rendered copy. A count guard that asserts the real
+   number still fails when a template change alters it — which is the point.
+   Anchoring on text at all is worth avoiding where an image payload will do.
 3. When an assertion is the *only* thing pinning a claim, check that it can
    fail on its own: neutralise the feature **and** relax the test's other
    assertions, so that assertion is the only one that could fail — then confirm

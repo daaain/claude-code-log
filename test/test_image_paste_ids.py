@@ -430,8 +430,8 @@ class TestFieldSurvivesParsing:
     ) -> dict[str, object]:
         if content is None:
             content = [
-                self._block(f"first:{_PNG_1X1}"),
-                self._block(f"second:{_PNG_1X1}"),
+                self._block(f"ZZFIRSTZZ{_PNG_1X1}"),
+                self._block(f"ZZSECONDZZ{_PNG_1X1}"),
                 {"type": "text", "text": "look at [Image #2]"},
             ]
         return {
@@ -457,10 +457,26 @@ class TestFieldSurvivesParsing:
 
         assert getattr(messages[0], "imagePasteIds", None) == [2, 3]
 
-        # [Image #2] is the FIRST block, so "first" renders where the text
-        # says it does and "second" appends unreferenced ahead of the text.
+        # Guard the ordering anchors before using them (see test/README.md).
+        # Raised in review — and the counts are not all 1, which is why the
+        # guard is worth asserting rather than eyeballing:
+        #   the payloads are unique, but a bare `second:` also occurs twice in
+        #   the page's date-formatting script (`second: '2-digit'`), which is
+        #   why these use ZZ-delimited tokens;
+        #   the user text occurs TWICE by design — the renderer emits a
+        #   markdown view and a raw view of the same message — so 2 is the
+        #   correct expectation and `index` therefore anchors on the rendered
+        #   copy.
+        assert html.count("ZZFIRSTZZ") == 1
+        assert html.count("ZZSECONDZZ") == 1
+        assert html.count("look at") == 2
+
+        # [Image #2] is the FIRST block, so it renders where the text says it
+        # does, and the second block appends unreferenced ahead of the text.
         assert "[Image #2]" not in html
-        assert html.index("second:") < html.index("look at") < html.index("first:")
+        assert (
+            html.index("ZZSECONDZZ") < html.index("look at") < html.index("ZZFIRSTZZ")
+        )
 
     def test_the_inlined_image_is_renderable(self):
         """The resolved block reaches the page as a usable ``data:`` URL — the
