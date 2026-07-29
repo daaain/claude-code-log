@@ -217,7 +217,20 @@ def _create_queued_command_message(
 
     meta = create_meta(transcript)
     result = create_user_message(
-        meta, prompt.items, extract_text_content(prompt.items), is_slash_command=False
+        meta,
+        prompt.items,
+        extract_text_content(prompt.items),
+        is_slash_command=False,
+        # A steering delivery carrying images records its own paste ids, in
+        # the attachment payload rather than at entry top level — the
+        # ``queued_command`` is the carrier here, not the user entry. Nothing
+        # declares the field on the model because ``attachment`` is already a
+        # ``dict[str, Any]`` passthrough, so forgetting *this argument* is the
+        # only way the ids get lost. Without them the ``[Image #N]``
+        # placeholders fall back to the positional reading, which is wrong
+        # wherever the paste counter is not 1..k (see
+        # ``user_factory._image_reference_mapping``).
+        image_paste_ids=payload.get("imagePasteIds"),
     )
     # Defensive only: create_user_message never returns None for a non-empty
     # chunk (it returns None solely on an empty content_list / the empty
