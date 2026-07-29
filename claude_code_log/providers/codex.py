@@ -541,9 +541,20 @@ class CodexProvider(BaseProvider):
         reorder these two lines.
         """
         if max_messages is not None and max_messages <= 0:
-            if not session_id or _SESSION_ID_RE.fullmatch(session_id) is None:
-                raise ValueError(f"Invalid session_id: {session_id}")
-            return LoadedSession(entries=[], token_totals=None)
+            # Nothing to share: with no entries requested there is no decode for
+            # the totals to piggyback on, so the override has no advantage here —
+            # and every attempt to hand-write this branch diverged from the base
+            # in some input. Delegating makes equivalence hold BY CONSTRUCTION
+            # rather than by argument, at the same one decode the base pays.
+            #
+            # Two divergences this avoids, both found by measurement rather than
+            # by reading: returning ``None`` reported no totals for a session
+            # that HAS them (base reports them, since its ``load_session_under``
+            # returns early while ``session_token_totals`` still runs); and
+            # resolving eagerly raised ``FileNotFoundError`` on an unknown id
+            # where the base silently returns empty, because the base never
+            # resolves at all on this path.
+            return super().load_session_with_totals(root, session_id, max_messages)
 
         identity, records = self._resolve_and_decode(root, session_id)
         totals = _token_totals_from_records(records)

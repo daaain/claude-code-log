@@ -35,7 +35,11 @@ from typing import Iterator, Optional
 
 from claude_code_log.converter import render_provider_wholesale
 from claude_code_log.providers import codex as codex_module
-from claude_code_log.providers.base import LoadedSession, ProviderTokenTotals
+from claude_code_log.providers.base import (
+    BaseProvider,
+    LoadedSession,
+    ProviderTokenTotals,
+)
 from claude_code_log.providers.codex import CodexProvider, _DecodedRecord
 
 _CWD = "/proj/decode"
@@ -204,6 +208,61 @@ def test_token_totals_cost_no_extra_decodes(tmp_path: Path) -> None:
         "per-file decode counts differ between the two arms: "
         f"with={dict(with_totals)} without={dict(without_totals)}"
     )
+
+
+def test_override_matches_base_across_max_messages(tmp_path: Path) -> None:
+    """The override must be interchangeable with the base implementation.
+
+    That interchangeability is the entire argument for this seam's shape — the
+    base IS the pair of calls the walker used to make, so a provider that does
+    not override cannot change behaviour. The claim is only worth anything if
+    the provider that DOES override agrees with it, and review found two inputs
+    where it did not:
+
+    * ``max_messages<=0`` returned ``token_totals=None`` for a session that has
+      totals, because the override skipped the totals with the entries. The base
+      reports them: its ``load_session_under`` returns early while
+      ``session_token_totals`` still runs.
+    * resolving eagerly on that path raised ``FileNotFoundError`` for an unknown
+      id where the base returns empty, because the base never resolves there.
+
+    Both were invisible to every other test — the walker never passes
+    ``max_messages<=0`` — so this compares the two implementations directly
+    rather than exercising a caller that cannot reach the difference.
+    """
+    root = tmp_path / "sessions"
+    root.mkdir()
+    _rollout(root, "one", "30000001-0000-4000-8000-000000000001", "2026-01-02")
+    provider = CodexProvider()
+    sid = "30000001-0000-4000-8000-000000000001"
+
+    def outcome(fn):
+        try:
+            loaded = fn()
+            return ("ok", len(loaded.entries), loaded.token_totals)
+        except Exception as exc:  # noqa: BLE001 - the exception type IS the result
+            return (type(exc).__name__,)
+
+    for max_messages in (None, 0, -1, 5):
+        assert outcome(
+            lambda: provider.load_session_with_totals(root, sid, max_messages)
+        ) == outcome(
+            lambda: BaseProvider.load_session_with_totals(
+                provider, root, sid, max_messages
+            )
+        ), f"override diverges from base at max_messages={max_messages}"
+
+    # An id the index does not contain: the base never resolves on the
+    # no-entries path, so it must not raise there and neither may the override.
+    assert outcome(
+        lambda: provider.load_session_with_totals(
+            root, "30000009-0000-4000-8000-000000000009", 0
+        )
+    ) == outcome(
+        lambda: BaseProvider.load_session_with_totals(
+            provider, root, "30000009-0000-4000-8000-000000000009", 0
+        )
+    ), "override diverges from base for an unknown id with no entries requested"
 
 
 def test_filtered_out_session_contributes_no_tokens(tmp_path: Path) -> None:
