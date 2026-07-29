@@ -293,26 +293,78 @@ The keying matters on two axes:
   resumed session can span a harness upgrade, so the version is learned
   from the file rather than assumed.
 - **Per prompt-text** — a `remove` is paired to a `queued_command` by
-  *content*, not arrival order. The 1:1 pairing is **not** airtight in
-  real archives (observed: a 2.1.160 file with 34 removes / 29
-  `queued_command`s). Content-keying makes suppression **lossless and
-  order-independent**: exactly the removes with a matching card are hidden,
-  and any orphan `remove` (no matching card, or one arriving before its
-  paired sibling) still renders as legacy steering rather than being
-  dropped. Rendering an orphan under a version that *did* have cards logs a
-  one-shot WARNING (content preserved, invariant-break made visible). Old
-  transcripts (no `queued_command`, empty budget) render `remove` exactly
-  as before.
+  *content*, not arrival order. Content-keying makes suppression
+  **lossless and order-independent**: exactly the removes with a matching
+  card are hidden, and any orphan `remove` (no matching card, or one
+  arriving before its paired sibling) still renders as legacy steering
+  rather than being dropped. Rendering an orphan under a version that
+  *did* have cards logs a one-shot WARNING.
 
-**Null-content era (≥~2.1.187).** In recent harnesses the paired `remove`
-op carries `content: null` — the steering text lives **only** in the
-`queued_command` attachment. Rendering steering from the attachment is
-therefore not just a de-duplication nicety but the *only* path that
+  That warning states only what the renderer observed — an orphan
+  `remove` with no *counted* card. It deliberately does **not** claim the
+  archive's pairing is broken: an uncounted card is at least as likely to
+  be our own doing. In #294 the pairing was intact (232 removes / 232
+  `queued_command`s in the reported session) and the pre-pass was simply
+  not counting image-bearing cards. A card that renders but cannot be
+  paired warns for itself, naming the shape — see *Prompt shapes* below.
+
+**Null-content era (≤2.1.202).** Older harnesses wrote the paired
+`remove` op with `content: null` — the steering text lived **only** in
+the `queued_command` attachment. Rendering steering from the attachment
+is therefore not just a de-duplication nicety but the *only* path that
 surfaces steering text at all on such transcripts (a null `remove`
 renders nothing, and pre-#284 the attachment was ghosted, so the text was
 silently lost). Null-content removes are dropped by the empty-content
 skip in `_filter_messages` *before* the suppression loop, so they neither
 consume budget nor trip the imbalance warning.
+
+Measured over one machine's full local corpus on 2026-07-28 (5606 files,
+4658 removes): every version **≤ 2.1.202** wrote null content (3836
+removes) and every version **≥ 2.1.205** wrote text (822 removes), with
+no version producing both.
+
+Two limits on that, because this is still a sample:
+
+- **The changeover is located to an interval, not a point.** It lies in
+  **(2.1.202, 2.1.205]**, and the versions in between cannot narrow it
+  here: 2.1.203 does not appear in this corpus at all, and 2.1.204
+  appears (268 entries) but produced *no* `remove` ops. "Sharp" describes
+  the observed versions, not a verified single release.
+- **The floor is a sampling floor.** 2.0.55 is the oldest version present
+  and 2.0.73 the oldest carrying a `remove` — oldest *available*, not
+  oldest *existing*. Nothing here shows what pre-2.0 harnesses wrote.
+
+Within those limits: on current harnesses the `remove` does carry its
+text and the content-keyed pairing is meaningful, and null-content is the
+legacy shape rather than the modern one. (An earlier revision of this
+page put the null-content era at "≥~2.1.187" — backwards, from a sample
+that happened to start there. Stating the bound as a dated interval is
+the guard against this correction hardening the same way.)
+
+**Prompt shapes.** `attachment.prompt` is normally a plain string, but a
+steering delivery carrying an image is written as a **list of content
+blocks** (`[{"type": "text", …}, {"type": "image", …}]`). Both shapes are
+normalized by `attachment_factory.queued_command_prompt_items`, which is
+shared with the renderer's pre-pass so the budget is seeded from exactly
+the cards the factory emits. Accepting only `str` (the pre-#294
+behaviour) dropped the card *and* its image outright while the paired
+`remove` rendered the text alone — and then the orphan warning blamed the
+archive for it.
+
+The helper returns a `pairable` flag alongside the items. A prompt is pairable
+when it is a supported shape — `str` or a list of blocks — **and** yields
+non-empty text, because text is the only thing the budget can key on. Both
+conditions bite: an image-only list renders but cannot be paired, and a
+text-bearing `dict` is not pairable either, however much text it carries. An
+unpairable delivery still renders; its `remove` stays visible rather than
+being suppressed by a card that cannot be shown to match it.
+
+Any *other* shape (neither `str` nor list) is rendered from its `str()` rather
+than dropped — silently discarding a steering delivery is indistinguishable
+from there having been none. Every unpairable card logs a WARNING naming the
+shape it saw, so the next novel shape is diagnosable from the log line alone.
+Note which shapes that covers: `dict` warns, and so does an image-only
+`list[image]`; `list[image,text]` is pairable and warns about nothing.
 
 **Transformer pass.** The `queued_command` prompt is routed through the
 same `create_user_message` classification + plugin-transformer pass as an
@@ -323,6 +375,16 @@ untransformed `UserTextMessage` is (re)wrapped as `UserSteeringMessage`
 legacy steering conversion in `renderer.py`, prevents a transformer's
 `UserTextMessage` *subclass* (which may carry its text in own fields with
 `items=[]`) from being rebuilt into an empty-items steering card.
+
+The list shape goes through the same seam — the normalized content items
+are handed to `create_user_message`, never assembled into a card
+directly — so a transformer sees an image-bearing prompt exactly as it
+sees a string one. The budget key is taken from the *raw* extracted text,
+before any transformer runs, and the legacy `remove` carries that same
+raw text, so a pair still matches even when what renders is a demoted
+marker rather than a steering card. (A transformer that demotes such a
+prompt drops the image with the rest of the original content; that is the
+plugin's rendering decision, the same as for the string path.)
 
 ### User Memory
 
@@ -812,9 +874,10 @@ The `leafUuid` links the summary to the last message of the session.
 - **Rendered**: Only `remove` operations (as `UserSteeringMessage`). On
   modern transcripts (≳2.1.101) a `remove` is suppressed when a paired
   `queued_command` attachment covers its steering text (rendered instead);
-  a `remove` with no matching card — legacy transcripts, or an orphan when
-  the 1:1 pairing breaks — still renders. See "User Steering (Queue Remove
-  / queued_command)" above.
+  a `remove` with no matching card — legacy transcripts, an unpaired
+  `remove`, or one whose card could not be paired (e.g. an image-only
+  prompt) — still renders. See "User Steering (Queue Remove /
+  queued_command)" above.
 - **CSS Class**: `user steering`
 - **Files**: [queue_operation.json](messages/claude-code/system/queue_operation.json)
 
