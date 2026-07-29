@@ -19,6 +19,7 @@ Also provides:
 """
 
 import json
+import logging
 import re
 from typing import Any, Optional, Union, cast
 
@@ -49,6 +50,8 @@ from .task_notification_factory import (
     has_task_notification,
 )
 from .teammate_factory import create_teammate_message, has_teammate_message
+
+logger = logging.getLogger(__name__)
 
 _IMAGE_PLACEHOLDER_RE = re.compile(r"\[Image\s+#(?P<number>[1-9][0-9]*)\]")
 
@@ -478,6 +481,7 @@ def create_user_message(
     content_list: list[ContentItem],
     text_content: str,
     is_slash_command: bool = False,
+    image_paste_ids: Any = None,
 ) -> Optional[UserMessageContent]:
     """Wrapper: build the candidate, then run plugin transformers.
 
@@ -487,9 +491,14 @@ def create_user_message(
     rewriteable by a plugin, not just the generic-text fallback.
     Transformers whose ``applies_to`` doesn't subclass-match the
     candidate's type pass through with no-op cost.
+
+    ``image_paste_ids`` is the carrier's ``imagePasteIds`` field, passed
+    through unvalidated (see :func:`_image_reference_mapping`). It is a
+    parameter rather than a :class:`MessageMeta` field because it describes
+    the content being rendered, not the message.
     """
     candidate = _classify_user_message(
-        meta, content_list, text_content, is_slash_command
+        meta, content_list, text_content, is_slash_command, image_paste_ids
     )
     if candidate is None:
         return None
@@ -502,6 +511,7 @@ def _classify_user_message(
     content_list: list[ContentItem],
     text_content: str,
     is_slash_command: bool = False,
+    image_paste_ids: Any = None,
 ) -> Optional[UserMessageContent]:
     """Create a user message content model from content items.
 
@@ -521,6 +531,7 @@ def _classify_user_message(
         text_content: Pre-extracted text content for pattern detection
         is_slash_command: True for slash command expanded prompts (isMeta=True)
         meta: Message metadata
+        image_paste_ids: The carrier's ``imagePasteIds``, unvalidated
 
     Returns:
         A content model, or None if content_list is empty.
@@ -580,19 +591,20 @@ def _classify_user_message(
     images = [
         image for item in content_list if (image := _as_image_content(item)) is not None
     ]
-    referenced_images = {
-        int(match.group("number"))
-        for item in content_list
-        if hasattr(item, "text")
-        for match in _IMAGE_PLACEHOLDER_RE.finditer(getattr(item, "text"))
-        if int(match.group("number")) <= len(images)
-    }
+    refs = _build_image_refs(images, image_paste_ids, content_list, meta)
 
     # Build items list preserving order, extracting IDE notifications from text
     items: list[
         TextContent | ImageContent | IdeNotificationContent | SystemReminderContent
     ] = []
-    image_number = 0
+    # Where each image block sits in ``items``, so the ones a placeholder
+    # inlined can be removed afterwards. Recording the position rather than
+    # deciding up-front is what keeps the two halves in agreement: a block is
+    # dropped here only because the inliner actually took it, never because a
+    # separate scan predicted it would (a placeholder inside a
+    # ``<system-reminder>`` or an IDE-notification prefix is scanned but never
+    # inlined, and used to cost the block).
+    image_positions: list[tuple[int, int]] = []
 
     for item in content_list:
         # Check for text content
@@ -609,17 +621,171 @@ def _classify_user_message(
             cursor = 0
             for match in SYSTEM_REMINDER_PATTERN.finditer(item_text):
                 _append_user_text_segment(
-                    items, item_text[cursor : match.start()], images
+                    items, item_text[cursor : match.start()], refs
                 )
                 items.append(SystemReminderContent(reminders=[match.group(1).strip()]))
                 cursor = match.end()
-            _append_user_text_segment(items, item_text[cursor:], images)
+            _append_user_text_segment(items, item_text[cursor:], refs)
         elif (image := _as_image_content(item)) is not None:
-            image_number += 1
-            if image_number not in referenced_images:
-                items.append(image)
+            image_positions.append((len(items), len(image_positions)))
+            items.append(image)
+
+    if refs.consumed:
+        inlined = {pos for pos, index in image_positions if index in refs.consumed}
+        items = [item for pos, item in enumerate(items) if pos not in inlined]
 
     return UserTextMessage(items=items, meta=meta)
+
+
+class _ImageRefs:
+    """Resolves ``[Image #N]`` placeholders to image blocks for one message.
+
+    Claude Code records the association explicitly: ``imagePasteIds`` runs
+    parallel to the image content blocks, so ``[Image #N]`` is the block at
+    ``imagePasteIds.index(N)``. N is a paste counter, not a position — it
+    resets when the CLI restarts inside a session that outlives it, and it
+    increments on delete-and-repaste — which is why reading it as a position
+    shows the wrong image without looking wrong.
+
+    Both halves of the rendering share one instance: the inliner takes blocks
+    by number, and the caller appends whichever blocks were not taken. A block
+    therefore cannot be both inlined and appended, nor dropped by one half on
+    a promise the other half never kept.
+    """
+
+    def __init__(self, images: list[ImageContent], mapping: dict[int, int]) -> None:
+        self._images = images
+        self._mapping = mapping
+        self.consumed: set[int] = set()
+
+    def take(self, number: int) -> Optional[ImageContent]:
+        """The block ``[Image #<number>]`` refers to, or None when we cannot
+        show which block that is — the caller then leaves the placeholder as
+        literal text and the block stays detached. A visible gap beats a
+        confident substitution."""
+        index = self._mapping.get(number)
+        if index is None:
+            return None
+        self.consumed.add(index)
+        return self._images[index]
+
+
+def _build_image_refs(
+    images: list[ImageContent],
+    paste_ids: Any,
+    content_list: list[ContentItem],
+    meta: MessageMeta,
+) -> _ImageRefs:
+    """Build the placeholder→block mapping, warning about anything it refuses
+    to map. Every refusal is named separately so a reader can tell an old
+    transcript apart from a malformed one."""
+    # A chunk carrying no image blocks. This happens when
+    # ``chunk_message_content`` splits a record between a block and the text
+    # that references it — a tool_result or thinking block lands between them,
+    # so the text segment sees an empty list rather than the record's blocks.
+    #
+    # This early return is a WARNING suppressor, not the thing that prevents a
+    # substitution. Deleting it changes no rendering (measured): the block-count
+    # bounds below — ``len(numbers) <= len(images)`` on the legacy path,
+    # ``len(ids) != len(images)`` on the recorded one — already refuse
+    # everything when there are no blocks. What deleting it costs is a warning
+    # on every split segment, blaming the transcript for our own chunking.
+    #
+    # That redundancy is load-bearing for a different reason: it is why a
+    # partial block list cannot make this resolver substitute where the older
+    # positional code would not have. Both refuse, for the same underlying
+    # reason — you cannot reference a block that is not in the list you were
+    # handed. No mutation of either mechanism can be pinned by a test here,
+    # because each shields the other; that is a property to keep, not a gap
+    # to fill.
+    if not images:
+        return _ImageRefs(images, {})
+
+    numbers = sorted(
+        {
+            int(match.group("number"))
+            for item in content_list
+            if hasattr(item, "text")
+            for match in _IMAGE_PLACEHOLDER_RE.finditer(getattr(item, "text"))
+        }
+    )
+    mapping, problems = _image_reference_mapping(images, paste_ids, numbers)
+    for problem in problems:
+        logger.warning(
+            "Cannot resolve image reference in message %s of session %s: %s "
+            "- rendering the placeholder literally and leaving the image "
+            "block detached",
+            meta.uuid or "(no uuid)",
+            meta.session_id or "(no session)",
+            problem,
+        )
+    return _ImageRefs(images, mapping)
+
+
+def _image_reference_mapping(
+    images: list[ImageContent],
+    paste_ids: Any,
+    numbers: list[int],
+) -> tuple[dict[int, int], list[str]]:
+    """Map each ``[Image #N]`` number to an index into ``images``.
+
+    Returns the mapping and the reasons for whatever it left out. A number
+    missing from the mapping is one we refuse to resolve, not one that
+    resolves to nothing.
+    """
+    # Nothing references a block, so there is nothing to resolve and nothing
+    # to report — whatever shape the ids are in. Raised in review: only the
+    # legacy branch below short-circuited on this, so a message with image
+    # blocks, a malformed or non-parallel ``imagePasteIds`` and no
+    # ``[Image #N]`` anywhere warned about a resolution nobody asked for. The
+    # warnings exist to explain a placeholder that stayed literal; with no
+    # placeholder there is nothing to explain.
+    if not numbers:
+        return {}, []
+
+    if paste_ids is None:
+        # Old transcripts recorded no association, so the positional reading
+        # is the only one available. Use it only for 1..k with no gaps and no
+        # more numbers than blocks — not because a paste counter cannot
+        # produce that shape (one that has just reset produces exactly it),
+        # but because on that shape the two readings COINCIDE and we do not
+        # have to know which regime we are in: paste ids are distinct, >= 1
+        # and recorded in ascending block order, so a list containing 1..k
+        # must carry them in its first k slots, making index(N) == N-1. The
+        # ascending premise is measured, not guaranteed — see
+        # dev-docs/messages.md. A gap or a number above the block count
+        # breaks the coincidence, and those fail closed.
+        if numbers == list(range(1, len(numbers) + 1)) and len(numbers) <= len(images):
+            return {number: number - 1 for number in numbers}, []
+        return {}, [
+            f"imagePasteIds is absent and the placeholder numbers {numbers} are "
+            f"not 1..{len(numbers)} over {len(images)} image block(s), so their "
+            f"order carries no information"
+        ]
+
+    if not isinstance(paste_ids, list) or not all(
+        isinstance(entry, int) and not isinstance(entry, bool)
+        for entry in cast(list[Any], paste_ids)
+    ):
+        return {}, [f"imagePasteIds is not a list of integers ({paste_ids!r})"]
+
+    ids = cast(list[int], paste_ids)
+    if len(ids) != len(images):
+        return {}, [
+            f"imagePasteIds has {len(ids)} entries but the message carries "
+            f"{len(images)} image block(s)"
+        ]
+    if len(set(ids)) != len(ids):
+        return {}, [f"imagePasteIds repeats a paste id ({ids})"]
+
+    mapping: dict[int, int] = {}
+    problems: list[str] = []
+    for number in numbers:
+        if number in ids:
+            mapping[number] = ids.index(number)
+        else:
+            problems.append(f"[Image #{number}] is not among the paste ids {ids}")
+    return mapping, problems
 
 
 def _append_user_text_segment(
@@ -627,7 +793,7 @@ def _append_user_text_segment(
         TextContent | ImageContent | IdeNotificationContent | SystemReminderContent
     ],
     text: str,
-    images: list[ImageContent],
+    refs: _ImageRefs,
 ) -> None:
     """Process one plain-text segment (between system reminders) into ``items``:
     peel an IDE notification if present, then append the remaining text with
@@ -641,7 +807,7 @@ def _append_user_text_segment(
     else:
         remaining_text = text
     if remaining_text.strip():
-        _append_text_with_images(items, remaining_text, images)
+        _append_text_with_images(items, remaining_text, refs)
 
 
 def _as_image_content(item: ContentItem) -> Optional[ImageContent]:
@@ -657,17 +823,18 @@ def _append_text_with_images(
         TextContent | ImageContent | IdeNotificationContent | SystemReminderContent
     ],
     text: str,
-    images: list[ImageContent],
+    refs: _ImageRefs,
 ) -> None:
-    """Replace valid numbered image references while preserving surrounding text."""
+    """Replace resolvable numbered image references while preserving surrounding
+    text. An unresolvable reference stays in the text as written."""
     cursor = 0
     for match in _IMAGE_PLACEHOLDER_RE.finditer(text):
-        number = int(match.group("number"))
-        if number > len(images):
+        image = refs.take(int(match.group("number")))
+        if image is None:
             continue
         if match.start() > cursor:
             items.append(TextContent(type="text", text=text[cursor : match.start()]))
-        items.append(images[number - 1])
+        items.append(image)
         cursor = match.end()
     if cursor < len(text):
         items.append(TextContent(type="text", text=text[cursor:]))

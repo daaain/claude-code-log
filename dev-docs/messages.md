@@ -624,6 +624,108 @@ class ImageContent(BaseModel, MessageContent):
     source: ImageSource
 ```
 
+### `[Image #N]` placeholders and `imagePasteIds`
+
+A pasted image leaves an `[Image #N]` placeholder in the surrounding text and
+its bytes in a separate content block. The association between the two is
+recorded on the entry, as a sibling of `message`:
+
+```json
+{
+  "type": "user",
+  "imagePasteIds": [4, 6],
+  "message": {"content": [
+    {"type": "image", "source": {"...": "the block for [Image #4]"}},
+    {"type": "image", "source": {"...": "the block for [Image #6]"}},
+    {"type": "text", "text": "compare [Image #6] with [Image #4]"}
+  ]}
+}
+```
+
+The list runs parallel to the image blocks, so **`[Image #N]` is the block at
+`imagePasteIds.index(N)`**.
+
+**N is a paste counter, not a position.** It resets when the CLI restarts
+inside a session that outlives it, and it increments on delete-and-repaste —
+hence non-contiguous runs like `[4, 6, 8]`, numbers far above the block count,
+and the same N naming different images at different points in one session.
+Nothing may therefore be keyed at session scope: the per-message list is both
+necessary and sufficient.
+
+Reading N as a 1-based index into the blocks — what the renderer did before
+this was modelled — fails three ways, in rising order of how hard it is to
+spot: the placeholder stays literal and the image appends detached (N above
+the block count); a block is dropped; or a *different* image renders where the
+placeholder sat, with nothing in the output to mark it wrong.
+
+Resolution lives in `factories/user_factory.py`
+(`_image_reference_mapping`), and both halves of the rendering share one
+mapping: the inliner takes blocks by number, and whatever it did not take is
+appended in place. A block can therefore never be inlined *and* appended, nor
+dropped by a pass that never rendered it — which is what a placeholder buried
+in a `<system-reminder>` or an IDE-notification prefix used to cause.
+
+An up-front scan of the **raw** item text does survive, but only to decide
+whether an absent-field message's numbering is contiguous, and the asymmetry
+is deliberate: a raw scan can only *widen* the set of numbers, a wider set can
+only make contiguity harder to satisfy, so it can over-fail-close and never
+over-substitute. Using post-split text there would be the unsafe choice — a
+hidden placeholder would be invisible to the contiguity check while still
+being a real reference. Consumption deliberately does **not** use that scan,
+and that asymmetry is the fix.
+
+When the association cannot be established the placeholder renders literally,
+the block stays detached, and a warning names the condition — an unknown paste
+id, lists that are not parallel, a repeated id, a malformed field. A visible
+gap beats a confident substitution. The model field is deliberately untyped so
+a malformed value reaches that report rather than failing validation and
+costing the whole entry.
+
+Old transcripts carry no `imagePasteIds`, so position is the only evidence
+available there. It is used only when the numbering is `1..k` with no gaps and
+no more numbers than blocks.
+
+**Why that condition, stated correctly.** Not "a reset counter cannot produce
+`1..k`" — one that has just reset produces exactly that. The condition is
+chosen because on that shape **the two readings coincide**, so the renderer
+does not have to know which regime produced the numbering. Paste ids are
+distinct, `>= 1`, and recorded in ascending block order; a list containing
+`1..k` must therefore hold them in its first `k` slots, which makes
+`ids.index(N)` and `N-1` the same answer. A gap, or a number above the block
+count, breaks the coincidence — and those fail closed.
+
+The ascending premise is **measured, not guaranteed by the format**: 180/180
+distinct messages carrying the field have strictly ascending ids, no
+duplicates, none below 1 (2026-07-28 archive). Scored the other way — pretend
+the field were absent and run the fallback against the recorded ids as ground
+truth — it fires on 24 of the 110 placeholder-bearing messages, refuses the
+other 86, and is correct on all 24. That is evidence from the era that *has*
+the field; the era where the fallback actually applies has no ground truth by
+construction, which is the limit of the argument.
+
+**What this does NOT cover: a chunk-split record.**
+`chunk_message_content` gives `tool_use` / `tool_result` / `thinking` blocks
+their own chunks, so a record whose image block and referencing text are
+separated by one of those yields a text segment that sees **no** image blocks.
+The placeholder then stays literal and the block is appended from its own
+chunk — on this renderer and on every renderer before it, because both refuse
+for the same underlying reason: you cannot reference a block that is not in
+the list you were handed. Two independent mechanisms produce that refusal (an
+early return on the empty list, and the block-count bounds), which is why no
+test pins it — each shields the other from mutation. Zero records in a
+5,606-file archive have image blocks *and* a special block, so this is a
+property to preserve rather than a behaviour anyone relies on.
+
+**How old is "old" — measured, with its limits.** In one real archive scanned
+on 2026-07-28 (5,606 transcript files), every image-bearing message that
+contained an `[Image #N]` placeholder carried the field, across versions
+2.1.84–2.1.220; the oldest records lacking it are twenty at 2.0.73–2.0.74,
+none of which contains a placeholder. That does not pin an introduction
+version: both shapes occur *within* 2.0.74, and the archive's sampling floor
+for image-bearing records is 2.0.73. The repo's own `test/test_data` fixtures
+at 1.0.31, 1.0.43 and 1.0.128 do carry placeholders with no field, which is
+what keeps the positional path live rather than historical.
+
 ---
 
 # Part 2: Assistant Messages (AssistantTranscriptEntry)

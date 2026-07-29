@@ -113,11 +113,13 @@ def _remove(text, *, sid=_SID):
     }
 
 
-def _queued_command(uuid, parent, prompt, *, version=_MODERN, sid=_SID):
+def _queued_command(uuid, parent, prompt, *, version=_MODERN, sid=_SID, paste_ids=None):
     """Modern in-DAG queued_command attachment paired with a 'remove'.
 
     ``prompt=None`` omits the prompt key entirely (a promptless, non-
-    renderable attachment).
+    renderable attachment). ``paste_ids`` sets ``imagePasteIds`` *inside the
+    attachment payload* — this record is its own carrier, unlike a user entry
+    where the field sits at top level beside ``message``.
     """
     attachment = {
         "type": "queued_command",
@@ -127,6 +129,8 @@ def _queued_command(uuid, parent, prompt, *, version=_MODERN, sid=_SID):
     }
     if prompt is not None:
         attachment["prompt"] = prompt
+    if paste_ids is not None:
+        attachment["imagePasteIds"] = paste_ids
     return {
         "type": "attachment",
         "uuid": uuid,
@@ -613,3 +617,67 @@ class TestNonStringPromptShapes:
         assert as_list.count(marker) == as_string.count(marker)
         assert as_list.count("User (steering)") == as_string.count("User (steering)")
         assert TestMixedVersion._imbalance_warnings(caplog) == []
+
+
+class TestSteeringPasteIds:
+    """A steering delivery is its own paste-id carrier.
+
+    ``imagePasteIds`` sits *inside the attachment payload* here, not at entry
+    top level as it does beside a user entry's ``message``. Nothing declares
+    it on the model — ``AttachmentTranscriptEntry.attachment`` is a
+    ``dict[str, Any]`` passthrough — so the only thing that can go wrong is
+    the factory forgetting to hand it to ``create_user_message``, which is
+    exactly what this pins.
+    """
+
+    def test_non_contiguous_paste_ids_resolve_by_id_not_position(self):
+        """Two blocks, ids ``[4, 6]``: ``[Image #6]`` is the SECOND block and
+        ``[Image #4]`` the first.
+
+        The numbering is deliberately non-contiguous so the recorded reading
+        and the positional fallback *disagree*. Under the fallback, `4` and `6`
+        are not 1..k, so neither placeholder resolves at all and both stay as
+        literal text — a contiguous fixture would pass either way and pin
+        nothing.
+        """
+        # Payloads must be tokens that cannot occur anywhere else in a rendered
+        # page. Raised in review: the first version of this test used the bare
+        # words "first"/"second", which appear in the inlined stylesheet
+        # (`:first-child`, `--text-secondary`) *before* any message content — so
+        # the ordering assertion below compared two CSS offsets and was true
+        # whatever the resolver did.
+        alpha, beta = _image_block("ZZBLOCKALPHAZZ"), _image_block("ZZBLOCKBETAZZ")
+        html = _render(
+            [
+                _user("u1", None, "start"),
+                _assistant("a1", "u1", "working"),
+                _user("u2", "a1", "next real prompt"),
+                _queued_command(
+                    "qc1",
+                    "u2",
+                    [
+                        {"type": "text", "text": "compare [Image #6] with [Image #4]"},
+                        alpha,
+                        beta,
+                    ],
+                    paste_ids=[4, 6],
+                ),
+                _assistant("a2", "qc1", "ok"),
+            ]
+        )
+
+        # Guard the guard: each token must occur exactly once, so a future
+        # template or stylesheet change cannot silently re-ambiguate the
+        # ordering assertion the way the original payloads did.
+        assert html.count("ZZBLOCKALPHAZZ") == 1, "alpha payload is not unique"
+        assert html.count("ZZBLOCKBETAZZ") == 1, "beta payload is not unique"
+
+        # Both placeholders resolved — neither survives as literal text.
+        assert "[Image #6]" not in html
+        assert "[Image #4]" not in html
+        # And they resolved BY ID: id 6 is the SECOND block and id 4 the first,
+        # so beta precedes alpha in the rendered card. Positional resolution
+        # would put alpha first (or, for 4/6 specifically, refuse entirely).
+        assert html.index("ZZBLOCKBETAZZ") < html.index("ZZBLOCKALPHAZZ"), (
+            "placeholders resolved positionally, not from the recorded ids"
+        )

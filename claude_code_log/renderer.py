@@ -4932,6 +4932,10 @@ def _render_messages(
                         chunk,  # Pass the chunk items
                         chunk_text,  # Pre-extracted text for pattern detection
                         is_slash_command=chunk_meta.is_meta,
+                        # Sibling of ``message``, not inside it — the entry
+                        # carries the [Image #N] ↔ block association that the
+                        # content alone does not.
+                        image_paste_ids=getattr(message, "imagePasteIds", None),
                     )
                 elif effective_type == "assistant":
                     # Pass usage only on first chunk
