@@ -274,7 +274,10 @@ class TestLegacyTranscripts:
             )
 
         assert _tags(model) == ["<b>", " then ", "<a>"]
-        assert caplog.text == ""
+        # Scoped to this resolver's own message rather than `caplog.text == ""`:
+        # an unrelated warning from any other logger would otherwise fail this
+        # for a reason that has nothing to do with paste-id resolution.
+        assert "Cannot resolve image reference" not in caplog.text
 
     def test_a_subset_starting_at_one_is_still_positional(self):
         """Two blocks, only the first referenced — the numbering is consistent

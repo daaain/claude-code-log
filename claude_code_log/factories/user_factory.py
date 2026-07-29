@@ -733,6 +733,16 @@ def _image_reference_mapping(
     missing from the mapping is one we refuse to resolve, not one that
     resolves to nothing.
     """
+    # Nothing references a block, so there is nothing to resolve and nothing
+    # to report — whatever shape the ids are in. Raised in review: only the
+    # legacy branch below short-circuited on this, so a message with image
+    # blocks, a malformed or non-parallel ``imagePasteIds`` and no
+    # ``[Image #N]`` anywhere warned about a resolution nobody asked for. The
+    # warnings exist to explain a placeholder that stayed literal; with no
+    # placeholder there is nothing to explain.
+    if not numbers:
+        return {}, []
+
     if paste_ids is None:
         # Old transcripts recorded no association, so the positional reading
         # is the only one available. Use it only for 1..k with no gaps and no
@@ -745,8 +755,6 @@ def _image_reference_mapping(
         # ascending premise is measured, not guaranteed — see
         # dev-docs/messages.md. A gap or a number above the block count
         # breaks the coincidence, and those fail closed.
-        if not numbers:
-            return {}, []
         if numbers == list(range(1, len(numbers) + 1)) and len(numbers) <= len(images):
             return {number: number - 1 for number in numbers}, []
         return {}, [

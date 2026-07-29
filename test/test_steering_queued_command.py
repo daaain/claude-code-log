@@ -640,7 +640,13 @@ class TestSteeringPasteIds:
         literal text — a contiguous fixture would pass either way and pin
         nothing.
         """
-        first, second = _image_block("first"), _image_block("second")
+        # Payloads must be tokens that cannot occur anywhere else in a rendered
+        # page. Raised in review: the first version of this test used the bare
+        # words "first"/"second", which appear in the inlined stylesheet
+        # (`:first-child`, `--text-secondary`) *before* any message content — so
+        # the ordering assertion below compared two CSS offsets and was true
+        # whatever the resolver did.
+        alpha, beta = _image_block("ZZBLOCKALPHAZZ"), _image_block("ZZBLOCKBETAZZ")
         html = _render(
             [
                 _user("u1", None, "start"),
@@ -651,8 +657,8 @@ class TestSteeringPasteIds:
                     "u2",
                     [
                         {"type": "text", "text": "compare [Image #6] with [Image #4]"},
-                        first,
-                        second,
+                        alpha,
+                        beta,
                     ],
                     paste_ids=[4, 6],
                 ),
@@ -660,11 +666,18 @@ class TestSteeringPasteIds:
             ]
         )
 
+        # Guard the guard: each token must occur exactly once, so a future
+        # template or stylesheet change cannot silently re-ambiguate the
+        # ordering assertion the way the original payloads did.
+        assert html.count("ZZBLOCKALPHAZZ") == 1, "alpha payload is not unique"
+        assert html.count("ZZBLOCKBETAZZ") == 1, "beta payload is not unique"
+
         # Both placeholders resolved — neither survives as literal text.
         assert "[Image #6]" not in html
         assert "[Image #4]" not in html
-        # And they resolved BY ID: #6 is the second block, #4 the first, so
-        # "second" precedes "first" in the rendered card.
-        assert html.index("second") < html.index("first"), (
+        # And they resolved BY ID: id 6 is the SECOND block and id 4 the first,
+        # so beta precedes alpha in the rendered card. Positional resolution
+        # would put alpha first (or, for 4/6 specifically, refuse entirely).
+        assert html.index("ZZBLOCKBETAZZ") < html.index("ZZBLOCKALPHAZZ"), (
             "placeholders resolved positionally, not from the recorded ids"
         )
