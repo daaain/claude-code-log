@@ -226,9 +226,21 @@ def test_override_matches_base_across_max_messages(tmp_path: Path) -> None:
     * resolving eagerly on that path raised ``FileNotFoundError`` for an unknown
       id where the base returns empty, because the base never resolves there.
 
-    Both were invisible to every other test — the walker never passes
-    ``max_messages<=0`` — so this compares the two implementations directly
-    rather than exercising a caller that cannot reach the difference.
+    **DO NOT rewrite this as a caller-driven test.** The subject under test is
+    the *pair* of implementations, not either side reached through a caller —
+    which is the general shape for any "override must be interchangeable with
+    base" claim. The walker never passes ``max_messages<=0``, so no amount of
+    driving it can reach the input.
+
+    That is verified, not assumed: with the ``token_totals=None`` defect restored,
+    a full wholesale render still shows the totals and a caller-driven test
+    **passes**, while this test fails. So "simplifying" it into a render-and-assert
+    would silently stop covering anything.
+
+    Both wrong versions fail this test on *different* assertions — the ``None``
+    variant at ``max_messages=0``, the eager-resolve variant on the unknown id —
+    which is what shows it discriminates between them rather than merely
+    reddening when something is off.
     """
     root = tmp_path / "sessions"
     root.mkdir()
