@@ -190,9 +190,14 @@ test/test_data/*.html
 local.ps1
 
 
-# Integration test data - exclude generated cache/HTML, keep JSONL files
+# Integration test data - exclude generated cache/HTML/images, keep JSONL files
 test/test_data/real_projects/*/cache/
 test/test_data/real_projects/*/*.html
 test/test_data/real_projects/index.html
+# Referenced-image export writes images/ next to the HTML it references, so a
+# render pointed at this corpus leaves binaries here. Same generated class as
+# the two rules above, which predate that export mode. Use `git add -f` if an
+# image ever needs to be a real fixture.
+test/test_data/real_projects/*/images/
 # SQLite cache the CLI drops into a projects dir when run against test data
 claude-code-log-cache.db
