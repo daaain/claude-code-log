@@ -214,6 +214,35 @@ class TestFailClosed:
         assert _tags(model) == ["<a>", "<b>", "[Image #1] and [Image #2]"]
         assert "has 1 entries but the message carries 2 image block(s)" in caplog.text
 
+    def test_no_placeholder_means_nothing_to_report_or_resolve(
+        self, caplog: pytest.LogCaptureFixture
+    ):
+        """Bad ids with no `[Image #N]` anywhere: silent, and the blocks render.
+
+        The warnings exist to explain a placeholder that stayed literal, so with
+        no placeholder there is nothing to explain — reporting anyway trains a
+        reader to ignore the warning that does matter. Raised in review.
+
+        One test rather than two because there is one mechanism: the guard sits
+        *above* the recorded/legacy branch split, so ids-present and ids-absent
+        reach the same early return. It covers both halves of what could go
+        wrong — the spurious warning, and the images still reaching the page,
+        since an early return in a resolver is exactly the shape that dropped
+        them before.
+        """
+        with caplog.at_level(logging.WARNING):
+            model = _render(
+                [
+                    _image("a"),
+                    _image("b"),
+                    TextContent(type="text", text="no placeholder in this text"),
+                ],
+                paste_ids=[1],  # non-parallel, and irrelevant: nothing refers
+            )
+
+        assert "Cannot resolve image reference" not in caplog.text
+        assert _tags(model) == ["<a>", "<b>", "no placeholder in this text"]
+
     def test_malformed_field_is_reported_not_coerced(
         self, caplog: pytest.LogCaptureFixture
     ):
