@@ -20,12 +20,15 @@ Each test is written so neutering its target guard turns it RED (e.g. folding
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator, Optional
 
 from claude_code_log.converter import (
     _sum_provider_token_totals,
     render_provider_wholesale,
 )
+import pytest
+
+from claude_code_log.models import TranscriptEntry
 from claude_code_log.providers.base import (
     BaseProvider,
     ProviderTokenTotals,
@@ -33,6 +36,7 @@ from claude_code_log.providers.base import (
 )
 from claude_code_log.providers.codex import (
     CodexProvider,
+    _DecodedRecord,
     _map_cumulative_usage,
     _token_totals_from_records,
 )
@@ -118,7 +122,10 @@ def _rollout_with_tokens(
                 "payload": {"type": "agent_message", "message": f"step {i}"},
             }
         )
-        records.append(_token_count_record(tu, f"2026-01-02T00:00:0{3 + i}Z"))
+        # Zero-padded: an unpadded f"…:0{3 + i}" emits "00:00:010Z" from the
+        # 7th record on, and this fixture is load-bearing for tests that
+        # assert on the literal timestamp.
+        records.append(_token_count_record(tu, f"2026-01-02T00:00:{3 + i:02d}Z"))
     rel_path = Path(rel)
     path = tmp / rel_path.parent / f"rollout-{rel_path.name}"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -126,13 +133,54 @@ def _rollout_with_tokens(
     return path
 
 
-def _decoded(records_source: Path) -> list[object]:
+def _decoded(records_source: Path) -> list[_DecodedRecord]:
+    """Decoded records, typed as what ``_decode_records`` yields.
+
+    Returning ``list[object]`` forced an ``arg-type`` suppression at every call
+    site, which meant the type checkers could not verify the very contract these
+    tests exist to pin.
+    """
     return list(CodexProvider()._decode_records(records_source))
 
 
 # --------------------------------------------------------------------------
 # _map_cumulative_usage — the mapping onto index columns
 # --------------------------------------------------------------------------
+def test_no_token_field_accepts_a_boolean() -> None:
+    """``bool`` is an ``int`` subclass, so a JSON ``true`` must not become a 1
+    in any token column.
+
+    Raised in review for the *component* fields after the same exclusion had
+    been added for ``total_tokens`` only — the record-selection guard rejects a
+    boolean total, but a record with a well-formed total and a boolean
+    ``input_tokens`` reaches the mapping untouched. One supplier fixed, the
+    others left green: fixing only the field named in the report would repeat
+    exactly that.
+
+    So the loop derives its field list from the usage dict itself rather than
+    naming fields inline. Add a component to ``_usage``/the mapping and it is
+    covered here automatically; an inline list of four names would silently
+    stop covering the fifth.
+    """
+    baseline = _usage(100, 20, 10, 0, 110)
+
+    for field in baseline:
+        poisoned = {**baseline, field: True}
+        totals = _map_cumulative_usage(poisoned)
+        assert 1 not in (
+            totals.input_tokens,
+            totals.cache_read_tokens,
+            totals.output_tokens,
+            totals.total_tokens,
+        ), f"boolean in {field!r} produced a phantom 1: {totals}"
+
+    # And False must not read as a legitimate zero-from-data either — same
+    # coercion, opposite value, and it would silently zero a real column.
+    for field in baseline:
+        totals = _map_cumulative_usage({**baseline, field: False})
+        assert isinstance(totals.total_tokens, int)
+
+
 def test_map_subtraction_is_disjoint() -> None:
     """THE double-count pin: billable input EXCLUDES the cached portion, and
     cache_read is the SOLE home of the cached tokens. If a future edit folded
@@ -207,7 +255,7 @@ def test_last_record_wins_not_sum(tmp_path: Path) -> None:
             _usage(500, 100, 40, 0, 540),  # <- the session total
         ],
     )
-    result = _token_totals_from_records(_decoded(path))  # type: ignore[arg-type]
+    result = _token_totals_from_records(_decoded(path))
     assert result is not None
     assert result.total_tokens == 540  # last record, not 110+325+540
     assert result.input_tokens == 400  # 500 - 100
@@ -230,7 +278,7 @@ def test_last_record_wins_across_compaction(tmp_path: Path) -> None:
             _usage(2100, 1800, 95, 22, 2195),  # post-compaction: cumulative up
         ],
     )
-    result = _token_totals_from_records(_decoded(path))  # type: ignore[arg-type]
+    result = _token_totals_from_records(_decoded(path))
     assert result is not None
     assert result.total_tokens == 2195  # last cumulative record, monotonic
 
@@ -245,7 +293,7 @@ def test_none_when_no_token_count(tmp_path: Path) -> None:
         "/p",
         [],  # no token_count records
     )
-    assert _token_totals_from_records(_decoded(path)) is None  # type: ignore[arg-type]
+    assert _token_totals_from_records(_decoded(path)) is None
 
 
 def test_monotonicity_violation_omits_totals(tmp_path: Path) -> None:
@@ -266,7 +314,7 @@ def test_monotonicity_violation_omits_totals(tmp_path: Path) -> None:
             _usage(300, 60, 20, 5, 320),  # DECREASE: 320 < 2090 → omit
         ],
     )
-    assert _token_totals_from_records(_decoded(path)) is None  # type: ignore[arg-type]
+    assert _token_totals_from_records(_decoded(path)) is None
 
 
 # --------------------------------------------------------------------------
@@ -448,7 +496,9 @@ def test_wholesale_never_leaks_account_level_data(tmp_path: Path) -> None:
 # synthetic pins.
 
 
-def test_malformed_total_does_not_omit_the_session(tmp_path: Path, caplog) -> None:
+def test_malformed_total_does_not_omit_the_session(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     """A record whose ``total_tokens`` is absent or not an int must be SKIPPED,
     not coerced to 0.
 
@@ -493,9 +543,11 @@ def test_malformed_total_does_not_omit_the_session(tmp_path: Path, caplog) -> No
     # the first offending record's timestamp, so the reader can open the
     # rollout at that record instead of re-scanning it. The malformed record
     # is the second token_count, at ...:04Z.
-    warnings = [
-        r.message for r in caplog.records if "total_tokens was" in r.getMessage()
-    ]
+    # Filter and collect through the SAME accessor. ``r.message`` is only
+    # populated once a formatter has run over the record, so collecting it while
+    # filtering on ``r.getMessage()`` can see something different from what was
+    # matched — and only the count is used here anyway, so collect the records.
+    warnings = [r for r in caplog.records if "total_tokens was" in r.getMessage()]
     assert len(warnings) == 1
     assert "absent" in caplog.text
     assert "skipped 1 record" in caplog.text
@@ -504,7 +556,9 @@ def test_malformed_total_does_not_omit_the_session(tmp_path: Path, caplog) -> No
     assert "monotonicity broken" not in caplog.text
 
 
-def test_malformed_total_names_the_type_it_saw(tmp_path: Path, caplog) -> None:
+def test_malformed_total_names_the_type_it_saw(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     """The warning names the actual shape, so the next surprise is diagnosable
     from the log line. A JSON string total reports ``str``.
 
@@ -538,7 +592,9 @@ def test_malformed_total_names_the_type_it_saw(tmp_path: Path, caplog) -> None:
     assert "str" in caplog.text
 
 
-def test_real_counter_reset_still_omits_totals(tmp_path: Path, caplog) -> None:
+def test_real_counter_reset_still_omits_totals(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     """The boundary of the change: skipping malformed records must not have
     disarmed the guard for a GENUINE decrease between two valid records."""
     import logging
@@ -584,13 +640,15 @@ class _PerMessageUsageProvider(BaseProvider):
     def get_session_format(self) -> str:
         return "permsg"
 
-    def get_data_dir(self):
+    def get_data_dir(self) -> Optional[Path]:
         return None
 
-    def discover_sessions(self):
+    def discover_sessions(self) -> Iterator[SessionInfo]:
         return iter(())
 
-    def load_session(self, session_id, max_messages=None):
+    def load_session(
+        self, session_id: str, max_messages: Optional[int] = None
+    ) -> Iterator[TranscriptEntry]:
         return iter(())
 
     def _info(self, root: Path) -> SessionInfo:
@@ -601,10 +659,12 @@ class _PerMessageUsageProvider(BaseProvider):
             source_path=root / "permsg.jsonl",
         )
 
-    def discover_sessions_under(self, root: Path):
+    def discover_sessions_under(self, root: Path) -> Iterator[SessionInfo]:
         yield self._info(root)
 
-    def load_session_under(self, root: Path, session_id, max_messages=None):
+    def load_session_under(
+        self, root: Path, session_id: str, max_messages: Optional[int] = None
+    ) -> Iterator[TranscriptEntry]:
         from claude_code_log.factories.transcript_factory import create_transcript_entry
 
         for index in (1, 2):

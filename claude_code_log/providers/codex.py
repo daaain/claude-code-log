@@ -354,6 +354,18 @@ def _map_cumulative_usage(usage: dict[str, Any]) -> ProviderTokenTotals:
     """
 
     def _as_int(value: Any) -> int:
+        """Every component field routes through here, so this is the ONE place
+        the int predicate is stated — add a new component and it is covered by
+        construction rather than by remembering to repeat the check.
+
+        ``bool`` is excluded explicitly because it is an ``int`` subclass: a JSON
+        ``true`` would otherwise contribute a phantom 1 to a token column. The
+        record-selection guard in :func:`_token_totals_from_records` already
+        excludes bools for ``total_tokens``; it did not cover the components,
+        which reach this mapping on any record whose *total* is well-formed.
+        """
+        if isinstance(value, bool):
+            return 0
         return value if isinstance(value, int) else 0
 
     input_tokens = _as_int(usage.get("input_tokens"))

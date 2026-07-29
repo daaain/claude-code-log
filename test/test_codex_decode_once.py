@@ -67,7 +67,7 @@ def _rollout(tmp: Path, name: str, thread_id: str, day: str, steps: int = 2) -> 
     for i in range(steps):
         records.append(
             {
-                "timestamp": f"{day}T00:00:0{2 + i}Z",
+                "timestamp": f"{day}T00:00:{2 + i:02d}Z",
                 "type": "event_msg",
                 "payload": {"type": "agent_message", "message": f"step {i}"},
             }
@@ -75,7 +75,7 @@ def _rollout(tmp: Path, name: str, thread_id: str, day: str, steps: int = 2) -> 
         cumulative = 100 * (i + 1)
         records.append(
             {
-                "timestamp": f"{day}T00:00:0{2 + i}Z",
+                "timestamp": f"{day}T00:00:{2 + i:02d}Z",
                 "type": "event_msg",
                 "payload": {
                     "type": "token_count",
