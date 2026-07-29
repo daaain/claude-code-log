@@ -161,24 +161,48 @@ def test_no_token_field_accepts_a_boolean() -> None:
     naming fields inline. Add a component to ``_usage``/the mapping and it is
     covered here automatically; an inline list of four names would silently
     stop covering the fifth.
+
+    ``reasoning_output_tokens`` is the one field a boolean cannot perturb, and
+    that is by design rather than a gap: the mapping never reads it (``output``
+    already subsumes reasoning — see
+    :func:`test_map_output_includes_reasoning_not_added`), so True, False and
+    absent are all identical. If that ever stops being true, this loop starts
+    covering it without being edited.
     """
-    baseline = _usage(100, 20, 10, 0, 110)
+    # THE CACHE MUST BE ZERO HERE. `input = max(input_tokens - cached, 0)`, so
+    # with a non-zero cache an accepted `True` (== 1) clamps to 0 — exactly what
+    # a correctly-rejected boolean also produces — and the field becomes
+    # unobservable. Two earlier versions of this test were vacuous for
+    # `input_tokens`, the field the report actually named: first by searching the
+    # output for a literal 1, then by comparing True against 0, which are
+    # indistinguishable once both clamp. Verified by mutation: with cached=20 the
+    # broken mapping was caught only on `cached_input_tokens`.
+    baseline = _usage(100, 0, 10, 0, 110)
 
+    # Assert the boolean is treated as the malformed value it is — identical to
+    # the field being absent — rather than hunting for the wrong value in the
+    # output. This holds per field, so no field can hide behind another.
     for field in baseline:
-        poisoned = {**baseline, field: True}
-        totals = _map_cumulative_usage(poisoned)
-        assert 1 not in (
-            totals.input_tokens,
-            totals.cache_read_tokens,
-            totals.output_tokens,
-            totals.total_tokens,
-        ), f"boolean in {field!r} produced a phantom 1: {totals}"
+        with_bool = _map_cumulative_usage({**baseline, field: True})
+        with_absent = _map_cumulative_usage(
+            {k: v for k, v in baseline.items() if k != field}
+        )
+        assert with_bool == with_absent, (
+            f"boolean in {field!r} was not treated as malformed: "
+            f"{with_bool} != {with_absent}"
+        )
 
-    # And False must not read as a legitimate zero-from-data either — same
-    # coercion, opposite value, and it would silently zero a real column.
+    # False likewise. Same coercion, opposite value: it would silently zero a
+    # real column rather than inventing a 1, which no "look for a 1" assertion
+    # could ever see.
     for field in baseline:
-        totals = _map_cumulative_usage({**baseline, field: False})
-        assert isinstance(totals.total_tokens, int)
+        with_false = _map_cumulative_usage({**baseline, field: False})
+        with_absent = _map_cumulative_usage(
+            {k: v for k, v in baseline.items() if k != field}
+        )
+        assert with_false == with_absent, (
+            f"boolean False in {field!r} was not treated as malformed"
+        )
 
 
 def test_map_subtraction_is_disjoint() -> None:
