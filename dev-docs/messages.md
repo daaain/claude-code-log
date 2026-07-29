@@ -351,15 +351,20 @@ behaviour) dropped the card *and* its image outright while the paired
 `remove` rendered the text alone — and then the orphan warning blamed the
 archive for it.
 
-The helper returns a `pairable` flag alongside the items. `pairable` is
-exactly "has non-empty text", because text is the only thing the budget
-can key on; an image-only delivery renders but cannot be paired, so its
-`remove` stays visible rather than being suppressed by a card that cannot
-be shown to match it. Any *other* shape (neither `str` nor list) is
-rendered from its `str()` rather than dropped — silently discarding a
-steering delivery is indistinguishable from there having been none — and
-logs a WARNING naming the shape it saw (`dict`, `list[image,text]`, …) so
-the next novel shape is diagnosable from the log line alone.
+The helper returns a `pairable` flag alongside the items. A prompt is pairable
+when it is a supported shape — `str` or a list of blocks — **and** yields
+non-empty text, because text is the only thing the budget can key on. Both
+conditions bite: an image-only list renders but cannot be paired, and a
+text-bearing `dict` is not pairable either, however much text it carries. An
+unpairable delivery still renders; its `remove` stays visible rather than
+being suppressed by a card that cannot be shown to match it.
+
+Any *other* shape (neither `str` nor list) is rendered from its `str()` rather
+than dropped — silently discarding a steering delivery is indistinguishable
+from there having been none. Every unpairable card logs a WARNING naming the
+shape it saw, so the next novel shape is diagnosable from the log line alone.
+Note which shapes that covers: `dict` warns, and so does an image-only
+`list[image]`; `list[image,text]` is pairable and warns about nothing.
 
 **Transformer pass.** The `queued_command` prompt is routed through the
 same `create_user_message` classification + plugin-transformer pass as an

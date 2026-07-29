@@ -133,10 +133,13 @@ def queued_command_prompt_items(
     ``pairable=False`` and the caller is expected to say so out loud —
     see :func:`_create_queued_command_message`.
 
-    ``pairable`` is exactly "has non-empty text", because text is the only
-    thing the suppression budget can key on. An image-only delivery is
-    renderable but not pairable; its paired ``remove``, which carries no
-    matching text either, simply stays visible.
+    ``pairable`` requires **both** a supported shape (``str`` or a list of
+    blocks) and non-empty text — text because it is the only thing the
+    suppression budget can key on, and shape because a ``str()``-rendered
+    fallback is not something we can claim to have matched. Both conditions
+    bite independently: an image-only list is renderable but not pairable,
+    and a text-bearing ``dict`` is not pairable either. Either way the paired
+    ``remove`` simply stays visible.
 
     Returns ``None`` only when there is nothing at all to render (no
     ``prompt`` key, or an empty/whitespace one) — the one case where
