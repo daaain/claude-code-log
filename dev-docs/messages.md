@@ -287,7 +287,10 @@ What the reader sees when pairing does *not* work out is the part worth stating
 here: nothing is ever dropped. A `remove` with no matching card renders as
 legacy steering, and a card that renders but cannot be paired leaves its
 `remove` visible rather than suppressing it on a match that cannot be shown.
-Both paths log a warning naming what was observed.
+A non-pairable card always warns; an unmatched `remove` warns only where that
+session and version did produce a counted card — with no card there is nothing
+for it to be imbalanced against, so a legacy-only transcript stays silent — and
+then only once per `(session, version)`.
 
 **Prompt shapes.** `attachment.prompt` is normally a plain string, but a
 steering delivery carrying an image is written as a **list of content blocks**
