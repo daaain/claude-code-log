@@ -476,7 +476,13 @@ class CodexProvider(BaseProvider):
 
     def _resolve_prefixes(self, index: _SessionIndex) -> list[CodexSessionIdentity]:
         """Every discovered identity, each fork's inherited prefix computed once
-        and retained on the index for the loads that follow."""
+        and retained on the index for the loads that follow.
+
+        Grouped by parent: a parent shared by *k* forks is decoded **once**, not
+        once per fork. Peak residency is one parent's candidate list plus one
+        child's -- the same pair the ungrouped path already held transiently --
+        so the reduction costs no memory.
+        """
         # A duplicated thread id is corrupt/ambiguous. Discovery remains useful
         # and deterministic by retaining the lexicographically first path;
         # loading that id reports the ambiguity instead of guessing.
@@ -488,10 +494,31 @@ class CodexProvider(BaseProvider):
                 )
 
         order = list(index.headers)
+        pending: dict[Path, list[CodexSessionIdentity]] = {}
         for thread_id in order:
-            index.resolved[thread_id] = self._with_inherited_prefix(
-                index.headers[thread_id], index.paths
+            identity = index.headers[thread_id]
+            parent_id = identity.parent_thread_id
+            parent_paths = index.paths.get(parent_id, []) if parent_id else []
+            if len(parent_paths) != 1:
+                # No uniquely resolvable parent: nothing to inherit, and that
+                # answer is final rather than merely uncomputed.
+                index.resolved[thread_id] = identity
+                continue
+            pending.setdefault(parent_paths[0], []).append(identity)
+
+        for parent_path, children in pending.items():
+            parent_records = self._prefix_candidates(
+                list(self._decode_records(parent_path))
             )
+            for identity in children:
+                index.resolved[identity.thread_id] = self._prefix_against(
+                    identity, parent_records
+                )
+            # Release the parent before starting the next group, so residency is
+            # one parent's candidates and not the corpus's.
+            del parent_records
+
+        # Emit in tree-walk order, whatever order the grouping resolved them in.
         return [index.resolved[thread_id] for thread_id in order]
 
     def load_session(
@@ -731,11 +758,27 @@ class CodexProvider(BaseProvider):
         parent_paths = index.get(parent_id, []) if parent_id else []
         if len(parent_paths) != 1:
             return identity
-        child_records = self._prefix_candidates(
-            list(self._decode_records(identity.path))
-        )
         parent_records = self._prefix_candidates(
             list(self._decode_records(parent_paths[0]))
+        )
+        return self._prefix_against(identity, parent_records)
+
+    def _prefix_against(
+        self,
+        identity: CodexSessionIdentity,
+        parent_records: list[_DecodedRecord],
+    ) -> CodexSessionIdentity:
+        """Resolve *identity*'s inherited prefix against already-decoded parent
+        records.
+
+        Split out of :meth:`_with_inherited_prefix` so discovery can decode a
+        shared parent once and measure every one of its children against it.
+        The wrapper stays the entry point for a standalone lookup that never ran
+        discovery, which keeps the grouped path a shortcut rather than the only
+        correct path.
+        """
+        child_records = self._prefix_candidates(
+            list(self._decode_records(identity.path))
         )
         prefix_length = self._contiguous_prefix_length(child_records, parent_records)
         if prefix_length == 0 and identity.spawn_call_id:

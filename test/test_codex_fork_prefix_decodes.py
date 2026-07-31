@@ -142,6 +142,12 @@ def test_load_does_not_recompute_the_inherited_prefix(tmp_path: Path) -> None:
     load path re-resolved the identity — decoding the child *and* its parent
     again — and then decoded the child a third time for its records.
 
+    The equality is deliberately exact rather than an upper bound, and it earns
+    that in both directions: a count that is too *low* means a child's prefix
+    comparison never happened. Verified — an implementation that resolves one
+    child per parent group and copies the answer to its siblings drops those
+    siblings to 2, and this test catches it there as well as at 6.
+
     Asserted over the *children* only. The shared parent's count is not a
     property of this change: it still scales with the fan-out until discovery
     groups by parent, which
@@ -223,3 +229,60 @@ def test_zero_prefix_fork_is_not_recomputed(tmp_path: Path) -> None:
     assert counts[parent.name] == 3, (
         f"parent re-decoded for a zero-prefix child's recomputation: {dict(counts)}"
     )
+
+
+def test_shared_parent_decode_count_is_independent_of_child_count(
+    tmp_path: Path,
+) -> None:
+    """A parent shared by *k* forks is decoded once, not *k* times.
+
+    Stated as invariance to *k* rather than as a magic number: the ungrouped
+    path decodes the parent once per child, so its count *scales* with the fan
+    out (4 at k=2, 6 at k=4), while grouping leaves it flat. Invariance is the
+    property; the absolute value is asserted too, so a regression that makes
+    both trees equally bad still fails.
+
+    The absolute 3 is 1 header read (``_read_identity`` during the index build,
+    which early-exits on the first record) + 1 full decode as the shared parent
+    during discovery + 1 full decode for the parent's own load.
+    """
+    small, _ = _fork_tree(tmp_path / "k2", 2)
+    large, _ = _fork_tree(tmp_path / "k4", 4)
+
+    counts_small = _decodes_per_path(tmp_path / "k2", tmp_path / "out-k2")
+    counts_large = _decodes_per_path(tmp_path / "k4", tmp_path / "out-k4")
+
+    assert counts_small[small.name] == counts_large[large.name], (
+        "parent decode count scales with the number of children: "
+        f"k=2 -> {counts_small[small.name]}, k=4 -> {counts_large[large.name]}"
+    )
+    assert counts_small[small.name] == 3, (
+        f"expected 1 header + 1 as shared parent + 1 own load, got "
+        f"{counts_small[small.name]} ({dict(counts_small)})"
+    )
+
+
+def test_grouped_discovery_keeps_per_child_prefix_values(tmp_path: Path) -> None:
+    """Grouping must not smear one child's prefix across its siblings.
+
+    The children inherit *different* amounts (2 and 3 records), so a grouped
+    implementation that computed the prefix once per parent — or reused the
+    previous child's answer — would be caught here rather than in a rendering
+    diff. This is the correctness half of the same change whose cost the tests
+    above measure.
+    """
+    root = tmp_path / "sessions"
+    _fork_tree(root, 4)
+    provider = CodexProvider()
+
+    by_id = {
+        info.session_id: getattr(info, "inherited_prefix_records", None)
+        for info in provider.discover_sessions_under(root)
+    }
+
+    assert by_id[_tid(1)] == 0, "the parent inherits nothing"
+    # children alternate: index 0,2 inherit 2 records; index 1,3 inherit 3
+    assert by_id[_tid(2)] == 2, by_id
+    assert by_id[_tid(3)] == 3, by_id
+    assert by_id[_tid(4)] == 2, by_id
+    assert by_id[_tid(5)] == 3, by_id
