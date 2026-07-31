@@ -133,6 +133,33 @@ class CodexSessionInfo(SessionInfo):
     inherited_prefix_records: int = 0
 
 
+@dataclass
+class _SessionIndex:
+    """Everything one tree walk already learned, kept for the whole run.
+
+    ``paths`` and ``headers`` are both filled by the index build, which reads
+    every rollout's header anyway; keeping the identity it produced is what
+    stops discovery and each load from reading those headers again.
+
+    ``resolved`` is separate and deliberately so. A ``CodexSessionIdentity``
+    whose ``inherited_prefix_records`` is 0 is indistinguishable from one whose
+    prefix was never computed -- and 0 is the *common* case, so conflating them
+    would silently send every non-fork session back down the slow path.
+    Membership in ``resolved`` is therefore the "prefix has been computed"
+    signal: entries are admitted only after resolution, which makes the
+    invariant structural instead of a sentinel every caller must remember.
+
+    Sized for the whole run on purpose: entries are a fixed handful of scalars
+    and two ``Path``s, so bounding the entry *count* bounds the memory. That is
+    what separates this from caching decoded *records*, where one rollout is
+    124 MB and no entry-count bound is a memory bound.
+    """
+
+    paths: dict[str, list[Path]]
+    headers: dict[str, CodexSessionIdentity]
+    resolved: dict[str, CodexSessionIdentity]
+
+
 @dataclass(frozen=True)
 class _DecodedRecord:
     line_no: int
@@ -384,11 +411,12 @@ class CodexProvider(BaseProvider):
     """Read active Codex rollout files from ``$CODEX_HOME/sessions``."""
 
     def __init__(self) -> None:
-        # Memoize the thread-id → paths index per resolved sessions root so a
+        # Memoize what one tree walk learned, per resolved sessions root, so a
         # wholesale run (discovery + per-session loads) reads each rollout's
-        # header once instead of O(sessions) times. Safe within a single CLI
-        # run — the sessions tree does not change mid-render.
-        self._index_cache: dict[Path, dict[str, list[Path]]] = {}
+        # header once instead of O(sessions) times and computes each fork's
+        # inherited prefix once instead of once per phase. Safe within a single
+        # CLI run — the sessions tree does not change mid-render.
+        self._index_cache: dict[Path, _SessionIndex] = {}
 
     def detect_path(self, path: Path) -> bool:
         """A Codex rollout file, or a directory containing at least one."""
@@ -430,24 +458,8 @@ class CodexProvider(BaseProvider):
         yield from self._discover_in(root)
 
     def _discover_in(self, sessions_root: Path) -> Iterator[SessionInfo]:
-        # A duplicated thread id is corrupt/ambiguous.  Discovery remains
-        # useful and deterministic by retaining the lexicographically first
-        # path; loading that id reports the ambiguity instead of guessing.
-        identities: dict[str, CodexSessionIdentity] = {}
-        index = self._session_index(sessions_root)
-        for path in self._rollout_paths(sessions_root):
-            identity = self._read_identity(path)
-            if identity.thread_id in identities:
-                logger.warning(
-                    "Duplicate Codex thread id %s; retaining first discovered rollout",
-                    identity.thread_id,
-                )
-                continue
-            identities[identity.thread_id] = self._with_inherited_prefix(
-                identity, index
-            )
-
-        for identity in identities.values():
+        index = self._index_for(sessions_root)
+        for identity in self._resolve_prefixes(index):
             yield CodexSessionInfo(
                 provider="codex",
                 session_id=identity.thread_id,
@@ -461,6 +473,26 @@ class CodexProvider(BaseProvider):
                 source_kind=identity.source_kind,
                 inherited_prefix_records=identity.inherited_prefix_records,
             )
+
+    def _resolve_prefixes(self, index: _SessionIndex) -> list[CodexSessionIdentity]:
+        """Every discovered identity, each fork's inherited prefix computed once
+        and retained on the index for the loads that follow."""
+        # A duplicated thread id is corrupt/ambiguous. Discovery remains useful
+        # and deterministic by retaining the lexicographically first path;
+        # loading that id reports the ambiguity instead of guessing.
+        for thread_id, paths in index.paths.items():
+            for _extra in paths[1:]:
+                logger.warning(
+                    "Duplicate Codex thread id %s; retaining first discovered rollout",
+                    thread_id,
+                )
+
+        order = list(index.headers)
+        for thread_id in order:
+            index.resolved[thread_id] = self._with_inherited_prefix(
+                index.headers[thread_id], index.paths
+            )
+        return [index.resolved[thread_id] for thread_id in order]
 
     def load_session(
         self, session_id: str, max_messages: Optional[int] = None
@@ -496,19 +528,40 @@ class CodexProvider(BaseProvider):
         if not session_id or _SESSION_ID_RE.fullmatch(session_id) is None:
             raise ValueError(f"Invalid session_id: {session_id}")
 
-        index = self._session_index(sessions_root)
-        if session_id not in index:
+        index = self._index_for(sessions_root)
+        # These two checks stay AHEAD of the resolved-identity lookup, and that
+        # ordering is behaviour rather than style: discovery retains-and-warns on
+        # a duplicated thread id, so the index legitimately holds an identity for
+        # an id that is illegal to load. Consulting it first would quietly load
+        # the first rollout where the contract says raise.
+        if session_id not in index.paths:
             raise FileNotFoundError(f"Codex session {session_id} not found")
-        paths = index[session_id]
+        paths = index.paths[session_id]
         if len(paths) != 1:
             raise ValueError(f"Multiple Codex rollouts have thread id {session_id}")
 
-        identity = self._with_inherited_prefix(self._read_identity(paths[0]), index)
+        identity = self._identity_for(index, session_id, paths[0])
         records = self._without_inherited_prefix(
             list(self._decode_records(identity.path)),
             identity.inherited_prefix_records,
         )
         return identity, records
+
+    def _identity_for(
+        self, index: _SessionIndex, session_id: str, path: Path
+    ) -> CodexSessionIdentity:
+        """The prefix-resolved identity for *session_id*, reusing discovery's
+        work when it ran and computing it when it did not.
+
+        Callers must have settled ambiguity before calling this.
+        """
+        cached = index.resolved.get(session_id)
+        if cached is not None:
+            return cached
+        # No discovery in this run (a standalone lookup): compute exactly as
+        # before. The fast path must not be the only correct path.
+        header = index.headers.get(session_id) or self._read_identity(path)
+        return self._with_inherited_prefix(header, index.paths)
 
     def _load_in(
         self, sessions_root: Path, session_id: str, max_messages: Optional[int]
@@ -600,11 +653,11 @@ class CodexProvider(BaseProvider):
         ambiguity is a soft miss here, unlike the hard errors :meth:`_load_in`
         raises.
         """
-        index = self._session_index(root)
-        paths = index.get(session_id)
+        index = self._index_for(root)
+        paths = index.paths.get(session_id)
         if not paths or len(paths) != 1:
             return None
-        identity = self._with_inherited_prefix(self._read_identity(paths[0]), index)
+        identity = self._identity_for(index, session_id, paths[0])
         records = self._without_inherited_prefix(
             list(self._decode_records(identity.path)),
             identity.inherited_prefix_records,
@@ -636,8 +689,22 @@ class CodexProvider(BaseProvider):
         return sorted(paths)
 
     def _session_index(self, sessions_root: Path) -> dict[str, list[Path]]:
+        """The thread-id → paths index, memoized per resolved root.
+
+        Kept as the narrow accessor its callers expect; :meth:`_index_for` is
+        the whole memoized record.
+        """
+        return self._index_for(sessions_root).paths
+
+    def _index_for(self, sessions_root: Path) -> _SessionIndex:
         # Memoized per resolved root: discovery and every per-session load in a
         # wholesale run share one index build (see ``_index_cache``).
+        #
+        # Keyed by the RESOLVED root, which is load-bearing rather than tidy: an
+        # inherited prefix is only meaningful against the sibling set it was
+        # computed within, so a prefix found under one root must never be
+        # answered to a lookup under another. ``load_session_from_path`` has no
+        # sibling set at all and correctly never consults this.
         try:
             cache_key = sessions_root.resolve()
         except OSError:
@@ -645,10 +712,13 @@ class CodexProvider(BaseProvider):
         cached = self._index_cache.get(cache_key)
         if cached is not None:
             return cached
-        index: dict[str, list[Path]] = {}
+        index = _SessionIndex(paths={}, headers={}, resolved={})
         for path in self._rollout_paths(sessions_root):
             identity = self._read_identity(path)
-            index.setdefault(identity.thread_id, []).append(path)
+            index.paths.setdefault(identity.thread_id, []).append(path)
+            # First path wins, matching discovery's retain-the-first rule; the
+            # paths are already sorted, so "first" is deterministic.
+            index.headers.setdefault(identity.thread_id, identity)
         self._index_cache[cache_key] = index
         return index
 
