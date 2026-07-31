@@ -34,6 +34,8 @@ from claude_code_log.models import (
 
 from .base import (
     BaseProvider,
+    LoadedSession,
+    ProviderTokenTotals,
     SessionInfo,
     file_mtime_iso,
     make_assistant_entry,
@@ -131,6 +133,33 @@ class CodexSessionInfo(SessionInfo):
     inherited_prefix_records: int = 0
 
 
+@dataclass
+class _SessionIndex:
+    """Everything one tree walk already learned, kept for the whole run.
+
+    ``paths`` and ``headers`` are both filled by the index build, which reads
+    every rollout's header anyway; keeping the identity it produced is what
+    stops discovery and each load from reading those headers again.
+
+    ``resolved`` is separate and deliberately so. A ``CodexSessionIdentity``
+    whose ``inherited_prefix_records`` is 0 is indistinguishable from one whose
+    prefix was never computed -- and 0 is the *common* case, so conflating them
+    would silently send every non-fork session back down the slow path.
+    Membership in ``resolved`` is therefore the "prefix has been computed"
+    signal: entries are admitted only after resolution, which makes the
+    invariant structural instead of a sentinel every caller must remember.
+
+    Sized for the whole run on purpose: entries are a fixed handful of scalars
+    and two ``Path``s, so bounding the entry *count* bounds the memory. That is
+    what separates this from caching decoded *records*, where one rollout is
+    124 MB and no entry-count bound is a memory bound.
+    """
+
+    paths: dict[str, list[Path]]
+    headers: dict[str, CodexSessionIdentity]
+    resolved: dict[str, CodexSessionIdentity]
+
+
 @dataclass(frozen=True)
 class _DecodedRecord:
     line_no: int
@@ -224,15 +253,170 @@ def _contained_rollouts(root: Path) -> Iterator[Path]:
             continue
 
 
+def _token_totals_from_records(
+    records: list[_DecodedRecord],
+) -> Optional[ProviderTokenTotals]:
+    """Session token totals from the LAST cumulative ``token_count`` record.
+
+    The session total is the final ``payload.info.total_token_usage``, never a
+    sum of the per-step deltas: each ``total_token_usage`` is cumulative and
+    monotonic over the session, so the last one already subsumes every prior
+    turn. Compaction lowers the live context window but does NOT reset the
+    cumulative counter, so "last record" stays correct across a compacted
+    session. That monotonicity is ENFORCED, not merely assumed — if
+    ``total_tokens`` ever decreases the guard below omits the session's totals.
+    Returns ``None`` when the session emitted no ``token_count`` (a
+    pre-accounting rollout) or when monotonicity is violated — the totals are
+    then OMITTED, not zeroed, and never a guessed-through wrong number.
+
+    WHY SESSION-LEVEL ONLY (evidenced design limit — do not "fix" into
+    per-message numbers):
+    The argument is STRUCTURAL, not statistical. A ``token_count`` delta
+    (``last_token_usage``) measures everything consumed since the *previous*
+    ``token_count`` — and one agent-loop step bundles reasoning + assistant
+    text + a tool call + its (often large, cached) tool result under a single
+    delta. The window contains more than one rendered thing, so a delta cannot
+    be attributed to any one message the transcript renders, regardless of
+    which record the step happens to end on. The corpus distribution merely
+    confirms that steps overwhelmingly end on tool work: measured post-
+    inherited-prefix-strip (the records that actually render), n=4138 events
+    across 34 sessions, ~75.6% of ``token_count`` events follow a tool-
+    execution step and ~22.5% follow an assistant/agent message — but even the
+    22.5% are not attributable, because that message shares its delta with the
+    reasoning and the next turn's cached context re-read. Per-message (and even
+    per-turn) attribution is therefore not recoverable from this stream; the
+    session cumulative is the finest honest unit, which is why this returns a
+    whole-session total.
+    """
+    last_usage: Optional[dict[str, Any]] = None
+    prev_total: Optional[int] = None
+    malformed_total_shapes: list[str] = []
+    first_malformed_at: Optional[str] = None
+    for record in records:
+        if record.kind != "event_msg":
+            continue
+        if record.payload.get("type") != "token_count":
+            continue
+        info = record.payload.get("info")
+        if not isinstance(info, dict):
+            continue
+        usage_raw = cast(dict[str, Any], info).get("total_token_usage")
+        if not isinstance(usage_raw, dict):
+            continue
+        usage = cast(dict[str, Any], usage_raw)
+        # Monotonicity guard. total_token_usage is cumulative, so total_tokens
+        # must never decrease. If it does, the cumulative-counter assumption has
+        # broken (e.g. a future Codex build that resets the counter mid-session),
+        # and NO single record is the honest total — "last" would understate,
+        # and max() would report a pre-reset peak; both are confidently wrong.
+        # Fail closed: omit the session's totals and warn, exactly as a
+        # pre-accounting rollout (no token_count) is omitted. A wrong number is
+        # worse than an absent one. Enforced, not merely assumed — monk and I
+        # measured 0 violations across the corpus, so this fires only on a
+        # future spec change, loudly.
+        # A record whose ``total_tokens`` is absent or not an int tells us
+        # nothing about the ordering. Coercing it to 0 (the pre-review
+        # behaviour) made it look like a counter reset, so a single malformed
+        # record tripped the guard below and omitted the WHOLE session's totals
+        # for what is a data-quality problem, not a broken counter. Skip it
+        # instead — out of the comparison AND out of last-record selection,
+        # since ``_map_cumulative_usage`` treats the stored total as
+        # authoritative and would carry a fabricated 0 through — and say so
+        # once at the end, naming the shape actually seen. ``bool`` is excluded
+        # deliberately: it is an ``int`` subclass, so a JSON ``true`` would
+        # otherwise pass as the total 1.
+        total_raw = usage.get("total_tokens")
+        if not isinstance(total_raw, int) or isinstance(total_raw, bool):
+            malformed_total_shapes.append(
+                "absent" if total_raw is None else type(total_raw).__name__
+            )
+            if first_malformed_at is None:
+                # Enough to open the rollout at the offending record instead of
+                # re-scanning it. One warning per session stays O(1), but a bare
+                # count would leave the reader nothing to search on.
+                first_malformed_at = record.timestamp or "(no timestamp)"
+            continue
+        total = total_raw
+        if prev_total is not None and total < prev_total:
+            logger.warning(
+                "Codex token_count total_tokens decreased (%d < %d); cumulative "
+                "monotonicity broken — omitting session totals",
+                total,
+                prev_total,
+            )
+            return None
+        prev_total = total
+        last_usage = usage
+    if malformed_total_shapes:
+        # Degrade visibly: the totals we return are real, but they are drawn
+        # from fewer records than the session actually holds.
+        logger.warning(
+            "Codex token_count: skipped %d record(s) whose total_tokens was "
+            "not an integer (saw: %s; first at %s); session totals come from "
+            "the remaining records",
+            len(malformed_total_shapes),
+            ", ".join(sorted(set(malformed_total_shapes))),
+            first_malformed_at,
+        )
+    if last_usage is None:
+        return None
+    return _map_cumulative_usage(last_usage)
+
+
+def _map_cumulative_usage(usage: dict[str, Any]) -> ProviderTokenTotals:
+    """Map a Codex ``total_token_usage`` dict onto the index's token columns.
+
+    THE SUBTRACTION PIN: billable input EXCLUDES the cached portion, and
+    ``cache_read`` is the sole home of the cached tokens. A future edit that
+    folded ``cached`` back into ``input`` here (or dropped the subtraction)
+    would double-count the cached tokens — index totals would balloon by the
+    cache-read column. Keep ``input = input_tokens - cached`` and
+    ``cache_read = cached`` disjoint. ``max(..., 0)`` guards a malformed record
+    where ``cached > input``.
+
+    ``total_tokens`` is carried through from the record, authoritative and
+    never recomputed (a degenerate record with zero components but a non-zero
+    total must keep its stored total). ``output`` already includes
+    ``reasoning_output_tokens``, so reasoning is not added again.
+    """
+
+    def _as_int(value: Any) -> int:
+        """Every component field routes through here, so this is the ONE place
+        the int predicate is stated — add a new component and it is covered by
+        construction rather than by remembering to repeat the check.
+
+        ``bool`` is excluded explicitly because it is an ``int`` subclass: a JSON
+        ``true`` would otherwise contribute a phantom 1 to a token column. The
+        record-selection guard in :func:`_token_totals_from_records` already
+        excludes bools for ``total_tokens``; it did not cover the components,
+        which reach this mapping on any record whose *total* is well-formed.
+        """
+        if isinstance(value, bool):
+            return 0
+        return value if isinstance(value, int) else 0
+
+    input_tokens = _as_int(usage.get("input_tokens"))
+    cached = _as_int(usage.get("cached_input_tokens"))
+    output_tokens = _as_int(usage.get("output_tokens"))
+    total_tokens = _as_int(usage.get("total_tokens"))
+    return ProviderTokenTotals(
+        input_tokens=max(input_tokens - cached, 0),
+        cache_read_tokens=cached,
+        output_tokens=output_tokens,
+        total_tokens=total_tokens,
+    )
+
+
 class CodexProvider(BaseProvider):
     """Read active Codex rollout files from ``$CODEX_HOME/sessions``."""
 
     def __init__(self) -> None:
-        # Memoize the thread-id → paths index per resolved sessions root so a
+        # Memoize what one tree walk learned, per resolved sessions root, so a
         # wholesale run (discovery + per-session loads) reads each rollout's
-        # header once instead of O(sessions) times. Safe within a single CLI
-        # run — the sessions tree does not change mid-render.
-        self._index_cache: dict[Path, dict[str, list[Path]]] = {}
+        # header once instead of O(sessions) times and computes each fork's
+        # inherited prefix once instead of once per phase. Safe within a single
+        # CLI run — the sessions tree does not change mid-render.
+        self._index_cache: dict[Path, _SessionIndex] = {}
 
     def detect_path(self, path: Path) -> bool:
         """A Codex rollout file, or a directory containing at least one."""
@@ -274,24 +458,8 @@ class CodexProvider(BaseProvider):
         yield from self._discover_in(root)
 
     def _discover_in(self, sessions_root: Path) -> Iterator[SessionInfo]:
-        # A duplicated thread id is corrupt/ambiguous.  Discovery remains
-        # useful and deterministic by retaining the lexicographically first
-        # path; loading that id reports the ambiguity instead of guessing.
-        identities: dict[str, CodexSessionIdentity] = {}
-        index = self._session_index(sessions_root)
-        for path in self._rollout_paths(sessions_root):
-            identity = self._read_identity(path)
-            if identity.thread_id in identities:
-                logger.warning(
-                    "Duplicate Codex thread id %s; retaining first discovered rollout",
-                    identity.thread_id,
-                )
-                continue
-            identities[identity.thread_id] = self._with_inherited_prefix(
-                identity, index
-            )
-
-        for identity in identities.values():
+        index = self._index_for(sessions_root)
+        for identity in self._resolve_prefixes(index):
             yield CodexSessionInfo(
                 provider="codex",
                 session_id=identity.thread_id,
@@ -305,6 +473,53 @@ class CodexProvider(BaseProvider):
                 source_kind=identity.source_kind,
                 inherited_prefix_records=identity.inherited_prefix_records,
             )
+
+    def _resolve_prefixes(self, index: _SessionIndex) -> list[CodexSessionIdentity]:
+        """Every discovered identity, each fork's inherited prefix computed once
+        and retained on the index for the loads that follow.
+
+        Grouped by parent: a parent shared by *k* forks is decoded **once**, not
+        once per fork. Peak residency is one parent's candidate list plus one
+        child's -- the same pair the ungrouped path already held transiently --
+        so the reduction costs no memory.
+        """
+        # A duplicated thread id is corrupt/ambiguous. Discovery remains useful
+        # and deterministic by retaining the lexicographically first path;
+        # loading that id reports the ambiguity instead of guessing.
+        for thread_id, paths in index.paths.items():
+            for _extra in paths[1:]:
+                logger.warning(
+                    "Duplicate Codex thread id %s; retaining first discovered rollout",
+                    thread_id,
+                )
+
+        order = list(index.headers)
+        pending: dict[Path, list[CodexSessionIdentity]] = {}
+        for thread_id in order:
+            identity = index.headers[thread_id]
+            parent_id = identity.parent_thread_id
+            parent_paths = index.paths.get(parent_id, []) if parent_id else []
+            if len(parent_paths) != 1:
+                # No uniquely resolvable parent: nothing to inherit, and that
+                # answer is final rather than merely uncomputed.
+                index.resolved[thread_id] = identity
+                continue
+            pending.setdefault(parent_paths[0], []).append(identity)
+
+        for parent_path, children in pending.items():
+            parent_records = self._prefix_candidates(
+                list(self._decode_records(parent_path))
+            )
+            for identity in children:
+                index.resolved[identity.thread_id] = self._prefix_against(
+                    identity, parent_records
+                )
+            # Release the parent before starting the next group, so residency is
+            # one parent's candidates and not the corpus's.
+            del parent_records
+
+        # Emit in tree-walk order, whatever order the grouping resolved them in.
+        return [index.resolved[thread_id] for thread_id in order]
 
     def load_session(
         self, session_id: str, max_messages: Optional[int] = None
@@ -321,27 +536,112 @@ class CodexProvider(BaseProvider):
         tree or the data dir), with sibling fork-prefix stripping."""
         yield from self._load_in(root, session_id, max_messages)
 
-    def _load_in(
-        self, sessions_root: Path, session_id: str, max_messages: Optional[int]
-    ) -> Iterator[TranscriptEntry]:
+    def _resolve_and_decode(
+        self, sessions_root: Path, session_id: str
+    ) -> tuple[CodexSessionIdentity, list[_DecodedRecord]]:
+        """Resolve ``session_id`` under ``sessions_root`` and decode its rollout
+        once, returning the identity and the post-inherited-prefix records.
+
+        The single expensive step in every path that reads a session: one
+        rollout decode. :meth:`_load_in` and :meth:`load_session_with_totals`
+        share it so a caller that needs both entries and totals pays for one
+        decode rather than two.
+
+        Raises (rather than soft-missing) on an unresolvable or ambiguous id,
+        matching the loader's contract; :meth:`session_token_totals` keeps its
+        own tolerant resolution, since a totals lookup must never crash a
+        render.
+        """
         if not session_id or _SESSION_ID_RE.fullmatch(session_id) is None:
             raise ValueError(f"Invalid session_id: {session_id}")
-        if max_messages is not None and max_messages <= 0:
-            return
 
-        index = self._session_index(sessions_root)
-        if session_id not in index:
+        index = self._index_for(sessions_root)
+        # These two checks stay AHEAD of the resolved-identity lookup, and that
+        # ordering is behaviour rather than style: discovery retains-and-warns on
+        # a duplicated thread id, so the index legitimately holds an identity for
+        # an id that is illegal to load. Consulting it first would quietly load
+        # the first rollout where the contract says raise.
+        if session_id not in index.paths:
             raise FileNotFoundError(f"Codex session {session_id} not found")
-        paths = index[session_id]
+        paths = index.paths[session_id]
         if len(paths) != 1:
             raise ValueError(f"Multiple Codex rollouts have thread id {session_id}")
 
-        identity = self._with_inherited_prefix(self._read_identity(paths[0]), index)
-        records = list(self._decode_records(identity.path))
+        identity = self._identity_for(index, session_id, paths[0])
         records = self._without_inherited_prefix(
-            records, identity.inherited_prefix_records
+            list(self._decode_records(identity.path)),
+            identity.inherited_prefix_records,
         )
+        return identity, records
+
+    def _identity_for(
+        self, index: _SessionIndex, session_id: str, path: Path
+    ) -> CodexSessionIdentity:
+        """The prefix-resolved identity for *session_id*, reusing discovery's
+        work when it ran and computing it when it did not.
+
+        Callers must have settled ambiguity before calling this.
+        """
+        cached = index.resolved.get(session_id)
+        if cached is not None:
+            return cached
+        # No discovery in this run (a standalone lookup): compute exactly as
+        # before. The fast path must not be the only correct path.
+        header = index.headers.get(session_id) or self._read_identity(path)
+        return self._with_inherited_prefix(header, index.paths)
+
+    def _load_in(
+        self, sessions_root: Path, session_id: str, max_messages: Optional[int]
+    ) -> Iterator[TranscriptEntry]:
+        if max_messages is not None and max_messages <= 0:
+            # Still validate the id, so an invalid one raises regardless of
+            # max_messages — the check used to precede this early return.
+            if not session_id or _SESSION_ID_RE.fullmatch(session_id) is None:
+                raise ValueError(f"Invalid session_id: {session_id}")
+            return
+
+        identity, records = self._resolve_and_decode(sessions_root, session_id)
         yield from self._normalize_records(identity, records, max_messages)
+
+    def load_session_with_totals(
+        self, root: Path, session_id: str, max_messages: Optional[int] = None
+    ) -> LoadedSession:
+        """Entries and cumulative totals from a SINGLE rollout decode.
+
+        The base implementation would call the loader and then
+        :meth:`session_token_totals`, and the two repeat the same index lookup,
+        identity resolution, decode and prefix strip — measured at +118 decodes
+        and +478 MB re-parsed across a 34-rollout archive, purely to recompute
+        what the first pass had already produced. Only the *tail* differs:
+        normalize for entries, last cumulative ``token_count`` for totals.
+
+        Totals are computed **before** normalizing, deliberately: the normalize
+        passes are free to transform their input, and computing totals first
+        means correctness here does not depend on whether they do. Do not
+        reorder these two lines.
+        """
+        if max_messages is not None and max_messages <= 0:
+            # Nothing to share: with no entries requested there is no decode for
+            # the totals to piggyback on, so the override has no advantage here —
+            # and every attempt to hand-write this branch diverged from the base
+            # in some input. Delegating makes equivalence hold BY CONSTRUCTION
+            # rather than by argument, at the same one decode the base pays.
+            #
+            # Two divergences this avoids, both found by measurement rather than
+            # by reading: returning ``None`` reported no totals for a session
+            # that HAS them (base reports them, since its ``load_session_under``
+            # returns early while ``session_token_totals`` still runs); and
+            # resolving eagerly raised ``FileNotFoundError`` on an unknown id
+            # where the base silently returns empty, because the base never
+            # resolves at all on this path.
+            return super().load_session_with_totals(root, session_id, max_messages)
+
+        identity, records = self._resolve_and_decode(root, session_id)
+        totals = _token_totals_from_records(records)
+        entries: list[TranscriptEntry] = list(
+            self._normalize_records(identity, records, max_messages)
+        )
+        return LoadedSession(entries=entries, token_totals=totals)
 
     def load_session_from_path(
         self, path: Path, max_messages: Optional[int] = None
@@ -360,6 +660,36 @@ class CodexProvider(BaseProvider):
         identity = self._read_identity(path)
         records = list(self._decode_records(path))
         yield from self._normalize_records(identity, records, max_messages)
+
+    def session_token_totals(
+        self, root: Path, session_id: str
+    ) -> Optional[ProviderTokenTotals]:
+        """Cumulative token totals for one Codex session, read from its
+        ``token_count`` events.
+
+        Resolution mirrors :meth:`_load_in` — same index lookup and the same
+        ``_without_inherited_prefix`` strip — so the totals are computed over
+        exactly the records this session renders. A fork must not inherit its
+        parent's cumulative ``token_count`` (currently ``inherited_prefix_records``
+        is 0 in observed corpora, but computing post-strip keeps this correct
+        by construction rather than by that coincidence).
+
+        Returns ``None`` — totals OMITTED, not zeroed — when the session has no
+        ``token_count`` events (pre-accounting rollouts) or cannot be resolved
+        unambiguously. A totals lookup must never crash a wholesale render, so
+        ambiguity is a soft miss here, unlike the hard errors :meth:`_load_in`
+        raises.
+        """
+        index = self._index_for(root)
+        paths = index.paths.get(session_id)
+        if not paths or len(paths) != 1:
+            return None
+        identity = self._identity_for(index, session_id, paths[0])
+        records = self._without_inherited_prefix(
+            list(self._decode_records(identity.path)),
+            identity.inherited_prefix_records,
+        )
+        return _token_totals_from_records(records)
 
     def _rollout_paths(self, sessions_root: Path) -> list[Path]:
         # Recursive discovery supports both current date shards and old flat
@@ -386,8 +716,22 @@ class CodexProvider(BaseProvider):
         return sorted(paths)
 
     def _session_index(self, sessions_root: Path) -> dict[str, list[Path]]:
+        """The thread-id → paths index, memoized per resolved root.
+
+        Kept as the narrow accessor its callers expect; :meth:`_index_for` is
+        the whole memoized record.
+        """
+        return self._index_for(sessions_root).paths
+
+    def _index_for(self, sessions_root: Path) -> _SessionIndex:
         # Memoized per resolved root: discovery and every per-session load in a
         # wholesale run share one index build (see ``_index_cache``).
+        #
+        # Keyed by the RESOLVED root, which is load-bearing rather than tidy: an
+        # inherited prefix is only meaningful against the sibling set it was
+        # computed within, so a prefix found under one root must never be
+        # answered to a lookup under another. ``load_session_from_path`` has no
+        # sibling set at all and correctly never consults this.
         try:
             cache_key = sessions_root.resolve()
         except OSError:
@@ -395,10 +739,13 @@ class CodexProvider(BaseProvider):
         cached = self._index_cache.get(cache_key)
         if cached is not None:
             return cached
-        index: dict[str, list[Path]] = {}
+        index = _SessionIndex(paths={}, headers={}, resolved={})
         for path in self._rollout_paths(sessions_root):
             identity = self._read_identity(path)
-            index.setdefault(identity.thread_id, []).append(path)
+            index.paths.setdefault(identity.thread_id, []).append(path)
+            # First path wins, matching discovery's retain-the-first rule; the
+            # paths are already sorted, so "first" is deterministic.
+            index.headers.setdefault(identity.thread_id, identity)
         self._index_cache[cache_key] = index
         return index
 
@@ -411,11 +758,27 @@ class CodexProvider(BaseProvider):
         parent_paths = index.get(parent_id, []) if parent_id else []
         if len(parent_paths) != 1:
             return identity
-        child_records = self._prefix_candidates(
-            list(self._decode_records(identity.path))
-        )
         parent_records = self._prefix_candidates(
             list(self._decode_records(parent_paths[0]))
+        )
+        return self._prefix_against(identity, parent_records)
+
+    def _prefix_against(
+        self,
+        identity: CodexSessionIdentity,
+        parent_records: list[_DecodedRecord],
+    ) -> CodexSessionIdentity:
+        """Resolve *identity*'s inherited prefix against already-decoded parent
+        records.
+
+        Split out of :meth:`_with_inherited_prefix` so discovery can decode a
+        shared parent once and measure every one of its children against it.
+        The wrapper stays the entry point for a standalone lookup that never ran
+        discovery, which keeps the grouped path a shortcut rather than the only
+        correct path.
+        """
+        child_records = self._prefix_candidates(
+            list(self._decode_records(identity.path))
         )
         prefix_length = self._contiguous_prefix_length(child_records, parent_records)
         if prefix_length == 0 and identity.spawn_call_id:

@@ -18,6 +18,49 @@ from claude_code_log.models import (
 )
 
 
+@dataclass(frozen=True)
+class ProviderTokenTotals:
+    """Cumulative session token totals surfaced by a provider that records
+    them at the session level (e.g. Codex ``token_count`` events), as opposed
+    to the Claude path which sums per-assistant-message ``usage``.
+
+    Mapped onto the same four columns the index renders, minus one:
+    ``cache_creation`` is deliberately ABSENT, not zero. Codex has no
+    cache-creation concept, and an omitted column ("we don't record this") is
+    a different, honest claim than a zero one ("we recorded zero of it").
+
+    ``total_tokens`` is the record's own authoritative total — never
+    recomputed from the components. For the well-formed cumulative records
+    that back session totals the identity ``input + cache_read + output ==
+    total`` holds, but degenerate records (all components zero, non-zero
+    total) do occur in the per-step stream, and there the stored total is the
+    only trustworthy figure. It is **currently unconsumed by the render/cache
+    paths** (the four displayed columns come from input/cache_read/output); it
+    is kept as the reconstruction anchor the tests validate and the reserve a
+    future per-turn layer would need.
+    """
+
+    input_tokens: int  # billable non-cached input = input_tokens - cached
+    cache_read_tokens: int  # cached_input_tokens
+    output_tokens: int  # output_tokens, which already includes reasoning
+    total_tokens: int  # record's authoritative total; never recomputed
+
+
+@dataclass(frozen=True)
+class LoadedSession:
+    """One session's rendered entries together with its cumulative token
+    totals, as returned by :meth:`BaseProvider.load_session_with_totals`.
+
+    The pair travels together because the caller needs both and a provider may
+    be able to produce both from a single parse. ``token_totals`` is ``None``
+    for the providers (and the sessions) that record none — omitted, never
+    zeroed, since a zero total is a different claim from an absent one.
+    """
+
+    entries: list[TranscriptEntry]
+    token_totals: Optional[ProviderTokenTotals]
+
+
 @dataclass
 class SessionInfo:
     provider: str
@@ -281,3 +324,45 @@ class BaseProvider(ABC):
 
     def get_session_stats(self, session_id: str) -> dict[str, Any]:
         return {}
+
+    def session_token_totals(
+        self, root: Path, session_id: str
+    ) -> Optional[ProviderTokenTotals]:
+        """Cumulative session token totals for the session ``session_id`` under
+        ``root``, or ``None`` when the provider records none.
+
+        The default is ``None``: providers whose token accounting is
+        per-assistant-message ``usage`` (Claude) leave this alone — those
+        totals flow through the message-usage accumulators in ``converter``,
+        not this seam. A provider that records session-level cumulative totals
+        (Codex) overrides this so the wholesale/index path can surface them
+        directly, bypassing the per-message summation that would otherwise
+        double-count a cumulative figure.
+
+        Still the seam for a totals-only lookup. The wholesale walker uses
+        :meth:`load_session_with_totals` instead, so that a provider whose
+        totals live in the same source it just parsed need not re-read it.
+        """
+        return None
+
+    def load_session_with_totals(
+        self, root: Path, session_id: str, max_messages: Optional[int] = None
+    ) -> LoadedSession:
+        """Entries *and* cumulative token totals for one session, in one call.
+
+        The wholesale walker needs both, and for a provider that reads them
+        from the same file this is the difference between parsing that file
+        once and parsing it twice — the second parse being work the first
+        already did and discarded, not a recomputation worth caching (the
+        decoded records of one real archive reach 124 MB for a single session,
+        so any cache here would need a byte budget rather than an entry count).
+
+        **The default is exactly the pair of calls the walker used to make**,
+        so a provider that does not override this cannot change behaviour by
+        the seam existing. Override it only when the two can genuinely share
+        work; leave it alone otherwise.
+        """
+        return LoadedSession(
+            entries=list(self.load_session_under(root, session_id, max_messages)),
+            token_totals=self.session_token_totals(root, session_id),
+        )

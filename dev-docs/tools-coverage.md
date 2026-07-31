@@ -267,6 +267,65 @@ separators, `ALL_TOOLS`-registry pipelines (no static membership yet), and
 cap/engine failures remain `ToolExecution`. False negatives are an acceptable
 compatibility cost; false reconstruction is not.
 
+### Token accounting
+
+Codex records token usage as cumulative `token_count` events
+(`payload.info.total_token_usage`), one emitted after nearly every agent-loop
+step — unlike Claude, which carries per-assistant-message `usage`. The provider
+surfaces these totals in two places: the **project-card token summary** on the
+wholesale index, and the **per-session token fields on the session cache**
+(`total_input_tokens` etc., which `sessions` has carried since the initial
+schema — so this is Claude-schema parity, not Codex-only state). Per-session
+token **rows on the index are deliberately NOT shown** — the Claude index does
+not render them either (the project-summary session dicts carry no
+`token_summary` key, and the drift pin
+`test_index_summary_dict_shape_matches_claude_path` locks the two shapes
+together), so adding them is a Claude-path UX change deferred to its own
+follow-up (see `work/codex-backlog.md`). The extraction is:
+
+- `providers/base.ProviderTokenTotals` — the token figures a session-level
+  provider surfaces: billable `input`, `cache_read`, `output`, and the
+  authoritative `total`. `cache_creation` is deliberately absent (Codex has no
+  such concept; an omitted column ≠ a zero one), so of the index's four token
+  columns the project card shows three and never a "Cache Creation" one.
+- `codex._token_totals_from_records` — takes the **last** cumulative record as
+  the session total (the values are cumulative and monotonic, so the final one
+  subsumes every prior turn; compaction lowers the live context window but does
+  not reset the counter). Returns `None` — totals **omitted, not zeroed** —
+  for pre-accounting rollouts with no `token_count`.
+- `codex._map_cumulative_usage` — maps `input = input_tokens − cached`,
+  `cache_read = cached_input_tokens`, `output = output_tokens` (already
+  includes reasoning). The subtraction keeps the cached tokens in exactly one
+  column; folding them back into `input` would double-count. `total_tokens` is
+  carried through authoritatively (never recomputed — a degenerate record with
+  zero components but a non-zero total keeps its stored total).
+- `converter.render_provider_wholesale` sums each session's cumulative total
+  into the index **project-card** totals (`_sum_provider_token_totals`) and
+  writes the per-session totals onto the **session cache**, **bypassing** the
+  per-message `usage` accumulators (`compute_session_data` /
+  `compute_project_aggregates`) that a cumulative figure must never flow
+  through.
+
+**Why only session/project granularity — an evidenced design limit, not a
+TODO.** The argument is structural, not statistical. A `token_count` delta
+(`last_token_usage`) measures everything consumed since the *previous*
+`token_count`, and one agent-loop step bundles reasoning + assistant text + a
+tool call + its (often large, cached) tool result under a single delta. That
+window contains more than one rendered thing, so the delta cannot be
+attributed to any single message the transcript renders — no matter which
+record the step happens to end on. The corpus distribution only *confirms* that
+steps overwhelmingly end on tool work: measured post-inherited-prefix-strip
+(the records that actually render), n=4138 events across 34 sessions, ~75.6% of
+`token_count` events follow a tool-execution step (`custom_tool_call_output`,
+`mcp_tool_call_end`, `function_call_output`, `patch_apply_end`,
+`web_search_end`, `sub_agent_activity`) and ~22.5% follow an assistant/agent
+message — but even that 22.5% is not attributable, because the message shares
+its delta with the reasoning before it and the next turn's cached context
+re-read. Per-message (and even per-turn) attribution is therefore not
+recoverable from this stream, so the session cumulative is the finest honest
+unit. Account-level fields in the same payload (`rate_limits`,
+`model_context_window`) are never read into output.
+
 ### Refreshing the Codex census
 
 The Codex manual states that generated app-server schemas match the installed
