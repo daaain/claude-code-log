@@ -12,13 +12,18 @@ The property under test is deliberately *not* "the output is correct".
 precisely why the redundancy survived a green suite — so these tests count the
 primitive instead.
 
-It is equally deliberately not "once per distinct path". That is the end state
-of the wider decode work (a rollout is still decoded during discovery, and a
-forked session still re-decodes its parent — 202 of the 320 redundant decodes
-in that archive, pre-existing and out of scope here). Pinning the end state
-would fail for reasons this change never claimed to fix. What this change owns
-is the *delta the totals seam adds*, so that delta — measured as a two-arm
-comparison against the base-class default — is what is pinned.
+It is equally deliberately not "once per distinct path", because that is not
+this seam's claim: what this change owns is the *delta the totals seam adds*,
+so that delta — measured as a two-arm comparison against the base-class
+default — is what is pinned. Pinning a whole-pipeline figure here would make
+this test fail for reasons the seam never claimed to fix.
+
+The rest of that pipeline — discovery's own decodes and a fork re-decoding its
+parent, 202 of the 320 redundant decodes in that archive — is no longer
+pre-existing: it is fixed by the two commits that follow this one, and pinned
+separately in ``test_codex_fork_prefix_decodes.py``. The scope note above still
+describes what *this* test measures; it no longer describes the state of the
+provider.
 
 The second test guards the trap that a decode count cannot see. Totals must
 stay subject to the same date filter as the messages they accompany: a session
@@ -176,14 +181,13 @@ def test_token_totals_cost_no_extra_decodes(tmp_path: Path) -> None:
     of every provider that records no session totals), and require the decode
     counts to be *equal*, per file and in total.
 
-    Deliberately NOT "once per distinct path". That is the end state of the
-    wider decode work and it is not reached here: a rollout is still decoded by
-    ``_read_identity`` during discovery, and forked sessions still re-decode
-    their parent. Those are pre-existing and out of scope — asserting the end
-    state would make this test fail for reasons this change never claimed to
-    fix, and would have to be weakened later by someone who does not know which
-    part was load-bearing. What this change owns is the *delta*, so the delta
-    is what it pins.
+    Deliberately NOT "once per distinct path" — not because that end state is
+    unreachable, but because it is a different claim with a different owner
+    (``test_codex_fork_prefix_decodes.py``, added with the commits that follow).
+    Asserting a whole-pipeline figure here would make this test fail for reasons
+    the seam never claimed to fix, and it would then be weakened by someone who
+    could not tell which part was load-bearing. What this change owns is the
+    *delta*, so the delta is what it pins.
 
     Three sessions, so an accidental equality on a single file cannot carry it.
     """
