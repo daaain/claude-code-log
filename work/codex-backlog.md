@@ -57,6 +57,23 @@ families and the provider contract are in
 - Evaluate app-server `thread/read` as a compatibility oracle or a future
   supported input backend; it should not silently replace local rollout
   support.
+- **Separate "malformed session id" from "session not found".**
+  `_SESSION_ID_RE` is `[A-Za-z0-9_-]+`, a *character-set* filter and not a UUID
+  validator: `abc`, `1234` and `not-a-uuid` all `fullmatch`. So an id that could
+  never name a session passes validation and only surfaces further down as
+  `FileNotFoundError` from the index lookup. A caller needing to distinguish
+  *you typed nonsense* from *that session is not here* currently cannot, and the
+  two deserve different messages. **This is a behaviour change at a boundary —
+  an exception type callers may already branch on — not a tidy-up**, which is
+  why it was held out of the decode work rather than folded in.
+
+  The same pattern and the same use exist in **both** providers
+  (`providers/codex.py:57`, used at `:555` and `:599`;
+  `providers/claude.py:12`, used at `:49`), so a fix has to cover both or state
+  why they should differ — changing only the Codex copy would leave the defect
+  live *and* make the two providers disagree about what a bad id does. Note the
+  Codex side now has **two** validation call sites rather than one, so "fix the
+  provider" means both of them.
 
 ## Product integration gaps
 
@@ -198,9 +215,138 @@ These refactors were intentionally deferred until behavior was pinned:
 1. **Split provider responsibilities.** Extract rollout catalog, tolerant
    decoder, reconstruction passes, and transcript normalizer; keep
    `CodexProvider` as a thin orchestration facade.
-2. **Remove repeated rollout scans.** Cache identities/decoded records within
-   one discovery/load operation and add an operation-count test proving
-   constrained/linear behavior without timing flakes.
+2. **Remove repeated rollout scans. — DONE (PR #302).** Both halves landed: the
+   totals seam (returning entries and totals from one decode) and the
+   fork-prefix fan-out (reusing the identity discovery already computed, and
+   decoding a shared parent once per discovery rather than once per child).
+
+   Measured over a frozen 34-rollout archive, 158.6 MB of source, page cache
+   pre-warmed, `use_cache=False`:
+
+   | | before | after |
+   |---|---|---|
+   | `_decode_records` calls | 236 | **104** |
+   | per-path factor (34-path floor) | 6.94x | **3.06x** |
+   | bytes actually parsed | 798.4 MB | **327.8 MB** |
+   | render peak (tracemalloc) | 727.3 MB | **641.8 MB** |
+   | retained identity map | — | **+20 KB** (725 B × 34) |
+
+   Across the whole arc, including the two-call walker that preceded the seam
+   fix, parsed bytes fall **1276.6 → 327.8 MB**. Phase split: discovery
+   118 → 70, load 118 → 34.
+
+   **Read the hottest-file figures with their labels.** The 11.6 MB parent of 12
+   forks — the file that *was* worst — falls **28x → 3x**. The *new* maximum is
+   **4x**, held by rollouts that are both a fork child and a shared parent. Both
+   count every `_decode_records` call, header reads included; the earlier "3x as
+   hottest" was one file tracked across the change while the superlative moved.
+
+   **The operation-count test this item asked for now exists**:
+   `test/test_codex_fork_prefix_decodes.py`, fully synthetic (`tmp_path` only,
+   no reach into a real data dir), counting the primitive rather than timing
+   anything. It pins per-path decode budgets as *exact* equalities — two-sided
+   on purpose, since a count that is too **low** means a child's prefix
+   comparison never ran — plus k-invariance of a shared parent's cost, the
+   ambiguity contract, and the absent-vs-zero case below.
+
+   **What genuinely remains, stated as unmeasured.** The per-file ceiling is
+   **4** and it is structural, not redundant: a rollout is decoded once as a
+   fork child and once as a shared parent when it is both, plus one header read
+   and one decode for its own load. Going lower needs either candidate lists
+   retained across parent groups — the retention rejected below on measurement —
+   or a **bounded tail read** of the parent, since the prefix comparison only
+   needs the parent's tail. **Neither is measured; do not quote a figure for
+   either.**
+
+   **Why the cache shape was rejected**, and it still constrains any future
+   attempt: unbounded, a decoded-record cache holds **264 MB resident for
+   152 MB of source**, and an entry-count LRU cannot bound it because a single
+   rollout decodes to **124 MB**. Any cache here needs a byte budget with
+   explicit eviction. What landed instead retains only identities — a fixed
+   handful of scalars and two `Path`s each — so bounding the entry *count*
+   bounds the memory. **Entry size is the discriminator, not lifetime**: the map
+   lives for the whole run, exactly as the path index already did.
+
+   Two invariants that fail *silently* if a later change disturbs them:
+   a duplicated thread id is **retained** by discovery but **illegal** to load,
+   so no fast path may skip the ambiguity raise; and
+   `inherited_prefix_records == 0` is indistinguishable from *not computed* if
+   membership is inferred from the value — and 0 is the common case, so
+   presence-in-the-resolved-map is what signals "computed".
+
+   **This is resource use, not wall clock.** Describe it as amplification, never
+   as a speedup: rendering dominates the run, so removing decodes buys I/O and
+   CPU rather than a visible improvement. An earlier profiling pass put roughly
+   70s of a ~93s instrumented run in HTML/Markdown generation, with interleaved
+   medians of 54.6s vs 56.4s — quoted as that run's numbers, not re-derived here,
+   and deliberately not the justification for anything. Wall clock on this work
+   has already produced one retraction: a +40.7% regression that did not
+   reproduce (+9.9% controlled) because the harness was launched on a box under
+   load. **Timing figures here need an idle machine and interleaved arms, or they
+   measure the machine.** The deterministic figures above carry the case on their
+   own.
+
+   **METRIC CAVEAT — the byte figures published before 2026-07-31 over-charge by
+   1.59x, and the error flatters this exact fix.** `Σ(file size × decode calls)`
+   bills every call as a full file read, but `_decode_records` streams lazily
+   from an open handle and `_read_identity` returns on the first `session_meta`,
+   so a one-line read was charged a whole file:
+
+       CHARGED   Σ(size × calls)        1272.5 MB   8.0x
+       CONSUMED  lines actually parsed   798.4 MB   5.0x
+       over-charge                                  1.59x
+
+   It closes to the byte: **102 of those 236 calls are early exits** (34 each at
+   `_session_index`, `_discover_in`, `_load_in`), so the phantom charge is
+   3 × 158.6 = **475.8 MB** against an observed charged−consumed gap of
+   **474.1 MB**, leaving 1.7 MB as what those calls really read. The over-charge
+   is **not a fixed discount** — it measured 1.495x / 1.594x / 1.482x across the
+   three states — so charged bytes cannot be converted to parsed bytes by any
+   constant, and two figures are comparable only within one metric.
+
+   The consequence for scoping anything here: collapsing the 3N `_read_identity`
+   calls to N scores **~317 MB charged and ~1.1 MB real**. Report **parsed** as
+   the honest number; keep charged only to compare against older charged
+   figures. Where the bytes actually were: decoding each parent once per child
+   cost **277.5 MB**, against **41.6 MB** for all 25 fork children put together,
+   and the 11 *distinct* parents are only **127.1 MB**. That is why grouping by
+   parent was the byte win independently of any call count. (Those two sum to
+   319.1 MB against a measured discovery total of 320.2 MB, the 1.1 MB remainder
+   being the 34 early-exit header reads — which is also an independent check that
+   the phase attribution is right.)
+
+   **The measurement METHOD, recorded because the corpus is not being kept.**
+   The 152 MB archive these figures came from is real user data with no owner and
+   is being retired; the synthetic test above is its successor for *regression*,
+   but it cannot reproduce these *magnitudes*. To re-measure credibly:
+
+   - Freeze the input first and hash it. Comparing against a live archive makes
+     drift indistinguishable from regression. Hash file *contents* in sorted-name
+     order, not `md5sum` output — that embeds paths, so a byte-identical tree at
+     a different path yields a different digest and looks exactly like drift.
+   - Attach at `_decode_records` — the single primitive every path funnels
+     through — and count per path, tagging the discovery and load phases
+     separately. The phase split is what localises a regression.
+   - Run both arms **in one process** with the page cache pre-warmed, and
+     `use_cache=False` so a render-skip cannot mask a decode. Interleave arms
+     rather than sequencing them: on a loaded machine, sequenced arms measure the
+     machine — a sequenced run once produced a stable-looking +50% for the
+     *faster* arm while call counts were byte-identical.
+   - For parsed bytes, count the lines actually handed to the parser (a counting
+     proxy around the file object works, and avoids re-implementing the decoder
+     — a lookalike decoder that disagrees is indistinguishable from a
+     regression). Do **not** infer bytes from call counts.
+   - Anchor memory claims on the **max** decoded size, not a median or a ratio:
+     the max (124 MB) reproduces to the digit, while the median wobbles ~0.9–1.05
+     MB with allocator overhead, so any max/median ratio is not reproducible.
+     One earlier "~120x" figure was retracted for exactly this.
+   - Treat the figures above as a **historical snapshot of one archive**, not a
+     target. A different corpus with different fork density will not reproduce
+     them, and should not be expected to.
+
+   The 127-line measurement analysis on the unpushed `dev/codex-decode-backlog`
+   branch is **superseded by this item** — it predates the metric correction and
+   states the charged figures as bytes read. Do not merge it as-is.
 3. **Simplify registry/discovery ownership.** Choose one discovery facade,
    validate factories/instances, and remove or exercise unused provider hooks.
 4. **Centralize entry construction.** Introduce a context/builder for session,
@@ -209,7 +355,12 @@ These refactors were intentionally deferred until behavior was pinned:
 
 Architecture work must preserve the provider contract, Codex adversarial
 suite, and HTML/Markdown exports after every extraction. Avoid long-lived cache
-state until invalidation semantics are explicit.
+state until invalidation semantics are explicit — noting that item 2 landed a
+run-lifetime *identity* map under that rule rather than as an exception to it:
+it shares the key, lifetime and staleness assumption of the path index that was
+already there, and its entries are a fixed size, so bounding the count bounds
+the memory. The rule still forbids what it was written to forbid, which is
+retaining decoded **records**.
 
 ## Refresh checkpoints
 
