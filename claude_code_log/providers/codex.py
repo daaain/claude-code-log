@@ -611,7 +611,7 @@ class CodexProvider(BaseProvider):
         The base implementation would call the loader and then
         :meth:`session_token_totals`, and the two repeat the same index lookup,
         identity resolution, decode and prefix strip — measured at +118 decodes
-        and +636 MB re-decoded across a 34-rollout archive, purely to recompute
+        and +478 MB re-parsed across a 34-rollout archive, purely to recompute
         what the first pass had already produced. Only the *tail* differs:
         normalize for entries, last cumulative ``token_count`` for totals.
 

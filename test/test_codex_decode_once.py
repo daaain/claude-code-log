@@ -4,8 +4,16 @@ Entries and cumulative token totals both come from a rollout's decoded
 records. When the walker asked the provider for them separately, the totals
 call repeated the whole resolution — index lookup, identity, decode,
 inherited-prefix strip — and threw the records away again. On a real 34-rollout
-archive that was 354 decodes where 236 sufficed: +118 decodes and +636 MB
-re-decoded to recompute what the first pass had already produced.
+archive that was 354 decodes where 236 sufficed: +118 decodes and +478 MB
+re-parsed to recompute what the first pass had already produced.
+
+That byte figure is the number of bytes actually handed to the parser. An
+earlier version of it said "+636 MB", which came from `Σ(file size × decode
+calls)` — a metric that bills *every* call as a full file read. It is not one:
+the decoder streams lazily and `_read_identity` returns on the first record, so
+102 of those 354 calls read a single line and were charged a whole file. On this
+corpus that inflates the total by 1.59x. Both are quoted in full where the
+figures are recorded; the parsed number is the honest one.
 
 The property under test is deliberately *not* "the output is correct".
 **Correct output is compatible with arbitrarily redundant decoding** — that is

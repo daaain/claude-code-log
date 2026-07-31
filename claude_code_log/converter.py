@@ -3126,7 +3126,7 @@ def render_provider_wholesale(
         # Entries and cumulative token totals come back from ONE provider call:
         # a provider reading both from the same file (Codex) would otherwise
         # re-parse it for the totals, which measured +118 rollout decodes and
-        # +636 MB re-decoded over a 34-rollout archive. The base implementation
+        # +478 MB re-parsed over a 34-rollout archive. The base implementation
         # of the seam is the old call pair, so providers that don't override it
         # behave exactly as before.
         #
