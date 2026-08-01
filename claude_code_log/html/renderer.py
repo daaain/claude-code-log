@@ -112,7 +112,13 @@ from ..renderer_timings import (
     report_timing_statistics,
     set_timing_var,
 )
-from ..utils import format_timestamp, split_websearch_queries
+from ..utils import (
+    collect_trunk_session_ids,
+    format_timestamp,
+    get_warmup_session_ids,
+    resume_command_for_session,
+    split_websearch_queries,
+)
 from .system_formatters import (
     format_away_summary_content,
     format_hook_attachment_content,
@@ -1611,6 +1617,7 @@ class HtmlRenderer(Renderer):
                 session_tree=session_tree,
                 page_info=page_info,
                 page_stats=page_stats,
+                repo_cwd=repo_cwd,
             )
 
     def _generate_inner(
@@ -1622,6 +1629,7 @@ class HtmlRenderer(Renderer):
         session_tree: Optional["SessionTree"] = None,
         page_info: Optional[dict[str, Any]] = None,
         page_stats: Optional[dict[str, Any]] = None,
+        repo_cwd: Optional[str] = None,
     ) -> str:
         """Body of ``generate`` running inside the SHA-resolver context."""
         import time
@@ -1664,6 +1672,19 @@ class HtmlRenderer(Renderer):
         with log_timing("Content formatting (pre-order)", t_start):
             render_roots = self._annotate_tree_for_render(root_messages)
 
+        # Resume button: only pages holding a single trunk session get
+        # one — `claude -r <session-id>` is unambiguous there. Combined
+        # pages spanning several sessions don't (which session would
+        # resume?).
+        resume_command = None
+        trunk_sids = collect_trunk_session_ids(
+            messages, get_warmup_session_ids(messages)
+        )
+        if len(trunk_sids) == 1:
+            resume_command = resume_command_for_session(
+                next(iter(trunk_sids)), repo_cwd
+            )
+
         # Render template
         with log_timing("Template environment setup", t_start):
             env = get_template_environment()
@@ -1684,6 +1705,7 @@ class HtmlRenderer(Renderer):
                     is_session_header=is_session_header,
                     page_info=page_info,
                     page_stats=page_stats,
+                    resume_command=resume_command,
                 )
             )
 
