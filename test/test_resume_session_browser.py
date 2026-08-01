@@ -27,6 +27,7 @@ def _user_entry(
     cwd: str = "/tmp/project",
     ts: str = "2026-01-01T10:00:00.000Z",
 ) -> dict:
+    """Build a raw user-entry dict for a JSONL fixture."""
     return {
         "type": "user",
         "timestamp": ts,
@@ -48,9 +49,11 @@ class TestResumeSessionBrowser:
     """Live-browser tests for the Resume Session button."""
 
     def setup_method(self) -> None:
+        """Track temp files created by the test for cleanup."""
         self.temp_files: List[Path] = []
 
     def teardown_method(self) -> None:
+        """Remove the temp files created during the test."""
         for f in self.temp_files:
             try:
                 f.unlink()
@@ -95,10 +98,11 @@ class TestResumeSessionBrowser:
             });
             """
         )
-        page.goto(f"file://{html}")
+        page.goto(html.as_uri())
 
     @pytest.mark.browser
     def test_click_copies_command_and_shows_toast(self, page: Page) -> None:
+        """Clicking the button copies the exact command and shows the toast."""
         html = self._render(
             [_user_entry("u1", "hello", session_id="ab12cd34", cwd="/tmp/project")]
         )
@@ -118,6 +122,7 @@ class TestResumeSessionBrowser:
 
     @pytest.mark.browser
     def test_no_button_on_multi_session_page(self, page: Page) -> None:
+        """Combined pages spanning several sessions render no button."""
         html = self._render(
             [
                 _user_entry("u1", "first", session_id="session_a"),
@@ -129,5 +134,5 @@ class TestResumeSessionBrowser:
                 ),
             ]
         )
-        page.goto(f"file://{html}")
+        page.goto(html.as_uri())
         expect(page.locator("#resumeSession")).to_have_count(0)
