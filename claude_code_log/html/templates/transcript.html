@@ -291,6 +291,10 @@
                         toast = document.createElement('div');
                         toast.id = 'resumeToast';
                         toast.className = 'resume-toast';
+                        // Live-region semantics so screen readers
+                        // announce the copy confirmation.
+                        toast.setAttribute('role', 'status');
+                        toast.setAttribute('aria-live', 'polite');
                         document.body.appendChild(toast);
                     }
                     toast.textContent = message;
