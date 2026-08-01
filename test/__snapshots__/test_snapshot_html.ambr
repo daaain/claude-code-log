@@ -374,6 +374,42 @@
       color: #333;
   }
   
+  /* Resume-session button (single-session pages only): copies the
+   * `cd … && claude -r <session-id>` command to the clipboard. */
+  .resume-session.floating-btn {
+      bottom: 340px;
+      border-radius: 6px;
+      width: auto;
+      height: 28px;
+      padding: 0 10px;
+      font-size: 0.65em;
+      font-family: 'SFMono-Regular', Consolas, monospace;
+      font-weight: 600;
+      white-space: nowrap;
+  }
+  
+  /* Transient confirmation shown after the resume command is copied. */
+  .resume-toast {
+      position: fixed;
+      right: 20px;
+      bottom: 380px;
+      max-width: 320px;
+      padding: 8px 12px;
+      background-color: var(--session-bg-dimmed);
+      color: var(--text-muted);
+      border-radius: 6px;
+      box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2);
+      font-size: 0.8em;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.3s;
+      z-index: 1000;
+  }
+  
+  .resume-toast.visible {
+      opacity: 1;
+  }
+  
   @media (max-width: 1280px) {
       .header > span:first-child {
           flex: auto;
@@ -5020,6 +5056,10 @@
       
       
   
+      
+      <button class="resume-session floating-btn" id="resumeSession" data-command="cd /home/synthetic/async-fixture &amp;&amp; claude -r eb000000-0000-4000-8000-000000000001"
+          title="Copy the command that resumes this session in Claude Code">▶ Resume Session</button>
+      
       <button class="timeline-toggle floating-btn" id="toggleTimeline" title="Show timeline">📆</button>
       <button class="filter-messages floating-btn" id="filterMessages" title="Search & Filter (/)">🔍</button>
       <button class="toggle-details floating-btn" id="toggleDetails" title="Toggle all details">📋</button>
@@ -5161,6 +5201,48 @@
                   document.body.classList.toggle('show-debug-info');
                   debugButton.classList.toggle('active');
               });
+  
+              // Resume session: copy the resume command to the clipboard
+              // and prompt the user to paste it into a terminal. The
+              // command is built server-side (data-command) from the
+              // session's recorded cwd, so its quoting matches the OS
+              // the transcript was recorded on — which may differ from
+              // the OS viewing this page.
+              const resumeButton = document.getElementById('resumeSession');
+              if (resumeButton) {
+                  let resumeToastTimer = null;
+                  function showResumeToast(message) {
+                      let toast = document.getElementById('resumeToast');
+                      if (!toast) {
+                          toast = document.createElement('div');
+                          toast.id = 'resumeToast';
+                          toast.className = 'resume-toast';
+                          document.body.appendChild(toast);
+                      }
+                      toast.textContent = message;
+                      toast.classList.add('visible');
+                      if (resumeToastTimer) clearTimeout(resumeToastTimer);
+                      resumeToastTimer = setTimeout(function () {
+                          toast.classList.remove('visible');
+                      }, 5000);
+                  }
+                  resumeButton.addEventListener('click', function () {
+                      const command = resumeButton.dataset.command;
+                      function copied() {
+                          showResumeToast('📋 Copied! Paste into your terminal to resume this session.');
+                      }
+                      function fallback() {
+                          // Clipboard API unavailable or refused: let the
+                          // user copy from a prompt instead.
+                          window.prompt('Copy this command, then paste it into your terminal:', command);
+                      }
+                      if (navigator.clipboard && navigator.clipboard.writeText) {
+                          navigator.clipboard.writeText(command).then(copied, fallback);
+                      } else {
+                          fallback();
+                      }
+                  });
+              }
   
               // User-content view toggle (Markdown / raw).
               //
@@ -7194,6 +7276,42 @@
   .user-view-global.floating-btn.active {
       background-color: #d4e8f7;
       color: #333;
+  }
+  
+  /* Resume-session button (single-session pages only): copies the
+   * `cd … && claude -r <session-id>` command to the clipboard. */
+  .resume-session.floating-btn {
+      bottom: 340px;
+      border-radius: 6px;
+      width: auto;
+      height: 28px;
+      padding: 0 10px;
+      font-size: 0.65em;
+      font-family: 'SFMono-Regular', Consolas, monospace;
+      font-weight: 600;
+      white-space: nowrap;
+  }
+  
+  /* Transient confirmation shown after the resume command is copied. */
+  .resume-toast {
+      position: fixed;
+      right: 20px;
+      bottom: 380px;
+      max-width: 320px;
+      padding: 8px 12px;
+      background-color: var(--session-bg-dimmed);
+      color: var(--text-muted);
+      border-radius: 6px;
+      box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2);
+      font-size: 0.8em;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.3s;
+      z-index: 1000;
+  }
+  
+  .resume-toast.visible {
+      opacity: 1;
   }
   
   @media (max-width: 1280px) {
@@ -11737,6 +11855,10 @@
       
       
   
+      
+      <button class="resume-session floating-btn" id="resumeSession" data-command="cd /home/synthetic/async-fixture &amp;&amp; claude -r eb000000-0000-4000-8000-000000000001"
+          title="Copy the command that resumes this session in Claude Code">▶ Resume Session</button>
+      
       <button class="timeline-toggle floating-btn" id="toggleTimeline" title="Show timeline">📆</button>
       <button class="filter-messages floating-btn" id="filterMessages" title="Search & Filter (/)">🔍</button>
       <button class="toggle-details floating-btn" id="toggleDetails" title="Toggle all details">📋</button>
@@ -11878,6 +12000,48 @@
                   document.body.classList.toggle('show-debug-info');
                   debugButton.classList.toggle('active');
               });
+  
+              // Resume session: copy the resume command to the clipboard
+              // and prompt the user to paste it into a terminal. The
+              // command is built server-side (data-command) from the
+              // session's recorded cwd, so its quoting matches the OS
+              // the transcript was recorded on — which may differ from
+              // the OS viewing this page.
+              const resumeButton = document.getElementById('resumeSession');
+              if (resumeButton) {
+                  let resumeToastTimer = null;
+                  function showResumeToast(message) {
+                      let toast = document.getElementById('resumeToast');
+                      if (!toast) {
+                          toast = document.createElement('div');
+                          toast.id = 'resumeToast';
+                          toast.className = 'resume-toast';
+                          document.body.appendChild(toast);
+                      }
+                      toast.textContent = message;
+                      toast.classList.add('visible');
+                      if (resumeToastTimer) clearTimeout(resumeToastTimer);
+                      resumeToastTimer = setTimeout(function () {
+                          toast.classList.remove('visible');
+                      }, 5000);
+                  }
+                  resumeButton.addEventListener('click', function () {
+                      const command = resumeButton.dataset.command;
+                      function copied() {
+                          showResumeToast('📋 Copied! Paste into your terminal to resume this session.');
+                      }
+                      function fallback() {
+                          // Clipboard API unavailable or refused: let the
+                          // user copy from a prompt instead.
+                          window.prompt('Copy this command, then paste it into your terminal:', command);
+                      }
+                      if (navigator.clipboard && navigator.clipboard.writeText) {
+                          navigator.clipboard.writeText(command).then(copied, fallback);
+                      } else {
+                          fallback();
+                      }
+                  });
+              }
   
               // User-content view toggle (Markdown / raw).
               //
@@ -13911,6 +14075,42 @@
   .user-view-global.floating-btn.active {
       background-color: #d4e8f7;
       color: #333;
+  }
+  
+  /* Resume-session button (single-session pages only): copies the
+   * `cd … && claude -r <session-id>` command to the clipboard. */
+  .resume-session.floating-btn {
+      bottom: 340px;
+      border-radius: 6px;
+      width: auto;
+      height: 28px;
+      padding: 0 10px;
+      font-size: 0.65em;
+      font-family: 'SFMono-Regular', Consolas, monospace;
+      font-weight: 600;
+      white-space: nowrap;
+  }
+  
+  /* Transient confirmation shown after the resume command is copied. */
+  .resume-toast {
+      position: fixed;
+      right: 20px;
+      bottom: 380px;
+      max-width: 320px;
+      padding: 8px 12px;
+      background-color: var(--session-bg-dimmed);
+      color: var(--text-muted);
+      border-radius: 6px;
+      box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2);
+      font-size: 0.8em;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.3s;
+      z-index: 1000;
+  }
+  
+  .resume-toast.visible {
+      opacity: 1;
   }
   
   @media (max-width: 1280px) {
@@ -16340,6 +16540,42 @@
   .user-view-global.floating-btn.active {
       background-color: #d4e8f7;
       color: #333;
+  }
+  
+  /* Resume-session button (single-session pages only): copies the
+   * `cd … && claude -r <session-id>` command to the clipboard. */
+  .resume-session.floating-btn {
+      bottom: 340px;
+      border-radius: 6px;
+      width: auto;
+      height: 28px;
+      padding: 0 10px;
+      font-size: 0.65em;
+      font-family: 'SFMono-Regular', Consolas, monospace;
+      font-weight: 600;
+      white-space: nowrap;
+  }
+  
+  /* Transient confirmation shown after the resume command is copied. */
+  .resume-toast {
+      position: fixed;
+      right: 20px;
+      bottom: 380px;
+      max-width: 320px;
+      padding: 8px 12px;
+      background-color: var(--session-bg-dimmed);
+      color: var(--text-muted);
+      border-radius: 6px;
+      box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2);
+      font-size: 0.8em;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.3s;
+      z-index: 1000;
+  }
+  
+  .resume-toast.visible {
+      opacity: 1;
   }
   
   @media (max-width: 1280px) {
@@ -21106,6 +21342,10 @@
       
       
   
+      
+      <button class="resume-session floating-btn" id="resumeSession" data-command="cd /tmp &amp;&amp; claude -r test_session"
+          title="Copy the command that resumes this session in Claude Code">▶ Resume Session</button>
+      
       <button class="timeline-toggle floating-btn" id="toggleTimeline" title="Show timeline">📆</button>
       <button class="filter-messages floating-btn" id="filterMessages" title="Search & Filter (/)">🔍</button>
       <button class="toggle-details floating-btn" id="toggleDetails" title="Toggle all details">📋</button>
@@ -21247,6 +21487,48 @@
                   document.body.classList.toggle('show-debug-info');
                   debugButton.classList.toggle('active');
               });
+  
+              // Resume session: copy the resume command to the clipboard
+              // and prompt the user to paste it into a terminal. The
+              // command is built server-side (data-command) from the
+              // session's recorded cwd, so its quoting matches the OS
+              // the transcript was recorded on — which may differ from
+              // the OS viewing this page.
+              const resumeButton = document.getElementById('resumeSession');
+              if (resumeButton) {
+                  let resumeToastTimer = null;
+                  function showResumeToast(message) {
+                      let toast = document.getElementById('resumeToast');
+                      if (!toast) {
+                          toast = document.createElement('div');
+                          toast.id = 'resumeToast';
+                          toast.className = 'resume-toast';
+                          document.body.appendChild(toast);
+                      }
+                      toast.textContent = message;
+                      toast.classList.add('visible');
+                      if (resumeToastTimer) clearTimeout(resumeToastTimer);
+                      resumeToastTimer = setTimeout(function () {
+                          toast.classList.remove('visible');
+                      }, 5000);
+                  }
+                  resumeButton.addEventListener('click', function () {
+                      const command = resumeButton.dataset.command;
+                      function copied() {
+                          showResumeToast('📋 Copied! Paste into your terminal to resume this session.');
+                      }
+                      function fallback() {
+                          // Clipboard API unavailable or refused: let the
+                          // user copy from a prompt instead.
+                          window.prompt('Copy this command, then paste it into your terminal:', command);
+                      }
+                      if (navigator.clipboard && navigator.clipboard.writeText) {
+                          navigator.clipboard.writeText(command).then(copied, fallback);
+                      } else {
+                          fallback();
+                      }
+                  });
+              }
   
               // User-content view toggle (Markdown / raw).
               //
@@ -23280,6 +23562,42 @@
   .user-view-global.floating-btn.active {
       background-color: #d4e8f7;
       color: #333;
+  }
+  
+  /* Resume-session button (single-session pages only): copies the
+   * `cd … && claude -r <session-id>` command to the clipboard. */
+  .resume-session.floating-btn {
+      bottom: 340px;
+      border-radius: 6px;
+      width: auto;
+      height: 28px;
+      padding: 0 10px;
+      font-size: 0.65em;
+      font-family: 'SFMono-Regular', Consolas, monospace;
+      font-weight: 600;
+      white-space: nowrap;
+  }
+  
+  /* Transient confirmation shown after the resume command is copied. */
+  .resume-toast {
+      position: fixed;
+      right: 20px;
+      bottom: 380px;
+      max-width: 320px;
+      padding: 8px 12px;
+      background-color: var(--session-bg-dimmed);
+      color: var(--text-muted);
+      border-radius: 6px;
+      box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2);
+      font-size: 0.8em;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.3s;
+      z-index: 1000;
+  }
+  
+  .resume-toast.visible {
+      opacity: 1;
   }
   
   @media (max-width: 1280px) {
@@ -28326,6 +28644,10 @@
       
       
   
+      
+      <button class="resume-session floating-btn" id="resumeSession" data-command="cd /home/synthetic/test-fixture &amp;&amp; claude -r ef000000-0000-4000-8000-000000000001"
+          title="Copy the command that resumes this session in Claude Code">▶ Resume Session</button>
+      
       <button class="timeline-toggle floating-btn" id="toggleTimeline" title="Show timeline">📆</button>
       <button class="filter-messages floating-btn" id="filterMessages" title="Search & Filter (/)">🔍</button>
       <button class="toggle-details floating-btn" id="toggleDetails" title="Toggle all details">📋</button>
@@ -28467,6 +28789,48 @@
                   document.body.classList.toggle('show-debug-info');
                   debugButton.classList.toggle('active');
               });
+  
+              // Resume session: copy the resume command to the clipboard
+              // and prompt the user to paste it into a terminal. The
+              // command is built server-side (data-command) from the
+              // session's recorded cwd, so its quoting matches the OS
+              // the transcript was recorded on — which may differ from
+              // the OS viewing this page.
+              const resumeButton = document.getElementById('resumeSession');
+              if (resumeButton) {
+                  let resumeToastTimer = null;
+                  function showResumeToast(message) {
+                      let toast = document.getElementById('resumeToast');
+                      if (!toast) {
+                          toast = document.createElement('div');
+                          toast.id = 'resumeToast';
+                          toast.className = 'resume-toast';
+                          document.body.appendChild(toast);
+                      }
+                      toast.textContent = message;
+                      toast.classList.add('visible');
+                      if (resumeToastTimer) clearTimeout(resumeToastTimer);
+                      resumeToastTimer = setTimeout(function () {
+                          toast.classList.remove('visible');
+                      }, 5000);
+                  }
+                  resumeButton.addEventListener('click', function () {
+                      const command = resumeButton.dataset.command;
+                      function copied() {
+                          showResumeToast('📋 Copied! Paste into your terminal to resume this session.');
+                      }
+                      function fallback() {
+                          // Clipboard API unavailable or refused: let the
+                          // user copy from a prompt instead.
+                          window.prompt('Copy this command, then paste it into your terminal:', command);
+                      }
+                      if (navigator.clipboard && navigator.clipboard.writeText) {
+                          navigator.clipboard.writeText(command).then(copied, fallback);
+                      } else {
+                          fallback();
+                      }
+                  });
+              }
   
               // User-content view toggle (Markdown / raw).
               //
@@ -30500,6 +30864,42 @@
   .user-view-global.floating-btn.active {
       background-color: #d4e8f7;
       color: #333;
+  }
+  
+  /* Resume-session button (single-session pages only): copies the
+   * `cd … && claude -r <session-id>` command to the clipboard. */
+  .resume-session.floating-btn {
+      bottom: 340px;
+      border-radius: 6px;
+      width: auto;
+      height: 28px;
+      padding: 0 10px;
+      font-size: 0.65em;
+      font-family: 'SFMono-Regular', Consolas, monospace;
+      font-weight: 600;
+      white-space: nowrap;
+  }
+  
+  /* Transient confirmation shown after the resume command is copied. */
+  .resume-toast {
+      position: fixed;
+      right: 20px;
+      bottom: 380px;
+      max-width: 320px;
+      padding: 8px 12px;
+      background-color: var(--session-bg-dimmed);
+      color: var(--text-muted);
+      border-radius: 6px;
+      box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2);
+      font-size: 0.8em;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.3s;
+      z-index: 1000;
+  }
+  
+  .resume-toast.visible {
+      opacity: 1;
   }
   
   @media (max-width: 1280px) {
@@ -35497,6 +35897,7 @@
       
       
   
+      
       <button class="timeline-toggle floating-btn" id="toggleTimeline" title="Show timeline">📆</button>
       <button class="filter-messages floating-btn" id="filterMessages" title="Search & Filter (/)">🔍</button>
       <button class="toggle-details floating-btn" id="toggleDetails" title="Toggle all details">📋</button>
@@ -35638,6 +36039,48 @@
                   document.body.classList.toggle('show-debug-info');
                   debugButton.classList.toggle('active');
               });
+  
+              // Resume session: copy the resume command to the clipboard
+              // and prompt the user to paste it into a terminal. The
+              // command is built server-side (data-command) from the
+              // session's recorded cwd, so its quoting matches the OS
+              // the transcript was recorded on — which may differ from
+              // the OS viewing this page.
+              const resumeButton = document.getElementById('resumeSession');
+              if (resumeButton) {
+                  let resumeToastTimer = null;
+                  function showResumeToast(message) {
+                      let toast = document.getElementById('resumeToast');
+                      if (!toast) {
+                          toast = document.createElement('div');
+                          toast.id = 'resumeToast';
+                          toast.className = 'resume-toast';
+                          document.body.appendChild(toast);
+                      }
+                      toast.textContent = message;
+                      toast.classList.add('visible');
+                      if (resumeToastTimer) clearTimeout(resumeToastTimer);
+                      resumeToastTimer = setTimeout(function () {
+                          toast.classList.remove('visible');
+                      }, 5000);
+                  }
+                  resumeButton.addEventListener('click', function () {
+                      const command = resumeButton.dataset.command;
+                      function copied() {
+                          showResumeToast('📋 Copied! Paste into your terminal to resume this session.');
+                      }
+                      function fallback() {
+                          // Clipboard API unavailable or refused: let the
+                          // user copy from a prompt instead.
+                          window.prompt('Copy this command, then paste it into your terminal:', command);
+                      }
+                      if (navigator.clipboard && navigator.clipboard.writeText) {
+                          navigator.clipboard.writeText(command).then(copied, fallback);
+                      } else {
+                          fallback();
+                      }
+                  });
+              }
   
               // User-content view toggle (Markdown / raw).
               //
@@ -37671,6 +38114,42 @@
   .user-view-global.floating-btn.active {
       background-color: #d4e8f7;
       color: #333;
+  }
+  
+  /* Resume-session button (single-session pages only): copies the
+   * `cd … && claude -r <session-id>` command to the clipboard. */
+  .resume-session.floating-btn {
+      bottom: 340px;
+      border-radius: 6px;
+      width: auto;
+      height: 28px;
+      padding: 0 10px;
+      font-size: 0.65em;
+      font-family: 'SFMono-Regular', Consolas, monospace;
+      font-weight: 600;
+      white-space: nowrap;
+  }
+  
+  /* Transient confirmation shown after the resume command is copied. */
+  .resume-toast {
+      position: fixed;
+      right: 20px;
+      bottom: 380px;
+      max-width: 320px;
+      padding: 8px 12px;
+      background-color: var(--session-bg-dimmed);
+      color: var(--text-muted);
+      border-radius: 6px;
+      box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2);
+      font-size: 0.8em;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.3s;
+      z-index: 1000;
+  }
+  
+  .resume-toast.visible {
+      opacity: 1;
   }
   
   @media (max-width: 1280px) {
@@ -42613,6 +43092,7 @@
       
       
   
+      
       <button class="timeline-toggle floating-btn" id="toggleTimeline" title="Show timeline">📆</button>
       <button class="filter-messages floating-btn" id="filterMessages" title="Search & Filter (/)">🔍</button>
       <button class="toggle-details floating-btn" id="toggleDetails" title="Toggle all details">📋</button>
@@ -42754,6 +43234,48 @@
                   document.body.classList.toggle('show-debug-info');
                   debugButton.classList.toggle('active');
               });
+  
+              // Resume session: copy the resume command to the clipboard
+              // and prompt the user to paste it into a terminal. The
+              // command is built server-side (data-command) from the
+              // session's recorded cwd, so its quoting matches the OS
+              // the transcript was recorded on — which may differ from
+              // the OS viewing this page.
+              const resumeButton = document.getElementById('resumeSession');
+              if (resumeButton) {
+                  let resumeToastTimer = null;
+                  function showResumeToast(message) {
+                      let toast = document.getElementById('resumeToast');
+                      if (!toast) {
+                          toast = document.createElement('div');
+                          toast.id = 'resumeToast';
+                          toast.className = 'resume-toast';
+                          document.body.appendChild(toast);
+                      }
+                      toast.textContent = message;
+                      toast.classList.add('visible');
+                      if (resumeToastTimer) clearTimeout(resumeToastTimer);
+                      resumeToastTimer = setTimeout(function () {
+                          toast.classList.remove('visible');
+                      }, 5000);
+                  }
+                  resumeButton.addEventListener('click', function () {
+                      const command = resumeButton.dataset.command;
+                      function copied() {
+                          showResumeToast('📋 Copied! Paste into your terminal to resume this session.');
+                      }
+                      function fallback() {
+                          // Clipboard API unavailable or refused: let the
+                          // user copy from a prompt instead.
+                          window.prompt('Copy this command, then paste it into your terminal:', command);
+                      }
+                      if (navigator.clipboard && navigator.clipboard.writeText) {
+                          navigator.clipboard.writeText(command).then(copied, fallback);
+                      } else {
+                          fallback();
+                      }
+                  });
+              }
   
               // User-content view toggle (Markdown / raw).
               //
@@ -44787,6 +45309,42 @@
   .user-view-global.floating-btn.active {
       background-color: #d4e8f7;
       color: #333;
+  }
+  
+  /* Resume-session button (single-session pages only): copies the
+   * `cd … && claude -r <session-id>` command to the clipboard. */
+  .resume-session.floating-btn {
+      bottom: 340px;
+      border-radius: 6px;
+      width: auto;
+      height: 28px;
+      padding: 0 10px;
+      font-size: 0.65em;
+      font-family: 'SFMono-Regular', Consolas, monospace;
+      font-weight: 600;
+      white-space: nowrap;
+  }
+  
+  /* Transient confirmation shown after the resume command is copied. */
+  .resume-toast {
+      position: fixed;
+      right: 20px;
+      bottom: 380px;
+      max-width: 320px;
+      padding: 8px 12px;
+      background-color: var(--session-bg-dimmed);
+      color: var(--text-muted);
+      border-radius: 6px;
+      box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2);
+      font-size: 0.8em;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.3s;
+      z-index: 1000;
+  }
+  
+  .resume-toast.visible {
+      opacity: 1;
   }
   
   @media (max-width: 1280px) {
@@ -49553,6 +50111,10 @@
       
       
   
+      
+      <button class="resume-session floating-btn" id="resumeSession" data-command="cd /tmp &amp;&amp; claude -r test_session"
+          title="Copy the command that resumes this session in Claude Code">▶ Resume Session</button>
+      
       <button class="timeline-toggle floating-btn" id="toggleTimeline" title="Show timeline">📆</button>
       <button class="filter-messages floating-btn" id="filterMessages" title="Search & Filter (/)">🔍</button>
       <button class="toggle-details floating-btn" id="toggleDetails" title="Toggle all details">📋</button>
@@ -49694,6 +50256,48 @@
                   document.body.classList.toggle('show-debug-info');
                   debugButton.classList.toggle('active');
               });
+  
+              // Resume session: copy the resume command to the clipboard
+              // and prompt the user to paste it into a terminal. The
+              // command is built server-side (data-command) from the
+              // session's recorded cwd, so its quoting matches the OS
+              // the transcript was recorded on — which may differ from
+              // the OS viewing this page.
+              const resumeButton = document.getElementById('resumeSession');
+              if (resumeButton) {
+                  let resumeToastTimer = null;
+                  function showResumeToast(message) {
+                      let toast = document.getElementById('resumeToast');
+                      if (!toast) {
+                          toast = document.createElement('div');
+                          toast.id = 'resumeToast';
+                          toast.className = 'resume-toast';
+                          document.body.appendChild(toast);
+                      }
+                      toast.textContent = message;
+                      toast.classList.add('visible');
+                      if (resumeToastTimer) clearTimeout(resumeToastTimer);
+                      resumeToastTimer = setTimeout(function () {
+                          toast.classList.remove('visible');
+                      }, 5000);
+                  }
+                  resumeButton.addEventListener('click', function () {
+                      const command = resumeButton.dataset.command;
+                      function copied() {
+                          showResumeToast('📋 Copied! Paste into your terminal to resume this session.');
+                      }
+                      function fallback() {
+                          // Clipboard API unavailable or refused: let the
+                          // user copy from a prompt instead.
+                          window.prompt('Copy this command, then paste it into your terminal:', command);
+                      }
+                      if (navigator.clipboard && navigator.clipboard.writeText) {
+                          navigator.clipboard.writeText(command).then(copied, fallback);
+                      } else {
+                          fallback();
+                      }
+                  });
+              }
   
               // User-content view toggle (Markdown / raw).
               //
@@ -51727,6 +52331,42 @@
   .user-view-global.floating-btn.active {
       background-color: #d4e8f7;
       color: #333;
+  }
+  
+  /* Resume-session button (single-session pages only): copies the
+   * `cd … && claude -r <session-id>` command to the clipboard. */
+  .resume-session.floating-btn {
+      bottom: 340px;
+      border-radius: 6px;
+      width: auto;
+      height: 28px;
+      padding: 0 10px;
+      font-size: 0.65em;
+      font-family: 'SFMono-Regular', Consolas, monospace;
+      font-weight: 600;
+      white-space: nowrap;
+  }
+  
+  /* Transient confirmation shown after the resume command is copied. */
+  .resume-toast {
+      position: fixed;
+      right: 20px;
+      bottom: 380px;
+      max-width: 320px;
+      padding: 8px 12px;
+      background-color: var(--session-bg-dimmed);
+      color: var(--text-muted);
+      border-radius: 6px;
+      box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2);
+      font-size: 0.8em;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.3s;
+      z-index: 1000;
+  }
+  
+  .resume-toast.visible {
+      opacity: 1;
   }
   
   @media (max-width: 1280px) {
@@ -56298,6 +56938,10 @@
       
       
   
+      
+      <button class="resume-session floating-btn" id="resumeSession" data-command="cd /tmp/project &amp;&amp; claude -r 00000000-0295-4000-8000-000000000001"
+          title="Copy the command that resumes this session in Claude Code">▶ Resume Session</button>
+      
       <button class="timeline-toggle floating-btn" id="toggleTimeline" title="Show timeline">📆</button>
       <button class="filter-messages floating-btn" id="filterMessages" title="Search & Filter (/)">🔍</button>
       <button class="toggle-details floating-btn" id="toggleDetails" title="Toggle all details">📋</button>
@@ -56439,6 +57083,48 @@
                   document.body.classList.toggle('show-debug-info');
                   debugButton.classList.toggle('active');
               });
+  
+              // Resume session: copy the resume command to the clipboard
+              // and prompt the user to paste it into a terminal. The
+              // command is built server-side (data-command) from the
+              // session's recorded cwd, so its quoting matches the OS
+              // the transcript was recorded on — which may differ from
+              // the OS viewing this page.
+              const resumeButton = document.getElementById('resumeSession');
+              if (resumeButton) {
+                  let resumeToastTimer = null;
+                  function showResumeToast(message) {
+                      let toast = document.getElementById('resumeToast');
+                      if (!toast) {
+                          toast = document.createElement('div');
+                          toast.id = 'resumeToast';
+                          toast.className = 'resume-toast';
+                          document.body.appendChild(toast);
+                      }
+                      toast.textContent = message;
+                      toast.classList.add('visible');
+                      if (resumeToastTimer) clearTimeout(resumeToastTimer);
+                      resumeToastTimer = setTimeout(function () {
+                          toast.classList.remove('visible');
+                      }, 5000);
+                  }
+                  resumeButton.addEventListener('click', function () {
+                      const command = resumeButton.dataset.command;
+                      function copied() {
+                          showResumeToast('📋 Copied! Paste into your terminal to resume this session.');
+                      }
+                      function fallback() {
+                          // Clipboard API unavailable or refused: let the
+                          // user copy from a prompt instead.
+                          window.prompt('Copy this command, then paste it into your terminal:', command);
+                      }
+                      if (navigator.clipboard && navigator.clipboard.writeText) {
+                          navigator.clipboard.writeText(command).then(copied, fallback);
+                      } else {
+                          fallback();
+                      }
+                  });
+              }
   
               // User-content view toggle (Markdown / raw).
               //
@@ -58472,6 +59158,42 @@
   .user-view-global.floating-btn.active {
       background-color: #d4e8f7;
       color: #333;
+  }
+  
+  /* Resume-session button (single-session pages only): copies the
+   * `cd … && claude -r <session-id>` command to the clipboard. */
+  .resume-session.floating-btn {
+      bottom: 340px;
+      border-radius: 6px;
+      width: auto;
+      height: 28px;
+      padding: 0 10px;
+      font-size: 0.65em;
+      font-family: 'SFMono-Regular', Consolas, monospace;
+      font-weight: 600;
+      white-space: nowrap;
+  }
+  
+  /* Transient confirmation shown after the resume command is copied. */
+  .resume-toast {
+      position: fixed;
+      right: 20px;
+      bottom: 380px;
+      max-width: 320px;
+      padding: 8px 12px;
+      background-color: var(--session-bg-dimmed);
+      color: var(--text-muted);
+      border-radius: 6px;
+      box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2);
+      font-size: 0.8em;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.3s;
+      z-index: 1000;
+  }
+  
+  .resume-toast.visible {
+      opacity: 1;
   }
   
   @media (max-width: 1280px) {
@@ -62992,6 +63714,10 @@
       
       
   
+      
+      <button class="resume-session floating-btn" id="resumeSession" data-command="cd /tmp/project &amp;&amp; claude -r system_reminder"
+          title="Copy the command that resumes this session in Claude Code">▶ Resume Session</button>
+      
       <button class="timeline-toggle floating-btn" id="toggleTimeline" title="Show timeline">📆</button>
       <button class="filter-messages floating-btn" id="filterMessages" title="Search & Filter (/)">🔍</button>
       <button class="toggle-details floating-btn" id="toggleDetails" title="Toggle all details">📋</button>
@@ -63133,6 +63859,48 @@
                   document.body.classList.toggle('show-debug-info');
                   debugButton.classList.toggle('active');
               });
+  
+              // Resume session: copy the resume command to the clipboard
+              // and prompt the user to paste it into a terminal. The
+              // command is built server-side (data-command) from the
+              // session's recorded cwd, so its quoting matches the OS
+              // the transcript was recorded on — which may differ from
+              // the OS viewing this page.
+              const resumeButton = document.getElementById('resumeSession');
+              if (resumeButton) {
+                  let resumeToastTimer = null;
+                  function showResumeToast(message) {
+                      let toast = document.getElementById('resumeToast');
+                      if (!toast) {
+                          toast = document.createElement('div');
+                          toast.id = 'resumeToast';
+                          toast.className = 'resume-toast';
+                          document.body.appendChild(toast);
+                      }
+                      toast.textContent = message;
+                      toast.classList.add('visible');
+                      if (resumeToastTimer) clearTimeout(resumeToastTimer);
+                      resumeToastTimer = setTimeout(function () {
+                          toast.classList.remove('visible');
+                      }, 5000);
+                  }
+                  resumeButton.addEventListener('click', function () {
+                      const command = resumeButton.dataset.command;
+                      function copied() {
+                          showResumeToast('📋 Copied! Paste into your terminal to resume this session.');
+                      }
+                      function fallback() {
+                          // Clipboard API unavailable or refused: let the
+                          // user copy from a prompt instead.
+                          window.prompt('Copy this command, then paste it into your terminal:', command);
+                      }
+                      if (navigator.clipboard && navigator.clipboard.writeText) {
+                          navigator.clipboard.writeText(command).then(copied, fallback);
+                      } else {
+                          fallback();
+                      }
+                  });
+              }
   
               // User-content view toggle (Markdown / raw).
               //

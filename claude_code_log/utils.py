@@ -212,6 +212,32 @@ def get_project_display_name(
     return best_working_dir(project_dir_name, working_directories)[0]
 
 
+def resume_command_for_session(session_id: str, cwd: Optional[str]) -> str:
+    """Build a shell one-liner that resumes ``session_id`` in Claude Code.
+
+    ``cwd`` is the session's recorded working directory; the command
+    changes there first so ``claude -r`` runs in the right project.
+    Quoting follows the OS the *transcript* was recorded on (detected
+    from the path shape, like :func:`path_looks_absolute`), not the
+    host rendering the HTML — a Windows-recorded session must be
+    resumed in a Windows shell regardless of where the page is viewed.
+
+    Returns a bare ``claude -r`` command when no cwd was recorded.
+    """
+    if not cwd:
+        return f"claude -r {session_id}"
+    from pathlib import PureWindowsPath
+
+    if PureWindowsPath(cwd).drive:
+        # Windows shells (PowerShell 7+, cmd): double quotes handle
+        # spaces; backslashes are literal inside them.
+        return f'cd "{cwd}" && claude -r {session_id}'
+    # POSIX shells: shlex protects spaces and metacharacters.
+    import shlex
+
+    return f"cd {shlex.quote(cwd)} && claude -r {session_id}"
+
+
 def path_looks_absolute(s: str) -> bool:
     """True if ``s`` looks like an absolute path on either POSIX or
     Windows. Decoupled from the host OS so JSONL-stored cwds don't
