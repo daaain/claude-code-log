@@ -873,6 +873,7 @@ class TestPaginationPicksUpNewSessions:
     def test_unchanged_project_still_skips_every_page(self, temp_project_dir):
         """The membership check must not cost incrementality on a no-op rebuild."""
         from claude_code_log.converter import convert_jsonl_to_html
+        from claude_code_log.html.renderer import HtmlRenderer
 
         for i, session_id in enumerate(["s1", "s2", "s3", "s4"]):
             self._write_session(temp_project_dir, session_id, f"2023-01-0{i + 1}")
@@ -882,8 +883,17 @@ class TestPaginationPicksUpNewSessions:
         assert len(pages) > 1
         before = {p: p.read_bytes() for p in pages}
 
-        convert_jsonl_to_html(temp_project_dir, page_size=25, silent=True)
+        # Byte-equality alone can't prove the pages were skipped: rendering is
+        # deterministic, so a page re-rendered from scratch is byte-identical
+        # to the one it replaces. Spy on the renderer to assert no page was
+        # rendered at all. `side_effect` keeps the real implementation, so the
+        # output assertions below stay meaningful if this ever regresses.
+        with patch.object(
+            HtmlRenderer, "generate", autospec=True, side_effect=HtmlRenderer.generate
+        ) as generate_spy:
+            convert_jsonl_to_html(temp_project_dir, page_size=25, silent=True)
 
+        assert generate_spy.call_count == 0
         for page, content in before.items():
             assert page.read_bytes() == content
 
