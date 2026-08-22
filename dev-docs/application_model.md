@@ -144,6 +144,19 @@ cache row, the session is reparsed. The schema-version row also
 invalidates the entire HTML cache when migrations bump the version,
 since rendered output may have changed even when source data hasn't.
 
+Paginated output carries an extra invalidation axis. `--page-size`
+assigns sessions to pages chronologically, and that assignment is
+recomputed from scratch on every run, so a page's *membership* can
+change while every session it already held is untouched: a new session
+lands on the partly-filled last page, or sessions imported from another
+machine sort into the middle by their original timestamps and shift
+everything after them along. Per-session freshness alone can't see
+this, so `is_page_stale()` also compares the run's computed session
+list against the cached `page_sessions` rows and reports
+`sessions_changed`. Without that comparison the affected pages report
+`up_to_date`, and the new sessions land in the cache and in their own
+`session-*.html` but never in any combined page (issue #308).
+
 Connections run in WAL mode with `synchronous=NORMAL` (durable across
 app crashes; only a power/OS crash can lose the last commit — fine for a
 regenerable cache). By default `_get_connection()` opens and closes a

@@ -1675,6 +1675,7 @@ class CacheManager:
         page_size_config: int,
         variant_suffix: str = "",
         output_dir: Optional[Path] = None,
+        expected_session_ids: Optional[List[str]] = None,
     ) -> tuple[bool, str]:
         """Check if a page needs regeneration.
 
@@ -1688,6 +1689,11 @@ class CacheManager:
                 ``--output`` runs must pass their destination or the file
                 check reports ``file_missing`` forever (mirrors
                 ``is_transcript_stale``).
+            expected_session_ids: The sessions this page should hold on
+                *this* run, in render order. Every other check below reads
+                the page's *cached* membership, so without this a page whose
+                membership changed while its previously-held sessions stayed
+                untouched reports ``up_to_date`` (see ``sessions_changed``).
 
         Returns:
             Tuple of (is_stale: bool, reason: str)
@@ -1715,6 +1721,23 @@ class CacheManager:
             return True, "file_missing"
         if is_html_outdated(actual_file):
             return True, "file_version_mismatch"
+
+        # Check if the page's *membership* changed. The caller recomputes the
+        # session→page assignment from scratch every run, so a page can gain,
+        # lose, or reorder sessions while every session it previously held is
+        # byte-for-byte untouched:
+        #   - a brand-new session lands on the partially-filled last page;
+        #   - a session imported with older timestamps sorts into the middle,
+        #     shifting the contents of every page after it.
+        # All the checks below (and above) read only the *cached* membership,
+        # so they see nothing amiss and report `up_to_date` — the new sessions
+        # then never get rendered into any page, and the combined output stays
+        # frozen until the HTML is deleted by hand (issue #308).
+        if (
+            expected_session_ids is not None
+            and list(expected_session_ids) != page_data.session_ids
+        ):
+            return True, "sessions_changed"
 
         # Check if any session on this page has changed
         with self._get_connection() as conn:
