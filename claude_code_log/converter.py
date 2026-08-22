@@ -1783,7 +1783,11 @@ def _generate_paginated_html(
         # Check if page is stale (resolve against the real output_dir so an
         # --output run doesn't report file_missing on every page forever).
         is_stale, reason = cache_manager.is_page_stale(
-            page_num, page_size, suffix, output_dir=output_dir
+            page_num,
+            page_size,
+            suffix,
+            output_dir=output_dir,
+            expected_session_ids=page_session_ids,
         )
 
         if not is_stale and page_file.exists():

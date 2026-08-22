@@ -425,6 +425,94 @@ class TestPageCacheMethods:
         assert is_stale is False
         assert "up_to_date" in reason
 
+    def _cache_single_session_page(self, cache_manager, temp_project_dir):
+        """Cache a 1-session page whose session data matches exactly."""
+        cache_manager.update_page_cache(
+            page_number=1,
+            html_path="combined_transcripts.html",
+            page_size_config=5000,
+            session_ids=["s1"],
+            message_count=1000,
+            first_timestamp="2023-01-01T10:00:00Z",
+            last_timestamp="2023-01-01T11:00:00Z",
+            total_input_tokens=100,
+            total_output_tokens=50,
+            total_cache_creation_tokens=0,
+            total_cache_read_tokens=0,
+        )
+        (temp_project_dir / "combined_transcripts.html").write_text("<html></html>")
+        cache_manager.update_session_cache(
+            {
+                "s1": SessionCacheData(
+                    session_id="s1",
+                    message_count=1000,
+                    first_timestamp="2023-01-01T10:00:00Z",
+                    last_timestamp="2023-01-01T11:00:00Z",
+                    first_user_message="Test",
+                    total_input_tokens=100,
+                    total_output_tokens=50,
+                    total_cache_creation_tokens=0,
+                    total_cache_read_tokens=0,
+                )
+            }
+        )
+
+    def test_is_page_stale_sessions_added_to_page(
+        self, cache_manager, temp_project_dir
+    ):
+        """A page that gains a session is stale even if its own sessions didn't change.
+
+        Every other check reads the page's cached membership, so an added
+        session is invisible without ``expected_session_ids`` (issue #308).
+        """
+        self._cache_single_session_page(cache_manager, temp_project_dir)
+
+        with patch("claude_code_log.renderer.is_html_outdated", return_value=False):
+            is_stale, reason = cache_manager.is_page_stale(
+                1, 5000, expected_session_ids=["s1", "s2"]
+            )
+        assert is_stale is True
+        assert reason == "sessions_changed"
+
+    def test_is_page_stale_sessions_reordered_on_page(
+        self, cache_manager, temp_project_dir
+    ):
+        """A page whose sessions shift order is stale — order is render order."""
+        cache_manager.update_page_cache(
+            page_number=1,
+            html_path="combined_transcripts.html",
+            page_size_config=5000,
+            session_ids=["s1", "s2"],
+            message_count=1000,
+            first_timestamp="2023-01-01T10:00:00Z",
+            last_timestamp="2023-01-01T11:00:00Z",
+            total_input_tokens=100,
+            total_output_tokens=50,
+            total_cache_creation_tokens=0,
+            total_cache_read_tokens=0,
+        )
+        (temp_project_dir / "combined_transcripts.html").write_text("<html></html>")
+
+        with patch("claude_code_log.renderer.is_html_outdated", return_value=False):
+            is_stale, reason = cache_manager.is_page_stale(
+                1, 5000, expected_session_ids=["s2", "s1"]
+            )
+        assert is_stale is True
+        assert reason == "sessions_changed"
+
+    def test_is_page_stale_up_to_date_with_matching_expected_sessions(
+        self, cache_manager, temp_project_dir
+    ):
+        """Passing the same membership must not defeat the cache."""
+        self._cache_single_session_page(cache_manager, temp_project_dir)
+
+        with patch("claude_code_log.renderer.is_html_outdated", return_value=False):
+            is_stale, reason = cache_manager.is_page_stale(
+                1, 5000, expected_session_ids=["s1"]
+            )
+        assert is_stale is False
+        assert reason == "up_to_date"
+
     def test_invalidate_all_pages(self, cache_manager):
         """invalidate_all_pages should remove all page cache entries."""
         cache_manager.update_page_cache(
@@ -700,6 +788,104 @@ class TestPaginationIntegration:
         )
         assert "messages" in page1_content.lower()
         assert "Page 1" in page1_content or "page-navigation" in page1_content
+
+
+class TestPaginationPicksUpNewSessions:
+    """Regression tests for issue #308.
+
+    A rebuild recomputes the session→page assignment from scratch, but page
+    staleness used to be judged purely on the sessions a page *already* held.
+    A session that appeared without disturbing any of them — a new session
+    landing on the partly-filled last page, or sessions copied in from another
+    machine sorting into the middle by their original timestamps — was written
+    to the cache and to its own ``session-*.html``, yet never rendered into any
+    combined page. The combined output stayed frozen until it was deleted by
+    hand.
+    """
+
+    @staticmethod
+    def _write_session(project_dir: Path, session_id: str, date: str, count: int = 10):
+        messages = _create_session_messages(session_id, count, date)
+        with open(project_dir / f"{session_id}.jsonl", "w", encoding="utf-8") as f:
+            for msg in messages:
+                f.write(json.dumps(msg) + "\n")
+
+    @staticmethod
+    def _paginated_session_ids(project_dir: Path) -> list[str]:
+        """Session ids reachable from the rendered pages, in page order."""
+        from claude_code_log.cache import CacheManager, get_library_version
+
+        cache_manager = CacheManager(project_dir, get_library_version())
+        return [
+            session_id
+            for page in cache_manager.get_all_pages()
+            for session_id in page.session_ids
+        ]
+
+    def test_new_session_appended_lands_on_last_page(self, temp_project_dir):
+        """A newer session added later must reach the (partly filled) last page."""
+        from claude_code_log.converter import convert_jsonl_to_html
+
+        for i, session_id in enumerate(["s1", "s2", "s3", "s4"]):
+            self._write_session(temp_project_dir, session_id, f"2023-01-0{i + 1}")
+
+        convert_jsonl_to_html(temp_project_dir, page_size=25, silent=True)
+        assert "s5" not in self._paginated_session_ids(temp_project_dir)
+
+        # A brand-new session, newer than every existing one. None of the
+        # already-paginated sessions change.
+        self._write_session(temp_project_dir, "s5", "2023-01-09")
+        convert_jsonl_to_html(temp_project_dir, page_size=25, silent=True)
+
+        assert "s5" in self._paginated_session_ids(temp_project_dir)
+        combined = "".join(
+            p.read_text(encoding="utf-8")
+            for p in sorted(temp_project_dir.glob("combined_transcripts*.html"))
+        )
+        assert "s5-user-0" in combined
+
+    def test_imported_older_sessions_shift_existing_pages(self, temp_project_dir):
+        """Sessions imported with older timestamps must re-flow the pages after them."""
+        from claude_code_log.converter import convert_jsonl_to_html
+
+        for i, session_id in enumerate(["s5", "s6", "s7", "s8"]):
+            self._write_session(temp_project_dir, session_id, f"2023-01-0{i + 5}")
+
+        convert_jsonl_to_html(temp_project_dir, page_size=25, silent=True)
+        before = self._paginated_session_ids(temp_project_dir)
+        assert before == ["s5", "s6", "s7", "s8"]
+
+        # Copied in from another machine: original (older) timestamps, so they
+        # sort to the front and push every later session along.
+        for i, session_id in enumerate(["s1", "s2"]):
+            self._write_session(temp_project_dir, session_id, f"2023-01-0{i + 1}")
+        convert_jsonl_to_html(temp_project_dir, page_size=25, silent=True)
+
+        after = self._paginated_session_ids(temp_project_dir)
+        assert after == ["s1", "s2", "s5", "s6", "s7", "s8"]
+        combined = "".join(
+            p.read_text(encoding="utf-8")
+            for p in sorted(temp_project_dir.glob("combined_transcripts*.html"))
+        )
+        for session_id in after:
+            assert f"{session_id}-user-0" in combined
+
+    def test_unchanged_project_still_skips_every_page(self, temp_project_dir):
+        """The membership check must not cost incrementality on a no-op rebuild."""
+        from claude_code_log.converter import convert_jsonl_to_html
+
+        for i, session_id in enumerate(["s1", "s2", "s3", "s4"]):
+            self._write_session(temp_project_dir, session_id, f"2023-01-0{i + 1}")
+
+        convert_jsonl_to_html(temp_project_dir, page_size=25, silent=True)
+        pages = sorted(temp_project_dir.glob("combined_transcripts*.html"))
+        assert len(pages) > 1
+        before = {p: p.read_bytes() for p in pages}
+
+        convert_jsonl_to_html(temp_project_dir, page_size=25, silent=True)
+
+        for page, content in before.items():
+            assert page.read_bytes() == content
 
 
 class TestNextLinkInPlaceUpdate:
