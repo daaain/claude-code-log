@@ -50,6 +50,7 @@ from ..models import (
     WorkflowAgentMessage,
     WorkflowPhaseMessage,
 )
+from ..render_cache import markdown_cache
 from ..renderer_timings import timing_stat
 
 if TYPE_CHECKING:
@@ -469,12 +470,42 @@ def _get_markdown_renderer() -> mistune.Markdown:
     )
 
 
-def render_markdown(text: str) -> str:
-    """Convert markdown text to HTML using mistune with Pygments syntax highlighting."""
+def _render_markdown_memoized(text: str, escaping_user_renderer: bool) -> str:
+    """Render ``text`` through one of the two mistune singletons, memoized.
+
+    Markdown output is a pure function of the text *and* the active render
+    repo cwd: the SHA-linkifier plugin resolves commit hashes against
+    ``git_remote._render_repo_cwd``, so the same ``5baac35`` links to
+    different repositories in different transcripts. The cwd is therefore
+    part of the key — without it a long-lived host (``serve``, the TUI)
+    would serve one project's commit links inside another's page.
+
+    ``escaping_user_renderer`` selects between the two renderer singletons
+    (they differ only in call site convention today, but they are distinct
+    objects and must not share cache entries).
+    """
+    from ..git_remote import current_render_repo_cwd
+
+    memo_key = (escaping_user_renderer, current_render_repo_cwd(), text)
+    cached = markdown_cache.get(memo_key)
+    if cached is not None:
+        return cached
+
     # Track markdown rendering time if enabled
     with timing_stat("_markdown_timings"):
-        renderer = _get_markdown_renderer()
-        return str(renderer(text))
+        renderer = (
+            _get_user_markdown_renderer()
+            if escaping_user_renderer
+            else _get_markdown_renderer()
+        )
+        rendered = str(renderer(text))
+    markdown_cache.put(memo_key, rendered)
+    return rendered
+
+
+def render_markdown(text: str) -> str:
+    """Convert markdown text to HTML using mistune with Pygments syntax highlighting."""
+    return _render_markdown_memoized(text, escaping_user_renderer=False)
 
 
 _INLINE_PARA_BOUNDARY_RE = re.compile(r"</p>\s*<p>")
@@ -494,9 +525,7 @@ def render_markdown_inline(text: str) -> str:
     ``<option>``, …) is escaped to literal characters rather than injected —
     these short fields were previously HTML-escaped, so keep that contract.
     """
-    with timing_stat("_markdown_timings"):
-        renderer = _get_user_markdown_renderer()
-        rendered = str(renderer(text)).strip()
+    rendered = _render_markdown_memoized(text, escaping_user_renderer=True).strip()
     if rendered.startswith("<p>") and rendered.endswith("</p>"):
         inner = rendered[len("<p>") : -len("</p>")]
         return _INLINE_PARA_BOUNDARY_RE.sub("<br>", inner)
@@ -540,9 +569,7 @@ def _get_user_markdown_renderer() -> mistune.Markdown:
 
 def render_user_markdown(text: str) -> str:
     """Render user-authored Markdown with HTML escaping enabled."""
-    with timing_stat("_markdown_timings"):
-        renderer = _get_user_markdown_renderer()
-        return str(renderer(text))
+    return _render_markdown_memoized(text, escaping_user_renderer=True)
 
 
 # HTML tags that are self-closing / void per the HTML spec — these do

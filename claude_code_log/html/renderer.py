@@ -106,9 +106,11 @@ from ..renderer import (
     prepare_projects_index,
     title_for_projects_index,
 )
+from ..render_cache import markdown_cache, pygments_cache
 from ..renderer_timings import (
     DEBUG_TIMING,
     log_timing,
+    report_cache_statistics,
     report_timing_statistics,
     set_timing_var,
 )
@@ -1567,12 +1569,21 @@ class HtmlRenderer(Renderer):
         for root in roots:
             visit(root)
 
-        # Report timing statistics for Markdown/Pygments operations
+        # Report timing statistics for Markdown/Pygments operations.
+        # The memo stats sit alongside them because the two are read
+        # together: a low hit rate explains a high recompute total, and
+        # a large `bytes` explains a tight cache budget.
         if DEBUG_TIMING:
             report_timing_statistics(
                 [
                     ("Markdown", markdown_timings),
                     ("Pygments", pygments_timings),
+                ]
+            )
+            report_cache_statistics(
+                [
+                    ("Markdown", markdown_cache.stats()),
+                    ("Pygments", pygments_cache.stats()),
                 ]
             )
 

@@ -251,7 +251,17 @@ Enable timing instrumentation to identify bottlenecks:
 CLAUDE_CODE_LOG_DEBUG_TIMING=1 claude-code-log path/to/file.jsonl
 ```
 
-This outputs detailed timing for each rendering phase. The timing module is in `claude_code_log/renderer_timings.py`.
+This outputs detailed timing for each rendering phase, plus hit rates for
+the render memo caches. The timing module is in
+`claude_code_log/renderer_timings.py`.
+
+Pygments highlighting and Markdown rendering are memoized because every
+message is formatted twice per run (once for its combined page, once for
+its session file) — see `claude_code_log/render_cache.py` and
+[dev-docs/application_model.md § 2.9](dev-docs/application_model.md).
+Set `CLAUDE_CODE_LOG_RENDER_CACHE_MB=0` to disable memoization when
+bisecting a rendering difference; any other value sets the per-cache byte
+budget in MB (default 192).
 
 ## Diagnosing Hangs
 

@@ -35,7 +35,7 @@ for user-facing operations docs see [`docs/`](../docs/).
 | Depth filter | renderer.py § Depth filtering, `models.RenderingDepth` | inlined below (§ 2.6) |
 | Image export | [`image_export.py`](../claude_code_log/image_export.py) | inlined below (§ 2.7) |
 | Performance profiling | [`renderer_timings.py`](../claude_code_log/renderer_timings.py) | inlined below (§ 2.8) |
-| Diagnosing hangs (SIGUSR1) | [`cli.py`](../claude_code_log/cli.py) `_install_stack_dump_signal` | inlined below (§ 2.9) |
+| Diagnosing hangs (SIGUSR1) | [`cli.py`](../claude_code_log/cli.py) `_install_stack_dump_signal` | inlined below (§ 2.10) |
 | Adding a new tool renderer | [`factories/tool_factory.py`](../claude_code_log/factories/tool_factory.py), `html/tool_formatters.py` | [implementing-a-tool-renderer.md](implementing-a-tool-renderer.md) (how-to) |
 | Which tools have a specialized renderer or provider adapter | `TOOL_INPUT_MODELS` / `TOOL_OUTPUT_PARSERS` in [`factories/tool_factory.py`](../claude_code_log/factories/tool_factory.py), plus provider adapters | [tools-coverage.md](tools-coverage.md) (Claude and Codex status vs. upstream references) |
 | Plugin system (third-party message transformers) | [`plugins.py`](../claude_code_log/plugins.py), [`factories/priorities.py`](../claude_code_log/factories/priorities.py), `Renderer._dispatch_format` | [plugins.md](plugins.md) |
@@ -338,7 +338,49 @@ provides `log_timing(label, t_start)` context managers used throughout
 times to stderr — useful for spotting which phase regressed when a
 large transcript suddenly takes seconds longer than before.
 
-### 2.9 Diagnosing hangs (SIGUSR1 stack dump)
+### 2.9 Render memo caches
+
+A project conversion renders every message **twice**: once into its
+combined-transcript page and once into its individual `session-*.html`.
+Both go through `HtmlRenderer.generate`, which rebuilds the tree from the
+same source entries, so the per-message formatting work is duplicated
+wholesale. On a 118-file, 12k-message project that is 22,420
+`format_content` calls covering 11,113 distinct messages.
+
+[`render_cache.py`](../claude_code_log/render_cache.py) memoizes the two
+dominant leaves of that work — Pygments highlighting
+(`html/renderer_code.py::highlight_code_with_pygments`) and mistune
+Markdown (`html/utils.py::_render_markdown_memoized`, behind
+`render_markdown` / `render_user_markdown` / `render_markdown_inline`).
+Measured effect on that project: 12.4s → 8.7s wall, with all 88 output
+files byte-identical. Hit rates run ~69% (Pygments) and ~59% (Markdown);
+Pygments exceeds the 50% that page-vs-session duplication alone implies
+because the same file contents are commonly re-read across messages.
+
+Two properties matter for correctness:
+
+- **Markdown is not a pure function of its text.** The SHA-linkifier
+  plugin resolves commit hashes against the per-render repo cwd carried
+  by `git_remote._render_repo_cwd` (read via `current_render_repo_cwd()`),
+  so identical text legitimately renders different links in different
+  projects. That cwd is part of the Markdown key — without it a
+  long-lived host (`serve`, the TUI) would serve one project's commit
+  links inside another's page. Pygments has no such coupling and keys on
+  its arguments alone.
+- **Bounded by bytes, not entries.** Rendered fragments are large, so
+  `functools.lru_cache(maxsize=N)` gives no control over footprint. The
+  caches evict LRU against a byte budget and refuse any single entry
+  above 1/8 of it, so one huge highlighted file cannot evict everything
+  behind it. `CLAUDE_CODE_LOG_RENDER_CACHE_MB` sets the budget (default
+  192 MB per cache; `0` disables memoization and restores the previous
+  always-recompute behaviour). Typical projects stay far under it — the
+  measured project held 13.3 MB of Pygments and 2.7 MB of Markdown with
+  zero evictions.
+
+`CLAUDE_CODE_LOG_DEBUG_TIMING=1` prints hit rate, entry count and bytes
+per cache alongside the render timings.
+
+### 2.10 Diagnosing hangs (SIGUSR1 stack dump)
 
 When `claude-code-log` appears stuck (100% CPU, no output), a
 single `SIGUSR1` to the running process dumps the live Python
@@ -545,6 +587,6 @@ Common entry questions and their best first stop:
 - "How do I export to JSON for downstream tooling?"
   → § 2.5 here (and `--format json` from § 2.1).
 - "claude-code-log is hung — how do I see what it's doing?"
-  → § 2.9 (`SIGUSR1` stack dump).
+  → § 2.10 (`SIGUSR1` stack dump).
 - "What's planned but not implemented?"
   → [`work/`](../work/) — each `.md` is an in-flight or proposed plan.
