@@ -263,6 +263,28 @@ Set `CLAUDE_CODE_LOG_RENDER_CACHE_MB=0` to disable memoization when
 bisecting a rendering difference; any other value sets the per-cache byte
 budget in MB (default 192).
 
+A project's own pages and session files can additionally be rendered in
+parallel worker processes. This is opt-in — set
+`CLAUDE_CODE_LOG_RENDER_JOBS=auto` (or a worker count) — because it
+overlaps with the memo above and only pays off on large projects. Note that
+each worker holds the project's whole transcript (~3x its bytes on disk),
+so the worker count is capped against available memory; on a small machine
+or a large archive it degrades to serial rather than swapping. See
+[dev-docs/application_model.md § 2.10](dev-docs/application_model.md) for
+the measurements.
+
+To re-measure both on your own hardware (core count changes the answer for
+the fan-out), point the benchmark at a real project:
+
+```bash
+uv run python scripts/bench_render.py ~/.claude/projects/<project>
+```
+
+It copies the project to scratch space, warms the cache, then times every
+combination of the two knobs plus a worker-count sweep — and hashes the
+output of each, so it doubles as an equivalence check across far more real
+data than the test fixtures cover.
+
 ## Diagnosing Hangs
 
 If `claude-code-log` appears stuck (100% CPU, no output), send `SIGUSR1` to print the live Python stack to stderr without killing the process:

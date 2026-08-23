@@ -40,7 +40,7 @@ from .utils import (
     create_session_preview,
     get_warmup_session_ids,
 )
-from .render_pool import RenderUnit
+from .render_pool import RenderUnit, memory_capped_workers, resolve_render_jobs
 from .cache import (
     CacheManager,
     SessionCacheData,
@@ -2026,7 +2026,7 @@ def convert_jsonl_to(
     force_regenerate: bool = False,
     report: Optional["RegenerationReport"] = None,
     archive_search_link: Optional[str] = None,
-    render_jobs: Optional[int] = 1,
+    render_jobs: Optional[int] = None,
 ) -> Path:
     """Convert JSONL transcript(s) to the specified format.
 
@@ -2068,11 +2068,12 @@ def convert_jsonl_to(
             index root. None leaves the link out of the rendered page.
         render_jobs: Worker processes for rendering this project's own
             output files (combined pages + per-session files), which are
-            independent of one another. ``1`` (the default) renders inline,
-            preserving the historical single-threaded behaviour for library
-            callers; ``None`` means "use the CPU count". The CLI passes the
-            budget it wants — see ``_make_render_pool`` for the conditions
-            under which a pool is actually created.
+            independent of one another. ``None`` (the default) consults
+            ``$CLAUDE_CODE_LOG_RENDER_JOBS``, which is unset for almost
+            everyone and means 1 — inline rendering, the historical
+            single-threaded behaviour. An explicit int overrides the
+            environment. See ``_make_render_pool`` for the further
+            conditions under which a pool is actually created.
     """
     if not input_path.exists():
         raise FileNotFoundError(f"Input path not found: {input_path}")
@@ -2630,10 +2631,18 @@ def build_session_title(
 # finish inline before a pool has even started.
 _MIN_UNITS_FOR_RENDER_POOL = 8
 
-# ...and below this many messages the project is small enough that its
-# whole conversion costs less than the pool's startup, however many files
-# it happens to spread that work across.
-_MIN_MESSAGES_FOR_RENDER_POOL = 2000
+# ...and below this many messages the project's render work is too small
+# to repay what each worker costs before it renders anything: `spawn`,
+# package import, and a full reload of the transcript from cache (~1.7s at
+# 47k messages). Measured on 4 cores, with the § 2.9 memo caches on:
+#
+#   12k messages  serial 8.2s  ->  4 workers 9.7s   (a loss)
+#   47k messages  serial 27.6s ->  4 workers 20.0s  (1.38x)
+#
+# so the crossover sits between the two. Set conservatively near the upper
+# measurement rather than the midpoint: below it the cost is a certain
+# regression, above it the win grows with project size and core count.
+_MIN_MESSAGES_FOR_RENDER_POOL = 25_000
 
 
 def _make_render_pool(
@@ -2657,9 +2666,11 @@ def _make_render_pool(
 
     Returns None whenever fanning out would be wrong or wasteful:
 
-    - ``render_jobs`` resolves to 1 — the caller asked for the inline path,
-      which is also what a project worker in the all-projects pool gets when
-      there is no spare capacity (nesting pools would oversubscribe).
+    - ``render_jobs`` resolves to 1 — which is the default, since the
+      fan-out is opt-in via ``$CLAUDE_CODE_LOG_RENDER_JOBS`` (see
+      ``render_pool.resolve_render_jobs``). It is also what a project
+      worker in the all-projects pool gets when there is no spare capacity,
+      since nesting pools would oversubscribe.
     - Single-file mode, or no cache manager. Workers reload the transcript
       from the cache; without one they would each re-parse every JSONL file.
     - ``image_export_mode="referenced"``, where each render writes
@@ -2668,8 +2679,16 @@ def _make_render_pool(
       running them concurrently would let two processes write one file at
       once, so this mode stays serial.
     - Projects too small for the pool's startup to pay for itself.
+    - Not enough memory for even one worker's copy of the transcript.
+
+    The worker count is also capped by available memory, because each
+    worker holds the whole transcript (~3x its bytes on disk). See
+    ``render_pool.memory_capped_workers``.
     """
-    if render_jobs is not None and render_jobs <= 1:
+    from .render_pool import memory_capped_workers, resolve_render_jobs
+
+    max_workers = resolve_render_jobs(render_jobs)
+    if max_workers <= 1:
         return None
     if cache_manager is None or not input_path.is_dir():
         return None
@@ -2678,7 +2697,16 @@ def _make_render_pool(
     if message_count < _MIN_MESSAGES_FOR_RENDER_POOL:
         return None
 
-    from .render_pool import make_render_pool, resolve_render_jobs
+    transcript_bytes = sum(
+        f.stat().st_size
+        for f in input_path.glob("*.jsonl")
+        if not f.name.startswith("agent-")
+    )
+    max_workers = memory_capped_workers(max_workers, transcript_bytes)
+    if max_workers <= 1:
+        return None
+
+    from .render_pool import make_render_pool
 
     return make_render_pool(
         format=format,
@@ -2693,7 +2721,7 @@ def _make_render_pool(
         image_export_mode=image_export_mode,
         archive_search_link=archive_search_link,
         library_version=get_library_version(),
-        max_workers=resolve_render_jobs(render_jobs),
+        max_workers=max_workers,
     )
 
 
@@ -4147,19 +4175,46 @@ def process_projects_hierarchy(
     job_budget = jobs if jobs is not None and jobs > 0 else (os.cpu_count() or 1)
     resolved_jobs = max(1, min(job_budget, len(to_convert)))
 
-    # Spare capacity goes to each project's *own* render fan-out. With
-    # fewer stale projects than workers — the shape of every incremental
-    # run — the project pool alone leaves most cores idle, because a
-    # single project's conversion is single-threaded. Dividing the budget
-    # gives one stale project the whole machine and many stale projects
-    # the historical one-worker-each.
+    # Spare capacity goes to each project's *own* render fan-out — but only
+    # when that fan-out is switched on, which it isn't by default (see
+    # `render_pool.resolve_render_jobs`). `--jobs` never enables it; it only
+    # caps it, so the two pool levels together can't oversubscribe.
+    #
+    # With fewer stale projects than workers — the shape of every
+    # incremental run — the project pool alone leaves most cores idle,
+    # because a single project's conversion is single-threaded. Dividing the
+    # budget gives one stale project the whole machine and many stale
+    # projects the historical one-worker-each.
     #
     # This does not fix the *tail* of a large multi-project run: the split
     # is static, so when the small projects finish early their share isn't
     # handed back to the big project still rendering. Making it dynamic
     # needs a single flat pool over render units rather than two nested
     # levels.
-    per_project_render_jobs = max(1, job_budget // max(1, len(to_convert)))
+    #
+    # Memory is the binding constraint, not cores. Every render worker holds
+    # its project's whole transcript (~3x its bytes on disk), and so does
+    # every project worker, so the footprint is the *product* of the two
+    # levels. Left unchecked that is how an `auto` run on a large archive
+    # takes a machine into swap and wedges it. Size the render share against
+    # the largest stale project, divided across the project workers that will
+    # be resident at the same time; each worker re-checks against its own
+    # project before actually starting a pool.
+    render_budget = resolve_render_jobs(None)
+    per_project_render_jobs = 1
+    if render_budget > 1 and to_convert:
+        per_project_render_jobs = max(
+            1,
+            min(
+                render_budget,
+                job_budget // max(1, len(to_convert)),
+                memory_capped_workers(
+                    render_budget,
+                    max(plan.source_bytes for plan in to_convert),
+                    concurrent_projects=resolved_jobs,
+                ),
+            ),
+        )
 
     def _convert_plan_inline(plan: _ProjectPlan) -> None:
         """Convert one project in this process, reporting progress/failure."""

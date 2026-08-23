@@ -51,7 +51,13 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 if TYPE_CHECKING:
     from .models import RenderingDepth, TranscriptEntry
 
-__all__ = ["RenderPool", "RenderUnit", "resolve_render_jobs"]
+__all__ = [
+    "RENDER_JOBS_ENV",
+    "RenderPool",
+    "RenderUnit",
+    "memory_capped_workers",
+    "resolve_render_jobs",
+]
 
 
 @dataclass
@@ -96,15 +102,144 @@ class _WorkerSetup:
     library_version: str
 
 
-def resolve_render_jobs(requested: Optional[int]) -> int:
-    """Resolve a render-worker count from an explicit request.
+RENDER_JOBS_ENV = "CLAUDE_CODE_LOG_RENDER_JOBS"
 
-    ``None`` means "decide for me" → CPU count. Values below 1 (and an
-    unavailable CPU count) collapse to 1, i.e. the inline path.
+
+def resolve_render_jobs(requested: Optional[int]) -> int:
+    """How many workers to render this project's output files over.
+
+    ``1`` means the inline path — no pool, no worker processes.
+
+    The fan-out is **off by default** and enabled by ``$RENDER_JOBS_ENV``
+    (``auto`` for the CPU count, or an explicit worker count). That default
+    is deliberate: it competes with the render memo caches, since each
+    worker starts with a cold cache and re-does the page-vs-session
+    formatting the memo would have collapsed. It wins clearly on large
+    projects and loses on small ones (see ``application_model.md`` § 2.10),
+    which is not a trade to make on everyone's behalf until the two-phase
+    restructuring removes the conflict.
+
+    ``requested`` is an explicit caller override (the ``render_jobs``
+    argument to ``convert_jsonl_to``) and wins over the environment;
+    ``None`` consults it. An unparseable setting means off, not a crash.
     """
     if requested is not None:
         return max(1, requested)
-    return max(1, os.cpu_count() or 1)
+    raw = os.getenv(RENDER_JOBS_ENV)
+    if raw is None:
+        return 1
+    value = raw.strip().lower()
+    if not value:
+        return 1
+    if value in ("auto", "cpu"):
+        return max(1, os.cpu_count() or 1)
+    try:
+        return max(1, int(value))
+    except ValueError:
+        return 1
+
+
+# A loaded transcript costs far more resident memory than it does on
+# disk — the JSONL becomes Pydantic entries, a TemplateMessage tree and a
+# SessionTree. Measured peak RSS against transcript bytes: 2.0x for a
+# 118MB/12k-message project, 3.0x for a 140MB/47k-message one. Denser
+# transcripts (more, smaller messages) cost more per byte, so take the
+# upper end.
+_RSS_PER_TRANSCRIPT_BYTE = 3.0
+
+# Interpreter, imports, Pygments' lexer tables and the render memo caches,
+# before any transcript is loaded. Measured base RSS was ~44MB and the memo
+# caches held 16MB on a 12k-message project; 150MB leaves room for a
+# Pygments-heavy project to fill more of its memo budget without making the
+# estimate so pessimistic that small projects never get a worker.
+_WORKER_BASE_BYTES = 150 * 1024 * 1024
+
+# Never hand the whole of available memory to workers — the parent still
+# holds its own copy of the transcript and keeps rendering alongside them.
+_MEMORY_HEADROOM_FRACTION = 0.6
+
+
+def _available_memory_bytes() -> Optional[int]:
+    """Best-effort read of memory we may actually use, or None if unknown.
+
+    Checks the cgroup limit first: inside a container the host's totals are
+    a lie, and this is exactly where an over-eager fan-out gets the whole
+    machine OOM-killed or swap-thrashed into unresponsiveness.
+    """
+    limits: list[int] = []
+
+    # cgroup v2 (containers, systemd slices).
+    try:
+        with open("/sys/fs/cgroup/memory.max") as handle:
+            raw = handle.read().strip()
+        if raw != "max":
+            with open("/sys/fs/cgroup/memory.current") as handle:
+                current = int(handle.read().strip())
+            limits.append(max(0, int(raw) - current))
+    except (OSError, ValueError):
+        pass
+
+    # Linux: MemAvailable accounts for reclaimable page cache, which
+    # SC_AVPHYS_PAGES (free pages only) badly under-reports.
+    try:
+        with open("/proc/meminfo") as handle:
+            for line in handle:
+                if line.startswith("MemAvailable:"):
+                    limits.append(int(line.split()[1]) * 1024)
+                    break
+    except (OSError, ValueError, IndexError):
+        pass
+
+    if not limits:
+        # macOS and the rest: free physical pages. Conservative, since it
+        # ignores memory the OS could reclaim, which is the right way to
+        # be wrong here.
+        try:
+            limits.append(
+                os.sysconf("SC_AVPHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")  # type: ignore[arg-type]
+            )
+        except (ValueError, OSError, AttributeError):
+            return None
+
+    return min(limits) if limits else None
+
+
+def memory_capped_workers(
+    requested: int, transcript_bytes: int, *, concurrent_projects: int = 1
+) -> int:
+    """Reduce ``requested`` to what memory can actually hold.
+
+    Every worker loads the project's whole transcript — that is what makes
+    workers independent of the parent, and it means peak memory is
+    ``workers x project size``, not a fixed overhead. A 1GB project costs
+    roughly 3GB per worker, so an unguarded ``auto`` on a large archive
+    exhausts RAM and drives the machine into swap, where it pegs every core
+    and stops responding. That failure mode is far worse than rendering
+    serially, so cap rather than trust the request.
+
+    ``concurrent_projects`` is how many project conversions run at once
+    (the ``--all-projects`` pool). Each holds a transcript copy of its own
+    *and* spawns its own render workers, so the footprint is multiplicative
+    across the two levels and the budget has to be split before it is spent.
+
+    Returns at least 1 (the inline path). When available memory can't be
+    determined, allows at most 2 workers — enough to be useful, small
+    enough not to be dangerous on an unknown machine.
+    """
+    if requested <= 1:
+        return 1
+
+    per_copy = int(transcript_bytes * _RSS_PER_TRANSCRIPT_BYTE) + _WORKER_BASE_BYTES
+    available = _available_memory_bytes()
+    if available is None:
+        return min(requested, 2)
+
+    budget = int(available * _MEMORY_HEADROOM_FRACTION) // max(1, concurrent_projects)
+    # The conversion holding these workers has a copy of its own, already
+    # charged against `available` when it is the caller but not yet when
+    # the all-projects parent is sizing budgets for workers it will spawn.
+    affordable = (budget - per_copy) // max(1, per_copy)
+    return max(1, min(requested, affordable))
 
 
 # --------------------------------------------------------------------------

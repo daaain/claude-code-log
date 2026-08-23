@@ -80,9 +80,10 @@ single transcript or directory. Major flags:
   output, packing whole sessions into pages of up to N messages each
   (sessions are never split across pages, so individual pages may
   overflow). Per-session HTML files are not paginated.
-- `--jobs N` / `-j N` — total worker processes for conversion (default:
-  CPU count; `1` disables parallelism). Split between converting projects
-  in parallel and each project's own render fan-out (§ 2.10).
+- `--jobs N` / `-j N` — worker processes for the all-projects conversion
+  phase (default: CPU count; `1` disables parallelism). Also caps the
+  per-project render fan-out, which is opt-in via
+  `$CLAUDE_CODE_LOG_RENDER_JOBS` (§ 2.10).
 
 CLI orchestration delegates to `converter.py` (which owns the
 high-level "load + render + write" flow) and never touches `renderer.py`
@@ -96,11 +97,11 @@ three phases: **plan** (sequential, cheap — per-project staleness via
 cache mtimes, also ensures DB schema/migrations exist), **execute**
 (stale projects fan out over a `ProcessPoolExecutor` with the `spawn`
 start method, largest-first; rendering is CPU-bound pure Python and
-projects are independent, so this scales near-linearly with cores; any
-budget left over after one worker per stale project is handed to each
-project's own render fan-out, § 2.10), and **collect** (sequential —
-per-project index data is read back from the cache and the cross-project
-`index.html` is written last). Workers
+projects are independent, so this scales near-linearly with cores; when
+the per-project render fan-out is enabled, any budget left over after one
+worker per stale project is handed to it, § 2.10), and **collect**
+(sequential — per-project index data is read back from the cache and the
+cross-project `index.html` is written last). Workers
 run silent; the parent prints one progress line per project as results
 arrive. All workers share the WAL-mode SQLite cache DB — each writes
 only its own project's rows, and WAL serialises the short write
@@ -401,33 +402,71 @@ which would move ~114MB per worker. The parent sends only small per-unit
 metadata, keeps every staleness check and cache write to itself (so the DB
 stays single-writer), and the pool starts lazily on first submit.
 
-`convert_jsonl_to(render_jobs=...)` controls it. The library default is
-`1` — inline, exactly as before — so no existing caller changes behaviour.
-The CLI passes its `--jobs` budget: a single-project conversion spends all
-of it here, while `--all-projects` divides it (`jobs // stale projects`)
-so the two pool levels together never oversubscribe. `_make_render_pool`
-declines entirely for single-file mode, a missing cache manager,
-`image_export_mode="referenced"` (renders write `images/image_NNNN.png`
-from a per-call counter, so concurrent renders would collide on those
-names), and projects below the size where the pool pays for itself.
+**Memory is the binding constraint, not cores.** That self-sufficiency
+means every worker holds a full copy of the transcript, and a loaded
+transcript costs far more than its bytes on disk: measured peak RSS was
+2.0× for a 118MB/12k-message project and 3.0× for a 140MB/47k-message one
+(denser transcripts cost more per byte). So peak memory is
+`workers × project size`, and under `--all-projects` it multiplies again
+with the project pool — `project workers × render workers × project size`.
+A 1GB project is ~3GB *per process*; four render workers under two project
+workers is ~24GB. Unguarded, that exhausts RAM and drives the machine into
+swap, where it pegs every core and stops responding — a far worse outcome
+than rendering serially. `render_pool.memory_capped_workers` therefore caps
+the worker count against available memory (cgroup limit first, since inside
+a container the host's totals are a lie; then `MemAvailable`, then free
+physical pages), taking 60% of it as budget and charging one transcript
+copy per worker plus one for the conversion itself. The all-projects parent
+applies the same cap with `concurrent_projects=resolved_jobs` before
+handing out any budget, and each worker re-checks against its own project
+before starting a pool. Unknown memory allows at most 2 workers.
 
-One ordering change made this possible: the paginated writer used to
-reveal page N-1's "Next" link while generating page N, so page N's
+**Opt-in.** The fan-out is off unless `$CLAUDE_CODE_LOG_RENDER_JOBS` is
+set (`auto` for the CPU count, or an explicit worker count) — see
+`render_pool.resolve_render_jobs`. `--jobs` never enables it; it only caps
+it, so the two pool levels together can't oversubscribe. An explicit
+`convert_jsonl_to(render_jobs=N)` overrides the environment; the default
+`None` consults it. `_make_render_pool` declines regardless for
+single-file mode, a missing cache manager, `image_export_mode="referenced"`
+(renders write `images/image_NNNN.png` from a per-call counter, so
+concurrent renders would collide on those names), projects below
+`_MIN_MESSAGES_FOR_RENDER_POOL`, and machines without the memory for a
+second copy of the transcript.
+
+One ordering change made the pages parallelisable: the paginated writer
+used to reveal page N-1's "Next" link while generating page N, so page N's
 render edited page N-1's file. That fixup now runs once after all pages
 land — order-independent and idempotent.
 
-**Measured limits.** The fan-out and the memo caches in § 2.9 work against
-each other: splitting units across processes gives each worker a cold
-cache, so the page-vs-session duplication the memo removes comes back.
-On a 4-core box, a 47k-message project went 27.8s → 20.2s (1.38×) while
-total CPU rose 26.7s → 44.8s. Below roughly 12k messages the fan-out is a
-net *loss* — worker startup plus the lost memo hits exceed the parallelism
-— which is what `_MIN_MESSAGES_FOR_RENDER_POOL` guards. Machines with more
-cores absorb the inflated CPU better, so the win grows with core count,
-but the inflation itself is the ceiling. Removing it needs the two-phase
-"format once, assemble many" restructuring: format each distinct message
-once (in parallel), then assemble pages and session files from the
-fragments — template rendering itself is only ~0.08s for a 20MB page.
+**Measured** on 4 cores, 47k-message project (240 session files, 218
+output units); the serial floor — cache check, transcript load, planning,
+all in the parent and none of it parallelised — is 4.7s:
+
+| | wall | total CPU |
+|---|---|---|
+| neither optimisation | 44.8s | 43.5s |
+| memo only (§ 2.9) | 27.6s | 26.2s |
+| fan-out only (4 workers) | 22.5s | 57.0s |
+| both | **20.0s** | 48.8s |
+
+Read those together, because the pair is easy to misread. The fan-out
+parallelises perfectly well on its own — 44.8s → 22.5s is 2.0× on 4 cores
+against a 4.7s serial floor. It looks weak *on top of the memo* (27.6s →
+20.0s, 1.38×) only because the two optimisations attack the same work: the
+memo removes the page-vs-session duplication, and splitting units across
+processes gives each worker a cold cache and brings some of it back. Both
+together is still the fastest configuration, so they compose — just
+sub-additively.
+
+Two consequences. First, core count matters a lot: 48.8s of CPU over 4
+cores is 12.2s plus the 4.7s floor, so a 10-core machine should land near
+9.5s rather than 20s. Second, the per-worker cost (a full transcript
+reload plus a cold memo) grows with worker count — CPU went 26.2s → 38.2s
+→ 48.8s at 1, 2 and 4 workers — so the speedup saturates rather than
+scaling indefinitely. Removing that ceiling needs the two-phase "format
+once, assemble many" restructuring: format each distinct message once (in
+parallel), then assemble pages and session files from the fragments —
+template rendering itself is only ~0.08s for a 20MB page.
 
 ### 2.11 Diagnosing hangs (SIGUSR1 stack dump)
 

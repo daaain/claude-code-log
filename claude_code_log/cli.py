@@ -33,6 +33,7 @@ from .cache import (
     get_library_version,
 )
 from .models import RenderingDepth
+from .render_pool import resolve_render_jobs
 from .search import (
     ENV_INDEX_FIELDS,
     ENV_SEARCH_FIELDS,
@@ -1014,12 +1015,11 @@ def main() -> None:
     type=click.IntRange(min=1),
     default=None,
     help=(
-        "Total worker processes for conversion (default: CPU count; 1 "
-        "disables parallelism). Under --all-projects the budget is split "
-        "between converting projects in parallel and rendering each "
-        "project's own pages/session files in parallel; a single-project "
-        "conversion spends all of it on the latter. Peak memory scales "
-        "with jobs × the largest stale project."
+        "Worker processes for converting projects in --all-projects mode "
+        "(default: CPU count; 1 disables parallelism). Peak memory scales "
+        "with jobs x the largest stale project. Also caps the per-project "
+        "render fan-out, which is opt-in via "
+        "$CLAUDE_CODE_LOG_RENDER_JOBS (auto, or a worker count)."
     ),
 )
 @click.option(
@@ -1971,9 +1971,14 @@ def convert(
             force_regenerate=output is not None and _output_path_is_file(output),
             report=report,
             # A single-project conversion has the whole machine to itself,
-            # so its pages and session files fan out over `--jobs` workers
-            # (None → CPU count). The library default stays 1.
-            render_jobs=jobs,
+            # so `--jobs` is the cap for its render fan-out. Whether that
+            # fan-out runs at all is decided by
+            # $CLAUDE_CODE_LOG_RENDER_JOBS, which is off by default —
+            # `render_jobs=None` consults it, and the min() keeps an
+            # explicit `--jobs` as the ceiling.
+            render_jobs=(
+                min(jobs, resolve_render_jobs(None)) if jobs is not None else None
+            ),
         )
         # Report only work actually done this run. On a pure skip the converter
         # already printed its "... is current, skipping regeneration" line, so
