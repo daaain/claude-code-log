@@ -797,7 +797,75 @@ def _validate_git_link_template(template: str) -> None:
         )
 
 
-@click.command()
+class DefaultCommandGroup(click.Group):
+    """A group that falls back to a default subcommand.
+
+    The CLI was a single flat command for its whole life, so
+    ``claude-code-log``, ``claude-code-log some/file.jsonl`` and
+    ``claude-code-log --from-date yesterday`` all have to keep working
+    unchanged. Anything whose first argument isn't a registered subcommand
+    is therefore rewritten as ``<default_command> <args...>``.
+
+    A path that collides with a subcommand name can be forced through with
+    ``--``: ``claude-code-log -- serve``.
+    """
+
+    default_command = "convert"
+
+    def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
+        if args and args[0] == "--":
+            # Explicit escape hatch: everything after `--` is the default
+            # command's arguments, even if it looks like a subcommand name.
+            args = [self.default_command] + args[1:]
+        elif not args or args[0] not in self.commands:
+            # No args at all, an INPUT_PATH, or an option like --help /
+            # --version / --from-date: all belong to the default command.
+            # Sending --help there is deliberate — it keeps the familiar
+            # full option list, and `convert`'s epilog advertises the
+            # subcommands (see _default_command_epilog).
+            args = [self.default_command] + args
+        return super().parse_args(ctx, args)
+
+
+def _subcommand_epilog(group: click.Group) -> str:
+    """Build the default command's epilog from what's actually registered.
+
+    The group's own help is unreachable (``parse_args`` always rewrites to a
+    subcommand), so the subcommand list has to appear in the default
+    command's ``--help`` or subcommands would be undiscoverable. Deriving it
+    from ``group.commands`` keeps it from advertising commands that don't
+    exist. Called at the bottom of the module, once everything is registered.
+    """
+    others = [
+        (name, cmd)
+        for name, cmd in sorted(group.commands.items())
+        if name != DefaultCommandGroup.default_command
+    ]
+    if not others:
+        return ""
+    width = max(len(name) for name, _ in others)
+    # The leading \b stops Click's formatter rewrapping the block, so the
+    # command list keeps its alignment.
+    lines = ["\b", "Subcommands:"]
+    lines += [
+        f"  {name:<{width}}  {(cmd.short_help or cmd.help or '').splitlines()[0]}"
+        for name, cmd in others
+    ]
+    lines += [
+        "",
+        "Run 'claude-code-log <subcommand> --help' for its options. Any "
+        "other invocation runs the conversion described above.",
+    ]
+    return "\n".join(lines)
+
+
+@click.group(cls=DefaultCommandGroup)
+@click.version_option(version=get_library_version(), prog_name="claude-code-log")
+def main() -> None:
+    """Convert Claude transcript JSONL files to HTML or Markdown."""
+
+
+@main.command(name="convert")
 @click.version_option(version=get_library_version(), prog_name="claude-code-log")
 @click.argument("input_path", type=click.Path(path_type=Path), required=False)
 @click.option(
@@ -1040,7 +1108,7 @@ def _validate_git_link_template(template: str) -> None:
     help="Show full traceback on errors.",
 )
 @click.pass_context
-def main(
+def convert(
     ctx: click.Context,
     input_path: Optional[Path],
     output: Optional[Path],
@@ -1945,6 +2013,11 @@ def main(
 
             traceback.print_exc()
         sys.exit(1)
+
+
+# Registered last, once every subcommand exists, so the default command's
+# --help advertises exactly the subcommands that are really available.
+convert.epilog = _subcommand_epilog(main)
 
 
 if __name__ == "__main__":
