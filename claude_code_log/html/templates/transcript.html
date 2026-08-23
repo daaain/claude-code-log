@@ -244,6 +244,11 @@
 
     {% for root in roots %}{{ render_message(root) }}{% endfor %}
 
+    {% if resume_command %}
+    <button class="resume-session floating-btn" id="resumeSession" data-command="{{ resume_command }}"
+        title="Resume session: copy the command that resumes this session in Claude Code"
+        aria-label="Resume session">▶️</button>
+    {% endif %}
     <button class="timeline-toggle floating-btn" id="toggleTimeline" title="Show timeline">📆</button>
     <button class="filter-messages floating-btn" id="filterMessages" title="Search & Filter (/)">🔍</button>
     <button class="toggle-details floating-btn" id="toggleDetails" title="Toggle all details">📋</button>
@@ -271,6 +276,52 @@
                 document.body.classList.toggle('show-debug-info');
                 debugButton.classList.toggle('active');
             });
+
+            // Resume session: copy the resume command to the clipboard
+            // and prompt the user to paste it into a terminal. The
+            // command is built server-side (data-command) from the
+            // session's recorded cwd, so its quoting matches the OS
+            // the transcript was recorded on — which may differ from
+            // the OS viewing this page.
+            const resumeButton = document.getElementById('resumeSession');
+            if (resumeButton) {
+                let resumeToastTimer = null;
+                function showResumeToast(message) {
+                    let toast = document.getElementById('resumeToast');
+                    if (!toast) {
+                        toast = document.createElement('div');
+                        toast.id = 'resumeToast';
+                        toast.className = 'resume-toast';
+                        // Live-region semantics so screen readers
+                        // announce the copy confirmation.
+                        toast.setAttribute('role', 'status');
+                        toast.setAttribute('aria-live', 'polite');
+                        document.body.appendChild(toast);
+                    }
+                    toast.textContent = message;
+                    toast.classList.add('visible');
+                    if (resumeToastTimer) clearTimeout(resumeToastTimer);
+                    resumeToastTimer = setTimeout(function () {
+                        toast.classList.remove('visible');
+                    }, 5000);
+                }
+                resumeButton.addEventListener('click', function () {
+                    const command = resumeButton.dataset.command;
+                    function copied() {
+                        showResumeToast('📋 Copied! Paste into your terminal to resume this session.');
+                    }
+                    function fallback() {
+                        // Clipboard API unavailable or refused: let the
+                        // user copy from a prompt instead.
+                        window.prompt('Copy this command, then paste it into your terminal:', command);
+                    }
+                    if (navigator.clipboard && navigator.clipboard.writeText) {
+                        navigator.clipboard.writeText(command).then(copied, fallback);
+                    } else {
+                        fallback();
+                    }
+                });
+            }
 
             // User-content view toggle (Markdown / raw).
             //

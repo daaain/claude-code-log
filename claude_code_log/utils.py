@@ -212,6 +212,58 @@ def get_project_display_name(
     return best_working_dir(project_dir_name, working_directories)[0]
 
 
+# The resume command is pasted into a shell, and transcript fields are
+# untrusted input (same threat model as the HTML escaping in #245) — so
+# both values are held to conservative charsets and the button is
+# skipped entirely rather than risk smuggling shell syntax.
+_RESUME_SESSION_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+# Inside double quotes, cmd still expands %var% / delayed-expansion
+# !var!, and PowerShell expands $var and `x escapes; a literal " would
+# end the quoting altogether.
+_WINDOWS_CWD_UNSAFE_RE = re.compile(r'["%!$`]')
+
+
+def resume_command_for_session(session_id: str, cwd: Optional[str]) -> Optional[str]:
+    """Build a shell one-liner that resumes ``session_id`` in Claude Code.
+
+    ``cwd`` is the session's recorded working directory; the command
+    changes there first so ``claude -r`` runs in the right project
+    (``cd`` on POSIX, ``pushd`` on Windows — see below).
+    Quoting follows the OS the *transcript* was recorded on (detected
+    from the path shape, like :func:`path_looks_absolute`), not the
+    host rendering the HTML — a Windows-recorded session must be
+    resumed in a Windows shell regardless of where the page is viewed.
+
+    Returns a bare ``claude -r`` command when no cwd was recorded, and
+    ``None`` (no button) when the session id or a Windows cwd contains
+    characters a shell could interpret. Newlines are rejected in every
+    position: pasting a multi-line clipboard can execute each line
+    immediately, so quoting alone is no defence.
+    """
+    if not _RESUME_SESSION_ID_RE.fullmatch(session_id):
+        return None
+    if not cwd:
+        return f"claude -r {session_id}"
+    if "\n" in cwd or "\r" in cwd:
+        return None
+    from pathlib import PureWindowsPath
+
+    if PureWindowsPath(cwd).drive:
+        if _WINDOWS_CWD_UNSAFE_RE.search(cwd):
+            return None
+        # Windows shells (PowerShell 7+, cmd): double quotes handle
+        # spaces; backslashes are literal inside them. `pushd` rather
+        # than `cd` because cmd's `cd` changes the directory but not
+        # the *drive* — pasted on C:, `cd "D:\proj"` silently leaves
+        # you on C: and `claude -r` runs in the wrong project. `pushd`
+        # switches both, and is a Push-Location alias in PowerShell.
+        return f'pushd "{cwd}" && claude -r {session_id}'
+    # POSIX shells: shlex protects spaces and metacharacters.
+    import shlex
+
+    return f"cd {shlex.quote(cwd)} && claude -r {session_id}"
+
+
 def path_looks_absolute(s: str) -> bool:
     """True if ``s`` looks like an absolute path on either POSIX or
     Windows. Decoupled from the host OS so JSONL-stored cwds don't
