@@ -482,7 +482,10 @@ class HtmlRenderer(Renderer):
         )
         if src is None:
             return "[Image]"
-        return f'<img src="{src}" alt="image" class="uploaded-image" />'
+        # Escape the src: export_image allowlists the media type and
+        # validates the base64, but the data: URL (embedded mode) still
+        # must not be able to break out of the attribute (issue #277).
+        return f'<img src="{escape_html(src)}" alt="image" class="uploaded-image" />'
 
     # -------------------------------------------------------------------------
     # System Content Formatters

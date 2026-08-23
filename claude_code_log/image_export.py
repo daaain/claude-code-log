@@ -13,6 +13,47 @@ if TYPE_CHECKING:
     from .models import ImageContent
 
 
+# Image media types we are willing to emit into a data: URL or write to
+# disk. Deliberately excludes ``image/svg+xml`` — SVG can carry inline
+# ``<script>`` and event handlers, so a data:image/svg+xml URL is a
+# scriptable XSS vector when the generated page is opened under
+# ``file://``. Mirrors the allowlist already enforced on the
+# tool-result image path in ``html/tool_formatters.py`` (issue #277).
+_ALLOWED_IMAGE_MEDIA_TYPES = frozenset(
+    {
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/webp",
+    }
+)
+
+
+def _is_safe_image_source(media_type: str, data: str) -> bool:
+    """Whether an image's media type and base64 data are safe to emit.
+
+    Guards the embedded (data: URL) and referenced (write-to-disk)
+    paths against two problems:
+
+    - a non-allowlisted / scriptable media type (notably SVG), and
+    - malformed base64 (which could smuggle a raw ``"`` /  ``>`` past a
+      naive interpolation, or corrupt the written file).
+
+    Returns ``True`` only when the media type is allowlisted *and* the
+    data is strictly-valid base64. Callers should fall back to a
+    placeholder (``None``) otherwise. Note this does not, on its own,
+    make the result safe to drop into HTML unescaped — the HTML sink
+    must still ``escape_html`` the final ``src`` (issue #277).
+    """
+    if media_type not in _ALLOWED_IMAGE_MEDIA_TYPES:
+        return False
+    try:
+        base64.b64decode(data, validate=True)
+    except (binascii.Error, ValueError):
+        return False
+    return True
+
+
 def export_image(
     image: "ImageContent",
     mode: str,
@@ -40,10 +81,21 @@ def export_image(
         return None
 
     if mode == "embedded":
+        # Reject scriptable / non-allowlisted media types and malformed
+        # base64 before building the data: URL. Even with these guards
+        # the HTML sink must still escape the returned src (issue #277);
+        # returning None here degrades to a placeholder.
+        if not _is_safe_image_source(image.source.media_type, image.source.data):
+            return None
         return f"data:{image.source.media_type};base64,{image.source.data}"
 
     if mode == "referenced":
         if output_dir is None:
+            return None
+
+        # Same allowlist/validation as embedded mode: don't write a
+        # scriptable or malformed image to disk and then reference it.
+        if not _is_safe_image_source(image.source.media_type, image.source.data):
             return None
 
         try:
@@ -71,12 +123,17 @@ def export_image(
 
 
 def _get_extension(media_type: str) -> str:
-    """Get file extension from media type."""
+    """Get file extension from media type.
+
+    Only the allowlisted media types (``_ALLOWED_IMAGE_MEDIA_TYPES``)
+    reach this in referenced mode; ``image/svg+xml`` is intentionally
+    absent because SVG is rejected upstream as a scriptable XSS vector
+    (issue #277).
+    """
     ext_map = {
         "image/png": ".png",
         "image/jpeg": ".jpg",
         "image/gif": ".gif",
         "image/webp": ".webp",
-        "image/svg+xml": ".svg",
     }
     return ext_map.get(media_type, ".png")
