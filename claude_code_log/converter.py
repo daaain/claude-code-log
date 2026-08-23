@@ -65,7 +65,12 @@ from .models import (
     ToolResultContent,
     ToolUseContent,
 )
-from .dag import SessionTree, build_dag_from_entries, traverse_session_tree
+from .dag import (
+    SessionTree,
+    build_dag_from_entries,
+    filter_to_main_line,
+    traverse_session_tree,
+)
 from .renderer import (
     get_renderer,
     prepare_session_ai_titles,
@@ -1972,6 +1977,7 @@ def convert_jsonl_to(
     write_combined: bool = True,
     no_timestamps: bool = False,
     no_recaps: bool = False,
+    branches: str = "all",
     force_regenerate: bool = False,
     report: Optional["RegenerationReport"] = None,
 ) -> Path:
@@ -1990,6 +1996,9 @@ def convert_jsonl_to(
         page_size: Maximum messages per page for combined transcript pagination.
             If None, uses format default (embedded for HTML, referenced for Markdown).
         depth: Output depth level (full, high, low, minimal).
+        branches: Which conversation branches to render. "all" (default)
+            keeps every rewound fork; "main" keeps only the longest
+            root→leaf path per trunk, dropping abandoned rewind attempts.
         force_regenerate: Always (re)generate, bypassing the version-marker
             staleness skip. The CLI sets this for an explicit ``--output``
             (issue #221): the staleness heuristic only knows the embedded
@@ -2138,6 +2147,18 @@ def convert_jsonl_to(
 
     # Deduplicate messages (removes version stutters while preserving concurrent tool results)
     messages = deduplicate_messages(messages)
+
+    # Drop rewound-and-abandoned fork branches (--branches main). Runs after
+    # dedup so the DAG sees the same entries the renderer will. A prebuilt
+    # tree describes the unfiltered graph, so rebuild it from the survivors
+    # while carrying the workflow links across.
+    if branches == "main":
+        messages = filter_to_main_line(messages)
+        if session_tree is not None:
+            _pruned_tree = build_dag_from_entries(messages)
+            _pruned_tree.workflow_runs = session_tree.workflow_runs
+            _pruned_tree.workflow_links = session_tree.workflow_links
+            session_tree = _pruned_tree
 
     # Update title to include date range if specified
     if from_date or to_date:
@@ -2704,6 +2725,7 @@ def generate_single_session_file(
     compact: bool = False,
     no_timestamps: bool = False,
     no_recaps: bool = False,
+    branches: str = "all",
 ) -> Path:
     """Generate a single session output file for the given session ID.
 
@@ -2740,6 +2762,11 @@ def generate_single_session_file(
 
     # Load messages from JSONL files
     messages, _session_tree = load_directory_transcripts(input_path, cache_manager)
+
+    # Mirror ``convert_jsonl_to``: drop rewound-and-abandoned fork branches
+    # so a per-session file matches the combined transcript (--branches main).
+    if branches == "main":
+        messages = filter_to_main_line(messages)
 
     # Collect all known session IDs: from loaded messages + cache metadata
     all_session_ids: set[str] = {
@@ -3660,6 +3687,7 @@ def process_projects_hierarchy(
     write_combined: bool = True,
     no_timestamps: bool = False,
     no_recaps: bool = False,
+    branches: str = "all",
     jobs: Optional[int] = None,
 ) -> Path:
     """Process the entire ~/.claude/projects/ hierarchy and create linked output files.
@@ -3874,6 +3902,7 @@ def process_projects_hierarchy(
                 write_combined=write_combined,
                 no_timestamps=no_timestamps,
                 no_recaps=no_recaps,
+                branches=branches,
             )
         except Exception:
             _print_project_failed(plan, traceback.format_exc())
