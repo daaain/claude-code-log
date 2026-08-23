@@ -44,8 +44,8 @@ disk_gib = 60
 [proxy]
 default_deny = false
 # allow = ["github.com", "pypi.org", "*.pypi.org", "files.pythonhosted.org"]
-# The [[box.tools]] browser setup below also needs "*.fedoraproject.org" (dnf metalink +
-# whichever mirror it redirects to) and "cdn.playwright.dev" (browser bundles).
+# The [[box.tools]] steps below also need "*.fedoraproject.org" (dnf metalink + whichever
+# mirror it redirects to) for their dnf installs, and "cdn.playwright.dev" (browser bundles).
 # passthrough = ["@all"]   # hosts tunnelled UN-decrypted under default_deny (the toolchain)
 
 # ── Agents — uncomment ONE, then `fy box up` (step 2) ────────────────────────────────────
@@ -86,6 +86,17 @@ caches = [{ volume = "devbox_playwright", path = ".cache/ms-playwright" }]
 # Consumer tools installed once per fresh box, as MONITORED steps (reported ✓/✗). They run
 # as root, in the checkout, before the deps warm-up.
 #
+# `just` is this project's documented entry point: CLAUDE.md and CONTRIBUTING.md route every
+# workflow through it (`just ci` before pushing, `just test`, `just docs-build`), so without
+# it the box can't follow its own instructions — and the recipes below name it too. Fedora
+# packages it in `updates` (1.57.0 on F44), so this is a plain dnf install: no COPR, no cargo
+# build, no prebuilt binary fetched past the proxy. It pulls fzf in as a dependency (just's
+# `--choose`); the check names only what we asked for.
+[[box.tools]]
+name = "just"
+check = "rpm -q just"
+install = "dnf install -y just"
+
 # Browser tests (`just test-browser`, `uv run pytest -m browser`) need Chromium's shared
 # libraries in the box. `playwright install --with-deps` CANNOT do this here: it only knows
 # apt (Ubuntu/Debian) and the box image is Fedora, so the system libs are an explicit dnf
