@@ -89,6 +89,8 @@ ROWS_TABLE = "search_indexed_rows"
 
 ENV_SEARCH_FIELDS = "CLAUDE_CODE_LOG_SEARCH_FIELDS"
 ENV_INDEX_FIELDS = "CLAUDE_CODE_LOG_INDEX_FIELDS"
+#: Set to 0/false to stop conversions maintaining an existing index.
+ENV_AUTO_INDEX = "CLAUDE_CODE_LOG_SEARCH_AUTO_INDEX"
 
 
 # ---------------------------------------------------------------------------
@@ -610,11 +612,41 @@ def ensure_index(
     return index_status(conn)
 
 
-def reindex_files(conn: sqlite3.Connection, file_ids: Sequence[int]) -> None:
+def auto_index_enabled() -> bool:
+    """Whether a conversion should keep an existing index current.
+
+    Maintaining it costs ~25% on a re-conversion in which *every* file
+    changed (measured: 3.3 s -> 4.1 s over 7,516 messages); a normal run
+    touches a handful of files and the difference is unnoticeable. The cost
+    only applies once an index exists at all. Set the env var to 0 to opt
+    out and let `serve` catch up instead.
+    """
+    import os
+
+    value = os.getenv(ENV_AUTO_INDEX)
+    if value is None:
+        return True
+    return value.strip().lower() not in ("0", "false", "no", "off")
+
+
+def reindex_files(
+    conn: sqlite3.Connection,
+    file_ids: Sequence[int],
+    *,
+    commit: bool = True,
+) -> None:
     """Refresh specific files in place — the incremental maintenance hook.
 
-    Cheap enough to run on the cache's normal invalidation path: ~180 ms for
-    the largest file in an 8 GB archive.
+    Called from `CacheManager.save_cached_entries`, so a plain
+    `claude-code-log` run keeps an existing index current without anyone
+    asking. Returns immediately when no index exists, so users who never
+    run `serve` pay one `sqlite_master` lookup and nothing else.
+
+    Cheap enough for that path: ~180 ms for the largest file in an 8 GB
+    archive, and only files the cache actually rewrote are touched.
+
+    Pass `commit=False` to join the caller's transaction rather than
+    committing on its own.
     """
     if not file_ids or not _index_exists(conn):
         return
@@ -649,7 +681,8 @@ def reindex_files(conn: sqlite3.Connection, file_ids: Sequence[int]) -> None:
             ),
         )
     _refresh_indexed_count(conn)
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 # ---------------------------------------------------------------------------

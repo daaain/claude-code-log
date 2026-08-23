@@ -16,6 +16,8 @@ from typing import Any, Optional
 
 import pytest
 
+from test.conftest import bump_mtime
+
 from claude_code_log.search import (
     DEFAULT_INDEX_FIELDS,
     DEFAULT_SEARCH_FIELDS,
@@ -673,3 +675,122 @@ def test_removing_a_file_removes_its_rows(cache: sqlite3.Connection) -> None:
 def test_searching_before_the_index_exists_raises(cache: sqlite3.Connection) -> None:
     with pytest.raises(RuntimeError, match="not been built"):
         search(cache, "pydantic")
+
+
+# --- the cache write-path hook -------------------------------------------
+
+
+def test_a_normal_conversion_keeps_an_existing_index_current(tmp_path: Path) -> None:
+    """`save_cached_entries` maintains the index, so `serve` isn't required.
+
+    Without this hook the index only caught up at the next server start, so
+    a `claude-code-log` run followed by a search returned the old text.
+    """
+    from claude_code_log.cache import get_cache_db_path
+    from claude_code_log.converter import process_projects_hierarchy
+
+    projects = tmp_path / "projects"
+    project = projects / "-home-u-proj"
+    project.mkdir(parents=True)
+    jsonl = project / "session.jsonl"
+    jsonl.write_text(_entry_line("the first version mentions kangaroo"))
+    process_projects_hierarchy(projects, silent=True)
+
+    db_path = get_cache_db_path(projects)
+    conn = sqlite3.connect(db_path)
+    ensure_index(conn)
+    assert count_matches(conn, "kangaroo") == 1
+    conn.close()
+
+    # Rewrite the transcript and convert again — no server involved.
+    jsonl.write_text(_entry_line("the second version mentions platypus"))
+    bump_mtime(jsonl)
+    process_projects_hierarchy(projects, silent=True)
+
+    conn = sqlite3.connect(db_path)
+    try:
+        assert count_matches(conn, "platypus") == 1, "new text not indexed"
+        assert count_matches(conn, "kangaroo") == 0, "stale rows survived"
+    finally:
+        conn.close()
+
+
+def test_auto_index_can_be_switched_off(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The env var opts out of the conversion-time maintenance."""
+    from claude_code_log.cache import get_cache_db_path
+    from claude_code_log.converter import process_projects_hierarchy
+    from claude_code_log.search import ENV_AUTO_INDEX
+
+    projects = tmp_path / "projects"
+    project = projects / "-home-u-proj"
+    project.mkdir(parents=True)
+    jsonl = project / "session.jsonl"
+    jsonl.write_text(_entry_line("first mentions kangaroo"))
+    process_projects_hierarchy(projects, silent=True)
+
+    db_path = get_cache_db_path(projects)
+    conn = sqlite3.connect(db_path)
+    ensure_index(conn)
+    conn.close()
+
+    monkeypatch.setenv(ENV_AUTO_INDEX, "0")
+    jsonl.write_text(_entry_line("second mentions platypus"))
+    bump_mtime(jsonl)
+    process_projects_hierarchy(projects, silent=True)
+
+    conn = sqlite3.connect(db_path)
+    try:
+        # Opted out, so the index keeps the old rows until `serve` catches up.
+        assert count_matches(conn, "platypus") == 0
+        assert count_matches(conn, "kangaroo") == 1
+    finally:
+        conn.close()
+
+
+def test_conversion_does_not_create_an_index_for_non_users(tmp_path: Path) -> None:
+    """Nobody who never searches should pay for an index they didn't ask for."""
+    from claude_code_log.cache import get_cache_db_path
+    from claude_code_log.converter import process_projects_hierarchy
+    from claude_code_log.search import FTS_TABLE
+
+    projects = tmp_path / "projects"
+    project = projects / "-home-u-proj"
+    project.mkdir(parents=True)
+    (project / "session.jsonl").write_text(_entry_line("nothing to see here"))
+    process_projects_hierarchy(projects, silent=True)
+
+    conn = sqlite3.connect(get_cache_db_path(projects))
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (FTS_TABLE,),
+        ).fetchone()
+        assert row is None, "an index was built without anyone asking"
+    finally:
+        conn.close()
+
+
+def _entry_line(text: str) -> str:
+    """One user message as a JSONL line."""
+    return (
+        json.dumps(
+            {
+                "type": "user",
+                "timestamp": "2026-01-01T00:00:00Z",
+                "parentUuid": None,
+                "isSidechain": False,
+                "userType": "human",
+                "cwd": "/tmp",
+                "sessionId": "sess-hook",
+                "version": "1.0.0",
+                "uuid": "uuid-hook",
+                "message": {
+                    "role": "user",
+                    "content": [{"type": "text", "text": text}],
+                },
+            }
+        )
+        + "\n"
+    )

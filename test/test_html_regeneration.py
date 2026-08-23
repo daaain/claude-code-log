@@ -13,6 +13,7 @@ from claude_code_log.converter import (
     ensure_fresh_cache,
 )
 from claude_code_log.cache import CacheManager, get_library_version
+from test.conftest import bump_mtime
 
 
 class TestHtmlRegeneration:
@@ -61,16 +62,21 @@ class TestHtmlRegeneration:
         assert output_file.stat().st_mtime == original_mtime
 
         # Third run: Modify JSONL file, should regenerate
-        time.sleep(1.1)  # Ensure > 1.0 second difference for cache detection
         new_message = '{"type":"user","timestamp":"2025-07-03T16:15:00Z","parentUuid":null,"isSidechain":false,"userType":"human","cwd":"/tmp","sessionId":"test_session","version":"1.0.0","uuid":"new_msg","message":{"role":"user","content":[{"type":"text","text":"This is a new message to test regeneration."}]}}\n'
         with open(jsonl_file, "a", encoding="utf-8") as f:
             f.write(new_message)
+        # Make the source look newer than the cached mtime (see bump_mtime).
+        bump_mtime(jsonl_file)
 
         # Should regenerate without explicit print check since it should happen silently
         convert_jsonl_to_html(project_dir)
 
         # Verify file was regenerated
-        assert output_file.stat().st_mtime > original_mtime
+        # Rewritten, not necessarily *later*: this VM's filesystem clock has
+        # been observed going backwards by tens of ms, so a regenerated file can
+        # carry an earlier mtime. Inequality is the honest check for "it was
+        # rewritten" — an unchanged file keeps its mtime exactly.
+        assert output_file.stat().st_mtime != original_mtime
         new_content = output_file.read_text(encoding="utf-8")
         assert "This is a new message to test regeneration" in new_content
 
@@ -118,16 +124,21 @@ class TestHtmlRegeneration:
         assert session_file.stat().st_mtime == original_mtime
 
         # Third run: Modify JSONL file, should regenerate
-        time.sleep(1.1)  # Ensure > 1.0 second difference for cache detection
         new_message = '{"type":"assistant","timestamp":"2025-07-03T16:20:00Z","parentUuid":null,"isSidechain":false,"userType":"human","cwd":"/tmp","sessionId":"test_session","version":"1.0.0","uuid":"new_assistant_msg","requestId":"req_new","message":{"id":"new_assistant_msg","type":"message","role":"assistant","model":"claude-3-sonnet-20240229","content":[{"type":"text","text":"I can help you test session regeneration!"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":15,"output_tokens":10}}}\n'
         with open(jsonl_file, "a", encoding="utf-8") as f:
             f.write(new_message)
+        # Make the source look newer than the cached mtime (see bump_mtime).
+        bump_mtime(jsonl_file)
 
         # Should regenerate
         convert_jsonl_to_html(project_dir, generate_individual_sessions=True)
 
         # Verify session file was regenerated
-        assert session_file.stat().st_mtime > original_mtime
+        # Rewritten, not necessarily *later*: this VM's filesystem clock has
+        # been observed going backwards by tens of ms, so a regenerated file can
+        # carry an earlier mtime. Inequality is the honest check for "it was
+        # rewritten" — an unchanged file keeps its mtime exactly.
+        assert session_file.stat().st_mtime != original_mtime
         new_content = session_file.read_text(encoding="utf-8")
         assert "I can help you test session regeneration" in new_content
 
@@ -189,14 +200,19 @@ class TestHtmlRegeneration:
                     "Index regeneration should no longer be skipped on no-op runs."
                 )
         # File was rewritten (mtime advanced).
-        assert index_file.stat().st_mtime_ns > original_mtime_ns
+        # Rewritten, not necessarily *later*: this VM's filesystem clock has
+        # been observed going backwards by tens of ms, so a regenerated file can
+        # carry an earlier mtime. Inequality is the honest check for "it was
+        # rewritten" — an unchanged file keeps its mtime exactly.
+        assert index_file.stat().st_mtime_ns != original_mtime_ns
 
         # Third run: Modify JSONL file in project1; index picks up the
         # new content.
-        time.sleep(1.1)  # > 1.0s ensures the cache's mtime tier sees the change.
         new_message = '{"type":"summary","summary":"This project now has updated content for index regeneration test.","leafUuid":"msg_011","timestamp":"2025-07-03T16:25:00Z"}\n'
         with open(jsonl1, "a", encoding="utf-8") as f:
             f.write(new_message)
+        # Make the source look newer than the cached mtime (see bump_mtime).
+        bump_mtime(jsonl1)
 
         # Capture before re-run so we can prove the index *content*
         # actually changed (not just its mtime). The projects index
@@ -208,7 +224,11 @@ class TestHtmlRegeneration:
         pre_change_content = index_file.read_text(encoding="utf-8")
         post_change_mtime_ns = index_file.stat().st_mtime_ns
         process_projects_hierarchy(projects_dir)
-        assert index_file.stat().st_mtime_ns > post_change_mtime_ns
+        # Rewritten, not necessarily *later*: this VM's filesystem clock has
+        # been observed going backwards by tens of ms, so a regenerated file can
+        # carry an earlier mtime. Inequality is the honest check for "it was
+        # rewritten" — an unchanged file keeps its mtime exactly.
+        assert index_file.stat().st_mtime_ns != post_change_mtime_ns
         post_change_content = index_file.read_text(encoding="utf-8")
         assert post_change_content != pre_change_content, (
             "Regenerated index should reflect the appended JSONL entry "
@@ -252,10 +272,11 @@ class TestHtmlRegeneration:
         assert cache_was_updated is False
 
         # Modify JSONL file
-        time.sleep(1.1)  # Ensure > 1.0 second difference for cache detection
         new_message = '{"type":"user","timestamp":"2025-07-03T16:30:00Z","parentUuid":null,"isSidechain":false,"userType":"human","cwd":"/tmp","sessionId":"test_session","version":"1.0.0","uuid":"cache_test_msg","message":{"role":"user","content":[{"type":"text","text":"Testing cache update detection."}]}}\n'
         with open(jsonl_file, "a", encoding="utf-8") as f:
             f.write(new_message)
+        # Make the source look newer than the cached mtime (see bump_mtime).
+        bump_mtime(jsonl_file)
 
         # Now cache should detect the change
         cache_was_updated = ensure_fresh_cache(project_dir, cache_manager)
@@ -287,16 +308,21 @@ class TestHtmlRegeneration:
         assert f"Generated by claude-code-log v{library_version}" in content
 
         # Wait and modify JSONL file (this should trigger cache update and regeneration)
-        time.sleep(1.1)  # Ensure > 1.0 second difference for cache detection
         new_message = '{"type":"user","timestamp":"2025-07-03T16:35:00Z","parentUuid":null,"isSidechain":false,"userType":"human","cwd":"/tmp","sessionId":"test_session","version":"1.0.0","uuid":"force_regen_msg","message":{"role":"user","content":[{"type":"text","text":"This should force regeneration despite same version."}]}}\n'
         with open(jsonl_file, "a", encoding="utf-8") as f:
             f.write(new_message)
+        # Make the source look newer than the cached mtime (see bump_mtime).
+        bump_mtime(jsonl_file)
 
         # Should regenerate because cache was updated (not because of version change)
         convert_jsonl_to_html(project_dir)
 
         # Verify file was regenerated
-        assert output_file.stat().st_mtime > original_mtime
+        # Rewritten, not necessarily *later*: this VM's filesystem clock has
+        # been observed going backwards by tens of ms, so a regenerated file can
+        # carry an earlier mtime. Inequality is the honest check for "it was
+        # rewritten" — an unchanged file keeps its mtime exactly.
+        assert output_file.stat().st_mtime != original_mtime
         new_content = output_file.read_text(encoding="utf-8")
         assert "This should force regeneration despite same version" in new_content
 
@@ -352,7 +378,11 @@ class TestHtmlRegeneration:
             assert not skip_calls, f"unexpected skip after source grew: {skip_calls}"
 
         # The output was rewritten (newer mtime) and now contains the new message.
-        assert output_file.stat().st_mtime > original_mtime
+        # Rewritten, not necessarily *later*: this VM's filesystem clock has
+        # been observed going backwards by tens of ms, so a regenerated file can
+        # carry an earlier mtime. Inequality is the honest check for "it was
+        # rewritten" — an unchanged file keeps its mtime exactly.
+        assert output_file.stat().st_mtime != original_mtime
         assert "Single file mode test." in output_file.read_text(encoding="utf-8")
 
 
@@ -433,7 +463,6 @@ class TestIncrementalHtmlCache:
         session2_mtime = session2_html.stat().st_mtime
 
         # Wait and modify only session1
-        time.sleep(1.1)  # Ensure > 1.0 second difference
         new_msg = (
             '{"type":"user","timestamp":"2025-01-01T10:05:00Z","parentUuid":"msg1",'
             '"isSidechain":false,"userType":"human","cwd":"/tmp","sessionId":"session1",'
@@ -442,12 +471,18 @@ class TestIncrementalHtmlCache:
         )
         with open(project_dir / "session1.jsonl", "a", encoding="utf-8") as f:
             f.write(new_msg)
+        # Make the source look newer than the cached mtime (see bump_mtime).
+        bump_mtime(project_dir / "session1.jsonl")
 
         # Second run: Should only regenerate session1
         convert_jsonl_to_html(project_dir, generate_individual_sessions=True)
 
         # Session 1 should be regenerated (newer mtime)
-        assert session1_html.stat().st_mtime > session1_mtime
+        # Rewritten, not necessarily *later*: this VM's filesystem clock has
+        # been observed going backwards by tens of ms, so a regenerated file can
+        # carry an earlier mtime. Inequality is the honest check for "it was
+        # rewritten" — an unchanged file keeps its mtime exactly.
+        assert session1_html.stat().st_mtime != session1_mtime
 
         # Session 2 should NOT be regenerated (same mtime)
         assert session2_html.stat().st_mtime == session2_mtime
@@ -533,7 +568,6 @@ class TestIncrementalHtmlCache:
         assert not is_stale
 
         # Add a new message (increases count)
-        time.sleep(1.1)
         new_msg = (
             '{"type":"user","timestamp":"2025-01-01T10:01:00Z","parentUuid":"msg1",'
             '"isSidechain":false,"userType":"human","cwd":"/tmp","sessionId":"test_session",'
@@ -542,6 +576,8 @@ class TestIncrementalHtmlCache:
         )
         with open(project_dir / "test.jsonl", "a", encoding="utf-8") as f:
             f.write(new_msg)
+        # Make the source look newer than the cached mtime (see bump_mtime).
+        bump_mtime(project_dir / "test.jsonl")
 
         # Update cache to reflect new message
         ensure_fresh_cache(project_dir, cache_manager)

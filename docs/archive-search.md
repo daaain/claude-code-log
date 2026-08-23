@@ -112,6 +112,22 @@ claude-code-log serve --no-index    # start without touching the index
 
 The index is derived data: deleting the cache rebuilds both.
 
+### Staying current between server runs
+
+Once an index exists, ordinary `claude-code-log` runs keep it up to date —
+you don't have to restart the server to search new conversations.
+
+That costs about 25% extra on a conversion in which *every* transcript
+changed (3.3 s → 4.1 s over 7,516 messages); a normal run touches a handful
+of files and the difference isn't noticeable. Nothing is added for people
+who have never built an index.
+
+To opt out and let the next `serve` catch up instead:
+
+```bash
+CLAUDE_CODE_LOG_SEARCH_AUTO_INDEX=0 claude-code-log
+```
+
 ## Other options
 
 ```bash

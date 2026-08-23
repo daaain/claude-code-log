@@ -249,3 +249,31 @@ def page(context):
     page = context.new_page()
     yield page
     page.close()
+
+
+# ========== Deterministic mtime changes ==========
+# The cache treats a file as unchanged when its mtime is within 1.0 s of the
+# recorded one (``_cache_row_is_fresh``). Tests used to force a change with
+# ``time.sleep(1.1)``, which leaves only 0.1 s of margin and is not reliable:
+# the filesystem timestamp source can drift from the monotonic clock
+# ``sleep`` uses, and a 1.1 s sleep was measured producing an mtime delta of
+# **0.917 s** on this VM — under the threshold, so the cache saw the file as
+# fresh and the test failed. It reproduced roughly one run in six, in
+# isolation, which had it misread as an xdist flake.
+#
+# Setting the mtime explicitly is both deterministic and instant.
+
+
+def bump_mtime(path: "Path", seconds: float = 10.0) -> float:
+    """Move a file's mtime forward so the cache sees it as modified.
+
+    Returns the new mtime. Prefer this over sleeping: it states the intent
+    ("this file now looks newer than what was cached") instead of hoping a
+    sleep clears a threshold.
+    """
+    import os
+
+    stat = path.stat()
+    new_mtime = stat.st_mtime + seconds
+    os.utime(path, (stat.st_atime, new_mtime))
+    return new_mtime

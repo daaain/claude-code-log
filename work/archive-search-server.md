@@ -947,13 +947,54 @@ no-op reindex writes nothing.
 | Project-filtered | 2.4 ms |
 | Search-as-you-type, in browser | 243 ms to first results |
 
+### Follow-up: both gaps closed
+
+**The cache write path now maintains the index.** `save_cached_entries`
+calls `reindex_files(..., commit=False)` inside its own transaction, so an
+ordinary `claude-code-log` run keeps an existing index current and a file's
+stale rows leave with its stale messages instead of waiting for the next
+server start. It is a no-op (one `sqlite_master` lookup) for anyone who has
+never built an index.
+
+Measured cost on a re-conversion where *every* file changed — the worst
+case, since normally only a few do: **3.3 s → 4.1 s (+25%)** over 7,516
+messages. `CLAUDE_CODE_LOG_SEARCH_AUTO_INDEX=0` opts out. The gate lives at
+the call site, not inside `reindex_files`, so it disables the automatic
+hook without silently disabling explicit calls.
+
+Considered and rejected: extracting from the in-memory entries that
+`_serialize_entry` already has, to avoid re-decompressing what was just
+compressed. It would need the AUTOINCREMENT rowids of a just-inserted batch,
+which means inferring ids from insertion order — a correctness risk for
+maybe 40% of an already-small overhead.
+
+**The "pre-existing flake" was a real test bug, not parallelism.** It
+reproduced roughly one run in six *in isolation*, which is what had it
+misfiled. The cache treats a file as unchanged within a 1.0 s mtime
+tolerance, and the tests forced a change with `time.sleep(1.1)` — 0.1 s of
+margin. On this VM a 1.1 s sleep was measured producing an mtime delta of
+**0.917 s**: the filesystem's timestamp source drifts from the monotonic
+clock `sleep` uses, so the cache saw the file as fresh.
+
+Fixed with a `bump_mtime` helper in `conftest.py` that sets the mtime
+explicitly — deterministic, instant, and it states the intent instead of
+hoping a sleep clears a threshold. Nine sites across three files had the
+same latent bug (`test_cache_sqlite_integrity.py`, `test_cache.py`,
+`test_html_regeneration.py`), and ~9.9 s of sleeping is gone from the suite.
+
+Removing those sleeps then exposed a *second* use they had been quietly
+serving. Several regeneration tests assert `output.mtime > original_mtime`
+to mean "this file was rewritten"; with the 1.1 s cushion gone, the same
+backwards clock jitter made a regenerated file land **16 ms earlier** than
+the original. The sleeps had been masking a false assumption — that a
+rewrite always produces a later timestamp — rather than preventing a race.
+Those seven assertions now use `!=`, which is what the tests actually mean:
+an untouched file keeps its mtime exactly, a rewritten one does not.
+
+15/15 consecutive clean runs of the three files afterwards.
+
 ### Known gaps
 
-- **Not wired into the cache write path.** `reindex_files` exists and is
-  tested, but nothing calls it from `cache.py` yet; `ensure_index` at server
-  start covers the same ground via `cached_mtime`. Wiring it in would make a
-  plain `claude-code-log` run keep the index warm.
 - **`/api/search` has no `regex=` escape hatch.** Deferred as planned.
-- **Pre-existing flake:** `test_cache_sqlite_integrity.py::
-  test_mtime_change_invalidates_cache` fails intermittently under `-n auto`.
-  Confirmed present before this branch; not addressed here.
+- **Phased/streaming search is not wired up.** The `fields=` mechanism is
+  there; the UI would be solving a problem nobody has at 1–6 ms per query.

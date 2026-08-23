@@ -804,6 +804,18 @@ class CacheManager:
                 serialized_entries,
             )
 
+            # Keep the full-archive search index in step with the rows we
+            # just replaced, inside the same transaction. This is a no-op
+            # (one sqlite_master lookup) unless someone has run
+            # `claude-code-log serve` and built an index, so users who never
+            # search pay essentially nothing — and those who do never meet a
+            # stale index, because the file's old rows go out with its old
+            # messages rather than waiting for the next server start.
+            from .search import auto_index_enabled, reindex_files
+
+            if auto_index_enabled():
+                reindex_files(conn, [file_id], commit=False)
+
             self._update_last_updated(conn)
             conn.commit()
 

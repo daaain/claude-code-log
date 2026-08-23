@@ -22,6 +22,8 @@ from claude_code_log.models import (
     TextContent,
 )
 
+from test.conftest import bump_mtime
+
 
 @pytest.fixture
 def temp_project_dir():
@@ -180,11 +182,10 @@ class TestCacheManager:
         cache_manager.save_cached_entries(jsonl_path, sample_entries)
         assert cache_manager.is_file_cached(jsonl_path)
 
-        # Modify file
-        import time
-
-        time.sleep(1.1)  # Ensure different mtime (increase to be more reliable)
+        # Modify file, then make it look newer than the cached mtime
+        # (see bump_mtime in conftest — sleeping past the threshold flakes).
         jsonl_path.write_text("modified content", encoding="utf-8")
+        bump_mtime(jsonl_path)
 
         # Cache should be invalidated
         assert not cache_manager.is_file_cached(jsonl_path)
