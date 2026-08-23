@@ -221,7 +221,7 @@ def test_decode_entry_roundtrip() -> None:
 
 def test_hyphenated_terms_are_escaped() -> None:
     """`vis-timeline` is a hard OperationalError unquoted."""
-    assert fts_escape("vis-timeline") == '"vis-timeline"'
+    assert fts_escape("vis-timeline") == '"vis-timeline"*'
 
 
 @pytest.mark.parametrize(
@@ -236,6 +236,11 @@ def test_hyphenated_terms_are_escaped() -> None:
         'say "hello',
         "-leading-dash",
         "*",
+        # Punctuation-only words are long enough for the implicit prefix, so
+        # they emit a phrase-star over zero tokens: still valid, still empty.
+        "...",
+        "foo...",
+        "日本語",
     ],
 )
 def test_escaped_queries_are_valid_fts_syntax(raw: str) -> None:
@@ -258,7 +263,44 @@ def test_trailing_star_keeps_prefix_semantics() -> None:
 
 def test_embedded_quotes_are_doubled() -> None:
     escaped = fts_escape('say"it')
-    assert escaped == '"say""it"'
+    assert escaped == '"say""it"*'
+
+
+def test_words_get_an_implicit_prefix_match() -> None:
+    """A half-typed word finds the whole one without the user typing `*`."""
+    assert fts_escape("tokeni") == '"tokeni"*'
+    assert fts_escape("cache invalidation") == '"cache"* "invalidation"*'
+
+
+@pytest.mark.parametrize("word", ["a", "re", "os"])
+def test_short_words_are_matched_whole(word: str) -> None:
+    """Below `IMPLICIT_PREFIX_MIN_LENGTH` a prefix costs 100-500 ms on a real
+    archive (see the constant), so short words match whole."""
+    assert fts_escape(word) == f'"{word}"'
+
+
+def test_quoting_a_word_opts_out_of_the_prefix() -> None:
+    """The escape hatch for `cache` when you don't want `cache_manager`."""
+    assert fts_escape('"cache"') == '"cache"'
+    assert fts_escape('"cache" invalidation') == '"cache" "invalidation"*'
+
+
+def test_implicit_prefix_finds_longer_words() -> None:
+    """End to end through SQLite, not just the escaped string."""
+    db = sqlite3.connect(":memory:")
+    db.execute("CREATE VIRTUAL TABLE t USING fts5(x)")
+    db.execute("INSERT INTO t(x) VALUES('the tokenizer ran')")
+
+    def hits(query: str) -> int:
+        escaped = fts_escape(query)
+        return len(
+            db.execute("SELECT rowid FROM t WHERE t MATCH ?", (escaped,)).fetchall()
+        )
+
+    assert hits("tokeni") == 1
+    assert hits("tokenizer") == 1
+    assert hits('"tokeni"') == 0  # quoted: whole word only
+    assert hits("tokenizers") == 0
 
 
 def test_empty_query_escapes_to_empty() -> None:

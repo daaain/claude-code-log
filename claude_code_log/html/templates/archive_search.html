@@ -36,12 +36,24 @@
             flex-wrap: wrap;
         }
 
+        /* Same card as the transcript pages' "Search & Filter" toolbar
+           (.filter-toolbar), so the two search boxes read as one feature.
+           Translucent rather than opaque: sticky over a gradient body, a
+           solid fill is a white slab that swallows the input inside it. */
         .archive-search-form {
             position: sticky;
             top: 0;
             z-index: 10;
-            padding: 1em 0;
-            background: var(--bg-color, #fff);
+            margin: 0.5em 0 1em;
+            padding: 12px 16px;
+            background-color: var(--neutral-dimmed);
+            border-radius: 8px;
+            box-shadow: -7px -7px 10px #eeeeee44, 7px 7px 10px #00000011;
+            border-left: var(--white-dimmed) 1px solid;
+            border-top: var(--white-dimmed) 1px solid;
+            border-bottom: #00000017 1px solid;
+            border-right: #00000017 1px solid;
+            backdrop-filter: blur(8px);
         }
 
         .archive-search-row {
@@ -57,21 +69,35 @@
 
         .archive-search-filters {
             display: flex;
-            gap: 0.75em;
+            gap: 12px;
             flex-wrap: wrap;
             align-items: center;
-            margin-top: 0.6em;
-            font-size: 0.85em;
+            margin-top: 10px;
+            font-size: 0.75em;
+            color: var(--text-muted);
+        }
+
+        .archive-search-filters label {
+            display: flex;
+            align-items: center;
+            gap: 4px;
         }
 
         .archive-search-filters select {
-            padding: 0.3em 0.5em;
-            border: 1px solid rgba(128, 128, 128, 0.4);
+            padding: 4px 8px;
+            border: 1px solid #dee2e6;
             border-radius: 4px;
-            background: inherit;
-            color: inherit;
-            font: inherit;
+            background: #ffffff88;
+            color: var(--text-primary);
+            font-family: inherit;
+            font-size: 1em;
             max-width: 22em;
+            cursor: pointer;
+        }
+
+        .archive-search-filters select:hover {
+            background: #ffffff99;
+            border-color: var(--system-warning-color);
         }
 
         .archive-search-status {
@@ -143,7 +169,7 @@
         <pre>claude-code-log serve</pre>
         <p>Then open <a id='setup-link' href='http://127.0.0.1:8010/search.html'
                 >http://127.0.0.1:8010/search.html</a>. Search within a single
-            transcript keeps working here without the server — open any session
+            transcript keeps working without the server — open any session
             page and press <kbd>/</kbd>.</p>
     </div>
 
@@ -154,6 +180,8 @@
                     <input type='search' id='q' class='search-input' autofocus
                         placeholder='Search every message in every project…'
                         autocomplete='off' spellcheck='false'>
+                    <button type='button' id='clear' class='search-clear'
+                        title='Clear search'>✕</button>
                 </div>
             </div>
             <div class='archive-search-filters'>
@@ -182,6 +210,8 @@
             'use strict';
 
             const PAGE_SIZE = 20;
+            // Keep in step with `search.IMPLICIT_PREFIX_MIN_LENGTH`.
+            const PREFIX_MIN = 3;
             const el = (id) => document.getElementById(id);
             const app = el('app');
             const setup = el('setup');
@@ -192,6 +222,7 @@
             const resultsEl = el('results');
             const moreBtn = el('more');
             const fieldNote = el('field-note');
+            const clearBtn = el('clear');
 
             let defaultFields = [];
             let offset = 0;
@@ -208,16 +239,37 @@
             // Highlight the searched terms inside an excerpt. The server
             // builds excerpts but deliberately does not mark them up, so
             // escaping happens here, before any markup is introduced.
+            //
+            // The term rules mirror `search.fts_escape`: an unquoted word of
+            // PREFIX_MIN characters or more matched as a prefix, so highlight
+            // the whole word it was found in — highlighting `render` inside
+            // `renderer` and leaving the rest plain would look like a bug.
             function highlight(text, query) {
                 const safe = escapeHtml(text);
-                const terms = query
-                    .split(/\s+/)
-                    .map((t) => t.replace(/^"|"$|\*$/g, ''))
-                    .filter((t) => t.length > 1)
-                    .map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-                if (!terms.length) return safe;
+                const patterns = [];
+                (query.match(/"[^"]*"\*?|\S+/g) || []).forEach((raw) => {
+                    let term = raw;
+                    let prefix;
+                    if (term.charAt(0) === '"') {
+                        prefix = term.endsWith('*');
+                        term = term.slice(1, term.lastIndexOf('"'));
+                    } else {
+                        prefix = term.endsWith('*') && term.length > 1;
+                        if (prefix) term = term.slice(0, -1);
+                        else prefix = term.length >= PREFIX_MIN;
+                    }
+                    term = term.trim();
+                    if (term.length < 2) return;
+                    const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                    // `[^\W_]`, not `\w`: the index tokenizes on every
+                    // non-alphanumeric character, so `cache` matched
+                    // `cache_manager` at the underscore — extending the
+                    // highlight past it would overstate the match.
+                    patterns.push(prefix ? escaped + '[^\\W_]*' : escaped);
+                });
+                if (!patterns.length) return safe;
                 return safe.replace(
-                    new RegExp('(' + terms.join('|') + ')', 'gi'),
+                    new RegExp('(' + patterns.join('|') + ')', 'gi'),
                     '<span class="search-highlight">$1</span>'
                 );
             }
@@ -362,6 +414,12 @@
                 }
             }
 
+            // The clear button only shows once there is something to clear —
+            // same behaviour as the in-page search box on transcript pages.
+            function updateClearButton() {
+                clearBtn.classList.toggle('visible', input.value.length > 0);
+            }
+
             let debounce = null;
             function scheduleSearch() {
                 const key = queryKey();
@@ -423,6 +481,7 @@
                 if (state.project) projectSelect.value = state.project;
                 toolResults.checked = state.fields === 'all';
                 lastQueryKey = queryKey();
+                updateClearButton();
                 if (state.q) runSearch(false);
                 input.focus();
             }
@@ -435,7 +494,20 @@
                 writeUrl(true);
                 runSearch(false);
             });
-            input.addEventListener('input', scheduleSearch);
+            input.addEventListener('input', () => {
+                updateClearButton();
+                scheduleSearch();
+            });
+            clearBtn.addEventListener('click', () => {
+                input.value = '';
+                updateClearButton();
+                clearTimeout(debounce);
+                offset = 0;
+                lastQueryKey = queryKey();
+                writeUrl(false);
+                runSearch(false);
+                input.focus();
+            });
             projectSelect.addEventListener('change', () => {
                 offset = 0;
                 lastQueryKey = queryKey();
@@ -459,6 +531,7 @@
                 toolResults.checked = state.fields === 'all';
                 offset = 0;
                 lastQueryKey = queryKey();
+                updateClearButton();
                 runSearch(false);
             });
 

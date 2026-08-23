@@ -1,0 +1,18 @@
+{# Link to the archive-wide search page.
+
+   Shared by the index and by transcript pages so the two can't drift. The
+   href is passed in because the page's depth below the index root varies
+   (`search.html` sits next to `index.html`, which is one level up from a
+   project directory — but several under `--expand-paths`).
+
+   Rendered even though the page it points at only works under
+   `claude-code-log serve`: the target explains that itself, which is how
+   most people will find out the feature exists. #}
+{% macro archive_search_link(href) %}
+<p class='archive-search-link'>
+    <a href='{{ href }}'>🔎 Search inside all transcripts…</a>
+    <span class='archive-search-link-hint'>
+        (full-text across every message; needs <code>claude-code-log serve</code>)
+    </span>
+</p>
+{% endmacro %}

@@ -7,6 +7,7 @@
     <meta name='viewport' content='width=device-width, initial-scale=1.0'>
     <title>{{ title }}</title>
     {% from 'components/session_nav.html' import render_session_nav %}
+    {% from 'components/archive_search_link.html' import archive_search_link as render_archive_search_link %}
     <style>
 {% include 'components/global_styles.css' %}
 {% include 'components/session_nav_styles.css' %}
@@ -16,15 +17,6 @@
         /* Session navigation overrides for better text readability */
         .project-sessions .session-link {
             font-size: 1.2em;
-        }
-
-        .archive-search-link {
-            margin: 0.5em 0 1.5em;
-        }
-
-        .archive-search-link-hint {
-            font-size: 0.85em;
-            opacity: 0.7;
         }
     </style>
 </head>
@@ -39,12 +31,7 @@
          different things. -->
     {% include 'components/search.html' %}
 
-    <p class='archive-search-link'>
-        <a href='search.html'>🔎 Search inside all transcripts…</a>
-        <span class='archive-search-link-hint'>
-            (full-text across every message; needs <code>claude-code-log serve</code>)
-        </span>
-    </p>
+    {{ render_archive_search_link('search.html') }}
 
     <div class='summary'>
         <div class='summary-stats'>

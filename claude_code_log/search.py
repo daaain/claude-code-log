@@ -82,6 +82,29 @@ SESSION_ONLY_TYPES: frozenset[str] = frozenset({"ai-title", "queue-operation"})
 #: Bump when the extractor's output changes; forces a rebuild.
 EXTRACTOR_VERSION = 1
 
+#: Unquoted words at least this long are matched as prefixes (`tokeni` finds
+#: `tokenizer`) without the user typing `*`.
+#:
+#: Three is where the cost stops being free. A prefix query has to merge the
+#: doclists of *every* indexed term under the prefix, and `ORDER BY rank`
+#: scores all of them — there is no early exit. Measured on a synthetic
+#: index at real-archive scale (532,728 rows, 164 MB), top-20 plus the total
+#: count:
+#:
+#:     r*    389 ms      re*   274 ms      ren*   20 ms      rende*  19 ms
+#:     t*    501 ms      co*   217 ms      con*   79 ms
+#:     s*    389 ms      in*   112 ms      the*   78 ms
+#:
+#: So 1-2 characters cost 100-500 ms — worse than the pathological
+#: stopword-term case this design already tolerates (~150 ms), and they fire
+#: on the way to every longer query as the user types. From 3 characters up
+#: the worst case is ~110 ms and the typical one 20-40 ms, against 4-50 ms
+#: for the same words matched whole: a fraction of the 200 ms input debounce.
+#: Below the floor the word is matched whole, which is cheap (`re` exact:
+#: 14 ms) and no less useful than a prefix that matched a third of the
+#: archive would have been.
+IMPLICIT_PREFIX_MIN_LENGTH = 3
+
 FTS_TABLE = "message_fts"
 META_TABLE = "search_index_meta"
 FILES_TABLE = "search_indexed_files"
@@ -697,8 +720,11 @@ def fts_escape(user_query: str) -> str:
     `OperationalError: no such column: timeline`, because a bare hyphen
     reads as FTS5 column-filter/NOT syntax.
 
-    Double-quoted runs are preserved as phrases; a trailing `*` still means
-    prefix search. Everything else becomes a quoted term.
+    Unquoted words get an **implicit prefix match** (`tokeni` finds
+    `tokenizer`), so a half-typed word behaves the way people expect from a
+    search box; see `IMPLICIT_PREFIX_MIN_LENGTH` for why short ones don't.
+    Double-quoting a word opts out and matches it whole, and double-quoted
+    runs are still phrases.
     """
     tokens: list[str] = []
     for raw in re.findall(r'"[^"]*"\*?|\S+', user_query):
@@ -709,10 +735,11 @@ def fts_escape(user_query: str) -> str:
             if phrase.strip():
                 tokens.append('"' + phrase.replace('"', '""') + '"' + suffix)
             continue
-        prefix = raw.endswith("*") and len(raw) > 1
-        term = raw[:-1] if prefix else raw
+        explicit_prefix = raw.endswith("*") and len(raw) > 1
+        term = raw[:-1] if explicit_prefix else raw
         if not term.strip():
             continue
+        prefix = explicit_prefix or len(term) >= IMPLICIT_PREFIX_MIN_LENGTH
         tokens.append('"' + term.replace('"', '""') + '"' + ("*" if prefix else ""))
     return " ".join(tokens)
 

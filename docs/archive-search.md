@@ -9,7 +9,8 @@ claude-code-log serve
 ```
 
 Then open <http://127.0.0.1:8010/search.html>, or follow the
-**“Search inside all transcripts…”** link on the index page.
+**“Search inside all transcripts…”** link on the index page or on any
+project's combined transcript.
 
 ## Why it needs a server
 
@@ -39,18 +40,27 @@ Archive search is token-based (SQLite FTS5), not substring:
 
 | Query | Meaning |
 |---|---|
-| `pydantic` | the word `pydantic` |
+| `pydantic` | words starting with `pydantic` |
+| `tokeni` | words starting with `tokeni` — finds `tokenizer` |
+| `"cache"` | the whole word `cache`, never `cached` |
 | `cache invalidation` | both words, anywhere in the message |
 | `"cache invalidation"` | that exact phrase |
-| `tokeniz*` | words starting with `tokeniz` |
 
-Punctuation is handled for you — `vis-timeline` searches for the two words
-together, and no input can produce a syntax error.
+A word you type is matched as a prefix, so a half-typed one still finds
+what you meant; quote it to match it whole. Punctuation is handled for you
+— `vis-timeline` searches for the two words together, and no input can
+produce a syntax error.
+
+!!! note
+    Words of one or two characters are matched whole even unquoted. A
+    two-letter prefix matches a third of the archive, which is both slow
+    (hundreds of milliseconds, on every keystroke on the way to a longer
+    word) and useless as a result list.
 
 !!! note
     Because it is token-based, a mid-word substring like `ydant` finds
-    nothing. Use the in-page search on a session page for substring or
-    regex matching.
+    nothing — matching starts at the beginning of a word. Use the in-page
+    search on a session page for substring or regex matching.
 
 ## Filters
 

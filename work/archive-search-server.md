@@ -993,6 +993,50 @@ an untouched file keeps its mtime exactly, a rewritten one does not.
 
 15/15 consecutive clean runs of the three files afterwards.
 
+### Follow-up: implicit prefix search
+
+Typing `tokeni` and getting nothing until you add `*` reads as a broken
+search box, so unquoted words are now matched as prefixes by default
+(`fts_escape`), with `"quoted"` as the opt-out. The question was what it
+costs: a prefix query merges the doclists of *every* indexed term under the
+prefix, and `ORDER BY rank` scores all of them — there is no early exit.
+
+Measured on a synthetic index at real-archive scale (532,728 rows, 164 MB
+— the local dev archive is 1,260 messages, so the local text was replicated
+to that row count with per-row unique tokens to grow the term index too).
+Top-20 plus the `count(*)` both a search does:
+
+| prefix | total | hits | | whole word | total |
+|---|---:|---:|---|---|---:|
+| `r*` | 389 ms | 284,022 | | `re` | 14 ms |
+| `t*` | 501 ms | 283,703 | | | |
+| `co*` | 217 ms | 137,969 | | `co` | 0.6 ms |
+| `ren*` | 20 ms | 19,452 | | `the` | 56 ms |
+| `the*` | 78 ms | 68,914 | | `cache` | 34 ms |
+| `render*` | 19 ms | 19,444 | | `test` | 32 ms |
+
+So the answer is length-dependent, and sharply: **3 characters is where it
+stops mattering.** From there up the worst case is ~110 ms and the typical
+one 20–40 ms, against 4–50 ms for the same words matched whole — under the
+200 ms input debounce either way. At one or two characters it is 100–500 ms,
+worse than the pathological stopword query this design already tolerates
+(153 ms), and it fires on the way to *every* longer query as the user types.
+
+Hence `IMPLICIT_PREFIX_MIN_LENGTH = 3`: shorter words are matched whole,
+which is cheap and no less useful than a result list covering a third of the
+archive would have been. An explicit `*` is still honoured at any length —
+if you ask for `s*`, that's your call.
+
+Two smaller consequences:
+
+- The excerpt highlighter mirrors the rule, extending a highlight to the end
+  of the word it matched (`render` inside `renderer`) — but stopping at
+  non-alphanumerics, because the tokenizer splits there too (`cache` matches
+  `cache_manager`, and highlighting past the underscore overstates it).
+- `"vis-timeline"` now escapes to `"vis-timeline"*`: a phrase whose *last*
+  token is a prefix, which is what FTS5's phrase-star means and what the
+  user typing it wants.
+
 ### Known gaps
 
 - **`/api/search` has no `regex=` escape hatch.** Deferred as planned.

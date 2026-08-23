@@ -1587,6 +1587,7 @@ class HtmlRenderer(Renderer):
         session_tree: Optional["SessionTree"] = None,
         page_info: Optional[dict[str, Any]] = None,
         page_stats: Optional[dict[str, Any]] = None,
+        archive_search_link: Optional[str] = None,
     ) -> str:
         """Generate HTML from transcript messages.
 
@@ -1598,6 +1599,12 @@ class HtmlRenderer(Renderer):
             page_info: Optional pagination info (page_number, prev_link, next_link).
             page_stats: Optional page statistics (message_count, date_range, token_summary).
             session_tree: Optional pre-built SessionTree (avoids rebuilding DAG).
+            archive_search_link: Relative href of the archive-search page
+                (`search.html`, which sits next to the index), or None when
+                there is no index — a single-file conversion writes no
+                `search.html`, so the link would dangle. Computed by the
+                caller because only it knows where the index root is: under
+                ``--expand-paths`` a project page can be several levels deep.
         """
 
         from ..git_remote import canonical_cwd_from_messages, render_with_repo_context
@@ -1617,6 +1624,7 @@ class HtmlRenderer(Renderer):
                 session_tree=session_tree,
                 page_info=page_info,
                 page_stats=page_stats,
+                archive_search_link=archive_search_link,
                 repo_cwd=repo_cwd,
             )
 
@@ -1629,6 +1637,7 @@ class HtmlRenderer(Renderer):
         session_tree: Optional["SessionTree"] = None,
         page_info: Optional[dict[str, Any]] = None,
         page_stats: Optional[dict[str, Any]] = None,
+        archive_search_link: Optional[str] = None,
         repo_cwd: Optional[str] = None,
     ) -> str:
         """Body of ``generate`` running inside the SHA-resolver context."""
@@ -1706,6 +1715,7 @@ class HtmlRenderer(Renderer):
                     page_info=page_info,
                     page_stats=page_stats,
                     resume_command=resume_command,
+                    archive_search_link=archive_search_link,
                 )
             )
 

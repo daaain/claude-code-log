@@ -43,6 +43,28 @@ def test_index_page_links_to_the_search_page(generated_archive: Path) -> None:
     assert "href='search.html'" in index or 'href="search.html"' in index
 
 
+def test_combined_transcript_links_to_the_search_page(
+    generated_archive: Path,
+) -> None:
+    """A project page is one level below the index, where `search.html` is,
+    and pre-selects the project the reader came from."""
+    combined = (
+        generated_archive / "-home-u-testproj" / "combined_transcripts.html"
+    ).read_text()
+    assert "href='../search.html?project=-home-u-testproj'" in combined
+    assert "Search inside all transcripts" in combined
+
+
+def test_single_file_conversion_has_no_dangling_search_link(tmp_path: Path) -> None:
+    """No index, no `search.html` — so no link to one."""
+    from claude_code_log.converter import convert_jsonl_to_html
+
+    source = tmp_path / "session.jsonl"
+    shutil.copy(Path("test/test_data/representative_messages.jsonl"), source)
+    output = convert_jsonl_to_html(source)
+    assert "search.html" not in output.read_text()
+
+
 def test_index_page_keeps_its_own_search_box(generated_archive: Path) -> None:
     """The two searches answer different questions and stay separate.
 
@@ -131,6 +153,32 @@ class TestArchiveSearchBrowser:
             )
             assert "q=Bash" in page.evaluate("location.search")
             assert page.locator(".search-result-excerpt .search-highlight").count() > 0
+
+    def test_partial_words_match_without_a_trailing_star(
+        self, page: Any, generated_archive: Path
+    ) -> None:
+        """A half-typed word finds the whole one, and the highlight covers
+        the word that actually matched rather than only the typed prefix."""
+        _seed_index(generated_archive)
+        with self._serve(generated_archive) as server:
+            page.goto(f"{server.url}/search.html")
+            page.wait_for_selector("#app:not([hidden])", timeout=10000)
+            page.fill("#q", "Ba")  # below the prefix floor: whole word only
+            page.wait_for_timeout(800)
+            assert page.locator(".search-result-item").count() == 0
+
+            page.fill("#q", "Bas")
+            page.wait_for_function(
+                "document.querySelectorAll('.search-result-item').length > 0",
+                timeout=10000,
+            )
+            highlighted = page.locator(
+                ".search-result-excerpt .search-highlight"
+            ).first.inner_text()
+            assert highlighted.lower().startswith("bas")
+            assert len(highlighted) > len("Bas"), (
+                f"highlight {highlighted!r} stopped at the typed prefix"
+            )
 
     def test_deep_link_reveals_and_highlights_the_match(
         self, page: Any, generated_archive: Path

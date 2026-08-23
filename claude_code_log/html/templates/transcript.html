@@ -7,6 +7,7 @@
     <meta name='viewport' content='width=device-width, initial-scale=1.0'>
     <title>{{ title }}</title>
     {% from 'components/session_nav.html' import render_session_nav %}
+    {% from 'components/archive_search_link.html' import archive_search_link as render_archive_search_link %}
     <style>
 {% include 'components/global_styles.css' %}
 {% include 'components/message_styles.css' %}
@@ -88,6 +89,12 @@
         </div>
     </div>
 
+    {# The toolbar above searches this page; this goes wider. Only rendered
+       when the caller knows where `search.html` is (see
+       HtmlRenderer.generate). #}
+    {% if archive_search_link %}
+    {{ render_archive_search_link(archive_search_link) }}
+    {% endif %}
 
     {% if combined_transcript_link %}
     <div class="navigation">
