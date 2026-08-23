@@ -67,11 +67,16 @@ from claude_code_log.render_pool import (  # noqa: E402
 )
 
 
+# os.times() reports children_user / children_system as 0.0 on Windows —
+# there is no child-process CPU accounting there.
+CHILD_CPU_UNAVAILABLE = os.name == "nt"
+
+
 @dataclass
 class Result:
     label: str
     wall: float
-    cpu: float
+    cpu: Optional[float]
     digest: str
     files: int
 
@@ -164,7 +169,9 @@ def _run(
 
     # CPU is measured across the whole process tree, which is the number
     # that exposes the fan-out's overhead: wall time can improve while
-    # total CPU nearly doubles.
+    # total CPU nearly doubles. Windows has no child-process accounting in
+    # os.times() (the children_* fields are always zero there), so the
+    # column is reported as unavailable rather than as a misleading 0.0.
     before = os.times()
     start = time.monotonic()
     proc = subprocess.run(command, env=env, capture_output=True, text=True)
@@ -172,9 +179,11 @@ def _run(
     after = os.times()
     if proc.returncode != 0:
         sys.exit(f"{label}: conversion failed\n{proc.stderr[-2000:]}")
-    cpu = (after.children_user - before.children_user) + (
+    cpu: Optional[float] = (after.children_user - before.children_user) + (
         after.children_system - before.children_system
     )
+    if CHILD_CPU_UNAVAILABLE:
+        cpu = None
 
     digest, files = _digest_outputs(target, all_projects)
     return Result(label, wall, cpu, digest, files)
@@ -187,10 +196,8 @@ def _report(title: str, results: list[Result], baseline_label: str) -> set[str]:
     print("-" * 60)
     for result in results:
         speedup = baseline.wall / result.wall if result.wall else 0.0
-        print(
-            f"{result.label:<24} {result.wall:7.1f}s {result.cpu:7.1f}s "
-            f"{speedup:15.2f}x"
-        )
+        cpu = f"{result.cpu:7.1f}s" if result.cpu is not None else "    n/a"
+        print(f"{result.label:<24} {result.wall:7.1f}s {cpu} {speedup:15.2f}x")
     fastest = min(results, key=lambda r: r.wall)
     print(
         f"fastest: {fastest.label} ({baseline.wall / fastest.wall:.2f}x over "

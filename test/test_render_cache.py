@@ -384,3 +384,31 @@ Pages purgeable:                           1000.
     def test_probe_returns_none_off_darwin(self, monkeypatch):
         monkeypatch.setattr(render_pool_module.sys, "platform", "linux")
         assert render_pool_module._darwin_available_bytes() is None
+
+
+class TestWindowsMemoryProbe:
+    """Windows has no /proc/meminfo and no os.sysconf at all.
+
+    Without a probe of its own it lands in the same 2-worker
+    unknown-memory branch that macOS was stuck in.
+    """
+
+    def test_probe_returns_none_off_windows(self, monkeypatch):
+        monkeypatch.setattr(render_pool_module.sys, "platform", "linux")
+        assert render_pool_module._windows_available_bytes() is None
+
+    def test_probe_never_raises(self, monkeypatch):
+        """A failed foreign-function call must degrade, not crash a run."""
+        monkeypatch.setattr(render_pool_module.sys, "platform", "win32")
+        # No ctypes.windll off Windows, so this exercises the failure path.
+        assert render_pool_module._windows_available_bytes() is None
+
+    def test_available_memory_still_resolves_when_probes_fail(self, monkeypatch):
+        """The dispatcher tolerates every probe returning None."""
+        monkeypatch.setattr(render_pool_module, "_darwin_available_bytes", lambda: None)
+        monkeypatch.setattr(
+            render_pool_module, "_windows_available_bytes", lambda: None
+        )
+        # Whatever this machine reports, it must be a size or an honest None.
+        result = render_pool_module._available_memory_bytes()
+        assert result is None or result > 0

@@ -421,13 +421,18 @@ applies the same cap with `concurrent_projects=resolved_jobs` before
 handing out any budget, and each worker re-checks against its own project
 before starting a pool. Unknown memory allows at most 2 workers.
 
-macOS needs its own probe: it has neither `MemAvailable` nor
-`SC_AVPHYS_PAGES`, so it fell through to that unknown-memory branch and
-every Mac was capped at 2 workers regardless of its cores or RAM — a
-16-core machine measured the whole fan-out on 2. `_darwin_available_bytes`
-shells out to `vm_stat` (present on every macOS, no dependency) and counts
-free + inactive + speculative + purgeable pages; excluding the cheaply
-reclaimable ones reports a busy Mac as having almost nothing free.
+Both non-Linux platforms need their own probe, since each would otherwise
+fall through to that unknown-memory branch and be capped at 2 workers
+regardless of cores or RAM — a 16-core Mac measured the whole fan-out on
+2 before this was fixed. macOS has neither `MemAvailable` nor
+`SC_AVPHYS_PAGES`: `_darwin_available_bytes` shells out to `vm_stat`
+(present on every macOS, no dependency) and counts free + inactive +
+speculative + purgeable pages, since excluding the cheaply reclaimable
+ones reports a busy Mac as having almost nothing free. Windows has no
+`/proc` and no `os.sysconf` at all: `_windows_available_bytes` reads
+`ullAvailPhys` from `GlobalMemoryStatusEx` via `ctypes`. Every probe
+returns None rather than raising, so an unreadable platform stays
+conservative instead of failing a conversion.
 
 **Opt-in.** The fan-out is off unless `$CLAUDE_CODE_LOG_RENDER_JOBS` is
 set (`auto` for the CPU count, or an explicit worker count) — see

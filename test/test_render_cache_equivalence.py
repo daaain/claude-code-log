@@ -26,6 +26,7 @@ from pathlib import Path
 import pytest
 
 from claude_code_log import converter, render_cache
+from claude_code_log import render_pool as render_pool_module
 from claude_code_log.converter import convert_jsonl_to
 from claude_code_log.render_pool import RenderPool, RenderUnit
 
@@ -105,6 +106,13 @@ def test_parallel_render_is_byte_identical_to_serial(tmp_path: Path, monkeypatch
     """
     monkeypatch.setattr(converter, "_MIN_MESSAGES_FOR_RENDER_POOL", 0)
     monkeypatch.setattr(converter, "_MIN_UNITS_FOR_RENDER_POOL", 2)
+    # Pin available memory too. The pool declines when memory is tight, so
+    # on a small CI runner this test would otherwise compare the inline
+    # path against itself — or fail its dispatch assertion — depending on
+    # what else happened to be resident.
+    monkeypatch.setattr(
+        render_pool_module, "_available_memory_bytes", lambda: 64 * 1024**3
+    )
 
     # Count what the pool actually accepted. Every path in the fan-out
     # falls back to inline rendering on trouble, so without this a broken

@@ -216,6 +216,50 @@ def _darwin_available_bytes() -> Optional[int]:
     return _parse_vm_stat(completed.stdout)
 
 
+def _windows_available_bytes() -> Optional[int]:
+    """Available physical memory on Windows, or None elsewhere / on failure.
+
+    Windows has no ``/proc/meminfo`` and no ``os.sysconf`` at all, so
+    without this it lands in the same conservative unknown-memory branch
+    that capped macOS at 2 workers. ``GlobalMemoryStatusEx`` is the
+    documented API and reachable through ``ctypes``, so this needs no
+    dependency; ``ullAvailPhys`` is what the OS considers immediately
+    available, which is the same thing the other probes estimate.
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+
+        class _MemoryStatusEx(ctypes.Structure):
+            _fields_ = [
+                ("dwLength", ctypes.c_ulong),
+                ("dwMemoryLoad", ctypes.c_ulong),
+                ("ullTotalPhys", ctypes.c_ulonglong),
+                ("ullAvailPhys", ctypes.c_ulonglong),
+                ("ullTotalPageFile", ctypes.c_ulonglong),
+                ("ullAvailPageFile", ctypes.c_ulonglong),
+                ("ullTotalVirtual", ctypes.c_ulonglong),
+                ("ullAvailVirtual", ctypes.c_ulonglong),
+                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+            ]
+
+        status = _MemoryStatusEx()
+        status.dwLength = ctypes.sizeof(_MemoryStatusEx)
+        # windll exists only on Windows, which the platform check above
+        # has already established.
+        if not ctypes.windll.kernel32.GlobalMemoryStatusEx(  # type: ignore[attr-defined]
+            ctypes.byref(status)
+        ):
+            return None
+        return int(status.ullAvailPhys) or None
+    except Exception:
+        # ctypes is optional in some builds and the call is a foreign
+        # function into the OS; an unknown reading is recoverable (the
+        # caller just stays conservative), a crash mid-conversion is not.
+        return None
+
+
 def _available_memory_bytes() -> Optional[int]:
     """Best-effort read of memory we may actually use, or None if unknown.
 
@@ -248,16 +292,20 @@ def _available_memory_bytes() -> Optional[int]:
         pass
 
     if not limits:
-        darwin = _darwin_available_bytes()
-        if darwin is not None:
-            limits.append(darwin)
+        # Exactly one of these can return a reading on any given machine;
+        # both return None elsewhere.
+        for probe in (_darwin_available_bytes, _windows_available_bytes):
+            reading = probe()
+            if reading is not None:
+                limits.append(reading)
+                break
 
     if not limits:
         # Anything else with a POSIX free-page count. Conservative — it
         # ignores memory the OS could reclaim, which is the right way to
-        # be wrong here. Absent on macOS, which is why the probe above
-        # exists: falling through to "unknown" there capped every Mac at
-        # the 2-worker fallback regardless of how much RAM it had.
+        # be wrong here. Absent on both macOS and Windows, which is why
+        # the probes above exist: falling through to "unknown" capped
+        # those platforms at 2 workers regardless of their RAM.
         try:
             limits.append(
                 os.sysconf("SC_AVPHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")  # type: ignore[arg-type]
