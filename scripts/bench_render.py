@@ -77,10 +77,16 @@ class Result:
 
 
 def _cli_command() -> list[str]:
-    """Prefer the installed console script; fall back to the module."""
-    if shutil.which("claude-code-log"):
-        return ["claude-code-log"]
-    return [sys.executable, "-m", "claude_code_log"]
+    """Prefer the installed console script; fall back to the entry point.
+
+    The fallback invokes ``cli.main`` directly rather than ``-m
+    claude_code_log`` — the package has no ``__main__``, so the module form
+    fails outright when the console script isn't on PATH.
+    """
+    console_script = shutil.which("claude-code-log")
+    if console_script:
+        return [console_script]
+    return [sys.executable, "-c", "from claude_code_log.cli import main; main()"]
 
 
 def _project_dirs(root: Path) -> list[Path]:
@@ -388,23 +394,45 @@ def main() -> None:
 
         # Show what the memory cap will actually allow, so a run that
         # reports "no speedup" isn't quietly a run that never fanned out.
+        # Each worker holds a whole transcript, so this is often the real
+        # limit rather than core count.
         largest = max(_transcript_bytes(p) for p in sources)
         available = _available_memory_bytes()
-        concurrent = min(cpu_count, len(sources)) if args.all_projects else 1
-        allowed = memory_capped_workers(
-            cpu_count, largest, concurrent_projects=concurrent
-        )
         available_note = (
-            f"{available / 1e9:.1f}GB available" if available else "unknown"
+            f"{available / 1e9:.1f}GB reclaimable"
+            if available
+            else "UNKNOWN (capped at 2 workers)"
         )
-        print(
-            f"Memory:  {available_note}; largest project {largest / 1e6:.0f}MB "
-            f"-> at most {allowed} render worker(s) of the {cpu_count} requested"
-        )
+        print(f"Memory:  {available_note}; largest project {largest / 1e6:.0f}MB")
+
+        if args.all_projects:
+            # The two scenarios differ in how many conversions are resident
+            # at once, and therefore in how much is left for render workers.
+            concurrent = min(cpu_count, len(sources))
+            full = memory_capped_workers(
+                cpu_count, largest, concurrent_projects=concurrent
+            )
+            incremental = memory_capped_workers(cpu_count, largest)
+            print(
+                f"         full rebuild: {concurrent} concurrent projects "
+                f"-> at most {full} render worker(s) each"
+            )
+            print(
+                f"         incremental:  1 project -> at most {incremental} "
+                f"render worker(s) of the {cpu_count} requested"
+            )
+            allowed = max(full, incremental)
+        else:
+            allowed = memory_capped_workers(cpu_count, largest)
+            print(
+                f"         at most {allowed} render worker(s) of the "
+                f"{cpu_count} requested"
+            )
         if allowed <= 1:
             print(
-                "         (memory-capped to serial — the fan-out rows below will\n"
-                "          match 'memo only'. Use a smaller project or more RAM.)"
+                "         (memory-capped to serial — the fan-out rows below "
+                "will match\n          'memo only'. Use a smaller project or "
+                "free up RAM.)"
             )
 
         for project in sources:

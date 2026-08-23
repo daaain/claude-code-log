@@ -42,6 +42,9 @@ should not pay ~1s of ``spawn`` + import per worker to save 60ms.
 
 import multiprocessing
 import os
+import re
+import subprocess
+import sys
 import traceback
 from concurrent.futures import Future, ProcessPoolExecutor
 from dataclasses import dataclass
@@ -159,6 +162,60 @@ _WORKER_BASE_BYTES = 150 * 1024 * 1024
 _MEMORY_HEADROOM_FRACTION = 0.6
 
 
+# Pages `vm_stat` reports that can be handed to a new process without
+# pushing anything to swap. "inactive" and "speculative" are clean, cheaply
+# reclaimable page cache — excluding them reports a busy Mac as having
+# almost nothing free, which is exactly the under-read that capped a 16-core
+# machine at the 2-worker fallback.
+_DARWIN_RECLAIMABLE_PAGE_KINDS = ("free", "inactive", "speculative", "purgeable")
+
+_VM_STAT_PAGE_SIZE_RE = re.compile(r"page size of (\d+) bytes")
+_VM_STAT_LINE_RE = re.compile(r'^"?Pages ([A-Za-z -]+?)"?:\s+(\d+)\.?\s*$')
+
+
+def _parse_vm_stat(output: str) -> Optional[int]:
+    """Turn ``vm_stat`` output into a reclaimable byte count.
+
+    Split out from the subprocess call so it can be tested off-macOS.
+    """
+    page_size_match = _VM_STAT_PAGE_SIZE_RE.search(output)
+    # vm_stat's own default when the header is missing; every current macOS
+    # states it explicitly (4096 on Intel, 16384 on Apple silicon).
+    page_size = int(page_size_match.group(1)) if page_size_match else 4096
+
+    pages = 0
+    matched = False
+    for line in output.splitlines():
+        match = _VM_STAT_LINE_RE.match(line.strip())
+        if match and match.group(1).strip() in _DARWIN_RECLAIMABLE_PAGE_KINDS:
+            pages += int(match.group(2))
+            matched = True
+    if not matched:
+        return None
+    return pages * page_size
+
+
+def _darwin_available_bytes() -> Optional[int]:
+    """Reclaimable memory on macOS, or None off-macOS / on any failure.
+
+    macOS has no ``MemAvailable`` and no ``SC_AVPHYS_PAGES``, so this shells
+    out to ``vm_stat`` (present on every macOS, no dependency needed). Any
+    failure returns None and the caller falls back to its conservative
+    unknown-memory behaviour.
+    """
+    if sys.platform != "darwin":
+        return None
+    try:
+        completed = subprocess.run(
+            ["/usr/bin/vm_stat"], capture_output=True, text=True, timeout=5
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        return None
+    return _parse_vm_stat(completed.stdout)
+
+
 def _available_memory_bytes() -> Optional[int]:
     """Best-effort read of memory we may actually use, or None if unknown.
 
@@ -191,9 +248,16 @@ def _available_memory_bytes() -> Optional[int]:
         pass
 
     if not limits:
-        # macOS and the rest: free physical pages. Conservative, since it
+        darwin = _darwin_available_bytes()
+        if darwin is not None:
+            limits.append(darwin)
+
+    if not limits:
+        # Anything else with a POSIX free-page count. Conservative — it
         # ignores memory the OS could reclaim, which is the right way to
-        # be wrong here.
+        # be wrong here. Absent on macOS, which is why the probe above
+        # exists: falling through to "unknown" there capped every Mac at
+        # the 2-worker fallback regardless of how much RAM it had.
         try:
             limits.append(
                 os.sysconf("SC_AVPHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")  # type: ignore[arg-type]

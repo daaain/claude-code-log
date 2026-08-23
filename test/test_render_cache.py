@@ -17,6 +17,7 @@ from claude_code_log.models import DEFAULT_DEPTH
 from claude_code_log import render_pool as render_pool_module
 from claude_code_log.render_pool import (
     RENDER_JOBS_ENV,
+    _parse_vm_stat,
     memory_capped_workers,
     resolve_render_jobs,
 )
@@ -331,3 +332,55 @@ class TestMemoryCap:
     def test_a_request_of_one_stays_one(self, monkeypatch):
         self._with_memory(monkeypatch, 64 * 1024**3)
         assert memory_capped_workers(1, 1) == 1
+
+
+class TestDarwinMemoryProbe:
+    """macOS has neither MemAvailable nor SC_AVPHYS_PAGES.
+
+    Without a working probe every Mac fell through to the conservative
+    "unknown memory" branch, which caps the fan-out at 2 workers however
+    many cores and however much RAM the machine actually has.
+    """
+
+    # Apple silicon: 16KB pages, and the counts carry a trailing period.
+    APPLE_SILICON = """Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                              123456.
+Pages active:                            987654.
+Pages inactive:                          200000.
+Pages speculative:                        50000.
+Pages throttled:                              0.
+Pages wired down:                        300000.
+Pages purgeable:                          10000.
+"Translation faults":                 123456789.
+Pages copy-on-write:                    1234567.
+"""
+
+    # Intel: 4KB pages.
+    INTEL = """Mach Virtual Memory Statistics: (page size of 4096 bytes)
+Pages free:                               10000.
+Pages active:                            500000.
+Pages inactive:                           20000.
+Pages speculative:                         5000.
+Pages purgeable:                           1000.
+"""
+
+    def test_apple_silicon_page_size_and_reclaimable_set(self):
+        expected = (123456 + 200000 + 50000 + 10000) * 16384
+        assert _parse_vm_stat(self.APPLE_SILICON) == expected
+
+    def test_intel_page_size(self):
+        expected = (10000 + 20000 + 5000 + 1000) * 4096
+        assert _parse_vm_stat(self.INTEL) == expected
+
+    def test_active_and_wired_pages_are_not_counted(self):
+        """Those are in use; counting them would over-promise and swap."""
+        parsed = _parse_vm_stat(self.APPLE_SILICON)
+        assert parsed is not None
+        assert parsed < (987654 + 300000) * 16384
+
+    def test_unrecognisable_output_is_reported_as_unknown(self):
+        assert _parse_vm_stat("not vm_stat output at all") is None
+
+    def test_probe_returns_none_off_darwin(self, monkeypatch):
+        monkeypatch.setattr(render_pool_module.sys, "platform", "linux")
+        assert render_pool_module._darwin_available_bytes() is None

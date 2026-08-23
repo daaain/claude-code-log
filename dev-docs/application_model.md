@@ -421,6 +421,14 @@ applies the same cap with `concurrent_projects=resolved_jobs` before
 handing out any budget, and each worker re-checks against its own project
 before starting a pool. Unknown memory allows at most 2 workers.
 
+macOS needs its own probe: it has neither `MemAvailable` nor
+`SC_AVPHYS_PAGES`, so it fell through to that unknown-memory branch and
+every Mac was capped at 2 workers regardless of its cores or RAM — a
+16-core machine measured the whole fan-out on 2. `_darwin_available_bytes`
+shells out to `vm_stat` (present on every macOS, no dependency) and counts
+free + inactive + speculative + purgeable pages; excluding the cheaply
+reclaimable ones reports a busy Mac as having almost nothing free.
+
 **Opt-in.** The fan-out is off unless `$CLAUDE_CODE_LOG_RENDER_JOBS` is
 set (`auto` for the CPU count, or an explicit worker count) — see
 `render_pool.resolve_render_jobs`. `--jobs` never enables it; it only caps
@@ -457,6 +465,15 @@ memo removes the page-vs-session duplication, and splitting units across
 processes gives each worker a cold cache and brings some of it back. Both
 together is still the fastest configuration, so they compose — just
 sub-additively.
+
+A 16-core Mac over 8 real projects (1543MB of transcripts) confirms the
+shape at larger scale, though that run predates the macOS memory probe and
+so used only 2 render workers:
+
+| scenario | neither | memo only | both |
+|---|---|---|---|
+| full rebuild, 8 projects | 124.7s | 101.7s | 82.1s (1.24x) |
+| incremental, 1 stale project | 118.9s | 92.1s | 73.5s (1.25x) |
 
 Two consequences. First, core count matters a lot: 48.8s of CPU over 4
 cores is 12.2s plus the 4.7s floor, so a 10-core machine should land near
