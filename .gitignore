@@ -201,3 +201,11 @@ test/test_data/real_projects/index.html
 test/test_data/real_projects/*/images/
 # SQLite cache the CLI drops into a projects dir when run against test data
 claude-code-log-cache.db
+
+# >>> foldyard (managed) — do not edit inside this block >>>
+# Box/host-generated files foldyard writes beside foldyard.toml; never commit.
+.devbox-ca/
+.devbox-claude/
+.devbox-foldyard/
+.dev-mode.json
+# <<< foldyard (managed) <<<
