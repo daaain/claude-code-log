@@ -506,7 +506,10 @@ reload plus a cold memo) grows with worker count — CPU went 26.2s → 38.2s
 scaling indefinitely. Removing that ceiling needs the two-phase "format
 once, assemble many" restructuring: format each distinct message once (in
 parallel), then assemble pages and session files from the fragments —
-template rendering itself is only ~0.08s for a 20MB page.
+template rendering itself is only ~0.08s for a 20MB page. That would also
+remove the per-worker transcript copy, and with it the reason the memory
+cap has to be so conservative. Planned in
+[`work/render-format-once.md`](../work/render-format-once.md).
 
 ### 2.11 Diagnosing hangs (SIGUSR1 stack dump)
 
