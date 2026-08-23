@@ -83,6 +83,51 @@
             gap: 4px;
         }
 
+        /* Six toggles plus the project select is a lot for one row, so the
+           group wraps as a unit and keeps its own label attached. */
+        .archive-search-fields {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .archive-search-fields-label {
+            opacity: 0.8;
+        }
+
+        /* A group that isn't in the index can't be searched into, whatever
+           the checkbox says — so it doesn't pretend to be checkable. */
+        .archive-search-fields label:has(input:disabled) {
+            opacity: 0.45;
+            cursor: not-allowed;
+        }
+
+        .archive-search-fields input:disabled {
+            cursor: not-allowed;
+        }
+
+        .archive-search-reset {
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            background: #ffffff88;
+            color: var(--text-muted);
+            font-family: inherit;
+            font-size: 1em;
+            padding: 2px 8px;
+            cursor: pointer;
+        }
+
+        .archive-search-reset:hover {
+            background: #ffffff99;
+            border-color: var(--system-warning-color);
+            color: var(--text-primary);
+        }
+
+        .archive-search-reset[hidden] {
+            display: none;
+        }
+
         .archive-search-filters select {
             padding: 4px 8px;
             border: 1px solid #dee2e6;
@@ -185,15 +230,29 @@
                 </div>
             </div>
             <div class='archive-search-filters'>
-                <label>Project
+                <label class='archive-search-project'>Project
                     <select id='project'>
                         <option value=''>All projects</option>
                     </select>
                 </label>
-                <label class='search-option-inline'>
-                    <input type='checkbox' id='tool-results'>
-                    Include tool results
-                </label>
+                {# Rendered from `search.SEARCH_FIELDS`, so the toggles can't
+                   drift from the groups the extractor actually produces.
+                   Checked state comes from /api/ping, not from here — see
+                   `generate_archive_search_html`. #}
+                <div class='archive-search-fields' id='fields'
+                    role='group' aria-label='Which parts of a message to search'>
+                    <span class='archive-search-fields-label'>Search in</span>
+                    {% for field in search_fields %}
+                    <label class='search-option-inline' title='{{ field.hint }}'>
+                        <input type='checkbox' data-field='{{ field.name }}'
+                            id='field-{{ field.name }}'>
+                        <span>{{ field.label }}</span>
+                    </label>
+                    {% endfor %}
+                    <button type='button' class='archive-search-reset' id='reset'
+                        title='Back to the fields this server searches by default'
+                        hidden>reset</button>
+                </div>
                 <span id='field-note'></span>
             </div>
         </form>
@@ -217,12 +276,20 @@
             const setup = el('setup');
             const input = el('q');
             const projectSelect = el('project');
-            const toolResults = el('tool-results');
             const statusEl = el('status');
             const resultsEl = el('results');
             const moreBtn = el('more');
             const fieldNote = el('field-note');
             const clearBtn = el('clear');
+            const resetBtn = el('reset');
+
+            // The template renders one checkbox per field group in the
+            // server's canonical order, so the DOM is the only list of
+            // groups this script needs to know about.
+            const fieldBoxes = Array.prototype.slice.call(
+                el('fields').querySelectorAll('input[data-field]')
+            );
+            const FIELD_NAMES = fieldBoxes.map((box) => box.dataset.field);
 
             let defaultFields = [];
             let offset = 0;
@@ -274,6 +341,76 @@
                 );
             }
 
+            // --- field selection -----------------------------------------
+            // The `fields` param is the same spec language the API and the
+            // `--search-fields` flag take, so a URL from the docs
+            // (`?fields=+tool_result`) sets the checkboxes correctly and a
+            // URL the page produces can be pasted at either of the others.
+            // Mirrors `search.parse_field_spec`; the server re-parses it
+            // regardless, so this only has to agree, not to validate.
+            function parseFieldSpec(spec, defaults) {
+                if (!spec || !spec.trim()) return defaults.slice();
+                const tokens = spec.split(',')
+                    .map((t) => t.trim().toLowerCase())
+                    .filter(Boolean);
+                if (!tokens.length) return defaults.slice();
+                if (tokens.length === 1 && tokens[0] === 'all') {
+                    return FIELD_NAMES.slice();
+                }
+                if (tokens.length === 1 && tokens[0] === 'none') return [];
+
+                const deltas = tokens.filter((t) => t[0] === '+' || t[0] === '-');
+                const absolutes = tokens.filter((t) => t[0] !== '+' && t[0] !== '-');
+                // Mixing the two styles is an error server-side rather than
+                // a guess; fall back to the default so the checkboxes match
+                // what the failed request would have searched.
+                if (deltas.length && absolutes.length) return defaults.slice();
+
+                if (deltas.length) {
+                    const selected = new Set(defaults);
+                    deltas.forEach((token) => {
+                        const name = token.slice(1);
+                        if (FIELD_NAMES.indexOf(name) < 0) return;
+                        if (token[0] === '+') selected.add(name);
+                        else selected.delete(name);
+                    });
+                    return FIELD_NAMES.filter((n) => selected.has(n));
+                }
+                return FIELD_NAMES.filter((n) => absolutes.indexOf(n) >= 0);
+            }
+
+            function selectedFields() {
+                return fieldBoxes.filter((b) => b.checked).map((b) => b.dataset.field);
+            }
+
+            function applyFields(names) {
+                const wanted = new Set(names);
+                fieldBoxes.forEach((box) => {
+                    // A disabled box is one the index can't answer for; it
+                    // stays off no matter what the URL asked for.
+                    box.checked = !box.disabled && wanted.has(box.dataset.field);
+                });
+            }
+
+            /** The `fields` value to send and to put in the URL. Empty means
+             *  "whatever this server searches by default", which keeps a
+             *  shared link honest if the two servers are configured alike
+             *  and explicit if they aren't. */
+            function fieldsParam() {
+                const selected = selectedFields();
+                if (selected.length === defaultFields.length &&
+                    selected.every((n) => defaultFields.indexOf(n) >= 0)) {
+                    return '';
+                }
+                if (!selected.length) return 'none';
+                if (selected.length === FIELD_NAMES.length) return 'all';
+                return selected.join(',');
+            }
+
+            function updateResetButton() {
+                resetBtn.hidden = fieldsParam() === '';
+            }
+
             // --- URL state ---------------------------------------------
             // Params make searches shareable and the Back button useful.
             // replaceState while typing, pushState only on a committed
@@ -291,7 +428,7 @@
                 const params = new URLSearchParams();
                 if (input.value.trim()) params.set('q', input.value.trim());
                 if (projectSelect.value) params.set('project', projectSelect.value);
-                if (toolResults.checked) params.set('fields', 'all');
+                if (fieldsParam()) params.set('fields', fieldsParam());
                 const url = params.toString()
                     ? location.pathname + '?' + params.toString()
                     : location.pathname;
@@ -343,12 +480,8 @@
 
             // --- searching ----------------------------------------------
 
-            function currentFields() {
-                return toolResults.checked ? 'all' : '';
-            }
-
             function queryKey() {
-                return [input.value.trim(), projectSelect.value, currentFields()].join(' ');
+                return [input.value.trim(), projectSelect.value, fieldsParam()].join(' ');
             }
 
             async function runSearch(append) {
@@ -359,10 +492,23 @@
                     moreBtn.hidden = true;
                     return;
                 }
+                // Answered here rather than by the API, which would return a
+                // well-formed empty result set — indistinguishable from "no
+                // match", which is the wrong thing to tell someone who has
+                // simply switched every field off.
+                if (!selectedFields().length) {
+                    resultsEl.innerHTML =
+                        '<div class="search-no-results">' +
+                        'Nothing to search in — turn on at least one field.' +
+                        '</div>';
+                    statusEl.textContent = '';
+                    moreBtn.hidden = true;
+                    return;
+                }
 
                 const params = new URLSearchParams({ q: query, limit: PAGE_SIZE });
                 if (projectSelect.value) params.set('project', projectSelect.value);
-                if (currentFields()) params.set('fields', currentFields());
+                if (fieldsParam()) params.set('fields', fieldsParam());
                 if (append) params.set('offset', String(offset));
 
                 statusEl.textContent = append ? 'Loading more…' : 'Searching…';
@@ -471,7 +617,26 @@
                         'Search index unavailable: ' + (index.reason || 'not built') +
                         '. Restart the server to build it.';
                 } else {
-                    fieldNote.textContent = 'searching: ' + defaultFields.join(', ');
+                    // `--index-fields` can leave a group out of the index
+                    // entirely, and no amount of checking its box will make
+                    // it findable. Say so rather than returning nothing.
+                    const indexed = index.fields || [];
+                    if (indexed.length) {
+                        const missing = FIELD_NAMES.filter(
+                            (n) => indexed.indexOf(n) < 0
+                        );
+                        missing.forEach((name) => {
+                            const box = el('field-' + name);
+                            box.disabled = true;
+                            box.parentNode.title =
+                                'Not in the index — rebuild with ' +
+                                '--index-fields to search it';
+                        });
+                        if (missing.length) {
+                            fieldNote.textContent =
+                                'not indexed: ' + missing.join(', ');
+                        }
+                    }
                 }
 
                 await loadProjects();
@@ -479,7 +644,8 @@
                 const state = readUrl();
                 input.value = state.q;
                 if (state.project) projectSelect.value = state.project;
-                toolResults.checked = state.fields === 'all';
+                applyFields(parseFieldSpec(state.fields, defaultFields));
+                updateResetButton();
                 lastQueryKey = queryKey();
                 updateClearButton();
                 if (state.q) runSearch(false);
@@ -514,12 +680,20 @@
                 writeUrl(true);
                 runSearch(false);
             });
-            toolResults.addEventListener('change', () => {
+            fieldBoxes.forEach((box) => {
+                box.addEventListener('change', () => {
+                    offset = 0;
+                    lastQueryKey = queryKey();
+                    updateResetButton();
+                    writeUrl(true);
+                    runSearch(false);
+                });
+            });
+            resetBtn.addEventListener('click', () => {
+                applyFields(defaultFields);
                 offset = 0;
                 lastQueryKey = queryKey();
-                fieldNote.textContent = toolResults.checked
-                    ? 'searching: all fields including tool results'
-                    : 'searching: ' + defaultFields.join(', ');
+                updateResetButton();
                 writeUrl(true);
                 runSearch(false);
             });
@@ -528,7 +702,8 @@
                 const state = readUrl();
                 input.value = state.q;
                 projectSelect.value = state.project;
-                toolResults.checked = state.fields === 'all';
+                applyFields(parseFieldSpec(state.fields, defaultFields));
+                updateResetButton();
                 offset = 0;
                 lastQueryKey = queryKey();
                 updateClearButton();

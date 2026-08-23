@@ -7,6 +7,7 @@ the file gets an explanation rather than a broken search box.
 
 from __future__ import annotations
 
+import re
 import shutil
 import sqlite3
 from pathlib import Path
@@ -92,6 +93,27 @@ def test_search_page_explains_itself_without_the_api() -> None:
     html = generate_archive_search_html()
     assert "claude-code-log serve" in html
     assert "id='setup'" in html
+
+
+def test_every_field_group_gets_a_toggle() -> None:
+    """The toggles are rendered from `SEARCH_FIELDS`, so adding a group to
+    the extractor can't leave the UI a field behind."""
+    from claude_code_log.search import SEARCH_FIELD_LABELS, SEARCH_FIELDS
+
+    html = generate_archive_search_html()
+    for name in SEARCH_FIELDS:
+        assert f"data-field='{name}'" in html, f"no toggle for {name}"
+        assert SEARCH_FIELD_LABELS[name] in html
+    assert len(re.findall(r"data-field='", html)) == len(SEARCH_FIELDS)
+
+
+def test_toggles_start_unchecked_in_the_static_page() -> None:
+    """Which groups are on is a `serve --search-fields` decision, but the
+    page is written at conversion time — so the checked state has to come
+    from /api/ping, not from baked-in `checked` attributes."""
+    html = generate_archive_search_html()
+    fields_block = html[html.index("id='fields'") : html.index("id='field-note'")]
+    assert "checked" not in fields_block
 
 
 def test_session_pages_carry_the_uuid_deep_link_handler(
@@ -180,6 +202,85 @@ class TestArchiveSearchBrowser:
                 f"highlight {highlighted!r} stopped at the typed prefix"
             )
 
+    def test_field_toggles_reflect_the_server_default(
+        self, page: Any, generated_archive: Path
+    ) -> None:
+        """The page is static but the default scope is a `serve` flag, so
+        the boxes are set from /api/ping."""
+        from claude_code_log.search import DEFAULT_SEARCH_FIELDS
+
+        _seed_index(generated_archive)
+        with self._serve(generated_archive) as server:
+            page.goto(f"{server.url}/search.html")
+            page.wait_for_selector("#app:not([hidden])", timeout=10000)
+            assert _checked_fields(page) == list(DEFAULT_SEARCH_FIELDS)
+            # Unchanged from the default, so nothing to reset and nothing to
+            # spell out in the URL.
+            assert page.is_hidden("#reset")
+            assert "fields=" not in page.evaluate("location.search")
+
+    def test_unchecking_a_field_narrows_the_search_and_the_url(
+        self, page: Any, generated_archive: Path
+    ) -> None:
+        """`Bash` lives only in tool_input in the fixture, so turning that
+        group off is the difference between one hit and none — and the
+        narrowed scope survives in the URL and can be reset."""
+        _seed_index(generated_archive)
+        with self._serve(generated_archive) as server:
+            page.goto(f"{server.url}/search.html")
+            page.wait_for_selector("#app:not([hidden])", timeout=10000)
+            page.fill("#q", "Bash")
+            page.wait_for_function(
+                "document.querySelectorAll('.search-result-item').length > 0",
+                timeout=10000,
+            )
+
+            page.uncheck("#field-tool_input")
+            page.wait_for_selector(".search-no-results", timeout=10000)
+            assert "tool_input" not in _checked_fields(page)
+            fields = page.evaluate("new URLSearchParams(location.search).get('fields')")
+            assert fields and "tool_input" not in fields.split(",")
+            assert page.is_visible("#reset")
+
+            page.click("#reset")
+            page.wait_for_function(
+                "document.querySelectorAll('.search-result-item').length > 0",
+                timeout=10000,
+            )
+            assert page.is_hidden("#reset")
+            assert "fields=" not in page.evaluate("location.search")
+
+    def test_a_field_spec_in_the_url_sets_the_toggles(
+        self, page: Any, generated_archive: Path
+    ) -> None:
+        """The `fields` param speaks the same language as `--search-fields`,
+        so a delta from the docs sets the boxes rather than being ignored."""
+        from claude_code_log.search import SEARCH_FIELDS
+
+        _seed_index(generated_archive)
+        with self._serve(generated_archive) as server:
+            page.goto(f"{server.url}/search.html?fields=%2Btool_result")
+            page.wait_for_selector("#app:not([hidden])", timeout=10000)
+            assert _checked_fields(page) == list(SEARCH_FIELDS)
+
+            page.goto(f"{server.url}/search.html?fields=text,meta")
+            page.wait_for_selector("#app:not([hidden])", timeout=10000)
+            assert _checked_fields(page) == ["text", "meta"]
+
+    def test_turning_every_field_off_explains_itself(
+        self, page: Any, generated_archive: Path
+    ) -> None:
+        """An empty field set is a well-formed request the API answers with
+        zero rows — which would read as "no match" rather than "you have
+        nothing switched on"."""
+        _seed_index(generated_archive)
+        with self._serve(generated_archive) as server:
+            page.goto(f"{server.url}/search.html?q=the&fields=none")
+            page.wait_for_selector("#app:not([hidden])", timeout=10000)
+            assert _checked_fields(page) == []
+            page.wait_for_selector(".search-no-results", timeout=10000)
+            assert "at least one field" in page.inner_text(".search-no-results")
+
     def test_deep_link_reveals_and_highlights_the_match(
         self, page: Any, generated_archive: Path
     ) -> None:
@@ -249,14 +350,20 @@ class TestArchiveSearchBrowser:
             assert not state["searchRan"]
 
 
+def _checked_fields(page: Any) -> list[str]:
+    """The field groups currently switched on, in the page's own order."""
+    return page.eval_on_selector_all(
+        "#fields input[data-field]",
+        "boxes => boxes.filter(b => b.checked).map(b => b.dataset.field)",
+    )
+
+
 def _first_uuid(session_page: Path) -> str:
     """Pull a message uuid out of a generated page.
 
     Deliberately not a UUID-shaped pattern: transcript uuids are opaque
     identifiers, and the test fixtures use `msg_001`-style ids.
     """
-    import re
-
     match = re.search(r"data-uuid='([^']+)'", session_page.read_text())
     assert match, "no data-uuid in the generated session page"
     return match.group(1)

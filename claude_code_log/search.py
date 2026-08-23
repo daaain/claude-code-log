@@ -55,6 +55,31 @@ SEARCH_FIELDS: tuple[str, ...] = (
     "meta",
 )
 
+#: How the field groups are named and explained wherever a human sees them
+#: — the search page's toggles, and the docs. Kept next to `SEARCH_FIELDS`
+#: so a new group can't be added without deciding what to call it.
+SEARCH_FIELD_LABELS: dict[str, str] = {
+    "text": "Text",
+    "thinking": "Thinking",
+    "tool_input": "Tool input",
+    "tool_result": "Tool results",
+    "attachment": "Attachments",
+    "meta": "Meta",
+}
+
+#: One line each, for the toggles' tooltips.
+SEARCH_FIELD_HINTS: dict[str, str] = {
+    "text": "What you and Claude wrote to each other",
+    "thinking": "Claude's extended-thinking blocks",
+    "tool_input": "Tool names and the arguments they were called with",
+    "tool_result": (
+        "What tools returned — file dumps and tracebacks, roughly 69% of a "
+        "typical archive's text"
+    ),
+    "attachment": "Pasted and attached content",
+    "meta": "Session summaries, generated titles and system messages",
+}
+
 #: Searched unless told otherwise. `tool_result` is indexed but excluded
 #: here: it is 69% of the archive's text and dominates results with file
 #: dumps and tracebacks. Users opt into it per-request or by config.

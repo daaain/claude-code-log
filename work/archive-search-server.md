@@ -1037,8 +1037,52 @@ Two smaller consequences:
   token is a prefix, which is what FTS5's phrase-star means and what the
   user typing it wants.
 
+### Follow-up: a toggle per field group
+
+The page shipped with one checkbox, "Include tool results", which was the
+only field decision anyone was expected to make. But the API has taken a
+full `fields=` spec since `/api/search` existed, and `--search-fields`
+exposes the same six groups, so the UI was the narrow part: there was no
+way to search *only* text, which is exactly what you want when looking for
+what was **said** about something rather than every command that mentioned
+it.
+
+So the single checkbox became one per group, rendered from
+`search.SEARCH_FIELDS` rather than hand-listed — a seventh group would
+otherwise appear in the extractor, the API and the CLI while staying
+invisible on the page. Labels and hints live next to the list itself
+(`SEARCH_FIELD_LABELS` / `_HINTS`), so the docs and the UI can't disagree
+about what "meta" means.
+
+Three decisions worth recording:
+
+- **The checked state is not baked into the page.** `search.html` is
+  written at conversion time, but the default scope is a `serve --search-
+  fields` flag that can change between the two — so the boxes are set from
+  `/api/ping` on load. A test asserts the static page carries no `checked`.
+- **The `fields` URL param speaks the same spec language** as the flag and
+  the API, deltas included, so `?fields=+tool_result` from the docs sets
+  the toggles and a URL the page produced can be pasted into `curl`. That
+  meant mirroring `parse_field_spec` in JS; it only has to *agree*, since
+  the server re-parses whatever arrives.
+- **Empty is answered locally.** `fields=none` is a well-formed request the
+  API answers with zero rows, which the page would otherwise render as "No
+  results found" — the wrong thing to tell someone who has switched every
+  field off, so the page says so before it asks.
+
+A group left out of the index by `--index-fields` gets a disabled toggle
+and a "not indexed" note, because checking it could never have found
+anything.
+
+Also fixed here: a stray NUL byte in `queryKey()`'s `join(' ')`, present
+since the page was added in 77a82b5. It worked — a NUL is as good a
+separator as a space — which is why nothing caught it.
+
 ### Known gaps
 
 - **`/api/search` has no `regex=` escape hatch.** Deferred as planned.
+- **No `claude-code-log search` subcommand.** The core is HTTP-free and the
+  API takes every filter, so this is a thin wrapper nobody has asked for
+  yet; `curl` against a running `serve` covers the scripting case.
 - **Phased/streaming search is not wired up.** The `fields=` mechanism is
   there; the UI would be solving a problem nobody has at 1–6 ms per query.

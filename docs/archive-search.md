@@ -64,15 +64,41 @@ produce a syntax error.
 
 ## Filters
 
-- **Project** — restricts to one project. Following a link from a project's
-  combined transcript pre-selects that project; you can always widen it
-  back to all projects.
-- **Include tool results** — off by default. Tool output is roughly 69% of
-  a typical archive's text and is mostly file dumps and tracebacks, so it
-  drowns out prose unless you actually want it.
+**Project** restricts the search to one project. Following a link from a
+project's combined transcript pre-selects that project; you can always
+widen it back to all projects.
 
-The query and filters live in the URL, so results are shareable and the
-Back button works.
+**Search in** picks which parts of a message are searched. Every group has
+its own toggle:
+
+| Toggle | What it covers | On by default |
+|---|---|---|
+| **Text** | What you and Claude wrote to each other | ✅ |
+| **Thinking** | Claude's extended-thinking blocks | ✅ |
+| **Tool input** | Tool names and the arguments they were called with | ✅ |
+| **Tool results** | What tools returned — file dumps, tracebacks | ❌ |
+| **Attachments** | Pasted and attached content | ✅ |
+| **Meta** | Session summaries, generated titles, system messages | ✅ |
+
+Tool results are off by default because they are roughly 69% of a typical
+archive's text and mostly file dumps and tracebacks, so they drown out
+prose unless you actually want them. Turning the others off is the way to
+go the other direction: **Text** alone finds what was *said* about
+something, without every command that mentioned it.
+
+A **reset** button appears as soon as the selection differs from the
+server's default, and switching everything off says so rather than
+reporting no matches.
+
+The query and every filter live in the URL, so results are shareable and
+the Back button works. The `fields` parameter takes the same spec as
+`--search-fields` below, so `?fields=text` and `?fields=+tool_result` both
+set the toggles.
+
+!!! note
+    A group that `--index-fields` left out of the index can't be searched
+    whatever the toggle says, so its checkbox is disabled and the page
+    notes it as *not indexed*.
 
 ## Jumping to a result
 
@@ -88,18 +114,25 @@ have no card of their own; those results link to the session instead.
 By default everything is *indexed* but tool results are excluded from
 *searching*, so you can turn them on per-search without a rebuild.
 
+`--search-fields` sets where the page's toggles *start*; you can still
+change them per search afterwards.
+
 ```bash
 # Change the default search scope
 claude-code-log serve --search-fields text,thinking
 claude-code-log serve --search-fields +tool_result     # add to the default
+claude-code-log serve --search-fields -thinking        # remove from it
 claude-code-log serve --search-fields all
+claude-code-log serve --search-fields none             # every toggle off
 
 # Or via the environment
 CLAUDE_CODE_LOG_SEARCH_FIELDS=text,thinking claude-code-log serve
 ```
 
 The field groups are `text`, `thinking`, `tool_input`, `tool_result`,
-`attachment` and `meta`.
+`attachment` and `meta`. A spec is either an absolute list, `all`/`none`,
+or `+`/`-` deltas against the default — mixing an absolute name with a
+delta is an error rather than a guess.
 
 To shrink the index itself — at the cost of not being able to search those
 groups at all — narrow `--index-fields` (or

@@ -1890,9 +1890,25 @@ def generate_archive_search_html() -> str:
     page renders setup instructions rather than a search box — which also
     makes the feature discoverable to someone who just finds the file.
     """
+    from ..search import SEARCH_FIELD_HINTS, SEARCH_FIELD_LABELS, SEARCH_FIELDS
+
     env = get_template_environment()
     return str(
         env.get_template("archive_search.html").render(
             library_version=get_library_version(),
+            # The field toggles are rendered from the canonical list, so a
+            # new group appears in the UI without anyone remembering to add
+            # it. Which of them start out *checked* is deliberately not
+            # decided here: the page is written at conversion time, but the
+            # default search scope is a `serve` flag, so the checkboxes are
+            # set from `/api/ping` once the server answers.
+            search_fields=[
+                {
+                    "name": name,
+                    "label": SEARCH_FIELD_LABELS[name],
+                    "hint": SEARCH_FIELD_HINTS[name],
+                }
+                for name in SEARCH_FIELDS
+            ],
         )
     )
