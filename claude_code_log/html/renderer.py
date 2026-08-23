@@ -1870,3 +1870,19 @@ def generate_projects_index_html(
     This is a convenience function that delegates to HtmlRenderer.generate_projects_index.
     """
     return HtmlRenderer().generate_projects_index(project_summaries, from_date, to_date)
+
+
+def generate_archive_search_html() -> str:
+    """Render the archive-wide search page.
+
+    Written on every HTML run, including for people who never start the
+    server, so the link from the index page can't 404. Without the API the
+    page renders setup instructions rather than a search box — which also
+    makes the feature discoverable to someone who just finds the file.
+    """
+    env = get_template_environment()
+    return str(
+        env.get_template("archive_search.html").render(
+            library_version=get_library_version(),
+        )
+    )

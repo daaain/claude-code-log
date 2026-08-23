@@ -17,14 +17,34 @@
         .project-sessions .session-link {
             font-size: 1.2em;
         }
+
+        .archive-search-link {
+            margin: 0.5em 0 1.5em;
+        }
+
+        .archive-search-link-hint {
+            font-size: 0.85em;
+            opacity: 0.7;
+        }
     </style>
 </head>
 
 <body>
     <h1>{{ title }}</h1>
 
-    <!-- Search Component -->
+    <!-- Search Component. This box searches session titles and previews on
+         this page only — a session finder. Archive-wide message search lives
+         on its own page (it needs the local server to reach the cache), so
+         the two stay visibly distinct rather than one input meaning two
+         different things. -->
     {% include 'components/search.html' %}
+
+    <p class='archive-search-link'>
+        <a href='search.html'>🔎 Search inside all transcripts…</a>
+        <span class='archive-search-link-hint'>
+            (full-text across every message; needs <code>claude-code-log serve</code>)
+        </span>
+    </p>
 
     <div class='summary'>
         <div class='summary-stats'>

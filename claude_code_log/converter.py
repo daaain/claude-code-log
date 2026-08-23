@@ -4304,6 +4304,17 @@ def process_projects_hierarchy(
     # See issue #139: errors="replace" for lone-surrogate safety.
     index_path.write_text(index_content, encoding="utf-8", errors="replace")
 
+    # The archive-wide search page sits next to the index. It is static and
+    # self-contained; it only *works* when served (it needs the API to reach
+    # the SQLite cache), but it is written unconditionally so the index
+    # page's link never dangles and the page can explain itself.
+    if output_format == "html":
+        from .html.renderer import generate_archive_search_html
+
+        (index_path.parent / "search.html").write_text(
+            generate_archive_search_html(), encoding="utf-8", errors="replace"
+        )
+
     # Count total sessions from project summaries
     for summary in project_summaries:
         total_sessions += len(summary.get("sessions", []))

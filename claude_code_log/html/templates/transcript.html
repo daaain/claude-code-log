@@ -1044,6 +1044,42 @@
             if (window.location.hash) {
                 unfoldAncestorsOf(window.location.hash);
             }
+
+            // Deep link from archive search: ?uuid=<transcript uuid>.
+            // The `#msg-…` slot ids above are positional and shift whenever a
+            // session gains messages, so they can't be linked to from
+            // outside; data-uuid is stable.
+            //
+            // Note the link also carries `&q=`, which the search component
+            // picks up separately — a uuid alone scrolls to the card, but in
+            // most real hits the matched text sits inside a collapsed
+            // <details> that only the search machinery opens.
+            //
+            // data-uuid is not unique per card (one transcript entry can
+            // render as sibling text + tool_use cards), and returning the
+            // first is the behaviour we want here.
+            function revealMessageByUuid(uuid) {
+                if (!uuid) return false;
+                const target = document.querySelector(
+                    '[data-uuid="' + CSS.escape(uuid) + '"]'
+                );
+                if (!target) return false;
+                revealMessage(target);
+                if (target.scrollIntoView) {
+                    target.scrollIntoView({block: 'center'});
+                }
+                return true;
+            }
+            window.claudeLogRevealMessageByUuid = revealMessageByUuid;
+
+            // When the link also carries `q`, the search component scrolls
+            // instead — after it has filtered and unfolded, since doing it
+            // before would land on a position the search then invalidates.
+            const deepLinkParams = new URLSearchParams(window.location.search);
+            const deepLinkUuid = deepLinkParams.get('uuid');
+            if (deepLinkUuid && !deepLinkParams.get('q')) {
+                revealMessageByUuid(deepLinkUuid);
+            }
         });
     </script>
     <!-- Search functionality script -->
