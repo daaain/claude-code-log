@@ -39,12 +39,19 @@ Configure with ``CLAUDE_CODE_LOG_RENDER_CACHE_MB`` (default 192 MB;
 ``0`` disables memoization entirely, restoring the previous behaviour).
 """
 
+import contextlib
 import os
 import threading
 from collections import OrderedDict
-from typing import Hashable, Optional
+from typing import Hashable, Iterator, Optional
 
-__all__ = ["ByteBoundedCache", "markdown_cache", "pygments_cache", "clear_all"]
+__all__ = [
+    "ByteBoundedCache",
+    "markdown_cache",
+    "pygments_cache",
+    "clear_all",
+    "disabled",
+]
 
 
 DEFAULT_CACHE_MB = 192
@@ -75,7 +82,7 @@ def _configured_budget_bytes() -> int:
 class ByteBoundedCache:
     """An LRU cache of ``str`` values bounded by their total size in bytes.
 
-    Thread-safe: the render fan-out (see ``converter._render_jobs``) uses
+    Thread-safe: the render fan-out (``render_pool``) uses
     processes rather than threads, so contention is not expected, but the
     HTML helpers are also reachable from the TUI and from ``serve`` request
     handlers, and a torn ``OrderedDict`` would be a very unpleasant bug to
@@ -134,6 +141,22 @@ class ByteBoundedCache:
             self.hits = 0
             self.misses = 0
 
+    @property
+    def budget_bytes(self) -> int:
+        return self._budget
+
+    def set_budget(self, budget_bytes: int) -> None:
+        """Resize (or, at 0, switch off) this cache, dropping its contents.
+
+        Used by ``disabled()`` to toggle the shared singletons in place —
+        call sites imported the objects by value, so replacing the module
+        attributes would not reach them.
+        """
+        self.clear()
+        with self._lock:
+            self._budget = max(0, budget_bytes)
+            self._max_entry = int(self._budget * _MAX_ENTRY_FRACTION)
+
     def stats(self) -> dict[str, int]:
         with self._lock:
             return {
@@ -148,9 +171,33 @@ class ByteBoundedCache:
 # can't starve the Markdown cache (and vice versa).
 pygments_cache = ByteBoundedCache()
 markdown_cache = ByteBoundedCache()
+_ALL_CACHES = (pygments_cache, markdown_cache)
 
 
 def clear_all() -> None:
     """Drop both caches. Used by tests and by long-lived hosts (``serve``)."""
     pygments_cache.clear()
     markdown_cache.clear()
+
+
+@contextlib.contextmanager
+def disabled() -> Iterator[None]:
+    """Turn memoization off for the duration of the block.
+
+    Flips the budgets on the existing singletons rather than replacing
+    them, because every call site imported the objects by value
+    (``from ..render_cache import pygments_cache``) — rebinding the module
+    attributes would not reach them.
+
+    This is the in-process equivalent of ``CLAUDE_CODE_LOG_RENDER_CACHE_MB=0``,
+    and it exists so a conversion can be run both ways and the outputs
+    compared (see ``test_render_cache_equivalence.py``).
+    """
+    saved = [(cache, cache.budget_bytes) for cache in _ALL_CACHES]
+    for cache in _ALL_CACHES:
+        cache.set_budget(0)
+    try:
+        yield
+    finally:
+        for cache, budget in saved:
+            cache.set_budget(budget)

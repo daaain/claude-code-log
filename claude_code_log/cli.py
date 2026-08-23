@@ -1014,8 +1014,11 @@ def main() -> None:
     type=click.IntRange(min=1),
     default=None,
     help=(
-        "Worker processes for converting projects in --all-projects mode "
-        "(default: CPU count; 1 disables parallelism). Peak memory scales "
+        "Total worker processes for conversion (default: CPU count; 1 "
+        "disables parallelism). Under --all-projects the budget is split "
+        "between converting projects in parallel and rendering each "
+        "project's own pages/session files in parallel; a single-project "
+        "conversion spends all of it on the latter. Peak memory scales "
         "with jobs × the largest stale project."
     ),
 )
@@ -1967,6 +1970,10 @@ def convert(
             # with output=None anyway, so its skip is never forced.
             force_regenerate=output is not None and _output_path_is_file(output),
             report=report,
+            # A single-project conversion has the whole machine to itself,
+            # so its pages and session files fan out over `--jobs` workers
+            # (None → CPU count). The library default stays 1.
+            render_jobs=jobs,
         )
         # Report only work actually done this run. On a pure skip the converter
         # already printed its "... is current, skipping regeneration" line, so

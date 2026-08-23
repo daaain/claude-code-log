@@ -1,0 +1,128 @@
+"""End-to-end proof that the render optimisations don't change output.
+
+Both optimisations in this area are pure performance work, and both are
+easy to get subtly wrong in ways unit tests won't catch:
+
+- **Memoization** trades a recompute for a cached string. It is only sound
+  if the memoized function is genuinely pure with respect to its key —
+  Markdown is not purely a function of its text (the SHA-linkifier reads
+  the active render repo cwd), so a missing key component would show up
+  here as a rendered difference rather than an exception.
+- **The render fan-out** re-derives each worker's state from the cache
+  instead of inheriting the parent's, and moves the paginated "reveal the
+  Next link" fixup from a per-page step to a single post-pass. Either
+  could plausibly diverge from the serial path.
+
+So this converts a real multi-session project three ways and compares the
+bytes. It runs the conversion for real rather than stubbing the renderer:
+the whole point is to exercise the integration, and a project directory
+from ``test_data/real_projects`` covers Pygments-heavy tool output,
+Markdown, sub-agents and multiple sessions.
+"""
+
+import shutil
+from pathlib import Path
+
+import pytest
+
+from claude_code_log import converter, render_cache
+from claude_code_log.converter import convert_jsonl_to
+from claude_code_log.render_pool import RenderPool, RenderUnit
+
+# Real project with 40 session files — enough for several combined pages
+# and a wide spread of message types.
+SOURCE_PROJECT = (
+    Path(__file__).parent
+    / "test_data"
+    / "real_projects"
+    / "-Users-dain-workspace-coderabbit-review-helper"
+)
+
+# Small enough to force several combined pages out of this project, so the
+# pagination path (and its Next-link fixup) is exercised, not just the
+# single-file path.
+PAGE_SIZE = 200
+
+
+def _convert_copy(tmp_path: Path, name: str, **kwargs: object) -> dict[str, bytes]:
+    """Convert a fresh copy of the project and return {filename: bytes}.
+
+    Each run gets its own copy so it also gets its own cache DB (which
+    lives beside the project directory) — otherwise the second run would
+    find the first's output current and skip it, comparing nothing.
+
+    The copy keeps the project's *own* directory name and varies only the
+    parent, because the rendered title is derived from the project
+    directory name: copying to ``<tmp>/memoized`` would make every page
+    differ on the title alone and the comparison would be meaningless.
+    """
+    work_dir = tmp_path / name / SOURCE_PROJECT.name
+    shutil.copytree(SOURCE_PROJECT, work_dir)
+
+    convert_jsonl_to("html", work_dir, page_size=PAGE_SIZE, silent=True, **kwargs)  # type: ignore[arg-type]
+
+    rendered = {
+        path.name: path.read_bytes() for path in sorted(work_dir.glob("*.html"))
+    }
+    assert rendered, "conversion produced no HTML"
+    return rendered
+
+
+def _assert_same(
+    baseline: dict[str, bytes], other: dict[str, bytes], what: str
+) -> None:
+    assert set(other) == set(baseline), f"{what} produced a different set of files"
+    differing = [name for name in baseline if baseline[name] != other[name]]
+    assert not differing, f"{what} changed the bytes of: {', '.join(sorted(differing))}"
+
+
+@pytest.fixture(autouse=True)
+def _clean_caches():
+    render_cache.clear_all()
+    yield
+    render_cache.clear_all()
+
+
+def test_memoized_render_is_byte_identical_to_unmemoized(tmp_path: Path):
+    """The memo must be invisible in the output — only in the clock."""
+    with render_cache.disabled():
+        baseline = _convert_copy(tmp_path, "unmemoized")
+    memoized = _convert_copy(tmp_path, "memoized")
+
+    _assert_same(baseline, memoized, "memoization")
+    # Guard against the test silently passing because the memo never
+    # engaged (e.g. a future refactor routes around it).
+    stats = render_cache.pygments_cache.stats()
+    assert stats["hits"] > 0, "memo never hit — the comparison proved nothing"
+
+
+def test_parallel_render_is_byte_identical_to_serial(tmp_path: Path, monkeypatch):
+    """Fanning the render out over worker processes must not change output.
+
+    The thresholds that normally keep small projects off the pool are
+    lowered here: this fixture is far below them, and the point is to
+    exercise the worker path, not the heuristic that avoids it.
+    """
+    monkeypatch.setattr(converter, "_MIN_MESSAGES_FOR_RENDER_POOL", 0)
+    monkeypatch.setattr(converter, "_MIN_UNITS_FOR_RENDER_POOL", 2)
+
+    # Count what the pool actually accepted. Every path in the fan-out
+    # falls back to inline rendering on trouble, so without this a broken
+    # pool would compare the serial path against itself and pass.
+    dispatched: list[str] = []
+    original_submit = RenderPool.submit
+
+    def counting_submit(self: RenderPool, unit: RenderUnit):
+        future = original_submit(self, unit)
+        if future is not None:
+            dispatched.append(unit.kind)
+        return future
+
+    monkeypatch.setattr(RenderPool, "submit", counting_submit)
+
+    serial = _convert_copy(tmp_path, "serial", render_jobs=1)
+    parallel = _convert_copy(tmp_path, "parallel", render_jobs=2)
+
+    _assert_same(serial, parallel, "the render fan-out")
+    assert "page" in dispatched, "no combined page went through a worker"
+    assert "session" in dispatched, "no session file went through a worker"

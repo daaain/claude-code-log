@@ -80,7 +80,7 @@ class TestEnvironmentConfiguration:
         monkeypatch.setenv("CLAUDE_CODE_LOG_RENDER_CACHE_MB", "4")
         cache = ByteBoundedCache()
         assert cache.enabled
-        assert cache._budget == 4 * 1024 * 1024
+        assert cache.budget_bytes == 4 * 1024 * 1024
 
     def test_zero_disables_memoization(self, monkeypatch):
         monkeypatch.setenv("CLAUDE_CODE_LOG_RENDER_CACHE_MB", "0")
@@ -91,7 +91,7 @@ class TestEnvironmentConfiguration:
         # not crash a conversion.
         monkeypatch.setenv("CLAUDE_CODE_LOG_RENDER_CACHE_MB", "not-a-number")
         cache = ByteBoundedCache()
-        assert cache._budget == render_cache.DEFAULT_CACHE_MB * 1024 * 1024
+        assert cache.budget_bytes == render_cache.DEFAULT_CACHE_MB * 1024 * 1024
 
 
 class TestPygmentsMemo:

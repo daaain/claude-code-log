@@ -35,7 +35,7 @@ for user-facing operations docs see [`docs/`](../docs/).
 | Depth filter | renderer.py § Depth filtering, `models.RenderingDepth` | inlined below (§ 2.6) |
 | Image export | [`image_export.py`](../claude_code_log/image_export.py) | inlined below (§ 2.7) |
 | Performance profiling | [`renderer_timings.py`](../claude_code_log/renderer_timings.py) | inlined below (§ 2.8) |
-| Diagnosing hangs (SIGUSR1) | [`cli.py`](../claude_code_log/cli.py) `_install_stack_dump_signal` | inlined below (§ 2.10) |
+| Diagnosing hangs (SIGUSR1) | [`cli.py`](../claude_code_log/cli.py) `_install_stack_dump_signal` | inlined below (§ 2.11) |
 | Adding a new tool renderer | [`factories/tool_factory.py`](../claude_code_log/factories/tool_factory.py), `html/tool_formatters.py` | [implementing-a-tool-renderer.md](implementing-a-tool-renderer.md) (how-to) |
 | Which tools have a specialized renderer or provider adapter | `TOOL_INPUT_MODELS` / `TOOL_OUTPUT_PARSERS` in [`factories/tool_factory.py`](../claude_code_log/factories/tool_factory.py), plus provider adapters | [tools-coverage.md](tools-coverage.md) (Claude and Codex status vs. upstream references) |
 | Plugin system (third-party message transformers) | [`plugins.py`](../claude_code_log/plugins.py), [`factories/priorities.py`](../claude_code_log/factories/priorities.py), `Renderer._dispatch_format` | [plugins.md](plugins.md) |
@@ -80,8 +80,9 @@ single transcript or directory. Major flags:
   output, packing whole sessions into pages of up to N messages each
   (sessions are never split across pages, so individual pages may
   overflow). Per-session HTML files are not paginated.
-- `--jobs N` / `-j N` — worker processes for the all-projects
-  conversion phase (default: CPU count; `1` disables parallelism).
+- `--jobs N` / `-j N` — total worker processes for conversion (default:
+  CPU count; `1` disables parallelism). Split between converting projects
+  in parallel and each project's own render fan-out (§ 2.10).
 
 CLI orchestration delegates to `converter.py` (which owns the
 high-level "load + render + write" flow) and never touches `renderer.py`
@@ -95,9 +96,11 @@ three phases: **plan** (sequential, cheap — per-project staleness via
 cache mtimes, also ensures DB schema/migrations exist), **execute**
 (stale projects fan out over a `ProcessPoolExecutor` with the `spawn`
 start method, largest-first; rendering is CPU-bound pure Python and
-projects are independent, so this scales near-linearly with cores),
-and **collect** (sequential — per-project index data is read back from
-the cache and the cross-project `index.html` is written last). Workers
+projects are independent, so this scales near-linearly with cores; any
+budget left over after one worker per stale project is handed to each
+project's own render fan-out, § 2.10), and **collect** (sequential —
+per-project index data is read back from the cache and the cross-project
+`index.html` is written last). Workers
 run silent; the parent prints one progress line per project as results
 arrive. All workers share the WAL-mode SQLite cache DB — each writes
 only its own project's rows, and WAL serialises the short write
@@ -380,7 +383,53 @@ Two properties matter for correctness:
 `CLAUDE_CODE_LOG_DEBUG_TIMING=1` prints hit rate, entry count and bytes
 per cache alongside the render timings.
 
-### 2.10 Diagnosing hangs (SIGUSR1 stack dump)
+### 2.10 Intra-project render fan-out
+
+[`render_pool.py`](../claude_code_log/render_pool.py) fans a single
+project's output files — its combined pages and its per-session files —
+out over worker processes. This sits *below* the project-level pool in
+§ 2.1 and exists because that one leaves cores idle in two shapes:
+the all-projects wall clock is bounded by the largest single project
+(measured: 5 real projects, 4 cores, 195s of work, 65.0s wall — exactly
+the largest project's own time, at 2.18 cores average), and an
+incremental run has only one or two stale projects to fan out at all.
+
+Workers are **self-sufficient rather than fed**: each re-loads the
+transcript from the warm cache in its `initializer` (~0.7s for a 12k-message
+project, ~1.7s for 47k) instead of receiving the parent's parsed messages,
+which would move ~114MB per worker. The parent sends only small per-unit
+metadata, keeps every staleness check and cache write to itself (so the DB
+stays single-writer), and the pool starts lazily on first submit.
+
+`convert_jsonl_to(render_jobs=...)` controls it. The library default is
+`1` — inline, exactly as before — so no existing caller changes behaviour.
+The CLI passes its `--jobs` budget: a single-project conversion spends all
+of it here, while `--all-projects` divides it (`jobs // stale projects`)
+so the two pool levels together never oversubscribe. `_make_render_pool`
+declines entirely for single-file mode, a missing cache manager,
+`image_export_mode="referenced"` (renders write `images/image_NNNN.png`
+from a per-call counter, so concurrent renders would collide on those
+names), and projects below the size where the pool pays for itself.
+
+One ordering change made this possible: the paginated writer used to
+reveal page N-1's "Next" link while generating page N, so page N's
+render edited page N-1's file. That fixup now runs once after all pages
+land — order-independent and idempotent.
+
+**Measured limits.** The fan-out and the memo caches in § 2.9 work against
+each other: splitting units across processes gives each worker a cold
+cache, so the page-vs-session duplication the memo removes comes back.
+On a 4-core box, a 47k-message project went 27.8s → 20.2s (1.38×) while
+total CPU rose 26.7s → 44.8s. Below roughly 12k messages the fan-out is a
+net *loss* — worker startup plus the lost memo hits exceed the parallelism
+— which is what `_MIN_MESSAGES_FOR_RENDER_POOL` guards. Machines with more
+cores absorb the inflated CPU better, so the win grows with core count,
+but the inflation itself is the ceiling. Removing it needs the two-phase
+"format once, assemble many" restructuring: format each distinct message
+once (in parallel), then assemble pages and session files from the
+fragments — template rendering itself is only ~0.08s for a 20MB page.
+
+### 2.11 Diagnosing hangs (SIGUSR1 stack dump)
 
 When `claude-code-log` appears stuck (100% CPU, no output), a
 single `SIGUSR1` to the running process dumps the live Python
@@ -587,6 +636,6 @@ Common entry questions and their best first stop:
 - "How do I export to JSON for downstream tooling?"
   → § 2.5 here (and `--format json` from § 2.1).
 - "claude-code-log is hung — how do I see what it's doing?"
-  → § 2.10 (`SIGUSR1` stack dump).
+  → § 2.11 (`SIGUSR1` stack dump).
 - "What's planned but not implemented?"
   → [`work/`](../work/) — each `.md` is an in-flight or proposed plan.
