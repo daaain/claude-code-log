@@ -246,7 +246,8 @@
 
     {% if resume_command %}
     <button class="resume-session floating-btn" id="resumeSession" data-command="{{ resume_command }}"
-        title="Copy the command that resumes this session in Claude Code">▶ Resume Session</button>
+        title="Resume session: copy the command that resumes this session in Claude Code"
+        aria-label="Resume session">▶️</button>
     {% endif %}
     <button class="timeline-toggle floating-btn" id="toggleTimeline" title="Show timeline">📆</button>
     <button class="filter-messages floating-btn" id="filterMessages" title="Search & Filter (/)">🔍</button>

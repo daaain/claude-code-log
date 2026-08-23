@@ -110,7 +110,7 @@ class TestResumeSessionBrowser:
 
         button = page.locator("#resumeSession")
         expect(button).to_be_visible()
-        expect(button).to_have_text("▶ Resume Session")
+        expect(button).to_have_text("▶️")
 
         button.click()
         copied: Optional[str] = page.evaluate("() => window.__copied")

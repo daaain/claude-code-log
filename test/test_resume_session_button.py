@@ -40,15 +40,21 @@ class TestResumeCommandForSession:
         """A drive-lettered cwd gets Windows double-quote quoting."""
         assert (
             resume_command_for_session(SESSION_A, "C:\\Users\\maxno")
-            == f'cd "C:\\Users\\maxno" && claude -r {SESSION_A}'
+            == f'pushd "C:\\Users\\maxno" && claude -r {SESSION_A}'
         )
 
     def test_windows_cwd_with_spaces(self):
         """Spaces in a Windows cwd stay inside the double quotes."""
         assert (
             resume_command_for_session(SESSION_A, "C:\\My Projects\\app")
-            == f'cd "C:\\My Projects\\app" && claude -r {SESSION_A}'
+            == f'pushd "C:\\My Projects\\app" && claude -r {SESSION_A}'
         )
+
+    def test_windows_other_drive_uses_pushd(self):
+        """A D: cwd must switch drive too — cmd's `cd` alone wouldn't,
+        so a terminal started on C: would resume in the wrong project."""
+        command = resume_command_for_session(SESSION_A, "D:\\work\\app")
+        assert command == f'pushd "D:\\work\\app" && claude -r {SESSION_A}'
 
     def test_posix_cwd(self):
         """A plain POSIX cwd needs no quoting at all."""
@@ -106,7 +112,7 @@ class TestResumeButtonInHtml:
             "Test Resume",
         )
         assert 'id="resumeSession"' in html
-        assert "▶ Resume Session" in html
+        assert "▶️</button>" in html
         assert (
             f'data-command="cd /Users/dain/workspace &amp;&amp; claude -r {SESSION_A}"'
             in html
@@ -118,7 +124,9 @@ class TestResumeButtonInHtml:
             [_user_entry(SESSION_A, "C:\\Users\\maxno", "uuid-1")],
             "Test Resume Windows",
         )
-        assert f"cd &#34;C:\\Users\\maxno&#34; &amp;&amp; claude -r {SESSION_A}" in html
+        assert (
+            f"pushd &#34;C:\\Users\\maxno&#34; &amp;&amp; claude -r {SESSION_A}" in html
+        )
 
     def test_multi_session_page_has_no_button(self):
         """Combined pages spanning several sessions render no button."""

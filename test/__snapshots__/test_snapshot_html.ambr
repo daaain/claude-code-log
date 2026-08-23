@@ -260,12 +260,11 @@
       bottom: 200px;
   }
   
+  /* Text-labelled floating buttons ("uuid", "md") keep the round shape
+   * and size of the emoji ones; only the label typography differs. */
   .debug-toggle.floating-btn {
       bottom: 260px;
-      border-radius: 6px;
-      width: 38px;
-      height: 28px;
-      font-size: 0.65em;
+      font-size: 0.7em;
       font-family: 'SFMono-Regular', Consolas, monospace;
       font-weight: 600;
   }
@@ -360,11 +359,8 @@
   }
   
   .user-view-global.floating-btn {
-      bottom: 300px;
-      border-radius: 6px;
-      width: 38px;
-      height: 28px;
-      font-size: 0.65em;
+      bottom: 320px;
+      font-size: 0.7em;
       font-family: 'SFMono-Regular', Consolas, monospace;
       font-weight: 600;
   }
@@ -375,27 +371,21 @@
   }
   
   /* Resume-session button (single-session pages only): copies the
-   * `cd … && claude -r <session-id>` command to the clipboard. */
+   * `pushd … && claude -r <session-id>` command to the clipboard. */
   .resume-session.floating-btn {
-      bottom: 340px;
-      border-radius: 6px;
-      width: auto;
-      height: 28px;
-      padding: 0 10px;
-      font-size: 0.65em;
-      font-family: 'SFMono-Regular', Consolas, monospace;
-      font-weight: 600;
-      white-space: nowrap;
+      bottom: 380px;
   }
   
-  /* Transient confirmation shown after the resume command is copied. */
+  /* Transient confirmation shown after the resume command is copied.
+   * Opaque background (not the `…-dimmed` variant the buttons use) so
+   * the transcript text underneath doesn't bleed through the message. */
   .resume-toast {
       position: fixed;
       right: 20px;
-      bottom: 380px;
+      bottom: 440px;
       max-width: 320px;
       padding: 8px 12px;
-      background-color: var(--session-bg-dimmed);
+      background-color: #e8f4fd;
       color: var(--text-muted);
       border-radius: 6px;
       box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2);
@@ -5058,7 +5048,8 @@
   
       
       <button class="resume-session floating-btn" id="resumeSession" data-command="cd /home/synthetic/async-fixture &amp;&amp; claude -r eb000000-0000-4000-8000-000000000001"
-          title="Copy the command that resumes this session in Claude Code">▶ Resume Session</button>
+          title="Resume session: copy the command that resumes this session in Claude Code"
+          aria-label="Resume session">▶️</button>
       
       <button class="timeline-toggle floating-btn" id="toggleTimeline" title="Show timeline">📆</button>
       <button class="filter-messages floating-btn" id="filterMessages" title="Search & Filter (/)">🔍</button>
@@ -7168,12 +7159,11 @@
       bottom: 200px;
   }
   
+  /* Text-labelled floating buttons ("uuid", "md") keep the round shape
+   * and size of the emoji ones; only the label typography differs. */
   .debug-toggle.floating-btn {
       bottom: 260px;
-      border-radius: 6px;
-      width: 38px;
-      height: 28px;
-      font-size: 0.65em;
+      font-size: 0.7em;
       font-family: 'SFMono-Regular', Consolas, monospace;
       font-weight: 600;
   }
@@ -7268,11 +7258,8 @@
   }
   
   .user-view-global.floating-btn {
-      bottom: 300px;
-      border-radius: 6px;
-      width: 38px;
-      height: 28px;
-      font-size: 0.65em;
+      bottom: 320px;
+      font-size: 0.7em;
       font-family: 'SFMono-Regular', Consolas, monospace;
       font-weight: 600;
   }
@@ -7283,27 +7270,21 @@
   }
   
   /* Resume-session button (single-session pages only): copies the
-   * `cd … && claude -r <session-id>` command to the clipboard. */
+   * `pushd … && claude -r <session-id>` command to the clipboard. */
   .resume-session.floating-btn {
-      bottom: 340px;
-      border-radius: 6px;
-      width: auto;
-      height: 28px;
-      padding: 0 10px;
-      font-size: 0.65em;
-      font-family: 'SFMono-Regular', Consolas, monospace;
-      font-weight: 600;
-      white-space: nowrap;
+      bottom: 380px;
   }
   
-  /* Transient confirmation shown after the resume command is copied. */
+  /* Transient confirmation shown after the resume command is copied.
+   * Opaque background (not the `…-dimmed` variant the buttons use) so
+   * the transcript text underneath doesn't bleed through the message. */
   .resume-toast {
       position: fixed;
       right: 20px;
-      bottom: 380px;
+      bottom: 440px;
       max-width: 320px;
       padding: 8px 12px;
-      background-color: var(--session-bg-dimmed);
+      background-color: #e8f4fd;
       color: var(--text-muted);
       border-radius: 6px;
       box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2);
@@ -11861,7 +11842,8 @@
   
       
       <button class="resume-session floating-btn" id="resumeSession" data-command="cd /home/synthetic/async-fixture &amp;&amp; claude -r eb000000-0000-4000-8000-000000000001"
-          title="Copy the command that resumes this session in Claude Code">▶ Resume Session</button>
+          title="Resume session: copy the command that resumes this session in Claude Code"
+          aria-label="Resume session">▶️</button>
       
       <button class="timeline-toggle floating-btn" id="toggleTimeline" title="Show timeline">📆</button>
       <button class="filter-messages floating-btn" id="filterMessages" title="Search & Filter (/)">🔍</button>
@@ -13971,12 +13953,11 @@
       bottom: 200px;
   }
   
+  /* Text-labelled floating buttons ("uuid", "md") keep the round shape
+   * and size of the emoji ones; only the label typography differs. */
   .debug-toggle.floating-btn {
       bottom: 260px;
-      border-radius: 6px;
-      width: 38px;
-      height: 28px;
-      font-size: 0.65em;
+      font-size: 0.7em;
       font-family: 'SFMono-Regular', Consolas, monospace;
       font-weight: 600;
   }
@@ -14071,11 +14052,8 @@
   }
   
   .user-view-global.floating-btn {
-      bottom: 300px;
-      border-radius: 6px;
-      width: 38px;
-      height: 28px;
-      font-size: 0.65em;
+      bottom: 320px;
+      font-size: 0.7em;
       font-family: 'SFMono-Regular', Consolas, monospace;
       font-weight: 600;
   }
@@ -14086,27 +14064,21 @@
   }
   
   /* Resume-session button (single-session pages only): copies the
-   * `cd … && claude -r <session-id>` command to the clipboard. */
+   * `pushd … && claude -r <session-id>` command to the clipboard. */
   .resume-session.floating-btn {
-      bottom: 340px;
-      border-radius: 6px;
-      width: auto;
-      height: 28px;
-      padding: 0 10px;
-      font-size: 0.65em;
-      font-family: 'SFMono-Regular', Consolas, monospace;
-      font-weight: 600;
-      white-space: nowrap;
+      bottom: 380px;
   }
   
-  /* Transient confirmation shown after the resume command is copied. */
+  /* Transient confirmation shown after the resume command is copied.
+   * Opaque background (not the `…-dimmed` variant the buttons use) so
+   * the transcript text underneath doesn't bleed through the message. */
   .resume-toast {
       position: fixed;
       right: 20px;
-      bottom: 380px;
+      bottom: 440px;
       max-width: 320px;
       padding: 8px 12px;
-      background-color: var(--session-bg-dimmed);
+      background-color: #e8f4fd;
       color: var(--text-muted);
       border-radius: 6px;
       box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2);
@@ -16436,12 +16408,11 @@
       bottom: 200px;
   }
   
+  /* Text-labelled floating buttons ("uuid", "md") keep the round shape
+   * and size of the emoji ones; only the label typography differs. */
   .debug-toggle.floating-btn {
       bottom: 260px;
-      border-radius: 6px;
-      width: 38px;
-      height: 28px;
-      font-size: 0.65em;
+      font-size: 0.7em;
       font-family: 'SFMono-Regular', Consolas, monospace;
       font-weight: 600;
   }
@@ -16536,11 +16507,8 @@
   }
   
   .user-view-global.floating-btn {
-      bottom: 300px;
-      border-radius: 6px;
-      width: 38px;
-      height: 28px;
-      font-size: 0.65em;
+      bottom: 320px;
+      font-size: 0.7em;
       font-family: 'SFMono-Regular', Consolas, monospace;
       font-weight: 600;
   }
@@ -16551,27 +16519,21 @@
   }
   
   /* Resume-session button (single-session pages only): copies the
-   * `cd … && claude -r <session-id>` command to the clipboard. */
+   * `pushd … && claude -r <session-id>` command to the clipboard. */
   .resume-session.floating-btn {
-      bottom: 340px;
-      border-radius: 6px;
-      width: auto;
-      height: 28px;
-      padding: 0 10px;
-      font-size: 0.65em;
-      font-family: 'SFMono-Regular', Consolas, monospace;
-      font-weight: 600;
-      white-space: nowrap;
+      bottom: 380px;
   }
   
-  /* Transient confirmation shown after the resume command is copied. */
+  /* Transient confirmation shown after the resume command is copied.
+   * Opaque background (not the `…-dimmed` variant the buttons use) so
+   * the transcript text underneath doesn't bleed through the message. */
   .resume-toast {
       position: fixed;
       right: 20px;
-      bottom: 380px;
+      bottom: 440px;
       max-width: 320px;
       padding: 8px 12px;
-      background-color: var(--session-bg-dimmed);
+      background-color: #e8f4fd;
       color: var(--text-muted);
       border-radius: 6px;
       box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2);
@@ -21352,7 +21314,8 @@
   
       
       <button class="resume-session floating-btn" id="resumeSession" data-command="cd /tmp &amp;&amp; claude -r test_session"
-          title="Copy the command that resumes this session in Claude Code">▶ Resume Session</button>
+          title="Resume session: copy the command that resumes this session in Claude Code"
+          aria-label="Resume session">▶️</button>
       
       <button class="timeline-toggle floating-btn" id="toggleTimeline" title="Show timeline">📆</button>
       <button class="filter-messages floating-btn" id="filterMessages" title="Search & Filter (/)">🔍</button>
@@ -23462,12 +23425,11 @@
       bottom: 200px;
   }
   
+  /* Text-labelled floating buttons ("uuid", "md") keep the round shape
+   * and size of the emoji ones; only the label typography differs. */
   .debug-toggle.floating-btn {
       bottom: 260px;
-      border-radius: 6px;
-      width: 38px;
-      height: 28px;
-      font-size: 0.65em;
+      font-size: 0.7em;
       font-family: 'SFMono-Regular', Consolas, monospace;
       font-weight: 600;
   }
@@ -23562,11 +23524,8 @@
   }
   
   .user-view-global.floating-btn {
-      bottom: 300px;
-      border-radius: 6px;
-      width: 38px;
-      height: 28px;
-      font-size: 0.65em;
+      bottom: 320px;
+      font-size: 0.7em;
       font-family: 'SFMono-Regular', Consolas, monospace;
       font-weight: 600;
   }
@@ -23577,27 +23536,21 @@
   }
   
   /* Resume-session button (single-session pages only): copies the
-   * `cd … && claude -r <session-id>` command to the clipboard. */
+   * `pushd … && claude -r <session-id>` command to the clipboard. */
   .resume-session.floating-btn {
-      bottom: 340px;
-      border-radius: 6px;
-      width: auto;
-      height: 28px;
-      padding: 0 10px;
-      font-size: 0.65em;
-      font-family: 'SFMono-Regular', Consolas, monospace;
-      font-weight: 600;
-      white-space: nowrap;
+      bottom: 380px;
   }
   
-  /* Transient confirmation shown after the resume command is copied. */
+  /* Transient confirmation shown after the resume command is copied.
+   * Opaque background (not the `…-dimmed` variant the buttons use) so
+   * the transcript text underneath doesn't bleed through the message. */
   .resume-toast {
       position: fixed;
       right: 20px;
-      bottom: 380px;
+      bottom: 440px;
       max-width: 320px;
       padding: 8px 12px;
-      background-color: var(--session-bg-dimmed);
+      background-color: #e8f4fd;
       color: var(--text-muted);
       border-radius: 6px;
       box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2);
@@ -28658,7 +28611,8 @@
   
       
       <button class="resume-session floating-btn" id="resumeSession" data-command="cd /home/synthetic/test-fixture &amp;&amp; claude -r ef000000-0000-4000-8000-000000000001"
-          title="Copy the command that resumes this session in Claude Code">▶ Resume Session</button>
+          title="Resume session: copy the command that resumes this session in Claude Code"
+          aria-label="Resume session">▶️</button>
       
       <button class="timeline-toggle floating-btn" id="toggleTimeline" title="Show timeline">📆</button>
       <button class="filter-messages floating-btn" id="filterMessages" title="Search & Filter (/)">🔍</button>
@@ -30768,12 +30722,11 @@
       bottom: 200px;
   }
   
+  /* Text-labelled floating buttons ("uuid", "md") keep the round shape
+   * and size of the emoji ones; only the label typography differs. */
   .debug-toggle.floating-btn {
       bottom: 260px;
-      border-radius: 6px;
-      width: 38px;
-      height: 28px;
-      font-size: 0.65em;
+      font-size: 0.7em;
       font-family: 'SFMono-Regular', Consolas, monospace;
       font-weight: 600;
   }
@@ -30868,11 +30821,8 @@
   }
   
   .user-view-global.floating-btn {
-      bottom: 300px;
-      border-radius: 6px;
-      width: 38px;
-      height: 28px;
-      font-size: 0.65em;
+      bottom: 320px;
+      font-size: 0.7em;
       font-family: 'SFMono-Regular', Consolas, monospace;
       font-weight: 600;
   }
@@ -30883,27 +30833,21 @@
   }
   
   /* Resume-session button (single-session pages only): copies the
-   * `cd … && claude -r <session-id>` command to the clipboard. */
+   * `pushd … && claude -r <session-id>` command to the clipboard. */
   .resume-session.floating-btn {
-      bottom: 340px;
-      border-radius: 6px;
-      width: auto;
-      height: 28px;
-      padding: 0 10px;
-      font-size: 0.65em;
-      font-family: 'SFMono-Regular', Consolas, monospace;
-      font-weight: 600;
-      white-space: nowrap;
+      bottom: 380px;
   }
   
-  /* Transient confirmation shown after the resume command is copied. */
+  /* Transient confirmation shown after the resume command is copied.
+   * Opaque background (not the `…-dimmed` variant the buttons use) so
+   * the transcript text underneath doesn't bleed through the message. */
   .resume-toast {
       position: fixed;
       right: 20px;
-      bottom: 380px;
+      bottom: 440px;
       max-width: 320px;
       padding: 8px 12px;
-      background-color: var(--session-bg-dimmed);
+      background-color: #e8f4fd;
       color: var(--text-muted);
       border-radius: 6px;
       box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2);
@@ -38022,12 +37966,11 @@
       bottom: 200px;
   }
   
+  /* Text-labelled floating buttons ("uuid", "md") keep the round shape
+   * and size of the emoji ones; only the label typography differs. */
   .debug-toggle.floating-btn {
       bottom: 260px;
-      border-radius: 6px;
-      width: 38px;
-      height: 28px;
-      font-size: 0.65em;
+      font-size: 0.7em;
       font-family: 'SFMono-Regular', Consolas, monospace;
       font-weight: 600;
   }
@@ -38122,11 +38065,8 @@
   }
   
   .user-view-global.floating-btn {
-      bottom: 300px;
-      border-radius: 6px;
-      width: 38px;
-      height: 28px;
-      font-size: 0.65em;
+      bottom: 320px;
+      font-size: 0.7em;
       font-family: 'SFMono-Regular', Consolas, monospace;
       font-weight: 600;
   }
@@ -38137,27 +38077,21 @@
   }
   
   /* Resume-session button (single-session pages only): copies the
-   * `cd … && claude -r <session-id>` command to the clipboard. */
+   * `pushd … && claude -r <session-id>` command to the clipboard. */
   .resume-session.floating-btn {
-      bottom: 340px;
-      border-radius: 6px;
-      width: auto;
-      height: 28px;
-      padding: 0 10px;
-      font-size: 0.65em;
-      font-family: 'SFMono-Regular', Consolas, monospace;
-      font-weight: 600;
-      white-space: nowrap;
+      bottom: 380px;
   }
   
-  /* Transient confirmation shown after the resume command is copied. */
+  /* Transient confirmation shown after the resume command is copied.
+   * Opaque background (not the `…-dimmed` variant the buttons use) so
+   * the transcript text underneath doesn't bleed through the message. */
   .resume-toast {
       position: fixed;
       right: 20px;
-      bottom: 380px;
+      bottom: 440px;
       max-width: 320px;
       padding: 8px 12px;
-      background-color: var(--session-bg-dimmed);
+      background-color: #e8f4fd;
       color: var(--text-muted);
       border-radius: 6px;
       box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2);
@@ -45221,12 +45155,11 @@
       bottom: 200px;
   }
   
+  /* Text-labelled floating buttons ("uuid", "md") keep the round shape
+   * and size of the emoji ones; only the label typography differs. */
   .debug-toggle.floating-btn {
       bottom: 260px;
-      border-radius: 6px;
-      width: 38px;
-      height: 28px;
-      font-size: 0.65em;
+      font-size: 0.7em;
       font-family: 'SFMono-Regular', Consolas, monospace;
       font-weight: 600;
   }
@@ -45321,11 +45254,8 @@
   }
   
   .user-view-global.floating-btn {
-      bottom: 300px;
-      border-radius: 6px;
-      width: 38px;
-      height: 28px;
-      font-size: 0.65em;
+      bottom: 320px;
+      font-size: 0.7em;
       font-family: 'SFMono-Regular', Consolas, monospace;
       font-weight: 600;
   }
@@ -45336,27 +45266,21 @@
   }
   
   /* Resume-session button (single-session pages only): copies the
-   * `cd … && claude -r <session-id>` command to the clipboard. */
+   * `pushd … && claude -r <session-id>` command to the clipboard. */
   .resume-session.floating-btn {
-      bottom: 340px;
-      border-radius: 6px;
-      width: auto;
-      height: 28px;
-      padding: 0 10px;
-      font-size: 0.65em;
-      font-family: 'SFMono-Regular', Consolas, monospace;
-      font-weight: 600;
-      white-space: nowrap;
+      bottom: 380px;
   }
   
-  /* Transient confirmation shown after the resume command is copied. */
+  /* Transient confirmation shown after the resume command is copied.
+   * Opaque background (not the `…-dimmed` variant the buttons use) so
+   * the transcript text underneath doesn't bleed through the message. */
   .resume-toast {
       position: fixed;
       right: 20px;
-      bottom: 380px;
+      bottom: 440px;
       max-width: 320px;
       padding: 8px 12px;
-      background-color: var(--session-bg-dimmed);
+      background-color: #e8f4fd;
       color: var(--text-muted);
       border-radius: 6px;
       box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2);
@@ -50137,7 +50061,8 @@
   
       
       <button class="resume-session floating-btn" id="resumeSession" data-command="cd /tmp &amp;&amp; claude -r test_session"
-          title="Copy the command that resumes this session in Claude Code">▶ Resume Session</button>
+          title="Resume session: copy the command that resumes this session in Claude Code"
+          aria-label="Resume session">▶️</button>
       
       <button class="timeline-toggle floating-btn" id="toggleTimeline" title="Show timeline">📆</button>
       <button class="filter-messages floating-btn" id="filterMessages" title="Search & Filter (/)">🔍</button>
@@ -52247,12 +52172,11 @@
       bottom: 200px;
   }
   
+  /* Text-labelled floating buttons ("uuid", "md") keep the round shape
+   * and size of the emoji ones; only the label typography differs. */
   .debug-toggle.floating-btn {
       bottom: 260px;
-      border-radius: 6px;
-      width: 38px;
-      height: 28px;
-      font-size: 0.65em;
+      font-size: 0.7em;
       font-family: 'SFMono-Regular', Consolas, monospace;
       font-weight: 600;
   }
@@ -52347,11 +52271,8 @@
   }
   
   .user-view-global.floating-btn {
-      bottom: 300px;
-      border-radius: 6px;
-      width: 38px;
-      height: 28px;
-      font-size: 0.65em;
+      bottom: 320px;
+      font-size: 0.7em;
       font-family: 'SFMono-Regular', Consolas, monospace;
       font-weight: 600;
   }
@@ -52362,27 +52283,21 @@
   }
   
   /* Resume-session button (single-session pages only): copies the
-   * `cd … && claude -r <session-id>` command to the clipboard. */
+   * `pushd … && claude -r <session-id>` command to the clipboard. */
   .resume-session.floating-btn {
-      bottom: 340px;
-      border-radius: 6px;
-      width: auto;
-      height: 28px;
-      padding: 0 10px;
-      font-size: 0.65em;
-      font-family: 'SFMono-Regular', Consolas, monospace;
-      font-weight: 600;
-      white-space: nowrap;
+      bottom: 380px;
   }
   
-  /* Transient confirmation shown after the resume command is copied. */
+  /* Transient confirmation shown after the resume command is copied.
+   * Opaque background (not the `…-dimmed` variant the buttons use) so
+   * the transcript text underneath doesn't bleed through the message. */
   .resume-toast {
       position: fixed;
       right: 20px;
-      bottom: 380px;
+      bottom: 440px;
       max-width: 320px;
       padding: 8px 12px;
-      background-color: var(--session-bg-dimmed);
+      background-color: #e8f4fd;
       color: var(--text-muted);
       border-radius: 6px;
       box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2);
@@ -56968,7 +56883,8 @@
   
       
       <button class="resume-session floating-btn" id="resumeSession" data-command="cd /tmp/project &amp;&amp; claude -r 00000000-0295-4000-8000-000000000001"
-          title="Copy the command that resumes this session in Claude Code">▶ Resume Session</button>
+          title="Resume session: copy the command that resumes this session in Claude Code"
+          aria-label="Resume session">▶️</button>
       
       <button class="timeline-toggle floating-btn" id="toggleTimeline" title="Show timeline">📆</button>
       <button class="filter-messages floating-btn" id="filterMessages" title="Search & Filter (/)">🔍</button>
@@ -59078,12 +58994,11 @@
       bottom: 200px;
   }
   
+  /* Text-labelled floating buttons ("uuid", "md") keep the round shape
+   * and size of the emoji ones; only the label typography differs. */
   .debug-toggle.floating-btn {
       bottom: 260px;
-      border-radius: 6px;
-      width: 38px;
-      height: 28px;
-      font-size: 0.65em;
+      font-size: 0.7em;
       font-family: 'SFMono-Regular', Consolas, monospace;
       font-weight: 600;
   }
@@ -59178,11 +59093,8 @@
   }
   
   .user-view-global.floating-btn {
-      bottom: 300px;
-      border-radius: 6px;
-      width: 38px;
-      height: 28px;
-      font-size: 0.65em;
+      bottom: 320px;
+      font-size: 0.7em;
       font-family: 'SFMono-Regular', Consolas, monospace;
       font-weight: 600;
   }
@@ -59193,27 +59105,21 @@
   }
   
   /* Resume-session button (single-session pages only): copies the
-   * `cd … && claude -r <session-id>` command to the clipboard. */
+   * `pushd … && claude -r <session-id>` command to the clipboard. */
   .resume-session.floating-btn {
-      bottom: 340px;
-      border-radius: 6px;
-      width: auto;
-      height: 28px;
-      padding: 0 10px;
-      font-size: 0.65em;
-      font-family: 'SFMono-Regular', Consolas, monospace;
-      font-weight: 600;
-      white-space: nowrap;
+      bottom: 380px;
   }
   
-  /* Transient confirmation shown after the resume command is copied. */
+  /* Transient confirmation shown after the resume command is copied.
+   * Opaque background (not the `…-dimmed` variant the buttons use) so
+   * the transcript text underneath doesn't bleed through the message. */
   .resume-toast {
       position: fixed;
       right: 20px;
-      bottom: 380px;
+      bottom: 440px;
       max-width: 320px;
       padding: 8px 12px;
-      background-color: var(--session-bg-dimmed);
+      background-color: #e8f4fd;
       color: var(--text-muted);
       border-radius: 6px;
       box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2);
@@ -63748,7 +63654,8 @@
   
       
       <button class="resume-session floating-btn" id="resumeSession" data-command="cd /tmp/project &amp;&amp; claude -r system_reminder"
-          title="Copy the command that resumes this session in Claude Code">▶ Resume Session</button>
+          title="Resume session: copy the command that resumes this session in Claude Code"
+          aria-label="Resume session">▶️</button>
       
       <button class="timeline-toggle floating-btn" id="toggleTimeline" title="Show timeline">📆</button>
       <button class="filter-messages floating-btn" id="filterMessages" title="Search & Filter (/)">🔍</button>
