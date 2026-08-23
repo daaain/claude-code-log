@@ -10,6 +10,15 @@
     </div>
 </div>
 
+{# Inline vis-timeline (issue #278) only when there is no output directory
+   to hold a sidecar — keeps a bare-string / single-file render's timeline
+   working offline. The content is our own vendored asset, not transcript
+   data, and its </script sequences are neutralised in Python. #}
+{%- if timeline_inline_js | default(none) %}
+<style id="vis-timeline-inline-css">{{ timeline_inline_css | safe }}</style>
+<script id="vis-timeline-inline-js">{{ timeline_inline_js | safe }}</script>
+{%- endif %}
+
 <script id="timeline-script">
     // Timeline functionality - inline for self-contained HTML
     (function () {
@@ -381,17 +390,39 @@
                     return;
                 }
 
-                console.log('Loading vis-timeline from CDN...');
+                // Vendored, offline-first (issue #278) — never a CDN.
+                // Two shapes depending on how the page was rendered:
+                //  - sidecar: the Python renderer wrote vis-timeline's
+                //    JS/CSS into a sibling `assets/` dir and passes the
+                //    relative base; we load from there.
+                //  - inline: no output directory existed (bare-string
+                //    render), so the JS/CSS were embedded directly below
+                //    and are already present when this runs.
+                {%- set _asset_base = timeline_asset_base | default(none) %}
+                {%- set _inline_js = timeline_inline_js | default(none) %}
+                {% if _inline_js %}
+                // Inline mode: the vis-timeline <script>/<style> were
+                // emitted into the page (see below), so the library is
+                // already defined. Nothing to fetch.
+                if (window.vis && window.vis.Timeline) {
+                    isTimelineLoaded = true;
+                    resolve();
+                } else {
+                    reject(new Error('Inlined vis-timeline did not initialise'));
+                }
+                {% else %}
+                const assetBase = {{ ((_asset_base ~ '/') if _asset_base else '') | tojson }};
+                console.log('Loading vis-timeline from', assetBase || '(no local asset base)');
 
                 // Load CSS first
                 const link = document.createElement('link');
                 link.rel = 'stylesheet';
-                link.href = 'https://unpkg.com/vis-timeline/styles/vis-timeline-graph2d.min.css';
+                link.href = assetBase + 'vis-timeline-graph2d.min.css';
                 document.head.appendChild(link);
 
                 // Load JavaScript
                 const script = document.createElement('script');
-                script.src = 'https://unpkg.com/vis-timeline/standalone/umd/vis-timeline-graph2d.min.js';
+                script.src = assetBase + 'vis-timeline-graph2d.min.js';
                 script.onload = () => {
                     console.log('vis-timeline loaded successfully');
                     isTimelineLoaded = true;
@@ -402,6 +433,7 @@
                     reject(new Error('Failed to load vis-timeline'));
                 };
                 document.head.appendChild(script);
+                {% endif %}
             });
         }
 

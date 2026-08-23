@@ -17,6 +17,7 @@ import functools
 import html
 import json
 import re
+import shutil
 from pathlib import Path
 from typing import Any, Callable, Optional, TYPE_CHECKING
 
@@ -894,3 +895,67 @@ def get_template_environment() -> Environment:
     globals_dict: Any = env.globals
     globals_dict["starts_with_emoji"] = starts_with_emoji
     return env
+
+
+# Sub-directory (relative to a transcript HTML file) where vendored
+# front-end assets are written. All transcript pages for a project live
+# flat in one output directory, so this relative path is constant across
+# session / combined / paginated pages.
+VENDOR_ASSETS_DIRNAME = "assets"
+
+# The vendored files that a timeline-bearing page needs, resolved from
+# the package's ``assets/vendor`` directory (see that dir's
+# ``PROVENANCE.md``). Vendored rather than CDN-loaded so generated HTML
+# stays fully offline and leaks no request to a third party (issue #278).
+_VENDOR_ASSET_FILES = (
+    "vis-timeline-graph2d.min.js",
+    "vis-timeline-graph2d.min.css",
+)
+
+
+def _vendor_source_dir() -> Path:
+    return Path(__file__).parent / "assets" / "vendor"
+
+
+def ensure_vendor_assets(output_dir: Path) -> None:
+    """Copy vendored front-end assets into ``output_dir/assets`` once.
+
+    Idempotent: skips any file already present with a matching size, so
+    re-rendering a project doesn't rewrite the 530 KB timeline bundle on
+    every run. Called by the HTML renderer whenever it renders a
+    timeline-bearing page into a real output directory; string-only
+    renders (no output dir) simply don't get the sidecar, and the
+    timeline's ``script.onerror`` handler degrades gracefully if the
+    asset is absent.
+    """
+    src_dir = _vendor_source_dir()
+    dest_dir = output_dir / VENDOR_ASSETS_DIRNAME
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    for name in _VENDOR_ASSET_FILES:
+        src = src_dir / name
+        dest = dest_dir / name
+        if dest.exists() and dest.stat().st_size == src.stat().st_size:
+            continue
+        shutil.copyfile(src, dest)
+
+
+@functools.lru_cache(maxsize=1)
+def read_vendor_timeline_inline() -> tuple[str, str]:
+    """Return the vendored vis-timeline ``(js, css)`` for inlining.
+
+    Used only on the no-output-directory render path (e.g. the
+    ``generate_html`` convenience API), where there is nowhere to write
+    a sidecar so the assets must be embedded directly in the page to
+    keep a single self-contained file working (issue #278).
+
+    The JS has any ``</script`` sequence neutralised to ``<\\/script``
+    so it can't break out of the inline ``<script>`` tag. The current
+    vendored build contains none, but a future upgrade might; this makes
+    the inline path safe regardless. Cached because the 530 KB read
+    would otherwise repeat on every string render.
+    """
+    src_dir = _vendor_source_dir()
+    js = (src_dir / "vis-timeline-graph2d.min.js").read_text(encoding="utf-8")
+    css = (src_dir / "vis-timeline-graph2d.min.css").read_text(encoding="utf-8")
+    js = js.replace("</script", "<\\/script")
+    return js, css
