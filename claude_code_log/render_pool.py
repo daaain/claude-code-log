@@ -113,33 +113,46 @@ def resolve_render_jobs(requested: Optional[int]) -> int:
 
     ``1`` means the inline path — no pool, no worker processes.
 
-    The fan-out is **off by default** and enabled by ``$RENDER_JOBS_ENV``
-    (``auto`` for the CPU count, or an explicit worker count). That default
-    is deliberate: it competes with the render memo caches, since each
-    worker starts with a cold cache and re-does the page-vs-session
-    formatting the memo would have collapsed. It wins clearly on large
-    projects and loses on small ones (see ``application_model.md`` § 2.10),
-    which is not a trade to make on everyone's behalf until the two-phase
-    restructuring removes the conflict.
+    **On by default** at the CPU count, since measuring it on a 16-core
+    machine settled the question: an incremental run (one stale project,
+    the everyday shape) went 93.2s → 34.6s, a 2.7x improvement using 10.6
+    of 16 cores instead of 1. ``$RENDER_JOBS_ENV`` overrides — ``1``
+    disables it, ``auto`` is the default, an integer pins a worker count.
+
+    The cost is total CPU: workers start with cold memo caches and redo
+    the page-vs-session formatting the memo would have collapsed, so that
+    run burned 367.9s of CPU against 90.8s serial. Wall clock is what the
+    user waits for, so the trade is worth making by default — but it is
+    why ``_MIN_MESSAGES_FOR_RENDER_POOL`` keeps small projects out (below
+    the crossover the fan-out is a net loss) and why the count is capped
+    against available memory. See ``application_model.md`` § 2.10.
 
     ``requested`` is an explicit caller override (the ``render_jobs``
     argument to ``convert_jsonl_to``) and wins over the environment;
-    ``None`` consults it. An unparseable setting means off, not a crash.
+    ``None`` consults it. A number below 1 means "none of it" (mirroring
+    ``CLAUDE_CODE_LOG_RENDER_CACHE_MB=0``); an unparseable setting falls
+    back to the default rather than crashing a conversion.
     """
     if requested is not None:
         return max(1, requested)
+
+    def _default() -> int:
+        return max(1, os.cpu_count() or 1)
+
     raw = os.getenv(RENDER_JOBS_ENV)
     if raw is None:
-        return 1
+        return _default()
     value = raw.strip().lower()
     if not value:
-        return 1
+        return _default()
     if value in ("auto", "cpu"):
-        return max(1, os.cpu_count() or 1)
+        return _default()
+    if value in ("off", "no", "false", "serial"):
+        return 1
     try:
         return max(1, int(value))
     except ValueError:
-        return 1
+        return _default()
 
 
 # A loaded transcript costs far more resident memory than it does on

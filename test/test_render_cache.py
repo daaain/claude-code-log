@@ -178,11 +178,11 @@ class TestMarkdownMemo:
 
 
 class TestRenderJobsEnvironment:
-    """The render fan-out is opt-in; ``--jobs`` alone must not enable it."""
+    """The fan-out defaults on; the env var is the off switch and the dial."""
 
-    def test_unset_means_serial(self, monkeypatch):
+    def test_unset_means_cpu_count(self, monkeypatch):
         monkeypatch.delenv(RENDER_JOBS_ENV, raising=False)
-        assert resolve_render_jobs(None) == 1
+        assert resolve_render_jobs(None) == max(1, os.cpu_count() or 1)
 
     def test_auto_means_cpu_count(self, monkeypatch):
         monkeypatch.setenv(RENDER_JOBS_ENV, "auto")
@@ -192,12 +192,30 @@ class TestRenderJobsEnvironment:
         monkeypatch.setenv(RENDER_JOBS_ENV, "3")
         assert resolve_render_jobs(None) == 3
 
-    def test_unparseable_or_empty_means_serial(self, monkeypatch):
-        # Off is the safe reading of a broken setting: the fan-out is a
-        # performance trade, never a correctness requirement.
-        for value in ("", "   ", "yes", "-1"):
+    def test_one_disables_the_fan_out(self, monkeypatch):
+        """The documented off switch — it must actually reach the inline path."""
+        monkeypatch.setenv(RENDER_JOBS_ENV, "1")
+        assert resolve_render_jobs(None) == 1
+
+    def test_wordy_off_values_disable_it(self, monkeypatch):
+        for value in ("off", "no", "false", "serial", "OFF"):
             monkeypatch.setenv(RENDER_JOBS_ENV, value)
             assert resolve_render_jobs(None) == 1, value
+
+    def test_zero_and_negatives_disable_it(self, monkeypatch):
+        """Mirrors CLAUDE_CODE_LOG_RENDER_CACHE_MB=0 — a number below 1
+        is a request for none of it, not a broken setting."""
+        for value in ("0", "-1", "-4"):
+            monkeypatch.setenv(RENDER_JOBS_ENV, value)
+            assert resolve_render_jobs(None) == 1, value
+
+    def test_unparseable_or_empty_falls_back_to_the_default(self, monkeypatch):
+        # A broken setting shouldn't silently change behaviour in either
+        # direction; the default is the least surprising reading.
+        expected = max(1, os.cpu_count() or 1)
+        for value in ("", "   ", "yes", "3.5"):
+            monkeypatch.setenv(RENDER_JOBS_ENV, value)
+            assert resolve_render_jobs(None) == expected, value
 
     def test_explicit_argument_overrides_the_environment(self, monkeypatch):
         monkeypatch.setenv(RENDER_JOBS_ENV, "8")
@@ -238,10 +256,14 @@ class TestRenderPoolCreation:
         kwargs.update(overrides)
         return converter._make_render_pool(**kwargs)  # type: ignore[arg-type]
 
-    def test_no_pool_without_the_env_var(self, tmp_path, monkeypatch):
-        """The whole point of the default: no worker processes at all."""
+    def test_a_pool_is_created_by_default(self, tmp_path, monkeypatch):
+        """The fan-out is on unless something turns it off."""
         monkeypatch.delenv(RENDER_JOBS_ENV, raising=False)
-        assert self._make(tmp_path) is None
+        assert self._make(tmp_path, monkeypatch) is not None
+
+    def test_env_var_can_turn_it_off(self, tmp_path, monkeypatch):
+        monkeypatch.setenv(RENDER_JOBS_ENV, "1")
+        assert self._make(tmp_path, monkeypatch) is None
 
     def test_env_var_creates_a_pool(self, tmp_path, monkeypatch):
         monkeypatch.setenv(RENDER_JOBS_ENV, "2")

@@ -434,12 +434,13 @@ ones reports a busy Mac as having almost nothing free. Windows has no
 returns None rather than raising, so an unreadable platform stays
 conservative instead of failing a conversion.
 
-**Opt-in.** The fan-out is off unless `$CLAUDE_CODE_LOG_RENDER_JOBS` is
-set (`auto` for the CPU count, or an explicit worker count) — see
-`render_pool.resolve_render_jobs`. `--jobs` never enables it; it only caps
-it, so the two pool levels together can't oversubscribe. An explicit
-`convert_jsonl_to(render_jobs=N)` overrides the environment; the default
-`None` consults it. `_make_render_pool` declines regardless for
+**On by default** at the CPU count, settled by the 16-core measurement
+below. `$CLAUDE_CODE_LOG_RENDER_JOBS` overrides: `1` or `off` disables it,
+`auto` is the default, an integer pins a count — see
+`render_pool.resolve_render_jobs`. `--jobs` never enables or disables it;
+it only caps it, so the two pool levels together can't oversubscribe. An
+explicit `convert_jsonl_to(render_jobs=N)` overrides the environment; the
+default `None` consults it. `_make_render_pool` declines regardless for
 single-file mode, a missing cache manager, `image_export_mode="referenced"`
 (renders write `images/image_NNNN.png` from a per-call counter, so
 concurrent renders would collide on those names), projects below
@@ -471,14 +472,31 @@ processes gives each worker a cold cache and brings some of it back. Both
 together is still the fastest configuration, so they compose — just
 sub-additively.
 
-A 16-core Mac over 8 real projects (1543MB of transcripts) confirms the
-shape at larger scale, though that run predates the macOS memory probe and
-so used only 2 render workers:
+A 16-core Mac over 8 real projects (1543MB of transcripts, largest 329MB)
+shows what happens with cores to spare — and why the two `--all-projects`
+scenarios diverge so sharply:
 
-| scenario | neither | memo only | both |
-|---|---|---|---|
-| full rebuild, 8 projects | 124.7s | 101.7s | 82.1s (1.24x) |
-| incremental, 1 stale project | 118.9s | 92.1s | 73.5s (1.25x) |
+| scenario | config | wall | CPU | cores used |
+|---|---|---|---|---|
+| full rebuild, 8 projects | memo only | 100.8s | 226.0s | 2.2 of 16 |
+| full rebuild, 8 projects | both | 79.3s (1.27x) | 324.8s | 4.1 of 16 |
+| incremental, 1 stale | memo only | 93.2s | 90.8s | 1.0 of 16 |
+| incremental, 1 stale | both | **34.6s (2.70x)** | 367.9s | 10.6 of 16 |
+
+The incremental row is what flipped the default: 2.70x on the everyday
+shape of a run, using 10.6 cores instead of 1.
+
+The full-rebuild row is the *unsolved* case, and the numbers say exactly
+why. Converting the largest project alone takes 93.2s; converting all
+eight takes 100.8s. The other seven cost 7.6s of wall clock between them —
+the run is, to within 8%, "how long does the biggest project take". The
+static budget split then gives that project `jobs // stale projects` = 2
+render workers while the seven small ones finish and 13 cores go idle. So
+the fan-out helps it barely (1.27x) even though the same project alone
+reaches 2.70x. Fixing it needs the split to be dynamic — budget handed
+back as projects complete — or a single flat pool over render units rather
+than two nested levels. § 2.1's `per_project_render_jobs` is where that
+would change.
 
 Two consequences. First, core count matters a lot: 48.8s of CPU over 4
 cores is 12.2s plus the 4.7s floor, so a 10-core machine should land near

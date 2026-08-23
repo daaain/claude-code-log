@@ -1018,8 +1018,9 @@ def main() -> None:
         "Worker processes for converting projects in --all-projects mode "
         "(default: CPU count; 1 disables parallelism). Peak memory scales "
         "with jobs x the largest stale project. Also caps the per-project "
-        "render fan-out, which is opt-in via "
-        "$CLAUDE_CODE_LOG_RENDER_JOBS (auto, or a worker count)."
+        "render fan-out, which is on by default and controlled by "
+        "$CLAUDE_CODE_LOG_RENDER_JOBS (1 or 'off' to disable, auto, or a "
+        "worker count)."
     ),
 )
 @click.option(

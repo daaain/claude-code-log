@@ -263,13 +263,16 @@ Set `CLAUDE_CODE_LOG_RENDER_CACHE_MB=0` to disable memoization when
 bisecting a rendering difference; any other value sets the per-cache byte
 budget in MB (default 192).
 
-A project's own pages and session files can additionally be rendered in
-parallel worker processes. This is opt-in — set
-`CLAUDE_CODE_LOG_RENDER_JOBS=auto` (or a worker count) — because it
-overlaps with the memo above and only pays off on large projects. Note that
-each worker holds the project's whole transcript (~3x its bytes on disk),
-so the worker count is capped against available memory; on a small machine
-or a large archive it degrades to serial rather than swapping. See
+A project's own pages and session files are additionally rendered in
+parallel worker processes, on by default at the CPU count. Set
+`CLAUDE_CODE_LOG_RENDER_JOBS=1` (or `off`) to disable it, or an integer to
+pin a worker count. It earns its keep on the runs that matter — an
+incremental run over a real archive measured 93.2s → 34.6s on 16 cores —
+at the cost of considerably more total CPU, since each worker starts with
+a cold memo cache. Small projects are excluded outright, and because each
+worker holds the project's whole transcript (~3x its bytes on disk) the
+worker count is capped against available memory: on a small machine or a
+large archive it degrades to serial rather than swapping. See
 [dev-docs/application_model.md § 2.10](dev-docs/application_model.md) for
 the measurements.
 
