@@ -5,9 +5,10 @@ import faulthandler
 import logging
 import os
 import signal
+import sqlite3
 import sys
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 import click
 from git import Repo, InvalidGitRepositoryError
@@ -32,6 +33,11 @@ from .cache import (
     get_library_version,
 )
 from .models import RenderingDepth
+from .search import (
+    ENV_INDEX_FIELDS,
+    ENV_SEARCH_FIELDS,
+    SEARCH_FIELDS,
+)
 
 
 # Output values that mean "stream the rendered document to stdout" (issue
@@ -2048,18 +2054,66 @@ def convert(
     default=False,
     help="Open the index page in a browser once the server is up.",
 )
+@click.option(
+    "--search-fields",
+    envvar=ENV_SEARCH_FIELDS,
+    help=(
+        "Which field groups archive search looks in by default. "
+        f"Groups: {', '.join(SEARCH_FIELDS)}. Accepts an absolute list "
+        "('text,thinking'), 'all'/'none', or deltas against the default "
+        "('+tool_result', '-thinking'). Default excludes tool_result: it is "
+        "69% of a typical archive's text and mostly file dumps. "
+        f"Env: {ENV_SEARCH_FIELDS}."
+    ),
+)
+@click.option(
+    "--index-fields",
+    envvar=ENV_INDEX_FIELDS,
+    help=(
+        "Which field groups get indexed at all. Defaults to everything, so "
+        "enabling a group at search time never needs a reindex. Narrowing "
+        "this shrinks the index (dropping tool_result took a real 253 MB "
+        f"index to 94 MB) but forces a rebuild. Env: {ENV_INDEX_FIELDS}."
+    ),
+)
+@click.option(
+    "--reindex",
+    is_flag=True,
+    default=False,
+    help="Rebuild the search index from scratch instead of updating it.",
+)
+@click.option(
+    "--no-index",
+    is_flag=True,
+    default=False,
+    help=(
+        "Start without building or updating the search index. The search "
+        "page will report the index as unavailable."
+    ),
+)
 def serve(
     port: int,
     projects_dir: Optional[Path],
     no_convert: bool,
     open_browser: bool,
+    search_fields: Optional[str],
+    index_fields: Optional[str],
+    reindex: bool,
+    no_index: bool,
 ) -> None:
-    """Serve the projects directory over loopback.
+    """Serve the projects directory over loopback, with full-archive search.
 
     The generated HTML stays canonical and keeps working from `file://`;
     this adds an origin, which is what full-archive search needs in order to
     reach the SQLite cache.
     """
+    from .api import SearchApi
+    from .search import (
+        DEFAULT_INDEX_FIELDS,
+        DEFAULT_SEARCH_FIELDS,
+        fts5_available,
+        parse_field_spec,
+    )
     from .server import ArchiveServer
 
     projects_path = projects_dir or get_default_projects_dir()
@@ -2067,15 +2121,35 @@ def serve(
         click.echo(f"Error: projects directory not found: {projects_path}", err=True)
         sys.exit(1)
 
+    try:
+        resolved_search_fields = parse_field_spec(search_fields, DEFAULT_SEARCH_FIELDS)
+        resolved_index_fields = parse_field_spec(index_fields, DEFAULT_INDEX_FIELDS)
+    except ValueError as exc:
+        raise click.UsageError(str(exc)) from exc
+
     if not no_convert:
         # Same conversion the default command runs, so the pages being served
         # are current. --no-convert skips it for a fast start.
         click.echo(f"Refreshing {projects_path}...")
         process_projects_hierarchy(projects_path, silent=True)
 
-    server = ArchiveServer(projects_path, host="127.0.0.1", port=port)
+    db_path = get_cache_db_path(projects_path)
+    if not no_index:
+        _build_search_index(db_path, resolved_index_fields, rebuild=reindex)
+    elif not db_path.exists():
+        click.echo("No cache database found; search will be unavailable.", err=True)
+
+    api = SearchApi(db_path, default_fields=resolved_search_fields)
+    server = ArchiveServer(
+        projects_path, api_routes=api.routes(), host="127.0.0.1", port=port
+    )
     click.echo(f"Serving {projects_path}")
     click.echo(f"  {server.url}/index.html")
+    click.echo(f"  {server.url}/search.html")
+    if not no_index and not fts5_available(sqlite3.connect(":memory:")):
+        click.echo(
+            "  (this SQLite has no FTS5, so archive search is unavailable)", err=True
+        )
     click.echo("Press Ctrl+C to stop.")
 
     if open_browser:
@@ -2087,6 +2161,58 @@ def serve(
         click.echo("\nStopping...")
     finally:
         server.stop()
+
+
+def _build_search_index(
+    db_path: Path, index_fields: tuple[str, ...], *, rebuild: bool
+) -> None:
+    """Bring the FTS index up to date, with a progress bar.
+
+    Blocking rather than backgrounded, deliberately. A full build is ~50 s
+    for a 532k-message archive and only happens once; keeping it in the
+    foreground avoids two problems a background build would create — SQLite
+    has a single writer, so it would contend with the converter, and a
+    partially built index returns *wrong* answers (a silent subset) rather
+    than slow ones.
+    """
+    from .search import ensure_index, fts5_available
+
+    if not db_path.exists():
+        click.echo("No cache database found; search will be unavailable.", err=True)
+        return
+
+    conn = sqlite3.connect(db_path)
+    try:
+        if not fts5_available(conn):
+            click.echo(
+                "This SQLite build has no FTS5; archive search is unavailable.",
+                err=True,
+            )
+            return
+        bar: Optional[Any] = None
+
+        def report(done: int, total: int) -> None:
+            nonlocal bar
+            if total == 0:
+                return
+            if bar is None:
+                bar = click.progressbar(
+                    length=total, label="Indexing transcripts for search"
+                )
+                bar.__enter__()
+            bar.update(1)
+
+        status = ensure_index(
+            conn, index_fields=index_fields, progress=report, rebuild=rebuild
+        )
+        if bar is not None:
+            bar.__exit__(None, None, None)
+            click.echo(
+                f"Search index ready: {status.indexed_messages:,} messages "
+                f"({', '.join(status.fields)})."
+            )
+    finally:
+        conn.close()
 
 
 convert.epilog = _subcommand_epilog(main)

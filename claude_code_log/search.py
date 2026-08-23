@@ -394,8 +394,34 @@ def drop_index(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def _refresh_indexed_count(conn: sqlite3.Connection) -> None:
+    """Record the row count so `index_status` never has to count rows.
+
+    Called only when the index changes, so the 57 ms `count(*)` is paid at
+    build time rather than per request.
+    """
+    count = conn.execute(f"SELECT count(*) FROM {ROWS_TABLE}").fetchone()[0]
+    _meta_set(conn, "indexed_messages", str(int(count)))
+
+
+def index_ready(conn: sqlite3.Connection) -> bool:
+    """Cheap readiness check for the request path.
+
+    `index_status` is comparatively expensive and must not be called per
+    request; this is two indexed lookups.
+    """
+    return _index_exists(conn) and _meta_get(conn, "index_fields") is not None
+
+
 def index_status(conn: sqlite3.Connection) -> IndexStatus:
-    """Report the index's state without building anything."""
+    """Report the index's state without building anything.
+
+    Both counts come from small aggregate tables rather than `messages`.
+    Counting `messages` directly costs ~1.8 s on a real archive, because the
+    content BLOB is stored inline and a full scan therefore reads ~930 MB;
+    `count(*)` on the FTS table is 57 ms. Neither is acceptable on a request
+    path, so the indexed total is recorded at build time instead.
+    """
     if not fts5_available(conn):
         return IndexStatus(
             available=False, ready=False, reason="SQLite was built without FTS5"
@@ -404,18 +430,21 @@ def index_status(conn: sqlite3.Connection) -> IndexStatus:
         return IndexStatus(available=True, ready=False, reason="not built yet")
 
     fields_raw = _meta_get(conn, "index_fields") or ""
-    indexed = conn.execute(f"SELECT count(*) FROM {FTS_TABLE}").fetchone()[0]
-    total = conn.execute(
-        "SELECT count(*) FROM messages WHERE type NOT IN "
-        f"({','.join('?' * len(SKIP_TYPES))})",
-        tuple(SKIP_TYPES),
-    ).fetchone()[0]
+    indexed_raw = _meta_get(conn, "indexed_messages")
+    if indexed_raw is None:
+        # Only when the meta row is missing (an interrupted first build).
+        indexed = int(conn.execute(f"SELECT count(*) FROM {FTS_TABLE}").fetchone()[0])
+    else:
+        indexed = int(indexed_raw)
+    total_row = conn.execute(
+        "SELECT coalesce(sum(message_count), 0) FROM cached_files"
+    ).fetchone()
     return IndexStatus(
         available=True,
         ready=True,
         fields=tuple(f for f in fields_raw.split(",") if f),
-        indexed_messages=int(indexed),
-        total_messages=int(total),
+        indexed_messages=indexed,
+        total_messages=int(total_row[0]) if total_row else 0,
         built_at=_meta_get(conn, "built_at"),
     )
 
@@ -554,6 +583,7 @@ def ensure_index(
     _meta_set(conn, "extractor_version", str(EXTRACTOR_VERSION))
     _meta_set(conn, "index_fields", ",".join(fields))
     _meta_set(conn, "built_at", now)
+    _refresh_indexed_count(conn)
     conn.commit()
 
     if total:
@@ -589,6 +619,7 @@ def reindex_files(conn: sqlite3.Connection, file_ids: Sequence[int]) -> None:
             "indexed_at = excluded.indexed_at",
             (file_id, now),
         )
+    _refresh_indexed_count(conn)
     conn.commit()
 
 
