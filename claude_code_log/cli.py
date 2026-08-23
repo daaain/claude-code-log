@@ -2017,6 +2017,78 @@ def convert(
 
 # Registered last, once every subcommand exists, so the default command's
 # --help advertises exactly the subcommands that are really available.
+@main.command(name="serve")
+@click.option(
+    "--port",
+    type=int,
+    default=8010,
+    show_default=True,
+    help="Port to listen on. Use 0 to pick a free one.",
+)
+@click.option(
+    "--projects-dir",
+    type=click.Path(path_type=Path, file_okay=False),
+    help=(
+        "Projects directory to serve. Defaults to ~/.claude/projects "
+        "(the same directory the conversion uses)."
+    ),
+)
+@click.option(
+    "--no-convert",
+    is_flag=True,
+    default=False,
+    help=(
+        "Skip the startup conversion and serve whatever HTML is already "
+        "there. Faster to start; pages may be stale."
+    ),
+)
+@click.option(
+    "--open-browser",
+    is_flag=True,
+    default=False,
+    help="Open the index page in a browser once the server is up.",
+)
+def serve(
+    port: int,
+    projects_dir: Optional[Path],
+    no_convert: bool,
+    open_browser: bool,
+) -> None:
+    """Serve the projects directory over loopback.
+
+    The generated HTML stays canonical and keeps working from `file://`;
+    this adds an origin, which is what full-archive search needs in order to
+    reach the SQLite cache.
+    """
+    from .server import ArchiveServer
+
+    projects_path = projects_dir or get_default_projects_dir()
+    if not projects_path.exists():
+        click.echo(f"Error: projects directory not found: {projects_path}", err=True)
+        sys.exit(1)
+
+    if not no_convert:
+        # Same conversion the default command runs, so the pages being served
+        # are current. --no-convert skips it for a fast start.
+        click.echo(f"Refreshing {projects_path}...")
+        process_projects_hierarchy(projects_path, silent=True)
+
+    server = ArchiveServer(projects_path, host="127.0.0.1", port=port)
+    click.echo(f"Serving {projects_path}")
+    click.echo(f"  {server.url}/index.html")
+    click.echo("Press Ctrl+C to stop.")
+
+    if open_browser:
+        click.launch(f"{server.url}/index.html")
+
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        click.echo("\nStopping...")
+    finally:
+        server.stop()
+
+
 convert.epilog = _subcommand_epilog(main)
 
 

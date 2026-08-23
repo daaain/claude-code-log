@@ -141,6 +141,23 @@ def test_convert_is_the_default_command() -> None:
     assert DefaultCommandGroup.default_command == "convert"
 
 
+def test_serve_is_registered_and_reachable() -> None:
+    assert "serve" in main.commands
+    result = CliRunner().invoke(main, ["serve", "--help"])
+    assert result.exit_code == 0
+    assert "--port" in result.output
+    assert "--no-convert" in result.output
+
+
+def test_serve_errors_cleanly_on_a_missing_projects_dir(tmp_path: Path) -> None:
+    missing = tmp_path / "nope"
+    result = CliRunner().invoke(
+        main, ["serve", "--projects-dir", str(missing), "--no-convert"]
+    )
+    assert result.exit_code == 1
+    assert "not found" in result.output
+
+
 def test_unknown_option_still_errors_rather_than_being_swallowed() -> None:
     """Rewriting args must not turn a typo into a silent no-op."""
     result = CliRunner().invoke(main, ["--definitely-not-an-option"])
