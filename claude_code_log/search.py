@@ -338,7 +338,12 @@ def _create_tables(conn: sqlite3.Connection, fields: Sequence[str]) -> None:
         f"CREATE TABLE IF NOT EXISTS {FILES_TABLE} ("
         "  file_id INTEGER PRIMARY KEY,"
         "  indexed_at TEXT NOT NULL,"
-        "  message_count INTEGER NOT NULL DEFAULT 0"
+        "  message_count INTEGER NOT NULL DEFAULT 0,"
+        # The cache stamps cached_files.cached_mtime every time it rewrites a
+        # file's messages, so comparing it is how we notice that an
+        # already-indexed file has *changed*. Without it, `ensure_index`
+        # skips the file (its id is known) and search serves stale hits.
+        "  cached_mtime REAL NOT NULL DEFAULT 0"
         ")"
     )
     # Which FTS rowids came from which file. This has to be tracked here
@@ -539,24 +544,32 @@ def ensure_index(
         # virtual table, so a field or extractor change means a fresh table.
         drop_index(conn)
         _create_tables(conn, fields)
-        indexed_files: set[int] = set()
+        indexed_files: dict[int, float] = {}
     else:
         _create_tables(conn, fields)
         indexed_files = {
-            int(row[0]) for row in conn.execute(f"SELECT file_id FROM {FILES_TABLE}")
+            int(row[0]): float(row[1] or 0.0)
+            for row in conn.execute(f"SELECT file_id, cached_mtime FROM {FILES_TABLE}")
         }
 
     current_files = {
-        int(row[0]): int(row[1] or 0)
-        for row in conn.execute("SELECT id, message_count FROM cached_files")
+        int(row[0]): (int(row[1] or 0), float(row[2] or 0.0))
+        for row in conn.execute(
+            "SELECT id, message_count, cached_mtime FROM cached_files"
+        )
     }
 
     # Files that vanished from the cache take their rows with them.
-    for gone in indexed_files - set(current_files):
+    for gone in set(indexed_files) - set(current_files):
         _delete_file_rows(conn, gone)
         conn.execute(f"DELETE FROM {FILES_TABLE} WHERE file_id = ?", (gone,))
 
-    todo = [file_id for file_id in current_files if file_id not in indexed_files]
+    # New files, plus already-indexed ones the cache has rewritten since.
+    todo = [
+        file_id
+        for file_id, (_, mtime) in current_files.items()
+        if file_id not in indexed_files or abs(indexed_files[file_id] - mtime) >= 1e-6
+    ]
     total = len(todo)
     now = datetime.now(timezone.utc).isoformat()
     placeholders = ",".join("?" * (len(fields) + 1))
@@ -566,13 +579,17 @@ def ensure_index(
 
     for done, file_id in enumerate(todo, start=1):
         if file_id in indexed_files:
+            # Re-indexing a changed file: clear its old rows first.
             _delete_file_rows(conn, file_id)
         _index_file(conn, file_id, fields, insert_sql)
         conn.execute(
-            f"INSERT INTO {FILES_TABLE}(file_id, indexed_at, message_count) "
-            "VALUES(?, ?, ?) ON CONFLICT(file_id) DO UPDATE SET "
-            "indexed_at = excluded.indexed_at, message_count = excluded.message_count",
-            (file_id, now, current_files[file_id]),
+            f"INSERT INTO {FILES_TABLE}"
+            "(file_id, indexed_at, message_count, cached_mtime) "
+            "VALUES(?, ?, ?, ?) ON CONFLICT(file_id) DO UPDATE SET "
+            "indexed_at = excluded.indexed_at, "
+            "message_count = excluded.message_count, "
+            "cached_mtime = excluded.cached_mtime",
+            (file_id, now, current_files[file_id][0], current_files[file_id][1]),
         )
         if progress is not None:
             progress(done, total)
@@ -613,11 +630,23 @@ def reindex_files(conn: sqlite3.Connection, file_ids: Sequence[int]) -> None:
     for file_id in file_ids:
         _delete_file_rows(conn, file_id)
         _index_file(conn, file_id, fields, insert_sql)
+        row = conn.execute(
+            "SELECT message_count, cached_mtime FROM cached_files WHERE id = ?",
+            (file_id,),
+        ).fetchone()
         conn.execute(
-            f"INSERT INTO {FILES_TABLE}(file_id, indexed_at, message_count) "
-            "VALUES(?, ?, 0) ON CONFLICT(file_id) DO UPDATE SET "
-            "indexed_at = excluded.indexed_at",
-            (file_id, now),
+            f"INSERT INTO {FILES_TABLE}"
+            "(file_id, indexed_at, message_count, cached_mtime) "
+            "VALUES(?, ?, ?, ?) ON CONFLICT(file_id) DO UPDATE SET "
+            "indexed_at = excluded.indexed_at, "
+            "message_count = excluded.message_count, "
+            "cached_mtime = excluded.cached_mtime",
+            (
+                file_id,
+                now,
+                int(row[0] or 0) if row else 0,
+                float(row[1] or 0.0) if row else 0.0,
+            ),
         )
     _refresh_indexed_count(conn)
     conn.commit()

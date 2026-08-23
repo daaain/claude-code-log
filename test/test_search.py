@@ -609,6 +609,55 @@ def test_incremental_index_adds_a_new_file(cache: sqlite3.Connection) -> None:
     assert count_matches(cache, "brand") == 1
 
 
+def test_ensure_index_reindexes_a_changed_file(cache: sqlite3.Connection) -> None:
+    """A rewritten file keeps its file_id, so "already indexed" isn't enough.
+
+    Without comparing `cached_files.cached_mtime`, `ensure_index` skips the
+    file (its id is known) and search keeps returning the old text — stale
+    results with nothing failing anywhere.
+    """
+    ensure_index(cache)
+    assert count_matches(cache, "pydantic") == 2
+
+    # Simulate what the cache does when a JSONL file changes: replace the
+    # file's messages and re-stamp cached_mtime.
+    cache.execute("DELETE FROM messages WHERE file_id = 1")
+    _add_message(cache, 30, 1, 1, _assistant("now mentions mercurial"), uuid="uuid-30")
+    cache.execute("UPDATE cached_files SET cached_mtime = 12345.678 WHERE id = 1")
+    cache.commit()
+
+    ensure_index(cache)
+    assert count_matches(cache, "mercurial") == 1
+    assert count_matches(cache, "pydantic") == 1  # only the other project's
+
+
+def test_ensure_index_skips_unchanged_files(cache: sqlite3.Connection) -> None:
+    """The incremental path must not silently re-extract everything.
+
+    Re-running on an unchanged cache should touch no rows at all — that is
+    what makes it cheap enough (~180 ms for the largest file in an 8 GB
+    archive) to run on every server start.
+    """
+    ensure_index(cache)
+    before = index_status(cache).indexed_messages
+
+    writes: list[str] = []
+
+    def trace(statement: str) -> None:
+        normalised = " ".join(statement.split()).lower()
+        if normalised.startswith(
+            ("insert into message_fts", "delete from message_fts")
+        ):
+            writes.append(statement)
+
+    cache.set_trace_callback(trace)
+    again = ensure_index(cache)
+    cache.set_trace_callback(None)
+
+    assert again.indexed_messages == before
+    assert writes == [], f"re-indexed unchanged files: {writes}"
+
+
 def test_removing_a_file_removes_its_rows(cache: sqlite3.Connection) -> None:
     ensure_index(cache)
     assert count_matches(cache, "sqlite") == 1
