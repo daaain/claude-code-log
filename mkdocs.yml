@@ -74,6 +74,7 @@ nav:
   - Home: index.md
   - Example output: example.md
   - User Guide:
+      - Searching the whole archive: archive-search.md
       - Restoring archived sessions: restoring-archived-sessions.md
   - Reference:
       - CLI: reference/cli.md
