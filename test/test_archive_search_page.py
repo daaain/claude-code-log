@@ -7,6 +7,7 @@ the file gets an explanation rather than a broken search box.
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import sqlite3
@@ -370,6 +371,94 @@ class TestArchiveSearchBrowser:
             assert state["cardVisible"], "matched card hidden by its own query"
             assert state["visibleMessages"] > 0, "page filtered down to nothing"
             assert "hello" in state["words"] and "decorators" in state["words"]
+
+    def test_deep_link_target_the_local_scan_misses_stays_visible(
+        self, page: Any, tmp_path: Path
+    ) -> None:
+        """The FTS tokenizer folds diacritics (`cafe` finds `café`); the
+        in-page literal scan doesn't. When another message matches
+        literally, search-as-filter used to hide exactly the card the deep
+        link targeted — it must be forced visible as context instead."""
+        projects = tmp_path / "projects"
+        project = projects / "-home-u-testproj"
+        project.mkdir(parents=True)
+        source = Path("test/test_data/representative_messages.jsonl").read_text(
+            encoding="utf-8"
+        )
+
+        def entry(uuid: str, text: str, ts: str) -> str:
+            return json.dumps(
+                {
+                    "type": "user",
+                    "timestamp": ts,
+                    "parentUuid": None,
+                    "isSidechain": False,
+                    "userType": "human",
+                    "cwd": "/tmp",
+                    "sessionId": "test_session",
+                    "version": "1.0.0",
+                    "uuid": uuid,
+                    "message": {
+                        "role": "user",
+                        "content": [{"type": "text", "text": text}],
+                    },
+                }
+            )
+
+        (project / "session.jsonl").write_text(
+            source
+            + entry(
+                "msg_cafe_accent",
+                "Met at the café on Rue Cler.",
+                "2025-07-03T17:00:00Z",
+            )
+            + "\n"
+            + entry(
+                "msg_cafe_plain",
+                "We should open a cafe someday.",
+                "2025-07-03T17:01:00Z",
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        process_projects_hierarchy(projects, silent=True)
+        _seed_index(projects)
+
+        with self._serve(projects) as server:
+            page.goto(f"{server.url}/search.html?q=cafe")
+            page.wait_for_selector("#app:not([hidden])", timeout=10000)
+            page.wait_for_function(
+                "document.querySelectorAll('.search-result-item a').length > 1",
+                timeout=10000,
+            )
+            hrefs = page.eval_on_selector_all(
+                ".search-result-item a",
+                "links => links.map(a => a.getAttribute('href'))",
+            )
+            target = next(h for h in hrefs if "uuid=msg_cafe_accent" in h)
+
+            page.goto(f"{server.url}/{target}")
+            # The literal match ("cafe someday") highlights; the deep-link
+            # target can't, but must still be on the page.
+            page.wait_for_function(
+                "document.querySelectorAll('.search-highlight').length > 0",
+                timeout=10000,
+            )
+            state = page.evaluate(
+                """() => {
+                    const card = document.querySelector(
+                        '[data-uuid="msg_cafe_accent"]');
+                    return {
+                        found: !!card,
+                        visible: !!(card && card.offsetParent !== null
+                            && !card.classList.contains('search-hidden')),
+                    };
+                }"""
+            )
+            assert state["found"], "deep-linked café card missing from the page"
+            assert state["visible"], (
+                "café card hidden by the very filter its deep link ran"
+            )
 
     def test_uuid_without_a_query_still_scrolls(
         self, page: Any, generated_archive: Path

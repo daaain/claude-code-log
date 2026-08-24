@@ -136,10 +136,30 @@
             clearSearchFilterClasses();
         }
 
+        // The same FTS-vs-literal gap can also be partial: other messages
+        // match locally, but the deep-link target itself doesn't. The
+        // filter would then hide exactly the card the reader came for — so
+        // force the target (and its ancestors) visible as context.
+        const uuid = params.get('uuid');
+        if (uuid && searchState.matches.length > 0) {
+            const escaped = (window.CSS && CSS.escape) ? CSS.escape(uuid) : uuid;
+            let unhid = false;
+            document.querySelectorAll('.message[data-uuid="' + escaped + '"]')
+                .forEach(card => {
+                    [card, ...collectAncestorCards(card)].forEach(el => {
+                        if (el.classList.contains('search-hidden')) {
+                            el.classList.remove('search-hidden');
+                            el.classList.add('search-context');
+                            unhid = true;
+                        }
+                    });
+                });
+            if (unhid) syncTimelineWithSearch();
+        }
+
         // Re-run the uuid scroll *after* searching. performSearch hides
         // non-matching messages and unfolds ancestors, so any scroll done
         // before it lands somewhere else once the layout settles.
-        const uuid = params.get('uuid');
         if (uuid && window.claudeLogRevealMessageByUuid) {
             window.claudeLogRevealMessageByUuid(uuid);
         }
