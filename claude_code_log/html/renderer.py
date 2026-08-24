@@ -1562,16 +1562,23 @@ class HtmlRenderer(Renderer):
             # one tree's render leak into another's output.
             fragment_key = None
             if fragment_store is not None and msg.content.fragment_key is not None:
-                fragment_key = (
-                    *msg.content.fragment_key,
-                    msg.pair_first is None,
-                    msg.pair_middle is None,
-                    msg.pair_last is None,
-                    msg.display_model,
-                    msg.agent_depth,
-                    msg.spawns_collapsed_transcript,
-                    msg.in_workflow_sidechannel,
-                )
+                # The stamped key carries id(entry); translate it to the
+                # entry's master-list ordinal so the key means the same
+                # thing in every tree (and, eventually, every process
+                # that loads the same master list). An unknown id
+                # declines caching.
+                stable = fragment_store.stable_key(msg.content.fragment_key)
+                if stable is not None:
+                    fragment_key = (
+                        *stable,
+                        msg.pair_first is None,
+                        msg.pair_middle is None,
+                        msg.pair_last is None,
+                        msg.display_model,
+                        msg.agent_depth,
+                        msg.spawns_collapsed_transcript,
+                        msg.in_workflow_sidechannel,
+                    )
             cached = (
                 fragment_store.get(fragment_key, msg.content)
                 if fragment_store is not None and fragment_key is not None

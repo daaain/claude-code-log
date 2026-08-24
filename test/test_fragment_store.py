@@ -99,6 +99,22 @@ def test_pydantic_extra_fields_affect_digest():
     )
 
 
+def test_stable_key_translates_ids_to_master_list_ordinals():
+    store = RenderFragmentStore()
+    entries = [object(), object(), object()]
+    store.set_entry_ordinals(entries)
+
+    # A stamped (id(entry), part) maps to the entry's position in the
+    # master list — the identity two trees (or two processes loading the
+    # same list) agree on.
+    assert store.stable_key((id(entries[2]), 0)) == (2, 0)
+    assert store.stable_key((id(entries[0]), 5)) == (0, 5)
+
+    # An id the master list doesn't contain declines caching.
+    stranger = object()
+    assert store.stable_key((id(stranger), 0)) is None
+
+
 def test_store_hit_requires_matching_digest():
     store = RenderFragmentStore()
     key = (1, 0, "sig")

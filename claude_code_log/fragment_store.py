@@ -20,14 +20,18 @@ invalidation surface at zero:
   fresh store per conversion just like the CLI does.
 - **Keys are entry identity plus tree context, not content.**
   ``MessageContent.fragment_key`` is ``(id(source_entry), part_ordinal)``,
-  stamped by the pass-2 render loop; the consumer appends a signature of
-  the tree-derived render inputs (pair presence, model badge, agent
-  depth, …) so a message that legitimately renders differently in the
-  combined tree than in its session tree occupies two slots instead of
-  poisoning one. The master message list keeps every entry alive for the
-  whole conversion, so the ``id()`` is stable; transcript uuids are NOT
-  usable here because resumed/forked sessions reuse them across distinct
-  messages (work/render-format-once.md § 4.1).
+  stamped by the pass-2 render loop — the only identity available where
+  differently-filtered subsets are rendered. The store translates the id
+  to the entry's ordinal in the conversion's master message list
+  (``set_entry_ordinals`` / ``stable_key``), which every tree — and any
+  process that loads the same master list — agrees on; an unknown id
+  declines caching. The consumer appends a signature of the tree-derived
+  render inputs (pair presence, model badge, agent depth, …) so a
+  message that legitimately renders differently in the combined tree
+  than in its session tree occupies two slots instead of poisoning one.
+  Transcript uuids are NOT usable here because resumed/forked sessions
+  reuse them across distinct messages (work/render-format-once.md
+  § 4.1).
 - **Hits are verified against the content.** ``get`` compares a digest
   of the requesting tree's content against the digest stored at ``put``
   time (:func:`content_digest` — same field coverage as dataclass
@@ -56,7 +60,7 @@ import os
 from hashlib import blake2b
 from typing import TYPE_CHECKING, Optional, cast
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 
 from pydantic import BaseModel
 
@@ -195,6 +199,16 @@ class RenderFragmentStore:
 
     def __init__(self) -> None:
         self._fragments: dict[StoreKey, tuple[bytes, Fragment]] = {}
+        # id(entry) → the entry's ordinal in the conversion's master
+        # message list. Stamped fragment_keys carry the entry's Python
+        # id (the only identity available where subsets are rendered);
+        # stable_key() translates it to the ordinal, which two render
+        # trees — and, later, two *processes* that load the same master
+        # list — agree on. The translation also retires the id-reuse
+        # caveat: an id missing from the map (a stamped entry that is
+        # somehow not in the master list) declines caching instead of
+        # risking a stale-id collision.
+        self._entry_ordinals: dict[int, int] = {}
         self._bytes = 0
         self.hits = 0
         self.misses = 0
@@ -207,6 +221,22 @@ class RenderFragmentStore:
         # their output is tree-specific (per-tree ``#msg-d-{N}`` anchors —
         # see HtmlRenderer._annotate_tree_for_render).
         self.skipped = 0
+
+    def set_entry_ordinals(self, entries: "Iterable[object]") -> None:
+        """Record the master message list this conversion renders subsets of."""
+        self._entry_ordinals = {id(entry): i for i, entry in enumerate(entries)}
+
+    def stable_key(self, fragment_key: tuple[int, int]) -> Optional[tuple[int, int]]:
+        """Translate a stamped ``(id(entry), part_ordinal)`` to a stable key.
+
+        Returns ``(master_list_ordinal, part_ordinal)``, or None when the
+        id is unknown — the caller then skips the store for that message,
+        which is always safe.
+        """
+        ordinal = self._entry_ordinals.get(fragment_key[0])
+        if ordinal is None:
+            return None
+        return (ordinal, fragment_key[1])
 
     def get(self, key: StoreKey, content: "MessageContent") -> Optional[Fragment]:
         entry = self._fragments.get(key)

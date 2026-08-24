@@ -2240,6 +2240,11 @@ def convert_jsonl_to(
     # conversion, so nothing about it needs invalidating.
     fragment_store = _make_fragment_store(format)
     if fragment_store is not None:
+        # Store keys are per-entry ordinals in this master list — stable
+        # across the differently-filtered subsets each render tree gets,
+        # unlike the id(entry) the stamping code has to work with (the
+        # store translates at its boundary, see stable_key()).
+        fragment_store.set_entry_ordinals(messages)
         from .html.renderer import HtmlRenderer as _HtmlRenderer
 
         if isinstance(renderer, _HtmlRenderer):
