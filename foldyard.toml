@@ -43,10 +43,11 @@ disk_gib = 60
 # list it.
 [proxy]
 default_deny = true
-# git fetch/clone; uv/pip (box bootstrap + deps); dnf metalink for [[box.tools]] (it
-# redirects to an arbitrary mirror — on a fresh box, grant the one it picks live in
-# `fy tui`); the playwright browser bundles; and unpkg.com, which the generated
-# transcript pages load vis-timeline from (the browser test suite renders them).
+# git fetch/clone; uv/pip (box bootstrap + deps); dnf for [[box.tools]], pinned to the
+# master mirror dl.fedoraproject.org by the dnf-direct-mirror step below (the default
+# mirror system redirects to arbitrary hosts no allowlist can name); the playwright
+# browser bundles; and unpkg.com, which the generated transcript pages load vis-timeline
+# from (the browser test suite renders them).
 allow = ["github.com", "pypi.org", "*.pypi.org", "files.pythonhosted.org", "*.fedoraproject.org", "cdn.playwright.dev", "unpkg.com"]
 # passthrough = ["@all"]   # hosts tunnelled UN-decrypted under default_deny (the toolchain)
 
@@ -88,6 +89,18 @@ caches = [{ volume = "devbox_playwright", path = ".cache/ms-playwright" }]
 # Consumer tools installed once per fresh box, as MONITORED steps (reported ✓/✗). They run
 # as root, in the checkout, before the deps warm-up.
 #
+# The Fedora repos ship pointing at the mirror system: dnf resolves a metalink at
+# mirrors.fedoraproject.org, which hands every fetch to an arbitrary volunteer mirror —
+# unpredictable hostnames that can never sit in a proxy allowlist. Pin the two enabled
+# repos to the project's master mirror instead (direct downloads, no redirect, covered by
+# "*.fedoraproject.org" in [proxy] allow), and switch off the openh264 repo, whose payload
+# lives on Cisco's CDN and which nothing here installs from. Must stay ABOVE the dnf steps
+# below — [[box.tools]] run in order.
+[[box.tools]]
+name = "dnf-direct-mirror"
+check = "grep -q '^baseurl=https://dl.fedoraproject.org' /etc/yum.repos.d/fedora.repo"
+install = "sed -i -e 's|^metalink=|#metalink=|' -e 's|^#baseurl=http://download.example/pub/fedora/linux|baseurl=https://dl.fedoraproject.org/pub/fedora/linux|' /etc/yum.repos.d/fedora.repo /etc/yum.repos.d/fedora-updates.repo && sed -i '0,/^enabled=1/s//enabled=0/' /etc/yum.repos.d/fedora-cisco-openh264.repo"
+
 # `just` is this project's documented entry point: CLAUDE.md and CONTRIBUTING.md route every
 # workflow through it (`just ci` before pushing, `just test`, `just docs-build`), so without
 # it the box can't follow its own instructions — and the recipes below name it too. Fedora
