@@ -384,6 +384,35 @@ Two properties matter for correctness:
 `CLAUDE_CODE_LOG_DEBUG_TIMING=1` prints hit rate, entry count and bytes
 per cache alongside the render timings.
 
+**The fragment store sits above the leaf memo** and removes the
+page-vs-session duplication itself rather than its expensive leaves:
+[`fragment_store.py`](../claude_code_log/fragment_store.py) caches each
+message's complete formatted fragment — the `(title, html, timestamp)`
+triple `_annotate_tree_for_render` writes onto the tree — for the length
+of one conversion, so the per-session pass reuses what the combined-page
+pass formatted (measured: 64,968 lookups → 32,441 formats, a 50% hit
+rate, on a 803MB/187-file archive). One store per `convert_jsonl_to`
+call, created by `_make_fragment_store` (HTML only) and handed to the
+combined-page and session-file loops; it dies with the conversion, so
+nothing about it ever needs invalidating.
+`CLAUDE_CODE_LOG_FRAGMENT_STORE=0` disables it for bisecting.
+
+A fragment is *not* a pure function of its source entry, and the store
+carries three guards for the three ways the same message legitimately
+renders differently in different trees (each found by hash-diffing real
+projects — see `work/render-format-once.md` § 4.8): fragments embedding
+per-tree `#msg-d-{N}` anchors are never stored (output scan); a
+signature of the tree-derived render inputs (pair presence,
+`display_model`, `agent_depth`, sidechannel/collapse flags) is part of
+the store key; and `get()` verifies the stored `MessageContent` compares
+equal to the requesting tree's before serving (dataclass equality, with
+the per-tree `message_index`/`fragment_key` fields excluded via
+`compare=False`). Keys are `(id(source_entry), part_ordinal)` — entry
+identity, stamped in the pass-2 render loop — because transcript uuids
+collide across resumed/forked sessions. Renders with
+`image_export_mode="referenced"` bypass the store entirely (fragments
+imply image-file writes that replaying would skip).
+
 ### 2.10 Intra-project render fan-out
 
 [`render_pool.py`](../claude_code_log/render_pool.py) fans a single

@@ -1,9 +1,20 @@
 # Render step 3: format once, assemble many
 
-**Status:** proposed. Steps 1 and 2 have landed on
-`perf/render-memo-and-intra-project-jobs` (stacked on
-`feat/archive-search-server`); this is the follow-up they were built to
-make safe to attempt.
+**Status:** phase 1 (serial fragment store) landed on
+`perf/render-memo-and-intra-project-jobs`. Each entry-derived message is
+now formatted once per conversion and reused across the combined pages
+and session files — `fragment_store.py`, consumed by
+`_annotate_tree_for_render`, wired in `convert_jsonl_to`. Verified
+byte-identical on five real projects (including the 803MB / 187-file
+claude-code-log archive at a 50% hit rate) and by
+`test_render_cache_equivalence.py::test_fragment_store_render_is_byte_identical`.
+Phase 1 confirmed the duplicate work is structurally gone (64,968 lookups
+→ 32,441 formats on that archive), but also that its *serial* wall-clock
+win on top of a warm leaf memo is modest (~1s of 27s CPU) — the value is
+what it unblocks: § 2's parallel format phase, fed workers, and the spill
+that bounds fragment memory (186MB held in-memory on the 803MB archive,
+~24% of disk bytes on smaller ones). Remaining: §§ 2's phases 2+ below,
+and the traps in § 4.8 discovered while landing phase 1.
 
 This is a handover note. It exists because the two landed optimisations
 each hit a ceiling, and *the same restructuring removes both ceilings*.
@@ -207,6 +218,50 @@ A pool that can't bootstrap (a library caller without the
 `if __name__ == "__main__"` guard `spawn` needs), or a worker that dies,
 must still produce complete correct output by rendering inline. Never let
 a performance feature become a correctness requirement.
+
+### 4.8 A message's rendered fragment is NOT a pure function of its entry
+
+Discovered by hash-diffing real projects after the fixture-based
+equivalence test already passed — fixture coverage was not enough. Three
+distinct classes of cross-tree divergence exist, each with its own guard
+in the landed phase 1 (all in `_annotate_tree_for_render` /
+`fragment_store.py`):
+
+1. **Per-tree `#msg-d-{N}` anchors.** Async task forward/back-links,
+   background-job links and hook parent links embed the *partner*
+   message's `message_index`, which is assigned per render tree — the
+   same message links to `#msg-d-253` in its session tree and
+   `#msg-d-893` in the combined tree. Guard: any fragment whose output
+   contains `msg-d-` is never stored (output scan — catches every
+   emitter, present and future; a false positive only declines caching).
+2. **Tree-derived TemplateMessage flags.** `display_model` (a Task spawn
+   card shows the sub-agent's model badge only in a tree that contains
+   the sub-agent's transcript), `agent_depth`, pair presence,
+   `spawns_collapsed_transcript`, `in_workflow_sidechannel`. Guard: a
+   signature of these fields is part of the store key, so each variant
+   occupies its own slot.
+3. **Content built from cross-message ctx lookups.** A tool result whose
+   paired `tool_use` lives in *another session* resolves its tool name in
+   the combined tree but not in the session tree, producing different
+   MessageContent for the same entry (observed: generic collapsible
+   rendering vs. specialized). Guard: `get()` verifies the stored content
+   object compares equal to the requesting tree's content (dataclass
+   equality; `message_index`/`fragment_key` are `compare=False`), else
+   it's a counted conflict served fresh.
+
+The uuid-collision instrumentation quoted in § 4.1 could not have found
+classes 1–3 (it compared within one project that happened not to exercise
+them). Assume any new per-tree state is a divergence source until proven
+otherwise, and verify with hash runs over `downloads/projects/` — the
+fixture project exercises none of these classes.
+
+### 4.9 Storing content refs retains memory
+
+The content-equality guard keeps a reference to one MessageContent per
+fragment, which retains object graphs beyond the fragment strings
+(measured on the 803MB archive: maxrss 1236MB → 1507MB store-on, of which
+186MB is fragment text). The phase-2 spill design must either drop the
+content refs (replace with a content hash) or spill them too.
 
 ---
 

@@ -263,6 +263,13 @@ Set `CLAUDE_CODE_LOG_RENDER_CACHE_MB=0` to disable memoization when
 bisecting a rendering difference; any other value sets the per-cache byte
 budget in MB (default 192).
 
+Above the leaf memo, a per-conversion fragment store
+(`claude_code_log/fragment_store.py`) reuses each message's complete
+formatted fragment between the combined-page and per-session passes.
+Set `CLAUDE_CODE_LOG_FRAGMENT_STORE=0` to disable it when bisecting;
+see [dev-docs/application_model.md § 2.9](dev-docs/application_model.md)
+for its correctness guards.
+
 A project's own pages and session files are additionally rendered in
 parallel worker processes, on by default at the CPU count. Set
 `CLAUDE_CODE_LOG_RENDER_JOBS=1` (or `off`) to disable it, or an integer to

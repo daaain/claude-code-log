@@ -224,6 +224,7 @@ from .utils import (
 
 if TYPE_CHECKING:
     from ..cache import CacheManager
+    from ..fragment_store import RenderFragmentStore
 
 
 def check_html_version(html_file_path: Path) -> Optional[str]:
@@ -359,6 +360,11 @@ class HtmlRenderer(Renderer):
         """
         super().__init__()
         self.image_export_mode = image_export_mode
+        # Per-conversion fragment store (step 3, work/render-format-once.md):
+        # set by the converter so the combined-page pass and the per-session
+        # pass share each message's formatted fragment instead of formatting
+        # it twice. None (the default) formats every message fresh.
+        self.fragment_store: "Optional[RenderFragmentStore]" = None
         self._output_dir: Path | None = None
         self._image_counter = 0
         # session_id -> {teammate_id -> color}, snapshotted from the
@@ -1535,12 +1541,72 @@ class HtmlRenderer(Renderer):
         for root in roots:
             index_tree(root)
 
+        # Fragment store (step 3, work/render-format-once.md): serve each
+        # entry-derived message's fragment from the store when a prior tree
+        # already formatted it. Referenced-image renders are excluded — they
+        # allocate images/image_NNNN.png names from a per-generate counter,
+        # so replaying a fragment would skip the file writes it implies.
+        fragment_store = (
+            self.fragment_store if self.image_export_mode != "referenced" else None
+        )
+
         def visit(msg: TemplateMessage) -> None:
-            # Update current message ID for timing tracking
-            set_timing_var("_current_msg_id", msg.message_id)
-            title = self.title_content(msg)
-            html = self.format_content(msg)
-            formatted_ts = format_timestamp(msg.meta.timestamp if msg.meta else None)
+            # Store key = source-entry identity + a signature of the
+            # tree-derived inputs the formatters read off the
+            # TemplateMessage. The same message can legitimately render
+            # differently in different trees — a Task spawn card shows the
+            # sub-agent's model badge only in a tree containing that
+            # sub-agent's transcript, a tool_use renders its pair duration
+            # only when its result is in the tree, etc. Folding those into
+            # the key gives each variant its own slot instead of letting
+            # one tree's render leak into another's output.
+            fragment_key = None
+            if fragment_store is not None and msg.content.fragment_key is not None:
+                fragment_key = (
+                    *msg.content.fragment_key,
+                    msg.pair_first is None,
+                    msg.pair_middle is None,
+                    msg.pair_last is None,
+                    msg.display_model,
+                    msg.agent_depth,
+                    msg.spawns_collapsed_transcript,
+                    msg.in_workflow_sidechannel,
+                )
+            cached = (
+                fragment_store.get(fragment_key, msg.content)
+                if fragment_store is not None and fragment_key is not None
+                else None
+            )
+            if cached is not None:
+                title, html, formatted_ts = cached
+            else:
+                # Update current message ID for timing tracking
+                set_timing_var("_current_msg_id", msg.message_id)
+                title = self.title_content(msg)
+                html = self.format_content(msg)
+                formatted_ts = format_timestamp(
+                    msg.meta.timestamp if msg.meta else None
+                )
+                if fragment_store is not None and fragment_key is not None:
+                    # A fragment embedding a ``#msg-d-{N}`` anchor is
+                    # tree-specific, not message-specific: the N is the
+                    # *partner* message's index in THIS tree's
+                    # RenderingContext (async task links, background-job
+                    # links, hook parent links…), and the same message gets
+                    # a different partner index in the combined-page tree
+                    # than in its session tree. Caching one would carry the
+                    # wrong anchor into the other, so such fragments are
+                    # formatted per tree. Testing the output catches every
+                    # emitter, present and future; a transcript whose text
+                    # merely mentions "msg-d-" just declines caching, which
+                    # is always safe. Found by hash-diffing a real project —
+                    # see work/render-format-once.md § 4.8.
+                    if "msg-d-" in html or "msg-d-" in title:
+                        fragment_store.skipped += 1
+                    else:
+                        fragment_store.put(
+                            fragment_key, msg.content, (title, html, formatted_ts)
+                        )
             msg.rendered_title = title
             msg.rendered_html = html
             msg.rendered_timestamp = formatted_ts
@@ -1580,12 +1646,13 @@ class HtmlRenderer(Renderer):
                     ("Pygments", pygments_timings),
                 ]
             )
-            report_cache_statistics(
-                [
-                    ("Markdown", markdown_cache.stats()),
-                    ("Pygments", pygments_cache.stats()),
-                ]
-            )
+            cache_stats = [
+                ("Markdown", markdown_cache.stats()),
+                ("Pygments", pygments_cache.stats()),
+            ]
+            if fragment_store is not None:
+                cache_stats.append(("Fragments", fragment_store.stats()))
+            report_cache_statistics(cache_stats)
 
         return roots
 

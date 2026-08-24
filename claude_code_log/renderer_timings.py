@@ -124,9 +124,15 @@ def report_cache_statistics(
         if not lookups:
             continue
         rate = 100.0 * stats["hits"] / lookups
+        extras = [
+            f"{stats[extra_key]} {extra_key}"
+            for extra_key in ("conflicts", "skipped")
+            if stats.get(extra_key)
+        ]
+        skipped_note = f", {', '.join(extras)}" if extras else ""
         print(
             f"[TIMING] {name} memo: {stats['hits']}/{lookups} hits ({rate:.0f}%), "
-            f"{stats['entries']} entries, {stats['bytes'] / 1e6:.1f}MB",
+            f"{stats['entries']} entries, {stats['bytes'] / 1e6:.1f}MB{skipped_note}",
             flush=True,
         )
 

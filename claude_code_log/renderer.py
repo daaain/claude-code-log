@@ -4792,6 +4792,14 @@ def _render_messages(
         # Handle system messages (already filtered in pass 1)
         if isinstance(message, SystemTranscriptEntry):
             system_content = create_system_message(message)
+            if system_content is not None:
+                # Fragment identity for the render fragment store (step 3,
+                # work/render-format-once.md): the entry's Python id is
+                # stable for the whole conversion because the master
+                # message list keeps it alive. Only real factory output is
+                # stamped — the fork placeholder below depends on ctx
+                # state, so it stays unstamped and renders fresh per tree.
+                system_content.fragment_key = (id(message), 0)
             # A content-less system entry (e.g. ``turn_duration``,
             # ``stop_hook_summary`` with no body) is normally dropped — but if
             # it is a *within-session fork point* (issue #233), dropping it
@@ -4817,6 +4825,7 @@ def _render_messages(
         if isinstance(message, AttachmentTranscriptEntry):
             attachment_content = create_attachment_message(message)
             if attachment_content:
+                attachment_content.fragment_key = (id(message), 0)
                 attachment_msg = TemplateMessage(attachment_content)
                 if effective_session:
                     attachment_msg.render_session_id = effective_session
@@ -4913,8 +4922,13 @@ def _render_messages(
         usage_used = False
 
         # Process each chunk - regular chunks (list) become text/image messages,
-        # special chunks (single item) become tool/thinking messages
-        for chunk in chunks:
+        # special chunks (single item) become tool/thinking messages.
+        # The enumerate ordinal doubles as the fragment-key part index:
+        # chunking is a pure function of the entry, so the same entry
+        # yields the same ordinals in every render pass, and keying by
+        # chunk position (rather than by surviving-content position) stays
+        # aligned even when an empty chunk is skipped.
+        for part_ordinal, chunk in enumerate(chunks):
             # Each chunk needs its own meta copy to preserve original values
             chunk_meta = replace(meta)
 
@@ -4967,6 +4981,7 @@ def _render_messages(
                 if not chunk or content_model is None:
                     continue
 
+                content_model.fragment_key = (id(message), part_ordinal)
                 chunk_msg = TemplateMessage(content_model)
                 if effective_session:
                     chunk_msg.render_session_id = effective_session
@@ -5017,6 +5032,7 @@ def _render_messages(
                 if tool_result.content is None:
                     continue
 
+                tool_result.content.fragment_key = (id(message), part_ordinal)
                 tool_msg = TemplateMessage(tool_result.content)
                 if effective_session:
                     tool_msg.render_session_id = effective_session

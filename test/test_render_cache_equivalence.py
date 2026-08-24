@@ -97,6 +97,45 @@ def test_memoized_render_is_byte_identical_to_unmemoized(tmp_path: Path):
     assert stats["hits"] > 0, "memo never hit — the comparison proved nothing"
 
 
+def test_fragment_store_render_is_byte_identical(tmp_path: Path, monkeypatch):
+    """The fragment store must be invisible in the output — only in the clock.
+
+    Both runs disable the leaf memo so the comparison isolates the store:
+    a fragment served from the store replaces a *complete* title/html/
+    timestamp computation, so any key too coarse for real data (uuid reuse
+    across forked sessions, part-ordinal drift between the combined and
+    per-session passes) shows up here as changed bytes.
+    """
+    from claude_code_log.fragment_store import RenderFragmentStore
+
+    monkeypatch.setenv("CLAUDE_CODE_LOG_FRAGMENT_STORE", "0")
+    with render_cache.disabled():
+        baseline = _convert_copy(tmp_path, "no-fragments")
+    monkeypatch.delenv("CLAUDE_CODE_LOG_FRAGMENT_STORE")
+
+    # Capture the store the conversion creates, to prove it engaged —
+    # otherwise a future refactor that silently stops attaching it would
+    # make this comparison vacuous.
+    stores: list[RenderFragmentStore] = []
+    original_make = converter._make_fragment_store
+
+    def capturing_make(format_: str):
+        store = original_make(format_)
+        if store is not None:
+            stores.append(store)
+        return store
+
+    monkeypatch.setattr(converter, "_make_fragment_store", capturing_make)
+
+    with render_cache.disabled():
+        fragmented = _convert_copy(tmp_path, "fragments")
+
+    _assert_same(baseline, fragmented, "the fragment store")
+    assert stores, "no fragment store was created"
+    hits = sum(store.stats()["hits"] for store in stores)
+    assert hits > 0, "fragment store never hit — the comparison proved nothing"
+
+
 def test_parallel_render_is_byte_identical_to_serial(tmp_path: Path, monkeypatch):
     """Fanning the render out over worker processes must not change output.
 

@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
 
     from .cache import CacheManager
+    from .fragment_store import RenderFragmentStore
     from .providers.base import ProviderTokenTotals
     from .render_pool import RenderPool
 
@@ -1708,12 +1709,16 @@ def _generate_paginated_html(
     no_recaps: bool = False,
     archive_search_link: Optional[str] = None,
     render_pool: "Optional[RenderPool]" = None,
+    fragment_store: "Optional[RenderFragmentStore]" = None,
 ) -> tuple[Path, bool]:
     """Generate paginated HTML files for combined transcript.
 
     Args:
         render_pool: Optional pool to fan the stale pages out over. None
             (the default) renders them inline, one at a time.
+        fragment_store: Optional per-conversion fragment store shared with
+            the per-session pass, so inline page renders reuse (and seed)
+            each message's formatted fragment.
         messages: All messages (deduplicated)
         output_dir: Directory to write HTML files
         title: Base title for the pages
@@ -1933,6 +1938,7 @@ def _generate_paginated_html(
         page_renderer.depth = depth
         page_renderer.compact = compact
         page_renderer.no_recaps = no_recaps
+        page_renderer.fragment_store = fragment_store
         html_content = page_renderer.generate(
             page_messages,
             unit.title,
@@ -2227,6 +2233,18 @@ def convert_jsonl_to(
         no_recaps=no_recaps,
     )
 
+    # One fragment store per conversion, shared by the combined pages and
+    # the per-session files, so each entry-derived message is formatted
+    # once rather than once per output file that contains it (step 3,
+    # work/render-format-once.md). Scoped to this call: it dies with the
+    # conversion, so nothing about it needs invalidating.
+    fragment_store = _make_fragment_store(format)
+    if fragment_store is not None:
+        from .html.renderer import HtmlRenderer as _HtmlRenderer
+
+        if isinstance(renderer, _HtmlRenderer):
+            renderer.fragment_store = fragment_store
+
     # Decide whether to use pagination (HTML only, directory mode, no date filter)
     use_pagination = False
     cached_data = cache_manager.get_cached_project_data() if cache_manager else None
@@ -2306,6 +2324,7 @@ def convert_jsonl_to(
                 no_recaps=no_recaps,
                 archive_search_link=archive_search_link,
                 render_pool=render_pool,
+                fragment_store=fragment_store,
             )
         else:
             # Use single-file generation for small projects or filtered views
@@ -2444,6 +2463,7 @@ def convert_jsonl_to(
                 no_timestamps=no_timestamps,
                 no_recaps=no_recaps,
                 render_pool=render_pool,
+                fragment_store=fragment_store,
             )
 
     finally:
@@ -2631,6 +2651,7 @@ def build_session_title(
 # finish inline before a pool has even started.
 _MIN_UNITS_FOR_RENDER_POOL = 8
 
+
 # ...and below this many messages the project's render work is too small
 # to repay what each worker costs before it renders anything: `spawn`,
 # package import, and a full reload of the transcript from cache (~1.7s at
@@ -2642,6 +2663,25 @@ _MIN_UNITS_FOR_RENDER_POOL = 8
 # so the crossover sits between the two. Set conservatively near the upper
 # measurement rather than the midpoint: below it the cost is a certain
 # regression, above it the win grows with project size and core count.
+def _make_fragment_store(format: str) -> "Optional[RenderFragmentStore]":
+    """Create the per-conversion fragment store, or None when it can't help.
+
+    HTML only — the fragment triple it caches is exactly what
+    ``HtmlRenderer._annotate_tree_for_render`` computes, and no other
+    renderer consults it. Referenced-image renders are excluded at the
+    consumer (the annotate walk), not here, because the effective image
+    mode lives on the renderer. ``CLAUDE_CODE_LOG_FRAGMENT_STORE=0``
+    disables it for bisecting rendering differences.
+    """
+    if format != "html":
+        return None
+    from .fragment_store import RenderFragmentStore, fragment_store_enabled
+
+    if not fragment_store_enabled():
+        return None
+    return RenderFragmentStore()
+
+
 _MIN_MESSAGES_FOR_RENDER_POOL = 25_000
 
 
@@ -2803,12 +2843,16 @@ def _generate_individual_session_files(
     no_timestamps: bool = False,
     no_recaps: bool = False,
     render_pool: "Optional[RenderPool]" = None,
+    fragment_store: "Optional[RenderFragmentStore]" = None,
 ) -> int:
     """Generate individual files for each session in the specified format.
 
     Args:
         render_pool: Optional pool to fan the stale sessions out over. None
             (the default) renders them inline, one at a time.
+        fragment_store: Optional per-conversion fragment store (HTML only)
+            shared with the combined-page pass, so inline session renders
+            reuse the fragments that pass already formatted.
 
     Returns:
         Number of sessions regenerated
@@ -2851,6 +2895,11 @@ def _generate_individual_session_files(
         no_timestamps=no_timestamps,
         no_recaps=no_recaps,
     )
+    if fragment_store is not None:
+        from .html.renderer import HtmlRenderer as _HtmlRenderer
+
+        if isinstance(renderer, _HtmlRenderer):
+            renderer.fragment_store = fragment_store
     regenerated_count = 0
     # Stale sessions, collected before any rendering starts so they can be
     # dispatched together (inline or over the render pool).
