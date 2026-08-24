@@ -83,8 +83,13 @@ foldyard.toml.
 [box]
 # Shared named volumes mounted into the box at a $HOME-relative path, so they survive box
 # recreation. Playwright's browser bundle is ~900 MB — without this, every fresh box
-# re-downloads it through the proxy.
-caches = [{ volume = "devbox_playwright", path = ".cache/ms-playwright" }]
+# re-downloads it through the proxy. The dnf volume pairs with the dnf-keepcache step
+# below: metadata and kept RPMs land in ~/.cache/dnf, so a rebuilt box installs its
+# tools from cache instead of re-downloading from the master mirror.
+caches = [
+  { volume = "devbox_playwright", path = ".cache/ms-playwright" },
+  { volume = "devbox_dnf", path = ".cache/dnf" },
+]
 
 # Consumer tools installed once per fresh box, as MONITORED steps (reported ✓/✗). They run
 # as root, in the checkout, before the deps warm-up.
@@ -100,6 +105,19 @@ caches = [{ volume = "devbox_playwright", path = ".cache/ms-playwright" }]
 name = "dnf-direct-mirror"
 check = "grep -q '^baseurl=https://dl.fedoraproject.org' /etc/yum.repos.d/fedora.repo"
 install = "sed -i -e 's|^metalink=|#metalink=|' -e 's|^#baseurl=http://download.example/pub/fedora/linux|baseurl=https://dl.fedoraproject.org/pub/fedora/linux|' /etc/yum.repos.d/fedora.repo /etc/yum.repos.d/fedora-updates.repo && sed -i '0,/^enabled=1/s//enabled=0/' /etc/yum.repos.d/fedora-cisco-openh264.repo"
+
+# Keep downloaded RPMs (dnf discards them after install by default) and move the whole
+# dnf cache — metadata + packages — under ~/.cache/dnf, where the devbox_dnf volume in
+# [box] caches above persists it across box recreations. A rebuilt box then installs its
+# tools from cache: zero mirror traffic when the metadata is still fresh, ~600 KB of
+# metadata revalidation from the (allowlisted) master mirror when it isn't. The lines are
+# appended to dnf.conf's [main] section, which the stock file ends in. Verified in-box:
+# with egress fully denied, `dnf install` of a cached package succeeds. Must also stay
+# ABOVE the dnf install steps below.
+[[box.tools]]
+name = "dnf-keepcache"
+check = "grep -q '^system_cachedir=/root/.cache/dnf' /etc/dnf/dnf.conf"
+install = "mkdir -p /root/.cache/dnf && printf '\\nkeepcache=True\\nsystem_cachedir=/root/.cache/dnf\\ncachedir=/root/.cache/dnf\\n' >> /etc/dnf/dnf.conf"
 
 # `just` is this project's documented entry point: CLAUDE.md and CONTRIBUTING.md route every
 # workflow through it (`just ci` before pushing, `just test`, `just docs-build`), so without
