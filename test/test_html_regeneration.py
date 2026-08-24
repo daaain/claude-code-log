@@ -71,12 +71,9 @@ class TestHtmlRegeneration:
         # Should regenerate without explicit print check since it should happen silently
         convert_jsonl_to_html(project_dir)
 
-        # Verify file was regenerated
-        # Rewritten, not necessarily *later*: this VM's filesystem clock has
-        # been observed going backwards by tens of ms, so a regenerated file can
-        # carry an earlier mtime. Inequality is the honest check for "it was
-        # rewritten" — an unchanged file keeps its mtime exactly.
-        assert output_file.stat().st_mtime != original_mtime
+        # The new content proves regeneration; an mtime comparison would
+        # only add flakiness (a rewrite can land within the filesystem's
+        # timestamp granularity and keep the mtime identical).
         new_content = output_file.read_text(encoding="utf-8")
         assert "This is a new message to test regeneration" in new_content
 
@@ -133,12 +130,9 @@ class TestHtmlRegeneration:
         # Should regenerate
         convert_jsonl_to_html(project_dir, generate_individual_sessions=True)
 
-        # Verify session file was regenerated
-        # Rewritten, not necessarily *later*: this VM's filesystem clock has
-        # been observed going backwards by tens of ms, so a regenerated file can
-        # carry an earlier mtime. Inequality is the honest check for "it was
-        # rewritten" — an unchanged file keeps its mtime exactly.
-        assert session_file.stat().st_mtime != original_mtime
+        # The new content proves regeneration; an mtime comparison would
+        # only add flakiness (a rewrite can land within the filesystem's
+        # timestamp granularity and keep the mtime identical).
         new_content = session_file.read_text(encoding="utf-8")
         assert "I can help you test session regeneration" in new_content
 
@@ -177,21 +171,26 @@ class TestHtmlRegeneration:
         index_file = process_projects_hierarchy(projects_dir)
         assert index_file.exists()
         original_content = index_file.read_text(encoding="utf-8")
-        original_mtime_ns = index_file.stat().st_mtime_ns
 
         # Verify index was generated with project data
         assert "project1" in original_content
         assert "project2" in original_content
 
-        # Wait to ensure different modification time
-        time.sleep(0.1)
-
         # Second run: No source changes — but per the always-regenerate
         # contract, the index file is rewritten anyway. The stale
         # "Index ... is current, skipping regeneration" log line is
         # gone; assert its absence so the contract can't silently
-        # regress.
-        with patch("builtins.print") as mock_print:
+        # regress. The rewrite itself is observed at the write call: a
+        # no-op run produces byte-identical content, and an mtime
+        # comparison can falsely fail (or pass) within the filesystem's
+        # timestamp granularity.
+        real_write_text = Path.write_text
+        with (
+            patch("builtins.print") as mock_print,
+            patch.object(
+                Path, "write_text", autospec=True, side_effect=real_write_text
+            ) as write_spy,
+        ):
             process_projects_hierarchy(projects_dir, silent=False)
         for call in mock_print.call_args_list:
             args = call.args
@@ -199,12 +198,14 @@ class TestHtmlRegeneration:
                 assert "skipping regeneration" not in args[0], (
                     "Index regeneration should no longer be skipped on no-op runs."
                 )
-        # File was rewritten (mtime advanced).
-        # Rewritten, not necessarily *later*: this VM's filesystem clock has
-        # been observed going backwards by tens of ms, so a regenerated file can
-        # carry an earlier mtime. Inequality is the honest check for "it was
-        # rewritten" — an unchanged file keeps its mtime exactly.
-        assert index_file.stat().st_mtime_ns != original_mtime_ns
+        index_writes = [
+            c
+            for c in write_spy.call_args_list
+            if c.args and str(c.args[0]).endswith("index.html")
+        ]
+        assert index_writes, (
+            "Always-regenerate contract: the index must be rewritten on a no-op run."
+        )
 
         # Third run: Modify JSONL file in project1; index picks up the
         # new content.
@@ -222,13 +223,7 @@ class TestHtmlRegeneration:
         # content comparison catches a "byte-equivalent rewrite" stale
         # bug that an mtime check alone would silently pass.
         pre_change_content = index_file.read_text(encoding="utf-8")
-        post_change_mtime_ns = index_file.stat().st_mtime_ns
         process_projects_hierarchy(projects_dir)
-        # Rewritten, not necessarily *later*: this VM's filesystem clock has
-        # been observed going backwards by tens of ms, so a regenerated file can
-        # carry an earlier mtime. Inequality is the honest check for "it was
-        # rewritten" — an unchanged file keeps its mtime exactly.
-        assert index_file.stat().st_mtime_ns != post_change_mtime_ns
         post_change_content = index_file.read_text(encoding="utf-8")
         assert post_change_content != pre_change_content, (
             "Regenerated index should reflect the appended JSONL entry "
@@ -300,7 +295,6 @@ class TestHtmlRegeneration:
 
         # First run: Generate HTML
         output_file = convert_jsonl_to_html(project_dir)
-        original_mtime = output_file.stat().st_mtime
 
         # Verify the HTML contains the version comment
         content = output_file.read_text(encoding="utf-8")
@@ -317,12 +311,9 @@ class TestHtmlRegeneration:
         # Should regenerate because cache was updated (not because of version change)
         convert_jsonl_to_html(project_dir)
 
-        # Verify file was regenerated
-        # Rewritten, not necessarily *later*: this VM's filesystem clock has
-        # been observed going backwards by tens of ms, so a regenerated file can
-        # carry an earlier mtime. Inequality is the honest check for "it was
-        # rewritten" — an unchanged file keeps its mtime exactly.
-        assert output_file.stat().st_mtime != original_mtime
+        # The new content proves regeneration; an mtime comparison would
+        # only add flakiness (a rewrite can land within the filesystem's
+        # timestamp granularity and keep the mtime identical).
         new_content = output_file.read_text(encoding="utf-8")
         assert "This should force regeneration despite same version" in new_content
 
@@ -377,12 +368,9 @@ class TestHtmlRegeneration:
             ]
             assert not skip_calls, f"unexpected skip after source grew: {skip_calls}"
 
-        # The output was rewritten (newer mtime) and now contains the new message.
-        # Rewritten, not necessarily *later*: this VM's filesystem clock has
-        # been observed going backwards by tens of ms, so a regenerated file can
-        # carry an earlier mtime. Inequality is the honest check for "it was
-        # rewritten" — an unchanged file keeps its mtime exactly.
-        assert output_file.stat().st_mtime != original_mtime
+        # The output now contains the new message — that proves the rewrite;
+        # an mtime comparison would only add flakiness (a rewrite can land
+        # within the filesystem's timestamp granularity).
         assert "Single file mode test." in output_file.read_text(encoding="utf-8")
 
 
@@ -459,7 +447,6 @@ class TestIncrementalHtmlCache:
         assert session1_html.exists()
         assert session2_html.exists()
 
-        session1_mtime = session1_html.stat().st_mtime
         session2_mtime = session2_html.stat().st_mtime
 
         # Wait and modify only session1
@@ -477,14 +464,13 @@ class TestIncrementalHtmlCache:
         # Second run: Should only regenerate session1
         convert_jsonl_to_html(project_dir, generate_individual_sessions=True)
 
-        # Session 1 should be regenerated (newer mtime)
-        # Rewritten, not necessarily *later*: this VM's filesystem clock has
-        # been observed going backwards by tens of ms, so a regenerated file can
-        # carry an earlier mtime. Inequality is the honest check for "it was
-        # rewritten" — an unchanged file keeps its mtime exactly.
-        assert session1_html.stat().st_mtime != session1_mtime
+        # Session 1 was regenerated: its page now carries the new message.
+        # (Content is the reliable signal; a rewrite can land within the
+        # filesystem's timestamp granularity and keep the mtime identical.)
+        assert "New message in session 1" in session1_html.read_text(encoding="utf-8")
 
-        # Session 2 should NOT be regenerated (same mtime)
+        # Session 2 should NOT be regenerated (same mtime — and an
+        # unchanged file keeps its mtime exactly, so equality is safe)
         assert session2_html.stat().st_mtime == session2_mtime
 
     def test_html_cache_detects_library_version_change(self, tmp_path):
