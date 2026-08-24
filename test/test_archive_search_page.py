@@ -325,6 +325,52 @@ class TestArchiveSearchBrowser:
             assert state["onScreen"], "deep-linked card was not scrolled into view"
             assert state["query"] == "Bash"
 
+    def test_deep_link_with_non_contiguous_terms_still_reveals(
+        self, page: Any, generated_archive: Path
+    ) -> None:
+        """FTS matches `hello decorators` as two AND-ed words sitting apart
+        in the message, and the deep link carries the query verbatim — so
+        the session page's search has to speak the same language. Treated
+        as one contiguous string it matches nothing, and search-as-filter
+        hides every message: the page arrives blank."""
+        _seed_index(generated_archive)
+        with self._serve(generated_archive) as server:
+            page.goto(f"{server.url}/search.html?q=hello+decorators")
+            page.wait_for_selector("#app:not([hidden])", timeout=10000)
+            page.wait_for_function(
+                "document.querySelectorAll('.search-result-item a').length > 0",
+                timeout=10000,
+            )
+            href = page.locator(".search-result-item a").first.get_attribute("href")
+            assert "uuid=" in href and "q=hello%20decorators" in href
+
+            page.goto(f"{server.url}/{href}")
+            page.wait_for_function(
+                "document.querySelectorAll('.search-highlight').length > 0",
+                timeout=10000,
+            )
+            state = page.evaluate(
+                """() => {
+                    const uuid = new URLSearchParams(location.search).get('uuid');
+                    const card = document.querySelector('[data-uuid="' + uuid + '"]');
+                    const words = new Set(
+                        [...document.querySelectorAll('.search-highlight')]
+                            .map(h => h.textContent.toLowerCase())
+                    );
+                    return {
+                        cardVisible: !!(card && card.offsetParent !== null
+                            && !card.classList.contains('search-hidden')),
+                        visibleMessages: [...document.querySelectorAll(
+                            '.message:not(.session-header)'
+                        )].filter(m => m.offsetParent !== null).length,
+                        words: [...words],
+                    };
+                }"""
+            )
+            assert state["cardVisible"], "matched card hidden by its own query"
+            assert state["visibleMessages"] > 0, "page filtered down to nothing"
+            assert "hello" in state["words"] and "decorators" in state["words"]
+
     def test_uuid_without_a_query_still_scrolls(
         self, page: Any, generated_archive: Path
     ) -> None:

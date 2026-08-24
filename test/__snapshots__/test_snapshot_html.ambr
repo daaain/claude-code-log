@@ -6113,6 +6113,14 @@
           openSearch({focus: false});
           performSearch(query);
   
+          // Failsafe: the FTS backend can match where this page's literal
+          // scan doesn't (diacritics folding, tokenizer quirks). A deep link
+          // that finds nothing locally must not leave search-as-filter hiding
+          // every message — drop the filter and fall back to the uuid scroll.
+          if (searchState.matches.length === 0) {
+              clearSearchFilterClasses();
+          }
+  
           // Re-run the uuid scroll *after* searching. performSearch hides
           // non-matching messages and unfolds ancestors, so any scroll done
           // before it lands somewhere else once the layout settles.
@@ -6220,15 +6228,47 @@
           return ancestors;
       }
   
+      // Split a literal query into terms the way the archive search's FTS
+      // backend does: whitespace separates independent AND-ed terms, a
+      // double-quoted run stays one literal phrase, and a trailing `*`
+      // (explicit prefix syntax) is dropped — substring matching already
+      // covers prefixes. Deep links from the archive search page arrive as
+      // `?q=<raw query>`, so matching here has to speak the same language:
+      // treating `foo bar` as one contiguous string would find nothing in a
+      // message that FTS matched on the two words apart, and search-as-filter
+      // would hide every message.
+      function parseQueryTerms(query) {
+          const terms = [];
+          for (let raw of (query.match(/"[^"]*"\*?|\S+/g) || [])) {
+              raw = raw.replace(/\*$/, '');
+              if (raw.startsWith('"') && raw.endsWith('"') && raw.length > 1) {
+                  raw = raw.slice(1, -1);
+              }
+              if (raw.trim()) terms.push(raw);
+          }
+          return terms;
+      }
+  
       // Build the case-insensitive global search pattern for `query`, honoring
-      // the regex/literal toggle (literal queries are escaped). Returns null
-      // when useRegex is on and the query is not yet a valid regex — each caller
-      // supplies its own fallback so invalid-regex handling stays per-caller.
+      // the regex/literal toggle. A literal query becomes an alternation of
+      // its escaped terms (longest first, so `foo foobar` highlights the whole
+      // of `foobar` rather than its `foo` prefix). Returns null when the query
+      // has no usable terms, or useRegex is on and the query is not yet a
+      // valid regex — each caller supplies its own fallback so invalid-regex
+      // handling stays per-caller.
       function buildSearchPattern(query) {
           try {
-              const source = searchState.useRegex
-                  ? query
-                  : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              let source;
+              if (searchState.useRegex) {
+                  source = query;
+              } else {
+                  const terms = parseQueryTerms(query);
+                  if (terms.length === 0) return null;
+                  source = terms
+                      .sort((a, b) => b.length - a.length)
+                      .map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+                      .join('|');
+              }
               return new RegExp(source, 'gi');
           } catch (e) {
               return null;
@@ -6426,6 +6466,13 @@
           searchState.matches = [];
           let totalMatchCount = 0;
   
+          // Literal matching is per-term with AND semantics — same as the FTS
+          // backend the deep links come from: every term must appear in the
+          // item, anywhere and in any order.
+          const queryTerms = searchState.useRegex
+              ? []
+              : parseQueryTerms(query).map(t => t.toLowerCase());
+  
           searchState.searchIndex.forEach(item => {
               // Check if element is visible (for transcript pages with filters)
               if (!searchState.isIndexPage && searchState.searchInFiltered) {
@@ -6436,7 +6483,6 @@
   
               // Always use case-insensitive search
               const searchText = item.searchText.toLowerCase();
-              const searchQuery = query.toLowerCase();
   
               // Check if item matches the search
               let matchesItem = false;
@@ -6444,7 +6490,7 @@
                   searchPattern.lastIndex = 0;  // Reset lastIndex before each test to avoid skipping matches
                   matchesItem = searchPattern.test(searchText);
               } else {
-                  matchesItem = searchText.includes(searchQuery);
+                  matchesItem = queryTerms.every(term => searchText.includes(term));
               }
   
               if (matchesItem) {
@@ -13012,6 +13058,14 @@
           openSearch({focus: false});
           performSearch(query);
   
+          // Failsafe: the FTS backend can match where this page's literal
+          // scan doesn't (diacritics folding, tokenizer quirks). A deep link
+          // that finds nothing locally must not leave search-as-filter hiding
+          // every message — drop the filter and fall back to the uuid scroll.
+          if (searchState.matches.length === 0) {
+              clearSearchFilterClasses();
+          }
+  
           // Re-run the uuid scroll *after* searching. performSearch hides
           // non-matching messages and unfolds ancestors, so any scroll done
           // before it lands somewhere else once the layout settles.
@@ -13119,15 +13173,47 @@
           return ancestors;
       }
   
+      // Split a literal query into terms the way the archive search's FTS
+      // backend does: whitespace separates independent AND-ed terms, a
+      // double-quoted run stays one literal phrase, and a trailing `*`
+      // (explicit prefix syntax) is dropped — substring matching already
+      // covers prefixes. Deep links from the archive search page arrive as
+      // `?q=<raw query>`, so matching here has to speak the same language:
+      // treating `foo bar` as one contiguous string would find nothing in a
+      // message that FTS matched on the two words apart, and search-as-filter
+      // would hide every message.
+      function parseQueryTerms(query) {
+          const terms = [];
+          for (let raw of (query.match(/"[^"]*"\*?|\S+/g) || [])) {
+              raw = raw.replace(/\*$/, '');
+              if (raw.startsWith('"') && raw.endsWith('"') && raw.length > 1) {
+                  raw = raw.slice(1, -1);
+              }
+              if (raw.trim()) terms.push(raw);
+          }
+          return terms;
+      }
+  
       // Build the case-insensitive global search pattern for `query`, honoring
-      // the regex/literal toggle (literal queries are escaped). Returns null
-      // when useRegex is on and the query is not yet a valid regex — each caller
-      // supplies its own fallback so invalid-regex handling stays per-caller.
+      // the regex/literal toggle. A literal query becomes an alternation of
+      // its escaped terms (longest first, so `foo foobar` highlights the whole
+      // of `foobar` rather than its `foo` prefix). Returns null when the query
+      // has no usable terms, or useRegex is on and the query is not yet a
+      // valid regex — each caller supplies its own fallback so invalid-regex
+      // handling stays per-caller.
       function buildSearchPattern(query) {
           try {
-              const source = searchState.useRegex
-                  ? query
-                  : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              let source;
+              if (searchState.useRegex) {
+                  source = query;
+              } else {
+                  const terms = parseQueryTerms(query);
+                  if (terms.length === 0) return null;
+                  source = terms
+                      .sort((a, b) => b.length - a.length)
+                      .map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+                      .join('|');
+              }
               return new RegExp(source, 'gi');
           } catch (e) {
               return null;
@@ -13325,6 +13411,13 @@
           searchState.matches = [];
           let totalMatchCount = 0;
   
+          // Literal matching is per-term with AND semantics — same as the FTS
+          // backend the deep links come from: every term must appear in the
+          // item, anywhere and in any order.
+          const queryTerms = searchState.useRegex
+              ? []
+              : parseQueryTerms(query).map(t => t.toLowerCase());
+  
           searchState.searchIndex.forEach(item => {
               // Check if element is visible (for transcript pages with filters)
               if (!searchState.isIndexPage && searchState.searchInFiltered) {
@@ -13335,7 +13428,6 @@
   
               // Always use case-insensitive search
               const searchText = item.searchText.toLowerCase();
-              const searchQuery = query.toLowerCase();
   
               // Check if item matches the search
               let matchesItem = false;
@@ -13343,7 +13435,7 @@
                   searchPattern.lastIndex = 0;  // Reset lastIndex before each test to avoid skipping matches
                   matchesItem = searchPattern.test(searchText);
               } else {
-                  matchesItem = searchText.includes(searchQuery);
+                  matchesItem = queryTerms.every(term => searchText.includes(term));
               }
   
               if (matchesItem) {
@@ -15282,6 +15374,14 @@
           openSearch({focus: false});
           performSearch(query);
   
+          // Failsafe: the FTS backend can match where this page's literal
+          // scan doesn't (diacritics folding, tokenizer quirks). A deep link
+          // that finds nothing locally must not leave search-as-filter hiding
+          // every message — drop the filter and fall back to the uuid scroll.
+          if (searchState.matches.length === 0) {
+              clearSearchFilterClasses();
+          }
+  
           // Re-run the uuid scroll *after* searching. performSearch hides
           // non-matching messages and unfolds ancestors, so any scroll done
           // before it lands somewhere else once the layout settles.
@@ -15389,15 +15489,47 @@
           return ancestors;
       }
   
+      // Split a literal query into terms the way the archive search's FTS
+      // backend does: whitespace separates independent AND-ed terms, a
+      // double-quoted run stays one literal phrase, and a trailing `*`
+      // (explicit prefix syntax) is dropped — substring matching already
+      // covers prefixes. Deep links from the archive search page arrive as
+      // `?q=<raw query>`, so matching here has to speak the same language:
+      // treating `foo bar` as one contiguous string would find nothing in a
+      // message that FTS matched on the two words apart, and search-as-filter
+      // would hide every message.
+      function parseQueryTerms(query) {
+          const terms = [];
+          for (let raw of (query.match(/"[^"]*"\*?|\S+/g) || [])) {
+              raw = raw.replace(/\*$/, '');
+              if (raw.startsWith('"') && raw.endsWith('"') && raw.length > 1) {
+                  raw = raw.slice(1, -1);
+              }
+              if (raw.trim()) terms.push(raw);
+          }
+          return terms;
+      }
+  
       // Build the case-insensitive global search pattern for `query`, honoring
-      // the regex/literal toggle (literal queries are escaped). Returns null
-      // when useRegex is on and the query is not yet a valid regex — each caller
-      // supplies its own fallback so invalid-regex handling stays per-caller.
+      // the regex/literal toggle. A literal query becomes an alternation of
+      // its escaped terms (longest first, so `foo foobar` highlights the whole
+      // of `foobar` rather than its `foo` prefix). Returns null when the query
+      // has no usable terms, or useRegex is on and the query is not yet a
+      // valid regex — each caller supplies its own fallback so invalid-regex
+      // handling stays per-caller.
       function buildSearchPattern(query) {
           try {
-              const source = searchState.useRegex
-                  ? query
-                  : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              let source;
+              if (searchState.useRegex) {
+                  source = query;
+              } else {
+                  const terms = parseQueryTerms(query);
+                  if (terms.length === 0) return null;
+                  source = terms
+                      .sort((a, b) => b.length - a.length)
+                      .map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+                      .join('|');
+              }
               return new RegExp(source, 'gi');
           } catch (e) {
               return null;
@@ -15595,6 +15727,13 @@
           searchState.matches = [];
           let totalMatchCount = 0;
   
+          // Literal matching is per-term with AND semantics — same as the FTS
+          // backend the deep links come from: every term must appear in the
+          // item, anywhere and in any order.
+          const queryTerms = searchState.useRegex
+              ? []
+              : parseQueryTerms(query).map(t => t.toLowerCase());
+  
           searchState.searchIndex.forEach(item => {
               // Check if element is visible (for transcript pages with filters)
               if (!searchState.isIndexPage && searchState.searchInFiltered) {
@@ -15605,7 +15744,6 @@
   
               // Always use case-insensitive search
               const searchText = item.searchText.toLowerCase();
-              const searchQuery = query.toLowerCase();
   
               // Check if item matches the search
               let matchesItem = false;
@@ -15613,7 +15751,7 @@
                   searchPattern.lastIndex = 0;  // Reset lastIndex before each test to avoid skipping matches
                   matchesItem = searchPattern.test(searchText);
               } else {
-                  matchesItem = searchText.includes(searchQuery);
+                  matchesItem = queryTerms.every(term => searchText.includes(term));
               }
   
               if (matchesItem) {
@@ -22669,6 +22807,14 @@
           openSearch({focus: false});
           performSearch(query);
   
+          // Failsafe: the FTS backend can match where this page's literal
+          // scan doesn't (diacritics folding, tokenizer quirks). A deep link
+          // that finds nothing locally must not leave search-as-filter hiding
+          // every message — drop the filter and fall back to the uuid scroll.
+          if (searchState.matches.length === 0) {
+              clearSearchFilterClasses();
+          }
+  
           // Re-run the uuid scroll *after* searching. performSearch hides
           // non-matching messages and unfolds ancestors, so any scroll done
           // before it lands somewhere else once the layout settles.
@@ -22776,15 +22922,47 @@
           return ancestors;
       }
   
+      // Split a literal query into terms the way the archive search's FTS
+      // backend does: whitespace separates independent AND-ed terms, a
+      // double-quoted run stays one literal phrase, and a trailing `*`
+      // (explicit prefix syntax) is dropped — substring matching already
+      // covers prefixes. Deep links from the archive search page arrive as
+      // `?q=<raw query>`, so matching here has to speak the same language:
+      // treating `foo bar` as one contiguous string would find nothing in a
+      // message that FTS matched on the two words apart, and search-as-filter
+      // would hide every message.
+      function parseQueryTerms(query) {
+          const terms = [];
+          for (let raw of (query.match(/"[^"]*"\*?|\S+/g) || [])) {
+              raw = raw.replace(/\*$/, '');
+              if (raw.startsWith('"') && raw.endsWith('"') && raw.length > 1) {
+                  raw = raw.slice(1, -1);
+              }
+              if (raw.trim()) terms.push(raw);
+          }
+          return terms;
+      }
+  
       // Build the case-insensitive global search pattern for `query`, honoring
-      // the regex/literal toggle (literal queries are escaped). Returns null
-      // when useRegex is on and the query is not yet a valid regex — each caller
-      // supplies its own fallback so invalid-regex handling stays per-caller.
+      // the regex/literal toggle. A literal query becomes an alternation of
+      // its escaped terms (longest first, so `foo foobar` highlights the whole
+      // of `foobar` rather than its `foo` prefix). Returns null when the query
+      // has no usable terms, or useRegex is on and the query is not yet a
+      // valid regex — each caller supplies its own fallback so invalid-regex
+      // handling stays per-caller.
       function buildSearchPattern(query) {
           try {
-              const source = searchState.useRegex
-                  ? query
-                  : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              let source;
+              if (searchState.useRegex) {
+                  source = query;
+              } else {
+                  const terms = parseQueryTerms(query);
+                  if (terms.length === 0) return null;
+                  source = terms
+                      .sort((a, b) => b.length - a.length)
+                      .map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+                      .join('|');
+              }
               return new RegExp(source, 'gi');
           } catch (e) {
               return null;
@@ -22982,6 +23160,13 @@
           searchState.matches = [];
           let totalMatchCount = 0;
   
+          // Literal matching is per-term with AND semantics — same as the FTS
+          // backend the deep links come from: every term must appear in the
+          // item, anywhere and in any order.
+          const queryTerms = searchState.useRegex
+              ? []
+              : parseQueryTerms(query).map(t => t.toLowerCase());
+  
           searchState.searchIndex.forEach(item => {
               // Check if element is visible (for transcript pages with filters)
               if (!searchState.isIndexPage && searchState.searchInFiltered) {
@@ -22992,7 +23177,6 @@
   
               // Always use case-insensitive search
               const searchText = item.searchText.toLowerCase();
-              const searchQuery = query.toLowerCase();
   
               // Check if item matches the search
               let matchesItem = false;
@@ -23000,7 +23184,7 @@
                   searchPattern.lastIndex = 0;  // Reset lastIndex before each test to avoid skipping matches
                   matchesItem = searchPattern.test(searchText);
               } else {
-                  matchesItem = searchText.includes(searchQuery);
+                  matchesItem = queryTerms.every(term => searchText.includes(term));
               }
   
               if (matchesItem) {
@@ -30071,6 +30255,14 @@
           openSearch({focus: false});
           performSearch(query);
   
+          // Failsafe: the FTS backend can match where this page's literal
+          // scan doesn't (diacritics folding, tokenizer quirks). A deep link
+          // that finds nothing locally must not leave search-as-filter hiding
+          // every message — drop the filter and fall back to the uuid scroll.
+          if (searchState.matches.length === 0) {
+              clearSearchFilterClasses();
+          }
+  
           // Re-run the uuid scroll *after* searching. performSearch hides
           // non-matching messages and unfolds ancestors, so any scroll done
           // before it lands somewhere else once the layout settles.
@@ -30178,15 +30370,47 @@
           return ancestors;
       }
   
+      // Split a literal query into terms the way the archive search's FTS
+      // backend does: whitespace separates independent AND-ed terms, a
+      // double-quoted run stays one literal phrase, and a trailing `*`
+      // (explicit prefix syntax) is dropped — substring matching already
+      // covers prefixes. Deep links from the archive search page arrive as
+      // `?q=<raw query>`, so matching here has to speak the same language:
+      // treating `foo bar` as one contiguous string would find nothing in a
+      // message that FTS matched on the two words apart, and search-as-filter
+      // would hide every message.
+      function parseQueryTerms(query) {
+          const terms = [];
+          for (let raw of (query.match(/"[^"]*"\*?|\S+/g) || [])) {
+              raw = raw.replace(/\*$/, '');
+              if (raw.startsWith('"') && raw.endsWith('"') && raw.length > 1) {
+                  raw = raw.slice(1, -1);
+              }
+              if (raw.trim()) terms.push(raw);
+          }
+          return terms;
+      }
+  
       // Build the case-insensitive global search pattern for `query`, honoring
-      // the regex/literal toggle (literal queries are escaped). Returns null
-      // when useRegex is on and the query is not yet a valid regex — each caller
-      // supplies its own fallback so invalid-regex handling stays per-caller.
+      // the regex/literal toggle. A literal query becomes an alternation of
+      // its escaped terms (longest first, so `foo foobar` highlights the whole
+      // of `foobar` rather than its `foo` prefix). Returns null when the query
+      // has no usable terms, or useRegex is on and the query is not yet a
+      // valid regex — each caller supplies its own fallback so invalid-regex
+      // handling stays per-caller.
       function buildSearchPattern(query) {
           try {
-              const source = searchState.useRegex
-                  ? query
-                  : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              let source;
+              if (searchState.useRegex) {
+                  source = query;
+              } else {
+                  const terms = parseQueryTerms(query);
+                  if (terms.length === 0) return null;
+                  source = terms
+                      .sort((a, b) => b.length - a.length)
+                      .map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+                      .join('|');
+              }
               return new RegExp(source, 'gi');
           } catch (e) {
               return null;
@@ -30384,6 +30608,13 @@
           searchState.matches = [];
           let totalMatchCount = 0;
   
+          // Literal matching is per-term with AND semantics — same as the FTS
+          // backend the deep links come from: every term must appear in the
+          // item, anywhere and in any order.
+          const queryTerms = searchState.useRegex
+              ? []
+              : parseQueryTerms(query).map(t => t.toLowerCase());
+  
           searchState.searchIndex.forEach(item => {
               // Check if element is visible (for transcript pages with filters)
               if (!searchState.isIndexPage && searchState.searchInFiltered) {
@@ -30394,7 +30625,6 @@
   
               // Always use case-insensitive search
               const searchText = item.searchText.toLowerCase();
-              const searchQuery = query.toLowerCase();
   
               // Check if item matches the search
               let matchesItem = false;
@@ -30402,7 +30632,7 @@
                   searchPattern.lastIndex = 0;  // Reset lastIndex before each test to avoid skipping matches
                   matchesItem = searchPattern.test(searchText);
               } else {
-                  matchesItem = searchText.includes(searchQuery);
+                  matchesItem = queryTerms.every(term => searchText.includes(term));
               }
   
               if (matchesItem) {
@@ -37420,6 +37650,14 @@
           openSearch({focus: false});
           performSearch(query);
   
+          // Failsafe: the FTS backend can match where this page's literal
+          // scan doesn't (diacritics folding, tokenizer quirks). A deep link
+          // that finds nothing locally must not leave search-as-filter hiding
+          // every message — drop the filter and fall back to the uuid scroll.
+          if (searchState.matches.length === 0) {
+              clearSearchFilterClasses();
+          }
+  
           // Re-run the uuid scroll *after* searching. performSearch hides
           // non-matching messages and unfolds ancestors, so any scroll done
           // before it lands somewhere else once the layout settles.
@@ -37527,15 +37765,47 @@
           return ancestors;
       }
   
+      // Split a literal query into terms the way the archive search's FTS
+      // backend does: whitespace separates independent AND-ed terms, a
+      // double-quoted run stays one literal phrase, and a trailing `*`
+      // (explicit prefix syntax) is dropped — substring matching already
+      // covers prefixes. Deep links from the archive search page arrive as
+      // `?q=<raw query>`, so matching here has to speak the same language:
+      // treating `foo bar` as one contiguous string would find nothing in a
+      // message that FTS matched on the two words apart, and search-as-filter
+      // would hide every message.
+      function parseQueryTerms(query) {
+          const terms = [];
+          for (let raw of (query.match(/"[^"]*"\*?|\S+/g) || [])) {
+              raw = raw.replace(/\*$/, '');
+              if (raw.startsWith('"') && raw.endsWith('"') && raw.length > 1) {
+                  raw = raw.slice(1, -1);
+              }
+              if (raw.trim()) terms.push(raw);
+          }
+          return terms;
+      }
+  
       // Build the case-insensitive global search pattern for `query`, honoring
-      // the regex/literal toggle (literal queries are escaped). Returns null
-      // when useRegex is on and the query is not yet a valid regex — each caller
-      // supplies its own fallback so invalid-regex handling stays per-caller.
+      // the regex/literal toggle. A literal query becomes an alternation of
+      // its escaped terms (longest first, so `foo foobar` highlights the whole
+      // of `foobar` rather than its `foo` prefix). Returns null when the query
+      // has no usable terms, or useRegex is on and the query is not yet a
+      // valid regex — each caller supplies its own fallback so invalid-regex
+      // handling stays per-caller.
       function buildSearchPattern(query) {
           try {
-              const source = searchState.useRegex
-                  ? query
-                  : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              let source;
+              if (searchState.useRegex) {
+                  source = query;
+              } else {
+                  const terms = parseQueryTerms(query);
+                  if (terms.length === 0) return null;
+                  source = terms
+                      .sort((a, b) => b.length - a.length)
+                      .map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+                      .join('|');
+              }
               return new RegExp(source, 'gi');
           } catch (e) {
               return null;
@@ -37733,6 +38003,13 @@
           searchState.matches = [];
           let totalMatchCount = 0;
   
+          // Literal matching is per-term with AND semantics — same as the FTS
+          // backend the deep links come from: every term must appear in the
+          // item, anywhere and in any order.
+          const queryTerms = searchState.useRegex
+              ? []
+              : parseQueryTerms(query).map(t => t.toLowerCase());
+  
           searchState.searchIndex.forEach(item => {
               // Check if element is visible (for transcript pages with filters)
               if (!searchState.isIndexPage && searchState.searchInFiltered) {
@@ -37743,7 +38020,6 @@
   
               // Always use case-insensitive search
               const searchText = item.searchText.toLowerCase();
-              const searchQuery = query.toLowerCase();
   
               // Check if item matches the search
               let matchesItem = false;
@@ -37751,7 +38027,7 @@
                   searchPattern.lastIndex = 0;  // Reset lastIndex before each test to avoid skipping matches
                   matchesItem = searchPattern.test(searchText);
               } else {
-                  matchesItem = searchText.includes(searchQuery);
+                  matchesItem = queryTerms.every(term => searchText.includes(term));
               }
   
               if (matchesItem) {
@@ -44714,6 +44990,14 @@
           openSearch({focus: false});
           performSearch(query);
   
+          // Failsafe: the FTS backend can match where this page's literal
+          // scan doesn't (diacritics folding, tokenizer quirks). A deep link
+          // that finds nothing locally must not leave search-as-filter hiding
+          // every message — drop the filter and fall back to the uuid scroll.
+          if (searchState.matches.length === 0) {
+              clearSearchFilterClasses();
+          }
+  
           // Re-run the uuid scroll *after* searching. performSearch hides
           // non-matching messages and unfolds ancestors, so any scroll done
           // before it lands somewhere else once the layout settles.
@@ -44821,15 +45105,47 @@
           return ancestors;
       }
   
+      // Split a literal query into terms the way the archive search's FTS
+      // backend does: whitespace separates independent AND-ed terms, a
+      // double-quoted run stays one literal phrase, and a trailing `*`
+      // (explicit prefix syntax) is dropped — substring matching already
+      // covers prefixes. Deep links from the archive search page arrive as
+      // `?q=<raw query>`, so matching here has to speak the same language:
+      // treating `foo bar` as one contiguous string would find nothing in a
+      // message that FTS matched on the two words apart, and search-as-filter
+      // would hide every message.
+      function parseQueryTerms(query) {
+          const terms = [];
+          for (let raw of (query.match(/"[^"]*"\*?|\S+/g) || [])) {
+              raw = raw.replace(/\*$/, '');
+              if (raw.startsWith('"') && raw.endsWith('"') && raw.length > 1) {
+                  raw = raw.slice(1, -1);
+              }
+              if (raw.trim()) terms.push(raw);
+          }
+          return terms;
+      }
+  
       // Build the case-insensitive global search pattern for `query`, honoring
-      // the regex/literal toggle (literal queries are escaped). Returns null
-      // when useRegex is on and the query is not yet a valid regex — each caller
-      // supplies its own fallback so invalid-regex handling stays per-caller.
+      // the regex/literal toggle. A literal query becomes an alternation of
+      // its escaped terms (longest first, so `foo foobar` highlights the whole
+      // of `foobar` rather than its `foo` prefix). Returns null when the query
+      // has no usable terms, or useRegex is on and the query is not yet a
+      // valid regex — each caller supplies its own fallback so invalid-regex
+      // handling stays per-caller.
       function buildSearchPattern(query) {
           try {
-              const source = searchState.useRegex
-                  ? query
-                  : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              let source;
+              if (searchState.useRegex) {
+                  source = query;
+              } else {
+                  const terms = parseQueryTerms(query);
+                  if (terms.length === 0) return null;
+                  source = terms
+                      .sort((a, b) => b.length - a.length)
+                      .map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+                      .join('|');
+              }
               return new RegExp(source, 'gi');
           } catch (e) {
               return null;
@@ -45027,6 +45343,13 @@
           searchState.matches = [];
           let totalMatchCount = 0;
   
+          // Literal matching is per-term with AND semantics — same as the FTS
+          // backend the deep links come from: every term must appear in the
+          // item, anywhere and in any order.
+          const queryTerms = searchState.useRegex
+              ? []
+              : parseQueryTerms(query).map(t => t.toLowerCase());
+  
           searchState.searchIndex.forEach(item => {
               // Check if element is visible (for transcript pages with filters)
               if (!searchState.isIndexPage && searchState.searchInFiltered) {
@@ -45037,7 +45360,6 @@
   
               // Always use case-insensitive search
               const searchText = item.searchText.toLowerCase();
-              const searchQuery = query.toLowerCase();
   
               // Check if item matches the search
               let matchesItem = false;
@@ -45045,7 +45367,7 @@
                   searchPattern.lastIndex = 0;  // Reset lastIndex before each test to avoid skipping matches
                   matchesItem = searchPattern.test(searchText);
               } else {
-                  matchesItem = searchText.includes(searchQuery);
+                  matchesItem = queryTerms.every(term => searchText.includes(term));
               }
   
               if (matchesItem) {
@@ -51836,6 +52158,14 @@
           openSearch({focus: false});
           performSearch(query);
   
+          // Failsafe: the FTS backend can match where this page's literal
+          // scan doesn't (diacritics folding, tokenizer quirks). A deep link
+          // that finds nothing locally must not leave search-as-filter hiding
+          // every message — drop the filter and fall back to the uuid scroll.
+          if (searchState.matches.length === 0) {
+              clearSearchFilterClasses();
+          }
+  
           // Re-run the uuid scroll *after* searching. performSearch hides
           // non-matching messages and unfolds ancestors, so any scroll done
           // before it lands somewhere else once the layout settles.
@@ -51943,15 +52273,47 @@
           return ancestors;
       }
   
+      // Split a literal query into terms the way the archive search's FTS
+      // backend does: whitespace separates independent AND-ed terms, a
+      // double-quoted run stays one literal phrase, and a trailing `*`
+      // (explicit prefix syntax) is dropped — substring matching already
+      // covers prefixes. Deep links from the archive search page arrive as
+      // `?q=<raw query>`, so matching here has to speak the same language:
+      // treating `foo bar` as one contiguous string would find nothing in a
+      // message that FTS matched on the two words apart, and search-as-filter
+      // would hide every message.
+      function parseQueryTerms(query) {
+          const terms = [];
+          for (let raw of (query.match(/"[^"]*"\*?|\S+/g) || [])) {
+              raw = raw.replace(/\*$/, '');
+              if (raw.startsWith('"') && raw.endsWith('"') && raw.length > 1) {
+                  raw = raw.slice(1, -1);
+              }
+              if (raw.trim()) terms.push(raw);
+          }
+          return terms;
+      }
+  
       // Build the case-insensitive global search pattern for `query`, honoring
-      // the regex/literal toggle (literal queries are escaped). Returns null
-      // when useRegex is on and the query is not yet a valid regex — each caller
-      // supplies its own fallback so invalid-regex handling stays per-caller.
+      // the regex/literal toggle. A literal query becomes an alternation of
+      // its escaped terms (longest first, so `foo foobar` highlights the whole
+      // of `foobar` rather than its `foo` prefix). Returns null when the query
+      // has no usable terms, or useRegex is on and the query is not yet a
+      // valid regex — each caller supplies its own fallback so invalid-regex
+      // handling stays per-caller.
       function buildSearchPattern(query) {
           try {
-              const source = searchState.useRegex
-                  ? query
-                  : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              let source;
+              if (searchState.useRegex) {
+                  source = query;
+              } else {
+                  const terms = parseQueryTerms(query);
+                  if (terms.length === 0) return null;
+                  source = terms
+                      .sort((a, b) => b.length - a.length)
+                      .map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+                      .join('|');
+              }
               return new RegExp(source, 'gi');
           } catch (e) {
               return null;
@@ -52149,6 +52511,13 @@
           searchState.matches = [];
           let totalMatchCount = 0;
   
+          // Literal matching is per-term with AND semantics — same as the FTS
+          // backend the deep links come from: every term must appear in the
+          // item, anywhere and in any order.
+          const queryTerms = searchState.useRegex
+              ? []
+              : parseQueryTerms(query).map(t => t.toLowerCase());
+  
           searchState.searchIndex.forEach(item => {
               // Check if element is visible (for transcript pages with filters)
               if (!searchState.isIndexPage && searchState.searchInFiltered) {
@@ -52159,7 +52528,6 @@
   
               // Always use case-insensitive search
               const searchText = item.searchText.toLowerCase();
-              const searchQuery = query.toLowerCase();
   
               // Check if item matches the search
               let matchesItem = false;
@@ -52167,7 +52535,7 @@
                   searchPattern.lastIndex = 0;  // Reset lastIndex before each test to avoid skipping matches
                   matchesItem = searchPattern.test(searchText);
               } else {
-                  matchesItem = searchText.includes(searchQuery);
+                  matchesItem = queryTerms.every(term => searchText.includes(term));
               }
   
               if (matchesItem) {
@@ -58763,6 +59131,14 @@
           openSearch({focus: false});
           performSearch(query);
   
+          // Failsafe: the FTS backend can match where this page's literal
+          // scan doesn't (diacritics folding, tokenizer quirks). A deep link
+          // that finds nothing locally must not leave search-as-filter hiding
+          // every message — drop the filter and fall back to the uuid scroll.
+          if (searchState.matches.length === 0) {
+              clearSearchFilterClasses();
+          }
+  
           // Re-run the uuid scroll *after* searching. performSearch hides
           // non-matching messages and unfolds ancestors, so any scroll done
           // before it lands somewhere else once the layout settles.
@@ -58870,15 +59246,47 @@
           return ancestors;
       }
   
+      // Split a literal query into terms the way the archive search's FTS
+      // backend does: whitespace separates independent AND-ed terms, a
+      // double-quoted run stays one literal phrase, and a trailing `*`
+      // (explicit prefix syntax) is dropped — substring matching already
+      // covers prefixes. Deep links from the archive search page arrive as
+      // `?q=<raw query>`, so matching here has to speak the same language:
+      // treating `foo bar` as one contiguous string would find nothing in a
+      // message that FTS matched on the two words apart, and search-as-filter
+      // would hide every message.
+      function parseQueryTerms(query) {
+          const terms = [];
+          for (let raw of (query.match(/"[^"]*"\*?|\S+/g) || [])) {
+              raw = raw.replace(/\*$/, '');
+              if (raw.startsWith('"') && raw.endsWith('"') && raw.length > 1) {
+                  raw = raw.slice(1, -1);
+              }
+              if (raw.trim()) terms.push(raw);
+          }
+          return terms;
+      }
+  
       // Build the case-insensitive global search pattern for `query`, honoring
-      // the regex/literal toggle (literal queries are escaped). Returns null
-      // when useRegex is on and the query is not yet a valid regex — each caller
-      // supplies its own fallback so invalid-regex handling stays per-caller.
+      // the regex/literal toggle. A literal query becomes an alternation of
+      // its escaped terms (longest first, so `foo foobar` highlights the whole
+      // of `foobar` rather than its `foo` prefix). Returns null when the query
+      // has no usable terms, or useRegex is on and the query is not yet a
+      // valid regex — each caller supplies its own fallback so invalid-regex
+      // handling stays per-caller.
       function buildSearchPattern(query) {
           try {
-              const source = searchState.useRegex
-                  ? query
-                  : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              let source;
+              if (searchState.useRegex) {
+                  source = query;
+              } else {
+                  const terms = parseQueryTerms(query);
+                  if (terms.length === 0) return null;
+                  source = terms
+                      .sort((a, b) => b.length - a.length)
+                      .map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+                      .join('|');
+              }
               return new RegExp(source, 'gi');
           } catch (e) {
               return null;
@@ -59076,6 +59484,13 @@
           searchState.matches = [];
           let totalMatchCount = 0;
   
+          // Literal matching is per-term with AND semantics — same as the FTS
+          // backend the deep links come from: every term must appear in the
+          // item, anywhere and in any order.
+          const queryTerms = searchState.useRegex
+              ? []
+              : parseQueryTerms(query).map(t => t.toLowerCase());
+  
           searchState.searchIndex.forEach(item => {
               // Check if element is visible (for transcript pages with filters)
               if (!searchState.isIndexPage && searchState.searchInFiltered) {
@@ -59086,7 +59501,6 @@
   
               // Always use case-insensitive search
               const searchText = item.searchText.toLowerCase();
-              const searchQuery = query.toLowerCase();
   
               // Check if item matches the search
               let matchesItem = false;
@@ -59094,7 +59508,7 @@
                   searchPattern.lastIndex = 0;  // Reset lastIndex before each test to avoid skipping matches
                   matchesItem = searchPattern.test(searchText);
               } else {
-                  matchesItem = searchText.includes(searchQuery);
+                  matchesItem = queryTerms.every(term => searchText.includes(term));
               }
   
               if (matchesItem) {
@@ -65639,6 +66053,14 @@
           openSearch({focus: false});
           performSearch(query);
   
+          // Failsafe: the FTS backend can match where this page's literal
+          // scan doesn't (diacritics folding, tokenizer quirks). A deep link
+          // that finds nothing locally must not leave search-as-filter hiding
+          // every message — drop the filter and fall back to the uuid scroll.
+          if (searchState.matches.length === 0) {
+              clearSearchFilterClasses();
+          }
+  
           // Re-run the uuid scroll *after* searching. performSearch hides
           // non-matching messages and unfolds ancestors, so any scroll done
           // before it lands somewhere else once the layout settles.
@@ -65746,15 +66168,47 @@
           return ancestors;
       }
   
+      // Split a literal query into terms the way the archive search's FTS
+      // backend does: whitespace separates independent AND-ed terms, a
+      // double-quoted run stays one literal phrase, and a trailing `*`
+      // (explicit prefix syntax) is dropped — substring matching already
+      // covers prefixes. Deep links from the archive search page arrive as
+      // `?q=<raw query>`, so matching here has to speak the same language:
+      // treating `foo bar` as one contiguous string would find nothing in a
+      // message that FTS matched on the two words apart, and search-as-filter
+      // would hide every message.
+      function parseQueryTerms(query) {
+          const terms = [];
+          for (let raw of (query.match(/"[^"]*"\*?|\S+/g) || [])) {
+              raw = raw.replace(/\*$/, '');
+              if (raw.startsWith('"') && raw.endsWith('"') && raw.length > 1) {
+                  raw = raw.slice(1, -1);
+              }
+              if (raw.trim()) terms.push(raw);
+          }
+          return terms;
+      }
+  
       // Build the case-insensitive global search pattern for `query`, honoring
-      // the regex/literal toggle (literal queries are escaped). Returns null
-      // when useRegex is on and the query is not yet a valid regex — each caller
-      // supplies its own fallback so invalid-regex handling stays per-caller.
+      // the regex/literal toggle. A literal query becomes an alternation of
+      // its escaped terms (longest first, so `foo foobar` highlights the whole
+      // of `foobar` rather than its `foo` prefix). Returns null when the query
+      // has no usable terms, or useRegex is on and the query is not yet a
+      // valid regex — each caller supplies its own fallback so invalid-regex
+      // handling stays per-caller.
       function buildSearchPattern(query) {
           try {
-              const source = searchState.useRegex
-                  ? query
-                  : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              let source;
+              if (searchState.useRegex) {
+                  source = query;
+              } else {
+                  const terms = parseQueryTerms(query);
+                  if (terms.length === 0) return null;
+                  source = terms
+                      .sort((a, b) => b.length - a.length)
+                      .map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+                      .join('|');
+              }
               return new RegExp(source, 'gi');
           } catch (e) {
               return null;
@@ -65952,6 +66406,13 @@
           searchState.matches = [];
           let totalMatchCount = 0;
   
+          // Literal matching is per-term with AND semantics — same as the FTS
+          // backend the deep links come from: every term must appear in the
+          // item, anywhere and in any order.
+          const queryTerms = searchState.useRegex
+              ? []
+              : parseQueryTerms(query).map(t => t.toLowerCase());
+  
           searchState.searchIndex.forEach(item => {
               // Check if element is visible (for transcript pages with filters)
               if (!searchState.isIndexPage && searchState.searchInFiltered) {
@@ -65962,7 +66423,6 @@
   
               // Always use case-insensitive search
               const searchText = item.searchText.toLowerCase();
-              const searchQuery = query.toLowerCase();
   
               // Check if item matches the search
               let matchesItem = false;
@@ -65970,7 +66430,7 @@
                   searchPattern.lastIndex = 0;  // Reset lastIndex before each test to avoid skipping matches
                   matchesItem = searchPattern.test(searchText);
               } else {
-                  matchesItem = searchText.includes(searchQuery);
+                  matchesItem = queryTerms.every(term => searchText.includes(term));
               }
   
               if (matchesItem) {
