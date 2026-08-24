@@ -156,20 +156,46 @@ def test_parallel_render_is_byte_identical_to_serial(tmp_path: Path, monkeypatch
     # Count what the pool actually accepted. Every path in the fan-out
     # falls back to inline rendering on trouble, so without this a broken
     # pool would compare the serial path against itself and pass.
-    dispatched: list[str] = []
+    dispatched: list[RenderUnit] = []
     original_submit = RenderPool.submit
 
     def counting_submit(self: RenderPool, unit: RenderUnit):
         future = original_submit(self, unit)
         if future is not None:
-            dispatched.append(unit.kind)
+            dispatched.append(unit)
         return future
 
     monkeypatch.setattr(RenderPool, "submit", counting_submit)
+
+    # Capture the conversion's fragment store to prove the worker deltas
+    # actually flowed back to the parent (page workers export their
+    # fragments; the dispatch loop absorbs them). Without this, a broken
+    # return path would silently degrade the session feed to nothing.
+    stores = []
+    original_make = converter._make_fragment_store
+
+    def capturing_make(format_: str):
+        store = original_make(format_)
+        if store is not None:
+            stores.append(store)
+        return store
+
+    monkeypatch.setattr(converter, "_make_fragment_store", capturing_make)
 
     serial = _convert_copy(tmp_path, "serial", render_jobs=1)
     parallel = _convert_copy(tmp_path, "parallel", render_jobs=2)
 
     _assert_same(serial, parallel, "the render fan-out")
-    assert "page" in dispatched, "no combined page went through a worker"
-    assert "session" in dispatched, "no session file went through a worker"
+    kinds = [unit.kind for unit in dispatched]
+    assert "page" in kinds, "no combined page went through a worker"
+    assert "session" in kinds, "no session file went through a worker"
+    # The fed-fragment path (work/render-format-once.md § 2): page workers
+    # return fragment deltas, the parent absorbs them, and dispatched
+    # session units carry their session's slice.
+    assert any(unit.kind == "session" and unit.fed_fragments for unit in dispatched), (
+        "no session unit was fed fragments — the feed never engaged"
+    )
+    parallel_store = stores[-1]
+    assert parallel_store.stats()["entries"] > 0, (
+        "the parent store absorbed no worker fragment deltas"
+    )

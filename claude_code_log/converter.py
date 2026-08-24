@@ -1966,6 +1966,7 @@ def _generate_paginated_html(
         _render_page_inline,
         _record_page,
         label=lambda unit: f"page {unit.key}",
+        fragment_store=fragment_store,
     )
 
     # Reveal the "Next" link on every page that is no longer last. This
@@ -2776,12 +2777,18 @@ def _dispatch_render_units(
     render_inline: "Callable[[RenderUnit], None]",
     on_written: "Callable[[RenderUnit], None]",
     label: "Callable[[RenderUnit], str]",
+    fragment_store: "Optional[RenderFragmentStore]" = None,
 ) -> None:
     """Render ``units``, over the pool when there is one, else inline.
 
     ``on_written`` runs in the parent for every unit that made it to disk,
     in completion order — it owns the cache bookkeeping, which is why the
     workers never touch the DB for writes.
+
+    ``fragment_store`` absorbs the fragment deltas page workers return, so
+    the fragments a worker formatted still reach the conversion's store —
+    the session pass then feeds on them exactly as if the pages had
+    rendered inline (see RenderUnit.fed_fragments).
 
     Every path back to inline rendering is a *fallback*, never an error:
     a pool that can't bootstrap (a library caller without the
@@ -2810,7 +2817,7 @@ def _dispatch_render_units(
     for future in as_completed(futures):
         unit = futures[future]
         try:
-            _kind, _key, error = future.result()
+            _kind, _key, error, fragments_delta = future.result()
         except Exception as e:
             # The pool itself broke (BrokenProcessPool, a worker killed by
             # the OOM killer, …). Re-render this unit inline and send the
@@ -2824,6 +2831,8 @@ def _dispatch_render_units(
             continue
         if error is not None:
             raise RuntimeError(f"Failed to render {label(unit)}:\n{error}")
+        if fragments_delta and fragment_store is not None:
+            fragment_store.absorb(fragments_delta)
         on_written(unit)
 
     for unit in unsubmitted:
@@ -3033,12 +3042,41 @@ def _generate_individual_session_files(
                 unit.file_name, unit.key, session_message_count
             )
 
+        # Feed each pooled session unit its slice of the fragment store —
+        # by now the combined-page pass has completed (pages dispatch and
+        # drain before this function runs), so the store holds a fragment
+        # for essentially every message, whether the pages rendered inline
+        # or in workers (whose deltas the page dispatch absorbed). A
+        # worker seeds its own store from the slice and skips re-formatting
+        # everything that verifies; anything stale or mis-keyed digests
+        # into a conflict and is formatted fresh, so this is purely a
+        # CPU-saving feed, never a correctness dependency.
+        if fragment_store is not None and render_pool is not None and stale_units:
+            from .utils import get_parent_session_id as _trunk_of
+
+            ordinal_session: dict[int, str] = {}
+            for ordinal, msg in enumerate(messages):
+                msg_sid = getattr(msg, "sessionId", None)
+                if msg_sid:
+                    ordinal_session[ordinal] = _trunk_of(msg_sid)
+            all_fragments = fragment_store.export_fragments()
+            keys_by_session: dict[str, list[Any]] = {}
+            for store_key in all_fragments:
+                key_session = ordinal_session.get(cast(int, store_key[0]))
+                if key_session is not None:
+                    keys_by_session.setdefault(key_session, []).append(store_key)
+            for unit in stale_units:
+                unit_keys = keys_by_session.get(unit.key)
+                if unit_keys:
+                    unit.fed_fragments = {k: all_fragments[k] for k in unit_keys}
+
         _dispatch_render_units(
             stale_units,
             render_pool,
             _render_session_inline,
             _record_session,
             label=lambda unit: f"session {str(unit.key)[:8]}",
+            fragment_store=fragment_store,
         )
 
     return regenerated_count

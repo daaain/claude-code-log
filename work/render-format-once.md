@@ -8,6 +8,28 @@ and session files — `fragment_store.py`, consumed by
 byte-identical on five real projects (including the 803MB / 187-file
 claude-code-log archive at a 50% hit rate) and by
 `test_render_cache_equivalence.py::test_fragment_store_render_is_byte_identical`.
+
+**Phase 2 progress (fed fragments):** three follow-up commits made the
+store process-portable and wired it through the fan-out — the
+hit-verification now stores a content *digest* instead of a retained
+`MessageContent` ref (§ 4.9, premise corrected there), keys are
+master-list *ordinals* instead of `id(entry)`, and the render pool now
+moves fragments across the process boundary: page workers export their
+store as a delta in the result tuple, the parent absorbs the deltas,
+and each session unit is dispatched carrying its session's slice
+(`RenderUnit.fed_fragments`), which the worker seeds its own store
+from. Worker session hit rates measured 96–100% (they were 0 — workers
+had no store at all), for −14% total CPU and a small wall win on an
+8-core VM over a 34k-message archive (78.6s → 67.7s CPU, 15.3s → 14.3s
+wall at 8 workers; serial 28.7s CPU). Byte-identical across every
+configuration on that archive, and the pool equivalence test now
+asserts the feed engaged. The remaining worker CPU is dominated by
+bootstrap — each worker still loads the whole transcript — which is
+the next target (§ 2's "no per-worker transcript copy"), along with
+the flat pool and the § 7.5 threshold revisit. Also fixed:
+`scripts/bench_render.py`'s serial-labeled rows now pin
+`RENDER_JOBS=off` (they had been silently running the fan-out since
+its default flipped on, making the table labels lie).
 Phase 1 confirmed the duplicate work is structurally gone (64,968 lookups
 → 32,441 formats on that archive), but also that its *serial* wall-clock
 win on top of a warm leaf memo is modest (~1s of 27s CPU) — the value is

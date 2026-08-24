@@ -437,12 +437,23 @@ the all-projects wall clock is bounded by the largest single project
 the largest project's own time, at 2.18 cores average), and an
 incremental run has only one or two stale projects to fan out at all.
 
-Workers are **self-sufficient rather than fed**: each re-loads the
-transcript from the warm cache in its `initializer` (~0.7s for a 12k-message
-project, ~1.7s for 47k) instead of receiving the parent's parsed messages,
-which would move ~114MB per worker. The parent sends only small per-unit
-metadata, keeps every staleness check and cache write to itself (so the DB
-stays single-writer), and the pool starts lazily on first submit.
+Workers are **self-sufficient for the transcript, fed for the
+fragments**: each re-loads the transcript from the warm cache in its
+`initializer` (~0.7s for a 12k-message project, ~1.7s for 47k) instead of
+receiving the parent's parsed messages, which would move ~114MB per
+worker. The parent sends only small per-unit metadata, keeps every
+staleness check and cache write to itself (so the DB stays
+single-writer), and the pool starts lazily on first submit. Formatted
+fragments do cross the boundary, though (they are plain strings + digests
+— § 2.9's store made them portable): a page worker returns its fragment
+store as a delta in its result, the parent absorbs it, and each session
+unit dispatched afterwards carries its session's slice
+(`RenderUnit.fed_fragments`), which the worker seeds its own store from.
+Pages always drain before sessions dispatch, so the feed covers
+essentially every message; every fed fragment is digest-verified on use,
+so the worst a stale slice can do is cost the recompute it would have
+cost anyway. This removes the fan-out's main CPU tax — cold workers
+re-formatting in the session pass what the page pass already formatted.
 
 **Memory is the binding constraint, not cores.** That self-sufficiency
 means every worker holds a full copy of the transcript, and a loaded

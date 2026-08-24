@@ -213,14 +213,27 @@ def _bench_single(target: Path, sweep: list[int]) -> set[str]:
     print(f"  cache built in {time.monotonic() - warm_start:.1f}s")
 
     print("\nRunning configurations...", flush=True)
+    # Fan-out-less rows pin RENDER_JOBS=off explicitly: the fan-out is on
+    # by default now, so an unset variable means "auto", and the serial
+    # baselines would silently run the pool (which is exactly what
+    # happened when the default flipped — every row measured the same
+    # configuration and the table's labels lied).
     results = [
         _run(
             target,
             "neither",
-            {"CLAUDE_CODE_LOG_RENDER_CACHE_MB": "0"},
+            {
+                "CLAUDE_CODE_LOG_RENDER_CACHE_MB": "0",
+                "CLAUDE_CODE_LOG_RENDER_JOBS": "off",
+            },
             all_projects=False,
         ),
-        _run(target, "memo only", {}, all_projects=False),
+        _run(
+            target,
+            "memo only",
+            {"CLAUDE_CODE_LOG_RENDER_JOBS": "off"},
+            all_projects=False,
+        ),
         _run(
             target,
             "fan-out only",
@@ -267,10 +280,18 @@ def _bench_hierarchy(target: Path) -> set[str]:
         _run(
             target,
             "neither",
-            {"CLAUDE_CODE_LOG_RENDER_CACHE_MB": "0"},
+            {
+                "CLAUDE_CODE_LOG_RENDER_CACHE_MB": "0",
+                "CLAUDE_CODE_LOG_RENDER_JOBS": "off",
+            },
             all_projects=True,
         ),
-        _run(target, "memo only", {}, all_projects=True),
+        _run(
+            target,
+            "memo only",
+            {"CLAUDE_CODE_LOG_RENDER_JOBS": "off"},
+            all_projects=True,
+        ),
         _run(
             target,
             "both (auto)",
@@ -295,11 +316,20 @@ def _bench_hierarchy(target: Path) -> set[str]:
         _run(
             target,
             "neither",
-            {"CLAUDE_CODE_LOG_RENDER_CACHE_MB": "0"},
+            {
+                "CLAUDE_CODE_LOG_RENDER_CACHE_MB": "0",
+                "CLAUDE_CODE_LOG_RENDER_JOBS": "off",
+            },
             all_projects=True,
             stale=[largest],
         ),
-        _run(target, "memo only", {}, all_projects=True, stale=[largest]),
+        _run(
+            target,
+            "memo only",
+            {"CLAUDE_CODE_LOG_RENDER_JOBS": "off"},
+            all_projects=True,
+            stale=[largest],
+        ),
         _run(
             target,
             "both (auto)",

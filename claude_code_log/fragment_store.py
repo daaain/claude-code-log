@@ -226,6 +226,31 @@ class RenderFragmentStore:
         """Record the master message list this conversion renders subsets of."""
         self._entry_ordinals = {id(entry): i for i, entry in enumerate(entries)}
 
+    def set_entry_ordinal_map(self, mapping: dict[int, int]) -> None:
+        """Share a prebuilt ``id(entry) → ordinal`` map (worker-side reuse)."""
+        self._entry_ordinals = mapping
+
+    def export_fragments(self) -> dict[StoreKey, tuple[bytes, Fragment]]:
+        """The raw fragment mapping — digests and strings only, picklable.
+
+        This is what crosses the process boundary in the render fan-out: a
+        page worker exports its fragments back to the parent, and the
+        parent slices them into the session units it dispatches (see
+        converter._dispatch_render_units / render_pool._render_unit_worker).
+        Returned by reference; callers must not mutate it.
+        """
+        return self._fragments
+
+    def absorb(self, fragments: dict[StoreKey, tuple[bytes, Fragment]]) -> None:
+        """Merge fragments computed elsewhere (a worker's delta or a fed
+        slice). First writer wins, matching ``put`` — for a given key the
+        digest pins the content either way, so order cannot change output.
+        """
+        for key, entry in fragments.items():
+            if key not in self._fragments:
+                self._fragments[key] = entry
+                self._bytes += sum(len(part) for part in entry[1])
+
     def stable_key(self, fragment_key: tuple[int, int]) -> Optional[tuple[int, int]]:
         """Translate a stamped ``(id(entry), part_ordinal)`` to a stable key.
 

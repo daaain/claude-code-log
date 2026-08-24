@@ -23,12 +23,20 @@ metadata.
 
 Design
 ------
-Workers are **self-sufficient rather than fed**. The alternative — pickling
-the parent's parsed transcript to each worker — moves ~114MB per worker
-for a mid-sized project. Instead each worker re-loads from the (already
-warm) SQLite cache in its own ``initializer``, measured at 0.71s, and the
-parent sends only small per-unit metadata. That also keeps the parent's
-peak memory flat.
+Workers are **self-sufficient for the transcript, fed for the fragments**.
+Pickling the parent's parsed transcript to each worker would move ~114MB
+per worker for a mid-sized project, so each worker re-loads from the
+(already warm) SQLite cache in its own ``initializer``, measured at 0.71s,
+and the parent sends only small per-unit metadata. That also keeps the
+parent's peak memory flat. Formatted *fragments*, however, are plain
+strings and cheap to move, so those flow through the parent instead of
+being recomputed per worker: page units export their fragment store back
+in the result tuple, the parent absorbs the deltas, and the session units
+it dispatches afterwards each carry their session's slice
+(``RenderUnit.fed_fragments``) — collapsing the page-vs-session duplicate
+formatting that previously came back in every cold worker. The feed is
+verified the same way as any store hit (content digest + tree signature),
+so a stale or mis-keyed fragment costs a recompute, never wrong output.
 
 This makes a warm cache a hard prerequisite: without one a worker would
 re-parse every JSONL file (~3.3s each, per worker), so ``RenderPool`` is
@@ -82,6 +90,14 @@ class RenderUnit:
     page_info: Optional[Dict[str, Any]] = None
     page_stats: Optional[Dict[str, Any]] = None
     suppress_combined_link: bool = False
+    # Session units: this session's slice of the parent's fragment store
+    # (digests + strings, picklable), formatted by the combined-page pass
+    # that always completes before sessions dispatch. The worker absorbs
+    # it into its own store so the session render reuses instead of
+    # re-formatting. Purely an optimisation: a stale, missing or
+    # mis-keyed slice degrades to a digest conflict or a miss — formatted
+    # fresh — never to wrong output.
+    fed_fragments: Optional[Dict[Any, Any]] = None
 
 
 @dataclass
@@ -379,6 +395,11 @@ _worker_messages: "Optional[List[TranscriptEntry]]" = None
 _worker_session_tree: Any = None
 _worker_cache_manager: Any = None
 _worker_messages_by_session: "Optional[Dict[str, List[TranscriptEntry]]]" = None
+# id(entry) → master-list ordinal, built once per worker. Fragment-store
+# keys are these ordinals, which the parent and every worker agree on as
+# long as they load the same master list in the same order — and a skew
+# only costs hits (digest conflict → formatted fresh), never correctness.
+_worker_entry_ordinals: Optional[Dict[int, int]] = None
 
 
 def _init_render_worker(setup: _WorkerSetup) -> None:
@@ -391,6 +412,7 @@ def _init_render_worker(setup: _WorkerSetup) -> None:
     """
     global _worker_setup, _worker_messages, _worker_session_tree
     global _worker_cache_manager, _worker_messages_by_session
+    global _worker_entry_ordinals
 
     from .cache import CacheManager
     from .converter import (
@@ -419,6 +441,7 @@ def _init_render_worker(setup: _WorkerSetup) -> None:
     _worker_session_tree = session_tree
     _worker_cache_manager = cache_manager
     _worker_messages_by_session = by_session
+    _worker_entry_ordinals = {id(msg): i for i, msg in enumerate(messages)}
 
 
 def _build_worker_renderer() -> Any:
@@ -441,8 +464,42 @@ def _build_worker_renderer() -> Any:
     )
 
 
-def _render_unit_worker(unit: RenderUnit) -> "tuple[str, Any, Optional[str]]":
-    """Render and write one unit. Returns ``(kind, key, error_or_None)``.
+def _unit_fragment_store(unit: RenderUnit, renderer: Any) -> Any:
+    """Attach a per-unit fragment store to an HTML renderer, or None.
+
+    Page units get an empty store whose contents are exported back to the
+    parent (the delta in the result tuple); session units get a store
+    seeded with the slice the parent fed on the unit. Either way the
+    store's semantics are the per-conversion ones — this worker's master
+    list is the same conversion's, only re-loaded.
+    """
+    from .fragment_store import RenderFragmentStore, fragment_store_enabled
+
+    assert _worker_setup is not None
+    if _worker_setup.format != "html" or not fragment_store_enabled():
+        return None
+    from .html.renderer import HtmlRenderer
+
+    if not isinstance(renderer, HtmlRenderer):
+        return None
+    store = RenderFragmentStore()
+    assert _worker_entry_ordinals is not None
+    store.set_entry_ordinal_map(_worker_entry_ordinals)
+    if unit.fed_fragments:
+        store.absorb(unit.fed_fragments)
+    renderer.fragment_store = store
+    return store
+
+
+def _render_unit_worker(
+    unit: RenderUnit,
+) -> "tuple[str, Any, Optional[str], Optional[Dict[Any, Any]]]":
+    """Render and write one unit.
+
+    Returns ``(kind, key, error_or_None, fragments_delta_or_None)``. The
+    delta is a page unit's exported fragment store — the parent absorbs it
+    and feeds slices of it to the session units it dispatches afterwards.
+    Session units return None there (nothing renders after them).
 
     Failures come back as a formatted traceback rather than propagating,
     matching ``_convert_project_worker``: the parent needs to attribute the
@@ -455,6 +512,7 @@ def _render_unit_worker(unit: RenderUnit) -> "tuple[str, Any, Optional[str]]":
 
         output_dir = Path(_worker_setup.output_dir)
         renderer = _build_worker_renderer()
+        store = _unit_fragment_store(unit, renderer)
 
         if unit.kind == "page":
             page_messages: "List[TranscriptEntry]" = []
@@ -484,8 +542,11 @@ def _render_unit_worker(unit: RenderUnit) -> "tuple[str, Any, Optional[str]]":
             content, encoding="utf-8", errors="replace"
         )
     except Exception:
-        return unit.kind, unit.key, traceback.format_exc()
-    return unit.kind, unit.key, None
+        return unit.kind, unit.key, traceback.format_exc(), None
+    delta = (
+        store.export_fragments() if store is not None and unit.kind == "page" else None
+    )
+    return unit.kind, unit.key, None, delta
 
 
 # --------------------------------------------------------------------------
@@ -536,7 +597,7 @@ class RenderPool:
 
     def submit(
         self, unit: RenderUnit
-    ) -> Optional["Future[tuple[str, Any, str | None]]"]:
+    ) -> Optional["Future[tuple[str, Any, str | None, Dict[Any, Any] | None]]"]:
         """Queue a unit, or return None if the caller should render inline."""
         executor = self._ensure_executor()
         if executor is None:
