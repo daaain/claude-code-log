@@ -32,8 +32,8 @@ prefix = "claude-code-log"
 backend = "lima"
 wall = true
 name = "claude-code-log"
-cpus = 4
-memory_mib = 8192   # MiB — any whole number
+cpus = 8
+memory_mib = 16384   # MiB — any whole number
 disk_gib = 60
 
 # Egress proxy. Declaring [proxy] routes the box's egress through the Mac proxy — REQUIRED
@@ -85,11 +85,16 @@ foldyard.toml.
 # recreation. Playwright's browser bundle is ~900 MB — without this, every fresh box
 # re-downloads it through the proxy. The dnf volume pairs with the dnf-keepcache step
 # below: metadata and kept RPMs land in ~/.cache/dnf, so a rebuilt box installs its
-# tools from cache instead of re-downloading from the master mirror.
+# tools from cache instead of re-downloading from the master mirror. The uv volume spares
+# the wheel downloads on every rebuild.
 caches = [
   { volume = "devbox_playwright", path = ".cache/ms-playwright" },
   { volume = "devbox_dnf", path = ".cache/dnf" },
+  { volume = "devbox_uv", path = ".cache/uv" },
 ]
+shadow_volumes = [".venv"]                      # masks the host bind mount at that subpath
+warmup = [{ dir = ".", run = "uv sync" }]       # populate it — it starts empty
+env = { UV_LINK_MODE = "copy" }                 # venv volume ≠ cache volume ⇒ no hardlinks
 
 # Consumer tools installed once per fresh box, as MONITORED steps (reported ✓/✗). They run
 # as root, in the checkout, before the deps warm-up.
