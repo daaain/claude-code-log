@@ -1773,15 +1773,19 @@ def _generate_paginated_html(
                 orphan_path.unlink()
 
     # Group messages by session for fast lookup (agent messages grouped
-    # under their parent session since they don't have their own pages)
+    # under their parent session since they don't have their own pages).
+    # Each message's master-list ordinal is grouped alongside it: stale
+    # page units carry their slice of entries *and* those ordinals, so a
+    # render worker's fragment-store keys name the same positions the
+    # parent's do (see RenderUnit.entries / entry_ordinals).
     messages_by_session: Dict[str, List[TranscriptEntry]] = {}
-    for msg in messages:
+    ordinals_by_session: Dict[str, List[int]] = {}
+    for ordinal, msg in enumerate(messages):
         session_id = getattr(msg, "sessionId", None)
         if session_id:
             key = get_parent_session_id(session_id)
-            if key not in messages_by_session:
-                messages_by_session[key] = []
-            messages_by_session[key].append(msg)
+            messages_by_session.setdefault(key, []).append(msg)
+            ordinals_by_session.setdefault(key, []).append(ordinal)
 
     first_page_path = output_dir / _get_page_html_path(1, suffix)
 
@@ -1818,11 +1822,14 @@ def _generate_paginated_html(
         if not silent:
             print(f"Generating page {page_num} ({reason})...")
 
-        # Collect messages for this page
+        # Collect messages for this page (and their master-list ordinals,
+        # dispatched with the unit so workers never load the transcript)
         page_messages: List[TranscriptEntry] = []
+        page_ordinals: List[int] = []
         for session_id in page_session_ids:
             if session_id in messages_by_session:
                 page_messages.extend(messages_by_session[session_id])
+                page_ordinals.extend(ordinals_by_session[session_id])
 
         # Calculate page stats
         page_message_count = len(page_messages)
@@ -1910,6 +1917,8 @@ def _generate_paginated_html(
                 key=page_num,
                 file_name=html_path,
                 title=page_title,
+                entries=page_messages,
+                entry_ordinals=page_ordinals,
                 session_ids=page_session_ids,
                 page_info=page_info,
                 page_stats=page_stats,
@@ -1931,16 +1940,14 @@ def _generate_paginated_html(
         }
 
     def _render_page_inline(unit: RenderUnit) -> None:
-        page_messages: List[TranscriptEntry] = []
-        for session_id in unit.session_ids or []:
-            page_messages.extend(messages_by_session.get(session_id, []))
+        assert unit.entries is not None  # every page unit is planned with them
         page_renderer = HtmlRenderer()
         page_renderer.depth = depth
         page_renderer.compact = compact
         page_renderer.no_recaps = no_recaps
         page_renderer.fragment_store = fragment_store
         html_content = page_renderer.generate(
-            page_messages,
+            unit.entries,
             unit.title,
             page_info=unit.page_info,
             page_stats=unit.page_stats,
@@ -2278,8 +2285,8 @@ def convert_jsonl_to(
     # reported via the `report` out-parameter for the CLI's message.
     # One render pool per conversion, shared by the combined pages and
     # the per-session files: starting a second pool would pay `spawn` +
-    # import + transcript load all over again. Creation is cheap — no
-    # worker starts until the first unit is submitted.
+    # import all over again. Creation is cheap — no worker starts until
+    # the first unit is submitted.
     render_pool = _make_render_pool(
         format=format,
         input_path=input_path,
@@ -2295,6 +2302,7 @@ def convert_jsonl_to(
         image_export_mode=image_export_mode,
         archive_search_link=archive_search_link,
         render_jobs=render_jobs,
+        session_tree=session_tree,
     )
     try:
         did_regenerate = False
@@ -2652,16 +2660,17 @@ def build_session_title(
 
 
 # Below this many stale output files, the fan-out is not worth the ~1s of
-# `spawn` + package import + transcript load each worker pays before it can
-# render anything. Units average well under 200ms, so a handful of them
-# finish inline before a pool has even started.
+# `spawn` + package import each worker pays before it can render anything.
+# Units average well under 200ms, so a handful of them finish inline
+# before a pool has even started.
 _MIN_UNITS_FOR_RENDER_POOL = 8
 
 
-# ...and below this many messages the project's render work is too small
-# to repay what each worker costs before it renders anything: `spawn`,
-# package import, and a full reload of the transcript from cache (~1.7s at
-# 47k messages). Measured on 4 cores, with the § 2.9 memo caches on:
+# ...and below this many messages the project's render work is too small to
+# repay the pool's startup. Sized when workers still re-loaded the whole
+# transcript from cache (~1.7s at 47k messages) — they are fed entry slices
+# now, so this is due a re-measure (work/render-format-once.md § 7.5).
+# Measured on 4 cores, with the § 2.9 memo caches on:
 #
 #   12k messages  serial 8.2s  ->  4 workers 9.7s   (a loss)
 #   47k messages  serial 27.6s ->  4 workers 20.0s  (1.38x)
@@ -2707,6 +2716,7 @@ def _make_render_pool(
     image_export_mode: Optional[str],
     archive_search_link: Optional[str],
     render_jobs: Optional[int],
+    session_tree: Optional[SessionTree],
 ) -> "Optional[RenderPool]":
     """Build a render pool for this conversion, or None to render inline.
 
@@ -2717,19 +2727,23 @@ def _make_render_pool(
       ``render_pool.resolve_render_jobs``). It is also what a project
       worker in the all-projects pool gets when there is no spare capacity,
       since nesting pools would oversubscribe.
-    - Single-file mode, or no cache manager. Workers reload the transcript
-      from the cache; without one they would each re-parse every JSONL file.
+    - Single-file mode, or no cache manager (staleness planning needs one).
+    - No pre-built ``session_tree``. Workers render fed entry slices
+      against the conversion's tree; without one they would rebuild a DAG
+      from their slice alone, which can genuinely differ (missing
+      cross-session hierarchy) — a correctness cliff, so decline instead.
     - ``image_export_mode="referenced"``, where each render writes
       ``images/image_NNNN.png`` from a counter it resets per call. Those
       names already collide between the combined and per-session passes;
       running them concurrently would let two processes write one file at
       once, so this mode stays serial.
     - Projects too small for the pool's startup to pay for itself.
-    - Not enough memory for even one worker's copy of the transcript.
+    - Not enough memory for the fan-out's footprint.
 
-    The worker count is also capped by available memory, because each
-    worker holds the whole transcript (~3x its bytes on disk). See
-    ``render_pool.memory_capped_workers``.
+    The worker count is also capped by available memory. The cap formula
+    still charges each worker a full transcript copy — workers now hold
+    only their in-flight unit's slice, so this over-charges and is due a
+    re-size (work/render-format-once.md § 7.5); until then it errs safe.
     """
     from .render_pool import memory_capped_workers, resolve_render_jobs
 
@@ -2737,6 +2751,8 @@ def _make_render_pool(
     if max_workers <= 1:
         return None
     if cache_manager is None or not input_path.is_dir():
+        return None
+    if session_tree is None:
         return None
     if image_export_mode == "referenced":
         return None
@@ -2752,9 +2768,11 @@ def _make_render_pool(
     if max_workers <= 1:
         return None
 
+    from .dag import slim_session_tree
     from .render_pool import make_render_pool
 
     return make_render_pool(
+        session_tree=slim_session_tree(session_tree),
         format=format,
         project_dir=input_path,
         output_dir=effective_output_dir,
@@ -3042,33 +3060,51 @@ def _generate_individual_session_files(
                 unit.file_name, unit.key, session_message_count
             )
 
-        # Feed each pooled session unit its slice of the fragment store —
-        # by now the combined-page pass has completed (pages dispatch and
-        # drain before this function runs), so the store holds a fragment
-        # for essentially every message, whether the pages rendered inline
-        # or in workers (whose deltas the page dispatch absorbed). A
-        # worker seeds its own store from the slice and skips re-formatting
-        # everything that verifies; anything stale or mis-keyed digests
-        # into a conflict and is formatted fresh, so this is purely a
-        # CPU-saving feed, never a correctness dependency.
-        if fragment_store is not None and render_pool is not None and stale_units:
+        # Feed each pooled session unit everything its worker renders from:
+        #
+        # 1. Its *entries* — the session's slice of this conversion's master
+        #    list (trunk + integrated agent messages), with their master-
+        #    list ordinals. Workers never load the transcript; the trunk
+        #    grouping here selects exactly the set generate_session's own
+        #    filter would (sessionId == trunk or a "{trunk}#agent-" child),
+        #    so the worker's re-filter of the slice is idempotent.
+        # 2. Its slice of the fragment store — by now the combined-page
+        #    pass has completed (pages dispatch and drain before this
+        #    function runs), so the store holds a fragment for essentially
+        #    every message, whether the pages rendered inline or in workers
+        #    (whose deltas the page dispatch absorbed). A worker seeds its
+        #    own store from the slice and skips re-formatting everything
+        #    that verifies; anything stale or mis-keyed digests into a
+        #    conflict and is formatted fresh, so the fragment feed is
+        #    purely a CPU saver, never a correctness dependency.
+        if render_pool is not None and stale_units:
             from .utils import get_parent_session_id as _trunk_of
 
-            ordinal_session: dict[int, str] = {}
+            entries_by_trunk: dict[str, list[TranscriptEntry]] = {}
+            ordinals_by_trunk: dict[str, list[int]] = {}
+            trunk_of_ordinal: dict[int, str] = {}
             for ordinal, msg in enumerate(messages):
                 msg_sid = getattr(msg, "sessionId", None)
                 if msg_sid:
-                    ordinal_session[ordinal] = _trunk_of(msg_sid)
-            all_fragments = fragment_store.export_fragments()
-            keys_by_session: dict[str, list[Any]] = {}
-            for store_key in all_fragments:
-                key_session = ordinal_session.get(cast(int, store_key[0]))
-                if key_session is not None:
-                    keys_by_session.setdefault(key_session, []).append(store_key)
+                    trunk = _trunk_of(msg_sid)
+                    entries_by_trunk.setdefault(trunk, []).append(msg)
+                    ordinals_by_trunk.setdefault(trunk, []).append(ordinal)
+                    trunk_of_ordinal[ordinal] = trunk
             for unit in stale_units:
-                unit_keys = keys_by_session.get(unit.key)
-                if unit_keys:
-                    unit.fed_fragments = {k: all_fragments[k] for k in unit_keys}
+                unit.entries = entries_by_trunk.get(unit.key, [])
+                unit.entry_ordinals = ordinals_by_trunk.get(unit.key, [])
+
+            if fragment_store is not None:
+                all_fragments = fragment_store.export_fragments()
+                keys_by_session: dict[str, list[Any]] = {}
+                for store_key in all_fragments:
+                    key_session = trunk_of_ordinal.get(cast(int, store_key[0]))
+                    if key_session is not None:
+                        keys_by_session.setdefault(key_session, []).append(store_key)
+                for unit in stale_units:
+                    unit_keys = keys_by_session.get(unit.key)
+                    if unit_keys:
+                        unit.fed_fragments = {k: all_fragments[k] for k in unit_keys}
 
         _dispatch_render_units(
             stale_units,

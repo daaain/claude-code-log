@@ -23,26 +23,33 @@ metadata.
 
 Design
 ------
-Workers are **self-sufficient for the transcript, fed for the fragments**.
-Pickling the parent's parsed transcript to each worker would move ~114MB
-per worker for a mid-sized project, so each worker re-loads from the
-(already warm) SQLite cache in its own ``initializer``, measured at 0.71s,
-and the parent sends only small per-unit metadata. That also keeps the
-parent's peak memory flat. Formatted *fragments*, however, are plain
-strings and cheap to move, so those flow through the parent instead of
-being recomputed per worker: page units export their fragment store back
-in the result tuple, the parent absorbs the deltas, and the session units
-it dispatches afterwards each carry their session's slice
-(``RenderUnit.fed_fragments``) — collapsing the page-vs-session duplicate
-formatting that previously came back in every cold worker. The feed is
-verified the same way as any store hit (content digest + tree signature),
-so a stale or mis-keyed fragment costs a recompute, never wrong output.
+Workers are **fed, not self-sufficient**. Each unit crosses the process
+boundary carrying exactly what its render reads: the unit's own entry
+slice (a page's sessions, or one session's messages — the same objects
+the parent's master list holds), those entries' master-list ordinals
+(so fragment-store keys mean the same thing in every process), and — for
+session units — the session's slice of the parent's fragment store
+(``RenderUnit.fed_fragments``), formatted by the combined-page pass that
+always completes first. The one per-*worker* piece of state is a slimmed
+``SessionTree`` (``dag.slim_session_tree``) sent through the pool
+initializer: the render path reads only its DAG lines, junction points
+and workflow dicts, so the per-message ``nodes`` mapping — whose pickled
+size is the whole transcript — stays behind in the parent.
 
-This makes a warm cache a hard prerequisite: without one a worker would
-re-parse every JSONL file (~3.3s each, per worker), so ``RenderPool`` is
-only created when the caller has a ``CacheManager``. Staleness checks and
-all cache writes stay in the parent — workers render and write output
-files, nothing else — so the DB keeps a single writer.
+Workers previously re-loaded the whole transcript from the SQLite cache
+instead (once per worker, ~0.7s at 12k messages, ~12s of CPU at 329MB of
+transcript), which made per-worker cost — CPU *and* the ~3x-bytes-on-disk
+resident copy — scale with project size rather than unit size. Feeding
+moves each entry at most twice per conversion (its page unit, then its
+session unit) rather than once per worker, and what a worker holds is
+bounded by its largest single unit.
+
+Every fed fragment is verified the same way as any store hit (content
+digest + tree signature), so a stale or mis-keyed fragment costs a
+recompute, never wrong output. Staleness checks and all cache writes stay
+in the parent — workers render and write output files, nothing else — so
+the DB keeps a single writer (workers still open the cache read-only for
+the per-session combined-link lookup).
 
 The pool is created lazily on first use: a project with one stale session
 should not pay ~1s of ``spawn`` + import per worker to save 60ms.
@@ -84,8 +91,18 @@ class RenderUnit:
     key: Any
     file_name: str
     title: str
-    # Page units: the session ids whose messages make up the page.
-    # Session units: unused (the worker filters by session id itself).
+    # The unit's slice of the parent's master message list — a page's
+    # sessions' entries, or one session's (trunk + integrated agents).
+    # This is what the worker renders; it never loads the transcript
+    # itself. None only for inline rendering, which reads the parent's
+    # own lists instead.
+    entries: "Optional[List[TranscriptEntry]]" = None
+    # Master-list ordinal of each entry in ``entries`` (parallel list).
+    # Fragment-store keys are these ordinals, so the parent and every
+    # worker agree on what a key names without holding the same list.
+    entry_ordinals: Optional[List[int]] = None
+    # Page units: the session ids whose messages make up the page (kept
+    # for the parent's cache bookkeeping; workers render ``entries``).
     session_ids: Optional[List[str]] = None
     page_info: Optional[Dict[str, Any]] = None
     page_stats: Optional[Dict[str, Any]] = None
@@ -104,7 +121,10 @@ class RenderUnit:
 class _WorkerSetup:
     """Everything a worker needs to reconstruct the parent's render state.
 
-    Deliberately all-picklable primitives so it survives ``spawn``.
+    Everything here must survive a ``spawn`` pickle. ``session_tree`` is
+    the *slim* tree (``dag.slim_session_tree``) — its per-message
+    ``nodes`` mapping raises on lookup, so it must never be the full one:
+    that would ship the whole transcript to every worker.
     """
 
     format: str
@@ -119,6 +139,7 @@ class _WorkerSetup:
     image_export_mode: Optional[str]
     archive_search_link: Optional[str]
     library_version: str
+    session_tree: Any = None
 
 
 RENDER_JOBS_ENV = "CLAUDE_CODE_LOG_RENDER_JOBS"
@@ -350,13 +371,16 @@ def memory_capped_workers(
 ) -> int:
     """Reduce ``requested`` to what memory can actually hold.
 
-    Every worker loads the project's whole transcript — that is what makes
-    workers independent of the parent, and it means peak memory is
-    ``workers x project size``, not a fixed overhead. A 1GB project costs
-    roughly 3GB per worker, so an unguarded ``auto`` on a large archive
-    exhausts RAM and drives the machine into swap, where it pegs every core
-    and stops responding. That failure mode is far worse than rendering
-    serially, so cap rather than trust the request.
+    The formula still charges each worker a full transcript copy (~3x its
+    bytes on disk) — the footprint the fan-out had when workers re-loaded
+    the project, where an unguarded ``auto`` on a large archive exhausted
+    RAM and drove the machine into swap, pegging every core. Workers are
+    now *fed* per-unit entry slices and hold only their in-flight unit,
+    so this over-charges — deliberately, until the re-size is measured
+    (work/render-format-once.md § 7.5): the parent's master list, the
+    absorbed fragment text and the in-flight pickled slices still cost
+    real memory, and the swap failure mode is far worse than rendering
+    serially, so the cap errs safe rather than trusting the request.
 
     ``concurrent_projects`` is how many project conversions run at once
     (the ``--all-projects`` pool). Each holds a transcript copy of its own
@@ -391,57 +415,24 @@ def memory_capped_workers(
 # unit that worker handles. Module-level because that is the only state a
 # `spawn`ed worker can carry between tasks.
 _worker_setup: Optional[_WorkerSetup] = None
-_worker_messages: "Optional[List[TranscriptEntry]]" = None
-_worker_session_tree: Any = None
 _worker_cache_manager: Any = None
-_worker_messages_by_session: "Optional[Dict[str, List[TranscriptEntry]]]" = None
-# id(entry) → master-list ordinal, built once per worker. Fragment-store
-# keys are these ordinals, which the parent and every worker agree on as
-# long as they load the same master list in the same order — and a skew
-# only costs hits (digest conflict → formatted fresh), never correctness.
-_worker_entry_ordinals: Optional[Dict[int, int]] = None
 
 
 def _init_render_worker(setup: _WorkerSetup) -> None:
-    """Load the project's transcript once, at worker start.
+    """Set up the worker's render state. Deliberately cheap.
 
-    Mirrors what ``convert_jsonl_to`` does in the parent — load from cache,
-    date-filter, deduplicate — so a worker's message list is identical to
-    the parent's. Any divergence here shows up as differing output files,
-    which the test suite pins byte-for-byte against a serial run.
+    The transcript itself never loads here: every unit arrives carrying
+    its own entry slice (``RenderUnit.entries``), already date-filtered
+    and deduplicated by the parent — so a worker's messages are the
+    parent's, not a reconstruction that could drift. The cache manager is
+    only constructed (no load) for the per-session combined-link lookup.
     """
-    global _worker_setup, _worker_messages, _worker_session_tree
-    global _worker_cache_manager, _worker_messages_by_session
-    global _worker_entry_ordinals
+    global _worker_setup, _worker_cache_manager
 
     from .cache import CacheManager
-    from .converter import (
-        deduplicate_messages,
-        filter_messages_by_date,
-        load_directory_transcripts,
-    )
-    from .utils import get_parent_session_id
-
-    project_dir = Path(setup.project_dir)
-    cache_manager = CacheManager(project_dir, setup.library_version)
-    messages, session_tree = load_directory_transcripts(
-        project_dir, cache_manager, setup.from_date, setup.to_date, True
-    )
-    messages = filter_messages_by_date(messages, setup.from_date, setup.to_date)
-    messages = deduplicate_messages(messages)
-
-    by_session: "Dict[str, List[TranscriptEntry]]" = {}
-    for msg in messages:
-        session_id = getattr(msg, "sessionId", None)
-        if session_id:
-            by_session.setdefault(get_parent_session_id(session_id), []).append(msg)
 
     _worker_setup = setup
-    _worker_messages = messages
-    _worker_session_tree = session_tree
-    _worker_cache_manager = cache_manager
-    _worker_messages_by_session = by_session
-    _worker_entry_ordinals = {id(msg): i for i, msg in enumerate(messages)}
+    _worker_cache_manager = CacheManager(Path(setup.project_dir), setup.library_version)
 
 
 def _build_worker_renderer() -> Any:
@@ -469,9 +460,10 @@ def _unit_fragment_store(unit: RenderUnit, renderer: Any) -> Any:
 
     Page units get an empty store whose contents are exported back to the
     parent (the delta in the result tuple); session units get a store
-    seeded with the slice the parent fed on the unit. Either way the
-    store's semantics are the per-conversion ones — this worker's master
-    list is the same conversion's, only re-loaded.
+    seeded with the slice the parent fed on the unit. The ordinal map
+    comes from the unit's own ``entry_ordinals``, so keys name the same
+    master-list positions the parent's store uses — without either side
+    holding the other's list.
     """
     from .fragment_store import RenderFragmentStore, fragment_store_enabled
 
@@ -483,8 +475,13 @@ def _unit_fragment_store(unit: RenderUnit, renderer: Any) -> Any:
     if not isinstance(renderer, HtmlRenderer):
         return None
     store = RenderFragmentStore()
-    assert _worker_entry_ordinals is not None
-    store.set_entry_ordinal_map(_worker_entry_ordinals)
+    if unit.entries is not None and unit.entry_ordinals is not None:
+        store.set_entry_ordinal_map(
+            {
+                id(entry): ordinal
+                for entry, ordinal in zip(unit.entries, unit.entry_ordinals)
+            }
+        )
     if unit.fed_fragments:
         store.absorb(unit.fed_fragments)
     renderer.fragment_store = store
@@ -507,33 +504,36 @@ def _render_unit_worker(
     """
     try:
         assert _worker_setup is not None
-        assert _worker_messages is not None
-        assert _worker_messages_by_session is not None
+        # The unit's entries ARE its transcript — the parent slices its
+        # own (date-filtered, deduplicated) master list per unit.
+        # ``submit`` declines entry-less units to the inline path, so
+        # this is a backstop, not a reachable fallback.
+        assert unit.entries is not None, "render unit dispatched without entries"
 
         output_dir = Path(_worker_setup.output_dir)
         renderer = _build_worker_renderer()
         store = _unit_fragment_store(unit, renderer)
 
         if unit.kind == "page":
-            page_messages: "List[TranscriptEntry]" = []
-            for session_id in unit.session_ids or []:
-                page_messages.extend(_worker_messages_by_session.get(session_id, []))
             content = renderer.generate(
-                page_messages,
+                unit.entries,
                 unit.title,
                 page_info=unit.page_info,
                 page_stats=unit.page_stats,
-                session_tree=_worker_session_tree,
+                session_tree=_worker_setup.session_tree,
                 archive_search_link=_worker_setup.archive_search_link,
             )
         else:
+            # generate_session re-applies its own session filter to the
+            # fed slice; the parent sliced with the same predicate, so
+            # this is idempotent and keeps one code path with inline.
             content = renderer.generate_session(
-                _worker_messages,
+                unit.entries,
                 unit.key,
                 unit.title,
                 _worker_cache_manager,
                 output_dir,
-                session_tree=_worker_session_tree,
+                session_tree=_worker_setup.session_tree,
                 suppress_combined_link=unit.suppress_combined_link,
             )
 
@@ -559,7 +559,7 @@ class RenderPool:
 
     Use as a context manager for the duration of a conversion so pages and
     session files share the same warmed-up workers — starting a second pool
-    would pay ``spawn`` + import + transcript load all over again.
+    would pay ``spawn`` + package import all over again.
 
     ``submit`` falls back to rendering inline (returning None) whenever the
     pool can't or shouldn't be used, so callers keep a single code path:
@@ -598,7 +598,14 @@ class RenderPool:
     def submit(
         self, unit: RenderUnit
     ) -> Optional["Future[tuple[str, Any, str | None, Dict[Any, Any] | None]]"]:
-        """Queue a unit, or return None if the caller should render inline."""
+        """Queue a unit, or return None if the caller should render inline.
+
+        A unit with no entry slice is declined rather than queued: workers
+        never load the transcript, so only the parent's inline path (which
+        holds the full master list) can render it.
+        """
+        if unit.entries is None:
+            return None
         executor = self._ensure_executor()
         if executor is None:
             return None
@@ -645,8 +652,13 @@ def make_render_pool(
     archive_search_link: Optional[str],
     library_version: str,
     max_workers: int,
+    session_tree: Any = None,
 ) -> RenderPool:
-    """Construct a pool. Cheap — no process starts until the first submit."""
+    """Construct a pool. Cheap — no process starts until the first submit.
+
+    ``session_tree`` must be the slim form (``dag.slim_session_tree``);
+    it is pickled into every worker via the pool initializer.
+    """
     return RenderPool(
         _WorkerSetup(
             format=format,
@@ -661,6 +673,7 @@ def make_render_pool(
             image_export_mode=image_export_mode,
             archive_search_link=archive_search_link,
             library_version=library_version,
+            session_tree=session_tree,
         ),
         max_workers,
     )

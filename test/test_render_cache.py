@@ -15,8 +15,11 @@ import pytest
 from claude_code_log import converter, render_cache
 from claude_code_log.models import DEFAULT_DEPTH
 from claude_code_log import render_pool as render_pool_module
+from claude_code_log.dag import SessionTree, slim_session_tree
 from claude_code_log.render_pool import (
     RENDER_JOBS_ENV,
+    RenderPool,
+    RenderUnit,
     _parse_vm_stat,
     memory_capped_workers,
     resolve_render_jobs,
@@ -252,6 +255,9 @@ class TestRenderPoolCreation:
             image_export_mode=None,
             archive_search_link=None,
             render_jobs=None,
+            session_tree=SessionTree(
+                nodes={}, sessions={}, roots=[], junction_points={}
+            ),
         )
         kwargs.update(overrides)
         return converter._make_render_pool(**kwargs)  # type: ignore[arg-type]
@@ -299,9 +305,16 @@ class TestRenderPoolCreation:
         assert self._make(tmp_path, monkeypatch, image_export_mode="referenced") is None
 
     def test_no_pool_without_a_cache_manager(self, tmp_path, monkeypatch):
-        """Workers reload from cache; without one they'd re-parse every file."""
+        """Staleness planning (and the unit slicing it drives) needs one."""
         monkeypatch.setenv(RENDER_JOBS_ENV, "4")
         assert self._make(tmp_path, monkeypatch, cache_manager=None) is None
+
+    def test_no_pool_without_a_session_tree(self, tmp_path, monkeypatch):
+        """Workers render fed slices against the conversion's tree; a
+        worker-side rebuild from a slice alone can genuinely differ
+        (missing cross-session hierarchy), so no tree means no pool."""
+        monkeypatch.setenv(RENDER_JOBS_ENV, "4")
+        assert self._make(tmp_path, monkeypatch, session_tree=None) is None
 
     def test_no_pool_for_single_file_mode(self, tmp_path, monkeypatch):
         monkeypatch.setenv(RENDER_JOBS_ENV, "4")
@@ -310,13 +323,81 @@ class TestRenderPoolCreation:
         assert self._make(tmp_path, monkeypatch, input_path=transcript) is None
 
 
-class TestMemoryCap:
-    """Peak memory is workers x project size, so the cap is load-bearing.
+class TestSlimSessionTree:
+    """What crosses the process boundary to render workers.
 
-    Each worker holds the project's whole transcript (~3x its bytes on
-    disk). Without a cap, `auto` on a large archive exhausts RAM and drives
-    the machine into swap, where it pegs every core and stops responding —
-    a much worse outcome than rendering serially.
+    The slim tree exists so the per-message ``nodes`` mapping — whose
+    pickled size is the whole transcript — never ships to a worker. The
+    render path must not read it, and if a future change does, it must
+    fail loudly in the worker rather than render from an empty mapping.
+    """
+
+    @staticmethod
+    def _tree():
+        from claude_code_log.dag import SessionDAGLine
+
+        return SessionTree(
+            nodes={"u1": object()},  # type: ignore[dict-item]
+            sessions={
+                "s1": SessionDAGLine(
+                    session_id="s1", uuids=["u1"], first_timestamp="2026-01-01"
+                )
+            },
+            roots=["s1"],
+            junction_points={},
+        )
+
+    def test_render_fields_are_shared_not_copied(self):
+        tree = self._tree()
+        slim = slim_session_tree(tree)
+        assert slim.sessions is tree.sessions
+        assert slim.roots is tree.roots
+        assert slim.junction_points is tree.junction_points
+        assert slim.workflow_runs is tree.workflow_runs
+        assert slim.workflow_links is tree.workflow_links
+
+    def test_nodes_lookups_fail_loudly(self):
+        slim = slim_session_tree(self._tree())
+        with pytest.raises(RuntimeError, match="slim"):
+            slim.nodes["u1"]
+        with pytest.raises(RuntimeError, match="slim"):
+            slim.nodes.get("u1")
+        with pytest.raises(RuntimeError, match="slim"):
+            "u1" in slim.nodes
+
+    def test_survives_pickling_without_the_transcript(self):
+        import pickle
+
+        slim = slim_session_tree(self._tree())
+        clone = pickle.loads(pickle.dumps(slim))
+        assert clone.sessions["s1"].uuids == ["u1"]
+        # The loud-fail contract survives the round trip too.
+        with pytest.raises(RuntimeError, match="slim"):
+            clone.nodes["u1"]
+
+
+class TestSubmitRequiresEntries:
+    """Workers never load the transcript, so an entry-less unit can only
+    be rendered by the parent's inline path — submit must decline it."""
+
+    def test_entryless_unit_is_declined_before_any_worker_starts(self):
+        pool = RenderPool.__new__(RenderPool)
+        pool._executor = None
+        pool._broken = False
+        unit = RenderUnit(kind="page", key=1, file_name="x.html", title="t")
+        assert pool.submit(unit) is None
+        # Declining must not have started (or broken) anything.
+        assert pool._executor is None and not pool.broken
+
+
+class TestMemoryCap:
+    """The cap is load-bearing: swap-thrash is worse than rendering serially.
+
+    The formula still charges each worker a whole transcript copy (~3x its
+    bytes on disk) even though workers are now fed per-unit slices — a
+    deliberate over-charge until the re-size is measured
+    (work/render-format-once.md § 7.5). These tests pin the formula as it
+    stands; loosen them together with it.
     """
 
     @staticmethod

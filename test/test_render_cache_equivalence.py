@@ -189,6 +189,14 @@ def test_parallel_render_is_byte_identical_to_serial(tmp_path: Path, monkeypatch
     kinds = [unit.kind for unit in dispatched]
     assert "page" in kinds, "no combined page went through a worker"
     assert "session" in kinds, "no session file went through a worker"
+    # Workers never load the transcript — every dispatched unit must carry
+    # its own entry slice (with aligned master-list ordinals), or the pool
+    # would be quietly rendering from nothing / falling back inline.
+    for unit in dispatched:
+        assert unit.entries, f"{unit.kind} {unit.key} dispatched without entries"
+        assert unit.entry_ordinals is not None and len(unit.entry_ordinals) == len(
+            unit.entries
+        ), f"{unit.kind} {unit.key} ordinals not aligned with its entries"
     # The fed-fragment path (work/render-format-once.md § 2): page workers
     # return fragment deltas, the parent absorbs them, and dispatched
     # session units carry their session's slice.

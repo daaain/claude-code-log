@@ -41,6 +41,42 @@ store picklable/spillable — measured peak-RSS-neutral, see § 4.9).
 Remaining: §§ 2's phases 2+ below, and the traps in § 4.8 discovered
 while landing phase 1.
 
+**Phase 3 progress (no per-worker transcript copy):** render workers no
+longer load the transcript at all. Every dispatched unit carries its own
+slice of the parent's master list (`RenderUnit.entries`) plus those
+entries' master-list ordinals; session units are sliced by the same
+trunk predicate every renderer's `generate_session` filters by (HTML/MD
+use `sessionId == sid or startswith(f"{sid}#agent-")`, JSON uses
+`get_parent_session_id(...) == sid` — same set), so the worker's
+re-filter is idempotent. The one per-worker piece of state is a *slim*
+SessionTree (`dag.slim_session_tree`, via the pool initializer): the
+render path reads only `sessions`/`junction_points`/`workflow_*`, and
+the per-message `nodes` mapping — whose pickled size is the whole
+transcript — stays in the parent, with lookups on the slim form raising
+so a future render-path consumer of `nodes` fails loudly rather than
+silently diverging (`workflow_runs` still carries each workflow agent's
+entries; small slice, and the renderer does read them). `RenderPool.submit`
+declines entry-less units to the inline path, and `_make_render_pool`
+declines when there is no pre-built session tree (a worker-side DAG
+rebuild from a slice alone can genuinely differ). The memory cap and
+the pool thresholds still assume the old full-copy footprint —
+deliberately over-conservative until the § 7.5 re-size is measured.
+
+Measured on the 8-core / 16GB VM, same archive as the post-feeding
+table below, byte-identical in every configuration:
+
+- `-app` single project: both (auto) went 12.4s / 59.8s CPU →
+  **9.9s / 29.1s CPU** (2.69x over memo-only, from 2.11x). Per-worker
+  CPU overhead at 8 workers fell ~4.4s → ~0.7s — the transcript-load
+  tax is gone, and the worker-count knee should move with it.
+- Hierarchy incremental (329MB stale): 30.6s / 108.4s CPU →
+  **21.8s / 62.5s CPU** (2.87x, at +3% CPU over serial — down from
+  +76%; the pre-feeding baseline was +305%). An 8-core VM now beats
+  the same morning's 16-core Mac run (29.4s) on this scenario.
+- Hierarchy full rebuild: unchanged (1.00x) — the still-unrevised
+  memory cap grants 1 worker/project on 16GB, so the fan-out stays
+  inert there until the § 7.5 re-size.
+
 This is a handover note. It exists because the two landed optimisations
 each hit a ceiling, and *the same restructuring removes both ceilings*.
 Everything below was measured, not assumed — the numbers are here so you
@@ -119,6 +155,55 @@ seven cost 7.6s of wall clock between them, so the run is within 8% of
 hands that project `jobs // stale projects` = 2 render workers while the
 small ones finish and 13 cores idle. Same project alone gets 16 workers
 and reaches 2.70x.
+
+**Post-feeding re-measure (2026-08-24).** Both machines, same archive
+(`downloads/projects`, 1539MB, largest 329MB), all rows byte-identical:
+
+| machine | scenario | config | wall | CPU |
+|---|---|---|---|---|
+| 16-core Mac (63GB) | full rebuild, 8 stale | memo only | 98.5s | 223.2s |
+| 16-core Mac (63GB) | full rebuild, 8 stale | both (3 workers/project) | 65.8s (1.50x) | 277.1s |
+| 16-core Mac (63GB) | incremental, 1 stale | memo only | 93.6s | 91.1s |
+| 16-core Mac (63GB) | incremental, 1 stale | both (16 workers) | **29.4s (3.18x)** | 286.1s |
+| 8-core VM (16GB) | full rebuild, 8 stale | memo only | 62.3s | 188.2s |
+| 8-core VM (16GB) | full rebuild, 8 stale | both (capped 1 worker/project) | 65.0s (0.96x) | 191.2s |
+| 8-core VM (16GB) | incremental, 1 stale | memo only | 63.7s | 61.7s |
+| 8-core VM (16GB) | incremental, 1 stale | both (capped 5 workers) | 30.6s (2.08x) | 108.4s |
+
+Single-project sweep on `-app` (140MB), wall / CPU:
+
+| workers | 16-core Mac | 8-core VM |
+|---|---|---|
+| serial (memo only) | 21.5s / 21.5s | 26.2s / 25.3s |
+| 2 | 16.4s / 29.5s | 19.2s / 32.7s |
+| 4 | 12.1s / 37.5s | 14.6s / 42.4s |
+| 8 | **10.2s** / 54.8s | 12.7s / 60.6s |
+| 16 | 10.9s / 99.8s | — |
+
+What the numbers settle, in order of consequence:
+
+1. **Feeding worked as designed**: incremental went 2.70x → 3.18x wall
+   and 367.9s → 286.1s CPU against the pre-feeding table above.
+2. **Per-worker bootstrap is now the whole remaining overhead, and it
+   scales with project size**: ~5s CPU/worker on the 140MB project
+   (99.8−21.5 over 16), ~12s/worker on the 329MB one (286.1−91.1 over
+   16). That is the transcript reload — § 2's "no per-worker copy" is
+   confirmed as the top item.
+3. **The sweep saturates at 8 workers, and `auto` overshoots on big
+   machines**: 16 workers is *slower* than 8 on the Mac (10.9s vs
+   10.2s) at nearly double the CPU. The § 7.5 revisit has its answer:
+   until the per-worker copy is gone, worker counts past ~8 are pure
+   cost, so `resolve_render_jobs`'s auto should be capped (or scaled
+   against project size) in the interim.
+4. **The wall floor is the parent, not the workers**: the Mac at 16
+   workers (29.4s) and the VM at 5 workers (30.6s) land on the same
+   incremental wall. The residue is the serial parent bootstrap
+   (load + parse + plan of the 329MB project). More workers cannot
+   help; only the restructuring can.
+5. **Full rebuild improved (1.27x → 1.50x) but stays the unsolved
+   case**, and on a 16GB machine the memory cap makes the fan-out
+   fully inert there (1 worker/project, 0.96x). The flat pool + cap
+   relaxation remain the fix, both unlocked by item 2.
 
 ---
 

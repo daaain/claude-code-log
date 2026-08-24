@@ -276,14 +276,15 @@ parallel worker processes, on by default at the CPU count. Set
 pin a worker count. It earns its keep on the runs that matter — an
 incremental run over a real archive measured 93.2s → 34.6s on 16 cores —
 at the cost of more total CPU, since each worker starts with a cold memo
-cache. The fragment store recovers a share of that: page workers export
-their formatted fragments back to the parent, and session workers are fed
-their session's slice, so they verify-and-reuse instead of re-formatting
-(measured −14% total CPU on a 34k-message archive at 8 workers, with
-96–100% worker hit rates). Small projects are excluded outright, and because each
-worker holds the project's whole transcript (~3x its bytes on disk) the
-worker count is capped against available memory: on a small machine or a
-large archive it degrades to serial rather than swapping. See
+cache. Workers are *fed*, not self-loading: each unit crosses the process
+boundary carrying its own entry slice and (for session files) its slice
+of the fragment store, so workers verify-and-reuse formatted fragments
+instead of re-formatting, and no worker loads the project's transcript.
+Small projects are excluded outright, and the worker count is capped
+against available memory (the cap still charges each worker a full
+transcript copy — deliberately conservative until re-measured): on a
+small machine or a large archive it degrades to serial rather than
+swapping. See
 [dev-docs/application_model.md § 2.10](dev-docs/application_model.md) for
 the measurements.
 

@@ -8,7 +8,7 @@ See dev-docs/dag.md for the full architecture spec.
 
 import logging
 from dataclasses import dataclass, field
-from typing import Optional, TYPE_CHECKING
+from typing import NoReturn, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .workflow import WorkflowRun
@@ -1073,6 +1073,59 @@ def build_session_tree(
         sessions=sessions,
         roots=roots,
         junction_points=junction_points,
+    )
+
+
+class _NodesUnavailable(dict["str", "MessageNode"]):
+    """The ``nodes`` mapping of a slimmed SessionTree — loud on lookup.
+
+    A slim tree crosses the process boundary to render workers, which
+    consume only ``sessions`` / ``junction_points`` / ``workflow_*``.
+    ``nodes`` holds a ``MessageNode`` (and therefore a ``TranscriptEntry``)
+    per message, so shipping it would drag the whole transcript along —
+    exactly what feeding the workers exists to avoid. Lookups raise so a
+    future render-path consumer of ``nodes`` fails loudly in the worker
+    instead of silently rendering from an empty mapping; iteration-shaped
+    access stays empty-dict-behaved because pickling a dict subclass
+    iterates it.
+    """
+
+    _MESSAGE = (
+        "SessionTree.nodes is not available on a slimmed tree (render "
+        "workers are fed entries instead of the full transcript — see "
+        "slim_session_tree). If the render path genuinely needs nodes, "
+        "the worker feed must grow to carry them."
+    )
+
+    def __getitem__(self, key: str) -> NoReturn:
+        raise RuntimeError(self._MESSAGE)
+
+    def get(self, key: str, default: object = None) -> NoReturn:
+        raise RuntimeError(self._MESSAGE)
+
+    def __contains__(self, key: object) -> NoReturn:
+        raise RuntimeError(self._MESSAGE)
+
+
+def slim_session_tree(tree: SessionTree) -> SessionTree:
+    """A copy of ``tree`` without the per-message ``nodes`` mapping.
+
+    Everything the *render* path reads is shared by reference —
+    ``sessions``, ``roots``, ``junction_points`` and the workflow dicts.
+    ``nodes`` is only consumed at load time (``traverse_session_tree``
+    flattens it into the master message list), and it is the part whose
+    pickled size is the whole transcript, so the render fan-out sends
+    workers this slim form instead. Note ``workflow_runs`` still carries
+    each workflow agent's entries; those are a small slice of a project
+    and the renderer does read them.
+    """
+    return SessionTree(
+        nodes=_NodesUnavailable(),
+        sessions=tree.sessions,
+        roots=tree.roots,
+        junction_points=tree.junction_points,
+        workflow_runs=tree.workflow_runs,
+        workflow_links=tree.workflow_links,
     )
 
 

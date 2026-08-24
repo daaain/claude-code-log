@@ -437,35 +437,57 @@ the all-projects wall clock is bounded by the largest single project
 the largest project's own time, at 2.18 cores average), and an
 incremental run has only one or two stale projects to fan out at all.
 
-Workers are **self-sufficient for the transcript, fed for the
-fragments**: each re-loads the transcript from the warm cache in its
-`initializer` (~0.7s for a 12k-message project, ~1.7s for 47k) instead of
-receiving the parent's parsed messages, which would move ~114MB per
-worker. The parent sends only small per-unit metadata, keeps every
-staleness check and cache write to itself (so the DB stays
-single-writer), and the pool starts lazily on first submit. Formatted
-fragments do cross the boundary, though (they are plain strings + digests
-— § 2.9's store made them portable): a page worker returns its fragment
-store as a delta in its result, the parent absorbs it, and each session
-unit dispatched afterwards carries its session's slice
-(`RenderUnit.fed_fragments`), which the worker seeds its own store from.
-Pages always drain before sessions dispatch, so the feed covers
-essentially every message; every fed fragment is digest-verified on use,
-so the worst a stale slice can do is cost the recompute it would have
-cost anyway. This removes the fan-out's main CPU tax — cold workers
-re-formatting in the session pass what the page pass already formatted.
+Workers are **fed, never self-sufficient**: they do not load the
+transcript at all. Each dispatched unit carries its own slice of the
+parent's master message list (`RenderUnit.entries` — a page's sessions'
+entries, or one session's trunk + integrated agent entries), the
+master-list ordinal of each entry (`entry_ordinals`, so fragment-store
+keys name the same positions in every process), and — for session units —
+the session's slice of the parent's fragment store
+(`RenderUnit.fed_fragments`). The one per-worker piece of state is a
+*slim* `SessionTree` (`dag.slim_session_tree`, sent via the pool
+initializer): the render path reads only the DAG lines, junction points
+and workflow dicts, so the per-message `nodes` mapping — whose pickled
+size is the whole transcript — stays behind (its lookups raise on a slim
+tree, so a future render-path consumer of `nodes` fails loudly in a
+worker instead of silently diverging). The parent keeps every staleness
+check and cache write to itself (so the DB stays single-writer), slices
+session units with the same trunk predicate `generate_session` filters
+by (so the worker's re-filter of the fed slice is idempotent), and the
+pool starts lazily on first submit. `RenderPool.submit` declines a unit
+with no entry slice to the inline path, and a pool is only created when
+the conversion has a pre-built session tree — a worker-side DAG rebuild
+from a slice alone could genuinely differ.
 
-**Memory is the binding constraint, not cores.** That self-sufficiency
-means every worker holds a full copy of the transcript, and a loaded
-transcript costs far more than its bytes on disk: measured peak RSS was
-2.0× for a 118MB/12k-message project and 3.0× for a 140MB/47k-message one
-(denser transcripts cost more per byte). So peak memory is
-`workers × project size`, and under `--all-projects` it multiplies again
-with the project pool — `project workers × render workers × project size`.
-A 1GB project is ~3GB *per process*; four render workers under two project
-workers is ~24GB. Unguarded, that exhausts RAM and drives the machine into
-swap, where it pegs every core and stops responding — a far worse outcome
-than rendering serially. `render_pool.memory_capped_workers` therefore caps
+Before the feed, each worker re-loaded the whole transcript from the
+warm cache in its initializer (~0.7s at 12k messages; ~12s of CPU per
+worker at 329MB of transcript), so per-worker cost scaled with project
+size rather than unit size — measured post-fragment-feed on a 16-core
+Mac, 16 workers still burned 286.1s of CPU to do 91.1s of serial work,
+almost all of it transcript reloads, and 16 workers came out *slower*
+than 8. Feeding moves each entry at most twice per conversion (its page
+unit, then its session unit) instead of once per worker. Fragments cross
+the boundary as before (plain strings + digests — § 2.9's store made
+them portable): a page worker returns its fragment store as a delta in
+its result, the parent absorbs it, and session units dispatch afterwards
+carrying their slices. Pages always drain before sessions dispatch, so
+the feed covers essentially every message; every fed fragment is
+digest-verified on use, so the worst a stale slice can do is cost the
+recompute it would have cost anyway.
+
+**Memory: the cap still charges the old footprint.** A loaded transcript
+costs far more than its bytes on disk (measured peak RSS 2.0× for a
+118MB/12k-message project, 3.0× for 140MB/47k; denser transcripts cost
+more per byte). When workers held a full copy each, peak memory was
+`workers × project size` — multiplied again by the project pool under
+`--all-projects` — and an unguarded `auto` on a large archive exhausted
+RAM and drove the machine into swap, pegging every core: a far worse
+outcome than rendering serially. Workers now hold only their in-flight
+unit's slice, but `render_pool.memory_capped_workers` deliberately still
+charges each worker a full copy until the re-size is measured
+(`work/render-format-once.md` § 7.5) — the parent's master list, the
+absorbed fragment text and in-flight pickled slices still cost real
+memory, and the cap errs safe. It caps
 the worker count against available memory (cgroup limit first, since inside
 a container the host's totals are a lie; then `MemAvailable`, then free
 physical pages), taking 60% of it as budget and charging one transcript
@@ -494,11 +516,12 @@ below. `$CLAUDE_CODE_LOG_RENDER_JOBS` overrides: `1` or `off` disables it,
 it only caps it, so the two pool levels together can't oversubscribe. An
 explicit `convert_jsonl_to(render_jobs=N)` overrides the environment; the
 default `None` consults it. `_make_render_pool` declines regardless for
-single-file mode, a missing cache manager, `image_export_mode="referenced"`
-(renders write `images/image_NNNN.png` from a per-call counter, so
-concurrent renders would collide on those names), projects below
-`_MIN_MESSAGES_FOR_RENDER_POOL`, and machines without the memory for a
-second copy of the transcript.
+single-file mode, a missing cache manager, a missing pre-built session
+tree (workers render fed slices against the conversion's tree),
+`image_export_mode="referenced"` (renders write `images/image_NNNN.png`
+from a per-call counter, so concurrent renders would collide on those
+names), projects below `_MIN_MESSAGES_FOR_RENDER_POOL`, and machines
+without the memory the cap formula demands.
 
 One ordering change made the pages parallelisable: the paginated writer
 used to reveal page N-1's "Next" link while generating page N, so page N's
@@ -553,15 +576,24 @@ would change.
 
 Two consequences. First, core count matters a lot: 48.8s of CPU over 4
 cores is 12.2s plus the 4.7s floor, so a 10-core machine should land near
-9.5s rather than 20s. Second, the per-worker cost (a full transcript
-reload plus a cold memo) grows with worker count — CPU went 26.2s → 38.2s
-→ 48.8s at 1, 2 and 4 workers — so the speedup saturates rather than
-scaling indefinitely. Removing that ceiling needs the two-phase "format
-once, assemble many" restructuring: format each distinct message once (in
-parallel), then assemble pages and session files from the fragments —
-template rendering itself is only ~0.08s for a 20MB page. That would also
-remove the per-worker transcript copy, and with it the reason the memory
-cap has to be so conservative. Planned in
+9.5s rather than 20s. Second, the per-worker cost (then: a full
+transcript reload plus a cold memo) grows with worker count, so the
+speedup saturates rather than scaling indefinitely.
+
+Those tables predate the fragment feed and the entry feed, which removed
+most of that per-worker cost in two steps. Re-measured on an 8-core VM
+over the same 8-project archive (1539MB): with fragments fed, the
+incremental scenario reached 2.08x at +76% CPU over serial (the
+pre-feed baseline burned +305%); with entries fed as well — no worker
+transcript loads at all — it reached **2.87x at +3% CPU** (62.6s →
+21.8s wall, 62.5s CPU vs 60.5s serial), and the single-project sweep's
+per-worker CPU overhead fell from ~4.4s to ~0.7s at 8 workers. What
+remains unsolved is the full-rebuild scenario (the project pool grants
+each conversion too few render workers — the still-unrevised memory cap
+alone caps a 16GB machine at 1 worker/project) and the serial parent
+floor (load + parse + plan). Both land with the remaining
+"format once, assemble many" steps — the flat pool over render units
+and the § 7.5 threshold/cap re-size. Planned in
 [`work/render-format-once.md`](../work/render-format-once.md).
 
 ### 2.11 Diagnosing hangs (SIGUSR1 stack dump)
