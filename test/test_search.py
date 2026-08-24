@@ -34,6 +34,7 @@ from claude_code_log.search import (
     fts_escape,
     index_status,
     parse_field_spec,
+    project_slug,
     reindex_files,
     search,
 )
@@ -370,6 +371,22 @@ def test_types_without_a_rendered_card_get_session_links(message_type: str) -> N
 
 def test_link_without_a_session_falls_back_to_the_project() -> None:
     assert build_link("proj", None, "uuid", "assistant", "q") == "proj/"
+
+
+@pytest.mark.parametrize(
+    "stored,expected",
+    [
+        ("/home/u/.claude/projects/-home-u-proj", "-home-u-proj"),
+        ("/home/u/.claude/projects/-home-u-proj/", "-home-u-proj"),
+        ("D:\\a\\_temp\\projects\\-home-u-testproj", "-home-u-testproj"),
+        ("D:\\a\\_temp\\projects\\-home-u-testproj\\", "-home-u-testproj"),
+    ],
+)
+def test_project_slug_handles_both_separator_styles(stored: str, expected: str) -> None:
+    """Stored paths are `str(Path)` from the OS that indexed the archive, so
+    a Windows archive's paths keep their backslashes — splitting on '/'
+    alone would leave the whole path as the slug and break every link."""
+    assert project_slug(stored) == expected
 
 
 def test_excerpt_centres_on_the_match() -> None:
@@ -712,6 +729,54 @@ def test_removing_a_file_removes_its_rows(cache: sqlite3.Connection) -> None:
     ensure_index(cache)
     assert count_matches(cache, "sqlite") == 0
     assert count_matches(cache, "pydantic") == 1
+
+
+def test_incremental_update_without_contentless_delete_rebuilds(
+    cache: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SQLite < 3.43 can't DELETE from a contentless FTS5 table (that needs
+    `contentless_delete=1`), so an incremental update that has to remove
+    rows — a rewritten file, a vanished file — must fall back to a full
+    rebuild instead of dying in `_delete_file_rows`."""
+    import claude_code_log.search as search_module
+
+    monkeypatch.setattr(search_module, "_contentless_delete_supported", lambda: False)
+    ensure_index(cache)
+    assert count_matches(cache, "pydantic") == 2
+
+    # File 1 rewritten, file 2 gone entirely — both need row deletion.
+    cache.execute("DELETE FROM messages WHERE file_id = 1")
+    _add_message(cache, 30, 1, 1, _assistant("now mentions mercurial"), uuid="uuid-30")
+    cache.execute("UPDATE cached_files SET cached_mtime = 12345.678 WHERE id = 1")
+    cache.execute("DELETE FROM messages WHERE file_id = 2")
+    cache.execute("DELETE FROM cached_files WHERE id = 2")
+    cache.commit()
+
+    status = ensure_index(cache)
+    assert status.ready
+    assert count_matches(cache, "mercurial") == 1
+    assert count_matches(cache, "pydantic") == 0
+    assert count_matches(cache, "sqlite") == 0
+
+
+def test_windows_style_project_paths_produce_portable_links(tmp_path: Path) -> None:
+    """The cache stores `str(Path)`, so an archive indexed on Windows holds
+    backslash paths. Result links must carry the directory basename — the
+    browser happily normalises a full `D:\\...` path into a URL the archive
+    server can't resolve, which surfaced as deep-link 404s in Windows CI."""
+    conn = _make_cache(tmp_path)
+    conn.execute(
+        "UPDATE projects SET project_path = 'D:\\a\\_temp\\projects\\-home-u-alpha' "
+        "WHERE id = 1"
+    )
+    conn.commit()
+    _add_message(conn, 1, 1, 1, _assistant("indexed on windows"))
+    ensure_index(conn)
+
+    hits = search(conn, "windows")
+    assert hits, "expected a hit"
+    assert hits[0].project_slug == "-home-u-alpha"
+    assert hits[0].link.startswith("-home-u-alpha/session-")
 
 
 def test_searching_before_the_index_exists_raises(cache: sqlite3.Connection) -> None:

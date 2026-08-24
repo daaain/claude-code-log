@@ -203,6 +203,34 @@ def test_fields_parameter_widens_the_search(db_path: Path, client: Any) -> None:
     assert all_body["results"][0]["field"] == "tool_result"
 
 
+def test_unindexed_fields_are_dropped_and_reported(tmp_path: Path) -> None:
+    """An index built with a narrower column set (CLAUDE_CODE_LOG_INDEX_FIELDS)
+    must not turn the default search into an FTS 'no such column' error:
+    absent columns are dropped from the request and reported."""
+    path = tmp_path / "cache.db"
+    conn = _make_cache(path)
+    _add(conn, 1, 1, "alpha mentions pydantic", session_id="s-a", uuid="u-1")
+    ensure_index(conn, index_fields=("text",))
+    conn.close()
+
+    api = SearchApi(path)
+    body = api.search({"q": "pydantic"})
+    assert body["fields"] == ["text"]
+    assert body["unindexed_fields"] == [
+        "thinking",
+        "tool_input",
+        "attachment",
+        "meta",
+    ]
+    assert len(body["results"]) == 1
+
+    # Everything requested is unindexed: empty results, not an error.
+    body = api.search({"q": "pydantic", "fields": "meta"})
+    assert body["results"] == []
+    assert body["fields"] == []
+    assert body["unindexed_fields"] == ["meta"]
+
+
 def test_limit_is_capped(client: Any) -> None:
     _, body = client("/api/search", q="pydantic", limit="99999")
     assert body["limit"] == MAX_LIMIT

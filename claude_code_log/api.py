@@ -24,7 +24,9 @@ from .search import (
     count_matches,
     index_ready,
     index_status,
+    indexed_fields,
     parse_field_spec,
+    project_slug,
     search,
 )
 
@@ -99,7 +101,7 @@ class SearchApi:
                     # Never trust the stored path for resolution: it is
                     # absolute and points at the archive's *original*
                     # location. Only the basename is portable.
-                    "slug": str(row[1]).rstrip("/").rsplit("/", 1)[-1],
+                    "slug": project_slug(str(row[1])),
                     "path": row[1],
                     "message_count": row[2],
                     "first_timestamp": row[3],
@@ -112,7 +114,7 @@ class SearchApi:
     def _resolve_project_id(self, slug: str) -> Optional[int]:
         """Map a project slug (directory name) to its cache id."""
         for row in self.connection().execute("SELECT id, project_path FROM projects"):
-            if str(row[1]).rstrip("/").rsplit("/", 1)[-1] == slug:
+            if project_slug(str(row[1])) == slug:
                 return int(row[0])
         return None
 
@@ -132,8 +134,25 @@ class SearchApi:
             )
 
         fields = parse_field_spec(params.get("fields"), self.default_fields)
+
+        # The index's column set is baked in at build time and can be
+        # narrower than SEARCH_FIELDS (CLAUDE_CODE_LOG_INDEX_FIELDS). An
+        # FTS5 column filter naming a missing column is an OperationalError,
+        # not an empty result — so search only what exists, and report what
+        # was dropped rather than silently narrowing the scope.
+        available = set(indexed_fields(conn))
+        unindexed = [f for f in fields if f not in available]
+        if unindexed:
+            fields = tuple(f for f in fields if f in available)
+
         if not fields:
-            return {"results": [], "total": 0, "query": query, "fields": []}
+            return {
+                "results": [],
+                "total": 0,
+                "query": query,
+                "fields": [],
+                "unindexed_fields": unindexed,
+            }
 
         project_id: Optional[int] = None
         slug = params.get("project")
@@ -160,6 +179,7 @@ class SearchApi:
         return {
             "query": query,
             "fields": list(fields),
+            "unindexed_fields": unindexed,
             "project": slug or None,
             "limit": limit,
             "offset": offset,

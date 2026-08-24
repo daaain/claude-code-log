@@ -459,6 +459,19 @@ def _refresh_indexed_count(conn: sqlite3.Connection) -> None:
     _meta_set(conn, "indexed_messages", str(int(count)))
 
 
+def indexed_fields(conn: sqlite3.Connection) -> tuple[str, ...]:
+    """The field columns the existing index was built with.
+
+    The column set is baked into the virtual table at build time and can be
+    narrower than `SEARCH_FIELDS` (`CLAUDE_CODE_LOG_INDEX_FIELDS`), so a
+    request must not assume every searchable field exists: an FTS5 column
+    filter naming a missing column is an OperationalError, not an empty
+    result. Cheap — one indexed meta lookup, safe on the request path.
+    """
+    raw = _meta_get(conn, "index_fields") or ""
+    return tuple(f for f in raw.split(",") if f)
+
+
 def index_ready(conn: sqlite3.Connection) -> bool:
     """Cheap readiness check for the request path.
 
@@ -608,6 +621,22 @@ def ensure_index(
             "SELECT id, message_count, cached_mtime FROM cached_files"
         )
     }
+
+    # A contentless FTS5 table only accepts DELETE when created with
+    # `contentless_delete=1` (SQLite >= 3.43; see `_create_tables`). On an
+    # older SQLite, an incremental update that needs to remove rows — a
+    # vanished file, or a rewritten one — would die in `_delete_file_rows`
+    # with "cannot DELETE from contentless fts5 table", so fall back to a
+    # full rebuild instead: correct on every SQLite, just slower.
+    if indexed_files and not _contentless_delete_supported():
+        needs_delete = bool(set(indexed_files) - set(current_files)) or any(
+            file_id in indexed_files and abs(indexed_files[file_id] - mtime) >= 1e-6
+            for file_id, (_, mtime) in current_files.items()
+        )
+        if needs_delete:
+            drop_index(conn)
+            _create_tables(conn, fields)
+            indexed_files = {}
 
     # Files that vanished from the cache take their rows with them.
     for gone in set(indexed_files) - set(current_files):
@@ -822,19 +851,27 @@ def _build_query(
     planner drives from `messages` and probes FTS by rowid, which turns a
     2.4 ms project-filtered search into 2,012 ms. `test_search.py` asserts
     the plan.
+
+    Returns the SQL and the filter parameters in placeholder order; the
+    caller prepends the MATCH expression and appends LIMIT/OFFSET.
     """
     where: list[str] = [f"f.{FTS_TABLE} MATCH ?"]
     params: list[Any] = []
     if project_id is not None:
         where.append("m.project_id = ?")
+        params.append(project_id)
     if session_id is not None:
         where.append("m.session_id = ?")
+        params.append(session_id)
     if message_type is not None:
         where.append("m.type = ?")
+        params.append(message_type)
     if date_from is not None:
         where.append("m.timestamp >= ?")
+        params.append(date_from)
     if date_to is not None:
         where.append("m.timestamp <= ?")
+        params.append(date_to)
 
     sql = (
         "SELECT f.rowid, m.type, m.timestamp, m.session_id, m._uuid, "
@@ -870,6 +907,19 @@ def build_excerpt(text: str, terms: Sequence[str], width: int = 240) -> str:
     return ("…" if start > 0 else "") + fragment + ("…" if end < len(text) else "")
 
 
+def project_slug(project_path: str) -> str:
+    """The project directory's basename — the only portable part of a path
+    stored in the cache.
+
+    Stored paths are `str(Path)` from whatever OS indexed the archive, so a
+    Windows archive's paths keep their backslashes. Splitting on '/' alone
+    would leave the whole path as the "slug", which then leaks into result
+    links as `D:/a/.../projects/-slug/session-….html` — a URL the archive
+    server can't resolve.
+    """
+    return re.split(r"[\\/]", project_path.rstrip("\\/"))[-1]
+
+
 def _plain_terms(user_query: str) -> list[str]:
     """The literal strings to look for when building an excerpt."""
     terms: list[str] = []
@@ -901,18 +951,14 @@ def search(
         raise RuntimeError("search index has not been built")
 
     match = _match_expression(escaped, fields)
-    sql, _ = _build_query(
+    sql, filter_params = _build_query(
         project_id=project_id,
         session_id=session_id,
         message_type=message_type,
         date_from=date_from,
         date_to=date_to,
     )
-    params: list[Any] = [match]
-    for value in (project_id, session_id, message_type, date_from, date_to):
-        if value is not None:
-            params.append(value)
-    params += [limit, offset]
+    params: list[Any] = [match, *filter_params, limit, offset]
 
     terms = _plain_terms(user_query)
     results: list[SearchResult] = []
@@ -930,7 +976,7 @@ def search(
             # match where a naive substring scan doesn't (diacritics folding).
             next((name for name in fields if extracted.get(name)), "text"),
         )
-        slug = project_path.rstrip("/").rsplit("/", 1)[-1]
+        slug = project_slug(project_path)
         results.append(
             SearchResult(
                 message_id=int(row_id),
