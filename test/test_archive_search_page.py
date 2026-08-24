@@ -36,11 +36,11 @@ def generated_archive(tmp_path: Path) -> Path:
 def test_conversion_writes_the_search_page(generated_archive: Path) -> None:
     search_page = generated_archive / "search.html"
     assert search_page.exists()
-    assert "api/search" in search_page.read_text()
+    assert "api/search" in search_page.read_text(encoding="utf-8")
 
 
 def test_index_page_links_to_the_search_page(generated_archive: Path) -> None:
-    index = (generated_archive / "index.html").read_text()
+    index = (generated_archive / "index.html").read_text(encoding="utf-8")
     assert "href='search.html'" in index or 'href="search.html"' in index
 
 
@@ -51,7 +51,7 @@ def test_combined_transcript_links_to_the_search_page(
     and pre-selects the project the reader came from."""
     combined = (
         generated_archive / "-home-u-testproj" / "combined_transcripts.html"
-    ).read_text()
+    ).read_text(encoding="utf-8")
     assert "href='../search.html?project=-home-u-testproj'" in combined
     assert "Search inside all transcripts" in combined
 
@@ -63,7 +63,7 @@ def test_single_file_conversion_has_no_dangling_search_link(tmp_path: Path) -> N
     source = tmp_path / "session.jsonl"
     shutil.copy(Path("test/test_data/representative_messages.jsonl"), source)
     output = convert_jsonl_to_html(source)
-    assert "search.html" not in output.read_text()
+    assert "search.html" not in output.read_text(encoding="utf-8")
 
 
 def test_index_page_keeps_its_own_search_box(generated_archive: Path) -> None:
@@ -74,7 +74,7 @@ def test_index_page_keeps_its_own_search_box(generated_archive: Path) -> None:
     body. Merging them behind one input would make the same keystrokes mean
     different things depending on whether a server is running.
     """
-    index = (generated_archive / "index.html").read_text()
+    index = (generated_archive / "index.html").read_text(encoding="utf-8")
     assert "searchInput" in index
     assert "buildSearchIndex" in index
     # ...and it must not have been quietly rewired to the API.
@@ -83,7 +83,7 @@ def test_index_page_keeps_its_own_search_box(generated_archive: Path) -> None:
 
 def test_search_page_is_self_contained(generated_archive: Path) -> None:
     """No external assets — it has to work over plain loopback."""
-    html = (generated_archive / "search.html").read_text()
+    html = (generated_archive / "search.html").read_text(encoding="utf-8")
     assert "<script src=" not in html
     assert "<link rel='stylesheet'" not in html
     assert '<link rel="stylesheet"' not in html
@@ -121,7 +121,7 @@ def test_session_pages_carry_the_uuid_deep_link_handler(
 ) -> None:
     session_pages = list(generated_archive.glob("*/session-*.html"))
     assert session_pages, "expected at least one session page"
-    html = session_pages[0].read_text()
+    html = session_pages[0].read_text(encoding="utf-8")
     assert "claudeLogRevealMessageByUuid" in html
     assert "data-uuid" in html
 
@@ -364,6 +364,6 @@ def _first_uuid(session_page: Path) -> str:
     Deliberately not a UUID-shaped pattern: transcript uuids are opaque
     identifiers, and the test fixtures use `msg_001`-style ids.
     """
-    match = re.search(r"data-uuid='([^']+)'", session_page.read_text())
+    match = re.search(r"data-uuid='([^']+)'", session_page.read_text(encoding="utf-8"))
     assert match, "no data-uuid in the generated session page"
     return match.group(1)
