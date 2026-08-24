@@ -37,15 +37,17 @@ memory_mib = 8192   # MiB — any whole number
 disk_gib = 60
 
 # Egress proxy. Declaring [proxy] routes the box's egress through the Mac proxy — REQUIRED
-# by the wall (which otherwise leaves the box with no way out). Allow-all at first so box
-# bootstrap (PyPI, etc.) just works; lock down once you know your egress by flipping
-# `default_deny` and curating `allow` — blocked hosts then show live in `fy tui`, where you
-# can grant them. Any keyless host (below) is ALWAYS allowed implicitly — never list it.
+# by the wall (which otherwise leaves the box with no way out). Locked down: only the
+# bootstrap hosts below are allowed; anything else is denied and shows live in `fy tui`,
+# where you can grant it. Any keyless host (below) is ALWAYS allowed implicitly — never
+# list it.
 [proxy]
-default_deny = false
-# allow = ["github.com", "pypi.org", "*.pypi.org", "files.pythonhosted.org"]
-# The [[box.tools]] steps below also need "*.fedoraproject.org" (dnf metalink + whichever
-# mirror it redirects to) for their dnf installs, and "cdn.playwright.dev" (browser bundles).
+default_deny = true
+# git fetch/clone; uv/pip (box bootstrap + deps); dnf metalink for [[box.tools]] (it
+# redirects to an arbitrary mirror — on a fresh box, grant the one it picks live in
+# `fy tui`); the playwright browser bundles; and unpkg.com, which the generated
+# transcript pages load vis-timeline from (the browser test suite renders them).
+allow = ["github.com", "pypi.org", "*.pypi.org", "files.pythonhosted.org", "*.fedoraproject.org", "cdn.playwright.dev", "unpkg.com"]
 # passthrough = ["@all"]   # hosts tunnelled UN-decrypted under default_deny (the toolchain)
 
 # ── Agents — uncomment ONE, then `fy box up` (step 2) ────────────────────────────────────
