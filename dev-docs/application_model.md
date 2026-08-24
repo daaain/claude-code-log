@@ -404,10 +404,23 @@ projects — see `work/render-format-once.md` § 4.8): fragments embedding
 per-tree `#msg-d-{N}` anchors are never stored (output scan); a
 signature of the tree-derived render inputs (pair presence,
 `display_model`, `agent_depth`, sidechannel/collapse flags) is part of
-the store key; and `get()` verifies the stored `MessageContent` compares
-equal to the requesting tree's before serving (dataclass equality, with
-the per-tree `message_index`/`fragment_key` fields excluded via
-`compare=False`). Keys are `(id(source_entry), part_ordinal)` — entry
+the store key; and `get()` verifies the requesting tree's content
+digest matches the one stored at `put` time before serving.
+`fragment_store.content_digest` is a canonical BLAKE2b walk over
+exactly the compare-relevant state — same field coverage as dataclass
+equality, with the per-tree `message_index`/`fragment_key` fields
+excluded via `compare=False`, and any looseness of Python `==` that
+the canonical form can't express (bool/int, dict order,
+identity-`repr` objects) resolving to a conflict served fresh, never
+a false hit. A digest is stored rather than the content object so the
+store holds only strings and bytes — picklable, spillable, and unable
+to pin object graphs — the property the planned fed-worker format
+phase depends on. On the reference 803MB archive this is peak-RSS-
+neutral (measured 1521MB either way: the stored contents alias
+objects the master entry list keeps alive, and the store-on peak of
++269MB over store-off is the 186MB of fragment text plus per-entry
+overhead), so the fragment text itself is what any future memory
+bounding must address. Keys are `(id(source_entry), part_ordinal)` — entry
 identity, stamped in the pass-2 render loop — because transcript uuids
 collide across resumed/forked sessions. Renders with
 `image_export_mode="referenced"` bypass the store entirely (fragments

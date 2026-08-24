@@ -13,8 +13,11 @@ Phase 1 confirmed the duplicate work is structurally gone (64,968 lookups
 win on top of a warm leaf memo is modest (~1s of 27s CPU) — the value is
 what it unblocks: § 2's parallel format phase, fed workers, and the spill
 that bounds fragment memory (186MB held in-memory on the 803MB archive,
-~24% of disk bytes on smaller ones). Remaining: §§ 2's phases 2+ below,
-and the traps in § 4.8 discovered while landing phase 1.
+~24% of disk bytes on smaller ones). The § 4.9 content-ref retention is
+since resolved (equality guard replaced by a content digest, making the
+store picklable/spillable — measured peak-RSS-neutral, see § 4.9).
+Remaining: §§ 2's phases 2+ below, and the traps in § 4.8 discovered
+while landing phase 1.
 
 This is a handover note. It exists because the two landed optimisations
 each hit a ceiling, and *the same restructuring removes both ceilings*.
@@ -255,13 +258,35 @@ them). Assume any new per-tree state is a divergence source until proven
 otherwise, and verify with hash runs over `downloads/projects/` — the
 fixture project exercises none of these classes.
 
-### 4.9 Storing content refs retains memory
+### 4.9 Storing content refs retains memory (RESOLVED — with a corrected premise)
 
-The content-equality guard keeps a reference to one MessageContent per
-fragment, which retains object graphs beyond the fragment strings
-(measured on the 803MB archive: maxrss 1236MB → 1507MB store-on, of which
-186MB is fragment text). The phase-2 spill design must either drop the
-content refs (replace with a content hash) or spill them too.
+The content-equality guard originally kept a reference to one
+MessageContent per fragment. Resolved by replacing the retained ref
+with a 16-byte content digest (`fragment_store.content_digest`) — a
+canonical BLAKE2b walk with the same field coverage as dataclass
+`__eq__` (compare=True fields only), so the hit-verification
+semantics are unchanged. Where Python `==` is looser than the
+canonical form (bool/int unification, dict insertion order,
+identity-`repr` objects) the digests differ and the lookup counts as
+a conflict served fresh — divergence is only ever in the safe
+direction. Unit-pinned in `test/test_fragment_store.py`; hash-runs
+over five real archives byte-identical with unchanged hit rates
+(32,441/64,968 on the 803MB archive; conflict counts 0–48 per
+project, all served fresh).
+
+**The premise needed correcting, though.** A direct A/B on the 803MB
+archive (dev VM, serial, warm nothing) measured maxrss 1521MB with
+the ref-retaining store and 1521MB with the digest store — dropping
+the refs moves the *peak* not at all on this workload. The peak lands
+at the end of the combined-page pass, where the stored content
+objects alias strings the master entry list and the live tree hold
+anyway; the +269MB store-on delta over store-off (1252MB) is the
+186MB of fragment text plus per-entry dict/string overhead, not the
+refs. So the digest's value is structural, not a memory win: the
+store now holds only strings and bytes (picklable, spillable, cannot
+pin object graphs in differently-shaped workloads), which is the
+property the fed-worker format phase needs. Any future memory
+bounding must target the fragment text itself.
 
 ---
 

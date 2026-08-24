@@ -28,14 +28,22 @@ invalidation surface at zero:
   whole conversion, so the ``id()`` is stable; transcript uuids are NOT
   usable here because resumed/forked sessions reuse them across distinct
   messages (work/render-format-once.md § 4.1).
-- **Hits are verified against the content.** ``get`` compares the stored
-  content object with the requesting tree's content (dataclass equality,
-  with per-tree fields excluded via ``compare=False``); a mismatch is a
-  conflict, not a hit. This is the backstop for content built from
-  cross-message context that resolves differently per tree — e.g. a tool
-  result whose paired ``tool_use`` lives in another session, so the
-  factory resolves the tool name in the combined tree but not in the
-  session tree (work/render-format-once.md § 4.8).
+- **Hits are verified against the content.** ``get`` compares a digest
+  of the requesting tree's content against the digest stored at ``put``
+  time (:func:`content_digest` — same field coverage as dataclass
+  equality, with the per-tree ``compare=False`` fields excluded); a
+  mismatch is a conflict, not a hit. This is the backstop for content
+  built from cross-message context that resolves differently per tree —
+  e.g. a tool result whose paired ``tool_use`` lives in another session,
+  so the factory resolves the tool name in the combined tree but not in
+  the session tree (work/render-format-once.md § 4.8). A digest is
+  stored rather than the content object itself so the store holds only
+  strings and bytes — picklable, spillable, and unable to pin object
+  graphs — which is what lets phase 2 feed fragments to workers.
+  Measured peak-RSS-neutral on the reference 803MB archive (the stored
+  contents there alias objects the master entry list keeps alive
+  anyway — work/render-format-once.md § 4.9), but the retention it
+  removes is workload-shaped, and the structural property is the point.
 
 The store is a pure performance feature: a renderer with no store (or a
 content with no key) formats exactly as before.
@@ -43,8 +51,14 @@ content with no key) formats exactly as before.
 
 from __future__ import annotations
 
+import dataclasses
 import os
-from typing import TYPE_CHECKING, Optional
+from hashlib import blake2b
+from typing import TYPE_CHECKING, Optional, cast
+
+from collections.abc import Sequence
+
+from pydantic import BaseModel
 
 if TYPE_CHECKING:
     from .models import MessageContent
@@ -56,6 +70,108 @@ Fragment = tuple[str, str, str]
 # (id(entry), part_ordinal) from MessageContent.fragment_key, extended by
 # the consumer with the tree-context signature tuple.
 StoreKey = tuple[object, ...]
+
+
+def content_digest(content: "MessageContent") -> bytes:
+    """Canonical 16-byte digest of a content's compare-relevant state.
+
+    Stands in for dataclass ``__eq__`` in the store's hit-verification so
+    the store need not retain the content object itself
+    (work/render-format-once.md § 4.9). Field coverage matches dataclass
+    equality exactly: compare-excluded fields (the per-tree
+    ``message_index`` / ``fragment_key``) are skipped, everything else is
+    fed into the hash with type tags and length prefixes so no two
+    distinct structures can collide by concatenation.
+
+    Divergence from ``__eq__`` is tolerated only in the safe direction:
+    where Python equality is looser than this canonical form (``True ==
+    1``, equal dicts with different insertion order, identity-``repr``
+    objects), the digests differ, the lookup counts as a conflict, and
+    the fragment is formatted fresh — never the reverse.
+    """
+    h = blake2b(digest_size=16)
+    _feed(h, content)
+    return h.digest()
+
+
+def _feed(h: "blake2b", obj: object) -> None:  # noqa: C901 - flat type dispatch
+    # Singletons / primitives first. bool before int (bool subclasses
+    # int); str before Enum (value-equality StrEnums digest as their
+    # value, matching ``==``), and likewise int catches IntEnums.
+    if obj is None:
+        h.update(b"N")
+    elif obj is True:
+        h.update(b"T")
+    elif obj is False:
+        h.update(b"F")
+    elif isinstance(obj, str):
+        b = obj.encode("utf-8", "surrogatepass")
+        h.update(b"s%d:" % len(b))
+        h.update(b)
+    elif isinstance(obj, int):
+        b = b"%d" % obj
+        h.update(b"i%d:" % len(b))
+        h.update(b)
+    elif isinstance(obj, float):
+        b = repr(obj).encode()
+        h.update(b"f%d:" % len(b))
+        h.update(b)
+    elif isinstance(obj, bytes):
+        h.update(b"y%d:" % len(obj))
+        h.update(obj)
+    elif isinstance(obj, (list, tuple)):
+        # Distinct tags: [1] == (1,) is False in Python too.
+        items = cast("Sequence[object]", obj)
+        h.update(
+            b"l%d:" % len(items) if isinstance(obj, list) else b"t%d:" % len(items)
+        )
+        for item in items:
+            _feed(h, item)
+    elif isinstance(obj, dict):
+        mapping = cast("dict[object, object]", obj)
+        h.update(b"d%d:" % len(mapping))
+        for k, v in mapping.items():
+            _feed(h, k)
+            _feed(h, v)
+    elif dataclasses.is_dataclass(obj) and not isinstance(obj, type):
+        # Dataclass __eq__ requires identical classes, then compares the
+        # compare=True fields positionally — mirror both.
+        cls = type(obj)
+        _feed_class_tag(h, b"D", cls)
+        for f in dataclasses.fields(obj):
+            if f.compare:
+                _feed(h, getattr(obj, f.name))
+        h.update(b".")
+    elif isinstance(obj, BaseModel):
+        # Pydantic v2 __eq__ compares class, __dict__ and (for
+        # extra="allow" models) __pydantic_extra__. Keys are sorted
+        # because dict *order* does not affect pydantic equality.
+        _feed_class_tag(h, b"P", type(obj))
+        for k in sorted(obj.__dict__):
+            _feed(h, k)
+            _feed(h, obj.__dict__[k])
+        extra = getattr(obj, "__pydantic_extra__", None)
+        if extra:
+            h.update(b"x")
+            for k in sorted(extra):
+                _feed(h, k)
+                _feed(h, extra[k])
+        h.update(b".")
+    else:
+        # Unknown object: fall back to repr. An identity-based repr makes
+        # every lookup for that content a conflict (served fresh — safe),
+        # and the conflict counter makes the cost visible.
+        b = repr(obj).encode("utf-8", "surrogatepass")
+        _feed_class_tag(h, b"r", type(obj))
+        h.update(b"%d:" % len(b))
+        h.update(b)
+
+
+def _feed_class_tag(h: "blake2b", tag: bytes, cls: type) -> None:
+    name = f"{cls.__module__}.{cls.__qualname__}".encode()
+    h.update(tag)
+    h.update(b"%d:" % len(name))
+    h.update(name)
 
 
 def fragment_store_enabled() -> bool:
@@ -78,14 +194,14 @@ class RenderFragmentStore:
     """
 
     def __init__(self) -> None:
-        self._fragments: dict[StoreKey, tuple["MessageContent", Fragment]] = {}
+        self._fragments: dict[StoreKey, tuple[bytes, Fragment]] = {}
         self._bytes = 0
         self.hits = 0
         self.misses = 0
-        # Lookups whose stored content did not compare equal to the
-        # requesting tree's content — served fresh instead. A non-zero
-        # count is expected on real archives (cross-tree factory context);
-        # a LARGE one means a per-tree field is missing compare=False.
+        # Lookups whose stored content digest did not match the
+        # requesting tree's — served fresh instead. A non-zero count is
+        # expected on real archives (cross-tree factory context); a LARGE
+        # one means a per-tree field is missing compare=False.
         self.conflicts = 0
         # Fragments the consumer computed but declined to store because
         # their output is tree-specific (per-tree ``#msg-d-{N}`` anchors —
@@ -97,11 +213,12 @@ class RenderFragmentStore:
         if entry is None:
             self.misses += 1
             return None
-        stored_content, fragment = entry
+        stored_digest, fragment = entry
         # Verify the stored render really was computed from an equal
-        # content. Same-typed dataclasses compare field-wise; a type
-        # mismatch (uuid-collision-style key accidents) compares unequal.
-        if stored_content != content:
+        # content. The digest covers exactly the compare=True fields, so
+        # a type mismatch (uuid-collision-style key accidents) or any
+        # cross-tree content divergence compares unequal here.
+        if stored_digest != content_digest(content):
             self.conflicts += 1
             return None
         self.hits += 1
@@ -110,7 +227,7 @@ class RenderFragmentStore:
     def put(self, key: StoreKey, content: "MessageContent", fragment: Fragment) -> None:
         if key in self._fragments:
             return
-        self._fragments[key] = (content, fragment)
+        self._fragments[key] = (content_digest(content), fragment)
         self._bytes += sum(len(part) for part in fragment)
 
     def stats(self) -> dict[str, int]:
