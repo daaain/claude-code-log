@@ -48,7 +48,24 @@ default_deny = true
 # mirror system redirects to arbitrary hosts no allowlist can name); the playwright
 # browser bundles; and unpkg.com, which the generated transcript pages load vis-timeline
 # from (the browser test suite renders them).
-allow = ["github.com", "pypi.org", "*.pypi.org", "files.pythonhosted.org", "*.fedoraproject.org", "cdn.playwright.dev", "unpkg.com"]
+#
+# downloads.claude.ai is `claude --upgrade` (and `claude plugin`): the version manifest,
+# the release binaries, and the official plugin marketplace all sit under
+# /claude-code-releases on that one host. It is NOT the keyless host — api.anthropic.com
+# is, and it's allowed implicitly — so this needs listing, and it carries no credential:
+# a public CDN serving signed release artefacts. Without it the updater fails with
+# "proxy refused the connection" and the box stays pinned at whatever version it was
+# built with.
+allow = [
+  "github.com",
+  "pypi.org",
+  "*.pypi.org",
+  "files.pythonhosted.org",
+  "*.fedoraproject.org",
+  "cdn.playwright.dev",
+  "unpkg.com",
+  "downloads.claude.ai",
+]
 # passthrough = ["@all"]   # hosts tunnelled UN-decrypted under default_deny (the toolchain)
 
 # ── Agents — uncomment ONE, then `fy box up` (step 2) ────────────────────────────────────
