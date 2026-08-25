@@ -23,6 +23,8 @@ from claude_code_log.models import (
     UserTranscriptEntry,
 )
 
+from test.conftest import bump_mtime
+
 
 # Use conftest.py fixtures: isolated_cache_dir, isolated_db_path, isolated_cache_manager
 
@@ -1101,11 +1103,13 @@ class TestFileModificationDetection:
         # Verify cache is valid
         assert cache_manager.is_file_cached(jsonl_file) is True
 
-        # Wait and touch file to change mtime
-        time.sleep(1.1)
+        # Rewrite the file and make it *look* newer than the cached mtime.
+        # See bump_mtime in conftest: sleeping past the 1.0 s threshold is
+        # not reliable, and this states the intent directly.
         jsonl_file.write_text(
             json.dumps(sample_user_entry.model_dump()) + "\n", encoding="utf-8"
         )
+        bump_mtime(jsonl_file)
 
         # Cache should be invalidated
         assert cache_manager.is_file_cached(jsonl_file) is False

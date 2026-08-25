@@ -1,0 +1,976 @@
+"""Tests for full-archive search.
+
+Weighted towards the text extractor and the two invariants that are easy to
+break silently: the `CROSS JOIN` query plan and base64 exclusion. Both were
+found by measurement rather than by reading the code, and neither shows up
+as a failure — one is a 840x slowdown, the other a 28% larger index.
+"""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+import zlib
+from pathlib import Path
+from typing import Any, Optional
+
+import pytest
+
+from test.conftest import bump_mtime
+
+from claude_code_log.search import (
+    DEFAULT_INDEX_FIELDS,
+    DEFAULT_SEARCH_FIELDS,
+    FTS_TABLE,
+    SEARCH_FIELDS,
+    SKIP_TYPES,
+    build_excerpt,
+    build_link,
+    count_matches,
+    decode_entry,
+    ensure_index,
+    extract_search_text,
+    fts5_available,
+    fts_escape,
+    index_status,
+    parse_field_spec,
+    project_slug,
+    reindex_files,
+    search,
+)
+
+# ---------------------------------------------------------------------------
+# Text extraction
+# ---------------------------------------------------------------------------
+
+
+def test_extracts_assistant_text_and_thinking() -> None:
+    entry: dict[str, Any] = {
+        "type": "assistant",
+        "message": {
+            "content": [
+                {"type": "text", "text": "the visible answer"},
+                {"type": "thinking", "thinking": "the private reasoning"},
+            ]
+        },
+    }
+    out = extract_search_text(entry)
+    assert out["text"] == "the visible answer"
+    assert out["thinking"] == "the private reasoning"
+    assert out["tool_input"] == ""
+
+
+def test_extracts_tool_use_name_and_input() -> None:
+    entry: dict[str, Any] = {
+        "type": "assistant",
+        "message": {
+            "content": [
+                {
+                    "type": "tool_use",
+                    "name": "Grep",
+                    "input": {"pattern": "needle", "path": "/src"},
+                }
+            ]
+        },
+    }
+    out = extract_search_text(entry)
+    assert "Grep" in out["tool_input"]
+    assert "needle" in out["tool_input"]
+    assert out["text"] == ""
+
+
+def test_tool_result_text_does_not_leak_into_the_text_group() -> None:
+    """A file dump must not look like prose the user wrote.
+
+    `tool_result` is excluded from the default search fields precisely
+    because it is noisy, so nested text blocks landing in `text` would
+    defeat that.
+    """
+    entry: dict[str, Any] = {
+        "type": "user",
+        "message": {
+            "content": [
+                {
+                    "type": "tool_result",
+                    "content": [{"type": "text", "text": "line one of a file dump"}],
+                }
+            ]
+        },
+    }
+    out = extract_search_text(entry)
+    assert "file dump" in out["tool_result"]
+    assert out["text"] == ""
+
+
+def test_base64_image_payloads_are_excluded() -> None:
+    """The 28%-index-inflation bug: naive flattening indexes screenshots."""
+    payload = "iVBORw0KGgoAAAANSUhEUg" + "A" * 4000
+    entry: dict[str, Any] = {
+        "type": "user",
+        "message": {
+            "content": [
+                {"type": "text", "text": "here is a screenshot"},
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": payload,
+                    },
+                },
+            ]
+        },
+    }
+    out = extract_search_text(entry)
+    assert out["text"] == "here is a screenshot"
+    for value in out.values():
+        assert payload not in value
+        assert "iVBORw0KGgo" not in value
+
+
+def test_queue_operation_content_items_are_walked_not_flattened() -> None:
+    """A real archive had a 6.1 MB queue-operation that was one line + a PNG."""
+    payload = "iVBORw0KGgo" + "B" * 3000
+    entry: dict[str, Any] = {
+        "type": "queue-operation",
+        "operation": "enqueue",
+        "content": [
+            {"type": "text", "text": "the queued prompt"},
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/png",
+                    "data": payload,
+                },
+            },
+        ],
+    }
+    out = extract_search_text(entry)
+    assert out["text"] == "the queued prompt"
+    assert all(payload not in v for v in out.values())
+
+
+def test_short_base64_like_tokens_survive() -> None:
+    """The filter is deliberately conservative — real identifiers must pass."""
+    entry: dict[str, Any] = {
+        "type": "assistant",
+        "message": {"content": [{"type": "text", "text": "sha256:abc123DEF456=="}]},
+    }
+    assert "sha256:abc123DEF456==" in extract_search_text(entry)["text"]
+
+
+@pytest.mark.parametrize(
+    "entry,group,needle",
+    [
+        ({"type": "summary", "summary": "a session summary"}, "meta", "summary"),
+        ({"type": "ai-title", "aiTitle": "Generated Title"}, "meta", "Generated"),
+        ({"type": "system", "content": "a system note"}, "meta", "system note"),
+        (
+            {"type": "attachment", "attachment": {"type": "file", "text": "attached"}},
+            "attachment",
+            "attached",
+        ),
+    ],
+)
+def test_extracts_non_message_entry_types(
+    entry: dict[str, Any], group: str, needle: str
+) -> None:
+    assert needle in extract_search_text(entry)[group]
+
+
+def test_extraction_always_returns_every_group() -> None:
+    out = extract_search_text({"type": "user", "message": {"content": []}})
+    assert set(out) == set(SEARCH_FIELDS)
+    assert all(isinstance(v, str) for v in out.values())
+
+
+def test_booleans_are_not_indexed_as_words() -> None:
+    """`true`/`false` appear in nearly every tool input; they're pure noise."""
+    entry: dict[str, Any] = {
+        "type": "assistant",
+        "message": {
+            "content": [
+                {"type": "tool_use", "name": "Edit", "input": {"replace_all": True}}
+            ]
+        },
+    }
+    assert "True" not in extract_search_text(entry)["tool_input"]
+
+
+def test_deeply_nested_structures_terminate() -> None:
+    nested: Any = "bottom"
+    for _ in range(50):
+        nested = {"next": nested}
+    entry: dict[str, Any] = {
+        "type": "assistant",
+        "message": {"content": [{"type": "tool_use", "name": "X", "input": nested}]},
+    }
+    extract_search_text(entry)  # must not recurse forever
+
+
+def test_decode_entry_roundtrip() -> None:
+    entry = {"type": "user", "message": {"content": "hi"}}
+    blob = zlib.compress(json.dumps(entry).encode("utf-8"))
+    assert decode_entry(blob) == entry
+
+
+# ---------------------------------------------------------------------------
+# Query escaping
+# ---------------------------------------------------------------------------
+
+
+def test_hyphenated_terms_are_escaped() -> None:
+    """`vis-timeline` is a hard OperationalError unquoted."""
+    assert fts_escape("vis-timeline") == '"vis-timeline"*'
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "vis-timeline",
+        "NOT",
+        "AND OR",
+        "a:b",
+        "foo(bar)",
+        "^caret",
+        'say "hello',
+        "-leading-dash",
+        "*",
+        # Punctuation-only words are long enough for the implicit prefix, so
+        # they emit a phrase-star over zero tokens: still valid, still empty.
+        "...",
+        "foo...",
+        "日本語",
+    ],
+)
+def test_escaped_queries_are_valid_fts_syntax(raw: str) -> None:
+    """Any user input must produce a runnable MATCH, never an exception."""
+    db = sqlite3.connect(":memory:")
+    db.execute("CREATE VIRTUAL TABLE t USING fts5(x)")
+    db.execute("INSERT INTO t(x) VALUES('some text')")
+    escaped = fts_escape(raw)
+    if escaped:
+        db.execute("SELECT rowid FROM t WHERE t MATCH ?", (escaped,)).fetchall()
+
+
+def test_quoted_phrase_is_preserved() -> None:
+    assert fts_escape('"exact phrase"') == '"exact phrase"'
+
+
+def test_trailing_star_keeps_prefix_semantics() -> None:
+    assert fts_escape("tokeniz*") == '"tokeniz"*'
+
+
+def test_embedded_quotes_are_doubled() -> None:
+    escaped = fts_escape('say"it')
+    assert escaped == '"say""it"*'
+
+
+def test_words_get_an_implicit_prefix_match() -> None:
+    """A half-typed word finds the whole one without the user typing `*`."""
+    assert fts_escape("tokeni") == '"tokeni"*'
+    assert fts_escape("cache invalidation") == '"cache"* "invalidation"*'
+
+
+@pytest.mark.parametrize("word", ["a", "re", "os"])
+def test_short_words_are_matched_whole(word: str) -> None:
+    """Below `IMPLICIT_PREFIX_MIN_LENGTH` a prefix costs 100-500 ms on a real
+    archive (see the constant), so short words match whole."""
+    assert fts_escape(word) == f'"{word}"'
+
+
+def test_quoting_a_word_opts_out_of_the_prefix() -> None:
+    """The escape hatch for `cache` when you don't want `cache_manager`."""
+    assert fts_escape('"cache"') == '"cache"'
+    assert fts_escape('"cache" invalidation') == '"cache" "invalidation"*'
+
+
+def test_implicit_prefix_finds_longer_words() -> None:
+    """End to end through SQLite, not just the escaped string."""
+    db = sqlite3.connect(":memory:")
+    db.execute("CREATE VIRTUAL TABLE t USING fts5(x)")
+    db.execute("INSERT INTO t(x) VALUES('the tokenizer ran')")
+
+    def hits(query: str) -> int:
+        escaped = fts_escape(query)
+        return len(
+            db.execute("SELECT rowid FROM t WHERE t MATCH ?", (escaped,)).fetchall()
+        )
+
+    assert hits("tokeni") == 1
+    assert hits("tokenizer") == 1
+    assert hits('"tokeni"') == 0  # quoted: whole word only
+    assert hits("tokenizers") == 0
+
+
+def test_empty_query_escapes_to_empty() -> None:
+    assert fts_escape("   ") == ""
+
+
+# ---------------------------------------------------------------------------
+# Field specs
+# ---------------------------------------------------------------------------
+
+
+def test_field_spec_defaults_exclude_tool_result() -> None:
+    assert "tool_result" not in DEFAULT_SEARCH_FIELDS
+    assert "tool_result" in DEFAULT_INDEX_FIELDS
+
+
+@pytest.mark.parametrize(
+    "spec,expected",
+    [
+        (None, DEFAULT_SEARCH_FIELDS),
+        ("", DEFAULT_SEARCH_FIELDS),
+        ("all", SEARCH_FIELDS),
+        ("none", ()),
+        ("text", ("text",)),
+        ("thinking,text", ("text", "thinking")),  # normalised to canonical order
+        ("+tool_result", SEARCH_FIELDS),
+        ("-thinking", ("text", "tool_input", "attachment", "meta")),
+        (
+            "+tool_result,-text",
+            ("thinking", "tool_input", "tool_result", "attachment", "meta"),
+        ),
+    ],
+)
+def test_parse_field_spec(spec: Optional[str], expected: tuple[str, ...]) -> None:
+    assert parse_field_spec(spec, DEFAULT_SEARCH_FIELDS) == expected
+
+
+def test_unknown_field_is_rejected() -> None:
+    with pytest.raises(ValueError, match="Unknown search field"):
+        parse_field_spec("nonsense", DEFAULT_SEARCH_FIELDS)
+
+
+def test_mixing_absolute_and_delta_is_rejected() -> None:
+    with pytest.raises(ValueError, match="mixes absolute"):
+        parse_field_spec("text,+tool_result", DEFAULT_SEARCH_FIELDS)
+
+
+# ---------------------------------------------------------------------------
+# Links and excerpts
+# ---------------------------------------------------------------------------
+
+
+def test_link_carries_both_uuid_and_query() -> None:
+    """uuid anchors the card; q lets in-page search open collapsed details."""
+    link = build_link("proj-slug", "sess-1", "uuid-9", "assistant", "needle")
+    assert link.startswith("proj-slug/session-sess-1.html?")
+    assert "uuid=uuid-9" in link
+    assert "q=needle" in link
+
+
+@pytest.mark.parametrize("message_type", ["ai-title", "queue-operation"])
+def test_types_without_a_rendered_card_get_session_links(message_type: str) -> None:
+    link = build_link("proj", "sess-1", "uuid-9", message_type, "needle")
+    assert "uuid=" not in link
+    assert "session-sess-1.html" in link
+
+
+def test_link_without_a_session_falls_back_to_the_project() -> None:
+    assert build_link("proj", None, "uuid", "assistant", "q") == "proj/"
+
+
+@pytest.mark.parametrize(
+    "stored,expected",
+    [
+        ("/home/u/.claude/projects/-home-u-proj", "-home-u-proj"),
+        ("/home/u/.claude/projects/-home-u-proj/", "-home-u-proj"),
+        ("D:\\a\\_temp\\projects\\-home-u-testproj", "-home-u-testproj"),
+        ("D:\\a\\_temp\\projects\\-home-u-testproj\\", "-home-u-testproj"),
+    ],
+)
+def test_project_slug_handles_both_separator_styles(stored: str, expected: str) -> None:
+    """Stored paths are `str(Path)` from the OS that indexed the archive, so
+    a Windows archive's paths keep their backslashes — splitting on '/'
+    alone would leave the whole path as the slug and break every link."""
+    assert project_slug(stored) == expected
+
+
+def test_excerpt_centres_on_the_match() -> None:
+    text = "padding " * 50 + "NEEDLE" + " trailing" * 50
+    excerpt = build_excerpt(text, ["needle"], width=60)
+    assert "NEEDLE" in excerpt
+    assert excerpt.startswith("…")
+    assert len(excerpt) < 120
+
+
+def test_excerpt_without_a_match_returns_a_prefix() -> None:
+    assert build_excerpt("some text", ["absent"]).startswith("some text")
+
+
+def test_excerpt_of_empty_text_is_empty() -> None:
+    assert build_excerpt("", ["x"]) == ""
+
+
+# ---------------------------------------------------------------------------
+# Index lifecycle and querying, against a real cache schema
+# ---------------------------------------------------------------------------
+
+
+def _make_cache(tmp_path: Path) -> sqlite3.Connection:
+    """A cache DB with the real schema, populated by hand."""
+    from claude_code_log.migrations.runner import run_migrations
+
+    db_path = tmp_path / "cache.db"
+    run_migrations(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO projects(id, project_path, version, cache_created, last_updated) "
+        "VALUES(1, '/home/u/.claude/projects/-home-u-alpha', '1', 'x', 'x')"
+    )
+    conn.execute(
+        "INSERT INTO projects(id, project_path, version, cache_created, last_updated) "
+        "VALUES(2, '/home/u/.claude/projects/-home-u-beta', '1', 'x', 'x')"
+    )
+    for file_id, project_id in ((1, 1), (2, 2)):
+        conn.execute(
+            "INSERT INTO cached_files(id, project_id, file_name, file_path, "
+            "source_mtime, cached_mtime, message_count) VALUES(?, ?, ?, ?, 0, 0, 0)",
+            (file_id, project_id, f"f{file_id}.jsonl", f"/tmp/f{file_id}.jsonl"),
+        )
+    conn.commit()
+    return conn
+
+
+def _add_message(
+    conn: sqlite3.Connection,
+    message_id: int,
+    project_id: int,
+    file_id: int,
+    entry: dict[str, Any],
+    *,
+    session_id: str = "sess-1",
+    uuid: str = "uuid-1",
+    timestamp: str = "2026-01-01T00:00:00Z",
+) -> None:
+    conn.execute(
+        "INSERT INTO messages(id, project_id, file_id, type, timestamp, session_id, "
+        "_uuid, content) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            message_id,
+            project_id,
+            file_id,
+            entry["type"],
+            timestamp,
+            session_id,
+            uuid,
+            zlib.compress(json.dumps(entry).encode("utf-8")),
+        ),
+    )
+    conn.commit()
+
+
+def _assistant(text: str) -> dict[str, Any]:
+    return {
+        "type": "assistant",
+        "message": {"content": [{"type": "text", "text": text}]},
+    }
+
+
+@pytest.fixture
+def cache(tmp_path: Path) -> sqlite3.Connection:
+    conn = _make_cache(tmp_path)
+    _add_message(conn, 1, 1, 1, _assistant("alpha project mentions pydantic"))
+    _add_message(
+        conn, 2, 1, 1, _assistant("alpha again, this one about sqlite"), uuid="uuid-2"
+    )
+    _add_message(
+        conn,
+        3,
+        2,
+        2,
+        _assistant("beta project also mentions pydantic"),
+        session_id="sess-2",
+        uuid="uuid-3",
+    )
+    return conn
+
+
+def test_fts5_is_available() -> None:
+    assert fts5_available(sqlite3.connect(":memory:"))
+
+
+def test_ensure_index_builds_and_reports_status(cache: sqlite3.Connection) -> None:
+    before = index_status(cache)
+    assert before.ready is False
+
+    status = ensure_index(cache)
+    assert status.ready is True
+    assert status.indexed_messages == 3
+    assert status.fields == DEFAULT_INDEX_FIELDS
+    assert status.built_at
+
+
+def test_search_finds_across_projects(cache: sqlite3.Connection) -> None:
+    ensure_index(cache)
+    results = search(cache, "pydantic")
+    assert len(results) == 2
+    assert {r.project_slug for r in results} == {"-home-u-alpha", "-home-u-beta"}
+
+
+def test_search_filters_by_project(cache: sqlite3.Connection) -> None:
+    ensure_index(cache)
+    results = search(cache, "pydantic", project_id=2)
+    assert len(results) == 1
+    assert results[0].project_slug == "-home-u-beta"
+
+
+def test_search_filters_by_session(cache: sqlite3.Connection) -> None:
+    ensure_index(cache)
+    results = search(cache, "pydantic", session_id="sess-2")
+    assert [r.session_id for r in results] == ["sess-2"]
+
+
+def test_search_results_are_linkable(cache: sqlite3.Connection) -> None:
+    ensure_index(cache)
+    result = search(cache, "sqlite")[0]
+    assert result.link == "-home-u-alpha/session-sess-1.html?uuid=uuid-2&q=sqlite"
+    assert result.field == "text"
+    assert "sqlite" in result.snippet
+
+
+def test_search_respects_field_selection(cache: sqlite3.Connection) -> None:
+    _add_message(
+        cache,
+        4,
+        1,
+        1,
+        {
+            "type": "user",
+            "message": {
+                "content": [
+                    {"type": "tool_result", "content": "a rare_token in tool output"}
+                ]
+            },
+        },
+        uuid="uuid-4",
+    )
+    ensure_index(cache, rebuild=True)
+
+    assert search(cache, "rare_token", fields=DEFAULT_SEARCH_FIELDS) == []
+    hits = search(cache, "rare_token", fields=SEARCH_FIELDS)
+    assert len(hits) == 1
+    assert hits[0].field == "tool_result"
+
+
+def test_skip_types_are_not_indexed(cache: sqlite3.Connection) -> None:
+    _add_message(
+        cache,
+        5,
+        1,
+        1,
+        {"type": "progress", "message": {"content": [{"type": "text", "text": "x"}]}},
+        uuid="uuid-5",
+    )
+    ensure_index(cache, rebuild=True)
+    assert "progress" in SKIP_TYPES
+    indexed = cache.execute(f"SELECT count(*) FROM {FTS_TABLE}").fetchone()[0]
+    assert indexed == 3
+
+
+def test_unquotable_query_does_not_raise(cache: sqlite3.Connection) -> None:
+    ensure_index(cache)
+    assert search(cache, "vis-timeline") == []
+    assert search(cache, "") == []
+
+
+def test_count_matches(cache: sqlite3.Connection) -> None:
+    ensure_index(cache)
+    assert count_matches(cache, "pydantic") == 2
+    assert count_matches(cache, "nonexistentterm") == 0
+
+
+# --- the invariants -------------------------------------------------------
+
+
+def test_filtered_search_keeps_fts_as_the_outer_loop(
+    cache: sqlite3.Connection,
+) -> None:
+    """The CROSS JOIN is load-bearing: a plain JOIN is 840x slower.
+
+    With `JOIN`, SQLite drives from `messages` (SEARCH m USING INDEX) and
+    probes FTS by rowid, which on a real archive turned a 2.4 ms search into
+    2,012 ms. Nothing fails when that regresses — it just gets slow — so
+    the plan itself is asserted.
+    """
+    ensure_index(cache)
+    from claude_code_log.search import _build_query  # pyright: ignore[reportPrivateUsage]
+
+    sql, _ = _build_query(
+        project_id=1,
+        session_id=None,
+        message_type=None,
+        date_from=None,
+        date_to=None,
+    )
+    assert "CROSS JOIN" in sql
+
+    plan = [
+        str(row[-1])
+        for row in cache.execute(f"EXPLAIN QUERY PLAN {sql}", ('"pydantic"', 1, 20, 0))
+    ]
+    plan_text = " | ".join(plan)
+
+    # The healthy plan scans the FTS virtual table and probes `messages` by
+    # rowid. The pathological one is the reverse:
+    #   SEARCH m USING COVERING INDEX ... (project_id=?)
+    #   SCAN f VIRTUAL TABLE INDEX 32:=M6      <- note the `=`: rowid-constrained
+    assert "SCAN f VIRTUAL TABLE" in plan_text, plan_text
+    assert "SEARCH m USING INTEGER PRIMARY KEY" in plan_text, plan_text
+    assert "SCAN m" not in plan_text, plan_text
+
+
+def test_index_rebuilds_when_the_extractor_version_changes(
+    cache: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A changed extractor must not leave stale rows behind."""
+    ensure_index(cache)
+    assert search(cache, "pydantic")
+
+    monkeypatch.setattr("claude_code_log.search.EXTRACTOR_VERSION", 999)
+    status = ensure_index(cache)
+    assert status.indexed_messages == 3
+    assert search(cache, "pydantic")
+
+
+def test_index_rebuilds_when_fields_change(cache: sqlite3.Connection) -> None:
+    ensure_index(cache, index_fields=("text",))
+    assert index_status(cache).fields == ("text",)
+    ensure_index(cache, index_fields=SEARCH_FIELDS)
+    assert index_status(cache).fields == SEARCH_FIELDS
+
+
+def test_reindex_files_picks_up_changed_content(cache: sqlite3.Connection) -> None:
+    """The incremental hook: ~180 ms for the largest file in an 8 GB archive."""
+    ensure_index(cache)
+    assert count_matches(cache, "pydantic") == 2
+
+    cache.execute("DELETE FROM messages WHERE id = 1")
+    _add_message(cache, 10, 1, 1, _assistant("replaced with mercurial"), uuid="uuid-10")
+    reindex_files(cache, [1])
+
+    assert count_matches(cache, "pydantic") == 1
+    assert count_matches(cache, "mercurial") == 1
+
+
+def test_incremental_index_adds_a_new_file(cache: sqlite3.Connection) -> None:
+    ensure_index(cache)
+    cache.execute(
+        "INSERT INTO cached_files(id, project_id, file_name, file_path, "
+        "source_mtime, cached_mtime, message_count) "
+        "VALUES(3, 1, 'f3.jsonl', '/tmp/f3.jsonl', 0, 0, 0)"
+    )
+    _add_message(cache, 20, 1, 3, _assistant("a brand new file"), uuid="uuid-20")
+
+    status = ensure_index(cache)
+    assert status.indexed_messages == 4
+    assert count_matches(cache, "brand") == 1
+
+
+def test_ensure_index_reindexes_a_changed_file(cache: sqlite3.Connection) -> None:
+    """A rewritten file keeps its file_id, so "already indexed" isn't enough.
+
+    Without comparing `cached_files.cached_mtime`, `ensure_index` skips the
+    file (its id is known) and search keeps returning the old text — stale
+    results with nothing failing anywhere.
+    """
+    ensure_index(cache)
+    assert count_matches(cache, "pydantic") == 2
+
+    # Simulate what the cache does when a JSONL file changes: replace the
+    # file's messages and re-stamp cached_mtime.
+    cache.execute("DELETE FROM messages WHERE file_id = 1")
+    _add_message(cache, 30, 1, 1, _assistant("now mentions mercurial"), uuid="uuid-30")
+    cache.execute("UPDATE cached_files SET cached_mtime = 12345.678 WHERE id = 1")
+    cache.commit()
+
+    ensure_index(cache)
+    assert count_matches(cache, "mercurial") == 1
+    assert count_matches(cache, "pydantic") == 1  # only the other project's
+
+
+def test_ensure_index_skips_unchanged_files(cache: sqlite3.Connection) -> None:
+    """The incremental path must not silently re-extract everything.
+
+    Re-running on an unchanged cache should touch no rows at all — that is
+    what makes it cheap enough (~180 ms for the largest file in an 8 GB
+    archive) to run on every server start.
+    """
+    ensure_index(cache)
+    before = index_status(cache).indexed_messages
+
+    writes: list[str] = []
+
+    def trace(statement: str) -> None:
+        normalised = " ".join(statement.split()).lower()
+        if normalised.startswith(
+            ("insert into message_fts", "delete from message_fts")
+        ):
+            writes.append(statement)
+
+    cache.set_trace_callback(trace)
+    again = ensure_index(cache)
+    cache.set_trace_callback(None)
+
+    assert again.indexed_messages == before
+    assert writes == [], f"re-indexed unchanged files: {writes}"
+
+
+def test_removing_a_file_removes_its_rows(cache: sqlite3.Connection) -> None:
+    ensure_index(cache)
+    assert count_matches(cache, "sqlite") == 1
+    cache.execute("DELETE FROM messages WHERE file_id = 1")
+    cache.execute("DELETE FROM cached_files WHERE id = 1")
+    cache.commit()
+
+    ensure_index(cache)
+    assert count_matches(cache, "sqlite") == 0
+    assert count_matches(cache, "pydantic") == 1
+
+
+def test_incremental_update_without_contentless_delete_rebuilds(
+    cache: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SQLite < 3.43 can't DELETE from a contentless FTS5 table (that needs
+    `contentless_delete=1`), so an incremental update that has to remove
+    rows — a rewritten file, a vanished file — must fall back to a full
+    rebuild instead of dying in `_delete_file_rows`."""
+    import claude_code_log.search as search_module
+
+    monkeypatch.setattr(search_module, "_contentless_delete_supported", lambda: False)
+    ensure_index(cache)
+    assert count_matches(cache, "pydantic") == 2
+
+    # File 1 rewritten, file 2 gone entirely — both need row deletion.
+    cache.execute("DELETE FROM messages WHERE file_id = 1")
+    _add_message(cache, 30, 1, 1, _assistant("now mentions mercurial"), uuid="uuid-30")
+    cache.execute("UPDATE cached_files SET cached_mtime = 12345.678 WHERE id = 1")
+    cache.execute("DELETE FROM messages WHERE file_id = 2")
+    cache.execute("DELETE FROM cached_files WHERE id = 2")
+    cache.commit()
+
+    status = ensure_index(cache)
+    assert status.ready
+    assert count_matches(cache, "mercurial") == 1
+    assert count_matches(cache, "pydantic") == 0
+    assert count_matches(cache, "sqlite") == 0
+
+
+def _fts_ddl(conn: sqlite3.Connection) -> str:
+    """The `CREATE VIRTUAL TABLE` statement the FTS index was built with."""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (FTS_TABLE,),
+    ).fetchone()
+    return str(row[0]) if row and row[0] else ""
+
+
+@pytest.mark.skipif(
+    sqlite3.sqlite_version_info < (3, 43, 0),
+    reason="needs a SQLite that can create contentless_delete=1",
+)
+def test_an_index_built_before_contentless_delete_is_rebuilt_once(
+    cache: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The delete-less layout is baked into the table and `_create_tables`
+    uses `IF NOT EXISTS`, so an index built under SQLite < 3.43 survives an
+    interpreter upgrade unchanged. Checking only the *runtime* capability
+    then skips the legacy fallback while the table still can't DELETE, and
+    the next incremental update dies in `_delete_file_rows`. `ensure_index`
+    must notice the mismatch and rebuild once."""
+    import claude_code_log.search as search_module
+
+    monkeypatch.setattr(search_module, "_contentless_delete_supported", lambda: False)
+    ensure_index(cache)
+    assert "contentless_delete" not in _fts_ddl(cache)
+
+    # SQLite upgraded underneath the existing index.
+    monkeypatch.undo()
+    ensure_index(cache)
+    assert "contentless_delete=1" in _fts_ddl(cache), (
+        "the legacy table should have been rebuilt with contentless_delete=1"
+    )
+
+    # And the incremental path that would have raised now works.
+    cache.execute("DELETE FROM messages WHERE file_id = 1")
+    _add_message(cache, 30, 1, 1, _assistant("now mentions mercurial"), uuid="uuid-30")
+    cache.execute("UPDATE cached_files SET cached_mtime = 12345.678 WHERE id = 1")
+    cache.commit()
+
+    assert ensure_index(cache).ready
+    assert count_matches(cache, "mercurial") == 1
+    assert count_matches(cache, "sqlite") == 0
+    assert count_matches(cache, "pydantic") == 1
+
+
+def test_reindex_files_skips_a_table_that_cannot_delete(
+    cache: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`reindex_files` runs from the cache write path on an ordinary
+    conversion, so it must not raise when the index predates
+    `contentless_delete=1`. It leaves `cached_mtime` alone, which is what
+    lets the next `ensure_index` see the file as changed and rebuild."""
+    import claude_code_log.search as search_module
+
+    monkeypatch.setattr(search_module, "_contentless_delete_supported", lambda: False)
+    ensure_index(cache)
+
+    cache.execute("DELETE FROM messages WHERE file_id = 1")
+    _add_message(cache, 30, 1, 1, _assistant("now mentions mercurial"), uuid="uuid-30")
+    cache.execute("UPDATE cached_files SET cached_mtime = 12345.678 WHERE id = 1")
+    cache.commit()
+
+    reindex_files(cache, [1])  # must not raise
+    assert count_matches(cache, "mercurial") == 0, "no rows should have moved"
+
+    # The deferred rebuild catches up.
+    assert ensure_index(cache).ready
+    assert count_matches(cache, "mercurial") == 1
+    assert count_matches(cache, "sqlite") == 0
+
+
+def test_windows_style_project_paths_produce_portable_links(tmp_path: Path) -> None:
+    """The cache stores `str(Path)`, so an archive indexed on Windows holds
+    backslash paths. Result links must carry the directory basename — the
+    browser happily normalises a full `D:\\...` path into a URL the archive
+    server can't resolve, which surfaced as deep-link 404s in Windows CI."""
+    conn = _make_cache(tmp_path)
+    conn.execute(
+        "UPDATE projects SET project_path = 'D:\\a\\_temp\\projects\\-home-u-alpha' "
+        "WHERE id = 1"
+    )
+    conn.commit()
+    _add_message(conn, 1, 1, 1, _assistant("indexed on windows"))
+    ensure_index(conn)
+
+    hits = search(conn, "windows")
+    assert hits, "expected a hit"
+    assert hits[0].project_slug == "-home-u-alpha"
+    assert hits[0].link.startswith("-home-u-alpha/session-")
+
+
+def test_searching_before_the_index_exists_raises(cache: sqlite3.Connection) -> None:
+    with pytest.raises(RuntimeError, match="not been built"):
+        search(cache, "pydantic")
+
+
+# --- the cache write-path hook -------------------------------------------
+
+
+def test_a_normal_conversion_keeps_an_existing_index_current(tmp_path: Path) -> None:
+    """`save_cached_entries` maintains the index, so `serve` isn't required.
+
+    Without this hook the index only caught up at the next server start, so
+    a `claude-code-log` run followed by a search returned the old text.
+    """
+    from claude_code_log.cache import get_cache_db_path
+    from claude_code_log.converter import process_projects_hierarchy
+
+    projects = tmp_path / "projects"
+    project = projects / "-home-u-proj"
+    project.mkdir(parents=True)
+    jsonl = project / "session.jsonl"
+    jsonl.write_text(_entry_line("the first version mentions kangaroo"))
+    process_projects_hierarchy(projects, silent=True)
+
+    db_path = get_cache_db_path(projects)
+    conn = sqlite3.connect(db_path)
+    ensure_index(conn)
+    assert count_matches(conn, "kangaroo") == 1
+    conn.close()
+
+    # Rewrite the transcript and convert again — no server involved.
+    jsonl.write_text(_entry_line("the second version mentions platypus"))
+    bump_mtime(jsonl)
+    process_projects_hierarchy(projects, silent=True)
+
+    conn = sqlite3.connect(db_path)
+    try:
+        assert count_matches(conn, "platypus") == 1, "new text not indexed"
+        assert count_matches(conn, "kangaroo") == 0, "stale rows survived"
+    finally:
+        conn.close()
+
+
+def test_auto_index_can_be_switched_off(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The env var opts out of the conversion-time maintenance."""
+    from claude_code_log.cache import get_cache_db_path
+    from claude_code_log.converter import process_projects_hierarchy
+    from claude_code_log.search import ENV_AUTO_INDEX
+
+    projects = tmp_path / "projects"
+    project = projects / "-home-u-proj"
+    project.mkdir(parents=True)
+    jsonl = project / "session.jsonl"
+    jsonl.write_text(_entry_line("first mentions kangaroo"))
+    process_projects_hierarchy(projects, silent=True)
+
+    db_path = get_cache_db_path(projects)
+    conn = sqlite3.connect(db_path)
+    ensure_index(conn)
+    conn.close()
+
+    monkeypatch.setenv(ENV_AUTO_INDEX, "0")
+    jsonl.write_text(_entry_line("second mentions platypus"))
+    bump_mtime(jsonl)
+    process_projects_hierarchy(projects, silent=True)
+
+    conn = sqlite3.connect(db_path)
+    try:
+        # Opted out, so the index keeps the old rows until `serve` catches up.
+        assert count_matches(conn, "platypus") == 0
+        assert count_matches(conn, "kangaroo") == 1
+    finally:
+        conn.close()
+
+
+def test_conversion_does_not_create_an_index_for_non_users(tmp_path: Path) -> None:
+    """Nobody who never searches should pay for an index they didn't ask for."""
+    from claude_code_log.cache import get_cache_db_path
+    from claude_code_log.converter import process_projects_hierarchy
+    from claude_code_log.search import FTS_TABLE
+
+    projects = tmp_path / "projects"
+    project = projects / "-home-u-proj"
+    project.mkdir(parents=True)
+    (project / "session.jsonl").write_text(_entry_line("nothing to see here"))
+    process_projects_hierarchy(projects, silent=True)
+
+    conn = sqlite3.connect(get_cache_db_path(projects))
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (FTS_TABLE,),
+        ).fetchone()
+        assert row is None, "an index was built without anyone asking"
+    finally:
+        conn.close()
+
+
+def _entry_line(text: str) -> str:
+    """One user message as a JSONL line."""
+    return (
+        json.dumps(
+            {
+                "type": "user",
+                "timestamp": "2026-01-01T00:00:00Z",
+                "parentUuid": None,
+                "isSidechain": False,
+                "userType": "human",
+                "cwd": "/tmp",
+                "sessionId": "sess-hook",
+                "version": "1.0.0",
+                "uuid": "uuid-hook",
+                "message": {
+                    "role": "user",
+                    "content": [{"type": "text", "text": text}],
+                },
+            }
+        )
+        + "\n"
+    )

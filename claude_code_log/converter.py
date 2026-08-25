@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 import traceback
+from urllib.parse import quote
 from typing import Any, Dict, List, Optional, TYPE_CHECKING, cast
 
 import dateparser
@@ -1703,6 +1704,7 @@ def _generate_paginated_html(
     depth: RenderingDepth = DEFAULT_DEPTH,
     compact: bool = False,
     no_recaps: bool = False,
+    archive_search_link: Optional[str] = None,
 ) -> tuple[Path, bool]:
     """Generate paginated HTML files for combined transcript.
 
@@ -1715,6 +1717,8 @@ def _generate_paginated_html(
         session_data: Session metadata from cache
         working_directories: Working directories for project display name
         silent: Suppress verbose output
+        archive_search_link: Relative href to the archive-search page; see
+            ``convert_jsonl_to``. Every page of a paginated project gets it.
 
     Returns:
         ``(first_page_path, wrote_any)`` — the path to the first page
@@ -1896,6 +1900,7 @@ def _generate_paginated_html(
             page_info=page_info,
             page_stats=page_stats,
             session_tree=session_tree,
+            archive_search_link=archive_search_link,
         )
         # errors="replace": surrogateescape-decoded bytes from upstream
         # JSONL may carry lone surrogates (issue #139); strict UTF-8
@@ -1974,6 +1979,7 @@ def convert_jsonl_to(
     no_recaps: bool = False,
     force_regenerate: bool = False,
     report: Optional["RegenerationReport"] = None,
+    archive_search_link: Optional[str] = None,
 ) -> Path:
     """Convert JSONL transcript(s) to the specified format.
 
@@ -2007,6 +2013,12 @@ def convert_jsonl_to(
             written (e.g. ``--combined no``, or a current combined alongside a
             regenerated session). Leaves the ``Path`` return contract (that
             ~20 callers rely on) unchanged.
+        archive_search_link: Relative href from this project's output
+            directory to the archive-search page, e.g. ``../search.html``.
+            HTML only, and only passed by the hierarchy conversion — that is
+            the caller that writes a ``search.html`` for it to point at, and
+            the only one that knows how deep the project sits below the
+            index root. None leaves the link out of the rendered page.
     """
     if not input_path.exists():
         raise FileNotFoundError(f"Input path not found: {input_path}")
@@ -2216,6 +2228,7 @@ def convert_jsonl_to(
             depth=depth,
             compact=compact,
             no_recaps=no_recaps,
+            archive_search_link=archive_search_link,
         )
     else:
         # Use single-file generation for small projects or filtered views
@@ -2291,8 +2304,17 @@ def convert_jsonl_to(
         if should_regenerate:
             # For referenced images, pass the output directory
             output_dir = output_path.parent
+            generate_kwargs: dict[str, Any] = {}
+            # Markdown/JSON renderers share the `generate` signature only up
+            # to the common arguments; the archive-search link is HTML-only.
+            if format == "html" and archive_search_link:
+                generate_kwargs["archive_search_link"] = archive_search_link
             content = renderer.generate(
-                messages, title, output_dir=output_dir, session_tree=session_tree
+                messages,
+                title,
+                output_dir=output_dir,
+                session_tree=session_tree,
+                **generate_kwargs,
             )
             assert content is not None
             # See issue #139: errors="replace" for lone-surrogate safety.
@@ -3636,6 +3658,7 @@ def _convert_project_worker(
             write_combined=worker_args["write_combined"],
             no_timestamps=worker_args["no_timestamps"],
             no_recaps=worker_args["no_recaps"],
+            archive_search_link=worker_args["archive_search_link"],
         )
     except Exception:
         error = traceback.format_exc()
@@ -3773,6 +3796,29 @@ def process_projects_hierarchy(
             rel = p
         return rel.as_posix()
 
+    def _archive_search_link(plan: "_ProjectPlan") -> Optional[str]:
+        """Href from a project's output dir back up to `search.html`.
+
+        The search page is written next to the index (below), so the link is
+        the inverse of `_rel_to_index` — usually `../search.html`, but
+        `--expand-paths` puts projects several levels down. HTML only: no
+        other format has a page to link from.
+
+        Pre-selects the project the reader came from: the source directory
+        name is exactly the slug the search API keys projects by (both are
+        the basename of the project path the cache stores).
+        """
+        if output_format != "html":
+            return None
+        try:
+            up = Path(os.path.relpath(index_root, plan.dest_dir))
+        except ValueError:
+            # Different drives on Windows: no relative path exists.
+            return None
+        return (up / "search.html").as_posix() + (
+            "?project=" + quote(plan.project_dir.name)
+        )
+
     # ---- Phase 1 (plan): sequential, cheap staleness/destination pass.
     # Runs in the parent so the shared cache DB's schema/migrations and
     # every project row exist before any pool worker opens the DB.
@@ -3874,6 +3920,7 @@ def process_projects_hierarchy(
                 write_combined=write_combined,
                 no_timestamps=no_timestamps,
                 no_recaps=no_recaps,
+                archive_search_link=_archive_search_link(plan),
             )
         except Exception:
             _print_project_failed(plan, traceback.format_exc())
@@ -3919,6 +3966,7 @@ def process_projects_hierarchy(
                             "write_combined": write_combined,
                             "no_timestamps": no_timestamps,
                             "no_recaps": no_recaps,
+                            "archive_search_link": _archive_search_link(plan),
                         },
                     ): plan
                     for plan in by_size
@@ -4303,6 +4351,17 @@ def process_projects_hierarchy(
     index_path.parent.mkdir(parents=True, exist_ok=True)
     # See issue #139: errors="replace" for lone-surrogate safety.
     index_path.write_text(index_content, encoding="utf-8", errors="replace")
+
+    # The archive-wide search page sits next to the index. It is static and
+    # self-contained; it only *works* when served (it needs the API to reach
+    # the SQLite cache), but it is written unconditionally so the index
+    # page's link never dangles and the page can explain itself.
+    if output_format == "html":
+        from .html.renderer import generate_archive_search_html
+
+        (index_path.parent / "search.html").write_text(
+            generate_archive_search_html(), encoding="utf-8", errors="replace"
+        )
 
     # Count total sessions from project summaries
     for summary in project_summaries:

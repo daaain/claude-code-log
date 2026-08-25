@@ -1,3 +1,13 @@
+/* Link to the archive-wide search page (index + transcript pages) */
+.archive-search-link {
+    margin: 0.5em 0 1.5em;
+}
+
+.archive-search-link-hint {
+    font-size: 0.85em;
+    opacity: 0.7;
+}
+
 /* Search Bar Styles */
 .search-container {
     position: relative;
@@ -49,6 +59,19 @@
     font-size: 0.85em;
     font-family: inherit;
     transition: all 0.2s;
+    /* Load-bearing for `type="search"` inputs (the archive-search page):
+       WebKit renders those as a native searchfield that ignores padding and
+       border-radius, so the pill collapses into a bare rectangle. */
+    -webkit-appearance: none;
+    appearance: none;
+}
+
+/* The native clear affordance duplicates our own `.search-clear` button and
+   sits in the same corner. */
+.search-input::-webkit-search-cancel-button,
+.search-input::-webkit-search-decoration {
+    -webkit-appearance: none;
+    appearance: none;
 }
 
 .search-input:focus {

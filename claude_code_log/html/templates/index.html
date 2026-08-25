@@ -7,6 +7,7 @@
     <meta name='viewport' content='width=device-width, initial-scale=1.0'>
     <title>{{ title }}</title>
     {% from 'components/session_nav.html' import render_session_nav %}
+    {% from 'components/archive_search_link.html' import archive_search_link as render_archive_search_link %}
     <style>
 {% include 'components/global_styles.css' %}
 {% include 'components/session_nav_styles.css' %}
@@ -23,8 +24,14 @@
 <body>
     <h1>{{ title }}</h1>
 
-    <!-- Search Component -->
+    <!-- Search Component. This box searches session titles and previews on
+         this page only — a session finder. Archive-wide message search lives
+         on its own page (it needs the local server to reach the cache), so
+         the two stay visibly distinct rather than one input meaning two
+         different things. -->
     {% include 'components/search.html' %}
+
+    {{ render_archive_search_link('search.html') }}
 
     <div class='summary'>
         <div class='summary-stats'>
