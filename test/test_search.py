@@ -759,6 +759,79 @@ def test_incremental_update_without_contentless_delete_rebuilds(
     assert count_matches(cache, "sqlite") == 0
 
 
+def _fts_ddl(conn: sqlite3.Connection) -> str:
+    """The `CREATE VIRTUAL TABLE` statement the FTS index was built with."""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (FTS_TABLE,),
+    ).fetchone()
+    return str(row[0]) if row and row[0] else ""
+
+
+@pytest.mark.skipif(
+    sqlite3.sqlite_version_info < (3, 43, 0),
+    reason="needs a SQLite that can create contentless_delete=1",
+)
+def test_an_index_built_before_contentless_delete_is_rebuilt_once(
+    cache: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The delete-less layout is baked into the table and `_create_tables`
+    uses `IF NOT EXISTS`, so an index built under SQLite < 3.43 survives an
+    interpreter upgrade unchanged. Checking only the *runtime* capability
+    then skips the legacy fallback while the table still can't DELETE, and
+    the next incremental update dies in `_delete_file_rows`. `ensure_index`
+    must notice the mismatch and rebuild once."""
+    import claude_code_log.search as search_module
+
+    monkeypatch.setattr(search_module, "_contentless_delete_supported", lambda: False)
+    ensure_index(cache)
+    assert "contentless_delete" not in _fts_ddl(cache)
+
+    # SQLite upgraded underneath the existing index.
+    monkeypatch.undo()
+    ensure_index(cache)
+    assert "contentless_delete=1" in _fts_ddl(cache), (
+        "the legacy table should have been rebuilt with contentless_delete=1"
+    )
+
+    # And the incremental path that would have raised now works.
+    cache.execute("DELETE FROM messages WHERE file_id = 1")
+    _add_message(cache, 30, 1, 1, _assistant("now mentions mercurial"), uuid="uuid-30")
+    cache.execute("UPDATE cached_files SET cached_mtime = 12345.678 WHERE id = 1")
+    cache.commit()
+
+    assert ensure_index(cache).ready
+    assert count_matches(cache, "mercurial") == 1
+    assert count_matches(cache, "sqlite") == 0
+    assert count_matches(cache, "pydantic") == 1
+
+
+def test_reindex_files_skips_a_table_that_cannot_delete(
+    cache: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`reindex_files` runs from the cache write path on an ordinary
+    conversion, so it must not raise when the index predates
+    `contentless_delete=1`. It leaves `cached_mtime` alone, which is what
+    lets the next `ensure_index` see the file as changed and rebuild."""
+    import claude_code_log.search as search_module
+
+    monkeypatch.setattr(search_module, "_contentless_delete_supported", lambda: False)
+    ensure_index(cache)
+
+    cache.execute("DELETE FROM messages WHERE file_id = 1")
+    _add_message(cache, 30, 1, 1, _assistant("now mentions mercurial"), uuid="uuid-30")
+    cache.execute("UPDATE cached_files SET cached_mtime = 12345.678 WHERE id = 1")
+    cache.commit()
+
+    reindex_files(cache, [1])  # must not raise
+    assert count_matches(cache, "mercurial") == 0, "no rows should have moved"
+
+    # The deferred rebuild catches up.
+    assert ensure_index(cache).ready
+    assert count_matches(cache, "mercurial") == 1
+    assert count_matches(cache, "sqlite") == 0
+
+
 def test_windows_style_project_paths_produce_portable_links(tmp_path: Path) -> None:
     """The cache stores `str(Path)`, so an archive indexed on Windows holds
     backslash paths. Result links must carry the directory basename — the

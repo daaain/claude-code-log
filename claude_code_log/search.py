@@ -344,6 +344,31 @@ def _contentless_delete_supported() -> bool:
     return sqlite3.sqlite_version_info >= (3, 43, 0)
 
 
+#: `contentless_delete=1` as it appears in a stored `CREATE VIRTUAL TABLE`
+#: statement. FTS5 records the options as written, and permits whitespace and
+#: quoting around the value.
+_CONTENTLESS_DELETE_RE = re.compile(r"contentless_delete\s*=\s*['\"]?1['\"]?")
+
+
+def _index_delete_supported(conn: sqlite3.Connection) -> bool:
+    """Whether the FTS table *on disk* accepts DELETE.
+
+    Not the same question as `_contentless_delete_supported`, which reports
+    what the SQLite linked into *this* interpreter can create. The layout is
+    baked into the table at creation time and `_create_tables` uses
+    `IF NOT EXISTS`, so an index built under an older SQLite keeps its
+    delete-less schema forever — including after the interpreter is upgraded.
+    Asking the stored DDL is the only answer that stays true across that.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (FTS_TABLE,),
+    ).fetchone()
+    if row is None or not row[0]:
+        return False
+    return _CONTENTLESS_DELETE_RE.search(str(row[0])) is not None
+
+
 @dataclass
 class IndexStatus:
     """What `index_status` reports and `ensure_index` returns."""
@@ -601,6 +626,11 @@ def ensure_index(
         or not _index_exists(conn)
         or stored_version != str(EXTRACTOR_VERSION)
         or stored_fields != ",".join(fields)
+        # An index built under SQLite < 3.43 has no `contentless_delete=1`,
+        # and `_create_tables` won't add it to a table that already exists.
+        # Once the interpreter can create one, rebuild once so every later
+        # incremental update — here and in `reindex_files` — can DELETE.
+        or (_contentless_delete_supported() and not _index_delete_supported(conn))
     )
     if stale:
         # The index is derived data and the column set is baked into the
@@ -623,12 +653,14 @@ def ensure_index(
     }
 
     # A contentless FTS5 table only accepts DELETE when created with
-    # `contentless_delete=1` (SQLite >= 3.43; see `_create_tables`). On an
-    # older SQLite, an incremental update that needs to remove rows — a
-    # vanished file, or a rewritten one — would die in `_delete_file_rows`
-    # with "cannot DELETE from contentless fts5 table", so fall back to a
-    # full rebuild instead: correct on every SQLite, just slower.
-    if indexed_files and not _contentless_delete_supported():
+    # `contentless_delete=1` (SQLite >= 3.43; see `_create_tables`). Without
+    # it, an incremental update that needs to remove rows — a vanished file,
+    # or a rewritten one — would die in `_delete_file_rows` with "cannot
+    # DELETE from contentless fts5 table", so fall back to a full rebuild
+    # instead: correct on every SQLite, just slower. Ask the table, not the
+    # interpreter: the staleness check above has already rebuilt an old table
+    # if this SQLite can do better, so reaching here means it genuinely can't.
+    if indexed_files and not _index_delete_supported(conn):
         needs_delete = bool(set(indexed_files) - set(current_files)) or any(
             file_id in indexed_files and abs(indexed_files[file_id] - mtime) >= 1e-6
             for file_id, (_, mtime) in current_files.items()
@@ -726,6 +758,14 @@ def reindex_files(
     committing on its own.
     """
     if not file_ids or not _index_exists(conn):
+        return
+    if not _index_delete_supported(conn):
+        # Refreshing a file in place means deleting its old rows first, which
+        # this table's layout forbids (see `_index_delete_supported`). Leave
+        # it alone rather than raising in the middle of someone's conversion:
+        # the `cached_mtime` stays as it was, so the next `ensure_index` sees
+        # the file as changed and rebuilds the whole index — the same fallback
+        # it already takes for a vanished file.
         return
     fields_raw = _meta_get(conn, "index_fields")
     if not fields_raw:
