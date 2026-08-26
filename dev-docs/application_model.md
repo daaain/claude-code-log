@@ -478,26 +478,29 @@ the feed covers essentially every message; every fed fragment is
 digest-verified on use, so the worst a stale slice can do is cost the
 recompute it would have cost anyway.
 
-**Memory: the cap still charges the old footprint.** A loaded transcript
-costs far more than its bytes on disk (measured peak RSS 2.0× for a
-118MB/12k-message project, 3.0× for 140MB/47k; denser transcripts cost
-more per byte). When workers held a full copy each, peak memory was
-`workers × project size` — multiplied again by the project pool under
-`--all-projects` — and an unguarded `auto` on a large archive exhausted
-RAM and drove the machine into swap, pegging every core: a far worse
-outcome than rendering serially. Workers now hold only their in-flight
-unit's slice, but `render_pool.memory_capped_workers` deliberately still
-charges each worker a full copy until the re-size is measured
-(`work/render-format-once.md` § 7.5) — the parent's master list, the
-absorbed fragment text and in-flight pickled slices still cost real
-memory, and the cap errs safe. It caps
-the worker count against available memory (cgroup limit first, since inside
-a container the host's totals are a lie; then `MemAvailable`, then free
-physical pages), taking 60% of it as budget and charging one transcript
-copy per worker plus one for the conversion itself. The all-projects parent
-applies the same cap with `concurrent_projects=resolved_jobs` before
-handing out any budget, and each worker re-checks against its own project
-before starting a pool. Unknown memory allows at most 2 workers.
+**Memory: the cap charges measured post-feeding footprints.** The
+conversion *parent* is the heavyweight — its master entry list (Pydantic
+entries, TemplateMessage tree, SessionTree) plus the fragment store's
+text and in-flight pickled slices measured ~4.4× the transcript's bytes
+on disk (598MB on a 140MB/47k-message project, 1458MB on 329MB/97k; VmHWM
+polling, 2026-08-26). Fed workers hold only base imports, their memo
+caches and the in-flight unit's slice: the largest worker measured
+~136MB + 0.59× transcript across the same runs.
+`render_pool.memory_capped_workers` charges the parent 4.5× + base and
+each worker 0.8× + base — a ~1.2–1.35× margin over the fit, because the
+alternative failure mode is real: when workers each held a full copy, an
+unguarded `auto` on a large archive exhausted RAM and drove the machine
+into swap, pegging every core — far worse than rendering serially. (The
+one under-charged pathology is a single session spanning most of the
+transcript, whose unit slice re-inflates toward the parent's ~3× in its
+worker; it is one outlier inside the headroom, and such projects yield
+too few units to fan wide.) The cap reads available memory as cgroup
+limit first (inside a container the host's totals are a lie), then
+`MemAvailable`, then free physical pages, taking 60% of it as budget.
+The all-projects parent applies the same cap with
+`concurrent_projects=resolved_jobs` before handing out any budget, and
+each worker re-checks against its own project before starting a pool.
+Unknown memory allows at most 2 workers.
 
 Both non-Linux platforms need their own probe, since each would otherwise
 fall through to that unknown-memory branch and be capped at 2 workers
@@ -572,10 +575,14 @@ the run is, to within 8%, "how long does the biggest project take". The
 static budget split then gives that project `jobs // stale projects` = 2
 render workers while the seven small ones finish and 13 cores go idle. So
 the fan-out helps it barely (1.27x) even though the same project alone
-reaches 2.70x. Fixing it needs the split to be dynamic — budget handed
-back as projects complete — or a single flat pool over render units rather
-than two nested levels. § 2.1's `per_project_render_jobs` is where that
-would change.
+reaches 2.70x. The *dominant-project* form of this is now handled by
+hold-back: `_dominant_plan` (2x the runner-up, compared on cached
+message counts when available — bytes alone would miss a dense giant)
+keeps that project out of the pool and converts it last with the full
+render budget, measured 65.4s → 58.5s (1.12x) on the 8-core VM, where
+the 47k-message runner-up then bounds the pool. Fixing the general case
+— several level-sized projects — still needs the split to be dynamic, or
+a single flat pool over render units rather than two nested levels.
 
 Two consequences. First, core count matters a lot: 48.8s of CPU over 4
 cores is 12.2s plus the 4.7s floor, so a 10-core machine should land near
@@ -590,13 +597,17 @@ incremental scenario reached 2.08x at +76% CPU over serial (the
 pre-feed baseline burned +305%); with entries fed as well — no worker
 transcript loads at all — it reached **2.87x at +3% CPU** (62.6s →
 21.8s wall, 62.5s CPU vs 60.5s serial), and the single-project sweep's
-per-worker CPU overhead fell from ~4.4s to ~0.7s at 8 workers. What
-remains unsolved is the full-rebuild scenario (the project pool grants
-each conversion too few render workers — the still-unrevised memory cap
-alone caps a 16GB machine at 1 worker/project) and the serial parent
-floor (load + parse + plan). Both land with the remaining
-"format once, assemble many" steps — the flat pool over render units
-and the § 7.5 threshold/cap re-size. Planned in
+per-worker CPU overhead fell from ~4.4s to ~0.7s at 8 workers. With the
+memory cap re-sized to the measured post-feeding footprints (above),
+the same VM's incremental cap went 5 → 8 of 8 workers and the scenario
+reached **3.24x at +6% CPU** (61.8s → 19.1s wall, 63.3s CPU vs 59.5s
+serial), byte-identical in every configuration. The full-rebuild
+scenario improved to 1.12x via the dominant-project hold-back (above);
+what remains is its general case — several level-sized projects, where
+the *core* split `jobs // stale` still grants 1 render worker/project —
+and the serial parent floor (load + parse + plan). Both land with the
+remaining "format once, assemble many" step: the flat pool over render
+units. Planned in
 [`work/render-format-once.md`](../work/render-format-once.md).
 
 ### 2.11 Diagnosing hangs (SIGUSR1 stack dump)

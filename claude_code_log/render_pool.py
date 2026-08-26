@@ -192,19 +192,33 @@ def resolve_render_jobs(requested: Optional[int]) -> int:
         return _default()
 
 
-# A loaded transcript costs far more resident memory than it does on
-# disk — the JSONL becomes Pydantic entries, a TemplateMessage tree and a
-# SessionTree. Measured peak RSS against transcript bytes: 2.0x for a
-# 118MB/12k-message project, 3.0x for a 140MB/47k-message one. Denser
-# transcripts (more, smaller messages) cost more per byte, so take the
-# upper end.
-_RSS_PER_TRANSCRIPT_BYTE = 3.0
+# Post-feeding footprints, measured 2026-08-26 on the 8-core/16GB dev VM
+# (the work/render-format-once.md § 7.5 re-measure) by polling VmHWM
+# across fanned-out conversions of two real projects — 140MB/47k-message
+# and 329MB/97k-message:
+#
+#   conversion parent   598MB / 1458MB  ->  ~4.4x transcript bytes
+#   largest worker      218MB /  329MB  ->  ~136MB + 0.59x transcript
+#
+# The parent is the heavyweight: the JSONL becomes Pydantic entries, a
+# TemplateMessage tree and a SessionTree (~3x on its own), plus the
+# fragment store's text and the in-flight pickled slices. Fed workers
+# hold only base imports, their memo caches and the in-flight unit's
+# entry slice, so their cost scales weakly with project size. The
+# charges below carry a ~1.2-1.35x margin over the measured fit. The
+# pathological case — one session spanning most of the transcript, whose
+# unit slice re-inflates toward the parent's ~3x inside its worker — is
+# deliberately not charged for: it is a single outlier that fits inside
+# the headroom fraction, and such a project yields too few units to fan
+# wide anyway.
+_PARENT_RSS_PER_TRANSCRIPT_BYTE = 4.5
+_WORKER_RSS_PER_TRANSCRIPT_BYTE = 0.8
 
 # Interpreter, imports, Pygments' lexer tables and the render memo caches,
-# before any transcript is loaded. Measured base RSS was ~44MB and the memo
-# caches held 16MB on a 12k-message project; 150MB leaves room for a
-# Pygments-heavy project to fill more of its memo budget without making the
-# estimate so pessimistic that small projects never get a worker.
+# before any unit arrives. Measured worker intercept was ~136MB; 150MB
+# leaves room for a Pygments-heavy project to fill more of its memo budget
+# without making the estimate so pessimistic that small projects never get
+# a worker. Charged to the parent too (same interpreter, same caches).
 _WORKER_BASE_BYTES = 150 * 1024 * 1024
 
 # Never hand the whole of available memory to workers — the parent still
@@ -371,19 +385,21 @@ def memory_capped_workers(
 ) -> int:
     """Reduce ``requested`` to what memory can actually hold.
 
-    The formula still charges each worker a full transcript copy (~3x its
-    bytes on disk) — the footprint the fan-out had when workers re-loaded
-    the project, where an unguarded ``auto`` on a large archive exhausted
-    RAM and drove the machine into swap, pegging every core. Workers are
-    now *fed* per-unit entry slices and hold only their in-flight unit,
-    so this over-charges — deliberately, until the re-size is measured
-    (work/render-format-once.md § 7.5): the parent's master list, the
-    absorbed fragment text and the in-flight pickled slices still cost
-    real memory, and the swap failure mode is far worse than rendering
-    serially, so the cap errs safe rather than trusting the request.
+    Sized from the measured post-feeding footprints above: the parent —
+    master entry list, session tree, fragment store — is charged
+    ``_PARENT_RSS_PER_TRANSCRIPT_BYTE`` times the transcript's bytes on
+    disk, while each fed worker (base imports + memo caches + its
+    in-flight unit's slice) is charged the flat base plus a weak multiple
+    of transcript size. The pre-feeding formula charged every *worker*
+    the parent's ~3x copy — the footprint of the era when workers
+    re-loaded the whole project, where an unguarded ``auto`` on a large
+    archive exhausted RAM, drove the machine into swap and pegged every
+    core. Swap-thrash is far worse than rendering serially, which is why
+    the charges keep a margin over the measured fit and the headroom
+    fraction stays where it is.
 
     ``concurrent_projects`` is how many project conversions run at once
-    (the ``--all-projects`` pool). Each holds a transcript copy of its own
+    (the ``--all-projects`` pool). Each holds a master list of its own
     *and* spawns its own render workers, so the footprint is multiplicative
     across the two levels and the budget has to be split before it is spent.
 
@@ -394,16 +410,22 @@ def memory_capped_workers(
     if requested <= 1:
         return 1
 
-    per_copy = int(transcript_bytes * _RSS_PER_TRANSCRIPT_BYTE) + _WORKER_BASE_BYTES
+    parent_cost = (
+        int(transcript_bytes * _PARENT_RSS_PER_TRANSCRIPT_BYTE) + _WORKER_BASE_BYTES
+    )
+    worker_cost = (
+        int(transcript_bytes * _WORKER_RSS_PER_TRANSCRIPT_BYTE) + _WORKER_BASE_BYTES
+    )
     available = _available_memory_bytes()
     if available is None:
         return min(requested, 2)
 
     budget = int(available * _MEMORY_HEADROOM_FRACTION) // max(1, concurrent_projects)
-    # The conversion holding these workers has a copy of its own, already
-    # charged against `available` when it is the caller but not yet when
-    # the all-projects parent is sizing budgets for workers it will spawn.
-    affordable = (budget - per_copy) // max(1, per_copy)
+    # The parent's share is already resident when the conversion itself is
+    # the caller (its master list loads before the pool is sized) but not
+    # yet when the all-projects parent pre-sizes budgets for project
+    # workers it hasn't spawned; subtracting it in both cases errs safe.
+    affordable = (budget - parent_cost) // max(1, worker_cost)
     return max(1, min(requested, affordable))
 
 

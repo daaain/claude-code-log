@@ -281,8 +281,8 @@ boundary carrying its own entry slice and (for session files) its slice
 of the fragment store, so workers verify-and-reuse formatted fragments
 instead of re-formatting, and no worker loads the project's transcript.
 Small projects are excluded outright, and the worker count is capped
-against available memory (the cap still charges each worker a full
-transcript copy — deliberately conservative until re-measured): on a
+against available memory (the parent is charged its measured master-list
+footprint, each fed worker only its measured slice-holding cost): on a
 small machine or a large archive it degrades to serial rather than
 swapping. See
 [dev-docs/application_model.md § 2.10](dev-docs/application_model.md) for

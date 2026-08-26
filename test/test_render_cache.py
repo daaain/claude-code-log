@@ -10,6 +10,7 @@ both the eviction mechanics and that keying contract.
 
 import os
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -394,11 +395,11 @@ class TestSubmitRequiresEntries:
 class TestMemoryCap:
     """The cap is load-bearing: swap-thrash is worse than rendering serially.
 
-    The formula still charges each worker a whole transcript copy (~3x its
-    bytes on disk) even though workers are now fed per-unit slices — a
-    deliberate over-charge until the re-size is measured
-    (work/render-format-once.md § 7.5). These tests pin the formula as it
-    stands; loosen them together with it.
+    The formula charges the parent its measured master-list + fragment
+    store footprint (~4.5x transcript bytes) and each fed worker only its
+    measured slice-holding cost (a flat base + a weak multiple) — the
+    § 7.5 re-size of work/render-format-once.md, measured 2026-08-26.
+    These tests pin the formula's shape, not its constants.
     """
 
     @staticmethod
@@ -436,6 +437,61 @@ class TestMemoryCap:
     def test_a_request_of_one_stays_one(self, monkeypatch):
         self._with_memory(monkeypatch, 64 * 1024**3)
         assert memory_capped_workers(1, 1) == 1
+
+
+class TestDominantPlan:
+    """Hold-back selection: which stale project gets the machine to itself.
+
+    The full-rebuild wall collapses to the dominant project's serial time
+    when every project gets the same static render share, so the
+    all-projects loop holds a dominant project out of the pool and
+    converts it last with the full render budget. These pin the
+    selection heuristic (converter._dominant_plan)."""
+
+    @staticmethod
+    def _plan(source_bytes, messages=None):
+        return converter._ProjectPlan(
+            project_dir=Path("p"),
+            dest_dir=Path("p"),
+            cache_manager=None,
+            output_path=Path("p/combined_transcripts.html"),
+            needs_work=True,
+            archived_count=0,
+            stats=converter.GenerationStats(),
+            source_bytes=source_bytes,
+            cached_message_count=messages,
+        )
+
+    def test_dominant_by_messages_is_selected(self):
+        # The reference archive's shape: only 1.08x the runner-up's bytes
+        # but 2.07x its messages — and messages are what cost.
+        giant = self._plan(329, messages=97_000)
+        rest = [self._plan(304, messages=47_000), self._plan(139, messages=46_900)]
+        assert converter._dominant_plan([*rest, giant]) is giant
+
+    def test_bytes_fallback_misses_the_dense_giant(self):
+        # Same shape without cached counts: the comparison falls back to
+        # bytes, 1.08x is under the bar, and nothing is held back —
+        # the safe direction (hold-back on level sizes is a certain loss).
+        giant = self._plan(329)
+        assert converter._dominant_plan([self._plan(304), giant]) is None
+
+    def test_level_sizes_hold_nothing_back(self):
+        plans = [
+            self._plan(100, messages=10_000),
+            self._plan(90, messages=9_000),
+        ]
+        assert converter._dominant_plan(plans) is None
+
+    def test_dominant_by_bytes_when_any_count_is_missing(self):
+        # One project without a cache row poisons the count comparison,
+        # so every plan is ranked by bytes — consistently one unit.
+        giant = self._plan(1000)
+        rest = [self._plan(400, messages=50_000), self._plan(100)]
+        assert converter._dominant_plan([*rest, giant]) is giant
+
+    def test_a_single_plan_is_never_held_back(self):
+        assert converter._dominant_plan([self._plan(1000, messages=99_000)]) is None
 
 
 class TestDarwinMemoryProbe:

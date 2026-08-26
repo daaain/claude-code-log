@@ -77,6 +77,49 @@ table below, byte-identical in every configuration:
   memory cap grants 1 worker/project on 16GB, so the fan-out stays
   inert there until the § 7.5 re-size.
 
+**Phase 4 progress (§ 7 item 5 re-size, 2026-08-26):** the memory cap
+now charges measured post-feeding footprints instead of the old
+full-copy-per-worker model. VmHWM polling across fanned conversions of
+the 140MB/47k and 329MB/97k projects on the 8-core/16GB VM measured:
+conversion parent 598MB / 1458MB (~4.4x transcript bytes — master list
++ fragment store + in-flight slices), largest worker 218MB / 329MB
+(~136MB + 0.59x). `memory_capped_workers` now charges the parent
+4.5x + base and each worker 0.8x + base (~1.2–1.35x margin over the
+fit; the one under-charged pathology — a single session spanning most
+of the transcript, whose slice re-inflates in its worker — is noted at
+the constants). On this VM the incremental cap went 5 → 8 of 8 workers
+and the measured scenario went 21.8s → **19.1s wall (3.24x over the
+61.8s serial, at +6% CPU)**, byte-identical in every configuration.
+Full rebuild on 8 cores stays 1 worker/project because the *core* split
+(`jobs // stale`) binds before memory does — the § "flat pool" remains
+the fix for that tail, with a cheaper interim below.
+
+**Interim tail fix (landed with the re-size):** the all-projects loop
+now holds a *dominant* stale project out of the pool and converts it
+last, alone, with the whole render budget
+(`converter._dominant_plan` + the hold-back wiring in phase 2).
+Dominance is 2x the runner-up, compared on cached message counts when
+every plan has one (bytes when not — and note bytes alone would *miss*
+the reference giant: 1.08x runner-up's bytes, 2.07x its messages).
+Measured on the 8-core VM: full rebuild 65.4s → **58.5s (1.12x)**,
+byte-identical. The modest factor is the archive's shape, not the
+mechanism: once the 97k-message giant is held back, the 47k runner-up
+becomes the new pool wall and the sizes below it are level — exactly
+the case the guard declines to hold back. An archive shaped
+"one giant + dwarfs" gains more; several level-sized bigs need the
+true flat pool (one worker pool over render units across projects,
+per-project setups registered with workers, parse/plan still
+per-project, cache writes still parent-owned per project), which
+stays the end state.
+
+**Still open after phase 4:** the flat pool (above); the fragment-text
+spill (§ 4.9 made the store spillable, nothing spills yet — 186MB held
+in RAM on the 803MB archive); allocating referenced-mode image names in
+the format phase (§ 4.3 — would fix the existing combined-vs-session
+name collision *and* make the mode pool-safe); and a >8-worker sweep on
+the 16-core Mac now that the per-worker transcript tax is gone (the
+knee at 8 was measured pre-feeding; `auto` may no longer overshoot).
+
 This is a handover note. It exists because the two landed optimisations
 each hit a ceiling, and *the same restructuring removes both ceilings*.
 Everything below was measured, not assumed — the numbers are here so you
@@ -91,12 +134,16 @@ Six commits, oldest first:
 
 | commit | what |
 |---|---|
-| `f136c32` | Memoize the pure render leaves (Pygments, Markdown) |
-| `31b09e6` | Fan a project's own pages and session files out over workers |
-| `69ccbe3` | Make the render fan-out opt-in and memory-safe |
-| `687bc7a` | Detect available memory on macOS, and report the cap up front |
-| `eb152da` | Support Windows in the memory probe and the benchmark |
-| `f66c759` | Turn the render fan-out on by default |
+| `0f70250` | Memoize the pure render leaves (Pygments, Markdown) |
+| `9312ec1` | Fan a project's own pages and session files out over workers |
+| `e8b732d` | Make the render fan-out opt-in and memory-safe |
+| `84dad33` | Detect available memory on macOS, and report the cap up front |
+| `fe273dd` | Support Windows in the memory probe and the benchmark |
+| `dbc888d` | Turn the render fan-out on by default |
+
+(then the phase 1–3 commits described in the status block above:
+`3d4a967` fragment store, `bfdbb4c` digest verification, `58f62a0`
+ordinal keys, `4b6f654` fed fragments, `dc02828` fed entry slices.)
 
 Read `dev-docs/application_model.md` §§ 2.9–2.10 first — that is the
 as-built reference for both, and it is current.

@@ -2668,17 +2668,20 @@ _MIN_UNITS_FOR_RENDER_POOL = 8
 
 
 # ...and below this many messages the project's render work is too small to
-# repay the pool's startup. Sized when workers still re-loaded the whole
-# transcript from cache (~1.7s at 47k messages) — they are fed entry slices
-# now, so this is due a re-measure (work/render-format-once.md § 7.5).
-# Measured on 4 cores, with the § 2.9 memo caches on:
+# repay the pool's startup. Re-measured post-feeding (2026-08-26, 8-core
+# VM, workers fed entry slices — the work/render-format-once.md § 7.5
+# revisit), best fanned configuration vs the serial memo-only row:
 #
-#   12k messages  serial 8.2s  ->  4 workers 9.7s   (a loss)
-#   47k messages  serial 27.6s ->  4 workers 20.0s  (1.38x)
+#   12.2k messages  serial  7.7s  ->  8.2s   (a loss)
+#   15.5k messages  serial  7.7s  ->  8.3s   (a loss)
+#   25.2k messages  serial 12.7s  ->  6.0s   (2.13x)
 #
-# so the crossover sits between the two. Set conservatively near the upper
-# measurement rather than the midpoint: below it the cost is a certain
+# so the crossover sits between 15.5k and 25.2k and the threshold sits at
+# its upper edge: below it the cost is a certain (if now small)
 # regression, above it the win grows with project size and core count.
+# The loss below the line shrank with the feed (workers no longer reload
+# the transcript) but did not flip sign — spawn + import + cold memo
+# caches still outweigh a few seconds of render work.
 def _make_fragment_store(format: str) -> "Optional[RenderFragmentStore]":
     """Create the per-conversion fragment store, or None when it can't help.
 
@@ -2742,10 +2745,9 @@ def _make_render_pool(
     - Projects too small for the pool's startup to pay for itself.
     - Not enough memory for the fan-out's footprint.
 
-    The worker count is also capped by available memory. The cap formula
-    still charges each worker a full transcript copy — workers now hold
-    only their in-flight unit's slice, so this over-charges and is due a
-    re-size (work/render-format-once.md § 7.5); until then it errs safe.
+    The worker count is also capped by available memory, with the parent
+    charged its full master-list footprint and each fed worker only its
+    measured slice-holding cost — see ``render_pool.memory_capped_workers``.
     """
     from .render_pool import memory_capped_workers, resolve_render_jobs
 
@@ -3881,7 +3883,47 @@ class _ProjectPlan:
     archived_count: int
     stats: GenerationStats
     source_bytes: int
+    # Total message count from the cache row, None when the project has
+    # no cache yet (first run). For a stale project it lags reality by
+    # one run — fine for the hold-back comparison, which only needs
+    # relative magnitudes. Message count predicts conversion cost far
+    # better than bytes: see _dominant_plan.
+    cached_message_count: Optional[int] = None
     error: Optional[str] = None
+
+
+def _dominant_plan(plans: "List[_ProjectPlan]") -> "Optional[_ProjectPlan]":
+    """The plan whose conversion will dominate the pool's wall clock, or None.
+
+    Message count predicts conversion cost far better than bytes — the
+    reference archive's 329MB/97k-message project takes as long as its
+    other seven projects combined while being only 1.08x the runner-up's
+    *bytes* (97k vs 47k *messages*) — so compare cached counts when every
+    plan has one and fall back to bytes otherwise; mixing the two units
+    in one ranking would make the ratio meaningless.
+
+    2x over the runner-up is the bar. Holding a project back pays
+    ``fanned(largest)`` *after* the pool instead of hiding
+    ``serial(largest)`` inside it, so with level sizes it is a certain
+    loss; at 2x the held-back project's fanned time (~1/3 of serial at 8+
+    workers) still undercuts the runner-up's serial time that now bounds
+    the pool.
+    """
+    if len(plans) < 2:
+        return None
+    if all(plan.cached_message_count for plan in plans):
+
+        def cost(plan: "_ProjectPlan") -> int:
+            return plan.cached_message_count or 0
+    else:
+
+        def cost(plan: "_ProjectPlan") -> int:
+            return plan.source_bytes
+
+    ranked = sorted(plans, key=cost, reverse=True)
+    if cost(ranked[0]) >= 2 * max(1, cost(ranked[1])):
+        return ranked[0]
+    return None
 
 
 def _plan_project(
@@ -4016,6 +4058,15 @@ def _plan_project(
         stats.files_loaded_from_cache = len(jsonl_files)
     stats.total_time = time.time() - plan_start
 
+    cached_message_count: Optional[int] = None
+    if cache_manager is not None:
+        try:
+            cache_stats = cache_manager.get_cache_stats()
+            if cache_stats.get("cache_enabled"):
+                cached_message_count = cache_stats["total_cached_messages"]
+        except Exception:
+            cached_message_count = None
+
     return _ProjectPlan(
         project_dir=project_dir,
         dest_dir=dest_dir,
@@ -4025,6 +4076,7 @@ def _plan_project(
         archived_count=archived_count,
         stats=stats,
         source_bytes=sum(f.stat().st_size for f in jsonl_files),
+        cached_message_count=cached_message_count,
     )
 
 
@@ -4303,7 +4355,24 @@ def process_projects_hierarchy(
     # the (WAL-mode) cache DB — so stale projects fan out over a
     # process pool. `jobs=1` keeps the historical inline path.
     job_budget = jobs if jobs is not None and jobs > 0 else (os.cpu_count() or 1)
-    resolved_jobs = max(1, min(job_budget, len(to_convert)))
+    render_budget = resolve_render_jobs(None)
+
+    # A dominant project is held out of the pool and converted last with
+    # the whole render budget. Measured on the reference archive, the
+    # full-rebuild wall is within 8% of "how long does the biggest project
+    # take", while the static split below grants that project the same
+    # share as everything else; a fanned single project runs ~3x its
+    # serial time, so the wall becomes pool(rest) + fanned(giant) instead
+    # of serial(giant). Only when a pool will actually run and the
+    # fan-out is on — with either off, ordering changes nothing and the
+    # historical path stays.
+    holdback = (
+        _dominant_plan(to_convert)
+        if job_budget > 1 and render_budget > 1 and len(to_convert) >= 2
+        else None
+    )
+    pooled = [plan for plan in to_convert if plan is not holdback]
+    resolved_jobs = max(1, min(job_budget, len(pooled)))
 
     # Spare capacity goes to each project's *own* render fan-out (on by
     # default — see `render_pool.resolve_render_jobs`; a project worker
@@ -4316,38 +4385,42 @@ def process_projects_hierarchy(
     # budget gives one stale project the whole machine and many stale
     # projects the historical one-worker-each.
     #
-    # This does not fix the *tail* of a large multi-project run: the split
-    # is static, so when the small projects finish early their share isn't
-    # handed back to the big project still rendering. Making it dynamic
-    # needs a single flat pool over render units rather than two nested
-    # levels.
+    # The hold-back above covers the dominant-project tail; for a run
+    # whose tail is several level-sized projects the split is still
+    # static (a finished small project's share isn't handed back), and
+    # making it dynamic needs a single flat pool over render units
+    # rather than two nested levels.
     #
-    # Memory is the binding constraint, not cores. Every render worker holds
-    # its project's whole transcript (~3x its bytes on disk), and so does
-    # every project worker, so the footprint is the *product* of the two
-    # levels. Left unchecked that is how an `auto` run on a large archive
-    # takes a machine into swap and wedges it. Size the render share against
-    # the largest stale project, divided across the project workers that will
+    # Memory can bind before cores do. Every *project* worker holds its
+    # project's whole master list (~4.5x its transcript bytes on disk with
+    # the fragment store); render workers hold only their in-flight unit's
+    # slice, but the footprint is still the *product* of the two levels.
+    # Left unchecked that is how an `auto` run on a large archive takes a
+    # machine into swap and wedges it. Size the render share against the
+    # largest stale project, divided across the project workers that will
     # be resident at the same time; each worker re-checks against its own
     # project before actually starting a pool.
-    render_budget = resolve_render_jobs(None)
     per_project_render_jobs = 1
-    if render_budget > 1 and to_convert:
+    if render_budget > 1 and pooled:
         per_project_render_jobs = max(
             1,
             min(
                 render_budget,
-                job_budget // max(1, len(to_convert)),
+                job_budget // max(1, len(pooled)),
                 memory_capped_workers(
                     render_budget,
-                    max(plan.source_bytes for plan in to_convert),
+                    max(plan.source_bytes for plan in pooled),
                     concurrent_projects=resolved_jobs,
                 ),
             ),
         )
 
-    def _convert_plan_inline(plan: _ProjectPlan) -> None:
+    def _convert_plan_inline(
+        plan: _ProjectPlan, render_jobs: Optional[int] = None
+    ) -> None:
         """Convert one project in this process, reporting progress/failure."""
+        if render_jobs is None:
+            render_jobs = per_project_render_jobs
         project_start_time = time.time()
         try:
             # Generate output for this project (handles cache updates internally)
@@ -4371,7 +4444,7 @@ def process_projects_hierarchy(
                 no_timestamps=no_timestamps,
                 no_recaps=no_recaps,
                 archive_search_link=_archive_search_link(plan),
-                render_jobs=per_project_render_jobs,
+                render_jobs=render_jobs,
             )
         except Exception:
             _print_project_failed(plan, traceback.format_exc())
@@ -4379,13 +4452,13 @@ def process_projects_hierarchy(
         _print_project_done(plan, time.time() - project_start_time)
 
     if resolved_jobs <= 1:
-        for plan in to_convert:
+        for plan in pooled:
             _convert_plan_inline(plan)
-    elif to_convert:
+    elif pooled:
         # Largest projects first: with N workers the wall clock is
         # bounded by the biggest single project, so don't leave it
         # queued behind small ones at the tail.
-        by_size = sorted(to_convert, key=lambda p: p.source_bytes, reverse=True)
+        by_size = sorted(pooled, key=lambda p: p.source_bytes, reverse=True)
         settled: set[int] = set()
         try:
             # `spawn` on every platform: fork is officially unsafe with
@@ -4444,9 +4517,15 @@ def process_projects_hierarchy(
                 f"this as a library, run it under `if __name__ == '__main__':` "
                 f"or pass jobs=1."
             )
-            for plan in to_convert:
+            for plan in pooled:
                 if id(plan) not in settled:
                     _convert_plan_inline(plan)
+
+    if holdback is not None:
+        # The rest are done and nothing else is resident, so the dominant
+        # project gets the whole machine (`--jobs` still caps it; the
+        # memory cap re-checks inside `_make_render_pool`).
+        _convert_plan_inline(holdback, render_jobs=min(render_budget, job_budget))
 
     # ---- Phase 3 (collect): aggregate per-project index data from the
     # now-fresh cache. Sequential — cheap cache reads (the no-cache
