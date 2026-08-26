@@ -9,6 +9,7 @@ both the eviction mechanics and that keying contract.
 """
 
 import os
+import sys
 
 import pytest
 
@@ -502,9 +503,20 @@ class TestWindowsMemoryProbe:
 
     def test_probe_never_raises(self, monkeypatch):
         """A failed foreign-function call must degrade, not crash a run."""
+        # Capture before patching: render_pool_module.sys IS the sys
+        # module, so the setattr below changes sys.platform globally for
+        # the duration of the test.
+        actually_windows = sys.platform == "win32"
         monkeypatch.setattr(render_pool_module.sys, "platform", "win32")
-        # No ctypes.windll off Windows, so this exercises the failure path.
-        assert render_pool_module._windows_available_bytes() is None
+        result = render_pool_module._windows_available_bytes()
+        if actually_windows:
+            # On real Windows the foreign call genuinely succeeds; what
+            # this test pins is that the probe returns rather than raises.
+            assert result is not None and result > 0
+        else:
+            # No ctypes.windll off Windows, so this exercises the failure
+            # path: the call fails inside the probe and degrades to None.
+            assert result is None
 
     def test_available_memory_still_resolves_when_probes_fail(self, monkeypatch):
         """The dispatcher tolerates every probe returning None."""

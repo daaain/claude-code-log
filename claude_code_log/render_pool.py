@@ -425,14 +425,19 @@ def _init_render_worker(setup: _WorkerSetup) -> None:
     its own entry slice (``RenderUnit.entries``), already date-filtered
     and deduplicated by the parent — so a worker's messages are the
     parent's, not a reconstruction that could drift. The cache manager is
-    only constructed (no load) for the per-session combined-link lookup.
+    only constructed (no load) for the per-session combined-link lookup,
+    and read-only: the parent already migrated the shared cache DB and
+    wrote this project's row, so N workers must not race those writes —
+    or any other.
     """
     global _worker_setup, _worker_cache_manager
 
     from .cache import CacheManager
 
     _worker_setup = setup
-    _worker_cache_manager = CacheManager(Path(setup.project_dir), setup.library_version)
+    _worker_cache_manager = CacheManager(
+        Path(setup.project_dir), setup.library_version, read_only=True
+    )
 
 
 def _build_worker_renderer() -> Any:

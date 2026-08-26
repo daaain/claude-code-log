@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Tests for caching functionality."""
 
+import sqlite3
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
@@ -577,6 +578,45 @@ class TestCacheManager:
 
         stats = cache_manager.get_cache_stats()
         assert stats["total_cached_messages"] == 50
+
+
+class TestReadOnlyCacheManager:
+    """read_only=True is what spawned render workers construct: it must
+    see the parent's data but be physically unable to write the shared DB."""
+
+    def test_reads_existing_project_without_writing(
+        self, temp_project_dir, mock_version
+    ):
+        writer = CacheManager(temp_project_dir, mock_version)
+        writer.update_project_aggregates(
+            total_message_count=5,
+            total_input_tokens=50,
+            total_output_tokens=100,
+            total_cache_creation_tokens=0,
+            total_cache_read_tokens=0,
+            earliest_timestamp="2023-01-01T10:00:00Z",
+            latest_timestamp="2023-01-01T20:00:00Z",
+        )
+
+        reader = CacheManager(temp_project_dir, mock_version, read_only=True)
+        assert reader._project_id == writer._project_id
+        cached = reader.get_cached_project_data()
+        assert cached is not None
+        assert cached.total_message_count == 5
+
+    def test_connections_reject_writes(self, temp_project_dir, mock_version):
+        CacheManager(temp_project_dir, mock_version)  # create the DB
+        reader = CacheManager(temp_project_dir, mock_version, read_only=True)
+        with pytest.raises(sqlite3.OperationalError):
+            with reader._get_connection() as conn:
+                conn.execute("DELETE FROM projects")
+
+    def test_missing_database_degrades_to_no_data(self, temp_project_dir, mock_version):
+        reader = CacheManager(temp_project_dir, mock_version, read_only=True)
+        assert reader._project_id is None
+        assert reader.get_cached_project_data() is None
+        # Construction must not have created the database as a side effect.
+        assert not reader.db_path.exists()
 
 
 class TestLibraryVersion:

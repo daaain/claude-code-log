@@ -338,15 +338,22 @@ def _bench_hierarchy(target: Path) -> set[str]:
             stale=[largest],
         ),
     ]
-    # Not folded into the digest comparison: this scenario regenerates a
-    # subset, so its file set legitimately differs from a full rebuild's.
-    _report(
+    # Not folded into the full-rebuild digest comparison: this scenario
+    # regenerates a subset, so its file set legitimately differs from a
+    # full rebuild's. The configurations *within* it rebuilt the same
+    # subset though, so they must agree with each other.
+    incremental_digests = _report(
         "Incremental — one project stale, the shape of a daily run. The\n"
         "project pool has nothing to spread, so the fan-out is the only\n"
         "thing that can use the other cores.",
         incremental,
         "memo only",
     )
+    if len(incremental_digests) > 1:
+        print(
+            "\nMISMATCH — incremental configurations disagreed on the rendered bytes."
+        )
+        sys.exit(1)
     return digests
 
 
@@ -420,6 +427,24 @@ def main() -> None:
     if holder is None:
         temp_holder = tempfile.mkdtemp(prefix="ccl-bench-")
         holder = Path(temp_holder)
+
+    # Refuse a work dir that overlaps the source tree before touching the
+    # filesystem: the copy loop rmtree's <holder>/<project name> and
+    # _clear_outputs sweeps the holder, so an overlapping --work-dir would
+    # delete real transcripts rather than scratch copies.
+    holder_resolved = holder.resolve()
+    for project in sources:
+        project_resolved = project.resolve()
+        if (
+            holder_resolved == project_resolved
+            or holder_resolved in project_resolved.parents
+            or project_resolved in holder_resolved.parents
+        ):
+            sys.exit(
+                f"--work-dir {holder} overlaps source project {project}; "
+                "pick a directory outside the source tree"
+            )
+
     holder.mkdir(parents=True, exist_ok=True)
 
     try:

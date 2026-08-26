@@ -451,7 +451,10 @@ and workflow dicts, so the per-message `nodes` mapping — whose pickled
 size is the whole transcript — stays behind (its lookups raise on a slim
 tree, so a future render-path consumer of `nodes` fails loudly in a
 worker instead of silently diverging). The parent keeps every staleness
-check and cache write to itself (so the DB stays single-writer), slices
+check and cache write to itself (so the DB stays single-writer — a
+worker's own `CacheManager`, kept only for the per-session combined-link
+lookup, is constructed `read_only=True`: no migrations, no project-row
+upsert, `mode=ro` connections), slices
 session units with the same trunk predicate `generate_session` filters
 by (so the worker's re-filter of the fed slice is idempotent), and the
 pool starts lazily on first submit. `RenderPool.submit` declines a unit

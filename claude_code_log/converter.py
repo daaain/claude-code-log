@@ -2083,8 +2083,9 @@ def convert_jsonl_to(
         render_jobs: Worker processes for rendering this project's own
             output files (combined pages + per-session files), which are
             independent of one another. ``None`` (the default) consults
-            ``$CLAUDE_CODE_LOG_RENDER_JOBS``, which is unset for almost
-            everyone and means 1 — inline rendering, the historical
+            ``$CLAUDE_CODE_LOG_RENDER_JOBS``: unset (or ``auto``) resolves
+            to the CPU count — the fan-out is on by default — while ``1``
+            or ``off`` opts out into inline rendering, the historical
             single-threaded behaviour. An explicit int overrides the
             environment. See ``_make_render_pool`` for the further
             conditions under which a pool is actually created.
@@ -2722,10 +2723,11 @@ def _make_render_pool(
 
     Returns None whenever fanning out would be wrong or wasteful:
 
-    - ``render_jobs`` resolves to 1 — which is the default, since the
-      fan-out is opt-in via ``$CLAUDE_CODE_LOG_RENDER_JOBS`` (see
-      ``render_pool.resolve_render_jobs``). It is also what a project
-      worker in the all-projects pool gets when there is no spare capacity,
+    - ``render_jobs`` resolves to 1. The fan-out is on by default (an
+      unset ``$CLAUDE_CODE_LOG_RENDER_JOBS`` means the CPU count), so this
+      takes ``1``/``off`` opting out via the environment (see
+      ``render_pool.resolve_render_jobs``) — or a project worker in the
+      all-projects pool getting 1 because there is no spare capacity,
       since nesting pools would oversubscribe.
     - Single-file mode, or no cache manager (staleness planning needs one).
     - No pre-built ``session_tree``. Workers render fed entry slices
@@ -4303,10 +4305,10 @@ def process_projects_hierarchy(
     job_budget = jobs if jobs is not None and jobs > 0 else (os.cpu_count() or 1)
     resolved_jobs = max(1, min(job_budget, len(to_convert)))
 
-    # Spare capacity goes to each project's *own* render fan-out — but only
-    # when that fan-out is switched on, which it isn't by default (see
-    # `render_pool.resolve_render_jobs`). `--jobs` never enables it; it only
-    # caps it, so the two pool levels together can't oversubscribe.
+    # Spare capacity goes to each project's *own* render fan-out (on by
+    # default — see `render_pool.resolve_render_jobs`; a project worker
+    # with no spare capacity renders inline). `--jobs` only caps that
+    # fan-out, so the two pool levels together can't oversubscribe.
     #
     # With fewer stale projects than workers — the shape of every
     # incremental run — the project pool alone leaves most cores idle,
