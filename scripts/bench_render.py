@@ -445,6 +445,18 @@ def main() -> None:
                 "pick a directory outside the source tree"
             )
 
+    # And it must be new or empty: the copy loop creates <holder>/<project
+    # name> and the output sweep clears the holder, so a directory with
+    # existing contents — even an unrelated one that merely shares a
+    # project's name — would have files this script never created deleted
+    # or overwritten. That includes a previous --keep run's copy: delete
+    # it yourself to reuse the path.
+    if holder.exists():
+        if not holder.is_dir():
+            sys.exit(f"--work-dir {holder} is not a directory")
+        if any(holder.iterdir()):
+            sys.exit(f"--work-dir {holder} is not empty; pass a new or empty directory")
+
     holder.mkdir(parents=True, exist_ok=True)
 
     try:
@@ -500,10 +512,10 @@ def main() -> None:
         for project in sources:
             # Keep each project's own directory name: the rendered title is
             # derived from it, so renaming would change output for no reason.
-            destination = holder / project.name
-            if destination.exists():
-                shutil.rmtree(destination)
-            shutil.copytree(project, destination)
+            # The holder was verified new-or-empty above, so the destination
+            # cannot pre-exist — copytree fails loudly rather than this loop
+            # deleting anything it didn't create.
+            shutil.copytree(project, holder / project.name)
         # Don't inherit generated output or a cache from the source tree.
         _clear_outputs(holder, all_projects=True)
         for stale_db in holder.glob("claude-code-log-cache.db*"):
