@@ -183,6 +183,181 @@ pool's own (far higher) memory bar has already declined, so the
 store-less conversion is always serial. Unit-pinned in
 `test_render_cache.py::TestFragmentStoreMemoryValve`.
 
+**Streaming-conversion design analysis (2026-08-27, so nobody
+re-derives it):** a code-level survey of every full-residency
+assumption behind the § "Still open" streaming item. The load-bearing
+findings, then the refined hard parts, then a staged path.
+
+*What already exists.* Three of the four planning inputs are pure
+cache reads today, before any entry is loaded:
+
+- Global session ordering and page assignment:
+  `_assign_sessions_to_pages` (`converter.py:1441`) sorts on
+  `sessions.first_timestamp` and sums `sessions.message_count` —
+  both indexed columns. The page plan is cache-computable.
+- Per-session staleness is *already computed pre-load* in
+  `_plan_project` (`converter.py:4112-4120`) — then thrown away
+  except as a count (`_ProjectPlan` carries only `needs_work`).
+  Keeping the list is step zero.
+- The cache stores full per-entry rows (compressed content blobs in
+  the `messages` table) with an existing session-keyed reader —
+  `load_session_entries` (`cache.py:1493`, used by archived-session
+  restore) — an embryonic per-session load path. Caveat: rows come
+  back `ORDER BY timestamp`, not file order, and there is no
+  ordinal/line-number column.
+
+And the render semantics already exist: the paginated path renders
+*page-scoped trees* (a page's sessions only), so page-granular
+streaming preserves today's paginated bytes by construction — the
+cross-page couplings streaming would sever (anchors, tool pairing
+across pages) are already severed under pagination
+(`dev-docs/dag.md` on `#msg-d-{N}` being single-page). What's
+missing is page/session-scoped *loading* and a set of compact
+cross-session sidecars. The natural streaming unit is the page
+(sessions never split across pages), so the entry-list peak becomes
+max(page ≈ 2000 messages default, largest single session) instead of
+the whole project. Non-paginated combined output keeps the old floor
+unless forced through pagination.
+
+*The four named hard parts, refined:*
+
+1. **Dedup** is two mechanisms, both global, both sidecar-able.
+   (i) `dag.build_message_index` (`dag.py:127-172`) dedups uuids
+   across sessions, survivor = copy in the session with the earliest
+   first-timestamp (resume-replay prefixes). The winner map
+   `{uuid → winning sid}` is derivable *by SQL* from the `messages`
+   table (`_uuid`, `session_id`, timestamps) — no entry loading.
+   (ii) `converter.deduplicate_messages` (`converter.py:1058`) keys
+   on a tuple that *includes* `session_id` (`converter.py:1090`), so
+   its drops are intra-session and per-session-computable; only the
+   final `parentUuid`/`leafUuid` rewrite (`converter.py:1186-1199`)
+   needs the assembled global dropped→survivor map. Sidecars are
+   ~100 bytes/entry of uuid strings — 1-2% of entry bytes.
+2. **The DAG**: `SessionTree.nodes` pins every entry, but the render
+   path already runs on `slim_session_tree` (phase 3) — streaming
+   needs the slim form built without ever materializing `nodes`
+   whole. The cross-session inputs are small (session-root
+   `parent_uuid` linkage for junctions, `dag.py:1035-1058`); the big
+   term is `sessions[*].uuids` (an O(entries) uuid copy), which
+   `_extract_session_hierarchy` re-copies per render call
+   (`renderer.py:1010-1013`) — restrict it to the tree's own
+   sessions. Forks/branches (`{trunk}@{uuid12}`) are intra-session
+   and stream fine.
+3. **Global session ordering**: solved by cache (above). Within-page
+   order today comes from master-list DAG-traversal order
+   (`converter.py:1786-1793`); a per-session DAG line ordered the
+   same way is the requirement.
+4. **Fragment-store ordinals**: confirmed master-list positions
+   (`fragment_store.py:238-240`, set at `converter.py:2271`).
+   Independent session loads would collide at ordinal 0. Re-key to
+   `(trunk sid, within-session ordinal, part_ordinal)` — every
+   process loading the same session slice agrees, no master list
+   needed. Don't derive global ordinals from planned count offsets:
+   the cached count and the render count genuinely diverge
+   (`converter.py:1841-1849`).
+
+*Global couplings the four didn't name* (each found in the survey,
+each small enough for a sidecar unless noted):
+
+- **`requestId` dedup for token totals** — `compute_project_aggregates`
+  / `compute_session_data` carry a project-global `seen_request_ids`
+  because a retried assistant entry shares its requestId across
+  sessions (`converter.py:1553-1556`). Thread one set through the
+  stream or cross-session retries double-count.
+- **Warmup detection** (`utils.py:776`) needs a whole session (fine —
+  that's the stream unit) but is consumed project-wide
+  (`converter.py:2954`) and is *not* a cached column — worth caching.
+- **Cross-session tool_use→result pairing** (`ctx.tool_use_context`,
+  `factories/tool_factory.py:1671`): sidecar of
+  `{tool_use_id → (name, file_path, favicon, label)}` — scalars only.
+  This is the same divergence class the store's § 4.8 digest guard
+  covers.
+- **Summary/leafUuid resolution** (`renderer.py:1115`) needs
+  uuid→session; `sessions.summary` is already the cached answer.
+- **`map_workflow_runs_by_tool_use`** (`workflow.py:614`) is
+  explicitly whole-project "before pagination splits it" — its
+  output `{tool_use_id → run_id}` is a compact sidecar.
+- **`_scan_sidechain_uuids`** (`converter.py:161`) re-reads every
+  subagent/workflow JSONL per load just to suppress orphan warnings —
+  make it per-session or cache it.
+- `ensure_fresh_cache` is itself all-or-nothing: one changed file
+  re-walks every file through `load_directory_transcripts`
+  (`converter.py:2542-2562`) — under streaming the cache build must
+  also go per-file (the pieces exist: `load_transcript` is per-file,
+  `save_cached_entries`/search reindex already are).
+
+*Staged path* (each stage byte-equivalence-tested at page
+granularity):
+
+1. Keep `_plan_project`'s stale-session list; add the SQL-derived
+   dedup-winner sidecar.
+2. **Session-scoped incremental** — when only session files are stale
+   and no page is, load only those sessions' trunk files (+ subagent
+   trees, which `load_transcript` already scopes per trunk) plus
+   sidecars. This alone removes the everyday "1 stale session loads
+   803MB" case at a fraction of the full feature's risk.
+3. **Page-granular streaming for full rebuilds** — plan pages from
+   cache, then load/render/drop one page's sessions at a time
+   (rendering that page and its sessions' files together), with the
+   fragment-store re-key from hard part 4.
+4. Only then revisit the § 7.5-style thresholds again — with the
+   floor gone, `memory_capped_workers`' parent charge (4.5x) stops
+   being the binding constraint on small machines.
+
+This is a restructuring of `load_directory_transcripts` +
+`convert_jsonl_to`'s spine — comparable invasiveness to the fed-worker
+sequence (phases 2-4), delivered incrementally the same way. Nothing
+else on this list delivers the "no archive too big for the machine"
+property; stage 2 alone delivers most of the everyday value.
+
+**Provider coverage check (Codex / Antigravity, 2026-08-27):** none
+of this branch's structural work reaches the provider paths, because
+providers do not flow through `convert_jsonl_to` at all — they render
+via `render_normalized_session_file` (`converter.py:3314`) and
+`render_provider_wholesale` (`converter.py:3477`), which never call
+`_make_fragment_store`, `_make_render_pool`, `_dispatch_render_units`,
+or build a `SessionTree`. Per feature:
+
+- **Leaf memo: applies** (module-global caches under the shared HTML
+  formatters). Verified empirically on a real 28MB/30-session Codex
+  tree (`downloads/codex/sessions`): 66-68% Markdown / ~50% Pygments
+  hit rates, and the § 4.2 git-cwd key is safe because codex
+  populates `entry.cwd` (`providers/codex.py:999-1034`); agy leaves
+  it empty (no SHA links, consistent, pre-existing).
+- **Fragment store: bypassed**, and it's a real miss — the wholesale
+  walker has the same session-vs-combined duplication (sessions
+  first at `converter.py:3734`, combined from the same entry objects
+  at `converter.py:3792-3809`), and `fragment_key` stamping already
+  happens for provider entries and is thrown away. Wiring is cheap:
+  one store per cwd group, `set_entry_ordinals(combined_messages)`,
+  a `fragment_store` parameter on `render_normalized_session_file`.
+- **Render pool: bypassed**, and naive wiring would silently decline
+  on the missing session tree (`converter.py:2809`) — providers
+  rebuild a DAG from entries on *every* render call
+  (`renderer.py:977-982`), a pre-existing inefficiency a per-group
+  SessionTree would fix anyway. Also needed: a provider-supplied
+  byte measure (the `*.jsonl` glob reads 0 on codex's nested
+  `sessions/YYYY/MM/DD/` tree, which would over-grant workers), a
+  `db_path` field on `_WorkerSetup` (the provider path's shared
+  output-root DB is not `project_dir.parent`-derivable under
+  `--expand-paths`), a `RenderUnit` refactor of the wholesale loop,
+  and un-rejecting `--jobs` (`cli.py:1217`). The trunk predicate
+  needs no change — codex/agy sessionIds are flat.
+- **Hold-back / memory cap: not applicable** — provider projects are
+  never enumerated by `process_projects_hierarchy` (its discovery is
+  `*.jsonl`-glob under `~/.claude/projects`). The cached message
+  counts the planner would need *are* written by the codex walker;
+  the loop just never sees them. Codex wholesale has no planning
+  phase at all.
+- **Antigravity is single-session-only** (`--session-id`): no
+  `discover_sessions_under`/`load_session_under`/`source_path`
+  (`providers/agy.py:34-55`; wholesale fails loudly, pinned in
+  `test_codex_walker.py:858-880`), so there is nothing to wire until
+  the wholesale surface exists.
+- **No test** exercises the fragment store or render pool with a
+  provider fixture; `work/codex-backlog.md:78-84,134-142` already
+  tracks the integration gap (cache/TUI/all-projects, `--jobs`).
+
 **Still open after phase 7:**
 
 - **The flat pool** (above — residual ~1.1-1.3x on measured archives,
@@ -196,15 +371,13 @@ store-less conversion is always serial. Unit-pinned in
   machine under ~2x its largest project cannot convert it, and no
   optimisation on this branch moves that floor; the valve above only
   stops the store from lowering the cliff's edge. The fix is a
-  metadata-planned streaming pass (the cache DB already holds
-  session-level metadata): plan sessions/pages from cache, then load,
-  render and drop one session or page at a time. Hard parts, from the
-  code as-built: dedup and cross-session tool_use/result pairing
-  assume the whole list is resident, the DAG builds from all entries,
-  combined pages need global session ordering, and fragment-store
-  ordinals are master-list positions. Big feature; nothing else on
-  this list delivers the "no archive too big for the machine"
-  property.
+  metadata-planned streaming pass — see the design analysis above
+  for the full survey, sidecar inventory, and staged path. Big
+  feature; nothing else on this list delivers the "no archive too
+  big for the machine" property.
+- **Provider wiring** — the fragment store for codex wholesale is the
+  cheap win; the pool needs the per-group SessionTree first (see the
+  provider coverage check above).
 - **The fragment-text spill** — demoted from headline to footnote by
   the § 4.9 measurement: it bounds only the store's own +269MB, not
   the master-list floor above, so it is a ~15-20% peak shave, not a
@@ -600,9 +773,20 @@ Full suite before pushing: `just ci`.
   pyright wrapper uses its bundled JS instead of fetching node past
   the wall). `.venv` lives on a box-local shadow volume, so host and
   box binaries never clobber each other.
-- Real transcripts for local testing: `downloads/projects/` (7.9GB, 84
-  projects, with a warm cache DB). Test fixtures:
-  `test/test_data/real_projects/`.
+- Real transcripts for local testing: `downloads/projects/` (7.9GB on
+  disk, 84 projects, with a warm cache DB). **Every `--all-projects`
+  timing in this doc runs on its 8 largest projects, never the full
+  corpus** — `bench_render.py`'s `--projects 8` default selects them
+  by top-level `*.jsonl` bytes (`_transcript_bytes` — subagent
+  sidecar files in subdirectories don't count), which today totals
+  1539MB with the largest at 329MB, matching the post-feeding tables
+  (the pre-feeding tables' 1543MB is the same subset, measured
+  earlier). Single-project rows use individual projects from the same
+  tree. The "803MB / 187-file" fragment-store reference project is
+  the corpus's own claude-code-log archive quoted at its *all-files*
+  size, subagent sidecars included (its top-level trunk files are
+  319MB — which is why it can sit inside a "largest 329MB" subset).
+  Test fixtures: `test/test_data/real_projects/`.
 
 ---
 
