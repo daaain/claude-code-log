@@ -831,10 +831,118 @@ slightly lower wall (28.2s → 25.2s), incremental 1092MB → 587MB at
 files plus interpreter baseline — the floor scales with page size,
 not archive size.
 
-Declines fall through to the full load unchanged. The remaining
-full-residency path is the cache refresh itself (`ensure_fresh_cache`
-still loads the whole project when source files changed) — that is
-streaming stage 4 territory, tracked in the work doc.
+Declines fall through to the full load unchanged. The cache refresh
+itself no longer full-loads on changed sources — that is § 2.14.
+
+### 2.14 Incremental cache refresh
+
+The last full-residency path was `ensure_fresh_cache` itself: one
+changed file re-walked every file through `load_directory_transcripts`
+to recompute three things — per-session cache rows, project
+aggregates, and the sidecar. Streaming stage 4
+(`converter._incremental_cache_refresh`) recomputes all three from a
+bounded *closure* of the modified files instead:
+
+- **Per-file parse**: each modified file's old identity state
+  (sessions, uuids, parentUuids, requestIds, residual type counts) is
+  captured from the messages table, then `load_transcript` re-parses
+  it (rewriting its rows exactly as always). Old uuids must be a
+  subset of new — a shrunk/rewritten file means history changed and
+  declines.
+- **Closure** (SQL projections, no entry loading): the modified
+  files' sessions, plus every session holding a copy of a modified
+  uuid (re-election partners), plus owners of external attachment
+  points (the dedup winner's session when duplicated), plus the
+  complete old target list of any junction a modified entry touches
+  or whose uuid is re-elected (so target order rebuilds natively),
+  plus files holding cross-file metadata (summaries by leafUuid,
+  ai-titles by session) for closure sessions. Sidecar-derived ids are
+  trunk-normalized — junction owners/targets can be branch-qualified
+  `{trunk}@{uuid12}` line ids that the file map doesn't know.
+- **Partial load**: the closure's files go through
+  `_load_sessions_partial` with two refresh-mode deviations — old
+  dedup-winner enforcement *exempts* modified uuids (their election
+  re-runs natively on the full candidate set, which the closure
+  guarantees is loaded), and the sidecar junction patch *skips*
+  junctions marked native (the old row would erase a new fork/resume
+  target).
+- **Facts persist**, restricted to closure sessions (all complete by
+  strict file resolution — the co-resident partial-session trap
+  applies to cache facts too): session rows upserted; junction rows
+  rewritten for tree junctions owned by closure sessions (patched
+  ones rewrite their old rows identically — harmless); parent rows
+  and re-elected winners replaced; project aggregates move by *delta*
+  — new minus old session-row contributions, plus the modified files'
+  summary-row delta, with bookends extended from the loaded entries'
+  own timestamp strings (the DB normalizes formats).
+
+**The two migrations the delta needs.** `total_message_count` is
+`len(messages)` of a full load — the *traversed* entry list — so
+moving it by delta requires every traversed entry to be attributable
+to a persisted session row:
+
+- **009 (`sessions.hidden`)**: warmup-only and empty/agent-only
+  sessions used to be filtered before the write, leaving their
+  contribution off the record. The writer now persists them from one
+  unfiltered `compute_session_data` pass, flagged `hidden = 1`, and
+  every read site meaning "sessions a human would render" filters
+  `hidden = 0` — so the visible set is byte-identical to the old
+  filtered computation.
+- **010 (`sessions.residual_count`)**: entries a session owns that
+  `compute_session_data` skips (`attachment`, `ai-title`), counted
+  from the traversed list by `compute_session_residuals`. Counting
+  them from cached message rows instead is *wrong*, because
+  attachments are parsed into the cache but can be dropped by DAG
+  traversal — a real-archive holdback caught exactly that (+16). A
+  session owning only such entries gets a row of its own (hidden,
+  since it has no first user message) so the arithmetic has somewhere
+  to put them. The column is deliberately NULLable: a pre-010 row's
+  contribution is unknown rather than zero, and the refresh declines
+  on one.
+
+Together they close the identity the delta relies on, verified across
+the full 78-project corpus:
+
+    total_message_count = Σ(message_count + residual_count) + #summary rows
+
+`Summary` entries are the one class with no session attribution, and
+they bypass traversal (appended wholesale), so counting their cached
+rows is exact.
+
+**Decline ladder** (each falls through to the unchanged full load):
+missing sidecar/project data, deleted source files (archival is the
+full path's business), shrunk files, a pre-009 cache (a closure
+session with prior entries but no row) or a pre-010 one (a closure
+session whose `residual_count` is NULL), attachments involved in
+cross-session dedup, a requestId with independent surviving copies on
+both sides of the closure boundary (D1 attribution would need global
+traversal order — same-uuid replay spans are dedup-resolved and
+safe), any strict-resolution gap, and a closure larger than
+max(4 files, a third of the project).
+
+The design identities were verified empirically before implementation
+across the full 78-project real corpus (I1: total_message_count == Σ
+unfiltered per-session counts + typed residual; I2: token totals == Σ
+per-session tokens; I3: bookends == raw min/max; zero failures), and
+the implementation is held to *DB-state equivalence* — session rows,
+aggregates, and all three sidecar tables equal to a full refresh's,
+plus rendered byte-identity — by
+`test/test_incremental_cache_refresh.py` and by holdback runs on real
+archives (hold back the newest files, warm the cache, restore them,
+then compare the incremental refresh against the full one: matched on
+the 803MB reference archive, 296MB repower, and 1003MB
+platform-frontend-next). DB state is the bar rather than HTML because
+the first bug this caught — a modified file's new summaries titling
+sessions outside the closure — was invisible in the rendered bytes.
+
+Measured on the 8-core/16GB VM, first conversion after three new
+sessions appear in the 803MB reference archive (peak RSS / wall):
+full refresh + full render 1131MB / 10.6s; full refresh + streamed
+render 901MB / 8.1s; incremental refresh + streamed render **582MB /
+6.7s**. Once the render streams, the refresh's full load *is* the
+peak — which is what this section removes, completing "no archive too
+big for the machine". `CLAUDE_CODE_LOG_INCREMENTAL_CACHE=0` is the
+kill switch.
 
 ---
 

@@ -284,9 +284,10 @@ class TestStreamingPageMaintenance:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # Prepare two identical copies, then add a session to both. The
-        # streamed copy converts with exactly one full load (the cache
-        # refresh, which also re-persists the sidecar) — the render itself
-        # must stream and still match the full path's bytes.
+        # streamed copy converts without loading the project at all: the
+        # cache refresh goes through the incremental path (stage 4) and
+        # the render streams, so no full load remains anywhere. (Before
+        # stage 4 this asserted exactly one — the refresh's.)
         monkeypatch.setenv("CLAUDE_CODE_LOG_STREAMING", "0")
         full_dir = _copy_project(tmp_path / "full", MULTI_SESSION_PROJECT)
         streamed_dir = _copy_project(tmp_path / "streamed", MULTI_SESSION_PROJECT)
@@ -303,7 +304,10 @@ class TestStreamingPageMaintenance:
         calls = _spy_full_load(monkeypatch)
         _convert(streamed_dir)
 
-        assert calls == [1], "expected only the cache-refresh full load"
+        assert calls == [], (
+            "expected no full load at all — the incremental cache refresh "
+            "and the streamed render should each stay partial"
+        )
         assert _html_files(streamed_dir) == _html_files(full_dir)
         assert (streamed_dir / "session-sess-new.html").exists()
 

@@ -1250,12 +1250,29 @@ def _load_sessions_partial(
     sidecar: "SessionSidecar",
     trunk_files: list[Path],
     silent: bool,
+    reelect_uuids: Optional[set[str]] = None,
+    native_junction_uuids: Optional[set[str]] = None,
 ) -> tuple[list[TranscriptEntry], SessionTree]:
     """Load the given trunk files into a faithful partial (entries, tree).
 
     The shared core of the session-scoped incremental path and the
     streaming path's page loads — see ``_load_stale_session_transcripts``
     for the piece-by-piece fidelity argument.
+
+    The two optional sets are the incremental cache refresh's deviations
+    (work/render-format-once.md, stage 4), where the sidecar predates
+    the modified files and is authoritative only for *old* facts:
+
+    - ``reelect_uuids``: uuids whose old dedup-winner row must NOT be
+      enforced — new copies changed the candidate set, and the refresh's
+      closure guarantees every copy's session is loaded, so
+      ``build_message_index`` re-runs the election natively with the
+      full run's semantics.
+    - ``native_junction_uuids``: junction uuids whose old sidecar row
+      must NOT overwrite the locally built junction — a new child
+      attached there, and the closure loaded all old targets, so the
+      local junction is complete (the old row would erase the new
+      target).
     """
     from .dag import (
         JunctionPoint,
@@ -1288,11 +1305,14 @@ def _load_sessions_partial(
     kept_messages: list[TranscriptEntry] = []
     dropped_uuids: set[str] = set()
     surviving_uuids: set[str] = set()
+    reelect = reelect_uuids or set()
     for entry in all_messages:
         if isinstance(entry, _metadata_types):
             kept_messages.append(entry)
             continue
-        winner = sidecar.dedup_winners.get(entry.uuid)
+        winner = (
+            None if entry.uuid in reelect else sidecar.dedup_winners.get(entry.uuid)
+        )
         # A winner is a raw sessionId, but sidecars persisted before the
         # branch-winner fix carry "{trunk}@{uuid12}" for uuids whose
         # surviving copy sits on a branch line — normalize to the trunk
@@ -1358,8 +1378,10 @@ def _load_sessions_partial(
 
     # Junction points carry the full run's complete, ordered target list —
     # including targets in unloaded sessions the local build can't know.
+    # (Refresh mode: native_junction_uuids keep their locally built
+    # junction — a new child attached there and every target is loaded.)
     for uuid, (junction_sid, targets) in sidecar.junctions.items():
-        if uuid in nodes:
+        if uuid in nodes and uuid not in (native_junction_uuids or set()):
             tree.junction_points[uuid] = JunctionPoint(
                 uuid=uuid, session_id=junction_sid, target_sessions=list(targets)
             )
@@ -1982,6 +2004,45 @@ def compute_session_data(
                 )
 
     return result
+
+
+def compute_session_residuals(messages: List[TranscriptEntry]) -> Dict[str, int]:
+    """Per-session count of traversed entries ``compute_session_data`` skips.
+
+    The complement of ``compute_session_data``'s ``message_count`` over
+    the same entry list: entries a session owns that that function
+    deliberately does not count — ``attachment`` and ``ai-title`` — so
+    that together the two account for every entry with a session
+    attribution. ``Summary`` entries carry no sessionId and are handled
+    project-wide instead (they bypass DAG traversal entirely, so a count
+    of their cached rows is exact).
+
+    This exists because ``projects.total_message_count`` is
+    ``len(messages)`` of the *traversed* list, while cached message rows
+    are the *parsed* list, and attachments can be dropped in between —
+    so the incremental refresh (§ 2.14) cannot derive the total from row
+    counts. Persisted per session (migration 010), it makes the identity
+
+        total = Σ(message_count + residual_count) + #summary rows
+
+    hold exactly, which is what lets the refresh move the total by delta.
+    """
+    residuals: Dict[str, int] = {}
+    for message in messages:
+        if not hasattr(message, "sessionId") or not isinstance(
+            message,
+            (
+                SummaryTranscriptEntry,
+                AiTitleTranscriptEntry,
+                AttachmentTranscriptEntry,
+            ),
+        ):
+            continue
+        session_id = coalesce_trunk_session_id(message, set())
+        if not session_id:
+            continue
+        residuals[session_id] = residuals.get(session_id, 0) + 1
+    return residuals
 
 
 def compute_project_aggregates(messages: List[TranscriptEntry]) -> Dict[str, Any]:
@@ -3510,6 +3571,383 @@ def convert_jsonl_to(
     return output_path
 
 
+def _incremental_refresh_enabled() -> bool:
+    """Whether the incremental cache refresh may be used.
+
+    ``CLAUDE_CODE_LOG_INCREMENTAL_CACHE=0`` (or ``off``/``no``/``false``)
+    forces the full-load refresh — the bisecting knob, mirroring the
+    branch's other kill-switches.
+    """
+    raw = os.getenv("CLAUDE_CODE_LOG_INCREMENTAL_CACHE")
+    if raw is None:
+        return True
+    return raw.strip().lower() not in ("0", "off", "no", "false")
+
+
+def _incremental_cache_refresh(
+    project_dir: Path,
+    cache_manager: CacheManager,
+    session_jsonl_files: list[Path],
+    modified_files: list[Path],
+    silent: bool,
+) -> bool:
+    """Refresh the cache from the modified files alone, never loading whole.
+
+    Streaming stage 4 (work/render-format-once.md): the full-load
+    refresh exists to recompute per-session rows, project aggregates,
+    and the sidecar — all three are recomputable from a bounded
+    *closure* of the modified files. Modified files are re-parsed
+    per-file (their message rows rewritten as always); every
+    cross-session fact a new entry can touch — dedup partners of its
+    uuids, owners of its attachment points, the complete old target
+    list of any junction it attaches to, cross-file metadata for its
+    sessions — pulls those sessions' files into the closure, which is
+    then loaded through the proven partial-load machinery with two
+    refresh-mode deviations (re-election of modified uuids, native
+    junctions at touched attachment points). Facts are persisted only
+    for closure sessions (all complete by strict resolution); aggregates
+    move by delta over the hidden-inclusive session rows plus the
+    per-file residual counts (summary/ai-title/attachment); bookends
+    extend monotonically (append-only).
+
+    Returns True when the cache was refreshed; False *declines* to the
+    unchanged full-load refresh. Decline ladder: missing sidecar or
+    project data, deleted source files (archival is the full path's
+    business), a shrunk/rewritten file (old uuids must be a subset of
+    new), a pre-migration-009 cache (a closure session with prior
+    entries but no session row), attachment entries involved in
+    cross-session dedup, a requestId with independent surviving copies
+    on both sides of the closure boundary (D1 attribution would need
+    global order), any structural gap in file resolution, or a closure
+    exceeding a third of the project's files (past which the full load
+    is competitive anyway). Message rows written before a decline are
+    exactly what the full path would write for those files, so a
+    declined attempt never leaves inconsistent state — the crash-window
+    posture (per-file commits before fact writes) likewise matches the
+    full path's.
+    """
+    from .cache import CachedFileState
+
+    if not modified_files:
+        return False
+    sidecar = cache_manager.load_session_sidecar()
+    if sidecar is None:
+        return False
+    cached_project = cache_manager.get_cached_project_data()
+    if cached_project is None or cached_project.total_message_count <= 0:
+        return False
+
+    # Deleted source files mean archival semantics — full path's job.
+    on_disk_names = {f.name for f in session_jsonl_files}
+    cached_trunk_names = {
+        n for n in cache_manager.get_cached_file_names() if not n.startswith("agent-")
+    }
+    if cached_trunk_names - on_disk_names:
+        return False
+
+    # Early size gate on the modified set itself; the closure can only
+    # be larger, and past a third of the project the full load competes.
+    # The floor keeps small projects eligible — their full load is cheap
+    # either way, and coupling scenarios routinely span 2-4 files.
+    closure_limit = max(4, len(session_jsonl_files) // 3)
+    if len(modified_files) > closure_limit:
+        return False
+
+    modified_names = [f.name for f in modified_files]
+
+    with cache_manager.batch():
+        # Old identity state must be captured before the parse replaces
+        # each file's rows; the old file map likewise (pre-009 check).
+        old_states = cache_manager.get_file_states(modified_names)
+        old_file_map = cache_manager.get_session_file_map()
+        old_rows = cache_manager.get_all_session_rows()
+
+        for f in modified_files:
+            load_transcript(f, cache_manager, None, None, silent)
+        new_states = cache_manager.get_file_states(modified_names)
+
+        closure: set[str] = set()
+        exempt_uuids: set[str] = set()
+        parent_uuids: set[str] = set()
+        summary_leafs: set[str] = set()
+        for name in modified_names:
+            new = new_states.get(name)
+            if new is None:
+                return False
+            old = old_states.get(name, CachedFileState())
+            if not (old.uuids <= new.uuids):
+                return False  # shrunk/rewritten file: history changed
+            closure |= new.sessions | old.sessions
+            exempt_uuids |= new.uuids | old.uuids
+            parent_uuids |= new.parent_uuids | old.parent_uuids
+            summary_leafs |= new.summary_leaf_uuids | old.summary_leaf_uuids
+            # A modified file's ai-title / summary entries title OTHER
+            # sessions (a summary routinely lives in a different
+            # session's file); those rows must be recomputed even though
+            # none of their own entries changed. Summary leafUuids
+            # resolve to owner sessions below; every owner joins, since
+            # which copy of a duplicated leaf wins the attribution is
+            # settled by the loaded set.
+            closure |= new.ai_title_sessions | old.ai_title_sessions
+        for _leaf, owner_set in cache_manager.get_uuid_owners(
+            sorted(summary_leafs)
+        ).items():
+            closure |= {s for s, _t in owner_set}
+
+        # Dedup partners: every session holding a copy of a modified
+        # uuid joins the closure so re-election runs on the full
+        # candidate set. Attachments in dedup are declined outright —
+        # their post-DAG residual count would stop being per-file linear.
+        owners = cache_manager.get_uuid_owners(sorted(exempt_uuids))
+        for _uuid, owner_set in owners.items():
+            sess = {s for s, _t in owner_set}
+            if len(sess) > 1:
+                if any(t == "attachment" for _s, t in owner_set):
+                    return False
+                closure |= sess
+
+        # Attachment-point owners: a modified entry whose parentUuid
+        # lives elsewhere attaches there — the owning session (the dedup
+        # winner's, when duplicated) must be loaded for the DAG to build
+        # the junction natively.
+        external_parents = sorted(parent_uuids - exempt_uuids)
+        touched_attachments: set[str] = set()
+        for uuid, owner_set in cache_manager.get_uuid_owners(external_parents).items():
+            sess = {s for s, _t in owner_set}
+            if not sess:
+                continue  # globally dangling parent — orphan, as in full
+            if len(sess) > 1:
+                winner = sidecar.dedup_winners.get(uuid)
+                if winner is None:
+                    return False
+                if "@" in winner:
+                    winner = winner.split("@", 1)[0]
+                closure.add(winner)
+            else:
+                closure |= sess
+            touched_attachments.add(uuid)
+
+        # Old junctions that may gain a child (a modified entry attaches
+        # at their uuid) or whose node may move (the uuid is re-elected):
+        # pull the complete old target list so the native junction is
+        # rebuilt from every child, in the full run's chronological
+        # target order, and mark it native so the sidecar patch doesn't
+        # overwrite the new target away. New junctions (no old row) need
+        # no prediction — the tree builds them from the loaded entries.
+        # Sidecar junction owners/targets can be branch-qualified line
+        # ids ("{trunk}@{uuid12}") — the closure holds trunk sessionIds
+        # (what the file map and messages table key on), so normalize.
+        def _trunk(sid: str) -> str:
+            return sid.split("@", 1)[0]
+
+        native_junction_uuids: set[str] = set()
+        for u in touched_attachments | (exempt_uuids & sidecar.junctions.keys()):
+            j = sidecar.junctions.get(u)
+            if j is not None:
+                closure.add(_trunk(j[0]))
+                closure |= {_trunk(t) for t in j[1]}
+                native_junction_uuids.add(u)
+
+        # Pre-009 caches lack hidden rows: a closure session with prior
+        # entries but no row has an unknown old contribution — decline
+        # (the full refresh backfills). Genuinely new sessions are fine.
+        for sid in closure:
+            if sid not in old_rows and sid in old_file_map:
+                return False
+
+        # Resolve the closure to files (strict: an archived dedup
+        # partner or any gap declines), plus files holding cross-file
+        # metadata (summaries by leafUuid, ai-titles by session) for
+        # closure sessions, so the partial metadata view matches the
+        # full one.
+        file_map = cache_manager.get_session_file_map()
+        needed = _resolve_session_source_files(
+            project_dir, file_map, sorted(closure), strict=True
+        )
+        if needed is None:
+            return False
+        meta_rows = cache_manager.get_metadata_target_files()
+        leaf_uuids = sorted({t for typ, t, _f in meta_rows if typ == "summary" and t})
+        leaf_owners = cache_manager.get_uuid_owners(leaf_uuids)
+        for typ, target, fname in meta_rows:
+            if fname.startswith("agent-"):
+                continue
+            if typ == "summary":
+                owner_sess = {s for s, _t in leaf_owners.get(target or "", set())}
+                if owner_sess & closure:
+                    needed.add(fname)
+            elif target in closure:
+                needed.add(fname)
+
+        if len(needed) > closure_limit:
+            return False
+
+        # Token-attribution guard: a requestId with independent
+        # surviving copies inside AND outside the closure would need the
+        # global traversal order to attribute (D1). Same-uuid spans are
+        # dedup-resolved (only the winner survives) and safe.
+        def _survives(uuid: str, sess: str) -> bool:
+            if uuid in exempt_uuids:
+                # A modified uuid's copies all sit inside the closure and
+                # at least one survives re-election there — so it counts
+                # as an inside survivor, never an outside one.
+                return sess in closure
+            winner = sidecar.dedup_winners.get(uuid)
+            if winner is not None and "@" in winner:
+                winner = winner.split("@", 1)[0]
+            return winner is None or winner == sess
+
+        closure_rids = cache_manager.get_session_request_ids(sorted(closure))
+        for _rid, pairs in cache_manager.get_request_id_entries(
+            sorted(closure_rids)
+        ).items():
+            inside = any(s in closure for u, s in pairs if _survives(u, s))
+            outside = any(s not in closure for u, s in pairs if _survives(u, s))
+            if inside and outside:
+                return False
+
+        trunk_files = [
+            f
+            for f in project_dir.glob("*.jsonl")
+            if not f.name.startswith("agent-") and f.name in needed
+        ]
+        if {f.name for f in trunk_files} != needed:
+            return False
+
+        if not silent:
+            print(
+                f"Incrementally refreshing cache for {project_dir.name}: "
+                f"{len(modified_files)} changed file(s), "
+                f"{len(needed)} of {len(session_jsonl_files)} file(s) loaded"
+            )
+
+        partial_entries, partial_tree = _load_sessions_partial(
+            project_dir,
+            cache_manager,
+            sidecar,
+            trunk_files,
+            silent,
+            reelect_uuids=exempt_uuids,
+            native_junction_uuids=native_junction_uuids,
+        )
+
+        # Compute every write, validate, then write — no fact lands
+        # before all decline checks have passed.
+        warmup = get_warmup_session_ids(partial_entries)
+        session_data = compute_session_data(
+            partial_entries, include_cwd=True, warmup_session_ids=None
+        )
+        _attach_session_residuals(session_data, partial_entries)
+        for sid, data in session_data.items():
+            data.hidden = sid in warmup or not data.first_user_message
+        p_rows = {sid: d for sid, d in session_data.items() if sid in closure}
+
+        # Junction rows to write: every junction the tree holds whose
+        # owner is a closure session. Sidecar-patched ones rewrite their
+        # old rows byte-identically (harmless); native ones (new
+        # attachments, re-elected nodes) carry the new truth. Junctions
+        # owned by partially-loaded co-resident sessions are excluded
+        # with the rest of their facts.
+        junction_replacements: Dict[str, tuple[str, List[str]]] = {}
+        for u, jp in partial_tree.junction_points.items():
+            if _trunk(jp.session_id) in closure:
+                junction_replacements[u] = (jp.session_id, list(jp.target_sessions))
+        for u in native_junction_uuids:
+            if u not in junction_replacements:
+                return False  # predicted junction absent — bail before writes
+
+        parent_updates: Dict[str, Optional[tuple[Optional[str], Optional[str]]]] = {}
+        for sid in p_rows:
+            line = partial_tree.sessions.get(sid)
+            if line is None:
+                continue
+            parent_updates[sid] = (
+                (line.parent_session_id, line.attachment_uuid)
+                if line.parent_session_id is not None
+                else None
+            )
+
+        winner_upserts: Dict[str, str] = {}
+        for u in exempt_uuids:
+            sess = {s for s, _t in owners.get(u, set())}
+            # owners predates nothing for exempt uuids: modified files'
+            # rows were already rewritten when it was queried.
+            if len(sess) > 1 and u in partial_tree.nodes:
+                winner_sid = partial_tree.nodes[u].entry.sessionId
+                if winner_sid is not None:
+                    winner_upserts[u] = winner_sid
+
+        d_count = d_in = d_out = d_cc = d_cr = 0
+        for sid, new_row in p_rows.items():
+            old_row = old_rows.get(sid)
+            if old_row is not None and old_row.residual_count is None:
+                # Pre-migration-010 row: its residual contribution is
+                # unknown (NULL is not a zero), so the delta has no
+                # basis. The full refresh backfills every row.
+                return False
+            d_count += (new_row.message_count + (new_row.residual_count or 0)) - (
+                (old_row.message_count + (old_row.residual_count or 0))
+                if old_row
+                else 0
+            )
+            d_in += new_row.total_input_tokens - (
+                old_row.total_input_tokens if old_row else 0
+            )
+            d_out += new_row.total_output_tokens - (
+                old_row.total_output_tokens if old_row else 0
+            )
+            d_cc += new_row.total_cache_creation_tokens - (
+                old_row.total_cache_creation_tokens if old_row else 0
+            )
+            d_cr += new_row.total_cache_read_tokens - (
+                old_row.total_cache_read_tokens if old_row else 0
+            )
+        # Summaries are the only entries with no session attribution.
+        # They bypass DAG traversal (appended wholesale), so their cached
+        # rows are an exact count — unlike attachments, which a session
+        # row now accounts for precisely because traversal can drop them.
+        d_residual = 0
+        for name in modified_names:
+            old_state = old_states.get(name, CachedFileState())
+            d_residual += new_states[name].type_counts.get(
+                "summary", 0
+            ) - old_state.type_counts.get("summary", 0)
+
+        # Bookends extend from the loaded entries' own timestamp strings
+        # (the DB normalizes timestamps, so row-derived strings can
+        # differ byte-wise from what compute_project_aggregates yields).
+        # Every new timestamp is in a modified file, and modified files
+        # are all in the closure, so partial_entries covers the
+        # extension candidates — attachments included.
+        earliest = cached_project.earliest_timestamp
+        latest = cached_project.latest_timestamp
+        for e in partial_entries:
+            ts = getattr(e, "timestamp", "")
+            if ts:
+                if not earliest or ts < earliest:
+                    earliest = ts
+                if not latest or ts > latest:
+                    latest = ts
+
+        cache_manager.update_session_cache(p_rows)
+        cache_manager.update_project_aggregates(
+            total_message_count=cached_project.total_message_count
+            + d_count
+            + d_residual,
+            total_input_tokens=cached_project.total_input_tokens + d_in,
+            total_output_tokens=cached_project.total_output_tokens + d_out,
+            total_cache_creation_tokens=cached_project.total_cache_creation_tokens
+            + d_cc,
+            total_cache_read_tokens=cached_project.total_cache_read_tokens + d_cr,
+            earliest_timestamp=earliest,
+            latest_timestamp=latest,
+        )
+        cache_manager.merge_session_sidecar(
+            parent_updates, junction_replacements, winner_upserts
+        )
+    return True
+
+
 def ensure_fresh_cache(
     project_dir: Path,
     cache_manager: Optional[CacheManager],
@@ -3558,6 +3996,27 @@ def ensure_fresh_cache(
         if not needs_update:
             return False  # Cache is already fresh
 
+        # Streaming stage 4: when the update is driven purely by changed
+        # files over a populated cache, refresh from those files' bounded
+        # closure instead of loading the whole project. Declines (False)
+        # fall through to the unchanged full load below.
+        if (
+            from_date is None
+            and to_date is None
+            and modified_files
+            and cached_project_data is not None
+            and cached_project_data.total_message_count > 0
+            and _incremental_refresh_enabled()
+        ):
+            if _incremental_cache_refresh(
+                project_dir,
+                cache_manager,
+                session_jsonl_files,
+                modified_files,
+                silent,
+            ):
+                return True
+
         # Load and process messages to populate cache
         if not silent:
             print(f"Updating cache for {project_dir.name}...")
@@ -3586,27 +4045,61 @@ def _update_cache_with_session_data(
 
     Thin writer wrapper over the two shared computation helpers
     (``compute_session_data`` + ``compute_project_aggregates``).
-    Filters the warmup + empty-session sets before persisting — the
-    cache stores only sessions a human would expect to render
-    (agent-only and warmup-only sessions are skipped).
+    Historically the warmup + empty-session sets were filtered before
+    persisting; since migration 009 they are persisted too, flagged
+    ``hidden`` — the incremental cache refresh computes aggregate
+    deltas over per-session rows, so every session's contribution must
+    be on record. Read sites filter ``hidden = 0``, so the visible set
+    is unchanged.
+
+    One unfiltered pass replaces the filtered one. For visible
+    sessions the result is identical except in one theoretical corner:
+    a warmup session's assistant ``requestId`` reappearing in a
+    visible session would shift D1 token attribution between the two
+    computations. Never observed across the 78-project survey corpus
+    (work/render-format-once.md, stage-4 design); warmup requests are
+    their own API calls.
     """
     warmup = get_warmup_session_ids(messages)
     sessions_cache_data = compute_session_data(
-        messages, include_cwd=True, warmup_session_ids=warmup
+        messages, include_cwd=True, warmup_session_ids=None
     )
-    # Filter empty sessions (agent-only). The warmup filter happens
-    # upstream inside compute_session_data; the empty filter here
-    # remains a cache-only policy (the pagination fallback returns
-    # all sessions verbatim).
-    sessions_cache_data = {
-        sid: data
-        for sid, data in sessions_cache_data.items()
-        if data.first_user_message
-    }
+    _attach_session_residuals(sessions_cache_data, messages)
+    for sid, data in sessions_cache_data.items():
+        data.hidden = sid in warmup or not data.first_user_message
     cache_manager.update_session_cache(sessions_cache_data)
 
     aggregates = compute_project_aggregates(messages)
     cache_manager.update_project_aggregates(**aggregates)
+
+
+def _attach_session_residuals(
+    sessions: Dict[str, SessionCacheData], messages: List[TranscriptEntry]
+) -> None:
+    """Set ``residual_count`` on every row, adding residual-only rows.
+
+    A session can own attachments or an ai-title without owning a single
+    entry ``compute_session_data`` counts; it gets a row here so the
+    total identity has somewhere to put those entries. Such a row has no
+    first user message, so it is hidden and invisible to every
+    render-facing read site — the same treatment as an agent-only
+    session.
+    """
+    for sid, count in compute_session_residuals(messages).items():
+        data = sessions.get(sid)
+        if data is None:
+            data = SessionCacheData(
+                session_id=sid,
+                first_timestamp="",
+                last_timestamp="",
+                message_count=0,
+                first_user_message="",
+            )
+            sessions[sid] = data
+        data.residual_count = count
+    for data in sessions.values():
+        if data.residual_count is None:
+            data.residual_count = 0
 
 
 def _collect_project_sessions(messages: list[TranscriptEntry]) -> list[dict[str, Any]]:

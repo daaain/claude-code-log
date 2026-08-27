@@ -325,8 +325,25 @@ incremental sidecar maintenance that entails) is the last piece of
 "no archive too big for the machine", along with the § 7.5-style
 threshold revisit once that floor moves.
 
-**Stage-4 design (incremental cache refresh, 2026-08-27; survey-
-grounded, implementation in flight):** the refresh's full load exists
+**Phase 11 — stage 4 landed (incremental cache refresh, 2026-08-27).** Measured
+on the 8-core/16GB VM, first conversion after three new sessions
+appear in the 803MB reference archive (peak RSS / wall): full refresh
++ full render 1131MB / 10.6s → full refresh + streamed render 901MB /
+8.1s → **incremental refresh + streamed render 582MB / 6.7s**. Once
+the render streams, the refresh's full load *is* the peak, so this is
+the step that finishes "no archive too big for the machine" — the
+whole pipeline now scales with what changed, not with the archive.
+Equivalence verified by holdback runs (hold back the newest files,
+warm, restore, compare against a full refresh) on the 803MB reference
+archive, 296MB repower and 1003MB platform-frontend-next: cache DB
+state (session rows incl. hidden, aggregates, all three sidecar
+tables) and every rendered byte matched on all three, plus 14 tests
+in `test_incremental_cache_refresh.py` and a full green `just ci`.
+`CLAUDE_CODE_LOG_INCREMENTAL_CACHE=0` is the kill switch. The design
+as landed, and the two traps found landing it:
+
+**Stage-4 design (incremental cache refresh, survey-grounded):** the
+refresh's full load exists
 to recompute three things — per-session cache rows, project
 aggregates, and the sidecar. All three are recomputable from a
 *bounded closure* of the modified files, with a decline-to-full-load
@@ -390,6 +407,53 @@ The algorithm (each step declines → unchanged full load):
    impossible).
 7. Page cache rows untouched — render-side staleness (sessions
    changed) drives regeneration exactly as after a full refresh.
+
+**Discovery while landing it — the forward metadata direction (the
+803MB holdback caught it):** the design closed over files holding
+metadata *for* closure sessions (a summary elsewhere titling a session
+whose row is being recomputed) but not the reverse: a *modified* file
+whose new `summary` entries name **other** sessions by leafUuid.
+Those sessions' own entries never changed, so nothing pulled them
+into the closure, and their `summary` column stayed at its old value
+(None) while the full refresh filled it in — 8 sessions on the
+reference archive, invisible in the rendered bytes, which is exactly
+why the acceptance bar is DB state rather than HTML. Fixed by
+capturing each file's summary leafUuids / ai-title sessionIds in
+`CachedFileState` and closing over every owner session of those
+leafUuids (all owners, since which copy of a duplicated leaf wins the
+attribution is settled by the loaded set). Pinned in
+`TestIncrementalEquivalence::test_new_summary_titles_an_untouched_
+session`, which fails under mutation; the ai-title arm turns out to
+be covered already (its target sits in the messages table's
+`session_id` column, so the file's own session set carries it), and
+its test says so rather than overclaiming. Second trap, caught in the
+same run: sidecar junction owners/targets can be branch-qualified
+`{trunk}@{uuid12}` line ids, which match no file-map key — closure
+membership must trunk-normalize them or strict resolution declines
+forever (this is the same branch-qualified-id class as phase 9's
+dedup-winner bug; assume any sidecar-derived session id may be a
+line id, not a raw sessionId).
+
+**Third trap — attachments are lossy between parse and traversal (the
+pre-009-cache upgrade run caught it):** `total_message_count` is
+`len(messages)` of the *traversed* list, but cached message rows are
+the *parsed* list, and an attachment whose parent never resolves is
+parsed yet never traversed. Counting the residual classes from cached
+rows therefore over-counted the project total by exactly the dropped
+attachments (+16 on a real upgrade scenario; session rows and every
+rendered byte matched, so only the DB-state bar caught it). Fixed by
+migration 010 (`sessions.residual_count`, NULLable so a pre-010 row
+reads as "unknown" and declines rather than as a zero): residuals are
+counted per session *from the traversed entries*, and the identity
+becomes `total = Σ(message_count + residual_count) + #summary rows` —
+summaries being the one class with no session attribution, and one
+that bypasses traversal so its row count is exact. Re-verified across
+all 78 corpus projects. Pinned by
+`test_attachments_in_a_new_session` (a new session carrying one
+attached and one orphaned attachment), which fails under mutation.
+Lesson for the next session: **cached rows are the parsed list, the
+project total is the traversed list** — never assume a per-type row
+count equals a contribution to `len(messages)`.
 
 Delta arithmetic needs old contributions for *every* closure session
 including warmup/agent-only ones, which today's cache filters out
@@ -615,11 +679,12 @@ granularity):
    shares them (the page render and that page's session files use the
    same loaded objects). The re-key becomes relevant only if pages
    ever fan out across processes.
-4. Only then revisit the § 7.5-style thresholds again — with the
-   floor gone, `memory_capped_workers`' parent charge (4.5x) stops
-   being the binding constraint on small machines. Still open: the
-   remaining floor is `ensure_fresh_cache`'s full load on changed
-   sources (stage 4 in the phase-9 block).
+4. ~~The remaining floor: `ensure_fresh_cache`'s full load on changed
+   sources.~~ **Landed in phase 11** — the incremental cache refresh;
+   see the stage-4 block above. Its tail is still open: revisit the
+   § 7.5-style thresholds now that the floor is gone, since
+   `memory_capped_workers`' parent charge (4.5x) stops being the
+   binding constraint on small machines.
 
 This is a restructuring of `load_directory_transcripts` +
 `convert_jsonl_to`'s spine — comparable invasiveness to the fed-worker
@@ -679,16 +744,21 @@ or build a `SessionTree`. Per feature:
 
 - **The flat pool** (above — residual ~1.1-1.3x on measured archives,
   token-governed nested pools the most implementable shape).
-- **Streaming conversion — the actual fix for peak memory.** Stages
-  1–3 landed (phases 8–9 on `perf/streaming-conversion`): a
-  stale-combined paginated project on a memory-tight machine now
-  converts page-by-page (803MB project: 1490MB → 591MB peak RSS,
-  slightly *faster* than the serial full path). What remains is
-  stage 4: `ensure_fresh_cache` still full-loads when sources
-  changed, so the first conversion after new sessions pays full
-  residency once — the per-file cache build (order-dependent
-  requestId dedup, incremental sidecar maintenance) is the last
-  piece of "no archive too big for the machine".
+- ~~**Streaming conversion — the actual fix for peak memory.**~~
+  **All four stages landed** (phases 8–10 on
+  `perf/streaming-conversion`): page-granular streaming for the
+  render (stage 3, now also engaging for page-sparse work on roomy
+  machines — phase 10) and an incremental cache refresh (stage 4), so
+  neither the refresh nor the render loads a project whole in the
+  everyday shapes. 803MB archive, first conversion after new
+  sessions: 1131MB → 582MB peak RSS at 10.6s → 6.7s. What is left is
+  the *threshold revisit* the staged path always listed as stage 4's
+  tail: with the floor gone, `memory_capped_workers`' 4.5x parent
+  charge is no longer the binding constraint on small machines, and
+  the § 7.5 numbers deserve a re-derivation. Remaining full-load
+  paths, all deliberate: date-filtered runs, `--force`, non-paginated
+  projects, provider (codex/agy) conversions, and every decline in
+  the two ladders.
 - **Provider wiring** — the fragment store for codex wholesale is the
   cheap win; the pool needs the per-group SessionTree first (see the
   provider coverage check above).

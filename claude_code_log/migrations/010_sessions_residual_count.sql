@@ -1,0 +1,29 @@
+-- Per-session residual entry count for the incremental cache refresh
+-- Migration: 010
+-- Description: `projects.total_message_count` is `len(messages)` of a
+-- full load — the *traversed* entry list. The incremental refresh
+-- (work/render-format-once.md, stage 4) recomputes it by delta over
+-- per-session rows, which needs every traversed entry attributed to a
+-- session row. `message_count` covers only what compute_session_data
+-- counts; the rest are:
+--
+--   attachment / ai-title  — owned by a session, skipped by
+--                            compute_session_data. Counted here.
+--   summary                — no sessionId at all; appended wholesale
+--                            (never dropped by traversal), so a COUNT
+--                            over the messages table is exact.
+--
+-- The distinction matters because *attachments can be dropped by DAG
+-- traversal* while their cached message rows remain, so counting them
+-- from the messages table over-counts (a real mismatch caught by a
+-- real-archive holdback run: +16 attachments). Counting them from the
+-- traversed list, per session, closes the identity:
+--
+--   total = Σ(message_count + residual_count) + #summary rows
+--
+-- Deliberately NULLable with no default: a row written before this
+-- migration is indistinguishable from a genuine zero otherwise, and the
+-- refresh must decline (falling back to the full refresh, which
+-- backfills every row) rather than compute a delta from a wrong basis.
+
+ALTER TABLE sessions ADD COLUMN residual_count INTEGER;

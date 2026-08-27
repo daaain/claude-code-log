@@ -317,6 +317,18 @@ RAM at render time. `CLAUDE_CODE_LOG_STREAMING=1` forces the streaming
 path (any machine, any staleness), `=0` disables it for bisecting. See
 [dev-docs/application_model.md § 2.13](dev-docs/application_model.md).
 
+The cache refresh itself is also incremental: when source files
+changed over a populated cache, session rows, project aggregates, and
+the cross-session sidecar are recomputed from the modified files'
+bounded coupling closure (dedup partners, attachment owners, junction
+targets) instead of loading the whole project — the refresh's
+residency scales with what changed, not with the archive. Anything
+hairy (deleted files, rewritten history, closures past a third of the
+project, cross-boundary token attribution) declines to the unchanged
+full-load refresh. Set `CLAUDE_CODE_LOG_INCREMENTAL_CACHE=0` to force
+the full refresh when bisecting. See
+[dev-docs/application_model.md § 2.14](dev-docs/application_model.md).
+
 To re-measure on your own hardware (core count changes the answer for
 the fan-out), point the benchmark at a real project:
 
