@@ -140,6 +140,20 @@ name = "just"
 check = "command -v just"
 install = "apt-get install -y --no-install-recommends just"
 
+# `uv run pyright` (the `just ci` typecheck leg) needs a Node runtime: the pyright PyPI
+# package is a thin wrapper that BUNDLES the pyright JS inside its wheel and prefers a
+# global `node` from PATH (PYRIGHT_PYTHON_GLOBAL_NODE defaults on). Without one it falls
+# back to nodeenv, which fetches a node tarball from nodejs.org — denied by the wall.
+# Debian's nodejs (v20) satisfies it outright, so this is the whole fix: no npm, no
+# registry.npmjs.org grant (only the PYRIGHT_PYTHON_FORCE_VERSION escape hatch would npm-
+# install a non-bundled version), and the wrapper's update check uses the already-granted
+# pypi.org JSON API with a 1s timeout that fails silent. Verified in-box: apt nodejs alone
+# takes `uv run pyright` from the nodeenv RuntimeError to a clean run.
+[[box.tools]]
+name = "nodejs-for-pyright"
+check = "command -v node"
+install = "apt-get install -y --no-install-recommends nodejs"
+
 # Browser tests (`just test-browser`, `uv run pytest -m browser`) need Chromium's shared
 # libraries in the box. On Debian, `playwright install-deps` is the supported path: playwright
 # itself owns the apt list for the browser build the lockfile pins, so a Chromium bump can't

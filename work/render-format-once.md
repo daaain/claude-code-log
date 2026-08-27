@@ -560,10 +560,12 @@ Full suite before pushing: `just ci`.
   wedged it (every core pegged, unresponsive, hard restart). The memory
   cap now prevents the worker explosion, but copying multi-GB project
   trees to scratch space is still worth sizing against free disk.
-- The box runs the full suite, browser tests included (`just
-  test-browser` — Chromium and its system libraries are provisioned by
-  the box config). `.venv` lives on a box-local shadow volume, so host
-  and box binaries never clobber each other.
+- The box runs all of `just ci`: the full suite including browser
+  tests (Chromium and its system libraries are provisioned by the box
+  config) and the pyright leg (Debian's nodejs is provisioned so the
+  pyright wrapper uses its bundled JS instead of fetching node past
+  the wall). `.venv` lives on a box-local shadow volume, so host and
+  box binaries never clobber each other.
 - Real transcripts for local testing: `downloads/projects/` (7.9GB, 84
   projects, with a warm cache DB). Test fixtures:
   `test/test_data/real_projects/`.
