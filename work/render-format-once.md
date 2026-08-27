@@ -112,13 +112,17 @@ per-project setups registered with workers, parse/plan still
 per-project, cache writes still parent-owned per project), which
 stays the end state.
 
-**Still open after phase 4:** the flat pool (above); the fragment-text
+**Phase 5 progress (§ 4.3 referenced-image names, 2026-08-27):**
+referenced-mode image filenames are now content-addressed, which fixes
+the combined-vs-session overwrite bug and lifts both the pool gate and
+the fragment-store exclusion for the mode — see § 4.3 (RESOLVED) for
+the details and the two latent inconsistencies it flushed out.
+
+**Still open after phase 5:** the flat pool (above); the fragment-text
 spill (§ 4.9 made the store spillable, nothing spills yet — 186MB held
-in RAM on the 803MB archive); allocating referenced-mode image names in
-the format phase (§ 4.3 — would fix the existing combined-vs-session
-name collision *and* make the mode pool-safe); and a >8-worker sweep on
-the 16-core Mac now that the per-worker transcript tax is gone (the
-knee at 8 was measured pre-feeding; `auto` may no longer overshoot).
+in RAM on the 803MB archive); and a >8-worker sweep on the 16-core Mac
+now that the per-worker transcript tax is gone (the knee at 8 was
+measured pre-feeding; `auto` may no longer overshoot).
 
 This is a handover note. It exists because the two landed optimisations
 each hit a ceiling, and *the same restructuring removes both ceilings*.
@@ -338,15 +342,28 @@ project's commit links inside another's page. Pygments has no such
 coupling. This is the *only* ContextVar affecting render output — verified
 by grepping the package.
 
-### 4.3 `image_export_mode="referenced"` is not parallel-safe
+### 4.3 `image_export_mode="referenced"` is not parallel-safe (RESOLVED)
 
-Renders write `images/image_NNNN.png` from `self._image_counter`, which
-resets per `generate()` call (`html/renderer.py:1661`). Those filenames
-already collide between the combined and per-session passes today;
-concurrency would let two processes write one file at once.
-`_make_render_pool` declines for this mode. Step 3 could actually *fix*
-this properly by allocating image names once during the format phase —
-worth doing, but out of scope unless it falls out naturally.
+Renders used to write `images/image_NNNN.png` from a per-`generate()`
+counter, so the combined and per-session passes assigned the same names
+to *different* images (the last pass overwrote the other's files), and
+concurrency would have let two processes write one file at once —
+`_make_render_pool` declined for the mode, and the fragment store
+excluded it. Resolved by content-addressing the filenames
+(`image_export.export_image`: `image_<blake2b-of-decoded-bytes>.<ext>`,
+written via unique temp file + atomic `os.replace`, skipped when the
+file already exists): every pass, run, and worker converges on the same
+file per image, so the pool gate and the fragment-store exclusion are
+lifted. This also fixed two latent inconsistencies found on the way:
+paginated combined pages ignored the conversion's image mode entirely
+(built a default embedded renderer, both inline and in workers), and a
+default Markdown conversion resolved to referenced *inside*
+`get_renderer` while the pool gate checked the raw `None` param — so
+pooled Markdown renders were already running the colliding counter.
+Regression coverage: `test_image_export.py`
+(`TestReferencedModeAcrossRenderPasses` parametrized over the paginated
+and single-file combined paths, plus content-addressing unit tests) and
+the inverted pool-gate test in `test_render_cache.py`.
 
 ### 4.4 Pages have a write-ordering dependency (already fixed — don't reintroduce)
 

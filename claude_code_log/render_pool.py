@@ -545,6 +545,7 @@ def _render_unit_worker(
             content = renderer.generate(
                 unit.entries,
                 unit.title,
+                output_dir=output_dir,
                 page_info=unit.page_info,
                 page_stats=unit.page_stats,
                 session_tree=_worker_setup.session_tree,

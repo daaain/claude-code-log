@@ -334,6 +334,19 @@ Default is `embedded` for HTML (single self-contained file) and
 `referenced` for Markdown (keeps the `.md` text small and lets
 images live as separate PNGs alongside).
 
+Referenced filenames are **content-addressed** — `images/image_<digest>.<ext>`
+from a BLAKE2b digest of the decoded bytes — so a given image maps to
+exactly one file no matter which render pass, run, or worker process
+exports it, and re-exporting is idempotent (an existing file is already
+the right bytes; writers go through a unique temp file + atomic
+`os.replace`, so concurrent exporters of the same image replace
+identical content). This replaced a per-render counter whose names
+collided between the combined-page and per-session passes — each pass
+restarted at `image_0001` and assigned the same names to different
+images, so the last pass to run overwrote the other's files. Content
+addressing is also what lets referenced-mode renders use the fragment
+store (§ 2.9) and the render fan-out (§ 2.10).
+
 ### 2.8 Performance profiling
 
 [`renderer_timings.py`](../claude_code_log/renderer_timings.py)
@@ -423,8 +436,11 @@ overhead), so the fragment text itself is what any future memory
 bounding must address. Keys are `(id(source_entry), part_ordinal)` — entry
 identity, stamped in the pass-2 render loop — because transcript uuids
 collide across resumed/forked sessions. Renders with
-`image_export_mode="referenced"` bypass the store entirely (fragments
-imply image-file writes that replaying would skip).
+`image_export_mode="referenced"` participate like any other: image
+filenames are content-addressed (§ 2.7), so a stored fragment's
+`src=` names the file the first formatting of that message already
+wrote, and replaying the fragment skips only a write that has
+happened.
 
 ### 2.10 Intra-project render fan-out
 
@@ -524,10 +540,15 @@ explicit `convert_jsonl_to(render_jobs=N)` overrides the environment; the
 default `None` consults it. `_make_render_pool` declines regardless for
 single-file mode, a missing cache manager, a missing pre-built session
 tree (workers render fed slices against the conversion's tree),
-`image_export_mode="referenced"` (renders write `images/image_NNNN.png`
-from a per-call counter, so concurrent renders would collide on those
-names), projects below `_MIN_MESSAGES_FOR_RENDER_POOL`, and machines
-without the memory the cap formula demands.
+projects below `_MIN_MESSAGES_FOR_RENDER_POOL`, and machines without
+the memory the cap formula demands.
+`image_export_mode="referenced"` used to decline too, when renders
+allocated `images/image_NNNN.png` names from a per-call counter that
+collided across passes and processes; referenced filenames are now
+content-addressed (`image_export.export_image` digests the decoded
+bytes and writes via temp-file + atomic replace), so any pass, run, or
+worker exporting the same image converges on the same file and the
+mode fans out like any other.
 
 One ordering change made the pages parallelisable: the paginated writer
 used to reveal page N-1's "Next" link while generating page N, so page N's

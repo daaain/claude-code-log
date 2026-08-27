@@ -469,7 +469,6 @@ class MarkdownRenderer(Renderer):
         super().__init__()
         self.image_export_mode = image_export_mode
         self._output_dir: Path | None = None
-        self._image_counter = 0
         self._ctx: RenderingContext | None = None
         # session_id -> {teammate_id -> color}, snapshotted at render
         # start. Scoped to avoid cross-session contamination in
@@ -558,12 +557,10 @@ class MarkdownRenderer(Renderer):
         """Format image based on export mode."""
         from ..image_export import export_image
 
-        self._image_counter += 1
         src = export_image(
             image,
             self.image_export_mode,
             output_dir=self._output_dir,
-            counter=self._image_counter,
         )
         if src is None:
             return "[Image]"
@@ -2411,7 +2408,6 @@ class MarkdownRenderer(Renderer):
     ) -> str:
         """Body of ``generate`` running inside the SHA-resolver context."""
         self._output_dir = output_dir
-        self._image_counter = 0
         self._last_heading_category: Optional[str] = None
         # Per-message timestamp date-on-change state (issue #160).
         # Reset each generate() so reusing a renderer across pages /

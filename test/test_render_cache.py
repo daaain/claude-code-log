@@ -301,10 +301,15 @@ class TestRenderPoolCreation:
             is None
         )
 
-    def test_referenced_images_stay_serial(self, tmp_path, monkeypatch):
-        """Concurrent renders would collide on images/image_NNNN.png."""
+    def test_referenced_images_pool_too(self, tmp_path, monkeypatch):
+        """Content-addressed image names made referenced mode pool-safe:
+        concurrent workers exporting the same image write the same file
+        atomically with identical bytes, so the old decline is gone."""
         monkeypatch.setenv(RENDER_JOBS_ENV, "4")
-        assert self._make(tmp_path, monkeypatch, image_export_mode="referenced") is None
+        assert (
+            self._make(tmp_path, monkeypatch, image_export_mode="referenced")
+            is not None
+        )
 
     def test_no_pool_without_a_cache_manager(self, tmp_path, monkeypatch):
         """Staleness planning (and the unit slicing it drives) needs one."""

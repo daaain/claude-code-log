@@ -1710,12 +1710,16 @@ def _generate_paginated_html(
     archive_search_link: Optional[str] = None,
     render_pool: "Optional[RenderPool]" = None,
     fragment_store: "Optional[RenderFragmentStore]" = None,
+    image_export_mode: Optional[str] = None,
 ) -> tuple[Path, bool]:
     """Generate paginated HTML files for combined transcript.
 
     Args:
         render_pool: Optional pool to fan the stale pages out over. None
             (the default) renders them inline, one at a time.
+        image_export_mode: The conversion's image mode (None → embedded),
+            honored per page so a referenced-mode run writes
+            ``images/`` files instead of silently embedding.
         fragment_store: Optional per-conversion fragment store shared with
             the per-session pass, so inline page renders reuse (and seed)
             each message's formatted fragment.
@@ -1941,7 +1945,7 @@ def _generate_paginated_html(
 
     def _render_page_inline(unit: RenderUnit) -> None:
         assert unit.entries is not None  # every page unit is planned with them
-        page_renderer = HtmlRenderer()
+        page_renderer = HtmlRenderer(image_export_mode=image_export_mode or "embedded")
         page_renderer.depth = depth
         page_renderer.compact = compact
         page_renderer.no_recaps = no_recaps
@@ -1949,6 +1953,7 @@ def _generate_paginated_html(
         html_content = page_renderer.generate(
             unit.entries,
             unit.title,
+            output_dir=output_dir,
             page_info=unit.page_info,
             page_stats=unit.page_stats,
             session_tree=session_tree,
@@ -2340,6 +2345,7 @@ def convert_jsonl_to(
                 archive_search_link=archive_search_link,
                 render_pool=render_pool,
                 fragment_store=fragment_store,
+                image_export_mode=image_export_mode,
             )
         else:
             # Use single-file generation for small projects or filtered views
@@ -2737,12 +2743,14 @@ def _make_render_pool(
       against the conversion's tree; without one they would rebuild a DAG
       from their slice alone, which can genuinely differ (missing
       cross-session hierarchy) — a correctness cliff, so decline instead.
-    - ``image_export_mode="referenced"``, where each render writes
-      ``images/image_NNNN.png`` from a counter it resets per call. Those
-      names already collide between the combined and per-session passes;
-      running them concurrently would let two processes write one file at
-      once, so this mode stays serial.
     - Projects too small for the pool's startup to pay for itself.
+
+    ``image_export_mode="referenced"`` used to decline too, when each
+    render allocated ``images/image_NNNN.png`` names from a per-call
+    counter. Filenames are content-addressed now (see
+    ``image_export.export_image``), so concurrent workers exporting the
+    same image write the same name atomically with identical bytes — the
+    mode is pool-safe.
     - Not enough memory for the fan-out's footprint.
 
     The worker count is also capped by available memory, with the parent
@@ -2757,8 +2765,6 @@ def _make_render_pool(
     if cache_manager is None or not input_path.is_dir():
         return None
     if session_tree is None:
-        return None
-    if image_export_mode == "referenced":
         return None
     if message_count < _MIN_MESSAGES_FOR_RENDER_POOL:
         return None

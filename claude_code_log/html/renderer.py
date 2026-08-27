@@ -366,7 +366,6 @@ class HtmlRenderer(Renderer):
         # it twice. None (the default) formats every message fresh.
         self.fragment_store: "Optional[RenderFragmentStore]" = None
         self._output_dir: Path | None = None
-        self._image_counter = 0
         # session_id -> {teammate_id -> color}, snapshotted from the
         # RenderingContext at the start of each render. Formatters look
         # up the per-session map via self._colors_for(message) so
@@ -487,12 +486,10 @@ class HtmlRenderer(Renderer):
         """Format image based on export mode."""
         from ..image_export import export_image
 
-        self._image_counter += 1
         src = export_image(
             image,
             self.image_export_mode,
             output_dir=self._output_dir,
-            counter=self._image_counter,
         )
         if src is None:
             return "[Image]"
@@ -1543,12 +1540,12 @@ class HtmlRenderer(Renderer):
 
         # Fragment store (step 3, work/render-format-once.md): serve each
         # entry-derived message's fragment from the store when a prior tree
-        # already formatted it. Referenced-image renders are excluded — they
-        # allocate images/image_NNNN.png names from a per-generate counter,
-        # so replaying a fragment would skip the file writes it implies.
-        fragment_store = (
-            self.fragment_store if self.image_export_mode != "referenced" else None
-        )
+        # already formatted it. Referenced-image renders participate too:
+        # filenames are content-addressed (see image_export.export_image),
+        # so a stored fragment's <img src> is the same name any tree would
+        # allocate, and a fragment can only exist because a prior pass this
+        # conversion already wrote (or placeholdered) that file.
+        fragment_store = self.fragment_store
 
         def visit(msg: TemplateMessage) -> None:
             # Store key = source-entry identity + a signature of the
@@ -1732,7 +1729,6 @@ class HtmlRenderer(Renderer):
 
         # Set output directory for image export (used in "referenced" mode)
         self._output_dir = output_dir
-        self._image_counter = 0
 
         if not title:
             title = "Claude Transcript"
