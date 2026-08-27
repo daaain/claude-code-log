@@ -423,3 +423,153 @@ class TestCrossSessionMechanics:
         assert sidecar.parents["sess-c"] == ("sess-a", "a3")
         assert sidecar.parents["sess-d"] == ("sess-c", "c2")
         assert sidecar.junctions["a3"] == ("sess-a", ["sess-c"])
+
+
+# ---------------------------------------------------------------------------
+# Branch-winner project: a duplicated uuid whose surviving copy sits on a
+# *branch* line of its session.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def branch_replay_project(tmp_path: Path) -> Path:
+    """A session with an in-session branch, replayed by a resume.
+
+    ``sess-a`` trunk is a1←a2←a3; a second child of ``a2``
+    (``branch-root-01`` ← ``branch-msg-0002``) forms a branch line, which
+    the DAG names ``sess-a@branch-root-0``. ``sess-r`` resumes from the
+    branch: it replays both branch entries under its own sessionId and
+    continues from them, so the whole-project dedup winner for those
+    uuids is sess-a — whose surviving copies sit on the *branch* line.
+    The sidecar must record the raw ``sess-a`` (the id partial loads
+    compare raw entries against), not the branch-qualified line id: a
+    ``{trunk}@{uuid12}`` winner matches no raw entry.sessionId, so every
+    copy would be dropped and the branch silently deleted from partial
+    renders (found by the streaming hash runs on the reference archive).
+    """
+    project = tmp_path / "branch-replay-project"
+    project.mkdir()
+    _write_jsonl(
+        project / "sess-a.jsonl",
+        [
+            _entry("user", "sess-a", "a1", None, "2025-07-01T10:00:00.000Z", "Start"),
+            _entry(
+                "assistant", "sess-a", "a2", "a1", "2025-07-01T10:01:00.000Z", "Reply"
+            ),
+            _entry("user", "sess-a", "a3", "a2", "2025-07-01T10:02:00.000Z", "More"),
+            # The branch: a second child of a2, later than a3.
+            _entry(
+                "user",
+                "sess-a",
+                "branch-root-01",
+                "a2",
+                "2025-07-01T10:10:00.000Z",
+                "Branching",
+            ),
+            _entry(
+                "assistant",
+                "sess-a",
+                "branch-msg-0002",
+                "branch-root-01",
+                "2025-07-01T10:11:00.000Z",
+                "Branch reply",
+            ),
+        ],
+    )
+    _write_jsonl(
+        project / "sess-r.jsonl",
+        [
+            # Replayed branch prefix under sess-r's id (later session ⇒
+            # sess-a's copies win project-wide).
+            _entry(
+                "user",
+                "sess-r",
+                "branch-root-01",
+                "a2",
+                "2025-07-01T10:10:00.000Z",
+                "Branching",
+            ),
+            _entry(
+                "assistant",
+                "sess-r",
+                "branch-msg-0002",
+                "branch-root-01",
+                "2025-07-01T10:11:00.000Z",
+                "Branch reply",
+            ),
+            _entry(
+                "user",
+                "sess-r",
+                "r1",
+                "branch-msg-0002",
+                "2025-07-01T12:00:00.000Z",
+                "Resumed from branch",
+            ),
+            _entry(
+                "assistant",
+                "sess-r",
+                "r2",
+                "r1",
+                "2025-07-01T12:01:00.000Z",
+                "Resumed reply",
+            ),
+        ],
+    )
+    return project
+
+
+class TestBranchWinnerMechanics:
+    def test_sidecar_records_raw_session_ids(self, branch_replay_project: Path) -> None:
+        _convert(branch_replay_project)
+        cache = CacheManager(branch_replay_project, get_library_version())
+        sidecar = cache.load_session_sidecar()
+        assert sidecar is not None
+        assert sidecar.dedup_winners == {
+            "branch-root-01": "sess-a",
+            "branch-msg-0002": "sess-a",
+        }
+
+    @pytest.mark.parametrize("stale_sessions", [["sess-a"], ["sess-r"]])
+    def test_partial_render_keeps_the_branch(
+        self,
+        branch_replay_project: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        stale_sessions: list[str],
+    ) -> None:
+        _convert(branch_replay_project)
+        baseline = _session_files(branch_replay_project)
+        # The branch is really in the baseline, or this pins nothing.
+        assert b"branch-root-0" in baseline["session-sess-a.html"]
+
+        for sid in stale_sessions:
+            (branch_replay_project / f"session-{sid}.html").unlink()
+
+        _forbid_full_load(monkeypatch)
+        _convert(branch_replay_project)
+
+        assert _session_files(branch_replay_project) == baseline
+
+    def test_branch_qualified_winner_from_old_sidecar_still_enforces(
+        self, branch_replay_project: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A sidecar persisted by the pre-fix code carries the
+        # branch-qualified line id; the load-time normalization must make
+        # it enforce as the raw trunk id instead of dropping every copy.
+        _convert(branch_replay_project)
+        baseline = _session_files(branch_replay_project)
+
+        cache = CacheManager(branch_replay_project, get_library_version())
+        with cache._get_connection() as conn:  # pyright: ignore[reportPrivateUsage]
+            conn.execute(
+                "UPDATE dedup_winners SET winner_session_id = ?",
+                ("sess-a@branch-root-0",),
+            )
+            conn.commit()
+
+        for name in ("session-sess-a.html", "session-sess-r.html"):
+            (branch_replay_project / name).unlink()
+
+        _forbid_full_load(monkeypatch)
+        _convert(branch_replay_project)
+
+        assert _session_files(branch_replay_project) == baseline
