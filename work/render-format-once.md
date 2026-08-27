@@ -118,11 +118,69 @@ the combined-vs-session overwrite bug and lifts both the pool gate and
 the fragment-store exclusion for the mode — see § 4.3 (RESOLVED) for
 the details and the two latent inconsistencies it flushed out.
 
-**Still open after phase 5:** the flat pool (above); the fragment-text
-spill (§ 4.9 made the store spillable, nothing spills yet — 186MB held
-in RAM on the 803MB archive); and a >8-worker sweep on the 16-core Mac
-now that the per-worker transcript tax is gone (the knee at 8 was
-measured pre-feeding; `auto` may no longer overshoot).
+**Phase 6 progress (generalized hold-back, 2026-08-27):**
+`_dominant_plan` (one project, 2x the runner-up) became
+`_holdback_plans`: a greedy makespan comparison, largest project
+first — hold while `pool(rest) + fanned(largest)` beats pooling
+everything, with the fanned time taken from a deliberately
+conservative speedup table (`_fanned_speedup`: 2.5x at 8+ workers vs
+2.7-3.2x measured, because over-estimating serializes projects that
+were better off pooled — the costly direction) over the workers a
+lone conversion would actually get (memory-capped against the
+project's own bytes, so a machine that can't fan never holds). It
+reproduces every decision the 2x rule made — including the reference
+archive, where after the 97k giant the twin 47k projects keep each
+other's pool bounded and nothing more holds — and additionally holds
+the shapes the 2x bar missed (a runner-up bounding a pool of smalls
+without being 2x any of them; unit-pinned in
+`test_render_cache.py::TestHoldbackPlans`). Multiple held projects
+convert sequentially after the pool, smallest first, each with the
+full render budget. Re-benchmarked over the reference archive on the
+8-core box (where the held set is identical, so this is a
+no-regression check plus fresher baselines): full rebuild 62.0s
+memo-only → 53.9s both (1.15x, vs 1.12x measured for the
+single-dominant rule), incremental 59.2s → 17.0s (3.48x),
+byte-identical in every configuration.
+
+**Flat-pool design analysis (2026-08-27, so nobody re-derives it):**
+the true flat pool's *residual* win over the generalized hold-back is
+smaller than it looks, and each candidate architecture has a sharp
+edge. (a) A parent-serial flat pool (parent parses each project,
+dispatches units to one shared pool) sinks the full rebuild: Σ parse
+across the archive is ~50-60s of inherently serial work on the 8-core
+VM, at or above today's whole full-rebuild wall — parallel parse
+across project workers is load-bearing, so the parent-serial shape is
+only viable with pipelined overlap, and even then bounded below by the
+biggest parse chain. (b) Keeping parse in project workers means units
+(carrying entry slices) must flow worker→parent→render-worker — double
+pickling of the whole transcript — or through a Manager queue with the
+same cost. (c) A token-governed variant (nested pools as today, but a
+machine-wide render-slot semaphore so finished projects' capacity
+flows to the still-running ones) preserves parallel parse and needs no
+unit shipping, but its memory story is subtle: spawned-but-idle
+workers retain their base+memo RSS across the shifting token
+assignment, and the two-level cap formula would need rethinking.
+(d) For *level-sized* projects specifically, concurrent-static is
+already near-optimal once the machine is saturated (speedup is concave
+in workers, so spreading cores across projects beats fanning one
+wide); the static split's real failures are skew (now held back) and
+the memory-capped regime where per-project jobs collapse to 1 (held
+back too, when the makespan math clears). What a flat pool uniquely
+adds: reclaiming the idle cores during a held-back project's serial
+parse phase, and the drained-pool tail among projects too level to
+hold. On the measured archives that residual is roughly 1.1-1.3x of
+the full-rebuild scenario. Worth having eventually — (c) is the most
+implementable shape — but it is no longer the dominant term.
+
+**Still open after phase 6:** the flat pool (above — residual ~1.1-1.3x
+on measured archives, token-governed nested pools the most
+implementable shape); the fragment-text spill (§ 4.9 made the store
+spillable, nothing spills yet — 186MB held in RAM on the 803MB
+archive; note that fed session slices re-materialize fragments at
+dispatch time, so a spill that matters must also throttle unit
+submission); and a >8-worker sweep on the 16-core Mac now that the
+per-worker transcript tax is gone (the knee at 8 was measured
+pre-feeding; `auto` may no longer overshoot).
 
 This is a handover note. It exists because the two landed optimisations
 each hit a ceiling, and *the same restructuring removes both ceilings*.
@@ -491,23 +549,22 @@ Full suite before pushing: `just ci`.
 
 ---
 
-## 6. Environment notes for the dev VM
+## 6. Environment notes for the dev box
 
-- **The 4-core / 4GB VM cannot measure the fan-out.** `memory_capped_workers`
-  correctly declines on every real project there, so `auto` is
-  indistinguishable from serial. Correctness work is fine locally;
-  performance claims need the Mac and `scripts/bench_render.py`.
-- **Don't run unbounded benchmarks on the VM.** An earlier
-  `--all-projects` benchmark exhausted RAM and wedged it (all four cores
-  pegged, unresponsive, hard restart). The memory cap now prevents the
-  worker explosion, but copying multi-GB project trees to `/tmp` is still
-  worth sizing first.
-- **`.venv` is shared with the host Mac over the mount.** A `uv run` on
-  either side replaces it with that platform's binaries and the other side
-  then fails with `Exec format error` until it re-syncs. `uv sync` fixes
-  it; pointing `UV_PROJECT_ENVIRONMENT` at different paths per platform
-  would fix it properly.
-- Real transcripts for local testing: `downloads/projects/` (7.8GB, 84
+- **The 8-core / 16GB box measures the fan-out fine** — it is the
+  "8-core VM" every post-feeding table in this doc quotes. Core count
+  changes the fan-out's answer, so cross-check performance claims on
+  the 16-core Mac with `scripts/bench_render.py` before generalizing.
+- **Don't run unbounded benchmarks without sizing them first.** An
+  earlier `--all-projects` benchmark on a smaller VM exhausted RAM and
+  wedged it (every core pegged, unresponsive, hard restart). The memory
+  cap now prevents the worker explosion, but copying multi-GB project
+  trees to scratch space is still worth sizing against free disk.
+- The box runs the full suite, browser tests included (`just
+  test-browser` — Chromium and its system libraries are provisioned by
+  the box config). `.venv` lives on a box-local shadow volume, so host
+  and box binaries never clobber each other.
+- Real transcripts for local testing: `downloads/projects/` (7.9GB, 84
   projects, with a warm cache DB). Test fixtures:
   `test/test_data/real_projects/`.
 

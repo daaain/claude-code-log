@@ -444,14 +444,18 @@ class TestMemoryCap:
         assert memory_capped_workers(1, 1) == 1
 
 
-class TestDominantPlan:
-    """Hold-back selection: which stale project gets the machine to itself.
+class TestHoldbackPlans:
+    """Hold-back selection: which stale projects get the machine to themselves.
 
-    The full-rebuild wall collapses to the dominant project's serial time
+    The full-rebuild wall collapses to the largest projects' serial time
     when every project gets the same static render share, so the
-    all-projects loop holds a dominant project out of the pool and
-    converts it last with the full render budget. These pin the
-    selection heuristic (converter._dominant_plan)."""
+    all-projects loop holds pool-bounding projects out and converts them
+    afterwards, each with the full render budget. These pin the greedy
+    makespan comparison (converter._holdback_plans): hold the largest
+    while pool(rest) + fanned(largest) beats pooling everything, stop at
+    the first losing hold."""
+
+    MB = 1024**2
 
     @staticmethod
     def _plan(source_bytes, messages=None):
@@ -467,36 +471,99 @@ class TestDominantPlan:
             cached_message_count=messages,
         )
 
-    def test_dominant_by_messages_is_selected(self):
+    def _held(self, plans, monkeypatch, jobs=8, render=8, memory=64 * 1024**3):
+        # Pin available memory: the fanned-speedup estimate consults the
+        # memory cap for the lone conversion, and these assertions are
+        # about the comparison, not the running machine's RAM.
+        monkeypatch.setattr(
+            render_pool_module, "_available_memory_bytes", lambda: memory
+        )
+        return converter._holdback_plans(plans, job_budget=jobs, render_budget=render)
+
+    def test_dominant_by_messages_is_held(self, monkeypatch):
         # The reference archive's shape: only 1.08x the runner-up's bytes
-        # but 2.07x its messages — and messages are what cost.
-        giant = self._plan(329, messages=97_000)
-        rest = [self._plan(304, messages=47_000), self._plan(139, messages=46_900)]
-        assert converter._dominant_plan([*rest, giant]) is giant
-
-    def test_bytes_fallback_misses_the_dense_giant(self):
-        # Same shape without cached counts: the comparison falls back to
-        # bytes, 1.08x is under the bar, and nothing is held back —
-        # the safe direction (hold-back on level sizes is a certain loss).
-        giant = self._plan(329)
-        assert converter._dominant_plan([self._plan(304), giant]) is None
-
-    def test_level_sizes_hold_nothing_back(self):
-        plans = [
-            self._plan(100, messages=10_000),
-            self._plan(90, messages=9_000),
+        # but 2.07x its messages — and messages are what cost. The level
+        # 47k twins that then bound the pool stay pooled: holding one
+        # would add its fanned time without moving the pool wall.
+        giant = self._plan(329 * self.MB, messages=97_000)
+        rest = [
+            self._plan(304 * self.MB, messages=47_000),
+            self._plan(139 * self.MB, messages=46_900),
         ]
-        assert converter._dominant_plan(plans) is None
+        assert self._held([*rest, giant], monkeypatch) == [giant]
 
-    def test_dominant_by_bytes_when_any_count_is_missing(self):
+    def test_a_pool_bounding_runner_up_is_held_too(self, monkeypatch):
+        # The shape the single-dominant heuristic missed: after the giant
+        # is held, a 47k project still bounds a pool of small ones (and is
+        # nowhere near 2x any of them). pool(smalls) + fanned(47k)
+        # undercuts the 47k serial wall, so it holds as well.
+        giant = self._plan(329 * self.MB, messages=97_000)
+        runner_up = self._plan(304 * self.MB, messages=47_000)
+        smalls = [
+            self._plan(30 * self.MB, messages=15_000),
+            self._plan(25 * self.MB, messages=12_000),
+            self._plan(20 * self.MB, messages=10_000),
+        ]
+        assert self._held([*smalls, runner_up, giant], monkeypatch) == [
+            giant,
+            runner_up,
+        ]
+
+    def test_bytes_fallback_misses_the_dense_giant(self, monkeypatch):
+        # Same shape without cached counts: the comparison falls back to
+        # bytes, the pool stays bounded by the 304MB runner-up either
+        # way, and holding the 329MB project would just append its fanned
+        # time — nothing is held back.
+        giant = self._plan(329 * self.MB)
+        assert self._held([self._plan(304 * self.MB), giant], monkeypatch) == []
+
+    def test_level_sizes_hold_nothing_back(self, monkeypatch):
+        plans = [
+            self._plan(100 * self.MB, messages=47_000),
+            self._plan(90 * self.MB, messages=46_000),
+        ]
+        assert self._held(plans, monkeypatch) == []
+
+    def test_sub_pool_threshold_projects_never_hold(self, monkeypatch):
+        # 10k messages can't use the render pool at all, so a lone
+        # conversion runs serial and holding it back gains nothing.
+        plans = [
+            self._plan(100 * self.MB, messages=10_000),
+            self._plan(9 * self.MB, messages=1_000),
+        ]
+        assert self._held(plans, monkeypatch) == []
+
+    def test_dominant_by_bytes_when_any_count_is_missing(self, monkeypatch):
         # One project without a cache row poisons the count comparison,
-        # so every plan is ranked by bytes — consistently one unit.
-        giant = self._plan(1000)
-        rest = [self._plan(400, messages=50_000), self._plan(100)]
-        assert converter._dominant_plan([*rest, giant]) is giant
+        # so every plan is ranked by bytes — consistently one unit. The
+        # 400MB project holds too: with the giant gone it would bound
+        # the pool on its own, and its fanned time undercuts that.
+        giant = self._plan(1000 * self.MB)
+        runner_up = self._plan(400 * self.MB, messages=50_000)
+        rest = [runner_up, self._plan(100 * self.MB)]
+        assert self._held([*rest, giant], monkeypatch) == [giant, runner_up]
 
-    def test_a_single_plan_is_never_held_back(self):
-        assert converter._dominant_plan([self._plan(1000, messages=99_000)]) is None
+    def test_a_single_plan_is_never_held_back(self, monkeypatch):
+        assert (
+            self._held([self._plan(1000 * self.MB, messages=99_000)], monkeypatch) == []
+        )
+
+    def test_a_core_bound_pool_keeps_its_projects(self, monkeypatch):
+        # Eight level projects on two cores: the pool already saturates
+        # the machine (wall ≈ total/2), and serializing any of them
+        # replaces hidden concurrency with appended fanned time.
+        plans = [self._plan(100 * self.MB, messages=47_000 - i) for i in range(8)]
+        assert self._held(plans, monkeypatch, jobs=2, render=2) == []
+
+    def test_memory_that_cannot_fan_never_holds(self, monkeypatch):
+        # A machine whose memory caps a lone conversion at one worker
+        # gets no speedup from holding anything back.
+        giant = self._plan(329 * self.MB, messages=97_000)
+        rest = [
+            self._plan(30 * self.MB, messages=15_000),
+            self._plan(25 * self.MB, messages=12_000),
+        ]
+        assert self._held([*rest, giant], monkeypatch, memory=2 * 1024**3) == []
 
 
 class TestDarwinMemoryProbe:

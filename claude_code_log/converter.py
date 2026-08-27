@@ -3893,43 +3893,111 @@ class _ProjectPlan:
     # no cache yet (first run). For a stale project it lags reality by
     # one run — fine for the hold-back comparison, which only needs
     # relative magnitudes. Message count predicts conversion cost far
-    # better than bytes: see _dominant_plan.
+    # better than bytes: see _holdback_plans.
     cached_message_count: Optional[int] = None
     error: Optional[str] = None
 
 
-def _dominant_plan(plans: "List[_ProjectPlan]") -> "Optional[_ProjectPlan]":
-    """The plan whose conversion will dominate the pool's wall clock, or None.
+# Bytes stand-in for _MIN_MESSAGES_FOR_RENDER_POOL when the hold-back
+# comparison has to rank plans by source bytes (a plan without a cache row
+# has no message count). Real projects measure ~3-3.4KB of JSONL per
+# message, so 75MB ≈ the 25k-message pool floor.
+_MIN_SOURCE_BYTES_FOR_HOLDBACK = 75 * 1024 * 1024
+
+
+def _fanned_speedup(workers: int) -> float:
+    """Conservative wall-clock speedup of a lone fanned-out conversion.
+
+    Deliberately under the measured single-project numbers (2.7-3.2x at
+    8+ workers, 1.8-1.9x at 4, 1.4x at 2 — work/render-format-once.md):
+    an over-estimate here makes ``_holdback_plans`` serialize projects
+    that were better off pooled, which is the costly direction, while an
+    under-estimate only forgoes part of a win.
+    """
+    if workers >= 8:
+        return 2.5
+    if workers >= 4:
+        return 1.8
+    if workers >= 2:
+        return 1.3
+    return 1.0
+
+
+def _holdback_plans(
+    plans: "List[_ProjectPlan]", *, job_budget: int, render_budget: int
+) -> "List[_ProjectPlan]":
+    """The stale projects to hold out of the pool and convert alone, in order.
+
+    Greedy makespan comparison, largest project first: holding a project
+    back pays ``fanned(largest)`` *after* the pool instead of hiding
+    ``serial(largest)`` inside it, so hold while
+
+        pool_wall(rest) + fanned(largest)  <  wall(pooling everything)
+
+    with the pool wall approximated as ``max(largest member, total /
+    workers)`` and the fanned time as serial cost over the conservative
+    ``_fanned_speedup`` of the workers a lone conversion would actually
+    get (memory-capped against the project's own bytes, so a machine that
+    can't fan the project never holds it back). The loop stops at the
+    first losing hold, which keeps every known pathology out by
+    construction: level-sized projects pool (serializing them wastes the
+    concurrency they already saturate), sub-pool-threshold projects never
+    hold (they can't fan, so holding gains nothing), and a core-bound
+    pool that already dwarfs the largest project keeps it.
 
     Message count predicts conversion cost far better than bytes — the
-    reference archive's 329MB/97k-message project takes as long as its
+    reference archive's 329MB/97k-message giant takes as long as its
     other seven projects combined while being only 1.08x the runner-up's
-    *bytes* (97k vs 47k *messages*) — so compare cached counts when every
-    plan has one and fall back to bytes otherwise; mixing the two units
-    in one ranking would make the ratio meaningless.
+    *bytes* — so costs compare cached counts when every plan has one and
+    fall back to bytes otherwise; mixing the two units in one ranking
+    would make the comparison meaningless.
 
-    2x over the runner-up is the bar. Holding a project back pays
-    ``fanned(largest)`` *after* the pool instead of hiding
-    ``serial(largest)`` inside it, so with level sizes it is a certain
-    loss; at 2x the held-back project's fanned time (~1/3 of serial at 8+
-    workers) still undercuts the runner-up's serial time that now bounds
-    the pool.
+    This generalizes the earlier single-dominant-project hold-back (2x
+    the runner-up): the 2x giant still holds, and shapes it missed — a
+    large project bounding a pool of small ones without being 2x a level
+    twin — now hold too, one at a time, while the numbers keep working.
     """
-    if len(plans) < 2:
-        return None
+    if len(plans) < 2 or job_budget <= 1 or render_budget <= 1:
+        return []
     if all(plan.cached_message_count for plan in plans):
+        eligible_floor = _MIN_MESSAGES_FOR_RENDER_POOL
 
         def cost(plan: "_ProjectPlan") -> int:
             return plan.cached_message_count or 0
     else:
+        eligible_floor = _MIN_SOURCE_BYTES_FOR_HOLDBACK
 
         def cost(plan: "_ProjectPlan") -> int:
             return plan.source_bytes
 
-    ranked = sorted(plans, key=cost, reverse=True)
-    if cost(ranked[0]) >= 2 * max(1, cost(ranked[1])):
-        return ranked[0]
-    return None
+    remaining = sorted(plans, key=cost, reverse=True)
+    held: "List[_ProjectPlan]" = []
+    while len(remaining) >= 2:
+        largest, rest = remaining[0], remaining[1:]
+        if cost(largest) < eligible_floor:
+            break
+        workers_alone = min(
+            render_budget,
+            job_budget,
+            memory_capped_workers(min(render_budget, job_budget), largest.source_bytes),
+        )
+        speedup = _fanned_speedup(workers_alone)
+        if speedup <= 1.0:
+            break
+        wall_pool_all = max(
+            cost(largest),
+            sum(cost(p) for p in remaining) / min(job_budget, len(remaining)),
+        )
+        wall_pool_rest = max(
+            cost(rest[0]),
+            sum(cost(p) for p in rest) / min(job_budget, len(rest)),
+        )
+        if wall_pool_rest + cost(largest) / speedup < wall_pool_all:
+            held.append(largest)
+            remaining = rest
+        else:
+            break
+    return held
 
 
 def _plan_project(
@@ -4363,21 +4431,24 @@ def process_projects_hierarchy(
     job_budget = jobs if jobs is not None and jobs > 0 else (os.cpu_count() or 1)
     render_budget = resolve_render_jobs(None)
 
-    # A dominant project is held out of the pool and converted last with
-    # the whole render budget. Measured on the reference archive, the
-    # full-rebuild wall is within 8% of "how long does the biggest project
-    # take", while the static split below grants that project the same
-    # share as everything else; a fanned single project runs ~3x its
-    # serial time, so the wall becomes pool(rest) + fanned(giant) instead
-    # of serial(giant). Only when a pool will actually run and the
-    # fan-out is on — with either off, ordering changes nothing and the
-    # historical path stays.
-    holdback = (
-        _dominant_plan(to_convert)
+    # Projects that would bound the pool's wall clock are held out of it
+    # and converted afterwards, one at a time, each with the whole render
+    # budget. Measured on the reference archive, the full-rebuild wall is
+    # within 8% of "how long does the biggest project take", while the
+    # static split below grants that project the same share as everything
+    # else; a fanned single project runs ~2.5-3x its serial time, so the
+    # wall becomes pool(rest) + Σ fanned(held) instead of serial(giant).
+    # `_holdback_plans` runs the makespan comparison per candidate and
+    # stops at the first losing hold. Only when a pool will actually run
+    # and the fan-out is on — with either off, ordering changes nothing
+    # and the historical path stays.
+    holdbacks = (
+        _holdback_plans(to_convert, job_budget=job_budget, render_budget=render_budget)
         if job_budget > 1 and render_budget > 1 and len(to_convert) >= 2
-        else None
+        else []
     )
-    pooled = [plan for plan in to_convert if plan is not holdback]
+    held_ids = {id(plan) for plan in holdbacks}
+    pooled = [plan for plan in to_convert if id(plan) not in held_ids]
     resolved_jobs = max(1, min(job_budget, len(pooled)))
 
     # Spare capacity goes to each project's *own* render fan-out (on by
@@ -4391,11 +4462,11 @@ def process_projects_hierarchy(
     # budget gives one stale project the whole machine and many stale
     # projects the historical one-worker-each.
     #
-    # The hold-back above covers the dominant-project tail; for a run
-    # whose tail is several level-sized projects the split is still
-    # static (a finished small project's share isn't handed back), and
-    # making it dynamic needs a single flat pool over render units
-    # rather than two nested levels.
+    # The hold-back above covers the tails a makespan comparison can
+    # see (projects that bound the pool and repay a lone fan-out); the
+    # split among what stays pooled is still static (a finished small
+    # project's share isn't handed back), and making it dynamic needs a
+    # single flat pool over render units rather than two nested levels.
     #
     # Memory can bind before cores do. Every *project* worker holds its
     # project's whole master list (~4.5x its transcript bytes on disk with
@@ -4527,11 +4598,12 @@ def process_projects_hierarchy(
                 if id(plan) not in settled:
                     _convert_plan_inline(plan)
 
-    if holdback is not None:
-        # The rest are done and nothing else is resident, so the dominant
-        # project gets the whole machine (`--jobs` still caps it; the
-        # memory cap re-checks inside `_make_render_pool`).
-        _convert_plan_inline(holdback, render_jobs=min(render_budget, job_budget))
+    # The pool has drained and nothing else is resident, so each held-back
+    # project gets the whole machine (`--jobs` still caps it; the memory
+    # cap re-checks inside `_make_render_pool`). Smallest first, so the
+    # run ends on the project that dominates the wall.
+    for plan in reversed(holdbacks):
+        _convert_plan_inline(plan, render_jobs=min(render_budget, job_budget))
 
     # ---- Phase 3 (collect): aggregate per-project index data from the
     # now-fresh cache. Sequential — cheap cache reads (the no-cache

@@ -596,14 +596,26 @@ the run is, to within 8%, "how long does the biggest project take". The
 static budget split then gives that project `jobs // stale projects` = 2
 render workers while the seven small ones finish and 13 cores go idle. So
 the fan-out helps it barely (1.27x) even though the same project alone
-reaches 2.70x. The *dominant-project* form of this is now handled by
-hold-back: `_dominant_plan` (2x the runner-up, compared on cached
-message counts when available — bytes alone would miss a dense giant)
-keeps that project out of the pool and converts it last with the full
-render budget, measured 65.4s → 58.5s (1.12x) on the 8-core VM, where
-the 47k-message runner-up then bounds the pool. Fixing the general case
-— several level-sized projects — still needs the split to be dynamic, or
-a single flat pool over render units rather than two nested levels.
+reaches 2.70x. Pool-bounding projects are now handled by hold-back:
+`_holdback_plans` runs a greedy makespan comparison, largest first
+(hold while `pool(rest) + fanned(largest)` beats pooling everything,
+with fanned time from the conservative `_fanned_speedup` of the
+workers a lone memory-capped conversion would get), keeps what it
+holds out of the pool and converts each alone with the full render
+budget afterwards. Costs compare cached message counts when every
+plan has one (bytes alone would miss a dense giant), bytes otherwise.
+On the reference archive it holds exactly the 97k giant — measured
+65.4s → 58.5s (1.12x) on the 8-core VM under the original
+single-dominant rule, whose decision the general rule reproduces
+there, since the twin 47k projects keep each other's pool bounded —
+and it additionally covers shapes the 2x-dominance bar missed, such
+as a runner-up that bounds a pool of small projects without being 2x
+any of them. What it deliberately never does is serialize level-sized
+projects (a certain loss — they already saturate the pool) or hold
+anything a machine can't actually fan. Fixing the truly general case —
+several level-sized projects sharing one static split — still needs
+the split to be dynamic, or a single flat pool over render units
+rather than two nested levels.
 
 Two consequences. First, core count matters a lot: 48.8s of CPU over 4
 cores is 12.2s plus the 4.7s floor, so a 10-core machine should land near
@@ -623,12 +635,13 @@ memory cap re-sized to the measured post-feeding footprints (above),
 the same VM's incremental cap went 5 → 8 of 8 workers and the scenario
 reached **3.24x at +6% CPU** (61.8s → 19.1s wall, 63.3s CPU vs 59.5s
 serial), byte-identical in every configuration. The full-rebuild
-scenario improved to 1.12x via the dominant-project hold-back (above);
-what remains is its general case — several level-sized projects, where
-the *core* split `jobs // stale` still grants 1 render worker/project —
-and the serial parent floor (load + parse + plan). Both land with the
-remaining "format once, assemble many" step: the flat pool over render
-units. Planned in
+scenario improved to 1.12x via the hold-back (above, since
+generalized from the single-dominant rule to the greedy makespan
+comparison); what remains is its general case — several level-sized
+projects, where the *core* split `jobs // stale` still grants 1
+render worker/project — and the serial parent floor (load + parse +
+plan). Both land with the remaining "format once, assemble many"
+step: the flat pool over render units. Planned in
 [`work/render-format-once.md`](../work/render-format-once.md).
 
 ### 2.11 Diagnosing hangs (SIGUSR1 stack dump)
