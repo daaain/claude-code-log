@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Benchmark the two render optimisations against real transcripts.
+"""Benchmark the render optimisations against real transcripts.
 
-Measures the render memo caches (``CLAUDE_CODE_LOG_RENDER_CACHE_MB``) and
-the intra-project render fan-out (``CLAUDE_CODE_LOG_RENDER_JOBS``), both
-documented in ``dev-docs/application_model.md`` §§ 2.9-2.10.
+Measures the render memo caches (``CLAUDE_CODE_LOG_RENDER_CACHE_MB``),
+the intra-project render fan-out (``CLAUDE_CODE_LOG_RENDER_JOBS``), and —
+in single-project mode, when the project paginates — the page-granular
+streaming pass (``CLAUDE_CODE_LOG_STREAMING``), documented in
+``dev-docs/application_model.md`` §§ 2.9-2.10 and 2.13.
 
 Run it on your own machine because **core count changes the answer**: the
 committed numbers come from a 4-core VM, the fan-out's payoff scales with
@@ -71,12 +73,30 @@ from claude_code_log.render_pool import (  # noqa: E402
 # there is no child-process CPU accounting there.
 CHILD_CPU_UNAVAILABLE = os.name == "nt"
 
+# The conversion runs under a wrapper child that reports the largest
+# waited-for descendant's peak RSS via getrusage(RUSAGE_CHILDREN) — the
+# residency column that makes the streaming-vs-full-load trade visible.
+# POSIX-only (no resource module on Windows); ru_maxrss is KiB on Linux,
+# bytes on macOS.
+RSS_UNAVAILABLE = os.name == "nt"
+_RSS_MARKER = "BENCH_MAX_RSS_BYTES="
+_RSS_WRAPPER = f"""
+import resource, subprocess, sys
+rc = subprocess.call(sys.argv[1:])
+peak = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
+if sys.platform != "darwin":
+    peak *= 1024
+print(f"{_RSS_MARKER}{{peak}}", file=sys.stderr)
+sys.exit(rc)
+"""
+
 
 @dataclass
 class Result:
     label: str
     wall: float
     cpu: Optional[float]
+    rss: Optional[int]
     digest: str
     files: int
 
@@ -137,15 +157,22 @@ def _run(
     *,
     all_projects: bool,
     stale: Optional[list[Path]] = None,
+    stale_files: Optional[list[str]] = None,
     jobs: Optional[int] = None,
 ) -> Result:
     """Time one conversion.
 
     ``stale`` restricts what gets invalidated beforehand — None means
     "everything", a list means only those projects (plus the index, which
-    is always rewritten).
+    is always rewritten). ``stale_files`` restricts it further, to named
+    files inside ``target`` (single-project incremental scenario).
     """
-    if stale is None:
+    if stale_files is not None:
+        for name in stale_files:
+            path = target / name
+            if path.exists():
+                path.unlink()
+    elif stale is None:
         _clear_outputs(target, all_projects)
     else:
         for path in target.glob("*.html"):
@@ -155,10 +182,13 @@ def _run(
                 path.unlink()
 
     env = dict(os.environ)
-    # Start from a known state: an inherited value for either knob would
-    # silently contaminate every row.
+    # Start from a known state: an inherited value for any knob would
+    # silently contaminate every row. Streaming in particular must be
+    # pinned per-row — on a memory-tight machine its auto mode would
+    # otherwise engage under the full-path labels.
     env.pop("CLAUDE_CODE_LOG_RENDER_CACHE_MB", None)
     env.pop("CLAUDE_CODE_LOG_RENDER_JOBS", None)
+    env.pop("CLAUDE_CODE_LOG_STREAMING", None)
     env.update(env_overrides)
 
     command = [*_cli_command(), str(target)]
@@ -166,6 +196,8 @@ def _run(
         command.append("--all-projects")
     if jobs is not None:
         command += ["-j", str(jobs)]
+    if not RSS_UNAVAILABLE:
+        command = [sys.executable, "-c", _RSS_WRAPPER, *command]
 
     # CPU is measured across the whole process tree, which is the number
     # that exposes the fan-out's overhead: wall time can improve while
@@ -185,19 +217,28 @@ def _run(
     if CHILD_CPU_UNAVAILABLE:
         cpu = None
 
+    rss: Optional[int] = None
+    for line in proc.stderr.splitlines():
+        if line.startswith(_RSS_MARKER):
+            rss = int(line[len(_RSS_MARKER) :])
+
     digest, files = _digest_outputs(target, all_projects)
-    return Result(label, wall, cpu, digest, files)
+    return Result(label, wall, cpu, rss, digest, files)
 
 
 def _report(title: str, results: list[Result], baseline_label: str) -> set[str]:
     baseline = next(r for r in results if r.label == baseline_label)
     print(f"\n{title}")
-    print(f"{'configuration':<24} {'wall':>8} {'CPU':>8} {'vs ' + baseline_label:>16}")
-    print("-" * 60)
+    print(
+        f"{'configuration':<24} {'wall':>8} {'CPU':>8} {'peak RSS':>9} "
+        f"{'vs ' + baseline_label:>16}"
+    )
+    print("-" * 70)
     for result in results:
         speedup = baseline.wall / result.wall if result.wall else 0.0
         cpu = f"{result.cpu:7.1f}s" if result.cpu is not None else "    n/a"
-        print(f"{result.label:<24} {result.wall:7.1f}s {cpu} {speedup:15.2f}x")
+        rss = f"{result.rss / 1e6:6.0f}MB" if result.rss is not None else "     n/a"
+        print(f"{result.label:<24} {result.wall:7.1f}s {cpu} {rss} {speedup:15.2f}x")
     fastest = min(results, key=lambda r: r.wall)
     print(
         f"fastest: {fastest.label} ({baseline.wall / fastest.wall:.2f}x over "
@@ -212,12 +253,27 @@ def _bench_single(target: Path, sweep: list[int]) -> set[str]:
     _run(target, "warm", {}, all_projects=False)
     print(f"  cache built in {time.monotonic() - warm_start:.1f}s")
 
-    print("\nRunning configurations...", flush=True)
+    # Streaming rows only make sense on a paginated project — page 2's
+    # file existing after the warm run is the cheapest reliable signal.
+    # The rows force the pass (STREAMING=1) because on a roomy machine
+    # auto mode declines it; RENDER_JOBS is pinned off so that if the
+    # pass declines structurally and falls through to the full path,
+    # the row degrades to "memo only" instead of silently measuring the
+    # fan-out under a streaming label.
+    paginated = (target / "combined_transcripts_2.html").exists()
+    streaming_env = {
+        "CLAUDE_CODE_LOG_STREAMING": "1",
+        "CLAUDE_CODE_LOG_RENDER_JOBS": "off",
+    }
+
+    print("\nScenario 1/2: full rebuild", flush=True)
     # Fan-out-less rows pin RENDER_JOBS=off explicitly: the fan-out is on
     # by default now, so an unset variable means "auto", and the serial
     # baselines would silently run the pool (which is exactly what
     # happened when the default flipped — every row measured the same
-    # configuration and the table's labels lied).
+    # configuration and the table's labels lied). CLAUDE_CODE_LOG_STREAMING=0
+    # keeps the full-path rows honest on a memory-tight machine, where
+    # auto mode would otherwise stream under a full-path label.
     results = [
         _run(
             target,
@@ -225,13 +281,17 @@ def _bench_single(target: Path, sweep: list[int]) -> set[str]:
             {
                 "CLAUDE_CODE_LOG_RENDER_CACHE_MB": "0",
                 "CLAUDE_CODE_LOG_RENDER_JOBS": "off",
+                "CLAUDE_CODE_LOG_STREAMING": "0",
             },
             all_projects=False,
         ),
         _run(
             target,
             "memo only",
-            {"CLAUDE_CODE_LOG_RENDER_JOBS": "off"},
+            {
+                "CLAUDE_CODE_LOG_RENDER_JOBS": "off",
+                "CLAUDE_CODE_LOG_STREAMING": "0",
+            },
             all_projects=False,
         ),
         _run(
@@ -240,13 +300,17 @@ def _bench_single(target: Path, sweep: list[int]) -> set[str]:
             {
                 "CLAUDE_CODE_LOG_RENDER_CACHE_MB": "0",
                 "CLAUDE_CODE_LOG_RENDER_JOBS": "auto",
+                "CLAUDE_CODE_LOG_STREAMING": "0",
             },
             all_projects=False,
         ),
         _run(
             target,
             "both (auto)",
-            {"CLAUDE_CODE_LOG_RENDER_JOBS": "auto"},
+            {
+                "CLAUDE_CODE_LOG_RENDER_JOBS": "auto",
+                "CLAUDE_CODE_LOG_STREAMING": "0",
+            },
             all_projects=False,
         ),
     ]
@@ -266,13 +330,83 @@ def _bench_single(target: Path, sweep: list[int]) -> set[str]:
             _run(
                 target,
                 label,
-                {"CLAUDE_CODE_LOG_RENDER_JOBS": str(workers)},
+                {
+                    "CLAUDE_CODE_LOG_RENDER_JOBS": str(workers),
+                    "CLAUDE_CODE_LOG_STREAMING": "0",
+                },
                 all_projects=False,
             )
         )
-    return _report(
-        f"Single project ({results[0].files} output files)", results, "memo only"
+    if paginated:
+        results.append(_run(target, "streaming", streaming_env, all_projects=False))
+    else:
+        print("  (not paginated — skipping the streaming row)")
+    digests = _report(
+        f"Single project, full rebuild ({results[0].files} output files)",
+        results,
+        "memo only",
     )
+
+    if not paginated:
+        return digests
+
+    # Incremental — the shape of a daily run over a paginated project:
+    # the combined output and a few session files are stale, everything
+    # else is current. This is where the streaming pass and the fan-out
+    # genuinely compete: the full path must load the whole project to
+    # regenerate the stale subset, the streaming pass loads only the
+    # pages that need work.
+    stale_files = ["combined_transcripts.html"] + sorted(
+        p.name for p in target.glob("session-*.html")
+    )[:3]
+    print(
+        f"\nScenario 2/2: incremental — page 1 + {len(stale_files) - 1} "
+        "session file(s) stale",
+        flush=True,
+    )
+    incremental = [
+        _run(
+            target,
+            "memo only",
+            {
+                "CLAUDE_CODE_LOG_RENDER_JOBS": "off",
+                "CLAUDE_CODE_LOG_STREAMING": "0",
+            },
+            all_projects=False,
+            stale_files=stale_files,
+        ),
+        _run(
+            target,
+            "both (auto)",
+            {
+                "CLAUDE_CODE_LOG_RENDER_JOBS": "auto",
+                "CLAUDE_CODE_LOG_STREAMING": "0",
+            },
+            all_projects=False,
+            stale_files=stale_files,
+        ),
+        _run(
+            target,
+            "streaming",
+            streaming_env,
+            all_projects=False,
+            stale_files=stale_files,
+        ),
+    ]
+    # Kept out of the cross-scenario digest set for the same reason as
+    # the hierarchy incremental: a subset regeneration's file set is
+    # compared within the scenario, not against the full rebuild's.
+    incremental_digests = _report(
+        "Incremental — combined stale + a few sessions, the shape of a daily run.",
+        incremental,
+        "memo only",
+    )
+    if len(incremental_digests) > 1:
+        print(
+            "\nMISMATCH — incremental configurations disagreed on the rendered bytes."
+        )
+        sys.exit(1)
+    return digests
 
 
 def _bench_hierarchy(target: Path) -> set[str]:
@@ -294,19 +428,20 @@ def _bench_hierarchy(target: Path) -> set[str]:
             {
                 "CLAUDE_CODE_LOG_RENDER_CACHE_MB": "0",
                 "CLAUDE_CODE_LOG_RENDER_JOBS": "off",
+                "CLAUDE_CODE_LOG_STREAMING": "0",
             },
             all_projects=True,
         ),
         _run(
             target,
             "memo only",
-            {"CLAUDE_CODE_LOG_RENDER_JOBS": "off"},
+            {"CLAUDE_CODE_LOG_RENDER_JOBS": "off", "CLAUDE_CODE_LOG_STREAMING": "0"},
             all_projects=True,
         ),
         _run(
             target,
             "both (auto)",
-            {"CLAUDE_CODE_LOG_RENDER_JOBS": "auto"},
+            {"CLAUDE_CODE_LOG_RENDER_JOBS": "auto", "CLAUDE_CODE_LOG_STREAMING": "0"},
             all_projects=True,
         ),
     ]
@@ -330,6 +465,7 @@ def _bench_hierarchy(target: Path) -> set[str]:
             {
                 "CLAUDE_CODE_LOG_RENDER_CACHE_MB": "0",
                 "CLAUDE_CODE_LOG_RENDER_JOBS": "off",
+                "CLAUDE_CODE_LOG_STREAMING": "0",
             },
             all_projects=True,
             stale=[largest],
@@ -337,14 +473,14 @@ def _bench_hierarchy(target: Path) -> set[str]:
         _run(
             target,
             "memo only",
-            {"CLAUDE_CODE_LOG_RENDER_JOBS": "off"},
+            {"CLAUDE_CODE_LOG_RENDER_JOBS": "off", "CLAUDE_CODE_LOG_STREAMING": "0"},
             all_projects=True,
             stale=[largest],
         ),
         _run(
             target,
             "both (auto)",
-            {"CLAUDE_CODE_LOG_RENDER_JOBS": "auto"},
+            {"CLAUDE_CODE_LOG_RENDER_JOBS": "auto", "CLAUDE_CODE_LOG_STREAMING": "0"},
             all_projects=True,
             stale=[largest],
         ),
