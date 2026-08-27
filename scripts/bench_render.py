@@ -251,10 +251,21 @@ def _bench_single(target: Path, sweep: list[int]) -> set[str]:
         ),
     ]
     for workers in sweep:
+        # Label with the worker count the converter will actually use:
+        # memory_capped_workers applies even to a pinned RENDER_JOBS, so
+        # an uncapped label would claim a fan-out width that never ran.
+        # Same formula the converter runs at pool creation — a pinned
+        # count is not clamped to the CPU count, only to memory.
+        effective = memory_capped_workers(workers, _transcript_bytes(target))
+        label = (
+            f"both ({workers} workers)"
+            if effective == workers
+            else f"both ({workers}->{effective} workers)"
+        )
         results.append(
             _run(
                 target,
-                f"both ({workers} workers)",
+                label,
                 {"CLAUDE_CODE_LOG_RENDER_JOBS": str(workers)},
                 all_projects=False,
             )
