@@ -4055,6 +4055,7 @@ def _plan_project(
     filter_path: Optional[str],
     write_combined: bool,
     page_size: int,
+    generate_individual_sessions: bool = True,
 ) -> Optional[_ProjectPlan]:
     """Resolve destination and staleness for one project (no rendering).
 
@@ -4150,20 +4151,21 @@ def _plan_project(
     else:
         combined_stale = True
 
-    # Determine if we need to do any work. With
-    # `write_combined=False`, the combined-transcript file
-    # isn't produced — its staleness / on-disk presence is
-    # irrelevant; only modified sources / stale per-session
-    # files matter.
+    # Determine if we need to do any work, gated on the artifacts that
+    # were actually requested. With `write_combined=False` the combined
+    # transcript isn't produced, so its staleness / on-disk presence is
+    # irrelevant; with `generate_individual_sessions=False` the
+    # per-session files aren't produced, so their staleness is too.
+    # Without a cache there is nothing that could have produced the
+    # requested outputs on an earlier run, so any request needs work —
+    # empty `modified_files` / `stale_sessions` must not read as
+    # "nothing to do" (that skipped every per-session file and left the
+    # index pointing at paths that were never written).
+    needs_work = bool(modified_files)
+    if generate_individual_sessions:
+        needs_work = needs_work or bool(stale_sessions) or cache_manager is None
     if write_combined:
-        needs_work = (
-            bool(modified_files)
-            or bool(stale_sessions)
-            or combined_stale
-            or not output_path.exists()
-        )
-    else:
-        needs_work = bool(modified_files) or bool(stale_sessions)
+        needs_work = needs_work or combined_stale or not output_path.exists()
 
     if needs_work:
         stats.files_updated = len(modified_files) if modified_files else 0
@@ -4414,6 +4416,7 @@ def process_projects_hierarchy(
                 filter_path=filter_path,
                 write_combined=write_combined,
                 page_size=page_size,
+                generate_individual_sessions=generate_individual_sessions,
             )
         except Exception as e:
             stats = GenerationStats()
