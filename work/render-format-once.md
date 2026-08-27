@@ -362,6 +362,31 @@ has too few stale units to help there. Streamed wall scales
 regardless; the crossover lands near 36% of pages stale and moves
 only weakly with core count.
 
+**Real-archive verification (2026-08-27, Dain's 7.9GB/82-project
+copy at `downloads/projects`):** the sparse gate re-measured and
+byte-verified on the two reference archives via the extended
+`bench_render.py`. 803MB reference (319MB transcripts, 16 pages):
+full rebuild fan-out 10.8s/1634MB vs streamed 26.2s/629MB (dense
+belongs to the fan-out); incremental streamed 4.0s/441MB vs fan-out
+6.5s/1128MB. 296MB document-processing: fan-out never engages (below
+the floor), streamed parity on dense (9.5s vs 9.2s) and wins sparse
+(2.1s vs 3.1s, 293MB vs 396MB). Every configuration byte-identical on
+both. Auto-mode spot checks on the real copies picked correctly both
+ways (sparse "3 of 16 pages" streamed at 3.7s; 8-of-16 dense took the
+fan-out), including inside `--all-projects` hierarchy runs — where a
+restored mid-chronology session correctly declined as dense, because
+its insertion shifts every later page's membership (the full path
+regenerated pages 2-4 for the same reason). The measured crossover on
+the 803MB archive brackets ~0.25-0.35 depending on fit; 1/3 sits in
+the wash zone where wall is within ~1-2s either way and streaming
+holds a 2.5x RSS advantage. Two observations for the record: (1)
+*pre-existing hierarchy planner gap* — a manually deleted non-first
+page file, as the only staleness, is not detected by `_plan_project`
+(the project reports "cached"); reproduced with streaming disabled,
+so unrelated to this branch — single-project invocations catch it;
+(2) `scripts/clone_project_nx.py` generates a >25k-message archive
+from any real project when no big one is at hand.
+
 The landed policy (`_should_stream` now returns None/"always"/
 "sparse"): force and memory-tight behave exactly as before; roomy (or
 unmeasurable) auto runs the streaming pass in *sparse* mode — it
