@@ -597,14 +597,23 @@
             }
 
             async function start() {
+                if (location.protocol === 'file:') {
+                    // A relative api/ping can never reach a server from a
+                    // file:// page, so don't attempt the fetch: the page
+                    // used to rely on Chromium refusing it outright, but
+                    // that rejection is not dependable cross-platform
+                    // (Windows CI observed the probe never settling, so
+                    // the setup panel never appeared).
+                    setup.hidden = false;
+                    return;
+                }
                 let ping;
                 try {
                     const response = await fetch('api/ping');
                     if (!response.ok) throw new Error(response.status);
                     ping = await response.json();
                 } catch (err) {
-                    // Either no server, or the page was opened over file://
-                    // (where the request is refused outright). Same remedy.
+                    // No server behind this origin (or it is not ours).
                     setup.hidden = false;
                     return;
                 }
