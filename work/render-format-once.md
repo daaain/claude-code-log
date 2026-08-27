@@ -325,6 +325,88 @@ incremental sidecar maintenance that entails) is the last piece of
 "no archive too big for the machine", along with the § 7.5-style
 threshold revisit once that floor moves.
 
+**Stage-4 design (incremental cache refresh, 2026-08-27; survey-
+grounded, implementation in flight):** the refresh's full load exists
+to recompute three things — per-session cache rows, project
+aggregates, and the sidecar. All three are recomputable from a
+*bounded closure* of the modified files, with a decline-to-full-load
+ladder for every hairy case.
+
+Empirical ground (scratchpad `stage4_survey.py`, run over the full
+7.9GB/78-project real corpus, zero failures): **I1** project
+`total_message_count` == Σ unfiltered per-session `message_count` +
+typed residual (summary/ai-title/attachment rows — countable from the
+messages table by type); **I2** project token totals == Σ unfiltered
+per-session tokens; **I3** bookend timestamps == raw min/max. Also:
+cross-session distinct-uuid shared requestIds are 0 in 76/78 projects
+(8 and 64 in platform-frontend-next and repower) — so a
+decline-on-boundary-rid guard almost never fires.
+
+The algorithm (each step declines → unchanged full load):
+
+1. *Preconditions*: cached project data + sidecar present, no date
+   filters, no files deleted since cache (deletion = archival
+   semantics, full path's job), agent-file-only changes excluded as
+   today.
+2. *Per-file parse*: capture each modified file's OLD state from the
+   messages table (sessions, uuid set, rid set, per-type metadata
+   counts), then `load_transcript` it (rewrites its rows). Decline
+   unless old uuids ⊆ new uuids per pre-existing file (append-only
+   check — a shrunk/rewritten file means history changed).
+3. *Closure fixpoint* (SQL over messages + old sidecar, no entry
+   loading): start C = old ∪ new sessions of modified files; add (a)
+   owner sessions of dangling parentUuids in new entries (attachment
+   targets — via dedup-winner rows when duplicated), (b) all sessions
+   holding any uuid that appears in modified files (re-election
+   partners; only modified-file uuids need re-election — other
+   winners' candidate sets are unchanged), (c) for each old junction
+   uuid that is a parentUuid-target of new entries, its full old
+   target list (so target order recomputes natively; junctions not
+   touched by new entries keep their old rows), (d) any session a
+   loaded-file co-residency would otherwise leave partially loaded
+   when it holds an exempt uuid. Decline past a size threshold
+   (closure files > ~1/3 of project files — beyond that the full
+   load is competitive anyway, mirroring the sparse gate).
+4. *rid guard*: any closure-session requestId also present outside
+   the closure → decline (token attribution would need global
+   order; survey says ~never).
+5. *Partial load*: `_load_sessions_partial` variant over the
+   closure's files with two refresh-specific deviations — (i) old
+   dedup-winner enforcement *exempts* uuids present in modified
+   files (their election must re-run natively; partners are loaded
+   by closure, and elections restricted to a superset-consistent
+   candidate set agree with the full tree by the min-first-timestamp
+   + encounter-order semantics), (ii) the sidecar junction patch
+   must *merge*, not overwrite — a new fork child would otherwise be
+   erased by the old target list (in practice: native rows win for
+   touched uuids, old rows stand for untouched ones).
+6. *Facts persist*, restricted to P = sessions whose complete file
+   set was loaded (the co-resident partial-session trap, stage-3's
+   lesson, applies to cache facts too): session rows for P upserted;
+   sidecar parents/junction/winner rows replaced for P-owned facts
+   and re-elected uuids, others untouched; project aggregates by
+   *delta* (new P rows − old P rows, metadata counts per file old →
+   new, bookends extended min/max — append-only makes shrink
+   impossible).
+7. Page cache rows untouched — render-side staleness (sessions
+   changed) drives regeneration exactly as after a full refresh.
+
+Delta arithmetic needs old contributions for *every* closure session
+including warmup/agent-only ones, which today's cache filters out
+before persisting — so migration 009 adds a ``hidden`` flag to the
+sessions table: the writer persists *all* sessions from one
+unfiltered `compute_session_data` pass, flagging warmup/empty rows,
+and every read site filters hidden. Visible rows must stay
+byte-identical to today's filtered computation — the only semantic
+coupling is a warmup-session requestId shared with a visible session
+(would shift D1 token attribution between the passes), guarded by
+survey + a decline check. Verification bar: DB-state equivalence
+(session rows, aggregates, all sidecar tables) between incremental
+and full refresh, plus rendered byte-identity, across synthetic
+scenarios (append, new session, resume/fork/replay coupling, shrunk
+file → decline, deleted file → decline, boundary rid → decline) and
+real-archive holdback runs.
+
 **Phase 10 (the sparse gate — "should streaming just be the default?",
 2026-08-27, same branch):** Dain asked whether streaming, being faster
 in every phase-9 measurement, should simply always run. The phase-9
