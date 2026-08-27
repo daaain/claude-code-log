@@ -1157,8 +1157,25 @@ Full suite before pushing: `just ci`.
   pyright wrapper uses its bundled JS instead of fetching node past
   the wall). `.venv` lives on a box-local shadow volume, so host and
   box binaries never clobber each other.
+- **The box's wall clock is not monotonic** (measured 2026-08-27: a
+  0.26s *backwards* jump inside a 4-second sample, while
+  `time.monotonic()` advanced normally — Lima guest clock sync).
+  Consequences: `test_integration_realistic.py::TestAddingNewJSONLFiles
+  ::test_index_html_updated_with_new_project_stats` flakes roughly
+  1 run in 6 (it asserts a regenerated file's mtime increased), and
+  the CLI can print a *negative* per-project duration. Not caused by
+  any change on this branch — reproduced with every knob disabled. If
+  a single mtime/duration assertion fails once and passes on re-run,
+  suspect this before the diff. The underlying fix is for production
+  duration measurements to use `time.monotonic()`
+  (`converter.py` has ~8 `time.time()` elapsed sites, plus
+  `renderer_timings.py`); left alone here to keep this branch
+  scoped — worth a small separate PR.
 - Real transcripts for local testing: `downloads/projects/` (7.9GB on
-  disk, 84 projects, with a warm cache DB). **Every `--all-projects`
+  disk, 84 projects, with a warm cache DB). Note it is a *snapshot*,
+  not the live tree: measure against it, not `~/.claude/projects`,
+  whose active session file grows mid-run and will show up as a
+  spurious diff between two copies. **Every `--all-projects`
   timing in this doc runs on its 8 largest projects, never the full
   corpus** — `bench_render.py`'s `--projects 8` default selects them
   by top-level `*.jsonl` bytes (`_transcript_bytes` — subagent
