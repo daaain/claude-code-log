@@ -37,34 +37,33 @@ memory_mib = 16384   # MiB — any whole number
 disk_gib = 60
 
 # Egress proxy. Declaring [proxy] routes the box's egress through the Mac proxy — REQUIRED
-# by the wall (which otherwise leaves the box with no way out). Locked down: only the
-# bootstrap hosts below are allowed; anything else is denied and shows live in `fy tui`,
-# where you can grant it. Any keyless host (below) is ALWAYS allowed implicitly — never
-# list it.
+# by the wall (which otherwise leaves the box with no way out). Locked down: anything not
+# granted is denied and shows live in `fy tui`, where you can grant it. Any keyless host
+# (below) is ALWAYS allowed implicitly — never list it.
+#
+# Per-host GRANTS do not live in this file (the box can write it — `fy config widenings`
+# explains); `default_deny` below only SEEDS the first answer, `fy allow wall on|off` is the
+# switch from then on. `recommend` is the committed, team-shared half: each entry is OFFERED
+# per host at `fy up`/`fy allow sync`/the TUI's wall pane, and becomes a grant only on that
+# machine's operator's yes.
 [proxy]
 default_deny = true
-# git fetch/clone; uv/pip (box bootstrap + deps); dnf for [[box.tools]], pinned to the
-# master mirror dl.fedoraproject.org by the dnf-direct-mirror step below (the default
-# mirror system redirects to arbitrary hosts no allowlist can name); the playwright
-# browser bundles; and unpkg.com, which the generated transcript pages load vis-timeline
-# from (the browser test suite renders them).
-#
-# downloads.claude.ai is `claude --upgrade` (and `claude plugin`): the version manifest,
-# the release binaries, and the official plugin marketplace all sit under
-# /claude-code-releases on that one host. It is NOT the keyless host — api.anthropic.com
-# is, and it's allowed implicitly — so this needs listing, and it carries no credential:
-# a public CDN serving signed release artefacts. Without it the updater fails with
-# "proxy refused the connection" and the box stays pinned at whatever version it was
-# built with.
-allow = [
-  "github.com",
-  "pypi.org",
-  "*.pypi.org",
-  "files.pythonhosted.org",
-  "*.fedoraproject.org",
-  "cdn.playwright.dev",
-  "unpkg.com",
-  "downloads.claude.ai",
+recommend = [
+  { host = "github.com", why = "git fetch/clone + release-asset redirects" },
+  { host = "objects.githubusercontent.com", why = "GitHub release assets CDN — uv-managed Python (python-build-standalone)" },
+  { host = "release-assets.githubusercontent.com", why = "GitHub release assets CDN (newer host, same role)" },
+  { host = "pypi.org", why = "uv/pip — box bootstrap + deps" },
+  { host = "*.pypi.org", why = "uv/pip mirrors" },
+  { host = "files.pythonhosted.org", why = "uv/pip package downloads" },
+  { host = "deb.debian.org", why = "apt — [[box.tools]] system packages + playwright install-deps" },
+  { host = "registry-1.docker.io", why = "box image build — debian base image manifest/blobs" },
+  { host = "auth.docker.io", why = "box image build — Docker Hub auth token for the base pull" },
+  { host = "production.cloudfront.docker.com", why = "box image build — Docker Hub blob CDN" },
+  { host = "ghcr.io", why = "box image build — the uv binary image layer" },
+  { host = "pkg-containers.githubusercontent.com", why = "box image build — ghcr.io blob storage" },
+  { host = "cdn.playwright.dev", why = "playwright browser bundles" },
+  { host = "unpkg.com", why = "vis-timeline, loaded by generated transcript pages (the browser test suite renders them)" },
+  { host = "downloads.claude.ai", why = "claude --upgrade / claude plugin — public CDN of signed release artefacts (NOT the keyless host; api.anthropic.com is implicit)" },
 ]
 # passthrough = ["@all"]   # hosts tunnelled UN-decrypted under default_deny (the toolchain)
 
@@ -100,77 +99,63 @@ foldyard.toml.
 [box]
 # Shared named volumes mounted into the box at a $HOME-relative path, so they survive box
 # recreation. Playwright's browser bundle is ~900 MB — without this, every fresh box
-# re-downloads it through the proxy. The dnf volume pairs with the dnf-keepcache step
-# below: metadata and kept RPMs land in ~/.cache/dnf, so a rebuilt box installs its
-# tools from cache instead of re-downloading from the master mirror. The uv volume spares
-# the wheel downloads on every rebuild.
+# re-downloads it through the proxy. The apt volume pairs with the apt-keepcache step
+# below: downloaded .debs land in ~/.cache/apt, so a rebuilt box installs its tools from
+# cache instead of re-downloading from deb.debian.org. The uv volumes spare the wheel
+# downloads AND the uv-managed Python (the Debian slim base ships none — uv provisions its
+# own from python-build-standalone) on every rebuild.
 caches = [
   { volume = "devbox_playwright", path = ".cache/ms-playwright" },
-  { volume = "devbox_dnf", path = ".cache/dnf" },
+  { volume = "devbox_apt", path = ".cache/apt" },
   { volume = "devbox_uv", path = ".cache/uv" },
+  { volume = "devbox_uv_python", path = ".local/share/uv" },
 ]
 shadow_volumes = [".venv"]                      # masks the host bind mount at that subpath
 warmup = [{ dir = ".", run = "uv sync" }]       # populate it — it starts empty
 env = { UV_LINK_MODE = "copy" }                 # venv volume ≠ cache volume ⇒ no hardlinks
 
 # Consumer tools installed once per fresh box, as MONITORED steps (reported ✓/✗). They run
-# as root, in the checkout, before the deps warm-up.
-#
-# The Fedora repos ship pointing at the mirror system: dnf resolves a metalink at
-# mirrors.fedoraproject.org, which hands every fetch to an arbitrary volunteer mirror —
-# unpredictable hostnames that can never sit in a proxy allowlist. Pin the two enabled
-# repos to the project's master mirror instead (direct downloads, no redirect, covered by
-# "*.fedoraproject.org" in [proxy] allow), and switch off the openh264 repo, whose payload
-# lives on Cisco's CDN and which nothing here installs from. Must stay ABOVE the dnf steps
-# below — [[box.tools]] run in order.
-[[box.tools]]
-name = "dnf-direct-mirror"
-check = "grep -q '^baseurl=https://dl.fedoraproject.org' /etc/yum.repos.d/fedora.repo"
-install = "sed -i -e 's|^metalink=|#metalink=|' -e 's|^#baseurl=http://download.example/pub/fedora/linux|baseurl=https://dl.fedoraproject.org/pub/fedora/linux|' /etc/yum.repos.d/fedora.repo /etc/yum.repos.d/fedora-updates.repo && sed -i '0,/^enabled=1/s//enabled=0/' /etc/yum.repos.d/fedora-cisco-openh264.repo"
+# as root, in the checkout, before the deps warm-up. The box is Debian (foldyard's generic
+# base, debian:trixie-slim), so apt pulls everything from the one allowlisted
+# deb.debian.org.
 
-# Keep downloaded RPMs (dnf discards them after install by default) and move the whole
-# dnf cache — metadata + packages — under ~/.cache/dnf, where the devbox_dnf volume in
-# [box] caches above persists it across box recreations. A rebuilt box then installs its
-# tools from cache: zero mirror traffic when the metadata is still fresh, ~600 KB of
-# metadata revalidation from the (allowlisted) master mirror when it isn't. The lines are
-# appended to dnf.conf's [main] section, which the stock file ends in. Verified in-box:
-# with egress fully denied, `dnf install` of a cached package succeeds. Must also stay
-# ABOVE the dnf install steps below.
+# Keep downloaded .debs (apt normally discards them, and the slim image ships a docker-clean
+# hook that deletes them on sight) in ~/.cache/apt, where the devbox_apt volume in [box]
+# caches above persists them across box recreations. A rebuilt box then installs its tools
+# from cache, with only index revalidation touching the (allowlisted) mirror. Ends with the
+# `apt-get update` the install steps below rely on — the slim image ships no package index.
+# Must stay ABOVE the apt install steps — [[box.tools]] run in order.
 [[box.tools]]
-name = "dnf-keepcache"
-check = "grep -q '^system_cachedir=/root/.cache/dnf' /etc/dnf/dnf.conf"
-install = "mkdir -p /root/.cache/dnf && printf '\\nkeepcache=True\\nsystem_cachedir=/root/.cache/dnf\\ncachedir=/root/.cache/dnf\\n' >> /etc/dnf/dnf.conf"
+name = "apt-keepcache"
+check = "grep -qs 'fy-keepcache' /etc/apt/apt.conf.d/90fy-keepcache"
+install = "mkdir -p /root/.cache/apt/archives/partial && rm -f /etc/apt/apt.conf.d/docker-clean && printf '// fy-keepcache\\nDir::Cache::Archives \"/root/.cache/apt/archives\";\\nAPT::Keep-Downloaded-Packages \"true\";\\n' > /etc/apt/apt.conf.d/90fy-keepcache && apt-get update"
 
 # `just` is this project's documented entry point: CLAUDE.md and CONTRIBUTING.md route every
 # workflow through it (`just ci` before pushing, `just test`, `just docs-build`), so without
-# it the box can't follow its own instructions — and the recipes below name it too. Fedora
-# packages it in `updates` (1.57.0 on F44), so this is a plain dnf install: no COPR, no cargo
-# build, no prebuilt binary fetched past the proxy. It pulls fzf in as a dependency (just's
-# `--choose`); the check names only what we asked for.
+# it the box can't follow its own instructions — and the recipes below name it too. Debian
+# trixie packages it, so this is a plain apt install: no cargo build, no prebuilt binary
+# fetched past the proxy.
 [[box.tools]]
 name = "just"
-check = "rpm -q just"
-install = "dnf install -y just"
+check = "command -v just"
+install = "apt-get install -y --no-install-recommends just"
 
 # Browser tests (`just test-browser`, `uv run pytest -m browser`) need Chromium's shared
-# libraries in the box. `playwright install --with-deps` CANNOT do this here: it only knows
-# apt (Ubuntu/Debian) and the box image is Fedora, so the system libs are an explicit dnf
-# step. The list below is the empirically-verified minimum for headless Chromium on
-# fedora-toolbox aarch64 — libatomic is a separate line because the headless_shell binary
-# needs it and it isn't pulled in by any of the others.
+# libraries in the box. On Debian, `playwright install-deps` is the supported path: playwright
+# itself owns the apt list for the browser build the lockfile pins, so a Chromium bump can't
+# silently outgrow a hand-maintained library list. The check names a few marker
+# libraries so a warm box skips the apt round-trip.
 [[box.tools]]
 name = "chromium-system-libs"
-check = "rpm -q nss atk at-spi2-atk libXcomposite libXrandr mesa-libgbm libatomic"
-install = "dnf install -y libX11 libXcomposite libXdamage libXext libXfixes libXrandr alsa-lib atk at-spi2-atk at-spi2-core dbus-libs mesa-libgbm nspr nss nss-util libxcb cups-libs pango cairo libdrm libatomic"
+check = "dpkg -s libnspr4 libnss3 libgbm1 libatomic1 > /dev/null 2>&1"
+install = "uv run --frozen playwright install-deps chromium"
 
 # Browser binaries, from the version of playwright uv.lock pins (NOT a floating `uvx
 # playwright` — the browser build number is tied to the library version). `--frozen` keeps
 # uv from rewriting the lockfile on the host bind mount, and the sync it does here doubles
 # as the venv warm-up. `check = "false"` means always run: `playwright install` is idempotent
 # and cheap once the cache volume above is warm, and re-running is what picks up a new
-# browser build when the playwright pin moves. It prints "your OS is not officially
-# supported … downloading fallback build for ubuntu20.04" on Fedora — expected, and that
-# fallback build is the one the suite passes on.
+# browser build when the playwright pin moves.
 [[box.tools]]
 name = "playwright-chromium"
 check = "false"
