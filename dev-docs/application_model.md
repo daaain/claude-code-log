@@ -142,6 +142,13 @@ at `~/.claude/projects/claude-code-log-cache.db` (or
 - Per-rendered-HTML: the HTML output itself, indexed by source file
   mtime + depth + compact flag (migrations 002–004) — so
   re-runs with unchanged inputs serve the cached HTML directly.
+- Cross-session sidecar (migration 008): compact projections of a full
+  load's `SessionTree` — per-session parent linkage, junction points,
+  and cross-session dedup winners — persisted so the session-scoped
+  incremental path (§ 2.12) can regenerate one stale session without
+  loading the project. Rewritten wholesale on every full directory
+  load, inside the same batch as the per-file writes, so it is exactly
+  as fresh as `cached_files`.
 
 Invalidation is mtime-based: when a JSONL's mtime is newer than its
 cache row, the session is reparsed. The schema-version row also
@@ -200,6 +207,11 @@ Current migrations:
   per-page HTML chunks for `--page-size`.
 - `005_session_team_name.sql` — adds `team_name` to sessions for the
   teammates feature (PR #125).
+- `006_session_ai_title.sql` / `007_subagents_fingerprint.sql` —
+  `ai_title` on sessions; subagent-sidecar fingerprint on cached files.
+- `008_session_sidecar.sql` — cross-session sidecar tables
+  (`session_parents`, `junction_uuids`, `dedup_winners`,
+  `sidecar_state`) for session-scoped incremental rendering (§ 2.12).
 
 Recreating-tables migrations toggle `PRAGMA foreign_keys = OFF/ON`
 around the rebuild to avoid losing rows to cascade-deletes during the
@@ -673,6 +685,67 @@ Windows lacks `SIGUSR1`, the install is a silent no-op there. Unlike
 is already wired to dump itself on demand. Added by PR #135 to make
 the DAG cyclic-children class of bug diagnosable in the field; useful
 for any future hang.
+
+### 2.12 Session-scoped incremental rendering
+
+Converting a project used to load its entire transcript even when the
+cache was fresh and a single session file needed regenerating — the
+master list, DAG and trees exist before any staleness is consulted.
+The session-scoped path (streaming stage 2 of
+[`work/render-format-once.md`](../work/render-format-once.md)) removes
+that: when the Phase-1b gate in `convert_jsonl_to` finds the cache
+fresh, the combined output current, and only session files stale,
+`converter._load_stale_session_transcripts` loads *only the files
+holding those sessions' entries* and renders them through the ordinary
+`_generate_individual_session_files`, byte-identical to the full path.
+
+Three pieces make the partial load faithful:
+
+- **The cross-session sidecar** (migration 008, `cache.SessionSidecar`)
+  is persisted by every full unfiltered directory load, in the same
+  batch as the per-file cache writes: per-session parent linkage
+  (resume/fork attachment points), junction points with their ordered
+  target lists, and the dedup winner for every uuid carried by more
+  than one session (resume replay prefixes). All three are compact
+  projections of the `SessionTree` the load already built. A partial
+  load enforces the winner map up front (losing copies drop before the
+  DAG sees them), patches parent/junction facts whose other end isn't
+  loaded, and adds empty ancestor stub lines so depth chains resolve.
+- **Discovery by the cache's file map**, not by filename stem
+  (`CacheManager.get_session_file_map`): real archives contain files
+  whose entries span two sessions (a continuation written into the
+  previous session's file) and sessions with no file of their own.
+  Co-resident fresh sessions load along with a stale one and are
+  skipped by the per-session staleness check. An archived stale
+  session (cached rows, source deleted) is skipped outright — the
+  full path loads everything and still renders nothing for it.
+- **A pagination-aware combined-freshness check**
+  (`_combined_output_is_stale`): the gate used to ask
+  `is_transcript_stale("combined_transcripts.html")`, a name a
+  paginated project has no cache row for — so paginated projects never
+  early-exited and full-loaded on every direct conversion. The helper
+  replays the pagination pass's plan from cached session data alone
+  (same session→page assignment, same `is_page_stale` per page, same
+  invalidation triggers). This also makes the plain
+  "everything is current" early exit fire for paginated projects.
+
+Equivalence is held to byte-identity by
+`test/test_session_scoped_render.py` — real fixture projects with the
+full loader monkeypatched to raise, plus a synthetic project pinning
+resume-replay dedup, cross-session fork parents, junctions and
+ancestor chains — and by hash runs over real archives (85 and 187
+output files byte-identical on the two measured projects, with 64 and
+129 session files regenerated through the partial path; sidecars of
+300–742 dedup winners in play). Measured on the 8-core VM against the
+803MB reference archive, warm cache: one stale session file went
+4.6s → 0.6s (7.9x), and a fully-fresh direct conversion 4.6s → 0.4s
+(the early exit finally firing for a paginated project).
+
+`CLAUDE_CODE_LOG_SESSION_SCOPED=0` disables the path for bisecting.
+Every decline (no sidecar yet, date filters, `--no-cache`, an
+inconsistent file map) falls back to the full load, whose behaviour is
+unchanged — the sidecar is an optimization input, never a correctness
+requirement.
 
 ---
 

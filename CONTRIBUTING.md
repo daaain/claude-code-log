@@ -293,6 +293,14 @@ swapping. See
 [dev-docs/application_model.md § 2.10](dev-docs/application_model.md) for
 the measurements.
 
+Orthogonal to both, a conversion whose cache is fresh and whose combined
+output is current regenerates stale *session files* from those sessions'
+own JSONL plus a persisted cross-session sidecar, instead of loading the
+whole project (session-scoped incremental rendering — see
+[dev-docs/application_model.md § 2.12](dev-docs/application_model.md)).
+Set `CLAUDE_CODE_LOG_SESSION_SCOPED=0` to force the full-load path when
+bisecting a rendering difference.
+
 To re-measure both on your own hardware (core count changes the answer for
 the fan-out), point the benchmark at a real project:
 

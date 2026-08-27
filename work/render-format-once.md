@@ -183,6 +183,67 @@ pool's own (far higher) memory bar has already declined, so the
 store-less conversion is always serial. Unit-pinned in
 `test_render_cache.py::TestFragmentStoreMemoryValve`.
 
+**Phase 8 progress (streaming stages 1–2 — session-scoped
+incremental, 2026-08-27, stacked branch `perf/streaming-conversion`):**
+the first two stages of the streaming plan below are implemented. A
+full unfiltered directory load now persists the cross-session sidecar
+(migration 008: per-session parent linkage, junction points with
+ordered targets, dedup winners for cross-session-duplicated uuids —
+compact projections of the tree it already built, written in the same
+batch as the per-file cache writes so they're exactly as fresh as
+`cached_files`). When the Phase-1b gate finds the cache fresh, the
+combined output current, and only session files stale,
+`_load_stale_session_transcripts` loads only the files holding those
+sessions' entries, enforces the sidecar's winner map up front, patches
+parent/junction facts from the sidecar (ancestor chains as empty stub
+lines), and renders through the unchanged
+`_generate_individual_session_files`. `CLAUDE_CODE_LOG_SESSION_SCOPED=0`
+is the bisecting knob; every decline falls back to the full load.
+Byte-identical on the two coupling-heavy real archives (the 296MB
+document-processing project: 85 output files, 64 sessions regenerated
+partially, 742-winner sidecar; the 803MB reference archive: 187 files,
+129 regenerated, 117 of them resume/fork-coupled), plus fixture and
+synthetic pins in `test_session_scoped_render.py` with the full loader
+monkeypatched to *raise*. Measured on the 8-core VM, warm cache: one
+stale session on the 803MB project **4.6s → 0.6s (7.9x)**; a
+fully-fresh direct conversion **→ 0.4s** (see next paragraph for why
+that wasn't already fast).
+
+Three things the implementation surfaced, for the record:
+
+1. **sessionId → file is NOT 1:1** (an assumption the design survey
+   carried, e.g. "one trunk file per session, named
+   `<session-id>.jsonl`"): real archives contain files whose entries
+   span two sessions — a continuation written into the previous
+   session's file — and sessions with no file of their own (the
+   fixture archive has one; document-processing has more). Discovery
+   therefore goes through the cache's messages table
+   (`CacheManager.get_session_file_map`), never by filename stem.
+   Latent pre-existing quirk this exposes: `_plan_project`'s
+   `valid_session_ids = {f.stem}` treats such sessions as archived,
+   so their staleness never marks the project needing work at the
+   plan level.
+2. **Paginated projects never hit the Phase-1b early exit at all** —
+   the gate asked `is_transcript_stale("combined_transcripts.html")`,
+   a name paginated projects have no cache row for, so every direct
+   conversion of a paginated project full-loaded even when everything
+   was current. `_combined_output_is_stale` now replays the
+   pagination pass's plan cache-only (same assignment from cached
+   session data, same `is_page_stale` + invalidation triggers), which
+   both enables the session-scoped path and makes the plain early
+   exit fire for paginated projects (the 0.4s above; it was ~4.6s).
+3. **Archived-stale sessions used to pin projects to the slow path
+   forever**: a session with cached rows but deleted source and a
+   missing rendered file blocked the early exit on every run, and the
+   full load it forced rendered nothing for it. The partial path
+   skips them with identical outcome and no load.
+
+Remaining from the staged plan: stage 3 (page-granular streaming for
+full rebuilds — the actual peak-memory fix) and stage 4 (threshold
+re-size once the floor moves). The stage-2 machinery (sidecar,
+file-map discovery, faithful partial DAG build) is exactly what stage
+3 drives from the page plan.
+
 **Streaming-conversion design analysis (2026-08-27, so nobody
 re-derives it):** a code-level survey of every full-residency
 assumption behind the § "Still open" streaming item. The load-bearing
@@ -289,17 +350,20 @@ each small enough for a sidecar unless noted):
 *Staged path* (each stage byte-equivalence-tested at page
 granularity):
 
-1. Keep `_plan_project`'s stale-session list; add the SQL-derived
-   dedup-winner sidecar.
-2. **Session-scoped incremental** — when only session files are stale
-   and no page is, load only those sessions' trunk files (+ subagent
-   trees, which `load_transcript` already scopes per trunk) plus
-   sidecars. This alone removes the everyday "1 stale session loads
-   803MB" case at a fraction of the full feature's risk.
+1. ~~Keep `_plan_project`'s stale-session list; add the dedup-winner
+   sidecar.~~ **Landed in phase 8** — the sidecar is persisted from
+   the built tree at full-load time (cheaper and safer than the SQL
+   derivation this doc proposed: winners read off `tree.nodes`, so
+   the tie-break semantics are the full run's by construction).
+2. ~~**Session-scoped incremental**.~~ **Landed in phase 8** — see
+   the progress block above, including the discoveries that changed
+   the design (file-map discovery instead of stems; winner map
+   enforced for all duplicated uuids rather than only external ones).
 3. **Page-granular streaming for full rebuilds** — plan pages from
    cache, then load/render/drop one page's sessions at a time
    (rendering that page and its sessions' files together), with the
-   fragment-store re-key from hard part 4.
+   fragment-store re-key from hard part 4. The stage-2 machinery is
+   what this drives from the page plan.
 4. Only then revisit the § 7.5-style thresholds again — with the
    floor gone, `memory_capped_workers`' parent charge (4.5x) stops
    being the binding constraint on small machines.
@@ -362,19 +426,18 @@ or build a `SessionTree`. Per feature:
 
 - **The flat pool** (above — residual ~1.1-1.3x on measured archives,
   token-governed nested pools the most implementable shape).
-- **Streaming conversion — the actual fix for peak memory.** Named
-  here so it stops hiding behind the spill: converting a project has
-  *always* loaded its entire transcript (master entry list + DAG +
-  trees), so peak RAM is bounded below by the largest single project
-  regardless of every knob — measured 1252MB store-less serial on the
-  803MB project (~1.56x bytes on disk), ~1.9x with the store. A
-  machine under ~2x its largest project cannot convert it, and no
-  optimisation on this branch moves that floor; the valve above only
-  stops the store from lowering the cliff's edge. The fix is a
-  metadata-planned streaming pass — see the design analysis above
-  for the full survey, sidecar inventory, and staged path. Big
-  feature; nothing else on this list delivers the "no archive too
-  big for the machine" property.
+- **Streaming conversion — the actual fix for peak memory.** Stages
+  1–2 (sidecar + session-scoped incremental) landed in phase 8 on
+  `perf/streaming-conversion`; what remains is stage 3, the part that
+  moves the floor: converting a *stale-combined* project still loads
+  its entire transcript (master entry list + DAG + trees), so peak
+  RAM stays bounded below by the largest single project — measured
+  1252MB store-less serial on the 803MB project (~1.56x bytes on
+  disk), ~1.9x with the store. A machine under ~2x its largest
+  project cannot convert it. The fix is the page-granular streaming
+  pass — see the design analysis above for the survey, sidecar
+  inventory, and staged path. Nothing else on this list delivers the
+  "no archive too big for the machine" property.
 - **Provider wiring** — the fragment store for codex wholesale is the
   cheap win; the pool needs the per-group SessionTree first (see the
   provider coverage check above).
