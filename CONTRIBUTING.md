@@ -301,6 +301,18 @@ whole project (session-scoped incremental rendering — see
 Set `CLAUDE_CODE_LOG_SESSION_SCOPED=0` to force the full-load path when
 bisecting a rendering difference.
 
+When the combined output *is* stale, a paginated project on a
+memory-tight machine (available memory under ~2.4x the project's
+transcript bytes — the same knee where the fragment store declines)
+converts page-by-page instead: pages are planned from cached session
+data, and each page's sessions are loaded, rendered (page + stale
+session files, with a per-page fragment store) and dropped in turn, so
+peak residency is one page rather than the project — no archive is too
+big for the machine's RAM at render time. `CLAUDE_CODE_LOG_STREAMING=1`
+forces the streaming path (any machine), `=0` disables it for
+bisecting. See
+[dev-docs/application_model.md § 2.13](dev-docs/application_model.md).
+
 To re-measure both on your own hardware (core count changes the answer for
 the fan-out), point the benchmark at a real project:
 

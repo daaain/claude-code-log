@@ -244,6 +244,89 @@ re-size once the floor moves). The stage-2 machinery (sidecar,
 file-map discovery, faithful partial DAG build) is exactly what stage
 3 drives from the page plan.
 
+**Phase 9 progress (streaming stage 3 — page-granular streaming,
+2026-08-28, same stacked branch):** stage 3 is implemented as a
+render-side streaming pass. `_stream_paginated_conversion` plans the
+session→page assignment purely from cached session data (via a shared
+`_plan_page` helper factored out of `_generate_paginated_html`, so the
+two plans cannot drift), then for each page needing work — stale page,
+or stale session files on it — loads only the files holding that
+page's sessions through the stage-2 partial-load machinery
+(`_resolve_session_source_files` + `_load_sessions_partial`, factored
+out of `_load_stale_session_transcripts`), renders the page and its
+stale session files together against a per-page fragment store, and
+drops it all before the next page. Peak residency becomes one page's
+files, not the project. Gating: structurally, paginated HTML directory
+conversions with no date filter / force / `--combined no`; then a
+memory valve — auto mode streams only when available memory is under
+2.4x the project's transcript bytes, deliberately the same knee as the
+fragment-store valve, so the ladder is continuous (roomy → full load +
+fan-out + store; tight → streaming, exactly where the fan-out and
+store already declined; streaming is inline/serial for that reason).
+`CLAUDE_CODE_LOG_STREAMING=1` forces it, `=0` kills it.
+`ensure_fresh_cache` now persists the sidecar too, so a run whose
+cache was just refreshed streams instead of loading the project a
+second time. Every decline (missing sidecar, incomplete file set for
+any page session — strict resolution, unlike stage 2's archived-skip)
+falls through to the unchanged full path.
+
+Two traps found while landing it, both now pinned:
+
+1. **The sidecar recorded branch-qualified dedup winners** — a
+   *stage-2 bug the streaming hash runs caught*: `tree.nodes[uuid]
+   .session_id` is rewritten to `{trunk}@{uuid12}` by branch
+   splitting, and a branch-qualified winner matches no raw
+   `entry.sessionId`, so the partial load's enforcement dropped
+   *every* copy of such uuids — silently deleting a whole branch
+   from `session-40f8af00…` on the reference archive (and from its
+   combined page under streaming). Fixed at persist time (record the
+   surviving entry's raw sessionId) plus a load-side normalization so
+   sidecars written by the buggy code still enforce correctly.
+   Pinned in `test_session_scoped_render.py::TestBranchWinnerMechanics`
+   (branch replayed by a resume; winner sits on the branch line).
+   The phase-8 hash-run claim stands for what it measured, but its
+   stale sets evidently never included a branch-winner session —
+   assume nothing about partial-load coverage that a hash run didn't
+   regenerate through the partial path.
+2. **A page load can carry a partially-loaded co-resident session
+   from another page** (a file spanning two sessions — discovery 1 of
+   phase 8): rendering it would truncate that session's file *and*
+   mark its cache row current with the full count, freezing the
+   truncation. The per-page session pass is therefore restricted to
+   the page's own stale sessions
+   (`_generate_individual_session_files(restrict_to_sessions=...)`);
+   the mutation reproduces the truncation and the pin is
+   `test_streaming_render.py::TestFileSpanningSessions`.
+
+Verification at the branch's bar: `test/test_streaming_render.py`
+(14 tests — real fixture with the full loader monkeypatched to raise,
+fully-streamed virgin conversion, page-size change, new-session-after-
+cache-refresh, memory-valve gating, cross-page fork/resume synthetics,
+the spanning-file trap) plus hash runs over both coupling-heavy real
+archives (hashrun harness in the session scratchpad): warm parity,
+full rebuild, and incremental scenarios all byte-identical — 85 files
+on the 296MB document-processing project, 187 on the 803MB reference
+archive. Measured on the 8-core/16GB VM (serial, warm cache), peak
+RSS / wall, full path → streamed: 296MB project full rebuild
+454MB / 9.0s → 305MB / 8.5s; 803MB project full rebuild
+1490MB / 28.2s → **591MB / 25.2s**, incremental (1 page + 5 sessions)
+1092MB / 7.6s → 587MB / 4.6s — the streamed pass is *both* smaller
+and faster than the serial full path, because per-page cache loads
+replace the one giant master-list materialization. The ~590MB is
+dominated by the largest single page's co-resident files plus
+interpreter baseline; the floor now scales with page size, not
+archive size.
+
+Remaining: stage 4 — the cache refresh itself (`ensure_fresh_cache`)
+still full-loads when source files changed, so the *first* conversion
+after new sessions still pays full residency once; making the cache
+build per-file (with the order-dependent requestId dedup and
+incremental sidecar maintenance that entails) is the last piece of
+"no archive too big for the machine", along with the § 7.5-style
+threshold revisit once that floor moves. `scripts/bench_render.py`
+does not yet sweep the streaming knob — worth adding when stage 4
+lands.
+
 **Streaming-conversion design analysis (2026-08-27, so nobody
 re-derives it):** a code-level survey of every full-residency
 assumption behind the § "Still open" streaming item. The load-bearing
@@ -359,14 +442,19 @@ granularity):
    the progress block above, including the discoveries that changed
    the design (file-map discovery instead of stems; winner map
    enforced for all duplicated uuids rather than only external ones).
-3. **Page-granular streaming for full rebuilds** — plan pages from
-   cache, then load/render/drop one page's sessions at a time
-   (rendering that page and its sessions' files together), with the
-   fragment-store re-key from hard part 4. The stage-2 machinery is
-   what this drives from the page plan.
+3. ~~**Page-granular streaming for full rebuilds**.~~ **Landed in
+   phase 9** — see the progress block above. The fragment-store
+   re-key from hard part 4 turned out unnecessary for the serial
+   streaming shape: one store per page, dying with the page, keeps
+   `id(entry)`-to-ordinal keys consistent within the only scope that
+   shares them (the page render and that page's session files use the
+   same loaded objects). The re-key becomes relevant only if pages
+   ever fan out across processes.
 4. Only then revisit the § 7.5-style thresholds again — with the
    floor gone, `memory_capped_workers`' parent charge (4.5x) stops
-   being the binding constraint on small machines.
+   being the binding constraint on small machines. Still open: the
+   remaining floor is `ensure_fresh_cache`'s full load on changed
+   sources (stage 4 in the phase-9 block).
 
 This is a restructuring of `load_directory_transcripts` +
 `convert_jsonl_to`'s spine — comparable invasiveness to the fed-worker
@@ -427,17 +515,15 @@ or build a `SessionTree`. Per feature:
 - **The flat pool** (above — residual ~1.1-1.3x on measured archives,
   token-governed nested pools the most implementable shape).
 - **Streaming conversion — the actual fix for peak memory.** Stages
-  1–2 (sidecar + session-scoped incremental) landed in phase 8 on
-  `perf/streaming-conversion`; what remains is stage 3, the part that
-  moves the floor: converting a *stale-combined* project still loads
-  its entire transcript (master entry list + DAG + trees), so peak
-  RAM stays bounded below by the largest single project — measured
-  1252MB store-less serial on the 803MB project (~1.56x bytes on
-  disk), ~1.9x with the store. A machine under ~2x its largest
-  project cannot convert it. The fix is the page-granular streaming
-  pass — see the design analysis above for the survey, sidecar
-  inventory, and staged path. Nothing else on this list delivers the
-  "no archive too big for the machine" property.
+  1–3 landed (phases 8–9 on `perf/streaming-conversion`): a
+  stale-combined paginated project on a memory-tight machine now
+  converts page-by-page (803MB project: 1490MB → 591MB peak RSS,
+  slightly *faster* than the serial full path). What remains is
+  stage 4: `ensure_fresh_cache` still full-loads when sources
+  changed, so the first conversion after new sessions pays full
+  residency once — the per-file cache build (order-dependent
+  requestId dedup, incremental sidecar maintenance) is the last
+  piece of "no archive too big for the machine".
 - **Provider wiring** — the fragment store for codex wholesale is the
   cheap win; the pool needs the per-group SessionTree first (see the
   provider coverage check above).

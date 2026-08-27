@@ -747,6 +747,77 @@ inconsistent file map) falls back to the full load, whose behaviour is
 unchanged — the sidecar is an optimization input, never a correctness
 requirement.
 
+### 2.13 Page-granular streaming conversion
+
+The session-scoped path (§ 2.12) still full-loads whenever the
+*combined* output is stale, so peak RAM stayed bounded below by the
+largest single project — a machine under ~2x its largest project could
+not convert it at all. The streaming path (stage 3 of
+[`work/render-format-once.md`](../work/render-format-once.md)) removes
+that floor for paginated HTML conversions:
+`converter._stream_paginated_conversion` plans the session→page
+assignment purely from cached session data (the same
+`_assign_sessions_to_pages` call, via the shared `_plan_page` helper,
+so the plans cannot drift), then for each page needing work — a stale
+page, or stale session files on it — loads *only the files holding
+that page's sessions* through the § 2.12 partial-load machinery,
+renders the page and its stale session files together against a
+per-page fragment store, and drops it all before the next page. Peak
+residency becomes max(one page's source files), not the project.
+
+When it runs:
+
+- **Structurally**: HTML directory conversions with a fresh-able cache,
+  no date filters, no `--force`-style regeneration, combined output
+  enabled, and pagination in play per the cached counts. The sidecar
+  must exist; since `ensure_fresh_cache` now persists it too (same
+  batch as the per-file cache writes), a run whose cache was just
+  refreshed can stream instead of loading the project a second time.
+- **By a memory valve**: in auto mode the path engages only when
+  available memory is under 2.4x the project's transcript bytes —
+  deliberately the same knee as the fragment-store valve (§ 2.9), so
+  the degradation ladder is continuous: plenty of RAM → full load,
+  fan-out, whole-conversion store; below ~2.4x → the store had already
+  declined, and streaming takes over the serial conversion; the
+  fan-out's own (far higher) memory bar has long since declined by
+  then, which is why streaming renders inline without losing anything.
+  `CLAUDE_CODE_LOG_STREAMING=1` forces the path wherever structurally
+  eligible; `=0` disables it (the bisecting knob).
+
+Two details are load-bearing for correctness:
+
+- **Strict file resolution**: a page load requires every one of its
+  sessions to resolve to a complete, present source-file set
+  (`_resolve_session_source_files(strict=True)`); any gap declines the
+  whole pass to the full load rather than rendering a page with a
+  session's remnant.
+- **The co-resident-session restriction**: a source file can span two
+  sessions that sit on *different* pages, so one page's load can carry
+  a partially-loaded session from another page. The per-page session
+  pass is therefore restricted to that page's own stale sessions
+  (`_generate_individual_session_files(restrict_to_sessions=...)`) —
+  without it, the partial session renders truncated and its cache row
+  then reads current forever (pinned by mutation test in
+  `test/test_streaming_render.py::TestFileSpanningSessions`).
+
+Byte-identity is held by `test/test_streaming_render.py` (a real
+fixture with the full loader monkeypatched to raise, a synthetic
+project whose resume/fork couplings span the page split, and the
+file-spanning trap above) and by hash runs over the two coupling-heavy
+real archives — every scenario (warm parity, full rebuild,
+incremental) byte-identical on both. Measured on the 8-core/16GB VM,
+serial, warm cache (full path → streamed): 296MB project full rebuild
+454MB → 305MB peak RSS; 803MB project full rebuild 1490MB → 591MB at
+slightly lower wall (28.2s → 25.2s), incremental 1092MB → 587MB at
+7.6s → 4.6s. The remaining ~590MB is the largest page's co-resident
+files plus interpreter baseline — the floor scales with page size,
+not archive size.
+
+Declines fall through to the full load unchanged. The remaining
+full-residency path is the cache refresh itself (`ensure_fresh_cache`
+still loads the whole project when source files changed) — that is
+streaming stage 4 territory, tracked in the work doc.
+
 ---
 
 ## 3. Data lifecycle
