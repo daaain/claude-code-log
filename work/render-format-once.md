@@ -337,7 +337,7 @@ roomy machine.
 Measured on the 8-core/16GB VM against a 137MB/26-page/50k-message
 archive (a real 40MB project cloned 4x with bijectively-rotated UUIDs
 and suffixed requestIds so dedup can't collapse the copies —
-`make_big_project.py` in the session scratchpad), warm cache,
+`scripts/clone_project_nx.py`), warm cache,
 `scripts/bench_render.py` now sweeping the streaming knob with a
 peak-RSS column:
 
