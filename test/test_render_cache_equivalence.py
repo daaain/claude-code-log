@@ -119,8 +119,8 @@ def test_fragment_store_render_is_byte_identical(tmp_path: Path, monkeypatch):
     stores: list[RenderFragmentStore] = []
     original_make = converter._make_fragment_store
 
-    def capturing_make(format_: str):
-        store = original_make(format_)
+    def capturing_make(format_: str, **kwargs: int):
+        store = original_make(format_, **kwargs)
         if store is not None:
             stores.append(store)
         return store
@@ -153,7 +153,7 @@ def test_parallel_render_is_byte_identical_to_serial(tmp_path: Path, monkeypatch
     # path against itself — or fail its dispatch assertion — depending on
     # what else happened to be resident.
     monkeypatch.setattr(
-        render_pool_module, "_available_memory_bytes", lambda: 64 * 1024**3
+        render_pool_module, "available_memory_bytes", lambda: 64 * 1024**3
     )
 
     # Count what the pool actually accepted. Every path in the fan-out
@@ -177,8 +177,8 @@ def test_parallel_render_is_byte_identical_to_serial(tmp_path: Path, monkeypatch
     stores = []
     original_make = converter._make_fragment_store
 
-    def capturing_make(format_: str):
-        store = original_make(format_)
+    def capturing_make(format_: str, **kwargs: int):
+        store = original_make(format_, **kwargs)
         if store is not None:
             stores.append(store)
         return store

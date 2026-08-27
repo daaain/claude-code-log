@@ -62,7 +62,7 @@ from typing import Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from claude_code_log.render_pool import (  # noqa: E402
-    _available_memory_bytes,
+    available_memory_bytes,
     memory_capped_workers,
 )
 
@@ -471,7 +471,7 @@ def main() -> None:
         # Each worker holds a whole transcript, so this is often the real
         # limit rather than core count.
         largest = max(_transcript_bytes(p) for p in sources)
-        available = _available_memory_bytes()
+        available = available_memory_bytes()
         available_note = (
             f"{available / 1e9:.1f}GB reclaimable"
             if available

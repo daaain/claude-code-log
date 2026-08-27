@@ -2251,8 +2251,18 @@ def convert_jsonl_to(
     # the per-session files, so each entry-derived message is formatted
     # once rather than once per output file that contains it (step 3,
     # work/render-format-once.md). Scoped to this call: it dies with the
-    # conversion, so nothing about it needs invalidating.
-    fragment_store = _make_fragment_store(format)
+    # conversion, so nothing about it needs invalidating. The byte count
+    # feeds the store's memory valve (same source-size measure as
+    # _make_render_pool's cap: top-level JSONL, agent files excluded).
+    if input_path.is_dir():
+        source_bytes = sum(
+            f.stat().st_size
+            for f in input_path.glob("*.jsonl")
+            if not f.name.startswith("agent-")
+        )
+    else:
+        source_bytes = input_path.stat().st_size
+    fragment_store = _make_fragment_store(format, transcript_bytes=source_bytes)
     if fragment_store is not None:
         # Store keys are per-entry ordinals in this master list — stable
         # across the differently-filtered subsets each render tree gets,
@@ -2688,22 +2698,54 @@ _MIN_UNITS_FOR_RENDER_POOL = 8
 # The loss below the line shrank with the feed (workers no longer reload
 # the transcript) but did not flip sign — spawn + import + cold memo
 # caches still outweigh a few seconds of render work.
-def _make_fragment_store(format: str) -> "Optional[RenderFragmentStore]":
+# Memory valve for the fragment store: keep it only when available memory
+# comfortably covers a store-carrying conversion. Measured serial peaks on
+# the largest real project (803MB of transcripts): 1252MB with the store
+# off (~1.56x bytes on disk), 1521MB with it on (~1.9x — the +269MB is the
+# fragment text plus per-entry overhead, work/render-format-once.md § 4.9).
+# 2.4x is that store-on peak plus a ~25% margin, so on a machine inside
+# the margin the conversion quietly runs store-less — the pre-store
+# footprint — instead of trading its last RAM for CPU. Whenever this valve
+# trips, the render pool's own memory cap (a far higher bar, ~10x bytes)
+# has already declined, so a store-less conversion is always a serial one
+# and no worker-side coordination is needed.
+_FRAGMENT_STORE_MIN_AVAILABLE_PER_BYTE = 2.4
+
+
+def _make_fragment_store(
+    format: str, transcript_bytes: int = 0
+) -> "Optional[RenderFragmentStore]":
     """Create the per-conversion fragment store, or None when it can't help.
 
     HTML only — the fragment triple it caches is exactly what
     ``HtmlRenderer._annotate_tree_for_render`` computes, and no other
-    renderer consults it. Referenced-image renders are excluded at the
-    consumer (the annotate walk), not here, because the effective image
-    mode lives on the renderer. ``CLAUDE_CODE_LOG_FRAGMENT_STORE=0``
-    disables it for bisecting rendering differences.
+    renderer consults it. ``CLAUDE_CODE_LOG_FRAGMENT_STORE=0`` disables it
+    for bisecting rendering differences; an explicit ``=1`` forces it past
+    the memory valve below, which otherwise skips the store when available
+    memory is under ``_FRAGMENT_STORE_MIN_AVAILABLE_PER_BYTE`` times the
+    project's transcript bytes (the store is a RAM-for-CPU trade, and on a
+    machine that tight the RAM matters more). ``transcript_bytes`` of 0
+    (unknown) skips the valve, as does an unreadable memory probe.
     """
     if format != "html":
         return None
-    from .fragment_store import RenderFragmentStore, fragment_store_enabled
+    from .fragment_store import (
+        RenderFragmentStore,
+        fragment_store_enabled,
+        fragment_store_forced,
+    )
 
     if not fragment_store_enabled():
         return None
+    if transcript_bytes > 0 and not fragment_store_forced():
+        from .render_pool import available_memory_bytes
+
+        available = available_memory_bytes()
+        if (
+            available is not None
+            and available < transcript_bytes * _FRAGMENT_STORE_MIN_AVAILABLE_PER_BYTE
+        ):
+            return None
     return RenderFragmentStore()
 
 

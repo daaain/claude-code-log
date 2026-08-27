@@ -73,6 +73,7 @@ __all__ = [
     "RENDER_JOBS_ENV",
     "RenderPool",
     "RenderUnit",
+    "available_memory_bytes",
     "memory_capped_workers",
     "resolve_render_jobs",
 ]
@@ -324,7 +325,7 @@ def _windows_available_bytes() -> Optional[int]:
         return None
 
 
-def _available_memory_bytes() -> Optional[int]:
+def available_memory_bytes() -> Optional[int]:
     """Best-effort read of memory we may actually use, or None if unknown.
 
     Checks the cgroup limit first: inside a container the host's totals are
@@ -416,7 +417,7 @@ def memory_capped_workers(
     worker_cost = (
         int(transcript_bytes * _WORKER_RSS_PER_TRANSCRIPT_BYTE) + _WORKER_BASE_BYTES
     )
-    available = _available_memory_bytes()
+    available = available_memory_bytes()
     if available is None:
         return min(requested, 2)
 

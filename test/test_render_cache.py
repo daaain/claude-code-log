@@ -238,7 +238,7 @@ class TestRenderPoolCreation:
         # tested, not about how much RAM the machine running them has.
         if monkeypatch is not None:
             monkeypatch.setattr(
-                render_pool_module, "_available_memory_bytes", lambda: 64 * 1024**3
+                render_pool_module, "available_memory_bytes", lambda: 64 * 1024**3
             )
         project = tmp_path / "project"
         project.mkdir(exist_ok=True)
@@ -285,7 +285,7 @@ class TestRenderPoolCreation:
         """
         monkeypatch.setenv(RENDER_JOBS_ENV, "4")
         monkeypatch.setattr(
-            render_pool_module, "_available_memory_bytes", lambda: 256 * 1024**2
+            render_pool_module, "available_memory_bytes", lambda: 256 * 1024**2
         )
         assert self._make(tmp_path) is None
 
@@ -410,7 +410,7 @@ class TestMemoryCap:
     @staticmethod
     def _with_memory(monkeypatch, available_bytes):
         monkeypatch.setattr(
-            render_pool_module, "_available_memory_bytes", lambda: available_bytes
+            render_pool_module, "available_memory_bytes", lambda: available_bytes
         )
 
     def test_plentiful_memory_grants_the_request(self, monkeypatch):
@@ -476,7 +476,7 @@ class TestHoldbackPlans:
         # memory cap for the lone conversion, and these assertions are
         # about the comparison, not the running machine's RAM.
         monkeypatch.setattr(
-            render_pool_module, "_available_memory_bytes", lambda: memory
+            render_pool_module, "available_memory_bytes", lambda: memory
         )
         return converter._holdback_plans(plans, job_budget=jobs, render_budget=render)
 
@@ -566,6 +566,55 @@ class TestHoldbackPlans:
         assert self._held([*rest, giant], monkeypatch, memory=2 * 1024**3) == []
 
 
+class TestFragmentStoreMemoryValve:
+    """The fragment store is a RAM-for-CPU trade (+~0.35x transcript bytes
+    at peak, measured); on a machine without that RAM to spare the valve
+    declines it and the conversion runs store-less — the pre-store
+    footprint — instead of trading its last memory for CPU."""
+
+    GB = 1024**3
+
+    def _make(self, monkeypatch, available, **kwargs):
+        monkeypatch.delenv("CLAUDE_CODE_LOG_FRAGMENT_STORE", raising=False)
+        monkeypatch.setattr(
+            render_pool_module, "available_memory_bytes", lambda: available
+        )
+        return converter._make_fragment_store("html", **kwargs)
+
+    def test_ample_memory_keeps_the_store(self, monkeypatch):
+        assert (
+            self._make(monkeypatch, 16 * self.GB, transcript_bytes=self.GB) is not None
+        )
+
+    def test_tight_memory_skips_the_store(self, monkeypatch):
+        # 1GB of transcripts wants ~2.4GB available; 2GB is inside the margin.
+        assert self._make(monkeypatch, 2 * self.GB, transcript_bytes=self.GB) is None
+
+    def test_explicit_enable_overrides_the_valve(self, monkeypatch):
+        monkeypatch.setattr(
+            render_pool_module, "available_memory_bytes", lambda: 2 * self.GB
+        )
+        monkeypatch.setenv("CLAUDE_CODE_LOG_FRAGMENT_STORE", "1")
+        assert (
+            converter._make_fragment_store("html", transcript_bytes=self.GB) is not None
+        )
+
+    def test_unknown_memory_keeps_the_store(self, monkeypatch):
+        # An unreadable probe must not cost the optimisation; the render
+        # pool is where unknown memory has to be conservative.
+        assert self._make(monkeypatch, None, transcript_bytes=self.GB) is not None
+
+    def test_unknown_bytes_skip_the_valve(self, monkeypatch):
+        assert self._make(monkeypatch, 2 * self.GB) is not None
+
+    def test_off_switch_still_wins_over_everything(self, monkeypatch):
+        monkeypatch.setattr(
+            render_pool_module, "available_memory_bytes", lambda: 64 * self.GB
+        )
+        monkeypatch.setenv("CLAUDE_CODE_LOG_FRAGMENT_STORE", "0")
+        assert converter._make_fragment_store("html", transcript_bytes=1) is None
+
+
 class TestDarwinMemoryProbe:
     """macOS has neither MemAvailable nor SC_AVPHYS_PAGES.
 
@@ -653,5 +702,5 @@ class TestWindowsMemoryProbe:
             render_pool_module, "_windows_available_bytes", lambda: None
         )
         # Whatever this machine reports, it must be a size or an honest None.
-        result = render_pool_module._available_memory_bytes()
+        result = render_pool_module.available_memory_bytes()
         assert result is None or result > 0

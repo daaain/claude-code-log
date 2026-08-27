@@ -172,15 +172,49 @@ hold. On the measured archives that residual is roughly 1.1-1.3x of
 the full-rebuild scenario. Worth having eventually — (c) is the most
 implementable shape — but it is no longer the dominant term.
 
-**Still open after phase 6:** the flat pool (above — residual ~1.1-1.3x
-on measured archives, token-governed nested pools the most
-implementable shape); the fragment-text spill (§ 4.9 made the store
-spillable, nothing spills yet — 186MB held in RAM on the 803MB
-archive; note that fed session slices re-materialize fragments at
-dispatch time, so a spill that matters must also throttle unit
-submission); and a >8-worker sweep on the 16-core Mac now that the
-per-worker transcript tax is gone (the knee at 8 was measured
-pre-feeding; `auto` may no longer overshoot).
+**Phase 7 progress (fragment-store memory valve, 2026-08-27):**
+`_make_fragment_store` now declines the store when available memory is
+under 2.4x the project's transcript bytes (the measured store-on
+serial peak, 1521MB on the 803MB project, plus margin), so a
+memory-tight machine converts at its pre-store footprint instead of
+trading its last RAM for CPU. `CLAUDE_CODE_LOG_FRAGMENT_STORE=1`
+forces the store past the valve; whenever the valve trips the render
+pool's own (far higher) memory bar has already declined, so the
+store-less conversion is always serial. Unit-pinned in
+`test_render_cache.py::TestFragmentStoreMemoryValve`.
+
+**Still open after phase 7:**
+
+- **The flat pool** (above — residual ~1.1-1.3x on measured archives,
+  token-governed nested pools the most implementable shape).
+- **Streaming conversion — the actual fix for peak memory.** Named
+  here so it stops hiding behind the spill: converting a project has
+  *always* loaded its entire transcript (master entry list + DAG +
+  trees), so peak RAM is bounded below by the largest single project
+  regardless of every knob — measured 1252MB store-less serial on the
+  803MB project (~1.56x bytes on disk), ~1.9x with the store. A
+  machine under ~2x its largest project cannot convert it, and no
+  optimisation on this branch moves that floor; the valve above only
+  stops the store from lowering the cliff's edge. The fix is a
+  metadata-planned streaming pass (the cache DB already holds
+  session-level metadata): plan sessions/pages from cache, then load,
+  render and drop one session or page at a time. Hard parts, from the
+  code as-built: dedup and cross-session tool_use/result pairing
+  assume the whole list is resident, the DAG builds from all entries,
+  combined pages need global session ordering, and fragment-store
+  ordinals are master-list positions. Big feature; nothing else on
+  this list delivers the "no archive too big for the machine"
+  property.
+- **The fragment-text spill** — demoted from headline to footnote by
+  the § 4.9 measurement: it bounds only the store's own +269MB, not
+  the master-list floor above, so it is a ~15-20% peak shave, not a
+  boundedness fix. If implemented, fed session slices re-materialize
+  fragments at dispatch time, so a spill that holds under the fan-out
+  must also throttle unit submission. With the valve landed, this is
+  no longer urgent on any measured machine shape.
+- **A >8-worker sweep on the 16-core Mac** now that the per-worker
+  transcript tax is gone (the knee at 8 was measured pre-feeding;
+  `auto` may no longer overshoot).
 
 This is a handover note. It exists because the two landed optimisations
 each hit a ceiling, and *the same restructuring removes both ceilings*.

@@ -409,6 +409,16 @@ call, created by `_make_fragment_store` (HTML only) and handed to the
 combined-page and session-file loops; it dies with the conversion, so
 nothing about it ever needs invalidating.
 `CLAUDE_CODE_LOG_FRAGMENT_STORE=0` disables it for bisecting.
+Because the store is a RAM-for-CPU trade — measured serial peaks on the
+803MB reference project: 1252MB store-off vs 1521MB store-on, the
++269MB being the fragment text plus per-entry overhead —
+`_make_fragment_store` carries a memory valve: when available memory is
+under `_FRAGMENT_STORE_MIN_AVAILABLE_PER_BYTE` (2.4×, the store-on peak
+plus margin) times the project's transcript bytes, the conversion runs
+store-less at its pre-store footprint instead of trading its last RAM
+for CPU. An explicit `CLAUDE_CODE_LOG_FRAGMENT_STORE=1` overrides the
+valve; whenever the valve trips, the render pool's far higher memory
+bar has already declined, so a store-less conversion is always serial.
 
 A fragment is *not* a pure function of its source entry, and the store
 carries three guards for the three ways the same message legitimately

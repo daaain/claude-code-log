@@ -189,6 +189,19 @@ def fragment_store_enabled() -> bool:
     return value not in ("0", "off", "false")
 
 
+def fragment_store_forced() -> bool:
+    """Whether the environment *explicitly* asks for the store.
+
+    An explicit ``CLAUDE_CODE_LOG_FRAGMENT_STORE=1`` (or ``on``/``true``)
+    overrides the memory valve in ``converter._make_fragment_store`` — the
+    store is a RAM-for-CPU trade the valve declines on tight machines, and
+    this is the knob for someone who wants the trade anyway. Unset means
+    "enabled, but let the valve decide".
+    """
+    value = os.environ.get("CLAUDE_CODE_LOG_FRAGMENT_STORE", "").strip().lower()
+    return value in ("1", "on", "true")
+
+
 class RenderFragmentStore:
     """In-memory fragment store for a single conversion.
 

@@ -266,8 +266,13 @@ budget in MB (default 192).
 Above the leaf memo, a per-conversion fragment store
 (`claude_code_log/fragment_store.py`) reuses each message's complete
 formatted fragment between the combined-page and per-session passes.
-Set `CLAUDE_CODE_LOG_FRAGMENT_STORE=0` to disable it when bisecting;
-see [dev-docs/application_model.md § 2.9](dev-docs/application_model.md)
+Set `CLAUDE_CODE_LOG_FRAGMENT_STORE=0` to disable it when bisecting.
+The store is a RAM-for-CPU trade (~+0.35× the project's transcript
+bytes at peak, measured), so a memory valve skips it automatically
+when available memory is under ~2.4× those bytes — the conversion
+then runs store-less at its pre-store footprint; an explicit `=1`
+forces the store past the valve. See
+[dev-docs/application_model.md § 2.9](dev-docs/application_model.md)
 for its correctness guards.
 
 A project's own pages and session files are additionally rendered in
