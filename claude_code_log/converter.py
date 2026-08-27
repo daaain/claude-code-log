@@ -18,7 +18,7 @@ from datetime import datetime
 from pathlib import Path
 import traceback
 from urllib.parse import quote
-from typing import Any, Dict, List, Optional, TYPE_CHECKING, cast
+from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING, cast
 
 import dateparser
 
@@ -26,7 +26,9 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
 
     from .cache import CacheManager
+    from .fragment_store import RenderFragmentStore
     from .providers.base import ProviderTokenTotals
+    from .render_pool import RenderPool
 
 from .utils import (
     coalesce_trunk_session_id,
@@ -39,6 +41,7 @@ from .utils import (
     create_session_preview,
     get_warmup_session_ids,
 )
+from .render_pool import RenderUnit, memory_capped_workers, resolve_render_jobs
 from .cache import (
     CacheManager,
     SessionCacheData,
@@ -1705,10 +1708,21 @@ def _generate_paginated_html(
     compact: bool = False,
     no_recaps: bool = False,
     archive_search_link: Optional[str] = None,
+    render_pool: "Optional[RenderPool]" = None,
+    fragment_store: "Optional[RenderFragmentStore]" = None,
+    image_export_mode: Optional[str] = None,
 ) -> tuple[Path, bool]:
     """Generate paginated HTML files for combined transcript.
 
     Args:
+        render_pool: Optional pool to fan the stale pages out over. None
+            (the default) renders them inline, one at a time.
+        image_export_mode: The conversion's image mode (None → embedded),
+            honored per page so a referenced-mode run writes
+            ``images/`` files instead of silently embedding.
+        fragment_store: Optional per-conversion fragment store shared with
+            the per-session pass, so inline page renders reuse (and seed)
+            each message's formatted fragment.
         messages: All messages (deduplicated)
         output_dir: Directory to write HTML files
         title: Base title for the pages
@@ -1763,15 +1777,19 @@ def _generate_paginated_html(
                 orphan_path.unlink()
 
     # Group messages by session for fast lookup (agent messages grouped
-    # under their parent session since they don't have their own pages)
+    # under their parent session since they don't have their own pages).
+    # Each message's master-list ordinal is grouped alongside it: stale
+    # page units carry their slice of entries *and* those ordinals, so a
+    # render worker's fragment-store keys name the same positions the
+    # parent's do (see RenderUnit.entries / entry_ordinals).
     messages_by_session: Dict[str, List[TranscriptEntry]] = {}
-    for msg in messages:
+    ordinals_by_session: Dict[str, List[int]] = {}
+    for ordinal, msg in enumerate(messages):
         session_id = getattr(msg, "sessionId", None)
         if session_id:
             key = get_parent_session_id(session_id)
-            if key not in messages_by_session:
-                messages_by_session[key] = []
-            messages_by_session[key].append(msg)
+            messages_by_session.setdefault(key, []).append(msg)
+            ordinals_by_session.setdefault(key, []).append(ordinal)
 
     first_page_path = output_dir / _get_page_html_path(1, suffix)
 
@@ -1779,7 +1797,13 @@ def _generate_paginated_html(
     # are current are skipped individually, so a run can write nothing.
     wrote_any = False
 
-    # Generate each page
+    # Stale pages, collected before any rendering starts so they can be
+    # dispatched together, plus the cache-write arguments to replay per page
+    # once its file lands (the parent owns every DB write).
+    stale_units: list[RenderUnit] = []
+    page_cache_args: dict[int, dict[str, Any]] = {}
+
+    # Plan each page
     for page_num, page_session_ids in enumerate(pages, start=1):
         html_path = _get_page_html_path(page_num, suffix)
         page_file = output_dir / html_path
@@ -1802,11 +1826,14 @@ def _generate_paginated_html(
         if not silent:
             print(f"Generating page {page_num} ({reason})...")
 
-        # Collect messages for this page
+        # Collect messages for this page (and their master-list ordinals,
+        # dispatched with the unit so workers never load the transcript)
         page_messages: List[TranscriptEntry] = []
+        page_ordinals: List[int] = []
         for session_id in page_session_ids:
             if session_id in messages_by_session:
                 page_messages.extend(messages_by_session[session_id])
+                page_ordinals.extend(ordinals_by_session[session_id])
 
         # Calculate page stats
         page_message_count = len(page_messages)
@@ -1855,10 +1882,6 @@ def _generate_paginated_html(
             "is_last_page": is_last_page,
         }
 
-        # Enable previous page's next link when creating a new page
-        if page_num > 1:
-            _enable_next_link_on_previous_page(output_dir, page_num - 1, suffix)
-
         # Build page_stats
         date_range = ""
         if first_timestamp and last_timestamp:
@@ -1888,17 +1911,51 @@ def _generate_paginated_html(
             "token_summary": token_summary,
         }
 
-        # Generate HTML for this page
+        # Queue this page. Rendering is deferred so the whole stale set can
+        # be dispatched together; the cache write below is replayed from
+        # `page_cache_args` in the parent once the file lands.
         page_title = f"{title} - Page {page_num}" if page_num > 1 else title
-        page_renderer = HtmlRenderer()
+        stale_units.append(
+            RenderUnit(
+                kind="page",
+                key=page_num,
+                file_name=html_path,
+                title=page_title,
+                entries=page_messages,
+                entry_ordinals=page_ordinals,
+                session_ids=page_session_ids,
+                page_info=page_info,
+                page_stats=page_stats,
+            )
+        )
+        page_cache_args[page_num] = {
+            "page_number": page_num,
+            "html_path": html_path,
+            "page_size_config": page_size,
+            "session_ids": page_session_ids,
+            "message_count": page_sessions_message_count,
+            "first_timestamp": first_timestamp,
+            "last_timestamp": last_timestamp,
+            "total_input_tokens": total_input_tokens,
+            "total_output_tokens": total_output_tokens,
+            "total_cache_creation_tokens": total_cache_creation_tokens,
+            "total_cache_read_tokens": total_cache_read_tokens,
+            "variant_suffix": suffix,
+        }
+
+    def _render_page_inline(unit: RenderUnit) -> None:
+        assert unit.entries is not None  # every page unit is planned with them
+        page_renderer = HtmlRenderer(image_export_mode=image_export_mode or "embedded")
         page_renderer.depth = depth
         page_renderer.compact = compact
         page_renderer.no_recaps = no_recaps
+        page_renderer.fragment_store = fragment_store
         html_content = page_renderer.generate(
-            page_messages,
-            page_title,
-            page_info=page_info,
-            page_stats=page_stats,
+            unit.entries,
+            unit.title,
+            output_dir=output_dir,
+            page_info=unit.page_info,
+            page_stats=unit.page_stats,
             session_tree=session_tree,
             archive_search_link=archive_search_link,
         )
@@ -1906,24 +1963,32 @@ def _generate_paginated_html(
         # JSONL may carry lone surrogates (issue #139); strict UTF-8
         # encoding crashes here. Replace with U+FFFD so output stays
         # valid UTF-8.
-        page_file.write_text(html_content, encoding="utf-8", errors="replace")
-        wrote_any = True
-
-        # Update cache
-        cache_manager.update_page_cache(
-            page_number=page_num,
-            html_path=html_path,
-            page_size_config=page_size,
-            session_ids=page_session_ids,
-            message_count=page_sessions_message_count,
-            first_timestamp=first_timestamp,
-            last_timestamp=last_timestamp,
-            total_input_tokens=total_input_tokens,
-            total_output_tokens=total_output_tokens,
-            total_cache_creation_tokens=total_cache_creation_tokens,
-            total_cache_read_tokens=total_cache_read_tokens,
-            variant_suffix=suffix,
+        (output_dir / unit.file_name).write_text(
+            html_content, encoding="utf-8", errors="replace"
         )
+
+    def _record_page(unit: RenderUnit) -> None:
+        nonlocal wrote_any
+        wrote_any = True
+        cache_manager.update_page_cache(**page_cache_args[unit.key])
+
+    _dispatch_render_units(
+        stale_units,
+        render_pool,
+        _render_page_inline,
+        _record_page,
+        label=lambda unit: f"page {unit.key}",
+        fragment_store=fragment_store,
+    )
+
+    # Reveal the "Next" link on every page that is no longer last. This
+    # used to run per-page, before rendering page N, which made page N's
+    # generation edit page N-1's file — a write ordering the parallel path
+    # can't honour. Doing it once, after all pages have landed, is both
+    # order-independent and idempotent: the helper is a no-op on a page
+    # that has no `last-page` class left to strip.
+    for page_num in range(1, len(pages)):
+        _enable_next_link_on_previous_page(output_dir, page_num, suffix)
 
     return first_page_path, wrote_any
 
@@ -1980,6 +2045,7 @@ def convert_jsonl_to(
     force_regenerate: bool = False,
     report: Optional["RegenerationReport"] = None,
     archive_search_link: Optional[str] = None,
+    render_jobs: Optional[int] = None,
 ) -> Path:
     """Convert JSONL transcript(s) to the specified format.
 
@@ -2019,6 +2085,15 @@ def convert_jsonl_to(
             the caller that writes a ``search.html`` for it to point at, and
             the only one that knows how deep the project sits below the
             index root. None leaves the link out of the rendered page.
+        render_jobs: Worker processes for rendering this project's own
+            output files (combined pages + per-session files), which are
+            independent of one another. ``None`` (the default) consults
+            ``$CLAUDE_CODE_LOG_RENDER_JOBS``: unset (or ``auto``) resolves
+            to the CPU count — the fan-out is on by default — while ``1``
+            or ``off`` opts out into inline rendering, the historical
+            single-threaded behaviour. An explicit int overrides the
+            environment. See ``_make_render_pool`` for the further
+            conditions under which a pool is actually created.
     """
     if not input_path.exists():
         raise FileNotFoundError(f"Input path not found: {input_path}")
@@ -2172,6 +2247,33 @@ def convert_jsonl_to(
         no_recaps=no_recaps,
     )
 
+    # One fragment store per conversion, shared by the combined pages and
+    # the per-session files, so each entry-derived message is formatted
+    # once rather than once per output file that contains it (step 3,
+    # work/render-format-once.md). Scoped to this call: it dies with the
+    # conversion, so nothing about it needs invalidating. The byte count
+    # feeds the store's memory valve (same source-size measure as
+    # _make_render_pool's cap: top-level JSONL, agent files excluded).
+    if input_path.is_dir():
+        source_bytes = sum(
+            f.stat().st_size
+            for f in input_path.glob("*.jsonl")
+            if not f.name.startswith("agent-")
+        )
+    else:
+        source_bytes = input_path.stat().st_size
+    fragment_store = _make_fragment_store(format, transcript_bytes=source_bytes)
+    if fragment_store is not None:
+        # Store keys are per-entry ordinals in this master list — stable
+        # across the differently-filtered subsets each render tree gets,
+        # unlike the id(entry) the stamping code has to work with (the
+        # store translates at its boundary, see stable_key()).
+        fragment_store.set_entry_ordinals(messages)
+        from .html.renderer import HtmlRenderer as _HtmlRenderer
+
+        if isinstance(renderer, _HtmlRenderer):
+            renderer.fragment_store = fragment_store
+
     # Decide whether to use pagination (HTML only, directory mode, no date filter)
     use_pagination = False
     cached_data = cache_manager.get_cached_project_data() if cache_manager else None
@@ -2197,176 +2299,207 @@ def convert_jsonl_to(
     # index linking, but the file at that path is not (re-)written.
     # Tracks whether the combined output was actually (re)written this call,
     # reported via the `report` out-parameter for the CLI's message.
-    did_regenerate = False
-    if not write_combined:
-        pass
-    elif use_pagination:
-        # Use paginated HTML generation
-        assert cache_manager is not None  # Ensured by use_pagination condition
-        # Use cached session data if available, otherwise build from messages
-        if cached_data is not None:
-            current_session_ids = collect_trunk_session_ids(
-                messages, get_warmup_session_ids(messages)
-            )
-            session_data = {
-                session_id: session_cache
-                for session_id, session_cache in cached_data.sessions.items()
-                if session_id in current_session_ids
-            }
-        else:
-            session_data = _build_session_data_from_messages(messages)
-        output_path, did_regenerate = _generate_paginated_html(
-            messages,
-            effective_output_dir,
-            title,
-            page_size,
-            cache_manager,
-            session_data,
-            working_directories,
-            silent=silent,
-            session_tree=session_tree,
-            depth=depth,
-            compact=compact,
-            no_recaps=no_recaps,
-            archive_search_link=archive_search_link,
-        )
-    else:
-        # Use single-file generation for small projects or filtered views
-        # Use incremental regeneration via html_cache when available
-        if cache_manager is not None and input_path.is_dir():
-            is_stale, _reason = cache_manager.is_transcript_stale(
-                output_path.name, None, output_dir=output_path.parent
-            )
-            should_regenerate = (
-                # force_regenerate first so the is_outdated() sniff is
-                # short-circuited for an explicit --output (issue #221, and
-                # avoids touching a /dev/stdout destination for #223).
-                force_regenerate
-                or is_stale
-                or renderer.is_outdated(output_path)
-                or from_date is not None
-                or to_date is not None
-                or not output_path.exists()
-            )
-        else:
-            # Fallback: old logic for single file mode or no cache.
-            #
-            # is_outdated() only compares the embedded tool version, not the
-            # source's freshness, so a source that grows between runs (e.g. an
-            # in-progress session re-exported with the same tool version) would
-            # be wrongly skipped as "current" and serve stale HTML (issues #221,
-            # #254). Mirror the cached directory path's source-tracking intent
-            # with an mtime check: regenerate when a source is newer than the
-            # existing output.
-            #
-            # This branch is taken for a single file (which never has a cache)
-            # and for a directory run WITHOUT a cache (e.g. --no-cache); the
-            # cached directory path handles freshness via `is_transcript_stale`
-            # above and doesn't reach here. There's no DB tracking per-source
-            # mtimes, so the *output* file's own mtime is the natural,
-            # persistence-free basis:
-            #   - single file  → the source file's own mtime;
-            #   - directory     → the NEWEST source .jsonl in the directory
-            #                     (the directory analogue; non-recursive, like
-            #                     how directory mode discovers sessions).
-            # This is sufficient because the output is always written after its
-            # sources are read, so `output.mtime >= source.mtime` holds
-            # post-write; a later append bumps the source past it. It shares the
-            # cache's filesystem-mtime granularity limit (a sub-tick append
-            # racing the prior write resolves on the next run) and, for a
-            # directory, the same non-recursive scope — a subagent transcript
-            # under `<stem>/subagents/` growing without its top-level parent
-            # .jsonl being touched isn't caught (rare: the parent session
-            # records the spawning tool_use and usually grows too).
-            source_is_newer = False
-            if output_path.exists():
-                output_mtime = output_path.stat().st_mtime
-                if input_path.is_file():
-                    source_is_newer = input_path.stat().st_mtime > output_mtime
-                elif input_path.is_dir():
-                    source_mtimes = [
-                        f.stat().st_mtime for f in input_path.glob("*.jsonl")
-                    ]
-                    source_is_newer = bool(source_mtimes) and (
-                        max(source_mtimes) > output_mtime
-                    )
-            should_regenerate = (
-                force_regenerate
-                or renderer.is_outdated(output_path)
-                or source_is_newer
-                or from_date is not None
-                or to_date is not None
-                or not output_path.exists()
-                or (input_path.is_dir() and cache_was_updated)
-            )
-
-        did_regenerate = should_regenerate
-        if should_regenerate:
-            # For referenced images, pass the output directory
-            output_dir = output_path.parent
-            generate_kwargs: dict[str, Any] = {}
-            # Markdown/JSON renderers share the `generate` signature only up
-            # to the common arguments; the archive-search link is HTML-only.
-            if format == "html" and archive_search_link:
-                generate_kwargs["archive_search_link"] = archive_search_link
-            content = renderer.generate(
-                messages,
-                title,
-                output_dir=output_dir,
-                session_tree=session_tree,
-                **generate_kwargs,
-            )
-            assert content is not None
-            # See issue #139: errors="replace" for lone-surrogate safety.
-            output_path.write_text(content, encoding="utf-8", errors="replace")
-
-            # Update html_cache for the combined transcript. Written for the
-            # marker-tracked formats (HTML + Markdown); JSON tracks its own
-            # freshness via its `version` field, so a marker-keyed row would
-            # always read stale (see `_tracks_version_marker`).
-            # Skip when the caller explicitly disabled cache writes — the
-            # CLI does this for `-o custom.html` exports so a user's
-            # one-off destination doesn't occupy a cache slot keyed by
-            # their arbitrary path.
-            if (
-                cache_manager is not None
-                and update_cache
-                and _tracks_version_marker(format)
-            ):
-                cache_manager.update_html_cache(
-                    output_path.name, None, total_message_count
+    # One render pool per conversion, shared by the combined pages and
+    # the per-session files: starting a second pool would pay `spawn` +
+    # import all over again. Creation is cheap — no worker starts until
+    # the first unit is submitted.
+    render_pool = _make_render_pool(
+        format=format,
+        input_path=input_path,
+        effective_output_dir=effective_output_dir,
+        cache_manager=cache_manager,
+        message_count=len(messages),
+        from_date=from_date,
+        to_date=to_date,
+        depth=depth,
+        compact=compact,
+        no_timestamps=no_timestamps,
+        no_recaps=no_recaps,
+        image_export_mode=image_export_mode,
+        archive_search_link=archive_search_link,
+        render_jobs=render_jobs,
+        session_tree=session_tree,
+    )
+    try:
+        did_regenerate = False
+        if not write_combined:
+            pass
+        elif use_pagination:
+            # Use paginated HTML generation
+            assert cache_manager is not None  # Ensured by use_pagination condition
+            # Use cached session data if available, otherwise build from messages
+            if cached_data is not None:
+                current_session_ids = collect_trunk_session_ids(
+                    messages, get_warmup_session_ids(messages)
                 )
-        elif not silent:
-            print(
-                f"{format.upper()} file {output_path.name} is current, skipping regeneration"
+                session_data = {
+                    session_id: session_cache
+                    for session_id, session_cache in cached_data.sessions.items()
+                    if session_id in current_session_ids
+                }
+            else:
+                session_data = _build_session_data_from_messages(messages)
+            output_path, did_regenerate = _generate_paginated_html(
+                messages,
+                effective_output_dir,
+                title,
+                page_size,
+                cache_manager,
+                session_data,
+                working_directories,
+                silent=silent,
+                session_tree=session_tree,
+                depth=depth,
+                compact=compact,
+                no_recaps=no_recaps,
+                archive_search_link=archive_search_link,
+                render_pool=render_pool,
+                fragment_store=fragment_store,
+                image_export_mode=image_export_mode,
+            )
+        else:
+            # Use single-file generation for small projects or filtered views
+            # Use incremental regeneration via html_cache when available
+            if cache_manager is not None and input_path.is_dir():
+                is_stale, _reason = cache_manager.is_transcript_stale(
+                    output_path.name, None, output_dir=output_path.parent
+                )
+                should_regenerate = (
+                    # force_regenerate first so the is_outdated() sniff is
+                    # short-circuited for an explicit --output (issue #221, and
+                    # avoids touching a /dev/stdout destination for #223).
+                    force_regenerate
+                    or is_stale
+                    or renderer.is_outdated(output_path)
+                    or from_date is not None
+                    or to_date is not None
+                    or not output_path.exists()
+                )
+            else:
+                # Fallback: old logic for single file mode or no cache.
+                #
+                # is_outdated() only compares the embedded tool version, not the
+                # source's freshness, so a source that grows between runs (e.g. an
+                # in-progress session re-exported with the same tool version) would
+                # be wrongly skipped as "current" and serve stale HTML (issues #221,
+                # #254). Mirror the cached directory path's source-tracking intent
+                # with an mtime check: regenerate when a source is newer than the
+                # existing output.
+                #
+                # This branch is taken for a single file (which never has a cache)
+                # and for a directory run WITHOUT a cache (e.g. --no-cache); the
+                # cached directory path handles freshness via `is_transcript_stale`
+                # above and doesn't reach here. There's no DB tracking per-source
+                # mtimes, so the *output* file's own mtime is the natural,
+                # persistence-free basis:
+                #   - single file  → the source file's own mtime;
+                #   - directory     → the NEWEST source .jsonl in the directory
+                #                     (the directory analogue; non-recursive, like
+                #                     how directory mode discovers sessions).
+                # This is sufficient because the output is always written after its
+                # sources are read, so `output.mtime >= source.mtime` holds
+                # post-write; a later append bumps the source past it. It shares the
+                # cache's filesystem-mtime granularity limit (a sub-tick append
+                # racing the prior write resolves on the next run) and, for a
+                # directory, the same non-recursive scope — a subagent transcript
+                # under `<stem>/subagents/` growing without its top-level parent
+                # .jsonl being touched isn't caught (rare: the parent session
+                # records the spawning tool_use and usually grows too).
+                source_is_newer = False
+                if output_path.exists():
+                    output_mtime = output_path.stat().st_mtime
+                    if input_path.is_file():
+                        source_is_newer = input_path.stat().st_mtime > output_mtime
+                    elif input_path.is_dir():
+                        source_mtimes = [
+                            f.stat().st_mtime for f in input_path.glob("*.jsonl")
+                        ]
+                        source_is_newer = bool(source_mtimes) and (
+                            max(source_mtimes) > output_mtime
+                        )
+                should_regenerate = (
+                    force_regenerate
+                    or renderer.is_outdated(output_path)
+                    or source_is_newer
+                    or from_date is not None
+                    or to_date is not None
+                    or not output_path.exists()
+                    or (input_path.is_dir() and cache_was_updated)
+                )
+
+            did_regenerate = should_regenerate
+            if should_regenerate:
+                # For referenced images, pass the output directory
+                output_dir = output_path.parent
+                generate_kwargs: dict[str, Any] = {}
+                # Markdown/JSON renderers share the `generate` signature only up
+                # to the common arguments; the archive-search link is HTML-only.
+                if format == "html" and archive_search_link:
+                    generate_kwargs["archive_search_link"] = archive_search_link
+                content = renderer.generate(
+                    messages,
+                    title,
+                    output_dir=output_dir,
+                    session_tree=session_tree,
+                    **generate_kwargs,
+                )
+                assert content is not None
+                # See issue #139: errors="replace" for lone-surrogate safety.
+                output_path.write_text(content, encoding="utf-8", errors="replace")
+
+                # Update html_cache for the combined transcript. Written for the
+                # marker-tracked formats (HTML + Markdown); JSON tracks its own
+                # freshness via its `version` field, so a marker-keyed row would
+                # always read stale (see `_tracks_version_marker`).
+                # Skip when the caller explicitly disabled cache writes — the
+                # CLI does this for `-o custom.html` exports so a user's
+                # one-off destination doesn't occupy a cache slot keyed by
+                # their arbitrary path.
+                if (
+                    cache_manager is not None
+                    and update_cache
+                    and _tracks_version_marker(format)
+                ):
+                    cache_manager.update_html_cache(
+                        output_path.name, None, total_message_count
+                    )
+            elif not silent:
+                print(
+                    f"{format.upper()} file {output_path.name} is current, skipping regeneration"
+                )
+
+        # Generate individual session files if requested and in directory mode.
+        # Its return count feeds the `report` below: per-session output is an
+        # independent axis from the combined write, so a run that rewrites session
+        # files while the combined stays current (or `--combined no`, which never
+        # writes a combined) still counts as work done — otherwise the CLI would
+        # fall silent on it. Kept separate from `did_regenerate` so the CLI can
+        # confirm session work without falsely claiming to have "combined".
+        sessions_regenerated = 0
+        if generate_individual_sessions and input_path.is_dir():
+            sessions_regenerated = _generate_individual_session_files(
+                format,
+                messages,
+                effective_output_dir,
+                from_date,
+                to_date,
+                cache_manager,
+                cache_was_updated,
+                image_export_mode,
+                silent=silent,
+                session_tree=session_tree,
+                depth=depth,
+                compact=compact,
+                write_combined=write_combined,
+                no_timestamps=no_timestamps,
+                no_recaps=no_recaps,
+                render_pool=render_pool,
+                fragment_store=fragment_store,
             )
 
-    # Generate individual session files if requested and in directory mode.
-    # Its return count feeds the `report` below: per-session output is an
-    # independent axis from the combined write, so a run that rewrites session
-    # files while the combined stays current (or `--combined no`, which never
-    # writes a combined) still counts as work done — otherwise the CLI would
-    # fall silent on it. Kept separate from `did_regenerate` so the CLI can
-    # confirm session work without falsely claiming to have "combined".
-    sessions_regenerated = 0
-    if generate_individual_sessions and input_path.is_dir():
-        sessions_regenerated = _generate_individual_session_files(
-            format,
-            messages,
-            effective_output_dir,
-            from_date,
-            to_date,
-            cache_manager,
-            cache_was_updated,
-            image_export_mode,
-            silent=silent,
-            session_tree=session_tree,
-            depth=depth,
-            compact=compact,
-            write_combined=write_combined,
-            no_timestamps=no_timestamps,
-            no_recaps=no_recaps,
-        )
+    finally:
+        if render_pool is not None:
+            render_pool.close()
 
     if report is not None:
         report.combined_regenerated = did_regenerate
@@ -2543,6 +2676,240 @@ def build_session_title(
     return f"{project_title}: Session {session_id[:8]}"
 
 
+# Below this many stale output files, the fan-out is not worth the ~1s of
+# `spawn` + package import each worker pays before it can render anything.
+# Units average well under 200ms, so a handful of them finish inline
+# before a pool has even started.
+_MIN_UNITS_FOR_RENDER_POOL = 8
+
+
+# ...and below this many messages the project's render work is too small to
+# repay the pool's startup. Re-measured post-feeding (2026-08-26, 8-core
+# VM, workers fed entry slices — the work/render-format-once.md § 7.5
+# revisit), best fanned configuration vs the serial memo-only row:
+#
+#   12.2k messages  serial  7.7s  ->  8.2s   (a loss)
+#   15.5k messages  serial  7.7s  ->  8.3s   (a loss)
+#   25.2k messages  serial 12.7s  ->  6.0s   (2.13x)
+#
+# so the crossover sits between 15.5k and 25.2k and the threshold sits at
+# its upper edge: below it the cost is a certain (if now small)
+# regression, above it the win grows with project size and core count.
+# The loss below the line shrank with the feed (workers no longer reload
+# the transcript) but did not flip sign — spawn + import + cold memo
+# caches still outweigh a few seconds of render work.
+# Memory valve for the fragment store: keep it only when available memory
+# comfortably covers a store-carrying conversion. Measured serial peaks on
+# the largest real project (803MB of transcripts): 1252MB with the store
+# off (~1.56x bytes on disk), 1521MB with it on (~1.9x — the +269MB is the
+# fragment text plus per-entry overhead, work/render-format-once.md § 4.9).
+# 2.4x is that store-on peak plus a ~25% margin, so on a machine inside
+# the margin the conversion quietly runs store-less — the pre-store
+# footprint — instead of trading its last RAM for CPU. Whenever this valve
+# trips, the render pool's own memory cap (a far higher bar, ~10x bytes)
+# has already declined, so a store-less conversion is always a serial one
+# and no worker-side coordination is needed.
+_FRAGMENT_STORE_MIN_AVAILABLE_PER_BYTE = 2.4
+
+
+def _make_fragment_store(
+    format: str, transcript_bytes: int = 0
+) -> "Optional[RenderFragmentStore]":
+    """Create the per-conversion fragment store, or None when it can't help.
+
+    HTML only — the fragment triple it caches is exactly what
+    ``HtmlRenderer._annotate_tree_for_render`` computes, and no other
+    renderer consults it. ``CLAUDE_CODE_LOG_FRAGMENT_STORE=0`` disables it
+    for bisecting rendering differences; an explicit ``=1`` forces it past
+    the memory valve below, which otherwise skips the store when available
+    memory is under ``_FRAGMENT_STORE_MIN_AVAILABLE_PER_BYTE`` times the
+    project's transcript bytes (the store is a RAM-for-CPU trade, and on a
+    machine that tight the RAM matters more). ``transcript_bytes`` of 0
+    (unknown) skips the valve, as does an unreadable memory probe.
+    """
+    if format != "html":
+        return None
+    from .fragment_store import (
+        RenderFragmentStore,
+        fragment_store_enabled,
+        fragment_store_forced,
+    )
+
+    if not fragment_store_enabled():
+        return None
+    if transcript_bytes > 0 and not fragment_store_forced():
+        from .render_pool import available_memory_bytes
+
+        available = available_memory_bytes()
+        if (
+            available is not None
+            and available < transcript_bytes * _FRAGMENT_STORE_MIN_AVAILABLE_PER_BYTE
+        ):
+            return None
+    return RenderFragmentStore()
+
+
+_MIN_MESSAGES_FOR_RENDER_POOL = 25_000
+
+
+def _make_render_pool(
+    *,
+    format: str,
+    input_path: Path,
+    effective_output_dir: Path,
+    cache_manager: Optional["CacheManager"],
+    message_count: int,
+    from_date: Optional[str],
+    to_date: Optional[str],
+    depth: RenderingDepth,
+    compact: bool,
+    no_timestamps: bool,
+    no_recaps: bool,
+    image_export_mode: Optional[str],
+    archive_search_link: Optional[str],
+    render_jobs: Optional[int],
+    session_tree: Optional[SessionTree],
+) -> "Optional[RenderPool]":
+    """Build a render pool for this conversion, or None to render inline.
+
+    Returns None whenever fanning out would be wrong or wasteful:
+
+    - ``render_jobs`` resolves to 1. The fan-out is on by default (an
+      unset ``$CLAUDE_CODE_LOG_RENDER_JOBS`` means the CPU count), so this
+      takes ``1``/``off`` opting out via the environment (see
+      ``render_pool.resolve_render_jobs``) — or a project worker in the
+      all-projects pool getting 1 because there is no spare capacity,
+      since nesting pools would oversubscribe.
+    - Single-file mode, or no cache manager (staleness planning needs one).
+    - No pre-built ``session_tree``. Workers render fed entry slices
+      against the conversion's tree; without one they would rebuild a DAG
+      from their slice alone, which can genuinely differ (missing
+      cross-session hierarchy) — a correctness cliff, so decline instead.
+    - Projects too small for the pool's startup to pay for itself.
+
+    ``image_export_mode="referenced"`` used to decline too, when each
+    render allocated ``images/image_NNNN.png`` names from a per-call
+    counter. Filenames are content-addressed now (see
+    ``image_export.export_image``), so concurrent workers exporting the
+    same image write the same name atomically with identical bytes — the
+    mode is pool-safe.
+    - Not enough memory for the fan-out's footprint.
+
+    The worker count is also capped by available memory, with the parent
+    charged its full master-list footprint and each fed worker only its
+    measured slice-holding cost — see ``render_pool.memory_capped_workers``.
+    """
+    from .render_pool import memory_capped_workers, resolve_render_jobs
+
+    max_workers = resolve_render_jobs(render_jobs)
+    if max_workers <= 1:
+        return None
+    if cache_manager is None or not input_path.is_dir():
+        return None
+    if session_tree is None:
+        return None
+    if message_count < _MIN_MESSAGES_FOR_RENDER_POOL:
+        return None
+
+    transcript_bytes = sum(
+        f.stat().st_size
+        for f in input_path.glob("*.jsonl")
+        if not f.name.startswith("agent-")
+    )
+    max_workers = memory_capped_workers(max_workers, transcript_bytes)
+    if max_workers <= 1:
+        return None
+
+    from .dag import slim_session_tree
+    from .render_pool import make_render_pool
+
+    return make_render_pool(
+        session_tree=slim_session_tree(session_tree),
+        format=format,
+        project_dir=input_path,
+        output_dir=effective_output_dir,
+        from_date=from_date,
+        to_date=to_date,
+        depth=depth,
+        compact=compact,
+        no_timestamps=no_timestamps,
+        no_recaps=no_recaps,
+        image_export_mode=image_export_mode,
+        archive_search_link=archive_search_link,
+        library_version=get_library_version(),
+        max_workers=max_workers,
+    )
+
+
+def _dispatch_render_units(
+    units: "list[RenderUnit]",
+    render_pool: "Optional[RenderPool]",
+    render_inline: "Callable[[RenderUnit], None]",
+    on_written: "Callable[[RenderUnit], None]",
+    label: "Callable[[RenderUnit], str]",
+    fragment_store: "Optional[RenderFragmentStore]" = None,
+) -> None:
+    """Render ``units``, over the pool when there is one, else inline.
+
+    ``on_written`` runs in the parent for every unit that made it to disk,
+    in completion order — it owns the cache bookkeeping, which is why the
+    workers never touch the DB for writes.
+
+    ``fragment_store`` absorbs the fragment deltas page workers return, so
+    the fragments a worker formatted still reach the conversion's store —
+    the session pass then feeds on them exactly as if the pages had
+    rendered inline (see RenderUnit.fed_fragments).
+
+    Every path back to inline rendering is a *fallback*, never an error:
+    a pool that can't bootstrap (a library caller without the
+    ``if __name__ == "__main__"`` guard ``spawn`` requires) or a worker
+    that dies mid-run must still produce complete output. Only a genuine
+    render failure inside a unit propagates.
+    """
+    if not units:
+        return
+
+    if render_pool is None or len(units) < _MIN_UNITS_FOR_RENDER_POOL:
+        for unit in units:
+            render_inline(unit)
+            on_written(unit)
+        return
+
+    futures: dict[Any, RenderUnit] = {}
+    unsubmitted: list[RenderUnit] = []
+    for unit in units:
+        future = render_pool.submit(unit)
+        if future is None:
+            unsubmitted.append(unit)
+        else:
+            futures[future] = unit
+
+    for future in as_completed(futures):
+        unit = futures[future]
+        try:
+            _kind, _key, error, fragments_delta = future.result()
+        except Exception as e:
+            # The pool itself broke (BrokenProcessPool, a worker killed by
+            # the OOM killer, …). Re-render this unit inline and send the
+            # rest of the batch the same way.
+            print(
+                f"Warning: render worker failed on {label(unit)} "
+                f"({e.__class__.__name__}: {e}); rendering inline."
+            )
+            render_pool.mark_broken()
+            unsubmitted.append(unit)
+            continue
+        if error is not None:
+            raise RuntimeError(f"Failed to render {label(unit)}:\n{error}")
+        if fragments_delta and fragment_store is not None:
+            fragment_store.absorb(fragments_delta)
+        on_written(unit)
+
+    for unit in unsubmitted:
+        render_inline(unit)
+        on_written(unit)
+
+
 def _generate_individual_session_files(
     format: str,
     messages: list[TranscriptEntry],
@@ -2559,8 +2926,17 @@ def _generate_individual_session_files(
     write_combined: bool = True,
     no_timestamps: bool = False,
     no_recaps: bool = False,
+    render_pool: "Optional[RenderPool]" = None,
+    fragment_store: "Optional[RenderFragmentStore]" = None,
 ) -> int:
     """Generate individual files for each session in the specified format.
+
+    Args:
+        render_pool: Optional pool to fan the stale sessions out over. None
+            (the default) renders them inline, one at a time.
+        fragment_store: Optional per-conversion fragment store (HTML only)
+            shared with the combined-page pass, so inline session renders
+            reuse the fragments that pass already formatted.
 
     Returns:
         Number of sessions regenerated
@@ -2603,7 +2979,15 @@ def _generate_individual_session_files(
         no_timestamps=no_timestamps,
         no_recaps=no_recaps,
     )
+    if fragment_store is not None:
+        from .html.renderer import HtmlRenderer as _HtmlRenderer
+
+        if isinstance(renderer, _HtmlRenderer):
+            renderer.fragment_store = fragment_store
     regenerated_count = 0
+    # Stale sessions, collected before any rendering starts so they can be
+    # dispatched together (inline or over the render pool).
+    stale_units: list[RenderUnit] = []
 
     # Reuse one connection for every per-session staleness check + html_cache
     # write, plus the per-session cache reads inside renderer.generate_session.
@@ -2669,48 +3053,119 @@ def _generate_individual_session_files(
                 )
 
             if should_regenerate_session:
-                # Generate session content. Under `--combined no` the
-                # combined file is never written, so the per-session
-                # back-link would 404 — suppress it.
-                session_content = renderer.generate_session(
-                    messages,
-                    session_id,
-                    session_title,
-                    cache_manager,
-                    output_dir,
-                    session_tree=session_tree,
-                    suppress_combined_link=not write_combined,
-                )
-                assert session_content is not None
-                # Write session file
-                # See issue #139: errors="replace" for lone-surrogate safety.
-                session_file_path.write_text(
-                    session_content, encoding="utf-8", errors="replace"
-                )
-                regenerated_count += 1
-
-                # Update html_cache to track this generation (marker-tracked
-                # formats only; JSON uses its own version-field freshness).
-                if cache_manager is not None and _tracks_version_marker(format):
-                    # Use message count from cache (pre-deduplication) to match
-                    # the count used in is_transcript_stale()
-                    if session_id in session_data:
-                        session_message_count = session_data[session_id].message_count
-                    else:
-                        # Fallback: count from messages list (less accurate due to dedup)
-                        session_message_count = sum(
-                            1
-                            for m in messages
-                            if hasattr(m, "sessionId")
-                            and getattr(m, "sessionId") == session_id
-                        )
-                    cache_manager.update_html_cache(
-                        session_file_name, session_id, session_message_count
+                # Collect rather than render: the whole stale set is
+                # gathered first so it can be fanned out over the render
+                # pool. Staleness checks and cache writes stay here in the
+                # parent, which keeps the DB single-writer.
+                stale_units.append(
+                    RenderUnit(
+                        kind="session",
+                        key=session_id,
+                        file_name=session_file_name,
+                        title=session_title,
+                        # Under `--combined no` the combined file is never
+                        # written, so the per-session back-link would 404.
+                        suppress_combined_link=not write_combined,
                     )
+                )
             elif not silent:
                 print(
                     f"Session file {session_file_path.name} is current, skipping regeneration"
                 )
+
+        def _render_session_inline(unit: RenderUnit) -> None:
+            session_content = renderer.generate_session(
+                messages,
+                unit.key,
+                unit.title,
+                cache_manager,
+                output_dir,
+                session_tree=session_tree,
+                suppress_combined_link=unit.suppress_combined_link,
+            )
+            assert session_content is not None
+            # See issue #139: errors="replace" for lone-surrogate safety.
+            (output_dir / unit.file_name).write_text(
+                session_content, encoding="utf-8", errors="replace"
+            )
+
+        def _record_session(unit: RenderUnit) -> None:
+            """Cache bookkeeping for one written session file."""
+            nonlocal regenerated_count
+            regenerated_count += 1
+            # Update html_cache to track this generation (marker-tracked
+            # formats only; JSON uses its own version-field freshness).
+            if cache_manager is None or not _tracks_version_marker(format):
+                return
+            # Use message count from cache (pre-deduplication) to match
+            # the count used in is_transcript_stale()
+            if unit.key in session_data:
+                session_message_count = session_data[unit.key].message_count
+            else:
+                # Fallback: count from messages list (less accurate due to dedup)
+                session_message_count = sum(
+                    1
+                    for m in messages
+                    if hasattr(m, "sessionId") and getattr(m, "sessionId") == unit.key
+                )
+            cache_manager.update_html_cache(
+                unit.file_name, unit.key, session_message_count
+            )
+
+        # Feed each pooled session unit everything its worker renders from:
+        #
+        # 1. Its *entries* — the session's slice of this conversion's master
+        #    list (trunk + integrated agent messages), with their master-
+        #    list ordinals. Workers never load the transcript; the trunk
+        #    grouping here selects exactly the set generate_session's own
+        #    filter would (sessionId == trunk or a "{trunk}#agent-" child),
+        #    so the worker's re-filter of the slice is idempotent.
+        # 2. Its slice of the fragment store — by now the combined-page
+        #    pass has completed (pages dispatch and drain before this
+        #    function runs), so the store holds a fragment for essentially
+        #    every message, whether the pages rendered inline or in workers
+        #    (whose deltas the page dispatch absorbed). A worker seeds its
+        #    own store from the slice and skips re-formatting everything
+        #    that verifies; anything stale or mis-keyed digests into a
+        #    conflict and is formatted fresh, so the fragment feed is
+        #    purely a CPU saver, never a correctness dependency.
+        if render_pool is not None and stale_units:
+            from .utils import get_parent_session_id as _trunk_of
+
+            entries_by_trunk: dict[str, list[TranscriptEntry]] = {}
+            ordinals_by_trunk: dict[str, list[int]] = {}
+            trunk_of_ordinal: dict[int, str] = {}
+            for ordinal, msg in enumerate(messages):
+                msg_sid = getattr(msg, "sessionId", None)
+                if msg_sid:
+                    trunk = _trunk_of(msg_sid)
+                    entries_by_trunk.setdefault(trunk, []).append(msg)
+                    ordinals_by_trunk.setdefault(trunk, []).append(ordinal)
+                    trunk_of_ordinal[ordinal] = trunk
+            for unit in stale_units:
+                unit.entries = entries_by_trunk.get(unit.key, [])
+                unit.entry_ordinals = ordinals_by_trunk.get(unit.key, [])
+
+            if fragment_store is not None:
+                all_fragments = fragment_store.export_fragments()
+                keys_by_session: dict[str, list[Any]] = {}
+                for store_key in all_fragments:
+                    key_session = trunk_of_ordinal.get(cast(int, store_key[0]))
+                    if key_session is not None:
+                        keys_by_session.setdefault(key_session, []).append(store_key)
+                for unit in stale_units:
+                    unit_keys = keys_by_session.get(unit.key)
+                    if unit_keys:
+                        unit.fed_fragments = {k: all_fragments[k] for k in unit_keys}
+
+        _dispatch_render_units(
+            stale_units,
+            render_pool,
+            _render_session_inline,
+            _record_session,
+            label=lambda unit: f"session {str(unit.key)[:8]}",
+            fragment_store=fragment_store,
+        )
 
     return regenerated_count
 
@@ -3476,7 +3931,115 @@ class _ProjectPlan:
     archived_count: int
     stats: GenerationStats
     source_bytes: int
+    # Total message count from the cache row, None when the project has
+    # no cache yet (first run). For a stale project it lags reality by
+    # one run — fine for the hold-back comparison, which only needs
+    # relative magnitudes. Message count predicts conversion cost far
+    # better than bytes: see _holdback_plans.
+    cached_message_count: Optional[int] = None
     error: Optional[str] = None
+
+
+# Bytes stand-in for _MIN_MESSAGES_FOR_RENDER_POOL when the hold-back
+# comparison has to rank plans by source bytes (a plan without a cache row
+# has no message count). Real projects measure ~3-3.4KB of JSONL per
+# message, so 75MB ≈ the 25k-message pool floor.
+_MIN_SOURCE_BYTES_FOR_HOLDBACK = 75 * 1024 * 1024
+
+
+def _fanned_speedup(workers: int) -> float:
+    """Conservative wall-clock speedup of a lone fanned-out conversion.
+
+    Deliberately under the measured single-project numbers (2.7-3.2x at
+    8+ workers, 1.8-1.9x at 4, 1.4x at 2 — work/render-format-once.md):
+    an over-estimate here makes ``_holdback_plans`` serialize projects
+    that were better off pooled, which is the costly direction, while an
+    under-estimate only forgoes part of a win.
+    """
+    if workers >= 8:
+        return 2.5
+    if workers >= 4:
+        return 1.8
+    if workers >= 2:
+        return 1.3
+    return 1.0
+
+
+def _holdback_plans(
+    plans: "List[_ProjectPlan]", *, job_budget: int, render_budget: int
+) -> "List[_ProjectPlan]":
+    """The stale projects to hold out of the pool and convert alone, in order.
+
+    Greedy makespan comparison, largest project first: holding a project
+    back pays ``fanned(largest)`` *after* the pool instead of hiding
+    ``serial(largest)`` inside it, so hold while
+
+        pool_wall(rest) + fanned(largest)  <  wall(pooling everything)
+
+    with the pool wall approximated as ``max(largest member, total /
+    workers)`` and the fanned time as serial cost over the conservative
+    ``_fanned_speedup`` of the workers a lone conversion would actually
+    get (memory-capped against the project's own bytes, so a machine that
+    can't fan the project never holds it back). The loop stops at the
+    first losing hold, which keeps every known pathology out by
+    construction: level-sized projects pool (serializing them wastes the
+    concurrency they already saturate), sub-pool-threshold projects never
+    hold (they can't fan, so holding gains nothing), and a core-bound
+    pool that already dwarfs the largest project keeps it.
+
+    Message count predicts conversion cost far better than bytes — the
+    reference archive's 329MB/97k-message giant takes as long as its
+    other seven projects combined while being only 1.08x the runner-up's
+    *bytes* — so costs compare cached counts when every plan has one and
+    fall back to bytes otherwise; mixing the two units in one ranking
+    would make the comparison meaningless.
+
+    This generalizes the earlier single-dominant-project hold-back (2x
+    the runner-up): the 2x giant still holds, and shapes it missed — a
+    large project bounding a pool of small ones without being 2x a level
+    twin — now hold too, one at a time, while the numbers keep working.
+    """
+    if len(plans) < 2 or job_budget <= 1 or render_budget <= 1:
+        return []
+    if all(plan.cached_message_count for plan in plans):
+        eligible_floor = _MIN_MESSAGES_FOR_RENDER_POOL
+
+        def cost(plan: "_ProjectPlan") -> int:
+            return plan.cached_message_count or 0
+    else:
+        eligible_floor = _MIN_SOURCE_BYTES_FOR_HOLDBACK
+
+        def cost(plan: "_ProjectPlan") -> int:
+            return plan.source_bytes
+
+    remaining = sorted(plans, key=cost, reverse=True)
+    held: "List[_ProjectPlan]" = []
+    while len(remaining) >= 2:
+        largest, rest = remaining[0], remaining[1:]
+        if cost(largest) < eligible_floor:
+            break
+        workers_alone = min(
+            render_budget,
+            job_budget,
+            memory_capped_workers(min(render_budget, job_budget), largest.source_bytes),
+        )
+        speedup = _fanned_speedup(workers_alone)
+        if speedup <= 1.0:
+            break
+        wall_pool_all = max(
+            cost(largest),
+            sum(cost(p) for p in remaining) / min(job_budget, len(remaining)),
+        )
+        wall_pool_rest = max(
+            cost(rest[0]),
+            sum(cost(p) for p in rest) / min(job_budget, len(rest)),
+        )
+        if wall_pool_rest + cost(largest) / speedup < wall_pool_all:
+            held.append(largest)
+            remaining = rest
+        else:
+            break
+    return held
 
 
 def _plan_project(
@@ -3611,6 +4174,15 @@ def _plan_project(
         stats.files_loaded_from_cache = len(jsonl_files)
     stats.total_time = time.time() - plan_start
 
+    cached_message_count: Optional[int] = None
+    if cache_manager is not None:
+        try:
+            cache_stats = cache_manager.get_cache_stats()
+            if cache_stats.get("cache_enabled"):
+                cached_message_count = cache_stats["total_cached_messages"]
+        except Exception:
+            cached_message_count = None
+
     return _ProjectPlan(
         project_dir=project_dir,
         dest_dir=dest_dir,
@@ -3620,6 +4192,7 @@ def _plan_project(
         archived_count=archived_count,
         stats=stats,
         source_bytes=sum(f.stat().st_size for f in jsonl_files),
+        cached_message_count=cached_message_count,
     )
 
 
@@ -3659,6 +4232,10 @@ def _convert_project_worker(
             no_timestamps=worker_args["no_timestamps"],
             no_recaps=worker_args["no_recaps"],
             archive_search_link=worker_args["archive_search_link"],
+            # Nested pools: this project worker gets its own share of the
+            # job budget for the render fan-out, computed by the parent so
+            # the two levels together never exceed `--jobs`.
+            render_jobs=worker_args["render_jobs"],
         )
     except Exception:
         error = traceback.format_exc()
@@ -3893,11 +4470,76 @@ def process_projects_hierarchy(
     # conversion touches only its own project dir and its own rows in
     # the (WAL-mode) cache DB — so stale projects fan out over a
     # process pool. `jobs=1` keeps the historical inline path.
-    resolved_jobs = jobs if jobs is not None and jobs > 0 else (os.cpu_count() or 1)
-    resolved_jobs = max(1, min(resolved_jobs, len(to_convert)))
+    job_budget = jobs if jobs is not None and jobs > 0 else (os.cpu_count() or 1)
+    render_budget = resolve_render_jobs(None)
 
-    def _convert_plan_inline(plan: _ProjectPlan) -> None:
+    # Projects that would bound the pool's wall clock are held out of it
+    # and converted afterwards, one at a time, each with the whole render
+    # budget. Measured on the reference archive, the full-rebuild wall is
+    # within 8% of "how long does the biggest project take", while the
+    # static split below grants that project the same share as everything
+    # else; a fanned single project runs ~2.5-3x its serial time, so the
+    # wall becomes pool(rest) + Σ fanned(held) instead of serial(giant).
+    # `_holdback_plans` runs the makespan comparison per candidate and
+    # stops at the first losing hold. Only when a pool will actually run
+    # and the fan-out is on — with either off, ordering changes nothing
+    # and the historical path stays.
+    holdbacks = (
+        _holdback_plans(to_convert, job_budget=job_budget, render_budget=render_budget)
+        if job_budget > 1 and render_budget > 1 and len(to_convert) >= 2
+        else []
+    )
+    held_ids = {id(plan) for plan in holdbacks}
+    pooled = [plan for plan in to_convert if id(plan) not in held_ids]
+    resolved_jobs = max(1, min(job_budget, len(pooled)))
+
+    # Spare capacity goes to each project's *own* render fan-out (on by
+    # default — see `render_pool.resolve_render_jobs`; a project worker
+    # with no spare capacity renders inline). `--jobs` only caps that
+    # fan-out, so the two pool levels together can't oversubscribe.
+    #
+    # With fewer stale projects than workers — the shape of every
+    # incremental run — the project pool alone leaves most cores idle,
+    # because a single project's conversion is single-threaded. Dividing the
+    # budget gives one stale project the whole machine and many stale
+    # projects the historical one-worker-each.
+    #
+    # The hold-back above covers the tails a makespan comparison can
+    # see (projects that bound the pool and repay a lone fan-out); the
+    # split among what stays pooled is still static (a finished small
+    # project's share isn't handed back), and making it dynamic needs a
+    # single flat pool over render units rather than two nested levels.
+    #
+    # Memory can bind before cores do. Every *project* worker holds its
+    # project's whole master list (~4.5x its transcript bytes on disk with
+    # the fragment store); render workers hold only their in-flight unit's
+    # slice, but the footprint is still the *product* of the two levels.
+    # Left unchecked that is how an `auto` run on a large archive takes a
+    # machine into swap and wedges it. Size the render share against the
+    # largest stale project, divided across the project workers that will
+    # be resident at the same time; each worker re-checks against its own
+    # project before actually starting a pool.
+    per_project_render_jobs = 1
+    if render_budget > 1 and pooled:
+        per_project_render_jobs = max(
+            1,
+            min(
+                render_budget,
+                job_budget // max(1, len(pooled)),
+                memory_capped_workers(
+                    render_budget,
+                    max(plan.source_bytes for plan in pooled),
+                    concurrent_projects=resolved_jobs,
+                ),
+            ),
+        )
+
+    def _convert_plan_inline(
+        plan: _ProjectPlan, render_jobs: Optional[int] = None
+    ) -> None:
         """Convert one project in this process, reporting progress/failure."""
+        if render_jobs is None:
+            render_jobs = per_project_render_jobs
         project_start_time = time.time()
         try:
             # Generate output for this project (handles cache updates internally)
@@ -3921,6 +4563,7 @@ def process_projects_hierarchy(
                 no_timestamps=no_timestamps,
                 no_recaps=no_recaps,
                 archive_search_link=_archive_search_link(plan),
+                render_jobs=render_jobs,
             )
         except Exception:
             _print_project_failed(plan, traceback.format_exc())
@@ -3928,13 +4571,13 @@ def process_projects_hierarchy(
         _print_project_done(plan, time.time() - project_start_time)
 
     if resolved_jobs <= 1:
-        for plan in to_convert:
+        for plan in pooled:
             _convert_plan_inline(plan)
-    elif to_convert:
+    elif pooled:
         # Largest projects first: with N workers the wall clock is
         # bounded by the biggest single project, so don't leave it
         # queued behind small ones at the tail.
-        by_size = sorted(to_convert, key=lambda p: p.source_bytes, reverse=True)
+        by_size = sorted(pooled, key=lambda p: p.source_bytes, reverse=True)
         settled: set[int] = set()
         try:
             # `spawn` on every platform: fork is officially unsafe with
@@ -3967,6 +4610,7 @@ def process_projects_hierarchy(
                             "no_timestamps": no_timestamps,
                             "no_recaps": no_recaps,
                             "archive_search_link": _archive_search_link(plan),
+                            "render_jobs": per_project_render_jobs,
                         },
                     ): plan
                     for plan in by_size
@@ -3992,9 +4636,16 @@ def process_projects_hierarchy(
                 f"this as a library, run it under `if __name__ == '__main__':` "
                 f"or pass jobs=1."
             )
-            for plan in to_convert:
+            for plan in pooled:
                 if id(plan) not in settled:
                     _convert_plan_inline(plan)
+
+    # The pool has drained and nothing else is resident, so each held-back
+    # project gets the whole machine (`--jobs` still caps it; the memory
+    # cap re-checks inside `_make_render_pool`). Smallest first, so the
+    # run ends on the project that dominates the wall.
+    for plan in reversed(holdbacks):
+        _convert_plan_inline(plan, render_jobs=min(render_budget, job_budget))
 
     # ---- Phase 3 (collect): aggregate per-project index data from the
     # now-fresh cache. Sequential — cheap cache reads (the no-cache

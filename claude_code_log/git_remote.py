@@ -287,6 +287,17 @@ def resolve_sha_for_current_render(sha: str) -> Optional[str]:
     return resolve_sha(_render_repo_cwd.get(), sha)
 
 
+def current_render_repo_cwd() -> Optional[str]:
+    """The repo cwd bound by the innermost ``render_with_repo_context``.
+
+    Public read accessor for the ContextVar. Markdown memoization keys on
+    this: the SHA-linkifier makes rendered output depend on which repo the
+    render is scoped to, so the same text is *not* interchangeable across
+    projects (see ``render_cache``).
+    """
+    return _render_repo_cwd.get()
+
+
 @contextlib.contextmanager
 def render_with_repo_context(cwd: Optional[str]) -> Iterator[None]:
     """Bind a canonical repo cwd for the duration of a render pass.

@@ -33,6 +33,7 @@ from .cache import (
     get_library_version,
 )
 from .models import RenderingDepth
+from .render_pool import resolve_render_jobs
 from .search import (
     ENV_INDEX_FIELDS,
     ENV_SEARCH_FIELDS,
@@ -1016,7 +1017,10 @@ def main() -> None:
     help=(
         "Worker processes for converting projects in --all-projects mode "
         "(default: CPU count; 1 disables parallelism). Peak memory scales "
-        "with jobs × the largest stale project."
+        "with jobs x the largest stale project. Also caps the per-project "
+        "render fan-out, which is on by default and controlled by "
+        "$CLAUDE_CODE_LOG_RENDER_JOBS (1 or 'off' to disable, auto, or a "
+        "worker count)."
     ),
 )
 @click.option(
@@ -1967,6 +1971,15 @@ def convert(
             # with output=None anyway, so its skip is never forced.
             force_regenerate=output is not None and _output_path_is_file(output),
             report=report,
+            # A single-project conversion has the whole machine to itself,
+            # so `--jobs` is the cap for its render fan-out. Whether that
+            # fan-out runs at all is decided by
+            # $CLAUDE_CODE_LOG_RENDER_JOBS, which is off by default —
+            # `render_jobs=None` consults it, and the min() keeps an
+            # explicit `--jobs` as the ceiling.
+            render_jobs=(
+                min(jobs, resolve_render_jobs(None)) if jobs is not None else None
+            ),
         )
         # Report only work actually done this run. On a pure skip the converter
         # already printed its "... is current, skipping regeneration" line, so

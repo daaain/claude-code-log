@@ -110,6 +110,33 @@ def timing_stat(list_name: str) -> Iterator[None]:
             _timing_data[list_name].append((duration, msg_id))
 
 
+def report_cache_statistics(
+    cache_stats: list[Tuple[str, dict[str, int]]],
+) -> None:
+    """Report memo-cache effectiveness for the pure render leaves.
+
+    Args:
+        cache_stats: List of (name, stats) pairs, where stats is the dict
+                     returned by ``render_cache.ByteBoundedCache.stats()``.
+    """
+    for name, stats in cache_stats:
+        lookups = stats["hits"] + stats["misses"]
+        if not lookups:
+            continue
+        rate = 100.0 * stats["hits"] / lookups
+        extras = [
+            f"{stats[extra_key]} {extra_key}"
+            for extra_key in ("conflicts", "skipped")
+            if stats.get(extra_key)
+        ]
+        skipped_note = f", {', '.join(extras)}" if extras else ""
+        print(
+            f"[TIMING] {name} memo: {stats['hits']}/{lookups} hits ({rate:.0f}%), "
+            f"{stats['entries']} entries, {stats['bytes'] / 1e6:.1f}MB{skipped_note}",
+            flush=True,
+        )
+
+
 def report_timing_statistics(
     operation_timings: list[Tuple[str, list[Tuple[float, str]]]],
 ) -> None:

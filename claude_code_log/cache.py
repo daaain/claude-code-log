@@ -323,6 +323,8 @@ class CacheManager:
         project_path: Path,
         library_version: str,
         db_path: Optional[Path] = None,
+        *,
+        read_only: bool = False,
     ):
         """Initialise cache manager for a project.
 
@@ -331,9 +333,18 @@ class CacheManager:
             library_version: Current version of the library for cache invalidation
             db_path: Optional explicit path to the cache database. If not provided,
                 uses CLAUDE_CODE_LOG_CACHE_PATH env var or default location.
+            read_only: Open the cache strictly for reading. Skips the
+                migration run and the project-row upsert, and opens every
+                connection in SQLite's ``mode=ro``, so this instance can
+                never write the shared database. Built for spawned render
+                workers, which would otherwise all race those writes. The
+                project id is looked up rather than created, so a missing
+                database or row degrades to "no cached data" instead of
+                erroring.
         """
         self.project_path = project_path
         self.library_version = library_version
+        self._read_only = read_only
 
         # Priority: explicit db_path > env var > default location
         if db_path:
@@ -348,15 +359,26 @@ class CacheManager:
         # if migrations are ever routed through it.
         self._shared_conn: Optional[sqlite3.Connection] = None
 
-        # Initialise database and ensure project exists
-        self._init_database()
         self._project_id: Optional[int] = None
-        self._ensure_project_exists()
+        if read_only:
+            # Migrations and the project-row upsert both write; a reader
+            # takes the schema and row exactly as the parent process left
+            # them, and only looks its project up.
+            self._lookup_project_id()
+        else:
+            # Initialise database and ensure project exists
+            self._init_database()
+            self._ensure_project_exists()
 
     def _configure_connection(self, conn: sqlite3.Connection) -> None:
         """Apply the standard pragmas/row factory to a fresh connection."""
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
+        if self._read_only:
+            # A mode=ro connection cannot switch journal modes, and a
+            # reader needs neither pragma: the writing parent already
+            # keeps the database in WAL.
+            return
         conn.execute("PRAGMA journal_mode = WAL")
         # synchronous=NORMAL is the recommended pairing for WAL: it keeps
         # durability across application crashes (only a power/OS crash can lose
@@ -373,7 +395,14 @@ class CacheManager:
         .db/.db-wal/.db-shm files — the exact failure mode the connection
         lifecycle elsewhere is careful to avoid (Windows WinError 32).
         """
-        conn = sqlite3.connect(self.db_path, timeout=30.0)
+        if self._read_only:
+            # as_uri() percent-encodes the (absolute) path, so URI mode is
+            # safe for paths with spaces or query-ish characters.
+            conn = sqlite3.connect(
+                self.db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=30.0
+            )
+        else:
+            conn = sqlite3.connect(self.db_path, timeout=30.0)
         try:
             self._configure_connection(conn)
         except BaseException:
@@ -444,6 +473,29 @@ class CacheManager:
             return
         run_migrations(self.db_path)
         _migrated_db_paths.add(key)
+
+    def _lookup_project_id(self) -> None:
+        """Read-only counterpart of ``_ensure_project_exists``: find, never create.
+
+        No version-compatibility handling either — invalidating on a
+        mismatch is a write, and the (writing) parent that spawned this
+        reader already resolved any mismatch before handing over. Leaves
+        ``_project_id`` as None — reads return "no cached data" — when the
+        database, schema, or row is absent, rather than raising out of a
+        worker's initialiser.
+        """
+        if not self.db_path.exists():
+            return
+        try:
+            with self._get_connection() as conn:
+                row = conn.execute(
+                    "SELECT id FROM projects WHERE project_path = ?",
+                    (str(self.project_path),),
+                ).fetchone()
+        except sqlite3.Error:
+            return
+        if row:
+            self._project_id = row["id"]
 
     def _ensure_project_exists(self) -> None:
         """Ensure project record exists and get its ID."""

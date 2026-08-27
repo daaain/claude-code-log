@@ -498,7 +498,27 @@ class MessageContent:
 
     # Set by RenderingContext.register() to enable content→TemplateMessage lookup
     # Using init=False to avoid dataclass inheritance issues with required fields
-    message_index: Optional[int] = field(default=None, init=False, repr=False)
+    # compare=False: the index is assigned per render tree, and the fragment
+    # store compares two trees' contents for the same source entry to decide
+    # whether a cached fragment may be reused — a per-tree field must not
+    # defeat that comparison (the contents ARE the same message).
+    message_index: Optional[int] = field(
+        default=None, init=False, repr=False, compare=False
+    )
+
+    # Identity of the source (TranscriptEntry, part) this content was built
+    # from: ``(id(entry), part_ordinal)``. Stamped by the pass-2 render loop
+    # for entry-derived content only — synthesized content (session/branch
+    # headers, grafted sidechannel nodes, ghost placeholders) stays None and
+    # is always formatted fresh. Valid only while the conversion's master
+    # message list keeps every entry alive (an ``id()`` can be reused after
+    # its object is freed), which is why the fragment store that consumes it
+    # is scoped to a single conversion. NOT a uuid: transcript uuids collide
+    # across resumed/forked sessions (see work/render-format-once.md § 4.1).
+    # compare=False for the same reason as message_index.
+    fragment_key: Optional[tuple[int, int]] = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     @property
     def message_type(self) -> str:

@@ -35,7 +35,7 @@ for user-facing operations docs see [`docs/`](../docs/).
 | Depth filter | renderer.py § Depth filtering, `models.RenderingDepth` | inlined below (§ 2.6) |
 | Image export | [`image_export.py`](../claude_code_log/image_export.py) | inlined below (§ 2.7) |
 | Performance profiling | [`renderer_timings.py`](../claude_code_log/renderer_timings.py) | inlined below (§ 2.8) |
-| Diagnosing hangs (SIGUSR1) | [`cli.py`](../claude_code_log/cli.py) `_install_stack_dump_signal` | inlined below (§ 2.9) |
+| Diagnosing hangs (SIGUSR1) | [`cli.py`](../claude_code_log/cli.py) `_install_stack_dump_signal` | inlined below (§ 2.11) |
 | Adding a new tool renderer | [`factories/tool_factory.py`](../claude_code_log/factories/tool_factory.py), `html/tool_formatters.py` | [implementing-a-tool-renderer.md](implementing-a-tool-renderer.md) (how-to) |
 | Which tools have a specialized renderer or provider adapter | `TOOL_INPUT_MODELS` / `TOOL_OUTPUT_PARSERS` in [`factories/tool_factory.py`](../claude_code_log/factories/tool_factory.py), plus provider adapters | [tools-coverage.md](tools-coverage.md) (Claude and Codex status vs. upstream references) |
 | Plugin system (third-party message transformers) | [`plugins.py`](../claude_code_log/plugins.py), [`factories/priorities.py`](../claude_code_log/factories/priorities.py), `Renderer._dispatch_format` | [plugins.md](plugins.md) |
@@ -80,8 +80,10 @@ single transcript or directory. Major flags:
   output, packing whole sessions into pages of up to N messages each
   (sessions are never split across pages, so individual pages may
   overflow). Per-session HTML files are not paginated.
-- `--jobs N` / `-j N` — worker processes for the all-projects
-  conversion phase (default: CPU count; `1` disables parallelism).
+- `--jobs N` / `-j N` — worker processes for the all-projects conversion
+  phase (default: CPU count; `1` disables parallelism). Also caps the
+  per-project render fan-out, which is opt-in via
+  `$CLAUDE_CODE_LOG_RENDER_JOBS` (§ 2.10).
 
 CLI orchestration delegates to `converter.py` (which owns the
 high-level "load + render + write" flow) and never touches `renderer.py`
@@ -95,9 +97,11 @@ three phases: **plan** (sequential, cheap — per-project staleness via
 cache mtimes, also ensures DB schema/migrations exist), **execute**
 (stale projects fan out over a `ProcessPoolExecutor` with the `spawn`
 start method, largest-first; rendering is CPU-bound pure Python and
-projects are independent, so this scales near-linearly with cores),
-and **collect** (sequential — per-project index data is read back from
-the cache and the cross-project `index.html` is written last). Workers
+projects are independent, so this scales near-linearly with cores; when
+the per-project render fan-out is enabled, any budget left over after one
+worker per stale project is handed to it, § 2.10), and **collect**
+(sequential — per-project index data is read back from the cache and the
+cross-project `index.html` is written last). Workers
 run silent; the parent prints one progress line per project as results
 arrive. All workers share the WAL-mode SQLite cache DB — each writes
 only its own project's rows, and WAL serialises the short write
@@ -330,6 +334,19 @@ Default is `embedded` for HTML (single self-contained file) and
 `referenced` for Markdown (keeps the `.md` text small and lets
 images live as separate PNGs alongside).
 
+Referenced filenames are **content-addressed** — `images/image_<digest>.<ext>`
+from a BLAKE2b digest of the decoded bytes — so a given image maps to
+exactly one file no matter which render pass, run, or worker process
+exports it, and re-exporting is idempotent (an existing file is already
+the right bytes; writers go through a unique temp file + atomic
+`os.replace`, so concurrent exporters of the same image replace
+identical content). This replaced a per-render counter whose names
+collided between the combined-page and per-session passes — each pass
+restarted at `image_0001` and assigned the same names to different
+images, so the last pass to run overwrote the other's files. Content
+addressing is also what lets referenced-mode renders use the fragment
+store (§ 2.9) and the render fan-out (§ 2.10).
+
 ### 2.8 Performance profiling
 
 [`renderer_timings.py`](../claude_code_log/renderer_timings.py)
@@ -338,7 +355,306 @@ provides `log_timing(label, t_start)` context managers used throughout
 times to stderr — useful for spotting which phase regressed when a
 large transcript suddenly takes seconds longer than before.
 
-### 2.9 Diagnosing hangs (SIGUSR1 stack dump)
+### 2.9 Render memo caches
+
+A project conversion renders every message **twice**: once into its
+combined-transcript page and once into its individual `session-*.html`.
+Both go through `HtmlRenderer.generate`, which rebuilds the tree from the
+same source entries, so the per-message formatting work is duplicated
+wholesale. On a 118-file, 12k-message project that is 22,420
+`format_content` calls covering 11,113 distinct messages.
+
+[`render_cache.py`](../claude_code_log/render_cache.py) memoizes the two
+dominant leaves of that work — Pygments highlighting
+(`html/renderer_code.py::highlight_code_with_pygments`) and mistune
+Markdown (`html/utils.py::_render_markdown_memoized`, behind
+`render_markdown` / `render_user_markdown` / `render_markdown_inline`).
+Measured effect on that project: 12.4s → 8.7s wall, with all 88 output
+files byte-identical. Hit rates run ~69% (Pygments) and ~59% (Markdown);
+Pygments exceeds the 50% that page-vs-session duplication alone implies
+because the same file contents are commonly re-read across messages.
+
+Two properties matter for correctness:
+
+- **Markdown is not a pure function of its text.** The SHA-linkifier
+  plugin resolves commit hashes against the per-render repo cwd carried
+  by `git_remote._render_repo_cwd` (read via `current_render_repo_cwd()`),
+  so identical text legitimately renders different links in different
+  projects. That cwd is part of the Markdown key — without it a
+  long-lived host (`serve`, the TUI) would serve one project's commit
+  links inside another's page. Pygments has no such coupling and keys on
+  its arguments alone.
+- **Bounded by bytes, not entries.** Rendered fragments are large, so
+  `functools.lru_cache(maxsize=N)` gives no control over footprint. The
+  caches evict LRU against a byte budget and refuse any single entry
+  above 1/8 of it, so one huge highlighted file cannot evict everything
+  behind it. `CLAUDE_CODE_LOG_RENDER_CACHE_MB` sets the budget (default
+  192 MB per cache; `0` disables memoization and restores the previous
+  always-recompute behaviour). Typical projects stay far under it — the
+  measured project held 13.3 MB of Pygments and 2.7 MB of Markdown with
+  zero evictions.
+
+`CLAUDE_CODE_LOG_DEBUG_TIMING=1` prints hit rate, entry count and bytes
+per cache alongside the render timings.
+
+**The fragment store sits above the leaf memo** and removes the
+page-vs-session duplication itself rather than its expensive leaves:
+[`fragment_store.py`](../claude_code_log/fragment_store.py) caches each
+message's complete formatted fragment — the `(title, html, timestamp)`
+triple `_annotate_tree_for_render` writes onto the tree — for the length
+of one conversion, so the per-session pass reuses what the combined-page
+pass formatted (measured: 64,968 lookups → 32,441 formats, a 50% hit
+rate, on a 803MB/187-file archive). One store per `convert_jsonl_to`
+call, created by `_make_fragment_store` (HTML only) and handed to the
+combined-page and session-file loops; it dies with the conversion, so
+nothing about it ever needs invalidating.
+`CLAUDE_CODE_LOG_FRAGMENT_STORE=0` disables it for bisecting.
+Because the store is a RAM-for-CPU trade — measured serial peaks on the
+803MB reference project: 1252MB store-off vs 1521MB store-on, the
++269MB being the fragment text plus per-entry overhead —
+`_make_fragment_store` carries a memory valve: when available memory is
+under `_FRAGMENT_STORE_MIN_AVAILABLE_PER_BYTE` (2.4×, the store-on peak
+plus margin) times the project's transcript bytes, the conversion runs
+store-less at its pre-store footprint instead of trading its last RAM
+for CPU. An explicit `CLAUDE_CODE_LOG_FRAGMENT_STORE=1` overrides the
+valve; whenever the valve trips, the render pool's far higher memory
+bar has already declined, so a store-less conversion is always serial.
+
+A fragment is *not* a pure function of its source entry, and the store
+carries three guards for the three ways the same message legitimately
+renders differently in different trees (each found by hash-diffing real
+projects — see `work/render-format-once.md` § 4.8): fragments embedding
+per-tree `#msg-d-{N}` anchors are never stored (output scan); a
+signature of the tree-derived render inputs (pair presence,
+`display_model`, `agent_depth`, sidechannel/collapse flags) is part of
+the store key; and `get()` verifies the requesting tree's content
+digest matches the one stored at `put` time before serving.
+`fragment_store.content_digest` is a canonical BLAKE2b walk over
+exactly the compare-relevant state — same field coverage as dataclass
+equality, with the per-tree `message_index`/`fragment_key` fields
+excluded via `compare=False`, and any looseness of Python `==` that
+the canonical form can't express (bool/int, dict order,
+identity-`repr` objects) resolving to a conflict served fresh, never
+a false hit. A digest is stored rather than the content object so the
+store holds only strings and bytes — picklable, spillable, and unable
+to pin object graphs — the property the planned fed-worker format
+phase depends on. On the reference 803MB archive this is peak-RSS-
+neutral (measured 1521MB either way: the stored contents alias
+objects the master entry list keeps alive, and the store-on peak of
++269MB over store-off is the 186MB of fragment text plus per-entry
+overhead), so the fragment text itself is what any future memory
+bounding must address. Keys are `(id(source_entry), part_ordinal)` — entry
+identity, stamped in the pass-2 render loop — because transcript uuids
+collide across resumed/forked sessions. Renders with
+`image_export_mode="referenced"` participate like any other: image
+filenames are content-addressed (§ 2.7), so a stored fragment's
+`src=` names the file the first formatting of that message already
+wrote, and replaying the fragment skips only a write that has
+happened.
+
+### 2.10 Intra-project render fan-out
+
+[`render_pool.py`](../claude_code_log/render_pool.py) fans a single
+project's output files — its combined pages and its per-session files —
+out over worker processes. This sits *below* the project-level pool in
+§ 2.1 and exists because that one leaves cores idle in two shapes:
+the all-projects wall clock is bounded by the largest single project
+(measured: 5 real projects, 4 cores, 195s of work, 65.0s wall — exactly
+the largest project's own time, at 2.18 cores average), and an
+incremental run has only one or two stale projects to fan out at all.
+
+Workers are **fed, never self-sufficient**: they do not load the
+transcript at all. Each dispatched unit carries its own slice of the
+parent's master message list (`RenderUnit.entries` — a page's sessions'
+entries, or one session's trunk + integrated agent entries), the
+master-list ordinal of each entry (`entry_ordinals`, so fragment-store
+keys name the same positions in every process), and — for session units —
+the session's slice of the parent's fragment store
+(`RenderUnit.fed_fragments`). The one per-worker piece of state is a
+*slim* `SessionTree` (`dag.slim_session_tree`, sent via the pool
+initializer): the render path reads only the DAG lines, junction points
+and workflow dicts, so the per-message `nodes` mapping — whose pickled
+size is the whole transcript — stays behind (its lookups raise on a slim
+tree, so a future render-path consumer of `nodes` fails loudly in a
+worker instead of silently diverging). The parent keeps every staleness
+check and cache write to itself (so the DB stays single-writer — a
+worker's own `CacheManager`, kept only for the per-session combined-link
+lookup, is constructed `read_only=True`: no migrations, no project-row
+upsert, `mode=ro` connections), slices
+session units with the same trunk predicate `generate_session` filters
+by (so the worker's re-filter of the fed slice is idempotent), and the
+pool starts lazily on first submit. `RenderPool.submit` declines a unit
+with no entry slice to the inline path, and a pool is only created when
+the conversion has a pre-built session tree — a worker-side DAG rebuild
+from a slice alone could genuinely differ.
+
+Before the feed, each worker re-loaded the whole transcript from the
+warm cache in its initializer (~0.7s at 12k messages; ~12s of CPU per
+worker at 329MB of transcript), so per-worker cost scaled with project
+size rather than unit size — measured post-fragment-feed on a 16-core
+Mac, 16 workers still burned 286.1s of CPU to do 91.1s of serial work,
+almost all of it transcript reloads, and 16 workers came out *slower*
+than 8. Feeding moves each entry at most twice per conversion (its page
+unit, then its session unit) instead of once per worker. Fragments cross
+the boundary as before (plain strings + digests — § 2.9's store made
+them portable): a page worker returns its fragment store as a delta in
+its result, the parent absorbs it, and session units dispatch afterwards
+carrying their slices. Pages always drain before sessions dispatch, so
+the feed covers essentially every message; every fed fragment is
+digest-verified on use, so the worst a stale slice can do is cost the
+recompute it would have cost anyway.
+
+**Memory: the cap charges measured post-feeding footprints.** The
+conversion *parent* is the heavyweight — its master entry list (Pydantic
+entries, TemplateMessage tree, SessionTree) plus the fragment store's
+text and in-flight pickled slices measured ~4.4× the transcript's bytes
+on disk (598MB on a 140MB/47k-message project, 1458MB on 329MB/97k; VmHWM
+polling, 2026-08-26). Fed workers hold only base imports, their memo
+caches and the in-flight unit's slice: the largest worker measured
+~136MB + 0.59× transcript across the same runs.
+`render_pool.memory_capped_workers` charges the parent 4.5× + base and
+each worker 0.8× + base — a ~1.2–1.35× margin over the fit, because the
+alternative failure mode is real: when workers each held a full copy, an
+unguarded `auto` on a large archive exhausted RAM and drove the machine
+into swap, pegging every core — far worse than rendering serially. (The
+one under-charged pathology is a single session spanning most of the
+transcript, whose unit slice re-inflates toward the parent's ~3× in its
+worker; it is one outlier inside the headroom, and such projects yield
+too few units to fan wide.) The cap reads available memory as cgroup
+limit first (inside a container the host's totals are a lie), then
+`MemAvailable`, then free physical pages, taking 60% of it as budget.
+The all-projects parent applies the same cap with
+`concurrent_projects=resolved_jobs` before handing out any budget, and
+each worker re-checks against its own project before starting a pool.
+Unknown memory allows at most 2 workers.
+
+Both non-Linux platforms need their own probe, since each would otherwise
+fall through to that unknown-memory branch and be capped at 2 workers
+regardless of cores or RAM — a 16-core Mac measured the whole fan-out on
+2 before this was fixed. macOS has neither `MemAvailable` nor
+`SC_AVPHYS_PAGES`: `_darwin_available_bytes` shells out to `vm_stat`
+(present on every macOS, no dependency) and counts free + inactive +
+speculative + purgeable pages, since excluding the cheaply reclaimable
+ones reports a busy Mac as having almost nothing free. Windows has no
+`/proc` and no `os.sysconf` at all: `_windows_available_bytes` reads
+`ullAvailPhys` from `GlobalMemoryStatusEx` via `ctypes`. Every probe
+returns None rather than raising, so an unreadable platform stays
+conservative instead of failing a conversion.
+
+**On by default** at the CPU count, settled by the 16-core measurement
+below. `$CLAUDE_CODE_LOG_RENDER_JOBS` overrides: `1` or `off` disables it,
+`auto` is the default, an integer pins a count — see
+`render_pool.resolve_render_jobs`. `--jobs` never enables or disables it;
+it only caps it, so the two pool levels together can't oversubscribe. An
+explicit `convert_jsonl_to(render_jobs=N)` overrides the environment; the
+default `None` consults it. `_make_render_pool` declines regardless for
+single-file mode, a missing cache manager, a missing pre-built session
+tree (workers render fed slices against the conversion's tree),
+projects below `_MIN_MESSAGES_FOR_RENDER_POOL`, and machines without
+the memory the cap formula demands.
+`image_export_mode="referenced"` used to decline too, when renders
+allocated `images/image_NNNN.png` names from a per-call counter that
+collided across passes and processes; referenced filenames are now
+content-addressed (`image_export.export_image` digests the decoded
+bytes and writes via temp-file + atomic replace), so any pass, run, or
+worker exporting the same image converges on the same file and the
+mode fans out like any other.
+
+One ordering change made the pages parallelisable: the paginated writer
+used to reveal page N-1's "Next" link while generating page N, so page N's
+render edited page N-1's file. That fixup now runs once after all pages
+land — order-independent and idempotent.
+
+**Measured** on 4 cores, 47k-message project (240 session files, 218
+output units); the serial floor — cache check, transcript load, planning,
+all in the parent and none of it parallelised — is 4.7s:
+
+| | wall | total CPU |
+|---|---|---|
+| neither optimisation | 44.8s | 43.5s |
+| memo only (§ 2.9) | 27.6s | 26.2s |
+| fan-out only (4 workers) | 22.5s | 57.0s |
+| both | **20.0s** | 48.8s |
+
+Read those together, because the pair is easy to misread. The fan-out
+parallelises perfectly well on its own — 44.8s → 22.5s is 2.0× on 4 cores
+against a 4.7s serial floor. It looks weak *on top of the memo* (27.6s →
+20.0s, 1.38×) only because the two optimisations attack the same work: the
+memo removes the page-vs-session duplication, and splitting units across
+processes gives each worker a cold cache and brings some of it back. Both
+together is still the fastest configuration, so they compose — just
+sub-additively.
+
+A 16-core Mac over 8 real projects (1543MB of transcripts, largest 329MB)
+shows what happens with cores to spare — and why the two `--all-projects`
+scenarios diverge so sharply:
+
+| scenario | config | wall | CPU | cores used |
+|---|---|---|---|---|
+| full rebuild, 8 projects | memo only | 100.8s | 226.0s | 2.2 of 16 |
+| full rebuild, 8 projects | both | 79.3s (1.27x) | 324.8s | 4.1 of 16 |
+| incremental, 1 stale | memo only | 93.2s | 90.8s | 1.0 of 16 |
+| incremental, 1 stale | both | **34.6s (2.70x)** | 367.9s | 10.6 of 16 |
+
+The incremental row is what flipped the default: 2.70x on the everyday
+shape of a run, using 10.6 cores instead of 1.
+
+The full-rebuild row is the *unsolved* case, and the numbers say exactly
+why. Converting the largest project alone takes 93.2s; converting all
+eight takes 100.8s. The other seven cost 7.6s of wall clock between them —
+the run is, to within 8%, "how long does the biggest project take". The
+static budget split then gives that project `jobs // stale projects` = 2
+render workers while the seven small ones finish and 13 cores go idle. So
+the fan-out helps it barely (1.27x) even though the same project alone
+reaches 2.70x. Pool-bounding projects are now handled by hold-back:
+`_holdback_plans` runs a greedy makespan comparison, largest first
+(hold while `pool(rest) + fanned(largest)` beats pooling everything,
+with fanned time from the conservative `_fanned_speedup` of the
+workers a lone memory-capped conversion would get), keeps what it
+holds out of the pool and converts each alone with the full render
+budget afterwards. Costs compare cached message counts when every
+plan has one (bytes alone would miss a dense giant), bytes otherwise.
+On the reference archive it holds exactly the 97k giant — measured
+65.4s → 58.5s (1.12x) on the 8-core VM under the original
+single-dominant rule, whose decision the general rule reproduces
+there, since the twin 47k projects keep each other's pool bounded —
+and it additionally covers shapes the 2x-dominance bar missed, such
+as a runner-up that bounds a pool of small projects without being 2x
+any of them. What it deliberately never does is serialize level-sized
+projects (a certain loss — they already saturate the pool) or hold
+anything a machine can't actually fan. Fixing the truly general case —
+several level-sized projects sharing one static split — still needs
+the split to be dynamic, or a single flat pool over render units
+rather than two nested levels.
+
+Two consequences. First, core count matters a lot: 48.8s of CPU over 4
+cores is 12.2s plus the 4.7s floor, so a 10-core machine should land near
+9.5s rather than 20s. Second, the per-worker cost (then: a full
+transcript reload plus a cold memo) grows with worker count, so the
+speedup saturates rather than scaling indefinitely.
+
+Those tables predate the fragment feed and the entry feed, which removed
+most of that per-worker cost in two steps. Re-measured on an 8-core VM
+over the same 8-project archive (1539MB): with fragments fed, the
+incremental scenario reached 2.08x at +76% CPU over serial (the
+pre-feed baseline burned +305%); with entries fed as well — no worker
+transcript loads at all — it reached **2.87x at +3% CPU** (62.6s →
+21.8s wall, 62.5s CPU vs 60.5s serial), and the single-project sweep's
+per-worker CPU overhead fell from ~4.4s to ~0.7s at 8 workers. With the
+memory cap re-sized to the measured post-feeding footprints (above),
+the same VM's incremental cap went 5 → 8 of 8 workers and the scenario
+reached **3.24x at +6% CPU** (61.8s → 19.1s wall, 63.3s CPU vs 59.5s
+serial), byte-identical in every configuration. The full-rebuild
+scenario improved to 1.12x via the hold-back (above, since
+generalized from the single-dominant rule to the greedy makespan
+comparison); what remains is its general case — several level-sized
+projects, where the *core* split `jobs // stale` still grants 1
+render worker/project — and the serial parent floor (load + parse +
+plan). Both land with the remaining "format once, assemble many"
+step: the flat pool over render units. Planned in
+[`work/render-format-once.md`](../work/render-format-once.md).
+
+### 2.11 Diagnosing hangs (SIGUSR1 stack dump)
 
 When `claude-code-log` appears stuck (100% CPU, no output), a
 single `SIGUSR1` to the running process dumps the live Python
@@ -545,6 +861,6 @@ Common entry questions and their best first stop:
 - "How do I export to JSON for downstream tooling?"
   → § 2.5 here (and `--format json` from § 2.1).
 - "claude-code-log is hung — how do I see what it's doing?"
-  → § 2.9 (`SIGUSR1` stack dump).
+  → § 2.11 (`SIGUSR1` stack dump).
 - "What's planned but not implemented?"
   → [`work/`](../work/) — each `.md` is an in-flight or proposed plan.

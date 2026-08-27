@@ -251,7 +251,59 @@ Enable timing instrumentation to identify bottlenecks:
 CLAUDE_CODE_LOG_DEBUG_TIMING=1 claude-code-log path/to/file.jsonl
 ```
 
-This outputs detailed timing for each rendering phase. The timing module is in `claude_code_log/renderer_timings.py`.
+This outputs detailed timing for each rendering phase, plus hit rates for
+the render memo caches. The timing module is in
+`claude_code_log/renderer_timings.py`.
+
+Pygments highlighting and Markdown rendering are memoized because every
+message is formatted twice per run (once for its combined page, once for
+its session file) — see `claude_code_log/render_cache.py` and
+[dev-docs/application_model.md § 2.9](dev-docs/application_model.md).
+Set `CLAUDE_CODE_LOG_RENDER_CACHE_MB=0` to disable memoization when
+bisecting a rendering difference; any other value sets the per-cache byte
+budget in MB (default 192).
+
+Above the leaf memo, a per-conversion fragment store
+(`claude_code_log/fragment_store.py`) reuses each message's complete
+formatted fragment between the combined-page and per-session passes.
+Set `CLAUDE_CODE_LOG_FRAGMENT_STORE=0` to disable it when bisecting.
+The store is a RAM-for-CPU trade (~+0.35× the project's transcript
+bytes at peak, measured), so a memory valve skips it automatically
+when available memory is under ~2.4× those bytes — the conversion
+then runs store-less at its pre-store footprint; an explicit `=1`
+forces the store past the valve. See
+[dev-docs/application_model.md § 2.9](dev-docs/application_model.md)
+for its correctness guards.
+
+A project's own pages and session files are additionally rendered in
+parallel worker processes, on by default at the CPU count. Set
+`CLAUDE_CODE_LOG_RENDER_JOBS=1` (or `off`) to disable it, or an integer to
+pin a worker count. It earns its keep on the runs that matter — an
+incremental run over a real archive measured 93.2s → 34.6s on 16 cores —
+at the cost of more total CPU, since each worker starts with a cold memo
+cache. Workers are *fed*, not self-loading: each unit crosses the process
+boundary carrying its own entry slice and (for session files) its slice
+of the fragment store, so workers verify-and-reuse formatted fragments
+instead of re-formatting, and no worker loads the project's transcript.
+Small projects are excluded outright, and the worker count is capped
+against available memory (the parent is charged its measured master-list
+footprint, each fed worker only its measured slice-holding cost): on a
+small machine or a large archive it degrades to serial rather than
+swapping. See
+[dev-docs/application_model.md § 2.10](dev-docs/application_model.md) for
+the measurements.
+
+To re-measure both on your own hardware (core count changes the answer for
+the fan-out), point the benchmark at a real project:
+
+```bash
+uv run python scripts/bench_render.py ~/.claude/projects/<project>
+```
+
+It copies the project to scratch space, warms the cache, then times every
+combination of the two knobs plus a worker-count sweep — and hashes the
+output of each, so it doubles as an equivalence check across far more real
+data than the test fixtures cover.
 
 ## Diagnosing Hangs
 
