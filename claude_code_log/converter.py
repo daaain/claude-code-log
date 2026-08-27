@@ -158,13 +158,20 @@ def get_index_filename(format: str) -> str:
     return "all-projects-summary.json" if ext == "json" else f"index.{ext}"
 
 
-def _scan_sidechain_uuids(directory: Path) -> set[str]:
+def _scan_sidechain_uuids(
+    directory: Path, session_stems: Optional[list[str]] = None
+) -> set[str]:
     """Collect UUIDs from sidechain/subagent files not loaded into the DAG.
 
     Some subagent files (e.g. aprompt_suggestion) are never referenced
     via agentId in the main session, so they aren't loaded by
     load_transcript(). Their UUIDs are needed to suppress false orphan
     warnings when main-chain entries reference sidechain parents.
+
+    ``session_stems`` restricts the scan to the named sessions' sidecar
+    directories — the session-scoped incremental path uses this so a
+    partial load doesn't re-read every subagent file in the project just
+    to suppress warnings.
     """
     uuids: set[str] = set()
     # ``*/subagents/*.jsonl`` covers ordinary sub-agent/teammate files;
@@ -172,8 +179,20 @@ def _scan_sidechain_uuids(directory: Path) -> set[str]:
     # transcripts (issue #174) — their agent UUIDs are otherwise unseen and
     # would raise false orphan warnings. ``journal.jsonl`` has no ``uuid`` so
     # scanning it is harmless.
-    workflow_files = directory.glob("*/subagents/workflows/*/*.jsonl")
-    for f in itertools.chain(directory.glob("*/subagents/*.jsonl"), workflow_files):
+    if session_stems is None:
+        workflow_files = directory.glob("*/subagents/workflows/*/*.jsonl")
+        scan_files = itertools.chain(
+            directory.glob("*/subagents/*.jsonl"), workflow_files
+        )
+    else:
+        scan_files = itertools.chain.from_iterable(
+            itertools.chain(
+                (directory / stem / "subagents").glob("*.jsonl"),
+                (directory / stem / "subagents" / "workflows").glob("*/*.jsonl"),
+            )
+            for stem in session_stems
+        )
+    for f in scan_files:
         try:
             with open(f, "r", encoding="utf-8", errors="replace") as fh:
                 for line in fh:
@@ -941,11 +960,19 @@ def load_directory_transcripts(
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
     silent: bool = False,
+    persist_sidecar: bool = False,
 ) -> tuple[list[TranscriptEntry], SessionTree]:
     """Load all JSONL transcript files from a directory and combine them.
 
     Returns (messages, session_tree) — the tree is reused by the renderer
     to avoid rebuilding the DAG.
+
+    ``persist_sidecar`` additionally writes the cross-session sidecar
+    (parent linkage, junction points, dedup winners — see
+    ``cache.SessionSidecar``) derived from this load's tree, enabling the
+    session-scoped incremental path on later runs. Only the conversion's
+    Phase-2 load passes it, and only for unfiltered loads — a date-filtered
+    subset must never masquerade as the whole project's sidecar.
     """
     all_messages: list[TranscriptEntry] = []
 
@@ -1013,6 +1040,289 @@ def load_directory_transcripts(
     # Resolve {tool_use_id: run} once, at full-session scope (BEFORE the renderer
     # paginates), so a Workflow tool_use links to its run even when its
     # tool_result lands on a different page (#174 PR3, pagination-boundary fix).
+    all_entries = (
+        _splice_queue_ops_chronologically(dag_ordered, queue_ops) + metadata_entries
+    )
+    tree.workflow_links = map_workflow_runs_by_tool_use(
+        all_entries, list(tree.workflow_runs.values())
+    )
+
+    if persist_sidecar and cache_manager is not None:
+        _persist_session_sidecar(cache_manager, all_messages, tree)
+
+    return all_entries, tree
+
+
+def _persist_session_sidecar(
+    cache_manager: "CacheManager",
+    all_messages: list[TranscriptEntry],
+    tree: SessionTree,
+) -> None:
+    """Project this load's cross-session facts into the cache sidecar.
+
+    Everything here is a cheap projection of state the full load already
+    built; the one extra pass is the duplicate-uuid scan, one dict walk
+    over the entries. Winners are read off ``tree.nodes`` — after
+    ``build_message_index`` the surviving node's ``session_id`` IS the
+    whole-project dedup winner for that uuid.
+    """
+    from .cache import SessionSidecar
+
+    seen_session_for_uuid: dict[str, str] = {}
+    duplicated_uuids: set[str] = set()
+    for entry in all_messages:
+        if isinstance(
+            entry,
+            (
+                SummaryTranscriptEntry,
+                AiTitleTranscriptEntry,
+                QueueOperationTranscriptEntry,
+            ),
+        ):
+            continue
+        prev = seen_session_for_uuid.get(entry.uuid)
+        if prev is None:
+            seen_session_for_uuid[entry.uuid] = entry.sessionId
+        elif prev != entry.sessionId:
+            duplicated_uuids.add(entry.uuid)
+
+    sidecar = SessionSidecar(
+        parents={
+            sid: (line.parent_session_id, line.attachment_uuid)
+            for sid, line in tree.sessions.items()
+            if line.parent_session_id is not None
+        },
+        junctions={
+            uuid: (jp.session_id, list(jp.target_sessions))
+            for uuid, jp in tree.junction_points.items()
+        },
+        dedup_winners={
+            uuid: tree.nodes[uuid].session_id
+            for uuid in duplicated_uuids
+            if uuid in tree.nodes
+        },
+    )
+    try:
+        cache_manager.save_session_sidecar(sidecar)
+    except Exception as e:
+        # The sidecar is an optimization input, never a correctness
+        # requirement — a failed write only means the next incremental
+        # run takes the full-load path.
+        logging.getLogger(__name__).warning("Failed to persist session sidecar: %s", e)
+
+
+def _session_scoped_enabled() -> bool:
+    """Whether the session-scoped incremental path may be used.
+
+    ``CLAUDE_CODE_LOG_SESSION_SCOPED=0`` (or ``off``/``no``/``false``)
+    forces the full-load path — the bisecting knob, mirroring
+    ``CLAUDE_CODE_LOG_FRAGMENT_STORE`` / ``CLAUDE_CODE_LOG_RENDER_JOBS``.
+    """
+    raw = os.getenv("CLAUDE_CODE_LOG_SESSION_SCOPED")
+    if raw is None:
+        return True
+    return raw.strip().lower() not in ("0", "off", "no", "false")
+
+
+def _load_stale_session_transcripts(
+    directory_path: Path,
+    cache_manager: "CacheManager",
+    stale_session_ids: list[str],
+    silent: bool = False,
+) -> Optional[tuple[list[TranscriptEntry], SessionTree]]:
+    """Load only the named trunk sessions, faithful to the full load.
+
+    The session-scoped incremental path: when the cache is fresh and only
+    session files are stale, the full pipeline's output for those sessions
+    is reproducible from the sessions' own files plus the persisted
+    cross-session sidecar — so a one-session change no longer loads the
+    whole project. Returns None to decline (missing sidecar or a stale
+    session whose JSONL is gone), in which case the caller falls back to
+    the full load, whose behaviour is unchanged.
+
+    Fidelity argument, piece by piece (the equivalence tests hold it to
+    byte-identity):
+
+    - *Discovery*: sessions map to source files via the cache's messages
+      table, not by filename stem — real archives contain files whose
+      entries span two sessions (a continuation written into the previous
+      session's file) and sessions with no file of their own. Every file
+      holding any stale session's entries is loaded whole, in the
+      directory's glob order, so per-file completeness and
+      ``build_message_index``'s first-encountered tie-break match the
+      full run. Co-resident fresh sessions ride along harmlessly — the
+      per-session staleness check skips them at render time.
+    - *Entries*: ``load_transcript`` per trunk file returns the same
+      spliced (agent-inlined) per-file list the full load concatenates,
+      and ``_integrate_agent_entries`` only consults anchors that live in
+      the same trunk's files.
+    - *Cross-session dedup*: every duplicated uuid's winner is enforced
+      from the sidecar — losing copies are dropped up front, which is
+      exactly the whole-project outcome, without depending on the loaded
+      subset's (possibly partial) per-session first-timestamps. Uuids
+      duplicated only *within* one session aren't in the winner map and
+      dedup identically in any subset (same-session ties keep the first
+      occurrence).
+    - *Order*: ``traverse_session_tree`` emits a session's subtree
+      contiguously, interleaving only child sessions at junctions —
+      children outside the loaded set are exactly the entries the
+      per-session filter drops from the full master list, so the loaded
+      projection's order is unchanged. Queue-op splicing anchors within
+      the session; metadata entries append per-file.
+    - *Tree facts*: parent linkage / junction targets that cross into
+      unloaded sessions are patched from the sidecar; ancestor sessions
+      appear as empty stub lines so depth chains resolve as in the full
+      tree. Workflow runs load per-session (the single-file loader).
+    """
+    from .dag import (
+        JunctionPoint,
+        SessionDAGLine,
+        build_dag,
+        build_message_index,
+        build_session_tree,
+        extract_session_dag_lines,
+    )
+    from .workflow import load_session_workflow_runs, map_workflow_runs_by_tool_use
+
+    sidecar = cache_manager.load_session_sidecar()
+    if sidecar is None:
+        return None
+
+    # Which files hold the stale sessions' entries. An *archived* stale
+    # session (cached rows, source gone) is skipped, matching the full
+    # path's outcome — it loads everything and still renders nothing for
+    # that session. (Pre-change, archived-stale sessions blocked the
+    # early exit forever AND full-loaded the project on every run.) A
+    # session whose stem-named file exists but whose cached rows don't
+    # point at it is an inconsistency this path declines to reason about.
+    file_map = cache_manager.get_session_file_map()
+    needed_files: set[str] = set()
+    for sid in stale_session_ids:
+        session_files = {
+            name for name in file_map.get(sid, set()) if not name.startswith("agent-")
+        }
+        missing = [
+            name for name in session_files if not (directory_path / name).exists()
+        ]
+        if not session_files or missing:
+            if (directory_path / f"{sid}.jsonl").exists():
+                return None
+            continue  # archived: no source anywhere, nothing to render
+        needed_files |= session_files
+
+    trunk_files = [
+        f
+        for f in directory_path.glob("*.jsonl")
+        if not f.name.startswith("agent-") and f.name in needed_files
+    ]
+    if {f.name for f in trunk_files} != needed_files:
+        return None
+
+    all_messages: list[TranscriptEntry] = []
+    with cache_manager.batch():
+        for jsonl_file in trunk_files:
+            all_messages.extend(
+                load_transcript(jsonl_file, cache_manager, None, None, silent)
+            )
+
+    _integrate_agent_entries(all_messages)
+
+    # Enforce the whole-project dedup outcome: drop every duplicated
+    # uuid's losing copies before the DAG sees them. (A co-resident
+    # session loaded only partially could otherwise present a skewed
+    # first-timestamp and flip an intra-subset winner.)
+    _metadata_types = (
+        SummaryTranscriptEntry,
+        AiTitleTranscriptEntry,
+        QueueOperationTranscriptEntry,
+    )
+    kept_messages: list[TranscriptEntry] = []
+    dropped_uuids: set[str] = set()
+    surviving_uuids: set[str] = set()
+    for entry in all_messages:
+        if isinstance(entry, _metadata_types):
+            kept_messages.append(entry)
+            continue
+        winner = sidecar.dedup_winners.get(entry.uuid)
+        if winner is not None and entry.sessionId != winner:
+            dropped_uuids.add(entry.uuid)
+        else:
+            kept_messages.append(entry)
+            surviving_uuids.add(entry.uuid)
+    all_messages = kept_messages
+
+    # Orphan-warning suppression: uuids we know exist outside the loaded
+    # set (dropped dedup losers whose winner isn't loaded, cross-session
+    # attachment points) plus the loaded sessions' own unreferenced
+    # subagent files. Over-suppression only quiets a warning; it never
+    # changes output.
+    suppression = _scan_sidechain_uuids(directory_path, [f.stem for f in trunk_files])
+    suppression |= dropped_uuids - surviving_uuids
+    suppression |= {
+        attachment
+        for (_parent, attachment) in sidecar.parents.values()
+        if attachment is not None
+    }
+
+    with _dag_warnings_suppressed(silent):
+        nodes = build_message_index(all_messages)
+        build_dag(nodes, sidechain_uuids=suppression)
+        lines = extract_session_dag_lines(nodes)
+        tree = build_session_tree(nodes, lines)
+
+    # Patch the cross-session facts the partial build cannot see. A line
+    # whose parent resolved locally (both sessions loaded) keeps its local
+    # resolution — it matches the full run by construction.
+    for sid, line in tree.sessions.items():
+        if line.parent_session_id is not None:
+            continue
+        parent_info = sidecar.parents.get(sid)
+        if parent_info is not None:
+            line.parent_session_id, line.attachment_uuid = parent_info
+
+    # Ancestor stub lines (empty, never traversed from roots) so
+    # depth chains walk to the same root the full tree has.
+    for sid in list(tree.sessions.keys()):
+        seen_chain: set[str] = set()
+        current = tree.sessions[sid].parent_session_id
+        while current is not None and current not in seen_chain:
+            seen_chain.add(current)
+            if current in tree.sessions:
+                current = tree.sessions[current].parent_session_id
+                continue
+            parent_of_current = sidecar.parents.get(current, (None, None))
+            tree.sessions[current] = SessionDAGLine(
+                session_id=current,
+                uuids=[],
+                first_timestamp="",
+                parent_session_id=parent_of_current[0],
+                attachment_uuid=parent_of_current[1],
+            )
+            current = parent_of_current[0]
+
+    # Junction points carry the full run's complete, ordered target list —
+    # including targets in unloaded sessions the local build can't know.
+    for uuid, (junction_sid, targets) in sidecar.junctions.items():
+        if uuid in nodes:
+            tree.junction_points[uuid] = JunctionPoint(
+                uuid=uuid, session_id=junction_sid, target_sessions=list(targets)
+            )
+
+    # Workflow runs, scoped per loaded session (the single-file loader).
+    tree.workflow_runs = {}
+    for jsonl_file in trunk_files:
+        for run in load_session_workflow_runs(jsonl_file, silent=silent):
+            tree.workflow_runs[run.run_id] = run
+
+    dag_ordered = traverse_session_tree(tree)
+    queue_ops: list[QueueOperationTranscriptEntry] = [
+        e for e in all_messages if isinstance(e, QueueOperationTranscriptEntry)
+    ]
+    metadata_entries: list[TranscriptEntry] = [
+        e
+        for e in all_messages
+        if isinstance(e, (SummaryTranscriptEntry, AiTitleTranscriptEntry))
+    ]
     all_entries = (
         _splice_queue_ops_chronologically(dag_ordered, queue_ops) + metadata_entries
     )
@@ -2024,6 +2334,87 @@ def convert_jsonl_to_html(
     )
 
 
+def _combined_output_is_stale(
+    cache_manager: "CacheManager",
+    output_path: Path,
+    effective_output_dir: Path,
+    format: str,
+    page_size: int,
+    suffix: str,
+) -> bool:
+    """Cache-only combined-output staleness, pagination-aware.
+
+    The Phase-1b early exit used to ask ``is_transcript_stale`` about
+    ``combined_transcripts.html`` only — a name a *paginated* project has
+    no cache row for, so every paginated project read "stale" and
+    full-loaded on every direct conversion even when nothing changed.
+    This helper reproduces the actual decision: for a paginated project
+    it replays the pagination pass's plan (same session→page assignment
+    from cached session data, same ``is_page_stale`` per page, same
+    page-size / page-count invalidation triggers) without loading a
+    single entry. Any deviation the plan would act on — page-size change,
+    page-count change, a stale or missing page — reports stale, which
+    routes to the full path exactly as before.
+
+    Only sound when the cache is fresh (the caller's gate): the cached
+    session table then matches the source tree, so the recomputed
+    assignment is the one the pagination pass would compute after a load.
+    """
+    cached_data = cache_manager.get_cached_project_data()
+    existing_page_count = cache_manager.get_page_count(suffix)
+    paginated = (
+        format == "html"
+        and cached_data is not None
+        and (cached_data.total_message_count > page_size or existing_page_count > 1)
+    )
+    if not paginated:
+        stale, _reason = cache_manager.is_transcript_stale(
+            output_path.name, None, output_dir=effective_output_dir
+        )
+        return stale
+
+    cached_page_size = cache_manager.get_page_size_config()
+    if cached_page_size is not None and cached_page_size != page_size:
+        return True
+
+    # The pagination pass assigns cached sessions ∩ sessions-on-disk (it
+    # intersects with the loaded transcripts; with a fresh cache, "some
+    # source file on disk holds this session's entries" is the same set).
+    assert cached_data is not None
+    on_disk = {
+        f.name
+        for f in cache_manager.project_path.glob("*.jsonl")
+        if not f.name.startswith("agent-")
+    }
+    file_map = cache_manager.get_session_file_map()
+    session_data = {
+        sid: data
+        for sid, data in cached_data.sessions.items()
+        if any(
+            name in on_disk
+            for name in file_map.get(sid, set())
+            if not name.startswith("agent-")
+        )
+    }
+    pages: List[List[str]] = _assign_sessions_to_pages(session_data, page_size)
+    if not pages:
+        pages = [[]]
+    if existing_page_count != len(pages):
+        return True
+    for page_num, page_session_ids in enumerate(pages, start=1):
+        page_file = effective_output_dir / _get_page_html_path(page_num, suffix)
+        is_stale, _reason = cache_manager.is_page_stale(
+            page_num,
+            page_size,
+            suffix,
+            output_dir=effective_output_dir,
+            expected_session_ids=page_session_ids,
+        )
+        if is_stale or not page_file.exists():
+            return True
+    return False
+
+
 def convert_jsonl_to(
     format: str,
     input_path: Path,
@@ -2183,12 +2574,22 @@ def convert_jsonl_to(
         ):
             # Check if the combined output is stale — unless it isn't
             # produced at all (`--combined no`), in which case its
-            # absence must not veto the early exit. `is_transcript_stale`
-            # already runs the version-marker sniff on the same resolved
-            # file, so no separate `is_html_outdated(output_path)` is needed.
+            # absence must not veto the early exit. For a single-file
+            # combined, `is_transcript_stale` runs the version-marker
+            # sniff on the same resolved file; for a *paginated* project
+            # (which has no `combined_transcripts.html` cache row, so
+            # that check would read "stale" on every run and this early
+            # exit never fired for them at all) the helper replays the
+            # pagination pass's own per-page staleness plan from cached
+            # session data alone.
             if write_combined:
-                combined_stale, _ = cache_manager.is_transcript_stale(
-                    output_path.name, None, output_dir=effective_output_dir
+                combined_stale = _combined_output_is_stale(
+                    cache_manager,
+                    output_path,
+                    effective_output_dir,
+                    format,
+                    page_size,
+                    suffix,
                 )
             else:
                 combined_stale = False
@@ -2207,9 +2608,62 @@ def convert_jsonl_to(
                     # Nothing regenerated: report defaults (False / 0) stand.
                     return output_path
 
+                # Session-scoped incremental path: the combined output is
+                # current and only session files are stale, so their bytes
+                # are reproducible from those sessions' own files plus the
+                # persisted cross-session sidecar — no whole-project load
+                # (work/render-format-once.md, streaming stage 2). Declines
+                # (None) fall through to the full load below, unchanged.
+                if _session_scoped_enabled():
+                    partial = _load_stale_session_transcripts(
+                        input_path,
+                        cache_manager,
+                        [sid for sid, _reason in stale_sessions],
+                        silent,
+                    )
+                    if partial is not None:
+                        partial_messages, partial_tree = partial
+                        partial_messages = deduplicate_messages(partial_messages)
+                        if not silent:
+                            print(
+                                f"Regenerating {len(stale_sessions)} stale "
+                                f"session file(s) for {input_path.name} "
+                                "(session-scoped, combined output current)"
+                            )
+                        sessions_regenerated = _generate_individual_session_files(
+                            format,
+                            partial_messages,
+                            effective_output_dir,
+                            None,
+                            None,
+                            cache_manager,
+                            False,
+                            image_export_mode,
+                            silent=silent,
+                            session_tree=partial_tree,
+                            depth=depth,
+                            compact=compact,
+                            write_combined=write_combined,
+                            no_timestamps=no_timestamps,
+                            no_recaps=no_recaps,
+                            render_pool=None,
+                            fragment_store=None,
+                        )
+                        if report is not None:
+                            report.combined_regenerated = False
+                            report.sessions_regenerated = sessions_regenerated
+                        return output_path
+
         # Phase 2: Load messages (will use fresh cache when available)
         messages, session_tree = load_directory_transcripts(
-            input_path, cache_manager, from_date, to_date, silent
+            input_path,
+            cache_manager,
+            from_date,
+            to_date,
+            silent,
+            # A full unfiltered load is the moment the cross-session
+            # sidecar can be (re)derived for the session-scoped path.
+            persist_sidecar=(from_date is None and to_date is None),
         )
 
         # Get working directories from cache

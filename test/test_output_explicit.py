@@ -323,8 +323,13 @@ class TestSingleFileStaleness:
         # The session was regenerated...
         assert session_html.exists(), "session HTML not regenerated"
         assert "individual session files" in r2.output
-        # ...the combined was skipped (converter says so)...
-        assert "skipping regeneration" in r2.output
+        # ...the combined was skipped (converter says so — either the full
+        # path's per-file skip line, or the session-scoped path's message,
+        # which names the same fact)...
+        assert (
+            "skipping regeneration" in r2.output
+            or "combined output current" in r2.output
+        )
         # ...and the CLI does NOT falsely claim to have combined it.
         assert "Successfully combined" not in r2.output, (
             f"claimed 'combined' when combined was skipped; output:\n{r2.output}"

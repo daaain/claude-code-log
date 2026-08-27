@@ -125,6 +125,31 @@ class ProjectCache(BaseModel):
     latest_timestamp: str = ""
 
 
+class SessionSidecar(BaseModel):
+    """Cross-session facts persisted at full-load time (migration 008).
+
+    Compact projections of a full directory load's ``SessionTree``, kept
+    so a later run can regenerate one stale session's file from that
+    session's own JSONL alone (the session-scoped incremental path —
+    ``converter._load_stale_session_transcripts``). Each field answers
+    one question a partial load cannot answer from its own entries:
+
+    - ``parents``: ``{session_id: (parent_session_id, attachment_uuid)}``
+      for every DAG-line attached to a parent session — restores the
+      resume/fork linkage when the parent session isn't loaded.
+    - ``junctions``: ``{uuid: (session_id, [target_session_ids])}`` for
+      every junction point, targets in the tree's chronological order —
+      restores fork markers whose target sessions aren't loaded.
+    - ``dedup_winners``: ``{uuid: winner_session_id}`` for uuids carried
+      by more than one session (resume replay prefixes) — tells a
+      partial load which of its entries the whole-project dedup drops.
+    """
+
+    parents: dict[str, tuple[Optional[str], Optional[str]]]
+    junctions: dict[str, tuple[str, list[str]]]
+    dedup_winners: dict[str, str]
+
+
 # ========== Helper Functions ==========
 
 
@@ -967,6 +992,140 @@ class CacheManager:
                 ),
             )
             conn.commit()
+
+    def save_session_sidecar(self, sidecar: SessionSidecar) -> None:
+        """Persist the cross-session sidecar (migration 008), wholesale.
+
+        Called at the end of every full directory load, inside the same
+        ``batch()`` scope as the per-file cache writes, so the sidecar is
+        exactly as fresh as ``cached_files``: whenever ``get_modified_files``
+        reports nothing modified, a present sidecar describes the current
+        source tree. Delete + insert in one transaction — a crash leaves
+        either the old sidecar or the new one, never a mix, and the
+        ``sidecar_state`` marker row is only written alongside the rows it
+        vouches for.
+        """
+        if self._project_id is None or self._read_only:
+            return
+
+        with self._get_connection() as conn:
+            pid = self._project_id
+            conn.execute("DELETE FROM session_parents WHERE project_id = ?", (pid,))
+            conn.execute("DELETE FROM junction_uuids WHERE project_id = ?", (pid,))
+            conn.execute("DELETE FROM dedup_winners WHERE project_id = ?", (pid,))
+            conn.executemany(
+                """INSERT INTO session_parents
+                   (project_id, session_id, parent_session_id, attachment_uuid)
+                   VALUES (?, ?, ?, ?)""",
+                [
+                    (pid, sid, parent, attachment)
+                    for sid, (parent, attachment) in sidecar.parents.items()
+                ],
+            )
+            conn.executemany(
+                """INSERT INTO junction_uuids
+                   (project_id, uuid, session_id, target_session_id, seq)
+                   VALUES (?, ?, ?, ?, ?)""",
+                [
+                    (pid, uuid, session_id, target, seq)
+                    for uuid, (session_id, targets) in sidecar.junctions.items()
+                    for seq, target in enumerate(targets)
+                ],
+            )
+            conn.executemany(
+                """INSERT INTO dedup_winners (project_id, uuid, winner_session_id)
+                   VALUES (?, ?, ?)""",
+                [(pid, uuid, winner) for uuid, winner in sidecar.dedup_winners.items()],
+            )
+            conn.execute(
+                """INSERT INTO sidecar_state (project_id, populated_at)
+                   VALUES (?, ?)
+                   ON CONFLICT(project_id) DO UPDATE SET
+                       populated_at = excluded.populated_at""",
+                (pid, datetime.now().isoformat()),
+            )
+            conn.commit()
+
+    def load_session_sidecar(self) -> Optional[SessionSidecar]:
+        """Load the cross-session sidecar, or None when never populated.
+
+        ``None`` (no ``sidecar_state`` row — e.g. a cache built before
+        migration 008, or a project never fully loaded since) tells the
+        caller to decline the session-scoped path and fall back to a full
+        load, which repopulates the sidecar. An *empty* sidecar with a
+        state row is a valid answer: most projects have no cross-session
+        coupling at all.
+        """
+        if self._project_id is None:
+            return None
+
+        with self._get_connection() as conn:
+            pid = self._project_id
+            state = conn.execute(
+                "SELECT 1 FROM sidecar_state WHERE project_id = ?", (pid,)
+            ).fetchone()
+            if state is None:
+                return None
+
+            parents: dict[str, tuple[Optional[str], Optional[str]]] = {}
+            for row in conn.execute(
+                """SELECT session_id, parent_session_id, attachment_uuid
+                   FROM session_parents WHERE project_id = ?""",
+                (pid,),
+            ):
+                parents[row["session_id"]] = (
+                    row["parent_session_id"],
+                    row["attachment_uuid"],
+                )
+
+            junctions: dict[str, tuple[str, list[str]]] = {}
+            for row in conn.execute(
+                """SELECT uuid, session_id, target_session_id
+                   FROM junction_uuids WHERE project_id = ?
+                   ORDER BY uuid, seq""",
+                (pid,),
+            ):
+                entry = junctions.setdefault(row["uuid"], (row["session_id"], []))
+                entry[1].append(row["target_session_id"])
+
+            dedup_winners: dict[str, str] = {}
+            for row in conn.execute(
+                "SELECT uuid, winner_session_id FROM dedup_winners WHERE project_id = ?",
+                (pid,),
+            ):
+                dedup_winners[row["uuid"]] = row["winner_session_id"]
+
+        return SessionSidecar(
+            parents=parents, junctions=junctions, dedup_winners=dedup_winners
+        )
+
+    def get_session_file_map(self) -> Dict[str, set[str]]:
+        """``{session_id: {file_name, ...}}`` from the cached messages table.
+
+        Which source files hold each session's entries. Usually 1:1 with
+        the ``<session-id>.jsonl`` naming, but not always — real archives
+        contain files whose entries span two sessions (a continuation
+        written into the previous session's file), and sessions with no
+        file of their own. The session-scoped incremental path loads by
+        this map instead of by filename stem for exactly that reason.
+
+        Entries with a NULL session_id (summaries) are skipped; agent
+        file rows are included and it is the caller's business to know
+        that ``agent-*`` files load via trunk-file recursion.
+        """
+        if self._project_id is None:
+            return {}
+
+        result: Dict[str, set[str]] = {}
+        with self._get_connection() as conn:
+            for row in conn.execute(
+                """SELECT DISTINCT m.session_id, cf.file_name
+                   FROM messages m JOIN cached_files cf ON m.file_id = cf.id
+                   WHERE m.project_id = ? AND m.session_id IS NOT NULL""",
+                (self._project_id,),
+            ):
+                result.setdefault(row["session_id"], set()).add(row["file_name"])
+        return result
 
     def get_working_directories(self) -> List[str]:
         """Get list of working directories associated with this project.
