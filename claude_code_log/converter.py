@@ -2556,30 +2556,56 @@ def _streaming_mode() -> str:
     return "auto"
 
 
-def _should_stream(transcript_bytes: int) -> bool:
-    """Whether this conversion should stream page-by-page.
+# On a roomy machine, streaming still wins whenever the work is
+# page-sparse, because per-page partial loads replace the whole-project
+# load that dominates an incremental run. Measured on the 8-core/16GB VM
+# against a 137MB/26-page archive (scripts/bench_render.py): incremental
+# (1 page + 3 sessions stale) streamed at 2.0s/276MB vs the fan-out full
+# path's 3.3s/542MB, while a full rebuild streamed at 11.1s vs the
+# fan-out's 6.7s — the crossover sits near 36% of pages stale (streamed
+# wall scales ~linearly with stale pages; the full path pays the full
+# load regardless and fans the rendering out). 1/3 keeps a margin under
+# that crossover, which moves only weakly with core count because the
+# full load, not rendering, is the fixed cost.
+_STREAMING_MAX_SPARSE_FRACTION = 1.0 / 3.0
 
-    Auto mode is a memory valve: stream only when available memory is
-    under ``_STREAMING_MIN_AVAILABLE_PER_BYTE`` times the project's
-    transcript bytes — the regime where the serial full load (measured
-    ~1.56x bytes store-less, ~1.9x with the store) is at risk and every
-    fan-out has already declined. On such a machine the streaming pass
-    bounds peak residency at one page's sessions instead of the project.
+
+def _should_stream(transcript_bytes: int) -> Optional[str]:
+    """How this conversion should stream page-by-page, if at all.
+
+    Returns ``None`` (don't stream), ``"always"`` (stream every eligible
+    page pass), or ``"sparse"`` (stream only if the pass turns out
+    page-sparse — see ``_STREAMING_MAX_SPARSE_FRACTION``; the count of
+    pages needing work only exists once the pass has planned its pages,
+    so the final decision lives in ``_stream_paginated_conversion``).
+
+    Auto mode is a memory valve with a sparse fallback: under
+    ``_STREAMING_MIN_AVAILABLE_PER_BYTE`` times the project's transcript
+    bytes — the regime where the serial full load (measured ~1.56x bytes
+    store-less, ~1.9x with the store) is at risk and every fan-out has
+    already declined — the pass always streams, bounding peak residency
+    at one page's sessions instead of the project. With more memory than
+    that (or none measurable), streaming is still the wall-clock winner
+    for page-sparse work, so the pass runs in sparse mode and declines
+    itself when the work turns out dense (falling through to the full
+    load + fan-out, which wins dense rebuilds on a roomy machine).
     """
     mode = _streaming_mode()
     if mode == "off":
-        return False
+        return None
     if mode == "force":
-        return True
+        return "always"
     if transcript_bytes <= 0:
-        return False
+        return None
     from .render_pool import available_memory_bytes
 
     available = available_memory_bytes()
-    return (
+    if (
         available is not None
         and available < transcript_bytes * _STREAMING_MIN_AVAILABLE_PER_BYTE
-    )
+    ):
+        return "always"
+    return "sparse"
 
 
 def _stream_paginated_conversion(
@@ -2598,8 +2624,15 @@ def _stream_paginated_conversion(
     generate_individual_sessions: bool,
     write_combined: bool,
     silent: bool,
+    sparse_only: bool = False,
 ) -> Optional[tuple[Path, bool, int]]:
     """Convert a paginated project page-by-page, never loading it whole.
+
+    ``sparse_only`` is the roomy-machine mode (``_should_stream`` →
+    ``"sparse"``): once the pages needing work are known, the pass
+    declines itself unless they are at most
+    ``_STREAMING_MAX_SPARSE_FRACTION`` of the plan — dense rebuilds
+    belong to the full load + fan-out there.
 
     Streaming stage 3 (work/render-format-once.md): the page plan is
     computed from cached session data alone (the same assignment
@@ -2704,15 +2737,14 @@ def _stream_paginated_conversion(
                 )
             }
 
-        if not silent:
-            print(
-                f"Streaming conversion for {input_path.name}: "
-                f"{len(pages)} page(s) planned from cache"
-            )
-
+        # Plan the work before rendering any of it: which pages are stale
+        # (or missing), and which carry stale session files. Pure cache
+        # and stat queries — cheap enough to run before the sparse gate.
+        page_work: List[tuple[int, List[str], bool, str, set[str]]] = []
         for page_num, page_session_ids in enumerate(pages, start=1):
-            html_path = _get_page_html_path(page_num, page_suffix)
-            page_file = effective_output_dir / html_path
+            page_file = effective_output_dir / _get_page_html_path(
+                page_num, page_suffix
+            )
             is_stale, reason = cache_manager.is_page_stale(
                 page_num,
                 page_size,
@@ -2722,11 +2754,39 @@ def _stream_paginated_conversion(
             )
             page_needs_render = is_stale or not page_file.exists()
             page_stale_sessions = stale_session_ids & set(page_session_ids)
+            if page_needs_render or page_stale_sessions:
+                page_work.append(
+                    (
+                        page_num,
+                        page_session_ids,
+                        page_needs_render,
+                        reason,
+                        page_stale_sessions,
+                    )
+                )
 
-            if not page_needs_render and not page_stale_sessions:
-                if not silent:
-                    print(f"Page {page_num} is current, skipping regeneration")
-                continue
+        # The sparse gate: on a roomy machine the streamed pass only wins
+        # while the work is a small slice of the plan; a dense pass
+        # declines to the full load + fan-out. Cache writes so far
+        # (page-size invalidation, orphan cleanup) are exactly what the
+        # full path would have done itself.
+        if sparse_only and len(page_work) > len(pages) * _STREAMING_MAX_SPARSE_FRACTION:
+            return None
+
+        if not silent:
+            print(
+                f"Streaming conversion for {input_path.name}: "
+                f"{len(page_work)} of {len(pages)} page(s) need work"
+            )
+
+        for (
+            page_num,
+            page_session_ids,
+            page_needs_render,
+            reason,
+            page_stale_sessions,
+        ) in page_work:
+            html_path = _get_page_html_path(page_num, page_suffix)
 
             # Load just this page's sessions (plus whatever co-resides in
             # their files), faithful to the full load via the sidecar.
@@ -3080,9 +3140,12 @@ def convert_jsonl_to(
         # streaming stage 3). On a memory-tight machine (or when forced by
         # CLAUDE_CODE_LOG_STREAMING=1) a paginated project converts
         # page-by-page from cache-planned partial loads instead of loading
-        # whole — the sidecar ensure_fresh_cache just (re)persisted makes
-        # the partial loads faithful even right after a cache update.
-        # Declines (None) fall through to the full load below, unchanged.
+        # whole; a roomy machine streams too when the pass turns out
+        # page-sparse (the daily-run shape), where partial loads beat the
+        # whole-project load the full path would pay. The sidecar
+        # ensure_fresh_cache just (re)persisted makes the partial loads
+        # faithful even right after a cache update. Declines (None) fall
+        # through to the full load below, unchanged.
         if (
             format == "html"
             and cache_manager is not None
@@ -3106,7 +3169,8 @@ def convert_jsonl_to(
                 for f in input_path.glob("*.jsonl")
                 if not f.name.startswith("agent-")
             )
-            if stream_paginated and _should_stream(stream_bytes):
+            stream_decision = _should_stream(stream_bytes)
+            if stream_paginated and stream_decision is not None:
                 stream_dirs = cache_manager.get_working_directories()
                 stream_title = (
                     "Claude Transcripts - "
@@ -3129,6 +3193,7 @@ def convert_jsonl_to(
                     ),
                     write_combined=write_combined,
                     silent=silent,
+                    sparse_only=stream_decision == "sparse",
                 )
                 if streamed is not None:
                     streamed_path, streamed_combined, streamed_sessions = streamed

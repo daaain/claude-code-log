@@ -323,9 +323,67 @@ after new sessions still pays full residency once; making the cache
 build per-file (with the order-dependent requestId dedup and
 incremental sidecar maintenance that entails) is the last piece of
 "no archive too big for the machine", along with the § 7.5-style
-threshold revisit once that floor moves. `scripts/bench_render.py`
-does not yet sweep the streaming knob — worth adding when stage 4
-lands.
+threshold revisit once that floor moves.
+
+**Phase 10 (the sparse gate — "should streaming just be the default?",
+2026-08-27, same branch):** Dain asked whether streaming, being faster
+in every phase-9 measurement, should simply always run. The phase-9
+numbers couldn't answer that: they compared streaming against the
+*serial* full path, because the memory valve only ever ran streaming
+where the fan-out had already declined. The missing comparison was
+streaming (inline by design) vs the full load + parallel fan-out on a
+roomy machine.
+
+Measured on the 8-core/16GB VM against a 137MB/26-page/50k-message
+archive (a real 40MB project cloned 4x with bijectively-rotated UUIDs
+and suffixed requestIds so dedup can't collapse the copies —
+`make_big_project.py` in the session scratchpad), warm cache,
+`scripts/bench_render.py` now sweeping the streaming knob with a
+peak-RSS column:
+
+    full rebuild    wall     CPU    peak RSS
+    memo only       12.3s   10.9s     681MB
+    both (auto)      6.7s   19.0s     706MB   ← wins
+    streaming       11.1s    9.7s     325MB
+
+    incremental (page 1 + 3 sessions stale)
+    memo only        3.2s    3.0s     542MB
+    both (auto)      3.3s    3.1s     542MB
+    streaming        2.0s    1.8s     276MB   ← wins
+
+So: *not* always. Streaming beats the serial full path everywhere
+(confirming phase 9), but a dense rebuild belongs to the fan-out on a
+roomy machine (6.7s vs 11.1s), while sparse work — the daily-run
+shape — streams faster than the fan-out *and* at half the RSS and
+less total CPU, because a couple of page loads replace the
+whole-project load that dominates an incremental run, and the fan-out
+has too few stale units to help there. Streamed wall scales
+~linearly with pages needing work; the full path pays the load
+regardless; the crossover lands near 36% of pages stale and moves
+only weakly with core count.
+
+The landed policy (`_should_stream` now returns None/"always"/
+"sparse"): force and memory-tight behave exactly as before; roomy (or
+unmeasurable) auto runs the streaming pass in *sparse* mode — it
+plans its pages, counts the ones needing work (cache/stat queries
+only), and declines itself past `_STREAMING_MAX_SPARSE_FRACTION`
+(1/3, margin under the crossover) so dense rebuilds fall through to
+the full load + fan-out unchanged. The staleness scan moved out of
+the render loop into a pre-pass to make that count exist before any
+rendering; cache writes before the decline (page-size invalidation,
+orphan cleanup) are the same writes the full path would make.
+Verified end-to-end on the synthetic archive with default env: sparse
+run streams ("3 of 12 page(s) need work", 1.6s), dense rebuild takes
+the fan-out (5.6s wall / 12.1s CPU). Pinned in
+`test_streaming_render.py::TestSparseGate` (sparse streams with the
+full loader forbidden; dense declines; a stale session pulls its page
+into the count), and the pre-existing auto-mode test's roomy branch
+is now explicitly the dense case. Byte-identity: bench hash runs
+(all configurations identical, both scenarios) + the suite.
+`scripts/bench_render.py` grew the streaming rows, the single-project
+incremental scenario, the peak-RSS column, and per-row pinning of
+`CLAUDE_CODE_LOG_STREAMING` (unpinned rows would silently stream on a
+tight machine under full-path labels).
 
 **Streaming-conversion design analysis (2026-08-27, so nobody
 re-derives it):** a code-level survey of every full-residency

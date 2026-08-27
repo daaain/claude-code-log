@@ -773,16 +773,34 @@ When it runs:
   must exist; since `ensure_fresh_cache` now persists it too (same
   batch as the per-file cache writes), a run whose cache was just
   refreshed can stream instead of loading the project a second time.
-- **By a memory valve**: in auto mode the path engages only when
-  available memory is under 2.4x the project's transcript bytes —
-  deliberately the same knee as the fragment-store valve (§ 2.9), so
-  the degradation ladder is continuous: plenty of RAM → full load,
-  fan-out, whole-conversion store; below ~2.4x → the store had already
-  declined, and streaming takes over the serial conversion; the
-  fan-out's own (far higher) memory bar has long since declined by
-  then, which is why streaming renders inline without losing anything.
+- **By a memory valve, with a sparse fallback**: in auto mode the path
+  always engages when available memory is under 2.4x the project's
+  transcript bytes — deliberately the same knee as the fragment-store
+  valve (§ 2.9), so the degradation ladder is continuous: below ~2.4x
+  the store had already declined, and streaming takes over the serial
+  conversion; the fan-out's own (far higher) memory bar has long since
+  declined by then, which is why streaming renders inline without
+  losing anything. With more memory than that (or none measurable),
+  the pass still runs — but in *sparse* mode: once it has planned its
+  pages and counted the ones needing work (stale/missing page, or
+  stale session files on it — pure cache and stat queries), it
+  declines itself unless that count is at most a third of the plan
+  (`_STREAMING_MAX_SPARSE_FRACTION`), falling through to the full load
+  + fan-out. The reasoning is measured, not structural: streaming's
+  wall scales with the pages needing work while the full path pays the
+  whole-project load regardless, so sparse work (the daily-run shape)
+  streams faster even where the fan-out is available — but a dense
+  rebuild renders serially and loses to the fan-out on a roomy
+  machine. On the 8-core/16GB VM against a 137MB/26-page archive
+  (`scripts/bench_render.py`): incremental (1 page + 3 sessions
+  stale) streamed 2.0s/276MB peak RSS vs the fan-out full path's
+  3.3s/542MB, while a full rebuild streamed 11.1s vs the fan-out's
+  6.7s; the crossover sits near 36% of pages stale and moves only
+  weakly with core count (the full load, not rendering, is the fixed
+  cost), so 1/3 keeps a margin under it.
   `CLAUDE_CODE_LOG_STREAMING=1` forces the path wherever structurally
-  eligible; `=0` disables it (the bisecting knob).
+  eligible, bypassing both the valve and the sparse gate; `=0`
+  disables it (the bisecting knob).
 
 Two details are load-bearing for correctness:
 

@@ -202,7 +202,7 @@ class TestStreamingGating:
         assert calls, "kill switch should have routed through the full loader"
         assert _html_files(fixture_baseline)[name] == baseline[name]
 
-    def test_auto_mode_streams_only_when_memory_is_tight(
+    def test_auto_mode_streams_dense_work_only_when_memory_is_tight(
         self, monkeypatch: pytest.MonkeyPatch, fixture_baseline: Path
     ) -> None:
         from claude_code_log import render_pool
@@ -210,13 +210,15 @@ class TestStreamingGating:
         baseline = _html_files(fixture_baseline)
         name = next(n for n in baseline if n.startswith("combined_transcripts_2"))
 
-        # Plenty of memory: the full path runs.
+        # Plenty of memory: one stale page of the fixture's two is half
+        # the plan — over the sparse threshold, so the full path runs
+        # (sparse work on a roomy machine is TestSparseGate's territory).
         monkeypatch.delenv("CLAUDE_CODE_LOG_STREAMING", raising=False)
         monkeypatch.setattr(render_pool, "available_memory_bytes", lambda: 1 << 40)
         (fixture_baseline / name).unlink()
         calls = _spy_full_load(monkeypatch)
         _convert(fixture_baseline)
-        assert calls, "roomy memory must keep the full-load path"
+        assert calls, "roomy memory must keep the full-load path for dense work"
         assert _html_files(fixture_baseline)[name] == baseline[name]
 
         # Tight memory: the streamed path takes over, full loader untouched.
@@ -568,3 +570,91 @@ class TestFileSpanningSessions:
         _convert(streamed_dir, page_size=self.PAGE_SIZE)
 
         assert _html_files(streamed_dir) == baseline
+
+
+@pytest.fixture()
+def many_page_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Six single-session pages, converted via the full path.
+
+    Each session's 5 messages exceed ``page_size=4``, so every session
+    closes its own page — six pages, letting the sparse gate's 1/3
+    threshold land strictly between one stale page (sparse) and four
+    (dense).
+    """
+    source = tmp_path / "many" / "many-page-project"
+    source.mkdir(parents=True)
+    for i in range(6):
+        sid = f"sess-{i}"
+        _write_jsonl(
+            source / f"{sid}.jsonl",
+            _make_session(sid, f"2025-07-0{i + 1}T10:00:00.000Z", 5),
+        )
+    monkeypatch.setenv("CLAUDE_CODE_LOG_STREAMING", "0")
+    convert_jsonl_to("html", source, silent=True, page_size=4)
+    monkeypatch.delenv("CLAUDE_CODE_LOG_STREAMING")
+    assert (source / "combined_transcripts_6.html").exists()
+    return source
+
+
+class TestSparseGate:
+    """Auto mode on a roomy machine streams page-sparse work only.
+
+    The benchmark behind the policy (scripts/bench_render.py, 137MB/26
+    pages, 8 cores): sparse regeneration streamed at 2.0s/276MB against
+    the fan-out full path's 3.3s/542MB, while a full rebuild streamed at
+    11.1s against the fan-out's 6.7s — so auto mode streams below
+    ``_STREAMING_MAX_SPARSE_FRACTION`` of pages needing work and declines
+    to the full load + fan-out above it. (Force mode ignores the gate;
+    tight memory streams regardless — the pre-existing valve.)
+    """
+
+    def _roomy_auto(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from claude_code_log import render_pool
+
+        monkeypatch.delenv("CLAUDE_CODE_LOG_STREAMING", raising=False)
+        monkeypatch.setattr(render_pool, "available_memory_bytes", lambda: 1 << 40)
+
+    def test_sparse_work_streams_even_with_roomy_memory(
+        self, many_page_project: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        baseline = _html_files(many_page_project)
+        self._roomy_auto(monkeypatch)
+
+        # One stale page of six (< 1/3): the daily-run shape.
+        (many_page_project / "combined_transcripts_3.html").unlink()
+        _forbid_full_load(monkeypatch)
+        convert_jsonl_to("html", many_page_project, silent=True, page_size=4)
+
+        assert _html_files(many_page_project) == baseline
+
+    def test_dense_work_declines_to_the_full_path(
+        self, many_page_project: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        baseline = _html_files(many_page_project)
+        self._roomy_auto(monkeypatch)
+
+        # Four stale pages of six (> 1/3): a rebuild-shaped run.
+        for n in ("", "_2", "_3", "_4"):
+            (many_page_project / f"combined_transcripts{n}.html").unlink()
+        calls = _spy_full_load(monkeypatch)
+        convert_jsonl_to("html", many_page_project, silent=True, page_size=4)
+
+        assert calls, "dense work on a roomy machine must take the full path"
+        assert _html_files(many_page_project) == baseline
+
+    def test_stale_session_counts_its_page_toward_the_gate(
+        self, many_page_project: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A stale session file with a current combined output is handled
+        # by the session-scoped path before streaming is consulted — so
+        # make its page stale too, and pair it with a *different* page's
+        # stale session: two pages of six need work, still sparse.
+        baseline = _html_files(many_page_project)
+        self._roomy_auto(monkeypatch)
+
+        (many_page_project / "combined_transcripts_2.html").unlink()
+        (many_page_project / "session-sess-4.html").unlink()
+        _forbid_full_load(monkeypatch)
+        convert_jsonl_to("html", many_page_project, silent=True, page_size=4)
+
+        assert _html_files(many_page_project) == baseline
