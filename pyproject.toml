@@ -52,6 +52,26 @@ asyncio_default_fixture_loop_scope = "function"
 # through the queue). Override with `-n0 --dist=no` for serial runs, or with
 # `--dist=no --pdb` for debugging (worksteal distribution must be disabled).
 addopts = "-n auto --dist=worksteal"
+# Per-test wall-clock ceiling. Nothing here is remotely slow — the slowest
+# test measured 5.6s (a browser one) and the slowest non-browser 4.5s — so
+# 300s never fires on healthy work. Its job is the pathological case: a test
+# that wedges used to hang `just ci` indefinitely (one observed browser-suite
+# hang under xdist sat for 75+ minutes with zero CPU in both pytest and
+# Chromium before it was killed, and never reproduced afterwards), which
+# reads as "CI is still running" rather than as a failure. Now it fails.
+# `thread` rather than the default `signal`: SIGALRM only lands when the main
+# thread is running Python, so it can't break a hang inside a C extension or
+# a blocked driver pipe — exactly the shape of hang worth catching. The
+# thread method dumps every thread's stack before killing the process. Under
+# xdist that dump goes to the killed worker's stderr and is swallowed, so the
+# run reports `worker 'gwN' crashed while running <nodeid>` — which still
+# names the hung test, the fact that was missing last time. Re-run that one
+# test with `-n0` to get the stacks.
+# Caveat: the timer covers a test item (setup, call, teardown), not
+# *session*-scoped fixture teardown, so a hang in e.g. closing the shared
+# browser context after the last test would still wedge.
+timeout = 300
+timeout_method = "thread"
 markers = [
     "tui: TUI tests using Textual framework (requires isolated event loop)",
     "browser: Browser integration tests using Playwright (requires Chromium)",
@@ -154,6 +174,7 @@ dev = [
     # the canonical example for third-party plugin authors. See
     # test/_plugins/clmail/README.md.
     "claude-code-log-clmail-test",
+    "pytest-timeout>=2.3.1",
 ]
 
 docs = [
