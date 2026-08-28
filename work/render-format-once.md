@@ -1299,6 +1299,22 @@ Full suite before pushing: `just ci`.
   which is what those 7 call sites actually mean; it sits next to
   `bump_mtime`, whose comment block documents the sibling
   filesystem-clock flake.
+- **The browser suite hangs under xdist on this box right now**
+  (2026-08-28). `uv run pytest -m browser -q` — the parallel default,
+  and what `just ci` runs — reaches ~93% and then stops dead: zero CPU
+  accumulation in the pytest process *and* in Chromium, so it is a
+  hang, not slowness, and `just ci` sits there indefinitely (75+
+  minutes before I killed it). `-n0` runs the same 90 tests green in
+  **75 seconds**. Verified pre-existing: checking out the
+  pre-change commit and re-running the parallel command reproduces the
+  hang (and a screenful of collection `E`s), so it is not the render
+  work on this branch. Suspect the shared persistent Chromium context
+  (`_persistent_context` / `_browser_user_data_dir` in `conftest.py`)
+  under concurrent workers. **Until it is fixed, verify the browser
+  leg with `uv run pytest -m browser -n0` and don't read a `just ci`
+  that never returns as a failure.** Note the sibling xdist hazard
+  already documented in CONTRIBUTING (`--snapshot-update` races) — the
+  parallel runner is where this repo's flakes live.
 - Real transcripts for local testing: `downloads/projects/` (7.9GB on
   disk, 84 projects, with a warm cache DB). Note it is a *snapshot*,
   not the live tree: measure against it, not `~/.claude/projects`,
