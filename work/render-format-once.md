@@ -1299,22 +1299,39 @@ Full suite before pushing: `just ci`.
   which is what those 7 call sites actually mean; it sits next to
   `bump_mtime`, whose comment block documents the sibling
   filesystem-clock flake.
-- **The browser suite hangs under xdist on this box right now**
-  (2026-08-28). `uv run pytest -m browser -q` — the parallel default,
-  and what `just ci` runs — reaches ~93% and then stops dead: zero CPU
-  accumulation in the pytest process *and* in Chromium, so it is a
-  hang, not slowness, and `just ci` sits there indefinitely (75+
-  minutes before I killed it). `-n0` runs the same 90 tests green in
-  **75 seconds**. Verified pre-existing: checking out the
-  pre-change commit and re-running the parallel command reproduces the
-  hang (and a screenful of collection `E`s), so it is not the render
-  work on this branch. Suspect the shared persistent Chromium context
-  (`_persistent_context` / `_browser_user_data_dir` in `conftest.py`)
-  under concurrent workers. **Until it is fixed, verify the browser
-  leg with `uv run pytest -m browser -n0` and don't read a `just ci`
-  that never returns as a failure.** Note the sibling xdist hazard
-  already documented in CONTRIBUTING (`--snapshot-update` races) — the
-  parallel runner is where this repo's flakes live.
+- **The browser suite hung under xdist once, on 2026-08-28, and has
+  not since.** What was seen: `uv run pytest -m browser -q` — the
+  parallel default, and what `just ci` runs — reached ~93% and stopped
+  dead, with zero CPU accumulation in the pytest process *and* in
+  Chromium, so a hang rather than slowness; `just ci` sat there 75+
+  minutes before being killed. Checking out the pre-change commit
+  reproduced it (with a screenful of collection `E`s), so it was never
+  the render work on this branch. `-n0` ran the same 90 tests green in
+  75s, and that was the workaround.
+
+  **Later the same day it stopped reproducing entirely**, with nothing
+  in the repo changed to address it: six consecutive clean parallel
+  runs (15s each), including at `-n 16` on this 8-core box and one with
+  available memory squeezed to 2.8GB by an 11GB balloon — the two
+  hypotheses worth testing cheaply, both negative — plus a full green
+  `just ci` in ~2 minutes. So the cause was environmental to that
+  session (the box had been running `downloads/projects`-scale
+  benchmarks), not something in `conftest.py`'s shared persistent
+  Chromium context, which was the standing suspect. Don't hunt it
+  without a fresh reproduction.
+
+  **What did change is that a hang is now a failure.** `pytest-timeout`
+  is in the dev group with `timeout = 300` / `timeout_method =
+  "thread"` in `pyproject.toml`, so a wedged test is killed and
+  reported instead of stalling the suite forever; under xdist that
+  surfaces as `worker 'gwN' crashed while running <nodeid>`, which
+  names the test — the fact this episode never produced. Re-run that
+  one test under `-n0` for the thread dump. Note the gap: the timer
+  covers a test item, not *session*-scoped fixture teardown, so a hang
+  in closing the shared browser context after the last test would still
+  wedge. Note too the sibling xdist hazard already documented in
+  CONTRIBUTING (`--snapshot-update` races) — the parallel runner is
+  where this repo's flakes live.
 - Real transcripts for local testing: `downloads/projects/` (7.9GB on
   disk, 84 projects, with a warm cache DB). Note it is a *snapshot*,
   not the live tree: measure against it, not `~/.claude/projects`,
@@ -1364,3 +1381,67 @@ Full suite before pushing: `just ci`.
 
 If step 3 turns out to be too invasive, the three landed pieces are
 independently useful and each commit reverts cleanly.
+
+---
+
+## 8. Structural backlog for `converter.py`
+
+Raised by a review pass over the finished branch (2026-08-28), then
+worked through. The theme is that `converter.py` has grown to five
+modules in one 6.6k-line file, and that the branch's own performance
+work added several near-duplicated rules that must agree.
+
+**Landed:**
+
+- The transcript-byte sum ("top-level `*.jsonl`, excluding `agent-`
+  sidecars") was written out at eight sites, four of them the identical
+  sum every memory heuristic is calibrated against → `utils
+  .trunk_jsonl_files` / `project_transcript_bytes`. This had *already*
+  drifted: `bench_render.py` computed it without the exclusion, so its
+  memory preview and worker-count labels predicted a cap the converter
+  would not apply (16 of 79 corpus projects carry such files, one
+  inflating by 30%).
+- The two 2.4× memory valves, each documented as deliberately the same
+  knee, → one `_MIN_AVAILABLE_MEMORY_PER_TRANSCRIPT_BYTE`.
+- The "is this project paginated?" rule, written out at three sites that
+  exist to predict each other, → `_is_paginated`.
+- `convert_jsonl_to`'s Phase 1b/1c gate-and-dispatch blocks (~165 lines
+  inline) → `_try_current_or_session_scoped` / `_try_streaming`, both
+  `-> Optional[Path]`, with the shared contract (a decline must be
+  indistinguishable from never having been attempted) stated once.
+- The fan-out glue → `render_dispatch.py`, the policy layer over
+  `render_pool.py`'s mechanism. This was the most tractable seam of the
+  file split: no back-edges, and both thresholds it reads exist only for
+  it.
+- The per-project conversion argument set, previously written three
+  times (inline call, `pool.submit` payload, worker unpacking) → one
+  `_conversion_kwargs` closure. This was a live hazard rather than
+  untidiness: a parameter added to `convert_jsonl_to` and missed in one
+  copy would not fail, it would make pooled projects convert
+  differently from inline ones, only under `--jobs > 1`.
+
+**Deferred, with reasons:**
+
+- **Splitting `converter.py` further.** After `render_dispatch.py` the
+  remaining seams are `_incremental_cache_refresh` (~370 lines, one
+  entry point), the streaming/partial-load cluster (~800) and the
+  all-projects hierarchy (~1,200). The last two call back into
+  `convert_jsonl_to`, so a naive split cycles, and tests monkeypatch
+  these by `converter.<name>`, so each move carries test churn.
+- **Splitting `process_projects_hierarchy`** (797 lines, already
+  commented as three phases). Phase 2 is the bulk of it and its
+  closures (`_convert_plan_inline`, `_print_project_done`,
+  `_print_project_failed`, `_conversion_kwargs`) read a dozen of the
+  function's own parameters and share mutable plan state. A faithful
+  module-level extraction needs a ~25-parameter signature or a
+  conversion-request parameter object — and the parameter object is the
+  better answer, but it is a design change that would want to sweep
+  `convert_jsonl_to`, `_try_streaming`, `_stream_paginated_conversion`
+  and `_convert_project_worker` together. Worth its own pass; not worth
+  a half-version.
+- **`RenderUnit` is two record types in one dataclass** (page-only vs
+  session-only fields). Only worth acting on if a third kind appears.
+- **`test_render_cache.py` is 787 lines** spanning memo caches, pool
+  creation, memory probes, hold-back, valves and the dispatch gate —
+  plausibly three files. Note the dispatch-gate and pool-creation tests
+  now import `render_dispatch`, which is a natural split line.
