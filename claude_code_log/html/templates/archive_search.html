@@ -659,6 +659,14 @@
                 updateClearButton();
                 if (state.q) runSearch(false);
                 input.focus();
+                // Boot finishes *here*, not at the unhide above: `#app`
+                // is revealed before `loadProjects` so the UI paints
+                // while the project list is in flight, which leaves a
+                // window where the field toggles are still unchecked and
+                // the URL's `fields` spec hasn't been applied. Anything
+                // scripting the page (the browser tests) needs a signal
+                // for the settled state rather than for the unhide.
+                app.dataset.ready = '1';
             }
 
             el('form').addEventListener('submit', (event) => {

@@ -168,7 +168,7 @@ class TestArchiveSearchBrowser:
         _seed_index(generated_archive)
         with self._serve(generated_archive) as server:
             page.goto(f"{server.url}/search.html")
-            page.wait_for_selector("#app:not([hidden])", timeout=10000)
+            _wait_ready(page)
             page.fill("#q", "Bash")
             page.wait_for_function(
                 "document.querySelectorAll('.search-result-item').length > 0",
@@ -185,7 +185,7 @@ class TestArchiveSearchBrowser:
         _seed_index(generated_archive)
         with self._serve(generated_archive) as server:
             page.goto(f"{server.url}/search.html")
-            page.wait_for_selector("#app:not([hidden])", timeout=10000)
+            _wait_ready(page)
             page.fill("#q", "Ba")  # below the prefix floor: whole word only
             page.wait_for_timeout(800)
             assert page.locator(".search-result-item").count() == 0
@@ -213,7 +213,7 @@ class TestArchiveSearchBrowser:
         _seed_index(generated_archive)
         with self._serve(generated_archive) as server:
             page.goto(f"{server.url}/search.html")
-            page.wait_for_selector("#app:not([hidden])", timeout=10000)
+            _wait_ready(page)
             assert _checked_fields(page) == list(DEFAULT_SEARCH_FIELDS)
             # Unchanged from the default, so nothing to reset and nothing to
             # spell out in the URL.
@@ -229,7 +229,7 @@ class TestArchiveSearchBrowser:
         _seed_index(generated_archive)
         with self._serve(generated_archive) as server:
             page.goto(f"{server.url}/search.html")
-            page.wait_for_selector("#app:not([hidden])", timeout=10000)
+            _wait_ready(page)
             page.fill("#q", "Bash")
             page.wait_for_function(
                 "document.querySelectorAll('.search-result-item').length > 0",
@@ -261,11 +261,11 @@ class TestArchiveSearchBrowser:
         _seed_index(generated_archive)
         with self._serve(generated_archive) as server:
             page.goto(f"{server.url}/search.html?fields=%2Btool_result")
-            page.wait_for_selector("#app:not([hidden])", timeout=10000)
+            _wait_ready(page)
             assert _checked_fields(page) == list(SEARCH_FIELDS)
 
             page.goto(f"{server.url}/search.html?fields=text,meta")
-            page.wait_for_selector("#app:not([hidden])", timeout=10000)
+            _wait_ready(page)
             assert _checked_fields(page) == ["text", "meta"]
 
     def test_turning_every_field_off_explains_itself(
@@ -277,7 +277,7 @@ class TestArchiveSearchBrowser:
         _seed_index(generated_archive)
         with self._serve(generated_archive) as server:
             page.goto(f"{server.url}/search.html?q=the&fields=none")
-            page.wait_for_selector("#app:not([hidden])", timeout=10000)
+            _wait_ready(page)
             assert _checked_fields(page) == []
             page.wait_for_selector(".search-no-results", timeout=10000)
             assert "at least one field" in page.inner_text(".search-no-results")
@@ -294,7 +294,7 @@ class TestArchiveSearchBrowser:
         _seed_index(generated_archive)
         with self._serve(generated_archive) as server:
             page.goto(f"{server.url}/search.html")
-            page.wait_for_selector("#app:not([hidden])", timeout=10000)
+            _wait_ready(page)
             page.fill("#q", "Bash")
             page.wait_for_function(
                 "document.querySelectorAll('.search-result-item a').length > 0",
@@ -337,7 +337,7 @@ class TestArchiveSearchBrowser:
         _seed_index(generated_archive)
         with self._serve(generated_archive) as server:
             page.goto(f"{server.url}/search.html?q=hello+decorators")
-            page.wait_for_selector("#app:not([hidden])", timeout=10000)
+            _wait_ready(page)
             page.wait_for_function(
                 "document.querySelectorAll('.search-result-item a').length > 0",
                 timeout=10000,
@@ -426,7 +426,7 @@ class TestArchiveSearchBrowser:
 
         with self._serve(projects) as server:
             page.goto(f"{server.url}/search.html?q=cafe")
-            page.wait_for_selector("#app:not([hidden])", timeout=10000)
+            _wait_ready(page)
             page.wait_for_function(
                 "document.querySelectorAll('.search-result-item a').length > 1",
                 timeout=10000,
@@ -483,6 +483,18 @@ class TestArchiveSearchBrowser:
             assert state["found"]
             # No `q`, so the in-page search must stay untouched.
             assert not state["searchRan"]
+
+
+def _wait_ready(page: Any) -> None:
+    """Block until the page has finished booting, not merely unhidden.
+
+    ``#app`` is revealed before the project list is fetched, so waiting on
+    ``#app:not([hidden])`` returns while the field checkboxes are still in
+    their unchecked initial state and the URL's ``fields`` spec has yet to
+    be applied — a window a slow machine can land in (observed on Windows
+    CI). ``data-ready`` is set on the last line of ``start()``.
+    """
+    page.wait_for_selector("#app[data-ready]", timeout=10000)
 
 
 def _checked_fields(page: Any) -> list[str]:
