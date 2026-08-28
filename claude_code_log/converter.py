@@ -5708,6 +5708,11 @@ def _convert_project_worker(
 ) -> "tuple[str, float, Optional[str]]":
     """Convert one project inside a pool worker process.
 
+    ``worker_args`` is a complete keyword-argument set for
+    ``convert_jsonl_to``, built by the parent's ``_conversion_kwargs``
+    (which is also what the inline path calls with) — so this function
+    holds no knowledge of that signature and cannot fall behind it.
+
     Module-level, with dict-of-picklables in and primitives out, so it
     works under the ``spawn`` start method. Failures are returned as a
     formatted traceback instead of raised so the parent can attribute
@@ -5716,37 +5721,10 @@ def _convert_project_worker(
     start = time.monotonic()
     error: Optional[str] = None
     try:
-        convert_jsonl_to(
-            worker_args["format"],
-            Path(worker_args["project_dir"]),
-            None,
-            worker_args["from_date"],
-            worker_args["to_date"],
-            worker_args["generate_individual_sessions"],
-            worker_args["use_cache"],
-            # Workers always run silent: per-file progress lines from N
-            # concurrent processes would interleave illegibly. The
-            # parent prints one line per project as results arrive.
-            silent=True,
-            image_export_mode=worker_args["image_export_mode"],
-            page_size=worker_args["page_size"],
-            depth=worker_args["depth"],
-            compact=worker_args["compact"],
-            output_root=(
-                Path(worker_args["output_root"]) if worker_args["output_root"] else None
-            ),
-            write_combined=worker_args["write_combined"],
-            no_timestamps=worker_args["no_timestamps"],
-            no_recaps=worker_args["no_recaps"],
-            archive_search_link=worker_args["archive_search_link"],
-            # Nested pools: this project worker gets its own share of the
-            # job budget for the render fan-out, computed by the parent so
-            # the two levels together never exceed `--jobs`.
-            render_jobs=worker_args["render_jobs"],
-        )
+        convert_jsonl_to(**worker_args)
     except Exception:
         error = traceback.format_exc()
-    return (worker_args["project_dir"], time.monotonic() - start, error)
+    return (str(worker_args["input_path"]), time.monotonic() - start, error)
 
 
 def process_projects_hierarchy(
@@ -6041,6 +6019,48 @@ def process_projects_hierarchy(
             ),
         )
 
+    def _conversion_kwargs(
+        plan: _ProjectPlan, *, silent: bool, render_jobs: int
+    ) -> Dict[str, Any]:
+        """The full argument set for converting one project.
+
+        Both execution paths build their call from this: the inline one
+        applies it directly, the pool ships the same dict to
+        `_convert_project_worker`, which applies it there. Everything in
+        it is picklable, which is what lets the pool send it unchanged.
+
+        Written once because it used to be written three times — the
+        inline call, the `pool.submit` payload, and the worker's
+        unpacking of that payload — so a new `convert_jsonl_to`
+        parameter had to be added in all three or pooled projects would
+        silently convert differently from inline ones.
+        """
+        return {
+            "format": output_format,
+            "input_path": plan.project_dir,
+            "output_path": None,
+            "from_date": from_date,
+            "to_date": to_date,
+            "generate_individual_sessions": generate_individual_sessions,
+            "use_cache": use_cache,
+            "silent": silent,
+            "image_export_mode": image_export_mode,
+            "page_size": page_size,
+            "depth": depth,
+            "compact": compact,
+            "output_root": (
+                plan.dest_dir if plan.dest_dir != plan.project_dir else None
+            ),
+            "write_combined": write_combined,
+            "no_timestamps": no_timestamps,
+            "no_recaps": no_recaps,
+            "archive_search_link": _archive_search_link(plan),
+            # Nested pools: a project worker gets its own share of the job
+            # budget for the render fan-out, computed by the parent so the
+            # two levels together never exceed `--jobs`.
+            "render_jobs": render_jobs,
+        }
+
     def _convert_plan_inline(
         plan: _ProjectPlan, render_jobs: Optional[int] = None
     ) -> None:
@@ -6051,26 +6071,7 @@ def process_projects_hierarchy(
         try:
             # Generate output for this project (handles cache updates internally)
             convert_jsonl_to(
-                output_format,
-                plan.project_dir,
-                None,
-                from_date,
-                to_date,
-                generate_individual_sessions,
-                use_cache,
-                silent=silent,
-                image_export_mode=image_export_mode,
-                page_size=page_size,
-                depth=depth,
-                compact=compact,
-                output_root=(
-                    plan.dest_dir if plan.dest_dir != plan.project_dir else None
-                ),
-                write_combined=write_combined,
-                no_timestamps=no_timestamps,
-                no_recaps=no_recaps,
-                archive_search_link=_archive_search_link(plan),
-                render_jobs=render_jobs,
+                **_conversion_kwargs(plan, silent=silent, render_jobs=render_jobs)
             )
         except Exception:
             _print_project_failed(plan, traceback.format_exc())
@@ -6097,28 +6098,15 @@ def process_projects_hierarchy(
                 future_to_plan = {
                     pool.submit(
                         _convert_project_worker,
-                        {
-                            "format": output_format,
-                            "project_dir": str(plan.project_dir),
-                            "from_date": from_date,
-                            "to_date": to_date,
-                            "generate_individual_sessions": generate_individual_sessions,
-                            "use_cache": use_cache,
-                            "image_export_mode": image_export_mode,
-                            "page_size": page_size,
-                            "depth": depth,
-                            "compact": compact,
-                            "output_root": (
-                                str(plan.dest_dir)
-                                if plan.dest_dir != plan.project_dir
-                                else None
-                            ),
-                            "write_combined": write_combined,
-                            "no_timestamps": no_timestamps,
-                            "no_recaps": no_recaps,
-                            "archive_search_link": _archive_search_link(plan),
-                            "render_jobs": per_project_render_jobs,
-                        },
+                        # Workers always run silent: per-file progress lines
+                        # from N concurrent processes would interleave
+                        # illegibly. The parent prints one line per project
+                        # as results arrive.
+                        _conversion_kwargs(
+                            plan,
+                            silent=True,
+                            render_jobs=per_project_render_jobs,
+                        ),
                     ): plan
                     for plan in by_size
                 }
