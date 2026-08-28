@@ -2510,6 +2510,32 @@ def convert_jsonl_to_html(
     )
 
 
+def _is_paginated(
+    *, total_message_count: int, page_size: int, existing_page_count: int
+) -> bool:
+    """Does this project's combined output come out as pages, not one file?
+
+    The rule three passes have to agree on, so it is written once:
+    ``convert_jsonl_to``'s ``use_pagination`` (which decides for real,
+    routing to ``_generate_paginated_html``), the Phase-1b staleness
+    replay in ``_combined_output_is_stale``, and the Phase-1c streaming
+    gate. The latter two plan work on the assumption that the pagination
+    pass will reach the same answer, and a divergence would show up as
+    pages silently not regenerating.
+
+    The second clause is what keeps an already-paginated project
+    paginated after its message count drops back under ``page_size``:
+    the pages exist on disk and in the cache, so the pass must keep
+    maintaining them rather than switch to a single combined file and
+    strand them.
+
+    Callers supply the counts because they source them differently (a
+    cache row, a loaded message list, or both), but the predicate they
+    feed them to is the same one.
+    """
+    return total_message_count > page_size or existing_page_count > 1
+
+
 def _combined_output_is_stale(
     cache_manager: "CacheManager",
     output_path: Path,
@@ -2541,7 +2567,11 @@ def _combined_output_is_stale(
     paginated = (
         format == "html"
         and cached_data is not None
-        and (cached_data.total_message_count > page_size or existing_page_count > 1)
+        and _is_paginated(
+            total_message_count=cached_data.total_message_count,
+            page_size=page_size,
+            existing_page_count=existing_page_count,
+        )
     )
     if not paginated:
         stale, _reason = cache_manager.is_transcript_stale(
@@ -3238,9 +3268,10 @@ def convert_jsonl_to(
                 depth, compact, "html", no_recaps=no_recaps
             )
             stream_cached = cache_manager.get_cached_project_data()
-            stream_paginated = stream_cached is not None and (
-                stream_cached.total_message_count > page_size
-                or cache_manager.get_page_count(stream_page_suffix) > 1
+            stream_paginated = stream_cached is not None and _is_paginated(
+                total_message_count=stream_cached.total_message_count,
+                page_size=page_size,
+                existing_page_count=cache_manager.get_page_count(stream_page_suffix),
             )
             stream_bytes = project_transcript_bytes(input_path)
             stream_decision = _should_stream(stream_bytes)
@@ -3361,8 +3392,11 @@ def convert_jsonl_to(
         and from_date is None
         and to_date is None
     ):
-        # Use pagination if total messages exceed page_size or there are existing pages
-        use_pagination = total_message_count > page_size or existing_page_count > 1
+        use_pagination = _is_paginated(
+            total_message_count=total_message_count,
+            page_size=page_size,
+            existing_page_count=existing_page_count,
+        )
 
     # `write_combined=False` (#151 follow-up: --combined no) skips
     # combined-transcript generation entirely. Per-session files (if
