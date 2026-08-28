@@ -37,9 +37,11 @@ from .utils import (
     get_parent_session_id,
     get_project_display_name,
     is_agent_session,
+    project_transcript_bytes,
     should_use_as_session_starter,
     create_session_preview,
     get_warmup_session_ids,
+    trunk_jsonl_files,
 )
 from .render_pool import RenderUnit, memory_capped_workers, resolve_render_jobs
 from .cache import (
@@ -978,9 +980,7 @@ def load_directory_transcripts(
 
     # Find all .jsonl files, excluding agent files (they are loaded via load_transcript
     # when a session references them via agentId)
-    jsonl_files = [
-        f for f in directory_path.glob("*.jsonl") if not f.name.startswith("agent-")
-    ]
+    jsonl_files = trunk_jsonl_files(directory_path)
 
     # Reuse one connection across all per-file cache reads/writes in this load
     # pass. Nested under an outer batch() (e.g. ensure_fresh_cache) this is a
@@ -3225,11 +3225,7 @@ def convert_jsonl_to(
                 stream_cached.total_message_count > page_size
                 or cache_manager.get_page_count(stream_page_suffix) > 1
             )
-            stream_bytes = sum(
-                f.stat().st_size
-                for f in input_path.glob("*.jsonl")
-                if not f.name.startswith("agent-")
-            )
+            stream_bytes = project_transcript_bytes(input_path)
             stream_decision = _should_stream(stream_bytes)
             if stream_paginated and stream_decision is not None:
                 stream_dirs = cache_manager.get_working_directories()
@@ -3318,11 +3314,7 @@ def convert_jsonl_to(
     # feeds the store's memory valve (same source-size measure as
     # _make_render_pool's cap: top-level JSONL, agent files excluded).
     if input_path.is_dir():
-        source_bytes = sum(
-            f.stat().st_size
-            for f in input_path.glob("*.jsonl")
-            if not f.name.startswith("agent-")
-        )
+        source_bytes = project_transcript_bytes(input_path)
     else:
         source_bytes = input_path.stat().st_size
     fragment_store = _make_fragment_store(format, transcript_bytes=source_bytes)
@@ -3966,9 +3958,7 @@ def ensure_fresh_cache(
     # Exclude agent files from direct check - they are loaded via session references
     # Note: If only an agent file changes (session unchanged), cache won't detect it.
     # This is acceptable since agent files typically change alongside their sessions.
-    session_jsonl_files = [
-        f for f in project_dir.glob("*.jsonl") if not f.name.startswith("agent-")
-    ]
+    session_jsonl_files = trunk_jsonl_files(project_dir)
     if not session_jsonl_files:
         return False
 
@@ -4342,11 +4332,7 @@ def _make_render_pool(
     if message_count < _MIN_MESSAGES_FOR_RENDER_POOL:
         return None
 
-    transcript_bytes = sum(
-        f.stat().st_size
-        for f in input_path.glob("*.jsonl")
-        if not f.name.startswith("agent-")
-    )
+    transcript_bytes = project_transcript_bytes(input_path)
     max_workers = memory_capped_workers(max_workers, transcript_bytes)
     if max_workers <= 1:
         return None
@@ -5676,9 +5662,7 @@ def _plan_project(
 
     # Fast staleness check (mtime comparison only). Exclude agent
     # files - they are loaded via session references, not directly.
-    jsonl_files = [
-        f for f in project_dir.glob("*.jsonl") if not f.name.startswith("agent-")
-    ]
+    jsonl_files = trunk_jsonl_files(project_dir)
     # Valid session IDs are from existing JSONL files (file stem = session ID)
     valid_session_ids = {f.stem for f in jsonl_files}
     modified_files = (
@@ -6247,11 +6231,7 @@ def process_projects_hierarchy(
         try:
             # Get project info for index - use cached data if available
             # Exclude agent files (they are loaded via session references)
-            jsonl_files = [
-                f
-                for f in project_dir.glob("*.jsonl")
-                if not f.name.startswith("agent-")
-            ]
+            jsonl_files = trunk_jsonl_files(project_dir)
             jsonl_count = len(jsonl_files)
             last_modified: float = (
                 max(f.stat().st_mtime for f in jsonl_files) if jsonl_files else 0.0

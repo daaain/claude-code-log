@@ -1326,7 +1326,14 @@ Full suite before pushing: `just ci`.
   sidecar files in subdirectories don't count), which today totals
   1539MB with the largest at 329MB, matching the post-feeding tables
   (the pre-feeding tables' 1543MB is the same subset, measured
-  earlier). Single-project rows use individual projects from the same
+  earlier). **That figure reads 1493MB from 2026-08-28 on**, because
+  `_transcript_bytes` now calls the converter's own
+  `utils.project_transcript_bytes` and so excludes top-level
+  `agent-*.jsonl` as every production heuristic already did — it had
+  been predicting a worker cap the conversion would not apply (16 of
+  79 corpus projects carry such files, one inflating by 30%). The
+  *subset* is unchanged — the same 8 projects, largest still 329MB —
+  so every table above stays comparable; only the quoted total moved. Single-project rows use individual projects from the same
   tree. The "803MB / 187-file" fragment-store reference project is
   the corpus's own claude-code-log archive quoted at its *all-files*
   size, subagent sidecars included (its top-level trunk files are

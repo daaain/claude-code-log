@@ -67,6 +67,7 @@ from claude_code_log.render_pool import (  # noqa: E402
     available_memory_bytes,
     memory_capped_workers,
 )
+from claude_code_log.utils import project_transcript_bytes  # noqa: E402
 
 
 # os.times() reports children_user / children_system as 0.0 on Windows —
@@ -119,7 +120,15 @@ def _project_dirs(root: Path) -> list[Path]:
 
 
 def _transcript_bytes(project: Path) -> int:
-    return sum(f.stat().st_size for f in project.glob("*.jsonl"))
+    """The same bytes the converter's memory heuristics charge.
+
+    Shared with the converter rather than recomputed: this used to count
+    top-level `agent-*.jsonl` too, so the memory preview and the
+    `both (N->M workers)` labels predicted a worker cap the conversion
+    would not actually apply — 16 of 79 projects in the reference corpus
+    carry such files, one inflating its measured size by 30%.
+    """
+    return project_transcript_bytes(project)
 
 
 def _clear_outputs(target: Path, all_projects: bool) -> None:

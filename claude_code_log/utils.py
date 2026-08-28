@@ -755,6 +755,30 @@ def _compact_ide_tags_for_preview(text_content: str) -> str:
     return text_content
 
 
+def trunk_jsonl_files(directory: Path) -> list[Path]:
+    """This project's own transcript files: top-level, non-``agent-``.
+
+    ``agent-*.jsonl`` sidecars are excluded because they are loaded
+    through the sessions that reference them, never directly — counting
+    them twice is the recurring mistake this helper exists to prevent.
+    """
+    return [f for f in directory.glob("*.jsonl") if not f.name.startswith("agent-")]
+
+
+def project_transcript_bytes(directory: Path) -> int:
+    """Bytes of :func:`trunk_jsonl_files` — the project's size on disk.
+
+    This is the number every memory heuristic is calibrated against
+    (the render pool's worker cap, the fragment-store valve, the
+    streaming valve, a plan's ``source_bytes``), so they all have to
+    measure it the same way. ``scripts/bench_render.py`` computed it
+    without the ``agent-`` exclusion and so predicted a different worker
+    cap than the converter would apply — on this corpus 16 of 79
+    projects carry top-level agent files, one of them inflating by 30%.
+    """
+    return sum(f.stat().st_size for f in trunk_jsonl_files(directory))
+
+
 def is_agent_session(session_id: str) -> bool:
     """Check if a session ID is a synthetic agent session.
 
