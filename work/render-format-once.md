@@ -1164,13 +1164,21 @@ Full suite before pushing: `just ci`.
   ::test_index_html_updated_with_new_project_stats` flakes roughly
   1 run in 6 (it asserts a regenerated file's mtime increased), and
   the CLI can print a *negative* per-project duration. Not caused by
-  any change on this branch — reproduced with every knob disabled. If
-  a single mtime/duration assertion fails once and passes on re-run,
-  suspect this before the diff. The underlying fix is for production
-  duration measurements to use `time.monotonic()`
-  (`converter.py` has ~8 `time.time()` elapsed sites, plus
-  `renderer_timings.py`); left alone here to keep this branch
-  scoped — worth a small separate PR.
+  any change on this branch — reproduced with every knob disabled.
+  **Both are fixed now** (2026-08-28): every production elapsed-time
+  measurement reads `time.monotonic()` — the 8 sites in `converter.py`
+  (plan, project-worker, hierarchy total, per-project line) plus
+  `renderer_timings.py`, `renderer.py` and `html/renderer.py`, which
+  share a clock domain through `log_timing(t_start=...)` and so had to
+  move together (its docstring now says the reading must be
+  monotonic). Wall-clock readings that are genuinely *timestamps* —
+  `cache.py`'s `datetime.now()` rows, the mtime freshness compare —
+  stay on `time.time()`. Since file mtimes come from the OS and can
+  still step backwards, the mtime assertions moved to
+  `conftest.assert_regenerated` (mtime *changed*, not "increased"),
+  which is what those 7 call sites actually mean; it sits next to
+  `bump_mtime`, whose comment block documents the sibling
+  filesystem-clock flake.
 - Real transcripts for local testing: `downloads/projects/` (7.9GB on
   disk, 84 projects, with a warm cache DB). Note it is a *snapshot*,
   not the live tree: measure against it, not `~/.claude/projects`,

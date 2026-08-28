@@ -152,7 +152,7 @@ class TestLogTiming:
 
         importlib.reload(rt)
 
-        t_start = time.time()
+        t_start = time.monotonic()
         time.sleep(0.01)
 
         with rt.log_timing("Test Phase", t_start=t_start):

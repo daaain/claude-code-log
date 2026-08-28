@@ -41,7 +41,10 @@ def log_timing(
 
     Args:
         phase: Phase name (static string) or callable returning phase name (for dynamic names)
-        t_start: Optional start time for calculating total elapsed time
+        t_start: Optional start reading for the running total. Must come
+            from ``time.monotonic()`` — this module measures durations on
+            the monotonic clock, and mixing in a ``time.time()`` reading
+            would print a nonsense total (the two have unrelated epochs).
 
     Example:
         # Static phase name
@@ -56,12 +59,12 @@ def log_timing(
         yield
         return
 
-    t_phase_start = time.time()
+    t_phase_start = time.monotonic()
 
     try:
         yield
     finally:
-        t_now = time.time()
+        t_now = time.monotonic()
         phase_time = t_now - t_phase_start
 
         # Evaluate phase name (call if callable, use directly if string)
@@ -100,11 +103,11 @@ def timing_stat(list_name: str) -> Iterator[None]:
         yield
         return
 
-    t_start = time.time()
+    t_start = time.monotonic()
     try:
         yield
     finally:
-        duration = time.time() - t_start
+        duration = time.monotonic() - t_start
         if list_name in _timing_data:
             msg_id = _timing_data.get("_current_msg_id", "")
             _timing_data[list_name].append((duration, msg_id))

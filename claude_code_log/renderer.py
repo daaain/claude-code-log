@@ -745,7 +745,7 @@ def generate_template_messages(
         depth = RenderingDepth(depth)
 
     # Performance timing
-    t_start = time.time()
+    t_start = time.monotonic()
 
     # Filter out warmup-only sessions
     with log_timing("Filter warmup sessions", t_start):

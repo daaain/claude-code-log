@@ -5579,7 +5579,7 @@ def _plan_project(
     """
     from .utils import project_destination
 
-    plan_start = time.time()
+    plan_start = time.monotonic()
     stats = GenerationStats()
     cache_manager: Optional[CacheManager] = None
     if use_cache:
@@ -5686,7 +5686,7 @@ def _plan_project(
     else:
         # Fast path: nothing to do, just collect stats for index
         stats.files_loaded_from_cache = len(jsonl_files)
-    stats.total_time = time.time() - plan_start
+    stats.total_time = time.monotonic() - plan_start
 
     cached_message_count: Optional[int] = None
     if cache_manager is not None:
@@ -5720,7 +5720,7 @@ def _convert_project_worker(
     formatted traceback instead of raised so the parent can attribute
     them to the right project and keep processing the rest.
     """
-    start = time.time()
+    start = time.monotonic()
     error: Optional[str] = None
     try:
         convert_jsonl_to(
@@ -5753,7 +5753,7 @@ def _convert_project_worker(
         )
     except Exception:
         error = traceback.format_exc()
-    return (worker_args["project_dir"], time.time() - start, error)
+    return (worker_args["project_dir"], time.monotonic() - start, error)
 
 
 def process_projects_hierarchy(
@@ -5806,7 +5806,7 @@ def process_projects_hierarchy(
     """
     import time
 
-    start_time = time.time()
+    start_time = time.monotonic()
 
     if not projects_path.exists():
         raise FileNotFoundError(f"Projects path not found: {projects_path}")
@@ -6054,7 +6054,7 @@ def process_projects_hierarchy(
         """Convert one project in this process, reporting progress/failure."""
         if render_jobs is None:
             render_jobs = per_project_render_jobs
-        project_start_time = time.time()
+        project_start_time = time.monotonic()
         try:
             # Generate output for this project (handles cache updates internally)
             convert_jsonl_to(
@@ -6082,7 +6082,7 @@ def process_projects_hierarchy(
         except Exception:
             _print_project_failed(plan, traceback.format_exc())
             return
-        _print_project_done(plan, time.time() - project_start_time)
+        _print_project_done(plan, time.monotonic() - project_start_time)
 
     if resolved_jobs <= 1:
         for plan in pooled:
@@ -6533,7 +6533,7 @@ def process_projects_hierarchy(
         total_sessions += len(summary.get("sessions", []))
 
     # Print summary
-    elapsed = time.time() - start_time
+    elapsed = time.monotonic() - start_time
 
     # Print any errors/warnings that occurred
     for project_name, stats in project_stats:
