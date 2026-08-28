@@ -1725,7 +1725,7 @@ class HtmlRenderer(Renderer):
         """Body of ``generate`` running inside the SHA-resolver context."""
         import time
 
-        t_start = time.monotonic()
+        t_start = time.perf_counter()
 
         # Set output directory for image export (used in "referenced" mode)
         self._output_dir = output_dir
