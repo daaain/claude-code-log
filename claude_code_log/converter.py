@@ -3005,6 +3005,244 @@ def _stream_paginated_conversion(
     return first_page_path, wrote_any, sessions_regenerated
 
 
+# ===== convert_jsonl_to's partial paths =====
+#
+# Two ways a directory conversion can finish without loading the whole
+# project, tried in order before the full load. Both have the same shape,
+# which is this branch's central contract: check preconditions, attempt a
+# partial path, and return the conversion's ``Path`` if it handled the
+# work or ``None`` to fall through to the next path (ultimately the
+# unchanged full load). A decline must be indistinguishable from never
+# having been attempted, so neither writes output or mutates ``report``
+# on any path that returns ``None``.
+
+
+def _try_current_or_session_scoped(
+    *,
+    input_path: Path,
+    output_path: Path,
+    effective_output_dir: Path,
+    cache_manager: Optional["CacheManager"],
+    cache_was_updated: bool,
+    format: str,
+    ext: str,
+    suffix: str,
+    page_size: int,
+    from_date: Optional[str],
+    to_date: Optional[str],
+    force_regenerate: bool,
+    write_combined: bool,
+    generate_individual_sessions: bool,
+    image_export_mode: Optional[str],
+    depth: RenderingDepth,
+    compact: bool,
+    no_timestamps: bool,
+    no_recaps: bool,
+    silent: bool,
+    report: Optional["RegenerationReport"],
+) -> Optional[Path]:
+    """Finish from the cache alone, when the combined output is current.
+
+    Covers the two outcomes that share those preconditions, in order:
+
+    - **Nothing is stale.** Return without loading anything.
+    - **Only session files are stale.** Their bytes are reproducible from
+      those sessions' own JSONL plus the persisted cross-session sidecar,
+      so regenerate just those — no whole-project load
+      (work/render-format-once.md, streaming stage 2).
+
+    Both need the same staleness answers, which is why they are one
+    function rather than two: splitting them would compute
+    ``_combined_output_is_stale`` and ``get_stale_sessions`` twice.
+
+    Returns ``None`` when the preconditions don't hold, when the combined
+    output is stale, or when the session-scoped load declines.
+    """
+    if (
+        cache_manager is None
+        or cache_was_updated
+        or from_date is not None
+        or to_date is not None
+        or force_regenerate
+    ):
+        return None
+
+    # Check if the combined output is stale — unless it isn't produced at
+    # all (`--combined no`), in which case its absence must not veto the
+    # early exit. For a single-file combined, `is_transcript_stale` runs
+    # the version-marker sniff on the same resolved file; for a
+    # *paginated* project (which has no `combined_transcripts.html` cache
+    # row, so that check would read "stale" on every run and this early
+    # exit never fired for them at all) the helper replays the pagination
+    # pass's own per-page staleness plan from cached session data alone.
+    if write_combined:
+        combined_stale = _combined_output_is_stale(
+            cache_manager,
+            output_path,
+            effective_output_dir,
+            format,
+            page_size,
+            suffix,
+        )
+    else:
+        combined_stale = False
+    if combined_stale:
+        return None
+
+    # Check if any session file of this variant is stale
+    stale_sessions = cache_manager.get_stale_sessions(
+        variant=suffix, ext=ext, output_dir=effective_output_dir
+    )
+    if not stale_sessions or not generate_individual_sessions:
+        # Nothing needs regeneration - skip loading
+        if not silent:
+            print(
+                f"All HTML files are current for {input_path.name}, "
+                "skipping regeneration"
+            )
+        # Nothing regenerated: report defaults (False / 0) stand.
+        return output_path
+
+    if not _session_scoped_enabled():
+        return None
+    partial = _load_stale_session_transcripts(
+        input_path,
+        cache_manager,
+        [sid for sid, _reason in stale_sessions],
+        silent,
+    )
+    if partial is None:
+        return None
+
+    partial_messages, partial_tree = partial
+    partial_messages = deduplicate_messages(partial_messages)
+    if not silent:
+        print(
+            f"Regenerating {len(stale_sessions)} stale "
+            f"session file(s) for {input_path.name} "
+            "(session-scoped, combined output current)"
+        )
+    sessions_regenerated = _generate_individual_session_files(
+        format,
+        partial_messages,
+        effective_output_dir,
+        None,
+        None,
+        cache_manager,
+        False,
+        image_export_mode,
+        silent=silent,
+        session_tree=partial_tree,
+        depth=depth,
+        compact=compact,
+        write_combined=write_combined,
+        no_timestamps=no_timestamps,
+        no_recaps=no_recaps,
+        render_pool=None,
+        fragment_store=None,
+    )
+    if report is not None:
+        report.combined_regenerated = False
+        report.sessions_regenerated = sessions_regenerated
+    return output_path
+
+
+def _try_streaming(
+    *,
+    input_path: Path,
+    effective_output_dir: Path,
+    cache_manager: Optional["CacheManager"],
+    format: str,
+    page_size: int,
+    from_date: Optional[str],
+    to_date: Optional[str],
+    force_regenerate: bool,
+    write_combined: bool,
+    generate_individual_sessions: bool,
+    image_export_mode: Optional[str],
+    archive_search_link: Optional[str],
+    depth: RenderingDepth,
+    compact: bool,
+    no_timestamps: bool,
+    no_recaps: bool,
+    silent: bool,
+    report: Optional["RegenerationReport"],
+) -> Optional[Path]:
+    """Convert a paginated project page-by-page, if this run should.
+
+    Streaming stage 3 (work/render-format-once.md). On a memory-tight
+    machine (or when forced by ``CLAUDE_CODE_LOG_STREAMING=1``) a
+    paginated project converts from cache-planned partial loads instead
+    of loading whole; a roomy machine streams too when the pass turns out
+    page-sparse (the daily-run shape), where partial loads beat the
+    whole-project load the full path would pay. The sidecar
+    ``ensure_fresh_cache`` just (re)persisted makes the partial loads
+    faithful even right after a cache update.
+
+    Returns ``None`` when the preconditions don't hold, when the project
+    isn't paginated, when ``_should_stream`` declines, or when the pass
+    itself declines (sparse mode meeting dense work).
+    """
+    if (
+        format != "html"
+        or cache_manager is None
+        or from_date is not None
+        or to_date is not None
+        or force_regenerate
+        or not write_combined
+    ):
+        return None
+
+    from .utils import variant_suffix as _page_variant_suffix
+
+    stream_page_suffix = _page_variant_suffix(
+        depth, compact, "html", no_recaps=no_recaps
+    )
+    stream_cached = cache_manager.get_cached_project_data()
+    stream_paginated = stream_cached is not None and _is_paginated(
+        total_message_count=stream_cached.total_message_count,
+        page_size=page_size,
+        existing_page_count=cache_manager.get_page_count(stream_page_suffix),
+    )
+    if not stream_paginated:
+        return None
+    stream_decision = _should_stream(project_transcript_bytes(input_path))
+    if stream_decision is None:
+        return None
+
+    stream_dirs = cache_manager.get_working_directories()
+    stream_title = (
+        f"Claude Transcripts - {get_project_display_name(input_path.name, stream_dirs)}"
+    )
+    streamed = _stream_paginated_conversion(
+        input_path,
+        effective_output_dir,
+        cache_manager,
+        stream_title,
+        page_size,
+        depth=depth,
+        compact=compact,
+        no_timestamps=no_timestamps,
+        no_recaps=no_recaps,
+        image_export_mode=image_export_mode,
+        archive_search_link=archive_search_link,
+        generate_individual_sessions=(
+            generate_individual_sessions and input_path.is_dir()
+        ),
+        write_combined=write_combined,
+        silent=silent,
+        sparse_only=stream_decision == "sparse",
+    )
+    if streamed is None:
+        return None
+
+    streamed_path, streamed_combined, streamed_sessions = streamed
+    if report is not None:
+        report.combined_regenerated = streamed_combined
+        report.sessions_regenerated = streamed_sessions
+    return streamed_path
+
+
 def convert_jsonl_to(
     format: str,
     input_path: Path,
@@ -3153,159 +3391,58 @@ def convert_jsonl_to(
             input_path, cache_manager, from_date, to_date, silent
         )
 
-        # Phase 1b: Early exit if nothing needs regeneration
-        # Skip expensive message loading if all output files are up to date
-        if (
-            cache_manager is not None
-            and not cache_was_updated
-            and from_date is None
-            and to_date is None
-            and not force_regenerate
-        ):
-            # Check if the combined output is stale — unless it isn't
-            # produced at all (`--combined no`), in which case its
-            # absence must not veto the early exit. For a single-file
-            # combined, `is_transcript_stale` runs the version-marker
-            # sniff on the same resolved file; for a *paginated* project
-            # (which has no `combined_transcripts.html` cache row, so
-            # that check would read "stale" on every run and this early
-            # exit never fired for them at all) the helper replays the
-            # pagination pass's own per-page staleness plan from cached
-            # session data alone.
-            if write_combined:
-                combined_stale = _combined_output_is_stale(
-                    cache_manager,
-                    output_path,
-                    effective_output_dir,
-                    format,
-                    page_size,
-                    suffix,
-                )
-            else:
-                combined_stale = False
-            if not combined_stale:
-                # Check if any session file of this variant is stale
-                stale_sessions = cache_manager.get_stale_sessions(
-                    variant=suffix, ext=ext, output_dir=effective_output_dir
-                )
-                if not stale_sessions or not generate_individual_sessions:
-                    # Nothing needs regeneration - skip loading
-                    if not silent:
-                        print(
-                            f"All HTML files are current for {input_path.name}, "
-                            "skipping regeneration"
-                        )
-                    # Nothing regenerated: report defaults (False / 0) stand.
-                    return output_path
+        # Phase 1b: finish without loading the project at all, if the
+        # cache says we can.
+        settled = _try_current_or_session_scoped(
+            input_path=input_path,
+            output_path=output_path,
+            effective_output_dir=effective_output_dir,
+            cache_manager=cache_manager,
+            cache_was_updated=cache_was_updated,
+            format=format,
+            ext=ext,
+            suffix=suffix,
+            page_size=page_size,
+            from_date=from_date,
+            to_date=to_date,
+            force_regenerate=force_regenerate,
+            write_combined=write_combined,
+            generate_individual_sessions=generate_individual_sessions,
+            image_export_mode=image_export_mode,
+            depth=depth,
+            compact=compact,
+            no_timestamps=no_timestamps,
+            no_recaps=no_recaps,
+            silent=silent,
+            report=report,
+        )
+        if settled is not None:
+            return settled
 
-                # Session-scoped incremental path: the combined output is
-                # current and only session files are stale, so their bytes
-                # are reproducible from those sessions' own files plus the
-                # persisted cross-session sidecar — no whole-project load
-                # (work/render-format-once.md, streaming stage 2). Declines
-                # (None) fall through to the full load below, unchanged.
-                if _session_scoped_enabled():
-                    partial = _load_stale_session_transcripts(
-                        input_path,
-                        cache_manager,
-                        [sid for sid, _reason in stale_sessions],
-                        silent,
-                    )
-                    if partial is not None:
-                        partial_messages, partial_tree = partial
-                        partial_messages = deduplicate_messages(partial_messages)
-                        if not silent:
-                            print(
-                                f"Regenerating {len(stale_sessions)} stale "
-                                f"session file(s) for {input_path.name} "
-                                "(session-scoped, combined output current)"
-                            )
-                        sessions_regenerated = _generate_individual_session_files(
-                            format,
-                            partial_messages,
-                            effective_output_dir,
-                            None,
-                            None,
-                            cache_manager,
-                            False,
-                            image_export_mode,
-                            silent=silent,
-                            session_tree=partial_tree,
-                            depth=depth,
-                            compact=compact,
-                            write_combined=write_combined,
-                            no_timestamps=no_timestamps,
-                            no_recaps=no_recaps,
-                            render_pool=None,
-                            fragment_store=None,
-                        )
-                        if report is not None:
-                            report.combined_regenerated = False
-                            report.sessions_regenerated = sessions_regenerated
-                        return output_path
-
-        # Phase 1c: page-granular streaming (work/render-format-once.md,
-        # streaming stage 3). On a memory-tight machine (or when forced by
-        # CLAUDE_CODE_LOG_STREAMING=1) a paginated project converts
-        # page-by-page from cache-planned partial loads instead of loading
-        # whole; a roomy machine streams too when the pass turns out
-        # page-sparse (the daily-run shape), where partial loads beat the
-        # whole-project load the full path would pay. The sidecar
-        # ensure_fresh_cache just (re)persisted makes the partial loads
-        # faithful even right after a cache update. Declines (None) fall
-        # through to the full load below, unchanged.
-        if (
-            format == "html"
-            and cache_manager is not None
-            and from_date is None
-            and to_date is None
-            and not force_regenerate
-            and write_combined
-        ):
-            from .utils import variant_suffix as _page_variant_suffix
-
-            stream_page_suffix = _page_variant_suffix(
-                depth, compact, "html", no_recaps=no_recaps
-            )
-            stream_cached = cache_manager.get_cached_project_data()
-            stream_paginated = stream_cached is not None and _is_paginated(
-                total_message_count=stream_cached.total_message_count,
-                page_size=page_size,
-                existing_page_count=cache_manager.get_page_count(stream_page_suffix),
-            )
-            stream_bytes = project_transcript_bytes(input_path)
-            stream_decision = _should_stream(stream_bytes)
-            if stream_paginated and stream_decision is not None:
-                stream_dirs = cache_manager.get_working_directories()
-                stream_title = (
-                    "Claude Transcripts - "
-                    f"{get_project_display_name(input_path.name, stream_dirs)}"
-                )
-                streamed = _stream_paginated_conversion(
-                    input_path,
-                    effective_output_dir,
-                    cache_manager,
-                    stream_title,
-                    page_size,
-                    depth=depth,
-                    compact=compact,
-                    no_timestamps=no_timestamps,
-                    no_recaps=no_recaps,
-                    image_export_mode=image_export_mode,
-                    archive_search_link=archive_search_link,
-                    generate_individual_sessions=(
-                        generate_individual_sessions and input_path.is_dir()
-                    ),
-                    write_combined=write_combined,
-                    silent=silent,
-                    sparse_only=stream_decision == "sparse",
-                )
-                if streamed is not None:
-                    streamed_path, streamed_combined, streamed_sessions = streamed
-                    if report is not None:
-                        report.combined_regenerated = streamed_combined
-                        report.sessions_regenerated = streamed_sessions
-                    return streamed_path
+        # Phase 1c: convert a paginated project page-by-page instead of
+        # loading it whole.
+        streamed_path = _try_streaming(
+            input_path=input_path,
+            effective_output_dir=effective_output_dir,
+            cache_manager=cache_manager,
+            format=format,
+            page_size=page_size,
+            from_date=from_date,
+            to_date=to_date,
+            force_regenerate=force_regenerate,
+            write_combined=write_combined,
+            generate_individual_sessions=generate_individual_sessions,
+            image_export_mode=image_export_mode,
+            archive_search_link=archive_search_link,
+            depth=depth,
+            compact=compact,
+            no_timestamps=no_timestamps,
+            no_recaps=no_recaps,
+            silent=silent,
+            report=report,
+        )
+        if streamed_path is not None:
+            return streamed_path
 
         # Phase 2: Load messages (will use fresh cache when available)
         messages, session_tree = load_directory_transcripts(
