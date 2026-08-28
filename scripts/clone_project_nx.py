@@ -8,9 +8,9 @@ size whose every copy renders independently.
 
     uv run python scripts/clone_project_nx.py <source-project> <dest-dir> 4
 
-Each copy c applies a bijective hex-digit rotation (+c mod 16) to every
-UUID in each file (uuid, parentUuid, sessionId, leafUuid, and the
-filenames themselves) so copies never collide, and suffixes every
+Each copy c applies a bijective per-digit rotation to every UUID in each
+file (uuid, parentUuid, sessionId, leafUuid, and the filenames
+themselves) so copies never collide, and suffixes every
 requestId so requestId-based dedup cannot collapse messages across
 copies. Copy 0 is byte-identical to the source. Timestamps are left
 alone, so all copies share the source's time range.
@@ -31,10 +31,21 @@ Translator = Callable[["re.Match[str]"], str]
 
 
 def make_translators(c: int) -> tuple[Translator, Translator]:
-    rot = {h: HEX[(i + c) % 16] for i, h in enumerate(HEX)}
-
+    # The rotation offset for each hex position is that position's digit
+    # of c in base 16, so every copy index gets its own offset vector: a
+    # bijection within a copy (distinct UUIDs stay distinct) and distinct
+    # across copies (no copy > 15 wraps back onto an earlier one, which a
+    # single +c mod 16 rotation would). Copy 0 is the identity.
     def xlate_uuid(m: "re.Match[str]") -> str:
-        return "".join(rot.get(ch, ch) for ch in m.group(0))
+        out: list[str] = []
+        pos = 0
+        for ch in m.group(0):
+            if ch == "-":
+                out.append(ch)
+                continue
+            out.append(HEX[(HEX.index(ch) + ((c >> (4 * pos)) & 0xF)) % 16])
+            pos += 1
+        return "".join(out)
 
     def xlate_req(m: "re.Match[str]") -> str:
         return m.group(0) + f"cp{c}"
@@ -51,8 +62,12 @@ def main() -> None:
     files = sorted(src.glob("*.jsonl"))
     if not files:
         sys.exit(f"No .jsonl transcripts in {src}")
+    if copies < 1:
+        sys.exit("copies must be at least 1")
     if dst == src or src in dst.parents:
         sys.exit("destination must be outside the source project")
+    if dst.exists() and any(dst.iterdir()):
+        sys.exit(f"destination {dst} exists and is not empty")
     dst.mkdir(parents=True, exist_ok=True)
 
     for c in range(copies):

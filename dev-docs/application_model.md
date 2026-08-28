@@ -213,6 +213,14 @@ Current migrations:
 - `008_session_sidecar.sql` — cross-session sidecar tables
   (`session_parents`, `junction_uuids`, `dedup_winners`,
   `sidecar_state`) for session-scoped incremental rendering (§ 2.12).
+- `009_sessions_hidden.sql` — adds `hidden` to sessions, so warmup /
+  empty sessions stay cached but out of the rendered set.
+- `010_sessions_residual_count.sql` — adds `residual_count` to
+  sessions: the per-session entries a full load traverses but
+  `message_count` doesn't cover, which the incremental cache refresh
+  needs to recompute `projects.total_message_count` by delta (§ 2.14).
+  Deliberately NULLable — a NULL means "unknown basis", and the
+  refresh declines rather than compute a delta from it.
 
 Recreating-tables migrations toggle `PRAGMA foreign_keys = OFF/ON`
 around the rebuild to avoid losing rows to cascade-deletes during the

@@ -312,9 +312,13 @@ rebuild still declines to the full load + fan-out, which wins it on
 wall time). Pages are planned from cached session data, and each page's
 sessions are loaded, rendered (page + stale session files, with a
 per-page fragment store) and dropped in turn, so peak residency is one
-page rather than the project — no archive is too big for the machine's
-RAM at render time. `CLAUDE_CODE_LOG_STREAMING=1` forces the streaming
-path (any machine, any staleness), `=0` disables it for bisecting. See
+page rather than the project — an archive's size stops being the bound;
+the largest page's source files become it.
+`CLAUDE_CODE_LOG_STREAMING=1` bypasses both gates (it streams on a roomy
+machine and on a dense rebuild), but not the structural preconditions:
+the conversion still has to be the paginated HTML path with every page's
+sessions resolvable to their source files, and the machine still has to
+hold the largest page. `=0` disables streaming for bisecting. See
 [dev-docs/application_model.md § 2.13](dev-docs/application_model.md).
 
 The cache refresh itself is also incremental: when source files

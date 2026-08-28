@@ -124,6 +124,7 @@ def _db_state(project: Path) -> dict[str, Any]:
                 row["total_cache_read_tokens"],
                 row["team_name"],
                 row["hidden"],
+                row["residual_count"],
             )
             for row in conn.execute("SELECT * FROM sessions")
         )

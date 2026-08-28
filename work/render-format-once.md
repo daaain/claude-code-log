@@ -309,7 +309,9 @@ on the 296MB document-processing project, 187 on the 803MB reference
 archive. Measured on the 8-core/16GB VM (serial, warm cache), peak
 RSS / wall, full path → streamed: 296MB project full rebuild
 454MB / 9.0s → 305MB / 8.5s; 803MB project full rebuild
-1490MB / 28.2s → **591MB / 25.2s**, incremental (1 page + 5 sessions)
+1490MB / 28.2s → **591MB / 25.2s**, incremental (1 page + 5 sessions,
+hand-marked — this predates `bench_render.py` carrying the scenario,
+which later fixed it at 1 page + 3 sessions)
 1092MB / 7.6s → 587MB / 4.6s — the streamed pass is *both* smaller
 and faster than the serial full path, because per-page cache loads
 replace the one giant master-list materialization. The ~590MB is
@@ -801,10 +803,10 @@ granularity):
    ever fan out across processes.
 4. ~~The remaining floor: `ensure_fresh_cache`'s full load on changed
    sources.~~ **Landed in phase 11** — the incremental cache refresh;
-   see the stage-4 block above. Its tail is still open: revisit the
-   § 7.5-style thresholds now that the floor is gone, since
-   `memory_capped_workers`' parent charge (4.5x) stops being the
-   binding constraint on small machines.
+   see the stage-4 block above. Its tail — the § 7.5-style threshold
+   revisit, once the floor was gone — **finished in phase 12**: the
+   binding threshold turned out to be the unit-count dispatch gate
+   rather than any of the three the item named.
 
 This is a restructuring of `load_directory_transcripts` +
 `convert_jsonl_to`'s spine — comparable invasiveness to the fed-worker
