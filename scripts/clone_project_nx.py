@@ -10,17 +10,23 @@ size whose every copy renders independently.
 
 Each copy c applies a bijective per-digit rotation to every UUID in each
 file (uuid, parentUuid, sessionId, leafUuid, and the filenames
-themselves) so copies never collide, and suffixes every
-requestId so requestId-based dedup cannot collapse messages across
+themselves) so copies never collide, and suffixes every requestId and
+tool-use id so id-based dedup and spawn linking cannot reach across
 copies. Copy 0 is byte-identical to the source. Timestamps are left
 alone, so all copies share the source's time range.
 
-Subagent sidecars (``agent-<id>.jsonl``) usually carry a short hex id
+Subagent sidecars (``agent-<id>.jsonl``, plus any
+``agent-<id>.meta.json`` next to them) usually carry a short hex id
 rather than a UUID, so the rotation leaves their names untouched; those
-get the same ``cp<c>`` suffix on both the filename and every ``"<id>"``
-reference in the copied text, keeping each copy's spawn links pointing
-at its own sidecar. Any other UUID-less basename is rejected up front,
-since copies of it would overwrite one another.
+get the same ``cp<c>`` suffix on both the filename and every reference
+to the id in the copied text — the JSON field (``"agentId":"a82a709"``)
+and the in-band ``agentId: a82a709`` line that async spawns append to
+their tool_result — keeping each copy's spawn links pointing at its own
+sidecar. Any other UUID-less basename is rejected up front, since copies
+of it would overwrite one another.
+
+Only the project directory itself is cloned; a session's nested
+``<session-uuid>/subagents/`` directory is not.
 """
 
 import re
@@ -30,8 +36,11 @@ from pathlib import Path
 from typing import Callable
 
 UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
-REQ_RE = re.compile(r"req_[A-Za-z0-9]+")
-AGENT_RE = re.compile(r"^agent-(.+)\.jsonl$")
+# requestId and tool-use ids alike: both key cross-copy collapsing (the
+# first through dedup, the second through tool_use/tool_result pairing
+# and the sidecar's ``{toolUseId: agentId}`` map).
+OPAQUE_ID_RE = re.compile(r"\b(?:req|(?:srv)?toolu)_[A-Za-z0-9]+")
+AGENT_FILE_RE = re.compile(r"^agent-(.+?)(\.meta\.json|\.jsonl)$")
 
 HEX = "0123456789abcdef"
 
@@ -55,10 +64,10 @@ def make_translators(c: int) -> tuple[Translator, Translator]:
             pos += 1
         return "".join(out)
 
-    def xlate_req(m: "re.Match[str]") -> str:
+    def xlate_id(m: "re.Match[str]") -> str:
         return m.group(0) + f"cp{c}"
 
-    return xlate_uuid, xlate_req
+    return xlate_uuid, xlate_id
 
 
 def make_agent_translator(c: int, agent_ids: list[str]) -> Callable[[str], str]:
@@ -67,14 +76,31 @@ def make_agent_translator(c: int, agent_ids: list[str]) -> Callable[[str], str]:
     The rotation can't make ``agent-a82a709.jsonl`` unique per copy — no
     UUID in the name — so those sidecars are renamed by suffix instead,
     and the ids inside the transcripts have to follow or the copy's spawn
-    entries would point at another copy's sidecar. Only whole JSON string
-    values are rewritten (``"agentId":"a82a709"``, ``"spawnedAgentId"``,
-    id lists), never an id mentioned inside prose.
+    entries would point at another copy's sidecar. Two reference forms
+    carry the id, and both are rewritten:
+
+    - whole JSON string values (``"agentId":"a82a709"``,
+      ``"spawnedAgentId"``, id lists);
+    - the in-band metadata line an async spawn appends to its
+      tool_result text (``agentId: a82a709 (use SendMessage ...)``),
+      which ``factories/agent_metadata_factory.py`` parses back out.
+
+    Both anchor on the exact id, so an id merely mentioned in prose is
+    left alone.
     """
     if not agent_ids:
         return lambda text: text
-    pattern = re.compile('"(' + "|".join(re.escape(i) for i in agent_ids) + ')"')
-    return lambda text: pattern.sub(lambda m: f'"{m.group(1)}cp{c}"', text)
+    ids = "|".join(re.escape(i) for i in agent_ids)
+    quoted = re.compile(f'"({ids})"')
+    # `agentId:` + horizontal space, mirroring _AGENT_ID_RE in the
+    # factory; \b stops a longer id from matching one of its prefixes.
+    in_band = re.compile(rf"(agentId:[^\S\r\n]*)({ids})\b")
+
+    def translate(text: str) -> str:
+        text = quoted.sub(lambda m: f'"{m.group(1)}cp{c}"', text)
+        return in_band.sub(lambda m: f"{m.group(1)}{m.group(2)}cp{c}", text)
+
+    return translate
 
 
 def main() -> None:
@@ -83,9 +109,13 @@ def main() -> None:
     src = Path(sys.argv[1]).expanduser().resolve()
     dst = Path(sys.argv[2]).expanduser().resolve()
     copies = int(sys.argv[3])
-    files = sorted(src.glob("*.jsonl"))
-    if not files:
+    transcripts = sorted(src.glob("*.jsonl"))
+    if not transcripts:
         sys.exit(f"No .jsonl transcripts in {src}")
+    # The spawning tool_result's toolUseId is only linked to a subagent
+    # through its meta sidecar, so a sidecar left behind (or shared
+    # between copies) loses the spawn link.
+    files = transcripts + sorted(src.glob("agent-*.meta.json"))
     if copies < 1:
         sys.exit("copies must be at least 1")
     if dst == src or src in dst.parents:
@@ -98,9 +128,9 @@ def main() -> None:
     # safe mapping, so refuse rather than let copies overwrite silently.
     flat = [f.name for f in files if not UUID_RE.search(f.name)]
     agent_ids = sorted(
-        m.group(1) for name in flat if (m := AGENT_RE.match(name)) is not None
+        {m.group(1) for name in flat if (m := AGENT_FILE_RE.match(name)) is not None}
     )
-    unmappable = [name for name in flat if not AGENT_RE.match(name)]
+    unmappable = [name for name in flat if not AGENT_FILE_RE.match(name)]
     if copies > 1 and unmappable:
         sys.exit(
             "no UUID to rewrite in these filenames, so copies would "
@@ -110,19 +140,21 @@ def main() -> None:
     dst.mkdir(parents=True, exist_ok=True)
 
     for c in range(copies):
-        xlate_uuid, xlate_req = make_translators(c)
+        xlate_uuid, xlate_id = make_translators(c)
         xlate_agent = make_agent_translator(c, agent_ids)
         for f in files:
             name = UUID_RE.sub(xlate_uuid, f.name)
-            if c and (m := AGENT_RE.match(name)) is not None and name == f.name:
-                name = f"agent-{m.group(1)}cp{c}.jsonl"
+            if c and name == f.name and (m := AGENT_FILE_RE.match(name)) is not None:
+                # A sidecar and its meta file share the id, so they land
+                # on matching names and stay a pair.
+                name = f"agent-{m.group(1)}cp{c}{m.group(2)}"
             out = dst / name
             if c == 0:
                 shutil.copyfile(f, out)
                 continue
             text = f.read_text(encoding="utf-8")
             text = UUID_RE.sub(xlate_uuid, text)
-            text = REQ_RE.sub(xlate_req, text)
+            text = OPAQUE_ID_RE.sub(xlate_id, text)
             text = xlate_agent(text)
             out.write_text(text, encoding="utf-8")
 
