@@ -556,6 +556,126 @@ incremental scenario, the peak-RSS column, and per-row pinning of
 `CLAUDE_CODE_LOG_STREAMING` (unpinned rows would silently stream on a
 tight machine under full-path labels).
 
+**Phase 12 — the § 7.5 threshold revisit, finished (2026-08-28).** The
+tail § 7 item 5 left open. It asked whether `memory_capped_workers`,
+`_MIN_MESSAGES_FOR_RENDER_POOL` and `per_project_render_jobs` were
+still right now that workers are fed slices instead of loading the
+transcript. The answer turned out to be about a *fourth* threshold
+nobody had listed, and it was costing more than all three:
+
+**The dispatch gate counted units, and pages are the fat units.**
+`_dispatch_render_units` fanned a batch out only at
+`_MIN_UNITS_FOR_RENDER_POOL = 8` units, justified by "units average
+well under 200ms". That is true of *session* units — cheap, because
+the page pass already put their fragments in the store — and false of
+*page* units, which carry ~`page_size` messages each and are where
+nearly all of a conversion's render time lives. So a project with
+fewer than 8 pages (~16k messages at the default page size) rendered
+its expensive page batch inline and fanned out only its cheap session
+batch: it paid the pool's ~1s of `spawn` + import for the batch with
+the least to gain. That is the whole explanation for a cliff that
+looked inexplicable while measuring by project size — 15.5k messages
+gave 1.01x and 25k gave 2.67x, because 25k is where the eighth page
+appears.
+
+Measured on the 8-core/16GB VM, 16 real projects from
+`downloads/projects`, full rebuild off a warm cache, every
+configuration byte-identical (harness in the session scratchpad; it
+copies each project to scratch, warms, then times serial vs `auto`
+and hashes the output):
+
+    msgs    project                     serial   before    after
+     2.5k   homelab                      1.71s    0.82x    1.02x
+     3.3k   feat-tangie-state-and-eval   2.23s    0.97x    1.00x
+     4.4k   infra-pulumi                 2.53s    0.89x    1.31x
+     4.5k   platform-frontend-next-…      3.52s    0.98x    1.35x
+     5.0k   chore-remove-all-mui         4.00s    0.99x    1.02x
+     6.3k   cook-anything                3.63s    0.86x    1.37x
+     6.8k   immich-smart-metadata        4.31s    0.90x    1.57x
+     8.2k   visual-ml                    4.88s    0.94x    1.59x
+    12.2k   repower                      7.71s    1.04x    1.79x
+    13.2k   document-processing          9.37s    1.00x    2.27x
+    15.5k   bulk-order-coop              7.79s    1.01x    2.04x
+    25.0k   -workspace                  12.20s    2.67x    2.57x
+    35.4k   claude-code-log             31.09s    2.81x    2.69x
+
+Two directions of win: the mid band gains what it should have been
+getting all along, and the small band stops *losing* — those
+0.82-0.94x rows were the count gate fanning out a session batch that
+had nothing to gain. Note this also retires an earlier claim in this
+doc: "296MB document-processing: fan-out never engages (below the
+floor)" was true of the code as it stood, not of the shape of the
+work.
+
+**The landed rule** (`converter._worth_dispatching`) weighs the batch
+instead of counting it: a lone unit never dispatches (it would render
+in a worker while the parent waits); once the pool has *started*
+(`RenderPool.started` — the executor is lazy and lives for the whole
+conversion) any multi-unit batch does, since the startup is sunk,
+which is how the session batch rides along behind the page batch that
+paid for it; otherwise the batch must carry
+`_MIN_ENTRIES_FOR_RENDER_POOL = 4,000` entries. That number is the
+pool's startup (~1s ≈ 2,000 entries at the ~2,000 entries/s the render
+phase sustains) with the same 2x margin the rest of this branch uses.
+
+**On the three thresholds § 7.5 actually named:**
+
+- `_MIN_MESSAGES_FOR_RENDER_POOL` (25,000) is now the same number as
+  the batch gate, and provably non-binding: every batch is a subset of
+  the project's message list, so a project below the gate can't form a
+  batch that clears it. It survives only as a short-circuit that skips
+  building a pool object nothing would start.
+- `memory_capped_workers` needed nothing. Re-measured on this code:
+  the conversion parent peaked at 1610MB on a 315MB project (5.1x) and
+  the phase-4 fit was 4.4x on 329MB — project-to-project variance
+  (±15%) is larger than any drift, the 4.5x charge sits inside it, and
+  the 0.6 headroom absorbs the rest. Its charge was never the binding
+  constraint on the fan-out; the dispatch gate was.
+- `per_project_render_jobs` is unchanged. On a full rebuild the *core*
+  split (`job_budget // len(pooled)`) still binds at 1 worker/project
+  before memory does — the flat pool remains the fix for that tail —
+  and on an incremental run the projects that now qualify are the ones
+  that finally use the workers they were already being granted.
+
+**The hold-back floor is now its own constant** (`_MIN_MESSAGES_FOR_
+HOLDBACK = 25,000`). It had been reading `_MIN_MESSAGES_FOR_RENDER_
+POOL`, so lowering the pool floor would have silently made 4k-message
+projects hold-back-eligible — and `_fanned_speedup` promises 2.5x at
+8+ workers, which a 3-page project does not deliver (1.3-1.6x
+measured). Over-estimating there serializes a project that was better
+off pooled, the expensive direction. Hold-back decisions are therefore
+bit-for-bit what they were.
+
+**No-regression check on the archive-level scenarios**
+(`bench_render.py --all-projects --projects 8`, the same 1539MB
+subset every table in this doc uses, every configuration
+byte-identical): full rebuild 64.8s memo-only → 57.5s both (1.13x,
+vs 1.15x at phase 6), incremental 61.8s → 18.0s (3.43x, vs 3.48x) —
+unchanged within run-to-run noise, which is the expected result. A
+full rebuild gives each pooled project 1 render worker (the core
+split binds), so no pool is built there at any floor; the
+incremental scenario's one stale project is the 97k-message giant,
+already far above both the old floor and the new gate. The projects
+this phase unlocks are the ones a *partially* stale archive leaves
+in the pool with spare budget.
+
+**Measurement lesson, worth more than the numbers:** in the marginal
+band a single timed run is not evidence. `chore-remove-all-mui` read
+0.91x on one sample and 1.02x as the median of five, and the *serial*
+baseline was stable (3.89-3.95s) while the fanned one swung
+3.30-4.04s — the fan-out has the higher variance, so a single sample
+biases against it. Every threshold decision here that fell inside
+±15% was re-run five times and taken as a median. Two forgone cases
+sit just under the gate: `docling-extraction` (3.2k entries) measures
+1.14x if forced, and `feat-tangie` (3.3k) measures 0.98x — no
+consistent sign below 4,000, which is exactly why the gate is there
+and not lower.
+
+Pinned in `test_render_cache.py::TestWorthDispatching` (lone unit,
+light batch, few-fat-units — the case the count gate got wrong —
+ride-along after start, broken pool is not started, entry-less units
+carry no work, and the floor-can't-bind invariant).
+
 **Streaming-conversion design analysis (2026-08-27, so nobody
 re-derives it):** a code-level survey of every full-residency
 assumption behind the § "Still open" streaming item. The load-bearing
@@ -1213,7 +1333,11 @@ Full suite before pushing: `just ci`.
 5. Revisit `memory_capped_workers`, `_MIN_MESSAGES_FOR_RENDER_POOL`
    (`converter.py:2645`) and `per_project_render_jobs`
    (`converter.py:4204`) — all three were sized around a per-worker
-   transcript copy that step 3 should make unnecessary.
+   transcript copy that step 3 should make unnecessary. **Done** —
+   phase 4 re-sized the memory charges, phase 12 finished the rest.
+   The item's premise was half right: the binding threshold was a
+   fourth one it didn't name (the unit-count dispatch gate), and of
+   the three listed, only the pool floor actually moved.
 
 If step 3 turns out to be too invasive, the three landed pieces are
 independently useful and each commit reverts cleanly.

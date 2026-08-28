@@ -397,6 +397,87 @@ class TestSubmitRequiresEntries:
         assert pool._executor is None and not pool.broken
 
 
+class TestWorthDispatching:
+    """The batch gate weighs *work*, not units.
+
+    Counting units sized the fan-out off the wrong batch: a project's page
+    units are the fat ones (~page_size messages each, where nearly all the
+    render time is), its session units the cheap ones (their fragments are
+    already in the store). An 8-unit count gate therefore kept every
+    project with fewer than 8 pages from fanning out the batch that had
+    everything to gain, while still fanning out the one that had nothing —
+    measured as a 0.82-0.94x *regression* on small projects and a forgone
+    1.2-2.2x on mid-sized ones (work/render-format-once.md § 7.5).
+    """
+
+    @staticmethod
+    def _pool(started: bool):
+        pool = RenderPool.__new__(RenderPool)
+        pool._executor = object() if started else None
+        pool._broken = False
+        return pool
+
+    @staticmethod
+    def _units(count: int, entries_each: int):
+        return [
+            RenderUnit(
+                kind="page",
+                key=n,
+                file_name=f"page{n}.html",
+                title="t",
+                entries=[None] * entries_each,  # type: ignore[list-item]
+            )
+            for n in range(count)
+        ]
+
+    def test_lone_unit_never_dispatches(self):
+        """A single unit renders in a worker while the parent waits."""
+        fat = converter._MIN_ENTRIES_FOR_RENDER_POOL * 10
+        assert not converter._worth_dispatching(self._units(1, fat), self._pool(False))
+
+    def test_light_batch_renders_inline(self):
+        units = self._units(6, converter._MIN_ENTRIES_FOR_RENDER_POOL // 20)
+        assert not converter._worth_dispatching(units, self._pool(False))
+
+    def test_few_fat_units_dispatch(self):
+        """The case the count gate got wrong: a 6-page batch carrying most
+        of a mid-sized project's messages is worth a pool, though 6 < 8."""
+        units = self._units(6, converter._MIN_ENTRIES_FOR_RENDER_POOL // 3)
+        assert converter._worth_dispatching(units, self._pool(False))
+
+    def test_light_batch_rides_along_once_workers_exist(self):
+        """Startup is sunk once the page batch has started the pool, so the
+        session batch behind it only has to beat rendering serially."""
+        units = self._units(6, converter._MIN_ENTRIES_FOR_RENDER_POOL // 20)
+        assert converter._worth_dispatching(units, self._pool(True))
+
+    def test_entryless_units_contribute_no_work(self):
+        """submit declines them to the inline path, so they can't repay a
+        pool — a batch of them must not start one."""
+        units = [
+            RenderUnit(kind="page", key=n, file_name=f"p{n}.html", title="t")
+            for n in range(50)
+        ]
+        assert not converter._worth_dispatching(units, self._pool(False))
+
+    def test_broken_pool_is_not_started(self):
+        """A pool that died mid-run must not count as warm: its units all
+        fall back inline, so a light batch would pay for nothing."""
+        pool = self._pool(True)
+        pool.mark_broken()
+        units = self._units(6, converter._MIN_ENTRIES_FOR_RENDER_POOL // 20)
+        assert not converter._worth_dispatching(units, pool)
+
+    def test_project_floor_cannot_bind_before_the_batch_gate(self):
+        """Every batch is a subset of the project's message list, so a
+        project above the floor can still decline batch by batch — and one
+        below it could never have cleared the gate anyway."""
+        assert (
+            converter._MIN_MESSAGES_FOR_RENDER_POOL
+            <= converter._MIN_ENTRIES_FOR_RENDER_POOL
+        )
+
+
 class TestMemoryCap:
     """The cap is load-bearing: swap-thrash is worse than rendering serially.
 

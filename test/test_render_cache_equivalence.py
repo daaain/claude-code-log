@@ -147,7 +147,7 @@ def test_parallel_render_is_byte_identical_to_serial(tmp_path: Path, monkeypatch
     # the fed-fragment assertions below are vacuous with it disabled.
     monkeypatch.delenv("CLAUDE_CODE_LOG_FRAGMENT_STORE", raising=False)
     monkeypatch.setattr(converter, "_MIN_MESSAGES_FOR_RENDER_POOL", 0)
-    monkeypatch.setattr(converter, "_MIN_UNITS_FOR_RENDER_POOL", 2)
+    monkeypatch.setattr(converter, "_MIN_ENTRIES_FOR_RENDER_POOL", 0)
     # Pin available memory too. The pool declines when memory is tight, so
     # on a small CI runner this test would otherwise compare the inline
     # path against itself — or fail its dispatch assertion — depending on

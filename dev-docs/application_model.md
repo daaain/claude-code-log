@@ -500,6 +500,29 @@ with no entry slice to the inline path, and a pool is only created when
 the conversion has a pre-built session tree — a worker-side DAG rebuild
 from a slice alone could genuinely differ.
 
+**Which batches are worth dispatching** is decided per batch by
+`converter._worth_dispatching`, on the work a batch carries rather than
+the number of units in it. A conversion dispatches two batches: its
+stale *pages* (one unit per ~`page_size` messages, where nearly all the
+render time is) and its stale *session files* (cheap, because the page
+pass has already put their fragments in the store). Weighing them by
+unit count got this exactly backwards — an 8-unit floor meant a project
+with fewer than 8 pages rendered its expensive page batch inline and
+fanned out only the cheap session batch, paying the pool's ~1s of
+`spawn` + import for the batch with the least to gain. Weighed by entry
+count against `_MIN_ENTRIES_FOR_RENDER_POOL` (4,000, about twice what
+that startup costs at the ~2,000 entries/s the render phase sustains),
+projects between ~4k and ~15k messages went from 0.86–1.05× to
+1.27–2.27×, and projects below it went from 0.82–0.94× — a real loss —
+back to 1.00×. Two refinements complete the rule: a lone unit never
+dispatches (it would render in a worker while the parent waits), and
+once the pool has started (`RenderPool.started`) any multi-unit batch
+does, since the startup is then sunk — which is how the session batch
+rides along behind the page batch that paid for it.
+`_MIN_MESSAGES_FOR_RENDER_POOL` is the same number, and only a
+short-circuit: every batch is a subset of the project's message list, so
+a project below it could never form a batch that clears the gate.
+
 Before the feed, each worker re-loaded the whole transcript from the
 warm cache in its initializer (~0.7s at 12k messages; ~12s of CPU per
 worker at 329MB of transcript), so per-worker cost scaled with project
@@ -563,7 +586,8 @@ default `None` consults it. `_make_render_pool` declines regardless for
 single-file mode, a missing cache manager, a missing pre-built session
 tree (workers render fed slices against the conversion's tree),
 projects below `_MIN_MESSAGES_FOR_RENDER_POOL`, and machines without
-the memory the cap formula demands.
+the memory the cap formula demands; a pool that *is* created still only
+starts if some batch clears `_worth_dispatching` above.
 `image_export_mode="referenced"` used to decline too, when renders
 allocated `images/image_NNNN.png` names from a per-call counter that
 collided across passes and processes; referenced filenames are now

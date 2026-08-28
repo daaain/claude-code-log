@@ -4180,11 +4180,28 @@ def build_session_title(
     return f"{project_title}: Session {session_id[:8]}"
 
 
-# Below this many stale output files, the fan-out is not worth the ~1s of
+# Below this much work in one batch, the fan-out is not worth the ~1s of
 # `spawn` + package import each worker pays before it can render anything.
-# Units average well under 200ms, so a handful of them finish inline
-# before a pool has even started.
-_MIN_UNITS_FOR_RENDER_POOL = 8
+#
+# This used to be a count of units (8), on the premise that "units average
+# well under 200ms". That holds for *session* units — cheap, because the
+# page pass already put their fragments in the store — but not for *page*
+# units, which carry ~`page_size` messages each and are where nearly all of
+# a conversion's render time lives. Counting them made a project's pages
+# dispatch only once it had 8 of them (~16k messages at the default page
+# size), so every smaller project rendered its expensive page batch inline
+# and fanned out only its cheap session batch — paying the pool's startup
+# for the batch that had the least to gain.
+#
+# Measured over 16 real projects on the 8-core VM (full rebuild, warm
+# cache — work/render-format-once.md § 7.5): projects between ~4k and ~15k
+# messages went from 0.86-1.05x under the count gate to 1.24-2.19x under
+# this one, while the ones below it went from 0.82-0.94x (a real loss —
+# their session batch was being fanned out for nothing) back to 1.00x.
+# 4,000 entries is just above the measured knee: the pool's startup is
+# worth roughly 2,000 entries of rendering at the ~2,000 entries/s the
+# render phase sustains, and a batch has to save more than it costs.
+_MIN_ENTRIES_FOR_RENDER_POOL = 4_000
 
 
 # ...and below this many messages the project's render work is too small to
@@ -4253,7 +4270,14 @@ def _make_fragment_store(
     return RenderFragmentStore()
 
 
-_MIN_MESSAGES_FOR_RENDER_POOL = 25_000
+# A project whose entire message list is below the batch gate can never
+# produce a batch that clears it — every batch is a subset of that list —
+# so building a pool for it is wasted setup. Purely a short-circuit: the
+# batch gate in `_worth_dispatching` is the decision that matters, which
+# is why this is the same number rather than a policy of its own. It was
+# 25,000 while the two gates were sized independently, back when a worker
+# had to load the whole transcript before it could render anything.
+_MIN_MESSAGES_FOR_RENDER_POOL = _MIN_ENTRIES_FOR_RENDER_POOL
 
 
 def _make_render_pool(
@@ -4289,7 +4313,10 @@ def _make_render_pool(
       against the conversion's tree; without one they would rebuild a DAG
       from their slice alone, which can genuinely differ (missing
       cross-session hierarchy) — a correctness cliff, so decline instead.
-    - Projects too small for the pool's startup to pay for itself.
+    - Projects too small for any batch to clear ``_worth_dispatching``,
+      where the real decision lives; a pool this returns is only ever
+      *started* by a batch worth dispatching, so this is a short-circuit
+      rather than a second policy.
 
     ``image_export_mode="referenced"`` used to decline too, when each
     render allocated ``images/image_NNNN.png`` names from a per-call
@@ -4345,6 +4372,32 @@ def _make_render_pool(
     )
 
 
+def _worth_dispatching(units: "list[RenderUnit]", render_pool: "RenderPool") -> bool:
+    """Is fanning this batch out worth what the pool costs to use?
+
+    Three cases, in order:
+
+    - **One unit.** Never. A lone unit renders in a worker while the parent
+      waits, which is strictly slower than rendering it here.
+    - **Workers already exist.** Always. The startup cost is sunk (the
+      executor is lazy and lives for the whole conversion), so a second
+      batch only has to beat rendering serially, which any spread does.
+      This is what lets a project's cheap session batch ride along behind
+      its expensive page batch.
+    - **Otherwise**, the batch has to carry enough work to repay starting
+      the pool — see ``_MIN_ENTRIES_FOR_RENDER_POOL``. Entry count is the
+      cost proxy because it is what the unit actually renders; units with
+      no slice are excluded, since ``RenderPool.submit`` declines those to
+      the inline path anyway.
+    """
+    if len(units) < 2:
+        return False
+    if render_pool.started:
+        return True
+    entries = sum(len(unit.entries) for unit in units if unit.entries)
+    return entries >= _MIN_ENTRIES_FOR_RENDER_POOL
+
+
 def _dispatch_render_units(
     units: "list[RenderUnit]",
     render_pool: "Optional[RenderPool]",
@@ -4373,7 +4426,7 @@ def _dispatch_render_units(
     if not units:
         return
 
-    if render_pool is None or len(units) < _MIN_UNITS_FOR_RENDER_POOL:
+    if render_pool is None or not _worth_dispatching(units, render_pool):
         for unit in units:
             render_inline(unit)
             on_written(unit)
@@ -5454,10 +5507,22 @@ class _ProjectPlan:
     error: Optional[str] = None
 
 
-# Bytes stand-in for _MIN_MESSAGES_FOR_RENDER_POOL when the hold-back
+# How big a project has to be before holding it out of the project pool
+# can pay. Deliberately *not* the render pool's own floor, which is far
+# lower: a project only just past that floor does fan out, but at the
+# 1.2-1.6x measured for 3-4 page batches, well under the 2.5x
+# `_fanned_speedup` promises at 8+ workers. Holding such a project back
+# would serialize it after the pool for a win the table over-states,
+# which is the expensive direction to be wrong in. 25,000 messages is
+# where a lone fanned conversion actually reaches that table (2.7-3.2x
+# measured) — the number this floor has always been in practice, kept
+# here now that the pool floor has moved out from under it.
+_MIN_MESSAGES_FOR_HOLDBACK = 25_000
+
+# Bytes stand-in for _MIN_MESSAGES_FOR_HOLDBACK when the hold-back
 # comparison has to rank plans by source bytes (a plan without a cache row
 # has no message count). Real projects measure ~3-3.4KB of JSONL per
-# message, so 75MB ≈ the 25k-message pool floor.
+# message, so 75MB ≈ the 25k-message hold-back floor.
 _MIN_SOURCE_BYTES_FOR_HOLDBACK = 75 * 1024 * 1024
 
 
@@ -5497,9 +5562,10 @@ def _holdback_plans(
     can't fan the project never holds it back). The loop stops at the
     first losing hold, which keeps every known pathology out by
     construction: level-sized projects pool (serializing them wastes the
-    concurrency they already saturate), sub-pool-threshold projects never
-    hold (they can't fan, so holding gains nothing), and a core-bound
-    pool that already dwarfs the largest project keeps it.
+    concurrency they already saturate), projects under
+    ``_MIN_MESSAGES_FOR_HOLDBACK`` never hold (they fan out too weakly for
+    the speedup table to be honest about them), and a core-bound pool that
+    already dwarfs the largest project keeps it.
 
     Message count predicts conversion cost far better than bytes — the
     reference archive's 329MB/97k-message giant takes as long as its
@@ -5516,7 +5582,7 @@ def _holdback_plans(
     if len(plans) < 2 or job_budget <= 1 or render_budget <= 1:
         return []
     if all(plan.cached_message_count for plan in plans):
-        eligible_floor = _MIN_MESSAGES_FOR_RENDER_POOL
+        eligible_floor = _MIN_MESSAGES_FOR_HOLDBACK
 
         def cost(plan: "_ProjectPlan") -> int:
             return plan.cached_message_count or 0
