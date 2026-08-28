@@ -2591,14 +2591,31 @@ def _combined_output_is_stale(
     return False
 
 
-# Below this much available memory per transcript byte, a paginated
-# conversion streams page-by-page instead of full-loading. 2.4x is the
-# same knee as the fragment-store valve (_FRAGMENT_STORE_MIN_AVAILABLE_PER_BYTE):
-# beneath it the conversion was already degrading to store-less serial, so
-# the streaming path takes over exactly where that ladder left off — one
-# continuous degradation, and roomier machines keep the fanned full-load
-# path untouched.
-_STREAMING_MIN_AVAILABLE_PER_BYTE = 2.4
+# The memory knee both of the conversion's RAM-for-CPU trades decline at,
+# as a multiple of the project's transcript bytes. Two things read it, and
+# they are deliberately the *same* number so the degradation ladder is
+# continuous — which is why it is one constant: two that must move
+# together would eventually drift apart.
+#
+# Where the number comes from: measured serial peaks on the largest real
+# project (803MB of transcripts) are 1252MB with the fragment store off
+# (~1.56x bytes on disk) and 1521MB with it on (~1.9x — the +269MB is the
+# fragment text plus per-entry overhead, work/render-format-once.md § 4.9).
+# 2.4x is that store-on peak plus a ~25% margin.
+#
+# Beneath it, in order:
+#
+# - ``_make_fragment_store`` declines the store, so the conversion runs at
+#   its pre-store footprint instead of trading its last RAM for CPU.
+#   Whenever that happens the render pool's own memory cap (a far higher
+#   bar, ~10x bytes) has already declined too, so a store-less conversion
+#   is always a serial one and needs no worker-side coordination.
+# - ``_should_stream`` makes a paginated conversion stream page-by-page
+#   rather than full-load, picking up exactly where that ladder left off
+#   and bounding peak residency at one page.
+#
+# Above it, roomier machines keep the fanned full-load path untouched.
+_MIN_AVAILABLE_MEMORY_PER_TRANSCRIPT_BYTE = 2.4
 
 
 def _streaming_mode() -> str:
@@ -2641,8 +2658,8 @@ def _should_stream(transcript_bytes: int) -> Optional[str]:
     so the final decision lives in ``_stream_paginated_conversion``).
 
     Auto mode is a memory valve with a sparse fallback: under
-    ``_STREAMING_MIN_AVAILABLE_PER_BYTE`` times the project's transcript
-    bytes — the regime where the serial full load (measured ~1.56x bytes
+    ``_MIN_AVAILABLE_MEMORY_PER_TRANSCRIPT_BYTE`` times the project's
+    transcript bytes — the regime where the serial full load (~1.56x bytes
     store-less, ~1.9x with the store) is at risk and every fan-out has
     already declined — the pass always streams, bounding peak residency
     at one page's sessions instead of the project. With more memory than
@@ -2663,7 +2680,7 @@ def _should_stream(transcript_bytes: int) -> Optional[str]:
     available = available_memory_bytes()
     if (
         available is not None
-        and available < transcript_bytes * _STREAMING_MIN_AVAILABLE_PER_BYTE
+        and available < transcript_bytes * _MIN_AVAILABLE_MEMORY_PER_TRANSCRIPT_BYTE
     ):
         return "always"
     return "sparse"
@@ -4194,35 +4211,6 @@ def build_session_title(
 _MIN_ENTRIES_FOR_RENDER_POOL = 4_000
 
 
-# ...and below this many messages the project's render work is too small to
-# repay the pool's startup. Re-measured post-feeding (2026-08-26, 8-core
-# VM, workers fed entry slices — the work/render-format-once.md § 7.5
-# revisit), best fanned configuration vs the serial memo-only row:
-#
-#   12.2k messages  serial  7.7s  ->  8.2s   (a loss)
-#   15.5k messages  serial  7.7s  ->  8.3s   (a loss)
-#   25.2k messages  serial 12.7s  ->  6.0s   (2.13x)
-#
-# so the crossover sits between 15.5k and 25.2k and the threshold sits at
-# its upper edge: below it the cost is a certain (if now small)
-# regression, above it the win grows with project size and core count.
-# The loss below the line shrank with the feed (workers no longer reload
-# the transcript) but did not flip sign — spawn + import + cold memo
-# caches still outweigh a few seconds of render work.
-# Memory valve for the fragment store: keep it only when available memory
-# comfortably covers a store-carrying conversion. Measured serial peaks on
-# the largest real project (803MB of transcripts): 1252MB with the store
-# off (~1.56x bytes on disk), 1521MB with it on (~1.9x — the +269MB is the
-# fragment text plus per-entry overhead, work/render-format-once.md § 4.9).
-# 2.4x is that store-on peak plus a ~25% margin, so on a machine inside
-# the margin the conversion quietly runs store-less — the pre-store
-# footprint — instead of trading its last RAM for CPU. Whenever this valve
-# trips, the render pool's own memory cap (a far higher bar, ~10x bytes)
-# has already declined, so a store-less conversion is always a serial one
-# and no worker-side coordination is needed.
-_FRAGMENT_STORE_MIN_AVAILABLE_PER_BYTE = 2.4
-
-
 def _make_fragment_store(
     format: str, transcript_bytes: int = 0
 ) -> "Optional[RenderFragmentStore]":
@@ -4233,7 +4221,7 @@ def _make_fragment_store(
     renderer consults it. ``CLAUDE_CODE_LOG_FRAGMENT_STORE=0`` disables it
     for bisecting rendering differences; an explicit ``=1`` forces it past
     the memory valve below, which otherwise skips the store when available
-    memory is under ``_FRAGMENT_STORE_MIN_AVAILABLE_PER_BYTE`` times the
+    memory is under ``_MIN_AVAILABLE_MEMORY_PER_TRANSCRIPT_BYTE`` times the
     project's transcript bytes (the store is a RAM-for-CPU trade, and on a
     machine that tight the RAM matters more). ``transcript_bytes`` of 0
     (unknown) skips the valve, as does an unreadable memory probe.
@@ -4254,7 +4242,7 @@ def _make_fragment_store(
         available = available_memory_bytes()
         if (
             available is not None
-            and available < transcript_bytes * _FRAGMENT_STORE_MIN_AVAILABLE_PER_BYTE
+            and available < transcript_bytes * _MIN_AVAILABLE_MEMORY_PER_TRANSCRIPT_BYTE
         ):
             return None
     return RenderFragmentStore()

@@ -425,8 +425,8 @@ Because the store is a RAM-for-CPU trade — measured serial peaks on the
 803MB reference project: 1252MB store-off vs 1521MB store-on, the
 +269MB being the fragment text plus per-entry overhead —
 `_make_fragment_store` carries a memory valve: when available memory is
-under `_FRAGMENT_STORE_MIN_AVAILABLE_PER_BYTE` (2.4×, the store-on peak
-plus margin) times the project's transcript bytes, the conversion runs
+under `_MIN_AVAILABLE_MEMORY_PER_TRANSCRIPT_BYTE` (2.4×, the store-on
+peak plus margin) times the project's transcript bytes, the conversion runs
 store-less at its pre-store footprint instead of trading its last RAM
 for CPU. An explicit `CLAUDE_CODE_LOG_FRAGMENT_STORE=1` overrides the
 valve; whenever the valve trips, the render pool's far higher memory
@@ -799,8 +799,9 @@ When it runs:
   refreshed can stream instead of loading the project a second time.
 - **By a memory valve, with a sparse fallback**: in auto mode the path
   always engages when available memory is under 2.4x the project's
-  transcript bytes — deliberately the same knee as the fragment-store
-  valve (§ 2.9), so the degradation ladder is continuous: below ~2.4x
+  transcript bytes — literally the same knee as the fragment-store valve
+  (§ 2.9): both read `_MIN_AVAILABLE_MEMORY_PER_TRANSCRIPT_BYTE`, one
+  constant so the two can't drift. The ladder is continuous: below ~2.4x
   the store had already declined, and streaming takes over the serial
   conversion; the fan-out's own (far higher) memory bar has long since
   declined by then, which is why streaming renders inline without
