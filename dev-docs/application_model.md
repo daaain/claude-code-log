@@ -35,6 +35,7 @@ for user-facing operations docs see [`docs/`](../docs/).
 | Depth filter | renderer.py § Depth filtering, `models.RenderingDepth` | inlined below (§ 2.6) |
 | Image export | [`image_export.py`](../claude_code_log/image_export.py) | inlined below (§ 2.7) |
 | Performance profiling | [`renderer_timings.py`](../claude_code_log/renderer_timings.py) | inlined below (§ 2.8) |
+| Intra-project render fan-out | [`render_pool.py`](../claude_code_log/render_pool.py) (mechanism) + [`render_dispatch.py`](../claude_code_log/render_dispatch.py) (policy) | inlined below (§ 2.10) |
 | Diagnosing hangs (SIGUSR1) | [`cli.py`](../claude_code_log/cli.py) `_install_stack_dump_signal` | inlined below (§ 2.11) |
 | Adding a new tool renderer | [`factories/tool_factory.py`](../claude_code_log/factories/tool_factory.py), `html/tool_formatters.py` | [implementing-a-tool-renderer.md](implementing-a-tool-renderer.md) (how-to) |
 | Which tools have a specialized renderer or provider adapter | `TOOL_INPUT_MODELS` / `TOOL_OUTPUT_PARSERS` in [`factories/tool_factory.py`](../claude_code_log/factories/tool_factory.py), plus provider adapters | [tools-coverage.md](tools-coverage.md) (Claude and Codex status vs. upstream references) |
@@ -468,7 +469,14 @@ happened.
 
 [`render_pool.py`](../claude_code_log/render_pool.py) fans a single
 project's output files — its combined pages and its per-session files —
-out over worker processes. This sits *below* the project-level pool in
+out over worker processes, and
+[`render_dispatch.py`](../claude_code_log/render_dispatch.py) is the
+policy layer that decides when it is used: `build_render_pool` (should
+this conversion have a pool), `worth_dispatching` (is this batch worth
+sending) and `dispatch_render_units` (run the batch, falling back
+inline). The dependency runs one way — `render_dispatch` imports
+`render_pool`, never the reverse — so a worker never loads the policy it
+executes. This sits *below* the project-level pool in
 § 2.1 and exists because that one leaves cores idle in two shapes:
 the all-projects wall clock is bounded by the largest single project
 (measured: 5 real projects, 4 cores, 195s of work, 65.0s wall — exactly
@@ -501,7 +509,7 @@ the conversion has a pre-built session tree — a worker-side DAG rebuild
 from a slice alone could genuinely differ.
 
 **Which batches are worth dispatching** is decided per batch by
-`converter._worth_dispatching`, on the work a batch carries rather than
+`render_dispatch.worth_dispatching`, on the work a batch carries rather than
 the number of units in it. A conversion dispatches two batches: its
 stale *pages* (one unit per ~`page_size` messages, where nearly all the
 render time is) and its stale *session files* (cheap, because the page
@@ -582,12 +590,12 @@ below. `$CLAUDE_CODE_LOG_RENDER_JOBS` overrides: `1` or `off` disables it,
 `render_pool.resolve_render_jobs`. `--jobs` never enables or disables it;
 it only caps it, so the two pool levels together can't oversubscribe. An
 explicit `convert_jsonl_to(render_jobs=N)` overrides the environment; the
-default `None` consults it. `_make_render_pool` declines regardless for
+default `None` consults it. `render_dispatch.build_render_pool` declines regardless for
 single-file mode, a missing cache manager, a missing pre-built session
 tree (workers render fed slices against the conversion's tree),
 projects below `_MIN_MESSAGES_FOR_RENDER_POOL`, and machines without
 the memory the cap formula demands; a pool that *is* created still only
-starts if some batch clears `_worth_dispatching` above.
+starts if some batch clears `worth_dispatching` above.
 `image_export_mode="referenced"` used to decline too, when renders
 allocated `images/image_NNNN.png` names from a per-call counter that
 collided across passes and processes; referenced filenames are now

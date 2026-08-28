@@ -657,7 +657,7 @@ class RenderPool:
         the rest of the conversion. Until then a batch has to be worth the
         ~1s of ``spawn`` + package import each worker pays; afterwards that
         cost is sunk, and a later batch only has to beat rendering inline
-        (see ``converter._worth_dispatching``).
+        (see ``render_dispatch.worth_dispatching``).
         """
         return self._executor is not None and not self._broken
 
