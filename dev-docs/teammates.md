@@ -349,12 +349,22 @@ whose stem isn't in the agent-id set, and for each:
    block (the canonical teammate-spawn shape), extract the body via
    `find_team_lead_body`. Otherwise use the raw text.
 3. Normalize via `_normalize_prompt`: collapse whitespace, lowercase.
-4. Compare against each unresolved Task tool_use's `prompt` input
+4. Compare against each unresolved spawn tool_use's `prompt` input
    (similarly normalized). Exact match wins.
-5. Back-patch the Task tool_result's `agentId` field, add to the agent-id
+5. Back-patch the spawn tool_result's `agentId` field, add to the agent-id
    set, and **remove the matched entry from the unresolved pool** so a
    second candidate file with the same prompt can't claim it (this last
    step was a CodeRabbit-driven fix on PR #117 — see commit `cc9951d`).
+
+> **Both spawn tool names count.** `_collect_unresolved_task_results`
+> gathers prompts from `Task` *and* `Agent` tool_uses. Teammates are
+> spawned by `Agent` in current Claude Code, and the sidecar
+> `agent-<id>.meta.json` it writes for an `in_process_teammate` carries
+> no `toolUseId` — so for a modern teammate session the prompt-hash
+> fallback is the *only* link, and gating it on `Task` alone silently
+> dropped every teammate transcript (the subagent JSONLs were never
+> opened). Pinned by
+> `test_prompt_hash_fallback_covers_both_spawn_tool_names`.
 
 Pre-normalized prompts are computed once up front to avoid quadratic
 work in the inner loop.

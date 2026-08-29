@@ -1283,3 +1283,165 @@ class TestTeammatesFactoryIntegration:
         # System block flagged in the mixed entry
         mixed = next(b for b in batched if len(b.blocks) == 3)
         assert any(blk.is_system for blk in mixed.blocks)
+
+
+# ---------------------------------------------------------------------------
+# Prompt-hash fallback: the ``Agent`` spawn tool
+# ---------------------------------------------------------------------------
+
+
+def _spawn_fixture(tmp_path: Path, spawn_tool_name: str) -> Path:
+    """A trunk session that spawns one teammate, plus its subagent file.
+
+    The sidecar deliberately carries no ``toolUseId`` (current Claude Code
+    omits it for in-process teammates) and the spawn's ``toolUseResult``
+    carries no ``agentId``, so the prompt-hash fallback is the *only*
+    path that can link the two.
+    """
+    import json
+
+    session_id = "ef000000-0000-4000-8000-0000000000aa"
+    agent_id = "aworker-0123456789abcdef"
+    prompt = "Audit the corpus and report back."
+    base = {
+        "isSidechain": False,
+        "userType": "external",
+        "cwd": "/home/synthetic/spawn-fixture",
+        "sessionId": session_id,
+        "version": "2.1.172",
+    }
+
+    trunk = tmp_path / f"{session_id}.jsonl"
+    trunk.write_text(
+        "\n".join(
+            json.dumps(e)
+            for e in [
+                {
+                    **base,
+                    "parentUuid": None,
+                    "uuid": "aaaaaaaa-0000-4000-8000-000000000001",
+                    "timestamp": "2026-08-28T10:00:00.000Z",
+                    "type": "user",
+                    "message": {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "go"}],
+                    },
+                },
+                {
+                    **base,
+                    "parentUuid": "aaaaaaaa-0000-4000-8000-000000000001",
+                    "uuid": "aaaaaaaa-0000-4000-8000-000000000002",
+                    "timestamp": "2026-08-28T10:01:00.000Z",
+                    "type": "assistant",
+                    "message": {
+                        "id": "msg_spawn",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "claude-opus-5",
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "tu_spawn_001",
+                                "name": spawn_tool_name,
+                                "input": {"name": "worker", "prompt": prompt},
+                            }
+                        ],
+                        "stop_reason": None,
+                    },
+                },
+                {
+                    **base,
+                    "parentUuid": "aaaaaaaa-0000-4000-8000-000000000002",
+                    "uuid": "aaaaaaaa-0000-4000-8000-000000000003",
+                    "timestamp": "2026-08-28T10:02:00.000Z",
+                    "type": "user",
+                    "toolUseResult": {"status": "spawned", "prompt": prompt},
+                    "message": {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "tu_spawn_001",
+                                "content": "Spawned successfully.",
+                            }
+                        ],
+                    },
+                },
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    subagents = tmp_path / session_id / "subagents"
+    subagents.mkdir(parents=True)
+    # No ``toolUseId`` here — that is what makes the sidecar path unusable.
+    (subagents / f"agent-{agent_id}.meta.json").write_text(
+        json.dumps(
+            {"agentType": "worker", "name": "worker", "taskKind": "in_process_teammate"}
+        ),
+        encoding="utf-8",
+    )
+    sub_base = {**base, "isSidechain": True, "agentId": agent_id}
+    (subagents / f"agent-{agent_id}.jsonl").write_text(
+        "\n".join(
+            json.dumps(e)
+            for e in [
+                {
+                    **sub_base,
+                    "parentUuid": None,
+                    "uuid": "bbbbbbbb-0000-4000-8000-000000000001",
+                    "timestamp": "2026-08-28T10:03:00.000Z",
+                    "type": "user",
+                    "message": {
+                        "role": "user",
+                        "content": (
+                            '<teammate-message teammate_id="team-lead" summary="audit">\n'
+                            f"{prompt}\n</teammate-message>"
+                        ),
+                    },
+                },
+                {
+                    **sub_base,
+                    "parentUuid": "bbbbbbbb-0000-4000-8000-000000000001",
+                    "uuid": "bbbbbbbb-0000-4000-8000-000000000002",
+                    "timestamp": "2026-08-28T10:04:00.000Z",
+                    "type": "assistant",
+                    "message": {
+                        "id": "msg_worker",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "claude-opus-5",
+                        "content": [{"type": "text", "text": "MARKER-worker-report"}],
+                        "stop_reason": None,
+                    },
+                },
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return trunk
+
+
+@pytest.mark.parametrize("spawn_tool_name", ["Task", "Agent"])
+def test_prompt_hash_fallback_covers_both_spawn_tool_names(
+    tmp_path: Path, spawn_tool_name: str
+) -> None:
+    """The teammate spawn tool is named ``Agent``, not ``Task``.
+
+    Gating the fallback's prompt collection on ``Task`` alone silently
+    dropped every teammate transcript of a modern session — the subagent
+    JSONLs were never even opened.
+    """
+    trunk = _spawn_fixture(tmp_path, spawn_tool_name)
+    messages = load_transcript(trunk, cache_manager=None, silent=True)
+
+    agent_id = "aworker-0123456789abcdef"
+    linked = [m for m in messages if getattr(m, "agentId", None) == agent_id]
+    assert linked, f"{spawn_tool_name} spawn: subagent transcript not linked"
+    # tool_result back-patch + both subagent entries.
+    assert len(linked) == 3
+    assert any(
+        "MARKER-worker-report" in str(getattr(m, "message", "")) for m in messages
+    )
