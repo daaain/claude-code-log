@@ -943,6 +943,12 @@ def _link_subagents_by_prompt_hash(
     entry wraps the prompt in ``<teammate-message teammate_id="team-lead">``,
     that body is compared; otherwise the raw text is.
 
+    Matching runs in two passes. Teammates routinely share a
+    byte-identical prompt, so the prompt alone does not identify one;
+    the first pass additionally requires the spawn's ``input.name`` to
+    equal the sidecar's ``name``, and only what that leaves over falls
+    through to prompt-only matching.
+
     On a match, the agent id is added to *agent_ids* (so the existing loader
     picks the file up) and the corresponding tool_result entry's ``agentId``
     field is back-patched (so ``_integrate_agent_entries`` anchors the
@@ -964,10 +970,13 @@ def _link_subagents_by_prompt_hash(
     # normalized prompt would re-match an already-patched entry, wiping
     # the first match (concrete repro: team-lead sends identical
     # instructions to multiple teammates in parallel).
-    remaining: list[tuple[str, UserTranscriptEntry]] = [
-        (_normalize_prompt(prompt), entry) for prompt, entry in unresolved
+    remaining: list[tuple[str, Optional[str], UserTranscriptEntry]] = [
+        (_normalize_prompt(prompt), name, entry) for prompt, name, entry in unresolved
     ]
 
+    # Collect the candidate files first, so matching can run name-aware
+    # before it falls back to prompt-only (see the two passes below).
+    candidates: list[tuple[str, str, Optional[str]]] = []
     for agent_file in sorted(subagents_dir.glob("agent-*.jsonl")):
         candidate_agent_id = agent_file.stem[len("agent-") :]
         if not candidate_agent_id or candidate_agent_id in agent_ids:
@@ -982,25 +991,64 @@ def _link_subagents_by_prompt_hash(
         if not candidate_norm:
             continue
 
-        for i, (norm_prompt, result_entry) in enumerate(remaining):
+        candidates.append(
+            (candidate_agent_id, candidate_norm, _read_sidecar_name(agent_file))
+        )
+
+    def _claim(candidate_agent_id: str, index: int) -> None:
+        agent_ids.add(candidate_agent_id)
+        remaining[index][2].agentId = candidate_agent_id
+        remaining.pop(index)
+
+    # Pass 1 — teammate name. A prompt is NOT a discriminator for
+    # teammates: a team-lead fanning the same instructions out to N
+    # teammates gives every one of them a byte-identical body, and then
+    # prompt-only matching pairs them by filename sort order against
+    # message order, which is arbitrary. Measured over one real archive:
+    # 7 of 12 teammate sessions contained such a group (15 groups, the
+    # largest with 11 members), and prompt-only matching anchored 23
+    # spawns (~12% of those it linked) to the WRONG teammate — a
+    # permutation within each group. That is worse than not linking at
+    # all: an absent transcript invites a re-run, a confidently
+    # mis-attributed one invites a wrong conclusion.
+    #
+    # Both sides carry the discriminator. The spawn's ``input.name``
+    # (``TaskInput.name``, populated when a team-lead spawns a named
+    # teammate) and the sidecar's own ``name`` are the same string.
+    unmatched: list[tuple[str, str, Optional[str]]] = []
+    for candidate_agent_id, candidate_norm, candidate_name in candidates:
+        if candidate_name is None:
+            unmatched.append((candidate_agent_id, candidate_norm, candidate_name))
+            continue
+        for i, (norm_prompt, spawn_name, _entry) in enumerate(remaining):
+            if norm_prompt == candidate_norm and spawn_name == candidate_name:
+                _claim(candidate_agent_id, i)
+                break
+        else:
+            unmatched.append((candidate_agent_id, candidate_norm, candidate_name))
+
+    # Pass 2 — prompt only, unchanged behaviour. Covers every spawn that
+    # carries no name (plain ``Task`` sub-agents, older transcripts) and
+    # any teammate whose name didn't pair, so a missing or renamed
+    # sidecar degrades to the previous result rather than to no link.
+    for candidate_agent_id, candidate_norm, _candidate_name in unmatched:
+        for i, (norm_prompt, _spawn_name, _entry) in enumerate(remaining):
             if norm_prompt == candidate_norm:
-                agent_ids.add(candidate_agent_id)
-                result_entry.agentId = candidate_agent_id
-                remaining.pop(i)
+                _claim(candidate_agent_id, i)
                 break
 
 
 def _collect_unresolved_task_results(
     messages: list[TranscriptEntry],
-) -> list[tuple[str, UserTranscriptEntry]]:
-    """Return (prompt, tool_result_entry) for spawn results lacking an agentId.
+) -> list[tuple[str, Optional[str], UserTranscriptEntry]]:
+    """Return (prompt, spawn name, tool_result_entry) for spawn results lacking an agentId.
 
     Covers both spawn tool names: ``Task`` (sub-agents) and ``Agent``
     (teammates). The teammate flow this fallback exists for is spelled
     ``Agent`` in current Claude Code, so gating on ``Task`` alone turns
     the whole fallback into a no-op for teammate sessions.
     """
-    task_prompts: dict[str, str] = {}
+    task_prompts: dict[str, tuple[str, Optional[str]]] = {}
     for msg in messages:
         if not isinstance(msg, AssistantTranscriptEntry):
             continue
@@ -1008,9 +1056,15 @@ def _collect_unresolved_task_results(
             if isinstance(item, ToolUseContent) and item.name in ("Task", "Agent"):
                 prompt = item.input.get("prompt")
                 if isinstance(prompt, str) and prompt:
-                    task_prompts[item.id] = prompt
+                    spawn_name = item.input.get("name")
+                    task_prompts[item.id] = (
+                        prompt,
+                        spawn_name
+                        if isinstance(spawn_name, str) and spawn_name
+                        else None,
+                    )
 
-    unresolved: list[tuple[str, UserTranscriptEntry]] = []
+    unresolved: list[tuple[str, Optional[str], UserTranscriptEntry]] = []
     for msg in messages:
         if not isinstance(msg, UserTranscriptEntry):
             continue
@@ -1019,11 +1073,33 @@ def _collect_unresolved_task_results(
         for item in msg.message.content:
             if not isinstance(item, ToolResultContent):
                 continue
-            prompt = task_prompts.get(item.tool_use_id)
-            if prompt is not None:
-                unresolved.append((prompt, msg))
+            entry = task_prompts.get(item.tool_use_id)
+            if entry is not None:
+                prompt, spawn_name = entry
+                unresolved.append((prompt, spawn_name, msg))
                 break
     return unresolved
+
+
+def _read_sidecar_name(agent_file: Path) -> Optional[str]:
+    """The teammate ``name`` from ``agent-<id>.meta.json``, if present.
+
+    Only the prompt-hash fallback needs this, so it is read here rather
+    than widened into the memoized ``_subagent_meta_map`` (whose value
+    type the sidecar path depends on). Returns None for a plain
+    ``Task`` sub-agent sidecar, which carries ``description`` instead —
+    those reach this code only when they also lack a ``toolUseId``, and
+    a None simply routes them to the prompt-only pass.
+    """
+    meta_path = agent_file.with_name(agent_file.stem + ".meta.json")
+    try:
+        raw: Any = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    name = cast("dict[str, Any]", raw).get("name")
+    return name if isinstance(name, str) and name else None
 
 
 def _read_first_message_text(agent_file: Path) -> Optional[str]:
