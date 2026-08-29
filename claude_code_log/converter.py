@@ -934,11 +934,11 @@ def _link_subagents_by_prompt_hash(
 ) -> None:
     """Link teammate subagent JSONLs whose agentId isn't in the main transcript.
 
-    Teammate-spawned Tasks sometimes produce tool_results that don't carry a
+    Teammate-spawned Tasks/Agents sometimes produce tool_results that don't carry a
     structured ``agentId`` — the linking info only appears in the Markdown
     metadata tail (parsed separately) or is absent altogether. Older
     transcripts predate the tail too. For these we fall back to matching
-    the Task tool_use's ``prompt`` input against each unmatched
+    the spawn tool_use's ``prompt`` input against each unmatched
     ``subagents/agent-*.jsonl`` file's first-entry content. When the first
     entry wraps the prompt in ``<teammate-message teammate_id="team-lead">``,
     that body is compared; otherwise the raw text is.
@@ -948,7 +948,7 @@ def _link_subagents_by_prompt_hash(
     field is back-patched (so ``_integrate_agent_entries`` anchors the
     subagent DAG-line to the right place).
 
-    No-op when the subagents dir doesn't exist or every Task is already
+    No-op when the subagents dir doesn't exist or every spawn is already
     linked; safe to call unconditionally.
     """
     unresolved = _collect_unresolved_task_results(messages)
@@ -993,13 +993,19 @@ def _link_subagents_by_prompt_hash(
 def _collect_unresolved_task_results(
     messages: list[TranscriptEntry],
 ) -> list[tuple[str, UserTranscriptEntry]]:
-    """Return (prompt, tool_result_entry) for Task results lacking an agentId."""
+    """Return (prompt, tool_result_entry) for spawn results lacking an agentId.
+
+    Covers both spawn tool names: ``Task`` (sub-agents) and ``Agent``
+    (teammates). The teammate flow this fallback exists for is spelled
+    ``Agent`` in current Claude Code, so gating on ``Task`` alone turns
+    the whole fallback into a no-op for teammate sessions.
+    """
     task_prompts: dict[str, str] = {}
     for msg in messages:
         if not isinstance(msg, AssistantTranscriptEntry):
             continue
         for item in msg.message.content:
-            if isinstance(item, ToolUseContent) and item.name == "Task":
+            if isinstance(item, ToolUseContent) and item.name in ("Task", "Agent"):
                 prompt = item.input.get("prompt")
                 if isinstance(prompt, str) and prompt:
                     task_prompts[item.id] = prompt
