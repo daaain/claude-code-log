@@ -4821,6 +4821,7 @@
       
   
       
+      <div id="transcript">
       
       <div class="session-divider"></div>
       
@@ -5070,7 +5071,7 @@
       
       </div>
       
-      
+      </div>
   
       
       <button class="resume-session floating-btn" id="resumeSession" data-command="cd /home/synthetic/async-fixture &amp;&amp; claude -r eb000000-0000-4000-8000-000000000001"
@@ -11891,6 +11892,7 @@
       
   
       
+      <div id="transcript">
       
       <div class="session-divider"></div>
       
@@ -12035,7 +12037,7 @@
       
       </div>
       
-      
+      </div>
   
       
       <button class="resume-session floating-btn" id="resumeSession" data-command="cd /home/synthetic/async-fixture &amp;&amp; claude -r eb000000-0000-4000-8000-000000000001"
@@ -21457,6 +21459,7 @@
       
   
       
+      <div id="transcript">
       
       <div class="session-divider"></div>
       
@@ -21824,7 +21827,7 @@
       
       </div>
       
-      
+      </div>
   
       
       <button class="resume-session floating-btn" id="resumeSession" data-command="cd /tmp &amp;&amp; claude -r test_session"
@@ -28645,6 +28648,7 @@
       
   
       
+      <div id="transcript">
       
       <div class="session-divider"></div>
       
@@ -29292,7 +29296,7 @@
       
       </div>
       
-      
+      </div>
   
       
       <button class="resume-session floating-btn" id="resumeSession" data-command="cd /home/synthetic/test-fixture &amp;&amp; claude -r ef000000-0000-4000-8000-000000000001"
@@ -36113,6 +36117,7 @@
       
   
       
+      <div id="transcript">
       
       <div class="session-divider"></div>
       
@@ -36711,7 +36716,7 @@
       
       </div>
       
-      
+      </div>
   
       
       <button class="timeline-toggle floating-btn" id="toggleTimeline" title="Show timeline">📆</button>
@@ -43589,6 +43594,7 @@
       
   
       
+      <div id="transcript">
       
       <div class="session-divider"></div>
       
@@ -44071,7 +44077,7 @@
       
       </div>
       
-      
+      </div>
   
       
       <button class="timeline-toggle floating-btn" id="toggleTimeline" title="Show timeline">📆</button>
@@ -50888,6 +50894,7 @@
       
   
       
+      <div id="transcript">
       
       <div class="session-divider"></div>
       
@@ -51255,7 +51262,7 @@
       
       </div>
       
-      
+      </div>
   
       
       <button class="resume-session floating-btn" id="resumeSession" data-command="cd /tmp &amp;&amp; claude -r test_session"
@@ -58076,6 +58083,7 @@
       
   
       
+      <div id="transcript">
       
       <div class="session-divider"></div>
       
@@ -58248,7 +58256,7 @@
       
       </div>
       
-      
+      </div>
   
       
       <button class="resume-session floating-btn" id="resumeSession" data-command="cd /tmp/project &amp;&amp; claude -r 00000000-0295-4000-8000-000000000001"
@@ -65069,6 +65077,7 @@
       
   
       
+      <div id="transcript">
       
       <div class="session-divider"></div>
       
@@ -65190,7 +65199,7 @@
       
       </div>
       
-      
+      </div>
   
       
       <button class="resume-session floating-btn" id="resumeSession" data-command="cd /tmp/project &amp;&amp; claude -r system_reminder"

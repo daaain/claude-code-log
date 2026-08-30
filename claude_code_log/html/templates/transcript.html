@@ -249,7 +249,18 @@
     {% endif %}
     {% endmacro %}
 
-    {% for root in roots %}{{ render_message(root) }}{% endfor %}
+    {#
+      The message tree lives in one addressable container so a client can
+      replace it wholesale — that is what `serve --watch` needs to update
+      a page in place without a navigation, and it keeps scroll position
+      because everything above the viewport is untouched.
+
+      Deliberately unstyled: `body` is already the 1200px centred column,
+      so a plain block wrapper is layout-neutral (verified by comparing
+      full-page screenshots and the first message's box before and after
+      adding it).
+    #}
+    <div id="transcript">{% for root in roots %}{{ render_message(root) }}{% endfor %}</div>
 
     {% if resume_command %}
     <button class="resume-session floating-btn" id="resumeSession" data-command="{{ resume_command }}"
