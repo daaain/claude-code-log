@@ -1,8 +1,12 @@
 # Real-time watch mode — Design
 
-Status: **designed, not implemented.** Decisions below are settled; the
-measurements that forced them are recorded so a later reader can tell
-which choices were reasoned and which were measured.
+Status: **Stage 0 and Stage 1 landed** on `feat/watch-mode`;
+`claude-code-log watch` works for the Markdown-on-disk case. Stage 2
+(the served page updating itself) is designed but not built.
+
+Decisions below are settled; the measurements that forced them are
+recorded so a later reader can tell which choices were reasoned and which
+were measured — and which turned out to be wrong.
 
 ## Motivation
 
@@ -26,16 +30,16 @@ structural finding.
 
 | # | decision |
 |---|---|
-| D1 | A `watch` subcommand owns the loop; `serve --watch` runs the same engine on a thread. |
+| D1 | A `watch` subcommand owns the loop; `serve --watch` runs the same engine on a thread. **Subcommand landed; `serve --watch` is Stage 2.** |
 | D2 | Add `source_size` to `cached_files` so the cache itself detects fast appends; the watcher then trusts `get_modified_files` rather than keeping parallel state. Detection is stat-polling. **Landed.** |
-| D3 | Default scope is one project; `--all-projects` is opt-in. |
-| D4 | Quiet-period debounce (~300 ms) with a max-latency cap (~2 s), both flags. |
+| D3 | Default scope is one project; `--all-projects` is opt-in. **Landed.** |
+| D4 | Quiet-period debounce (~300 ms) with a max-latency cap (~2 s), both flags. **Landed.** |
 | D5 | Container swap (option B) with uuid-set diffing, not full reload and not fragment patching. |
 | D6 | Polling. SSE only if measurement later justifies it. |
 | D7 | Route every output write through temp-file + `os.replace`. **Landed.** |
 | D8 | Measured: the write + FTS update is fast enough. No lock-avoidance machinery needed. |
 | D9 | ~~Fix `--output` destination-aware freshness~~ — already fixed; the doc that reported it was stale. **No work needed.** |
-| D10 | Injectable clock and file-event source; unit tests drive ticks by hand. |
+| D10 | Injectable clock; unit tests drive `tick()` by hand. **Landed** — the sleep injection turned out unnecessary once `run` used `Event.wait`. |
 | D11 | The `stream-json` piping request (#43 follow-up) is **subsumed** by watch mode. No stream-json parser. |
 
 ---
@@ -506,20 +510,35 @@ independently shippable.
   which is the first thing that needs it — landing it now would carry a
   large snapshot delta through two unrelated stages.
 
-**Stage 1 — the engine + use case 1.** `claude-code-log watch [path]`:
-stat-poll, debounce, call the existing conversion, one line per
-regeneration. Serves the Markdown/Obsidian case completely.
+**Stage 1 — the engine + use case 1. ✅ Landed.**
 
-*Questions to answer first:*
-1. **Can Phase 1b be made reachable when the cache was updated, restricted
-   to the touched sessions (C6)?** Without this, Stage 1 full-loads the
-   project every tick. This is the stage's real work.
-2. Tick cost on the 803 MB reference archive, not the 64 MB one — C6's
-   numbers are the optimistic end.
-3. Does a resident watcher's warm render memo beat the cold-memo figure?
-   (In-process steady ticks were 0.46–0.82 s; the memo's contribution is
-   unmeasured.)
-4. Single-instance guard: needed, or overkill (D8)?
+- `claude_code_log/watch.py` — `WatchEngine`: stat-poll, debounce, deliver
+  changed paths to a callback. No CLI or HTTP awareness. The scan is a
+  cheap *trigger*, not a source of truth; the conversion already knows
+  precisely what is stale, and since 011 the cache is the thing that gets
+  freshness right. Two classes of file must never be seen as a change —
+  dot-prefixed atomic-write temps and generated output, both of which
+  land in the watched tree — or the loop feeds itself forever. Pinned by
+  tests.
+- `claude-code-log watch [path]` — scoped to one project by default,
+  resolving the current directory's project; `--combined` defaults to
+  `no`, which is what keeps a tick on the session-scoped path.
+- Phase 1b reachability (`1ffc41b`) — the stage's real work; see C6.
+
+End-to-end against a live-fed session: an appended message is visible in
+the `.md` **0.26–0.36 s** later, dominated by the 0.3 s quiet period,
+with the conversion itself at 0.01–0.02 s.
+
+*A note on how the measurements went wrong first, since it cost real
+time:* the render pool **spawns**, so a worker re-imports the probe
+module. Two probe scripts did their fixture setup (`rmtree` + `copytree`
++ truncate) at module scope, so every worker re-ran it against the tree
+the parent was writing into. That produced a `FileNotFoundError` on an
+atomic-write temp and an `OSError: Directory not empty` that both looked
+exactly like a regression in the atomic-write change, and a
+`message_count` that appeared not to advance. All three were the missing
+`if __name__ == "__main__":` guard. Any probe that drives a conversion
+needs one.
 
 **Stage 2 — use case 2 under `serve`.** `serve --watch` runs the Stage 1
 engine on a thread; the session page polls its own URL, swaps
