@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """SQLite-based cache management for Claude Code Log."""
 
+import hashlib
 import json
 import logging
 import os
@@ -66,6 +67,10 @@ class CachedFileState(BaseModel):
     # their own entries did.
     summary_leaf_uuids: set[str] = set()
     ai_title_sessions: set[str] = set()
+    # SHA-256 of each cached entry's complete serialized model, in source
+    # insertion order. The old sequence must be an exact prefix of the new
+    # one for an incremental refresh to be append-only.
+    row_fingerprints: List[bytes] = []
 
 
 class SessionCacheData(BaseModel):
@@ -1208,12 +1213,16 @@ class CacheManager:
                 placeholders = ",".join("?" * len(chunk))
                 for row in conn.execute(
                     f"""SELECT cf.file_name, m.session_id, m._uuid, m._parent_uuid,
-                               m._request_id, m.type, m._leaf_uuid
+                               m._request_id, m.type, m._leaf_uuid, m.content
                         FROM messages m JOIN cached_files cf ON m.file_id = cf.id
-                        WHERE m.project_id = ? AND cf.file_name IN ({placeholders})""",
+                        WHERE m.project_id = ? AND cf.file_name IN ({placeholders})
+                        ORDER BY cf.file_name, m.id""",
                     (self._project_id, *chunk),
                 ):
                     state = result.setdefault(row["file_name"], CachedFileState())
+                    state.row_fingerprints.append(
+                        hashlib.sha256(bytes(row["content"])).digest()
+                    )
                     row_type = row["type"]
                     if row_type == "summary":
                         if row["_leaf_uuid"]:
@@ -1241,6 +1250,29 @@ class CacheManager:
                     (self._project_id, *chunk),
                 ):
                     result.setdefault(row["file_name"], CachedFileState())
+        return result
+
+    def get_parent_uuid_dependents(self, uuids: List[str]) -> Dict[str, set[str]]:
+        """Return sessions whose entries reference any named parent UUID.
+
+        This is the inverse edge of :meth:`get_uuid_owners`. A newly added
+        UUID can resolve an orphan already cached in an untouched file, so
+        the incremental DAG closure needs both directions.
+        """
+        result: Dict[str, set[str]] = {}
+        if self._project_id is None or not uuids:
+            return result
+        with self._get_connection() as conn:
+            for i in range(0, len(uuids), self._IN_CHUNK):
+                chunk = uuids[i : i + self._IN_CHUNK]
+                placeholders = ",".join("?" * len(chunk))
+                for row in conn.execute(
+                    f"""SELECT _parent_uuid, session_id FROM messages
+                        WHERE project_id = ? AND _parent_uuid IN ({placeholders})
+                          AND session_id IS NOT NULL""",
+                    (self._project_id, *chunk),
+                ):
+                    result.setdefault(row["_parent_uuid"], set()).add(row["session_id"])
         return result
 
     def get_uuid_owners(self, uuids: List[str]) -> Dict[str, set[Tuple[str, str]]]:

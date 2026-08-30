@@ -1237,10 +1237,16 @@ def _resolve_session_source_files(
         missing = [
             name for name in session_files if not (directory_path / name).exists()
         ]
-        if not session_files or missing:
+        if not session_files:
             if strict or (directory_path / f"{sid}.jsonl").exists():
                 return None
             continue  # archived: no source anywhere, nothing to render
+        if missing:
+            if strict or len(missing) != len(session_files):
+                return None
+            if (directory_path / f"{sid}.jsonl").exists():
+                return None
+            continue  # archived: every mapped source is gone
         needed_files |= session_files
     return needed_files
 
@@ -3780,8 +3786,9 @@ def _incremental_cache_refresh(
     *closure* of the modified files. Modified files are re-parsed
     per-file (their message rows rewritten as always); every
     cross-session fact a new entry can touch — dedup partners of its
-    uuids, owners of its attachment points, the complete old target
-    list of any junction it attaches to, cross-file metadata for its
+    uuids, owners of its attachment points, entries that reference its
+    uuids, the complete old target list of any junction it attaches to,
+    cross-file metadata for its
     sessions — pulls those sessions' files into the closure, which is
     then loaded through the proven partial-load machinery with two
     refresh-mode deviations (re-election of modified uuids, native
@@ -3794,9 +3801,9 @@ def _incremental_cache_refresh(
     Returns True when the cache was refreshed; False *declines* to the
     unchanged full-load refresh. Decline ladder: missing sidecar or
     project data, deleted source files (archival is the full path's
-    business), a shrunk/rewritten file (old uuids must be a subset of
-    new), a pre-migration-009 cache (a closure session with prior
-    entries but no session row), attachment entries involved in
+    business), a shrunk/rewritten file (the old ordered rows must be an
+    exact prefix of the new rows), a pre-migration-009 cache (a closure
+    session with prior entries but no session row), attachment entries involved in
     cross-session dedup, a requestId with independent surviving copies
     on both sides of the closure boundary (D1 attribution would need
     global order), any structural gap in file resolution, or a closure
@@ -3856,8 +3863,9 @@ def _incremental_cache_refresh(
             if new is None:
                 return False
             old = old_states.get(name, CachedFileState())
-            if not (old.uuids <= new.uuids):
-                return False  # shrunk/rewritten file: history changed
+            old_count = len(old.row_fingerprints)
+            if old.row_fingerprints != new.row_fingerprints[:old_count]:
+                return False  # not an exact append: existing history changed
             closure |= new.sessions | old.sessions
             exempt_uuids |= new.uuids | old.uuids
             parent_uuids |= new.parent_uuids | old.parent_uuids
@@ -3886,6 +3894,19 @@ def _incremental_cache_refresh(
                 if any(t == "attachment" for _s, t in owner_set):
                     return False
                 closure |= sess
+
+        # Inverse attachment edges: an untouched orphan may already name a
+        # UUID that was just appended in a modified file. Loading only the
+        # UUID's owner misses the newly resolved child session and therefore
+        # its parent/junction sidecar updates.
+        inverse_attachments = cache_manager.get_parent_uuid_dependents(
+            sorted(exempt_uuids)
+        )
+        inverse_attachment_uuids: set[str] = set()
+        for uuid, dependent_sessions in inverse_attachments.items():
+            if dependent_sessions:
+                closure |= dependent_sessions
+                inverse_attachment_uuids.add(uuid)
 
         # Attachment-point owners: a modified entry whose parentUuid
         # lives elsewhere attaches there — the owning session (the dedup
@@ -3918,11 +3939,17 @@ def _incremental_cache_refresh(
         # Sidecar junction owners/targets can be branch-qualified line
         # ids ("{trunk}@{uuid12}") — the closure holds trunk sessionIds
         # (what the file map and messages table key on), so normalize.
+        # Integrated subagents similarly use "{trunk}#agent-{id}" DAG-line
+        # ids even though their cached source rows retain the trunk id.
         def _trunk(sid: str) -> str:
-            return sid.split("@", 1)[0]
+            return sid.split("@", 1)[0].split("#agent-", 1)[0]
 
         native_junction_uuids: set[str] = set()
-        for u in touched_attachments | (exempt_uuids & sidecar.junctions.keys()):
+        for u in (
+            touched_attachments
+            | inverse_attachment_uuids
+            | (exempt_uuids & sidecar.junctions.keys())
+        ):
             j = sidecar.junctions.get(u)
             if j is not None:
                 closure.add(_trunk(j[0]))
@@ -4038,9 +4065,12 @@ def _incremental_cache_refresh(
                 return False  # predicted junction absent — bail before writes
 
         parent_updates: Dict[str, Optional[tuple[Optional[str], Optional[str]]]] = {}
-        for sid in p_rows:
-            line = partial_tree.sessions.get(sid)
-            if line is None:
+        for sid, line in partial_tree.sessions.items():
+            # Parent rows are keyed by DAG-line id, so synthetic agent and
+            # branch lines have no corresponding SessionCacheData row. Their
+            # owning trunk is nevertheless complete whenever it is in the
+            # closure and its sidecar facts must be refreshed with it.
+            if _trunk(sid) not in closure:
                 continue
             parent_updates[sid] = (
                 (line.parent_session_id, line.attachment_uuid)

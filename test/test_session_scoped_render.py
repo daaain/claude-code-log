@@ -224,6 +224,49 @@ class TestSessionScopedGating:
         assert archived not in after, "archived session cannot be re-rendered"
         assert after[other] == baseline[other]
 
+    def test_partially_missing_file_spanning_session_declines(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A surviving mapped source means the session is not archived."""
+        project = tmp_path / "file-spanning-project"
+        project.mkdir()
+        _write_jsonl(
+            project / "sess-a.jsonl",
+            [
+                _entry("user", "sess-a", "a1", None, "2025-07-01T10:00:00.000Z", "A"),
+                # E starts in A's file and continues in its stem-named file.
+                _entry("user", "sess-e", "e1", None, "2025-07-01T11:00:00.000Z", "E"),
+            ],
+        )
+        _write_jsonl(
+            project / "sess-e.jsonl",
+            [
+                _entry(
+                    "assistant",
+                    "sess-e",
+                    "e2",
+                    "e1",
+                    "2025-07-01T11:01:00.000Z",
+                    "E reply",
+                )
+            ],
+        )
+        _convert(project)
+        assert (project / "session-sess-e.html").exists()
+
+        # The cached map still names both sources, but only sess-a.jsonl
+        # survives. A full load renders E's surviving first entry.
+        (project / "sess-e.jsonl").unlink()
+        (project / "session-sess-e.html").unlink()
+
+        calls = _spy_full_load(monkeypatch)
+        _convert(project)
+
+        assert calls, "a partially missing source set must decline to the full path"
+        rendered = project / "session-sess-e.html"
+        assert rendered.exists()
+        assert b">E<" in rendered.read_bytes()
+
 
 class TestSessionSidecarCache:
     def test_round_trip(self, tmp_path: Path) -> None:

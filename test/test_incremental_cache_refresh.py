@@ -467,8 +467,153 @@ class TestIncrementalEquivalence:
 
         _run_scenario(tmp_path, monkeypatch, mutate, expect_incremental=True)
 
+    def test_new_uuid_connects_an_untouched_orphan_session(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A new parent uuid must pull its existing children into the closure."""
+
+        inc_dir = _base_project(tmp_path / "inc")
+        full_dir = _base_project(tmp_path / "full")
+        for project in (inc_dir, full_dir):
+            _write_jsonl(
+                project / "sess-orphan.jsonl",
+                [
+                    _entry(
+                        "user",
+                        "sess-orphan",
+                        "orphan-child",
+                        "future-parent",
+                        "2025-07-04T09:00:00.000Z",
+                        "Waiting for a parent",
+                    ),
+                    _entry(
+                        "assistant",
+                        "sess-orphan",
+                        "orphan-reply",
+                        "orphan-child",
+                        "2025-07-04T09:01:00.000Z",
+                        "Still waiting",
+                    ),
+                ],
+            )
+            _convert(project)
+
+        for project in (inc_dir, full_dir):
+            import json
+
+            parent = _entry(
+                "user",
+                "sess-a",
+                "future-parent",
+                "a3",
+                "2025-07-05T09:00:00.000Z",
+                "The missing parent",
+            )
+            with open(project / "sess-a.jsonl", "a", encoding="utf-8") as f:
+                f.write(json.dumps(parent) + "\n")
+            _bump_mtime(project / "sess-a.jsonl")
+
+        results = _spy_incremental(monkeypatch)
+        _convert(inc_dir)
+        assert results == [True]
+        monkeypatch.setenv("CLAUDE_CODE_LOG_INCREMENTAL_CACHE", "0")
+        _convert(full_dir)
+
+        state = _db_state(inc_dir)
+        assert state == _db_state(full_dir)
+        assert _html_files(inc_dir) == _html_files(full_dir)
+        assert [
+            target
+            for uuid, _owner, target, _seq in state["junctions"]
+            if uuid == "future-parent"
+        ] == ["sess-orphan"]
+
+    def test_new_session_persists_synthetic_agent_parent(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Sidecar updates include agent DAG lines owned by closure sessions."""
+        import shutil
+
+        data = Path(__file__).parent / "test_data"
+        project = _base_project(tmp_path)
+        _convert(project)
+        shutil.copyfile(
+            data / "sidechain_main.jsonl",
+            project / "88a8d761-7b9a-4bf1-a8ca-c1febe6bf358.jsonl",
+        )
+        shutil.copyfile(
+            data / "sidechain_agent.jsonl", project / "agent-e1c84ba5.jsonl"
+        )
+
+        cache = CacheManager(project, get_library_version())
+        files = converter.trunk_jsonl_files(project)
+        modified = cache.get_modified_files(files)
+        assert converter._incremental_cache_refresh(  # pyright: ignore[reportPrivateUsage]
+            project, cache, files, modified, silent=True
+        )
+
+        sidecar = cache.load_session_sidecar()
+        assert sidecar is not None
+        assert any("#agent-e1c84ba5" in sid for sid in sidecar.parents)
+
 
 class TestIncrementalDeclines:
+    @pytest.mark.parametrize("rewrite", ["timestamp", "uuidless", "duplicate"])
+    def test_non_append_rewrite_with_same_uuid_set_declines(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        rewrite: str,
+    ) -> None:
+        """UUID containment is insufficient to prove a file was appended."""
+        import json
+
+        inc_dir = _base_project(tmp_path / "inc")
+        full_dir = _base_project(tmp_path / "full")
+
+        if rewrite in {"uuidless", "duplicate"}:
+            for project in (inc_dir, full_dir):
+                path = project / "sess-a.jsonl"
+                rows = [json.loads(line) for line in path.read_text().splitlines()]
+                if rewrite == "uuidless":
+                    rows.append(
+                        {
+                            "type": "summary",
+                            "summary": "Temporary summary",
+                            "leafUuid": "a3",
+                        }
+                    )
+                else:
+                    rows.append(rows[-1].copy())
+                _write_jsonl(path, rows)
+
+        _convert(inc_dir)
+        _convert(full_dir)
+
+        for project in (inc_dir, full_dir):
+            path = project / (
+                "sess-c0.jsonl" if rewrite == "timestamp" else "sess-a.jsonl"
+            )
+            rows = [json.loads(line) for line in path.read_text().splitlines()]
+            if rewrite == "timestamp":
+                # Contract the project bookend while retaining every uuid.
+                rows[-1]["timestamp"] = "2025-07-03T09:00:00.000Z"
+            else:
+                # Remove either a UUID-less row or one occurrence of a
+                # duplicated UUID; the UUID set itself remains unchanged.
+                rows.pop()
+            _write_jsonl(path, rows)
+            _bump_mtime(path)
+
+        results = _spy_incremental(monkeypatch)
+        _convert(inc_dir)
+        assert results == [False]
+
+        monkeypatch.setenv("CLAUDE_CODE_LOG_INCREMENTAL_CACHE", "0")
+        _convert(full_dir)
+        assert _db_state(inc_dir) == _db_state(full_dir)
+        assert _html_files(inc_dir) == _html_files(full_dir)
+
     def test_shrunk_file_declines(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
