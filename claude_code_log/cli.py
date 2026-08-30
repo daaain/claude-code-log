@@ -7,12 +7,19 @@ import os
 import signal
 import sqlite3
 import sys
+import time
+import traceback
 from pathlib import Path
 from typing import Any, Callable, Optional
 
 import click
 from git import Repo, InvalidGitRepositoryError
 
+from .watch import (
+    DEFAULT_MAX_LATENCY,
+    DEFAULT_POLL_INTERVAL,
+    DEFAULT_QUIET_PERIOD,
+)
 from .converter import (
     RegenerationReport,
     convert_jsonl_to,
@@ -2226,6 +2233,209 @@ def _build_search_index(
             )
     finally:
         conn.close()
+
+
+@main.command(name="watch")
+@click.argument(
+    "input_path",
+    type=click.Path(exists=True, path_type=Path, file_okay=False),
+    required=False,
+)
+@click.option(
+    "-o",
+    "--output",
+    type=click.Path(path_type=Path),
+    help=(
+        "Output destination, as for `convert`. Pair with --format md to "
+        "keep an Obsidian vault current."
+    ),
+)
+@click.option(
+    "-f",
+    "--format",
+    "output_format",
+    type=click.Choice(["html", "md", "markdown"]),
+    default="html",
+    show_default=True,
+    help="Output format.",
+)
+@click.option(
+    "--combined",
+    type=click.Choice(["yes", "no", "only"]),
+    default="no",
+    show_default=True,
+    help=(
+        "As for `convert`, but defaulting to 'no'. Per-session files are "
+        "what a watch is for, and skipping the combined page is what lets "
+        "a tick regenerate just the changed session instead of reloading "
+        "the whole project."
+    ),
+)
+@click.option(
+    "--projects-dir",
+    type=click.Path(exists=True, path_type=Path, file_okay=False),
+    help="Projects directory (default: ~/.claude/projects/).",
+)
+@click.option(
+    "--all-projects",
+    is_flag=True,
+    default=False,
+    help=(
+        "Watch every project instead of one. Off by default: a tick over a "
+        "large archive is far more expensive than over a single project."
+    ),
+)
+@click.option(
+    "--interval",
+    type=float,
+    default=DEFAULT_POLL_INTERVAL,
+    show_default=True,
+    help="Seconds between filesystem polls.",
+)
+@click.option(
+    "--quiet-period",
+    type=float,
+    default=DEFAULT_QUIET_PERIOD,
+    show_default=True,
+    help=(
+        "Seconds of no further change before converting. Claude Code writes "
+        "several entries per turn; without this every one would trigger its "
+        "own render."
+    ),
+)
+@click.option(
+    "--max-latency",
+    type=float,
+    default=DEFAULT_MAX_LATENCY,
+    show_default=True,
+    help=(
+        "Convert anyway after this long, so an unbroken stream of appends "
+        "still surfaces instead of starving behind the quiet period."
+    ),
+)
+@click.option("--debug", is_flag=True, default=False, help="Show full tracebacks.")
+def watch(
+    input_path: Optional[Path],
+    output: Optional[Path],
+    output_format: str,
+    combined: str,
+    projects_dir: Optional[Path],
+    all_projects: bool,
+    interval: float,
+    quiet_period: float,
+    max_latency: float,
+    debug: bool,
+) -> None:
+    """Re-convert transcripts as they change, until interrupted.
+
+    Points at one project by default -- the one for the current directory
+    if it has transcripts, otherwise the given INPUT_PATH. Watching the
+    whole archive is available via --all-projects but is rarely what you
+    want: a tick's cost scales with the project, and only one project is
+    ever being written to.
+
+    The generated files on disk stay canonical, so anything that reloads
+    them picks the changes up: an editor or Obsidian for Markdown, a
+    browser refresh for HTML.
+    """
+    from .watch import WatchEngine
+
+    projects_path = projects_dir or get_default_projects_dir()
+    root = _resolve_watch_root(input_path, projects_path, all_projects)
+    if root is None:
+        sys.exit(1)
+
+    fmt = "markdown" if output_format == "md" else output_format
+    write_combined = combined != "no"
+    individual = combined != "only"
+
+    def convert(_changed: set[Path]) -> None:
+        started = time.monotonic()
+        if all_projects:
+            process_projects_hierarchy(
+                root,
+                silent=True,
+                output_format=fmt,
+                output_dir=output,
+                write_combined=write_combined,
+                generate_individual_sessions=individual,
+            )
+        else:
+            convert_jsonl_to(
+                fmt,
+                root,
+                # `output_root` is the directory form; leaving output_path
+                # unset lets the converter derive the filenames, which is
+                # what keeps the destination-aware freshness check working.
+                output_root=output,
+                silent=True,
+                write_combined=write_combined,
+                generate_individual_sessions=individual,
+            )
+        click.echo(
+            f"  {time.strftime('%H:%M:%S')}  converted in "
+            f"{time.monotonic() - started:.2f}s"
+        )
+
+    def report(exc: BaseException) -> None:
+        if debug:
+            traceback.print_exc()
+        click.echo(f"  conversion failed: {exc!r}", err=True)
+
+    engine = WatchEngine(
+        [root],
+        convert,
+        poll_interval=interval,
+        quiet_period=quiet_period,
+        max_latency=max_latency,
+        on_error=report,
+    )
+
+    click.echo(f"Watching {root}")
+    click.echo("Press Ctrl+C to stop.")
+    # Convert once up front so the output is current before the first
+    # change, then prime -- priming after means our own output writes are
+    # already in the baseline and can't trigger a spurious first tick.
+    convert(set())
+    engine.prime()
+    try:
+        engine.run()
+    except KeyboardInterrupt:
+        click.echo("\nStopping.")
+    click.echo(
+        f"{engine.stats.conversions} conversions, "
+        f"{engine.stats.polls} polls, {engine.stats.errors} errors."
+    )
+
+
+def _resolve_watch_root(
+    input_path: Optional[Path], projects_path: Path, all_projects: bool
+) -> Optional[Path]:
+    """Pick the directory to watch, or report why we can't.
+
+    Order: an explicit path wins; --all-projects means the hierarchy;
+    otherwise the project for the current directory, which is what someone
+    running this alongside a live session almost always means.
+    """
+    if input_path is not None:
+        return input_path
+    if all_projects:
+        return projects_path
+
+    from .utils import real_path_to_project_dirname
+
+    encoded = real_path_to_project_dirname(Path.cwd())
+    candidate = projects_path / encoded
+    if candidate.is_dir():
+        return candidate
+
+    click.echo(
+        f"No transcripts found for the current directory ({Path.cwd()}).\n"
+        f"  Looked for: {candidate}\n"
+        "  Pass a project directory explicitly, or use --all-projects.",
+        err=True,
+    )
+    return None
 
 
 convert.epilog = _subcommand_epilog(main)

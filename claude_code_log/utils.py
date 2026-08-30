@@ -307,6 +307,16 @@ def _split_real_path_for_join(real_path_str: str) -> list[str]:
     return list(p_posix.parts)
 
 
+def real_path_to_project_dirname(cwd: Path) -> str:
+    """Encode a real path the way Claude Code names its project directory.
+
+    ``/home/joe/proj`` → ``-home-joe-proj``. The inverse,
+    `project_dir_to_real_path`, is lossy and needs the cache to
+    disambiguate; this direction is not.
+    """
+    return str(cwd).replace("/", "-").replace("\\", "-")
+
+
 def project_dir_to_real_path(
     project_dir: Path,
     cached_working_directories: Optional[list[str]] = None,

@@ -33,6 +33,7 @@ if TYPE_CHECKING:
 
 from .utils import (
     atomic_write_text,
+    real_path_to_project_dirname,
     coalesce_trunk_session_id,
     collect_trunk_session_ids,
     format_timestamp_range,
@@ -4954,7 +4955,7 @@ def _provider_project_dirname(cwd: Optional[Path]) -> str:
     index always has a home for them (DECIDED #3)."""
     if cwd is None:
         return "no-project"
-    return str(cwd).replace("/", "-").replace("\\", "-")
+    return real_path_to_project_dirname(cwd)
 
 
 def _entry_timestamp_range(
