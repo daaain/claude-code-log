@@ -7,6 +7,7 @@ import os
 import signal
 import sqlite3
 import sys
+import threading
 import time
 import traceback
 from pathlib import Path
@@ -2111,6 +2112,16 @@ def convert(
         "page will report the index as unavailable."
     ),
 )
+@click.option(
+    "--watch",
+    "watch_sources",
+    is_flag=True,
+    default=False,
+    help=(
+        "Keep the served pages current: re-convert whenever a transcript "
+        "changes, in the background. Reload a page to see new messages."
+    ),
+)
 def serve(
     port: int,
     projects_dir: Optional[Path],
@@ -2120,6 +2131,7 @@ def serve(
     index_fields: Optional[str],
     reindex: bool,
     no_index: bool,
+    watch_sources: bool,
 ) -> None:
     """Serve the projects directory over loopback, with full-archive search.
 
@@ -2175,11 +2187,38 @@ def serve(
     if open_browser:
         click.launch(f"{server.url}/index.html")
 
+    watch_stop: Optional[threading.Event] = None
+    watch_thread: Optional[threading.Thread] = None
+    if watch_sources:
+        from .watch import WatchEngine
+
+        def reconvert(_changed: set[Path]) -> None:
+            # The server never renders. It re-runs the ordinary conversion
+            # and lets the pages on disk stay canonical, so a page served
+            # over http and the same file opened from file:// can never
+            # disagree.
+            process_projects_hierarchy(projects_path, silent=True)
+
+        def report(exc: BaseException) -> None:
+            click.echo(f"  watch: conversion failed: {exc!r}", err=True)
+
+        engine = WatchEngine([projects_path], reconvert, on_error=report)
+        # Prime before starting the thread so the baseline is taken at a
+        # known moment rather than whenever the thread gets scheduled.
+        engine.prime()
+        watch_stop = threading.Event()
+        watch_thread = engine.run_in_thread(watch_stop)
+        click.echo("  watching for changes (reload a page to see new messages)")
+
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         click.echo("\nStopping...")
     finally:
+        if watch_stop is not None:
+            watch_stop.set()
+        if watch_thread is not None:
+            watch_thread.join(timeout=5)
         server.stop()
 
 

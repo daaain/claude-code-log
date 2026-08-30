@@ -131,3 +131,88 @@ class TestWatchCommand:
 
         result = CliRunner().invoke(main, ["watch", "--projects-dir", str(projects)])
         assert result.exit_code == 1
+
+
+class TestServeWatch:
+    """`serve --watch` runs the same engine beside the HTTP server.
+
+    The server never renders: it re-runs the ordinary conversion and lets
+    the files on disk stay canonical, so a page served over http and the
+    same file opened from file:// can never disagree.
+    """
+
+    def _project(self, tmp_path: Path) -> tuple[Path, Path, str]:
+        projects = tmp_path / "projects"
+        proj = projects / "-tmp-demo"
+        proj.mkdir(parents=True)
+        sid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        (proj / f"{sid}.jsonl").write_text(_entry("u0", "hello", sid), encoding="utf-8")
+        return projects, proj, sid
+
+    def _invoke(self, projects: Path, args: list[str]):
+        """Run `serve`, returning as soon as the server would block.
+
+        The stub calls `start()` rather than doing nothing:
+        `BaseServer.shutdown()` waits on an event that only
+        `serve_forever` sets, so a no-op stub makes the command's own
+        `server.stop()` hang forever.
+        """
+        import claude_code_log.server as server_mod
+
+        real = server_mod.ArchiveServer.serve_forever
+        server_mod.ArchiveServer.serve_forever = (
+            lambda self: server_mod.ArchiveServer.start(self)
+        )
+        try:
+            return CliRunner().invoke(
+                main,
+                ["serve", "--projects-dir", str(projects), "--port", "0", "--no-index"]
+                + args,
+            )
+        finally:
+            server_mod.ArchiveServer.serve_forever = real
+
+    def test_watch_starts_and_stops_the_engine(self, tmp_path: Path) -> None:
+        projects, _proj, _sid = self._project(tmp_path)
+        import claude_code_log.watch as watch_mod
+
+        started: list[object] = []
+        real_run_in_thread = watch_mod.WatchEngine.run_in_thread
+
+        def spy(self, stop):  # noqa: ANN001
+            started.append(self)
+            return real_run_in_thread(self, stop)
+
+        watch_mod.WatchEngine.run_in_thread = spy
+        try:
+            result = self._invoke(projects, ["--watch"])
+        finally:
+            watch_mod.WatchEngine.run_in_thread = real_run_in_thread
+
+        assert result.exit_code == 0, result.output
+        assert started, "the watch engine was never started"
+        assert "watching for changes" in result.output
+        # The engine's thread is a daemon and was asked to stop in the
+        # finally block; nothing should still be running.
+        import threading
+
+        assert not any(
+            t.name == "claude-code-log-watch" and t.is_alive()
+            for t in threading.enumerate()
+        )
+
+    def test_without_the_flag_no_engine_runs(self, tmp_path: Path) -> None:
+        projects, _proj, _sid = self._project(tmp_path)
+        import claude_code_log.watch as watch_mod
+
+        started: list[object] = []
+        real = watch_mod.WatchEngine.run_in_thread
+        watch_mod.WatchEngine.run_in_thread = lambda self, stop: started.append(self)
+        try:
+            result = self._invoke(projects, [])
+        finally:
+            watch_mod.WatchEngine.run_in_thread = real
+
+        assert result.exit_code == 0, result.output
+        assert not started
+        assert "watching for changes" not in result.output
