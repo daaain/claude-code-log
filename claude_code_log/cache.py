@@ -329,7 +329,10 @@ def subagents_fingerprint(jsonl_path: Path) -> str:
 
 
 def _cache_row_is_fresh(
-    row: sqlite3.Row, source_mtime: float, current_fp: Callable[[], str]
+    row: sqlite3.Row,
+    source_mtime: float,
+    current_fp: Callable[[], str],
+    source_size: Optional[int] = None,
 ) -> bool:
     """Decide whether a cached_files row is still fresh.
 
@@ -339,13 +342,28 @@ def _cache_row_is_fresh(
     check passes (and get_modified_files() can plug in its
     scandir-optimized variant).
 
-    Cache is valid if modification times match (within 1 second
-    tolerance) and the sidecar inputs of spawn discovery (#213) match
-    too — new agent-*.meta.json files appear without touching the
-    source jsonl. Pre-007 rows carry NULL: accept those only when the
-    file has no sidecars today (nothing to miss), so legacy caches
-    don't mass-invalidate while sessions WITH sidecars reparse once.
+    Cache is valid if the size matches, modification times match
+    (within 1 second tolerance), and the sidecar inputs of spawn
+    discovery (#213) match too — new agent-*.meta.json files appear
+    without touching the source jsonl. Pre-007 rows carry a NULL
+    fingerprint: accept those only when the file has no sidecars today
+    (nothing to miss), so legacy caches don't mass-invalidate while
+    sessions WITH sidecars reparse once.
+
+    The size check exists because the mtime tolerance — which is there
+    for coarse filesystem timestamp granularity — hides any write that
+    lands within a second of the mtime recorded at cache time. Appending
+    to a transcript and converting immediately alternates between seeing
+    and missing the change; the last message of a turn can stay stranded
+    indefinitely. Size is exact and free (callers already stat the
+    file), and the combined rule is strictly tightening: it marks more
+    files stale, never fewer. Pre-011 rows carry NULL and fall back to
+    the mtime-only check so a populated cache doesn't mass-invalidate.
     """
+    if source_size is not None:
+        cached_size = row["source_size"]
+        if cached_size is not None and cached_size != source_size:
+            return False
     if abs(source_mtime - row["source_mtime"]) >= 1.0:
         return False
     cached_fp = row["subagents_fingerprint"]
@@ -749,7 +767,8 @@ class CacheManager:
 
         with self._get_connection() as conn:
             row = conn.execute(
-                "SELECT source_mtime, subagents_fingerprint FROM cached_files"
+                "SELECT source_mtime, source_size, subagents_fingerprint"
+                " FROM cached_files"
                 " WHERE project_id = ? AND file_name = ?",
                 (self._project_id, jsonl_path.name),
             ).fetchone()
@@ -757,10 +776,12 @@ class CacheManager:
         if not row:
             return False
 
+        source_stat = jsonl_path.stat()
         return _cache_row_is_fresh(
             row,
-            jsonl_path.stat().st_mtime,
+            source_stat.st_mtime,
             lambda: subagents_fingerprint(jsonl_path),
+            source_stat.st_size,
         )
 
     def load_cached_entries(self, jsonl_path: Path) -> Optional[List[TranscriptEntry]]:
@@ -860,7 +881,9 @@ class CacheManager:
         if self._project_id is None:
             return
 
-        source_mtime = jsonl_path.stat().st_mtime
+        source_stat = jsonl_path.stat()
+        source_mtime = source_stat.st_mtime
+        source_size = source_stat.st_size
         cached_mtime = datetime.now().timestamp()
         if subagents_fp is None:
             subagents_fp = subagents_fingerprint(jsonl_path)
@@ -871,12 +894,13 @@ class CacheManager:
             conn.execute(
                 """
                 INSERT INTO cached_files
-                (project_id, file_name, file_path, source_mtime, cached_mtime,
-                 message_count, subagents_fingerprint)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                (project_id, file_name, file_path, source_mtime, source_size,
+                 cached_mtime, message_count, subagents_fingerprint)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(project_id, file_name) DO UPDATE SET
                     file_path = excluded.file_path,
                     source_mtime = excluded.source_mtime,
+                    source_size = excluded.source_size,
                     cached_mtime = excluded.cached_mtime,
                     message_count = excluded.message_count,
                     subagents_fingerprint = excluded.subagents_fingerprint
@@ -886,6 +910,7 @@ class CacheManager:
                     jsonl_path.name,
                     str(jsonl_path),
                     source_mtime,
+                    source_size,
                     cached_mtime,
                     len(entries),
                     subagents_fp,
@@ -1507,7 +1532,8 @@ class CacheManager:
 
         with self._get_connection() as conn:
             rows = conn.execute(
-                "SELECT file_name, source_mtime, subagents_fingerprint"
+                "SELECT file_name, source_mtime, source_size,"
+                " subagents_fingerprint"
                 " FROM cached_files WHERE project_id = ?",
                 (self._project_id,),
             ).fetchall()
@@ -1542,7 +1568,8 @@ class CacheManager:
                 continue
 
             try:
-                source_mtime = jsonl_file.stat().st_mtime
+                # One stat serves both checks — st_size rides along free.
+                source_stat = jsonl_file.stat()
             except OSError:
                 # Missing file: same outcome as is_file_cached()'s
                 # exists() check returning False.
@@ -1550,7 +1577,10 @@ class CacheManager:
                 continue
 
             if not _cache_row_is_fresh(
-                row, source_mtime, lambda file=jsonl_file: current_fp(file)
+                row,
+                source_stat.st_mtime,
+                lambda file=jsonl_file: current_fp(file),
+                source_stat.st_size,
             ):
                 modified.append(jsonl_file)
 

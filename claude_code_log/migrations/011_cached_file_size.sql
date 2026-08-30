@@ -1,0 +1,24 @@
+-- Detect appends the mtime tolerance hides
+-- Migration: 011
+-- Description: Add a `source_size` column to `cached_files`.
+-- Freshness compared source mtimes with a 1.0s tolerance, which exists
+-- because filesystem timestamp granularity varies (and is coarse on
+-- some network filesystems). The cost is that a write landing within a
+-- second of the mtime recorded at cache time is invisible: appending to
+-- a transcript and converting immediately alternates between seeing and
+-- missing the change. It fails in the worst shape for a watch loop --
+-- the last message of a turn, landing just after a tick and followed by
+-- silence, stays stranded until something else touches the file.
+--
+-- Size is exact, and free: get_modified_files() already stats every
+-- file, so st_size costs no extra syscall. The rule becomes "stale if
+-- the size differs OR the mtime moved past tolerance", which is
+-- strictly tightening -- it can only mark more files stale, never
+-- fewer -- so it cannot invalidate anything the old rule accepted for
+-- good reason.
+--
+-- Backward-compatible in the same shape as 007: existing rows get NULL
+-- and fall back to the mtime-only check, so a populated cache does not
+-- mass-invalidate. Rows written from here on carry the size.
+
+ALTER TABLE cached_files ADD COLUMN source_size INTEGER;
