@@ -2382,7 +2382,9 @@ def watch(
     projects_path = projects_dir or get_default_projects_dir()
     root = _resolve_watch_root(input_path, projects_path, all_projects)
     if root is None:
-        sys.exit(1)
+        # `raise` rather than `sys.exit` so the type checkers can see that
+        # `root` is a Path from here on.
+        raise SystemExit(1)
 
     fmt = "markdown" if output_format == "md" else output_format
     write_combined = combined != "no"

@@ -74,7 +74,9 @@ class TestResolveWatchRoot:
 
 
 class TestWatchCommand:
-    def test_it_converts_once_before_watching(self, tmp_path: Path) -> None:
+    def test_it_converts_once_before_watching(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
         """A watch that only reacts leaves the output stale until the next
         message; the up-front conversion is what makes it usable at once."""
         projects = tmp_path / "projects"
@@ -88,30 +90,26 @@ class TestWatchCommand:
         # change (the up-front conversion primed after writing), and exits.
         import claude_code_log.watch as watch_mod
 
-        real_run = watch_mod.WatchEngine.run
         calls: list[int] = []
 
-        def run_once(self, stop=None):  # noqa: ANN001
+        def run_once(engine, stop=None):
             calls.append(1)
-            self.tick()
+            engine.tick()
 
-        watch_mod.WatchEngine.run = run_once
-        try:
-            result = CliRunner().invoke(
-                main,
-                [
-                    "watch",
-                    str(proj),
-                    "--projects-dir",
-                    str(projects),
-                    "-f",
-                    "md",
-                    "-o",
-                    str(out),
-                ],
-            )
-        finally:
-            watch_mod.WatchEngine.run = real_run
+        monkeypatch.setattr(watch_mod.WatchEngine, "run", run_once)
+        result = CliRunner().invoke(
+            main,
+            [
+                "watch",
+                str(proj),
+                "--projects-dir",
+                str(projects),
+                "-f",
+                "md",
+                "-o",
+                str(out),
+            ],
+        )
 
         assert result.exit_code == 0, result.output
         assert calls, "the engine loop never ran"
@@ -149,7 +147,7 @@ class TestServeWatch:
         (proj / f"{sid}.jsonl").write_text(_entry("u0", "hello", sid), encoding="utf-8")
         return projects, proj, sid
 
-    def _invoke(self, projects: Path, args: list[str]):
+    def _invoke(self, projects: Path, args: list[str], monkeypatch):
         """Run `serve`, returning as soon as the server would block.
 
         The stub calls `start()` rather than doing nothing:
@@ -159,35 +157,31 @@ class TestServeWatch:
         """
         import claude_code_log.server as server_mod
 
-        real = server_mod.ArchiveServer.serve_forever
-        server_mod.ArchiveServer.serve_forever = (
-            lambda self: server_mod.ArchiveServer.start(self)
-        )
-        try:
-            return CliRunner().invoke(
-                main,
-                ["serve", "--projects-dir", str(projects), "--port", "0", "--no-index"]
-                + args,
-            )
-        finally:
-            server_mod.ArchiveServer.serve_forever = real
+        def start_instead(server):
+            server_mod.ArchiveServer.start(server)
 
-    def test_watch_starts_and_stops_the_engine(self, tmp_path: Path) -> None:
+        monkeypatch.setattr(server_mod.ArchiveServer, "serve_forever", start_instead)
+        return CliRunner().invoke(
+            main,
+            ["serve", "--projects-dir", str(projects), "--port", "0", "--no-index"]
+            + args,
+        )
+
+    def test_watch_starts_and_stops_the_engine(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
         projects, _proj, _sid = self._project(tmp_path)
         import claude_code_log.watch as watch_mod
 
         started: list[object] = []
         real_run_in_thread = watch_mod.WatchEngine.run_in_thread
 
-        def spy(self, stop):  # noqa: ANN001
-            started.append(self)
-            return real_run_in_thread(self, stop)
+        def spy(engine, stop):
+            started.append(engine)
+            return real_run_in_thread(engine, stop)
 
-        watch_mod.WatchEngine.run_in_thread = spy
-        try:
-            result = self._invoke(projects, ["--watch"])
-        finally:
-            watch_mod.WatchEngine.run_in_thread = real_run_in_thread
+        monkeypatch.setattr(watch_mod.WatchEngine, "run_in_thread", spy)
+        result = self._invoke(projects, ["--watch"], monkeypatch)
 
         assert result.exit_code == 0, result.output
         assert started, "the watch engine was never started"
@@ -201,17 +195,17 @@ class TestServeWatch:
             for t in threading.enumerate()
         )
 
-    def test_without_the_flag_no_engine_runs(self, tmp_path: Path) -> None:
+    def test_without_the_flag_no_engine_runs(self, tmp_path: Path, monkeypatch) -> None:
         projects, _proj, _sid = self._project(tmp_path)
         import claude_code_log.watch as watch_mod
 
         started: list[object] = []
-        real = watch_mod.WatchEngine.run_in_thread
-        watch_mod.WatchEngine.run_in_thread = lambda self, stop: started.append(self)
-        try:
-            result = self._invoke(projects, [])
-        finally:
-            watch_mod.WatchEngine.run_in_thread = real
+
+        def spy(engine, stop):
+            started.append(engine)
+
+        monkeypatch.setattr(watch_mod.WatchEngine, "run_in_thread", spy)
+        result = self._invoke(projects, [], monkeypatch)
 
         assert result.exit_code == 0, result.output
         assert not started
