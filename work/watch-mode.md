@@ -540,6 +540,44 @@ exactly like a regression in the atomic-write change, and a
 `if __name__ == "__main__":` guard. Any probe that drives a conversion
 needs one.
 
+### Stage 1, measured on real archives
+
+The synthetic "large archive" built for this — one project duplicated
+four times into 128 files / 180 MB — turned out to be a **worst case,
+not a large case**. Every uuid appeared four times, which is exactly what
+makes `_incremental_cache_refresh` decline; it fell back to the full
+refresh, `CacheRefresh.FULL` vetoed Phase 1b, and every tick full-loaded
+(4.1 s). The decline ladder was working as designed; the fixture was
+lying. Real archives are what these numbers have to come from.
+
+On `downloads/projects/-Users-dain-workspace-claude-code-log`
+(**217 trunk files, 319 MB**), appending to the *largest* session file
+(40 MB — the pessimistic pick):
+
+| | |
+|---|---|
+| cold conversion | 15.2 s |
+| **steady tick** | **1.12 s** |
+| ↳ `_incremental_cache_refresh` | 0.75 s (**67% of the tick**) |
+| ↳ `_load_stale_session_transcripts` | 0.14 s |
+
+So the session-scoped path *does* engage on real data, and **the
+bottleneck has moved**: rendering is now 12% of a tick and the cache
+refresh is two thirds of it. That is the next thing to attack if 1.1 s
+proves too slow; the render work is done.
+
+Answers to Stage 1's other questions:
+
+- **Q3 — does a resident watcher's warm memo help?** Barely. In-process
+  ticks 4.11 s vs a fresh subprocess per tick 4.62 s (on the synthetic
+  archive, where both paths were identical work). The ~0.5 s gap is
+  interpreter startup; the render memo contributes essentially nothing
+  across ticks, because the render is not where the time goes.
+- **Q4 — single-instance guard?** Not needed. Three concurrent
+  conversions against one cache: **0 failures**, no `SQLITE_BUSY`, and a
+  clean conversion afterwards. Combined with D8's read-during-write
+  numbers, the WAL setup handles this.
+
 **Stage 2 — use case 2 under `serve`.** `serve --watch` runs the Stage 1
 engine on a thread; the session page polls its own URL, swaps
 `#transcript`, rehydrates, fades in new cards, offers follow-tail.
