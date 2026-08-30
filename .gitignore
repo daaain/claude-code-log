@@ -208,4 +208,5 @@ claude-code-log-cache.db
 .devbox-claude/
 .devbox-foldyard/
 .dev-mode.json
+**/foldyard.local.toml
 # <<< foldyard (managed) <<<
