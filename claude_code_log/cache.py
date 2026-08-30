@@ -240,6 +240,27 @@ def scrub_surrogates(s: Optional[str]) -> Optional[str]:
     return s.encode("utf-8", errors="surrogateescape").decode("utf-8", errors="replace")
 
 
+# Compression level for a cached entry's content blob. zlib's default
+# (6) spends most of its time for the last few percent of size, and
+# rewriting a file's rows is the largest item in a watch tick.
+#
+# The size cost is much smaller than a single-file measurement suggests.
+# Over one atypical 207-entry, 40 MB session (~190 KB per entry) level 6
+# takes 183 ms to reach 2.92 MB against level 3's 81 ms to reach 3.44 MB
+# — 18% more bytes. But zlib levels only diverge on large payloads, and a
+# real archive is mostly small entries: across a 49 MB archive's 18,288
+# rows the blobs grow 26.37 MB -> 27.05 MB, i.e. **2.6%**, for a cold
+# conversion 11% faster (6.15 s -> 5.49 s) and a tick ~20% faster.
+#
+# Decompression is unaffected (~50 ms either way) and level-agnostic, so
+# this is backward compatible: rows written at any level still read. The
+# only visible transition is that re-serialising an existing entry
+# changes its blob, hence its row fingerprint, so the first incremental
+# refresh over a level-6 cache declines to a full refresh once and is
+# consistent thereafter.
+CONTENT_COMPRESSION_LEVEL = 3
+
+
 @functools.lru_cache(maxsize=1)
 def get_library_version() -> str:
     """Get the current library version from package metadata or pyproject.toml.
@@ -718,7 +739,8 @@ class CacheManager:
             "_level": None,
             "_operation": None,
             "content": zlib.compress(
-                json.dumps(entry.model_dump(), separators=(",", ":")).encode("utf-8")
+                json.dumps(entry.model_dump(), separators=(",", ":")).encode("utf-8"),
+                CONTENT_COMPRESSION_LEVEL,
             ),
         }
 

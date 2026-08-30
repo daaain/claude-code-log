@@ -140,7 +140,13 @@ at `~/.claude/projects/claude-code-log-cache.db` (or
   per-role token totals, `team_name` (added in migration 005).
 - Per-message: a denormalised view used by archived-session
   restoration (the cache holds enough to re-render even after the
-  source JSONL is deleted).
+  source JSONL is deleted). Each row's `content` is the entry as
+  zlib-compressed JSON, written at `CONTENT_COMPRESSION_LEVEL` (3, not
+  zlib's default 6: levels only diverge on large payloads, so across a
+  real 18,288-row archive it costs 2.6% more bytes and makes a cold
+  conversion 11% faster — compressing rows is the largest item in a
+  watch tick). Reading is level-agnostic, so rows written at any level
+  still load.
 - Per-rendered-HTML: the HTML output itself, indexed by source file
   mtime + depth + compact flag (migrations 002–004) — so
   re-runs with unchanged inputs serve the cached HTML directly.

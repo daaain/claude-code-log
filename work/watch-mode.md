@@ -858,12 +858,29 @@ queries around the refresh — `get_session_file_map` ×3 (50 ms),
 to SHA it, now redundant with the prefix hash), `get_uuid_owners` ×4
 (37 ms). Those are the next 130 ms if anyone wants it.
 
-**One knob not taken.** `zlib` level 1 would cut the *full* rewrite from
-183 ms to 74 ms for 29% larger blobs (level 3: 81 ms, +18%) — measured,
-one line, backward compatible, since `decompress` doesn't care. It would
-help every path rather than just resumable ones, but it trades on-disk
-size for everyone to fix a watch-local problem, so it is a decision to
-take deliberately rather than fold into this.
+**The zlib knob — taken, at level 3, and I had the cost wrong.** Level 3
+cuts the *full* row rewrite from 183 ms to 81 ms; `decompress` is
+level-agnostic, so it is backward compatible and one line.
+
+I first priced the size at **+18%**, from that same atypical 40 MB
+session (207 entries, ~190 KB each). That number does not survive
+contact with an archive: zlib's levels only diverge on large payloads,
+and real transcripts are mostly small entries. Measured across a 49 MB
+archive's **18,288 rows**, blobs grow 26.37 MB → 27.05 MB — **2.6%**,
+with the DB file up 2.1%:
+
+| | level 6 | level 3 |
+|---|---|---|
+| cold conversion | 6.15 s | **5.49 s** |
+| cache DB | 38.3 MB | 39.1 MB |
+| tick (full rewrite path) | 0.377 s | **0.329 s** |
+| tick (resumed) | 0.352 s | **0.269 s** |
+
+So it is not the watch-local trade I described — it makes cold
+conversions 11% faster for 2% more disk, everywhere. One transition
+artifact: re-serialising an entry changes its blob and therefore its row
+fingerprint, so the first incremental refresh over a level-6 cache
+declines to a full refresh once.
 
 ### Fix C — the cheap ones — ✅ LANDED (the two that need no migration)
 
