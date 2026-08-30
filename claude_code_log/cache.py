@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """SQLite-based cache management for Claude Code Log."""
 
+import functools
 import hashlib
 import json
 import logging
@@ -239,8 +240,19 @@ def scrub_surrogates(s: Optional[str]) -> Optional[str]:
     return s.encode("utf-8", errors="surrogateescape").decode("utf-8", errors="replace")
 
 
+@functools.lru_cache(maxsize=1)
 def get_library_version() -> str:
-    """Get the current library version from package metadata or pyproject.toml."""
+    """Get the current library version from package metadata or pyproject.toml.
+
+    Memoised because it is called *per rendered file* on the staleness
+    path (``is_transcript_stale`` → ``is_html_outdated``), and each call
+    re-parses the installed package metadata through
+    ``importlib.metadata``: 173 calls and 35 ms of a 1.1 s watch tick on
+    a 217-session project, scaling with the session count rather than
+    with anything that changed. An installed version cannot change inside
+    a process, so a one-slot cache is exact; tests that need a different
+    value patch this name on the module, which is unaffected.
+    """
     # First try to get version from installed package metadata
     try:
         from importlib.metadata import version as get_version
@@ -1903,15 +1915,33 @@ class CacheManager:
         if self._project_id is None:
             return []
 
+        from .renderer import is_html_outdated
+
         stale_sessions: List[tuple[str, str]] = []
+        base_dir = output_dir or self.project_path
 
         with self._get_connection() as conn:
-            # Get all sessions
+            # Both tables are read whole, once, rather than per session.
+            # `is_transcript_stale` issues two queries per call, so a
+            # project with many sessions spent most of this function in
+            # SQLite round-trips for rows it was going to read anyway
+            # (work/watch-mode.md, C15). The per-session logic below is a
+            # faithful inline of that method — same order of checks, same
+            # reason strings — minus the queries.
             session_rows = conn.execute(
-                """SELECT session_id, last_timestamp FROM sessions
+                """SELECT session_id, message_count FROM sessions
                    WHERE project_id = ? AND hidden = 0""",
                 (self._project_id,),
             ).fetchall()
+            html_rows = conn.execute(
+                """SELECT html_path, message_count, library_version
+                   FROM html_cache WHERE project_id = ?""",
+                (self._project_id,),
+            ).fetchall()
+            html_cache = {
+                r["html_path"]: (r["message_count"] or 0, r["library_version"])
+                for r in html_rows
+            }
 
             for row in session_rows:
                 session_id = row["session_id"]
@@ -1924,12 +1954,26 @@ class CacheManager:
                     continue
 
                 html_path = f"session-{session_id}{variant}.{ext}"
-
-                is_stale, reason = self.is_transcript_stale(
-                    html_path, session_id, output_dir=output_dir
-                )
-                if is_stale:
-                    stale_sessions.append((session_id, reason))
+                cached = html_cache.get(html_path)
+                if cached is None:
+                    stale_sessions.append((session_id, "not_cached"))
+                    continue
+                cached_count, cached_version = cached
+                if cached_version != self.library_version:
+                    stale_sessions.append((session_id, "version_mismatch"))
+                    continue
+                actual_file = base_dir / html_path
+                if not actual_file.exists():
+                    stale_sessions.append((session_id, "file_missing"))
+                    continue
+                if is_html_outdated(actual_file):
+                    stale_sessions.append((session_id, "file_version_mismatch"))
+                    continue
+                # `session_not_found` cannot arise here — the candidate
+                # list *is* the sessions table — so only the count check
+                # remains of `is_transcript_stale`'s session branch.
+                if row["message_count"] != cached_count:
+                    stale_sessions.append((session_id, "session_updated"))
 
         return stale_sessions
 
