@@ -103,7 +103,7 @@ container swap.
 page's own URL is both the change-detection channel and the content
 channel, in one request.
 
-### C6. ⚠️ The session-scoped fast path is unreachable in watch mode
+### C6. ~~⚠️~~ ✅ The session-scoped fast path was unreachable in watch mode
 
 **This is the finding that most shapes the work.** Phase 1b
 (`_try_current_or_session_scoped`, `converter.py:3027`) — the 0.6 s
@@ -130,6 +130,43 @@ touched. With `--combined no` the combined-staleness veto is already
 skipped, so `cache_was_updated` is genuinely the only blocker. This is a
 converter change, not a watcher change, and it is the prerequisite that
 makes watch mode cheap rather than merely possible.
+
+#### ✅ Resolved
+
+The veto's real concern was narrower than "the cache changed": Phase 1b's
+staleness test is per-session **message counts**, so a session whose
+content changed without its count changing would be missed. An
+**incremental** refresh rules that out — `_incremental_cache_refresh`
+only succeeds after proving every modified file's cached rows are an
+exact *prefix* of its current rows (`converter.py:3866`), i.e. a pure
+append, and with append-only sources a changed session always changes its
+count. It also keeps the sidecar current via `merge_session_sidecar`,
+which is the partial load's other requirement.
+
+So `ensure_fresh_cache` now reports *how* it refreshed
+(`CacheRefresh.NONE` / `INCREMENTAL` / `FULL`, via
+`ensure_fresh_cache_detailed`; the old bool function remains as a
+wrapper), and Phase 1b refuses only for `FULL`.
+
+Measured on the same 64 MB / 32-session archive, a watch tick with
+`--combined no`:
+
+| | before | after |
+|---|---|---|
+| path taken | full project load | **`_load_stale_session_transcripts`** |
+| tick (in-process, incl. hierarchy overhead) | 0.78 s | **0.31 s** |
+| render alone | — | **0.09 s** |
+
+Equivalence: two independent copies of the archive advanced through the
+same appends, one with the session-scoped path and one with
+`CLAUDE_CODE_LOG_SESSION_SCOPED=0`. **8 ticks, both formats, 28–29 output
+files each, byte-identical every time.**
+
+Pinned in `test/test_session_scoped_render.py::TestSessionScopedAfterAppend`
+— including that a FULL refresh still declines, and that the appended
+message actually reaches the output (an equivalence test alone would pass
+if *both* paths rendered nothing, which is precisely how the first draft
+of this measurement fooled itself).
 
 ### C7. ~~⚠️~~ ✅ The cache's 1-second mtime tolerance silently swallows fast appends
 

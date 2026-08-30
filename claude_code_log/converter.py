@@ -15,6 +15,7 @@ from collections.abc import Iterator
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
 import traceback
 from urllib.parse import quote
@@ -3029,7 +3030,7 @@ def _try_current_or_session_scoped(
     output_path: Path,
     effective_output_dir: Path,
     cache_manager: Optional["CacheManager"],
-    cache_was_updated: bool,
+    cache_refresh: "CacheRefresh",
     format: str,
     ext: str,
     suffix: str,
@@ -3061,12 +3062,33 @@ def _try_current_or_session_scoped(
     function rather than two: splitting them would compute
     ``_combined_output_is_stale`` and ``get_stale_sessions`` twice.
 
+    **On ``cache_refresh``.** This used to refuse outright whenever the
+    cache had been updated, which made the path unreachable for the case
+    it helps most: a live session gaining messages, where every run has
+    new bytes by definition. The refusal was really about one risk — the
+    staleness check here is per-session *message counts*, so a session
+    whose content changed without its count changing would be missed.
+
+    An INCREMENTAL refresh rules that out. It only succeeds after
+    proving every modified file's cached rows are an exact prefix of its
+    current rows (``_incremental_cache_refresh``), i.e. the change was a
+    pure append; with append-only sources a changed session always
+    changes its count. It also keeps the cross-session sidecar current
+    (``merge_session_sidecar``), which is the other thing the partial
+    load needs. A FULL refresh carries neither guarantee, so it still
+    refuses.
+
+    Note this mostly unlocks ``--combined no``: when a combined output
+    exists, the session's growth makes it stale and
+    ``_combined_output_is_stale`` bails us out to the streaming path
+    anyway.
+
     Returns ``None`` when the preconditions don't hold, when the combined
     output is stale, or when the session-scoped load declines.
     """
     if (
         cache_manager is None
-        or cache_was_updated
+        or cache_refresh is CacheRefresh.FULL
         or from_date is not None
         or to_date is not None
         or force_regenerate
@@ -3359,7 +3381,8 @@ def convert_jsonl_to(
         # directory mode) so DAG-based ordering handles sidechain placement.
         _integrate_agent_entries(messages)
         title = f"Claude Transcript - {input_path.stem}"
-        cache_was_updated = False  # No cache in single file mode
+        cache_refresh = CacheRefresh.NONE  # No cache in single file mode
+        cache_was_updated = False
 
         # Single-file workflow support (#174 PR3): a lone ``<SID>.jsonl`` still
         # has its run data in the sibling ``<SID>/subagents/workflows/`` dir, so
@@ -3393,9 +3416,10 @@ def convert_jsonl_to(
             output_path = effective_output_dir / f"combined_transcripts{suffix}.{ext}"
 
         # Phase 1: Ensure cache is fresh and populated
-        cache_was_updated = ensure_fresh_cache(
+        cache_refresh = ensure_fresh_cache_detailed(
             input_path, cache_manager, from_date, to_date, silent
         )
+        cache_was_updated = bool(cache_refresh)
 
         # Phase 1b: finish without loading the project at all, if the
         # cache says we can.
@@ -3404,7 +3428,7 @@ def convert_jsonl_to(
             output_path=output_path,
             effective_output_dir=effective_output_dir,
             cache_manager=cache_manager,
-            cache_was_updated=cache_was_updated,
+            cache_refresh=cache_refresh,
             format=format,
             ext=ext,
             suffix=suffix,
@@ -4158,6 +4182,32 @@ def _incremental_cache_refresh(
     return True
 
 
+class CacheRefresh(Enum):
+    """How `ensure_fresh_cache` brought the cache up to date.
+
+    The distinction that matters to callers is INCREMENTAL vs FULL, not
+    "did anything change". The incremental path only runs after proving
+    that every modified file's cached rows are an exact *prefix* of its
+    current rows — i.e. the change was a pure append and no existing
+    entry was rewritten (`_incremental_cache_refresh`). That proof is
+    what lets the session-scoped render path trust a per-session
+    staleness check based on message counts: with append-only sources a
+    changed session always changes its count, so nothing can change
+    underneath a count that stayed the same.
+
+    A FULL refresh carries no such proof — it is the fallback for
+    rewritten history, deleted files, and everything else hairy — so
+    callers that need the guarantee must treat it like a cold cache.
+    """
+
+    NONE = "none"
+    INCREMENTAL = "incremental"
+    FULL = "full"
+
+    def __bool__(self) -> bool:
+        return self is not CacheRefresh.NONE
+
+
 def ensure_fresh_cache(
     project_dir: Path,
     cache_manager: Optional[CacheManager],
@@ -4167,10 +4217,29 @@ def ensure_fresh_cache(
 ) -> bool:
     """Ensure cache is fresh and populated. Returns True if cache was updated.
 
+    Thin bool wrapper over `ensure_fresh_cache_detailed` for callers that
+    only need "did anything change".
+    """
+    return bool(
+        ensure_fresh_cache_detailed(
+            project_dir, cache_manager, from_date, to_date, silent
+        )
+    )
+
+
+def ensure_fresh_cache_detailed(
+    project_dir: Path,
+    cache_manager: Optional[CacheManager],
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    silent: bool = False,
+) -> CacheRefresh:
+    """Ensure cache is fresh and populated, reporting *how*.
+
     This does the heavy lifting of loading and parsing files.
     """
     if cache_manager is None:
-        return False
+        return CacheRefresh.NONE
 
     # Check if cache needs updating
     # Exclude agent files from direct check - they are loaded via session references
@@ -4178,7 +4247,7 @@ def ensure_fresh_cache(
     # This is acceptable since agent files typically change alongside their sessions.
     session_jsonl_files = trunk_jsonl_files(project_dir)
     if not session_jsonl_files:
-        return False
+        return CacheRefresh.NONE
 
     # Reuse one connection for the invalidation reads AND the whole populate
     # pass (per-file load + save + the session/aggregate writes) instead of
@@ -4202,7 +4271,7 @@ def ensure_fresh_cache(
         )
 
         if not needs_update:
-            return False  # Cache is already fresh
+            return CacheRefresh.NONE  # Cache is already fresh
 
         # Streaming stage 4: when the update is driven purely by changed
         # files over a populated cache, refresh from those files' bounded
@@ -4223,7 +4292,7 @@ def ensure_fresh_cache(
                 modified_files,
                 silent,
             ):
-                return True
+                return CacheRefresh.INCREMENTAL
 
         # Load and process messages to populate cache
         if not silent:
@@ -4243,7 +4312,7 @@ def ensure_fresh_cache(
 
         # Update cache with fresh data
         _update_cache_with_session_data(cache_manager, messages)
-    return True
+    return CacheRefresh.FULL
 
 
 def _update_cache_with_session_data(
