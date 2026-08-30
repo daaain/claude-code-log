@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
 
     from .cache import CacheManager, SessionSidecar
+    from .entry_store import ParsedEntryStore
     from .fragment_store import RenderFragmentStore
     from .providers.base import ProviderTokenTotals
     from .render_pool import RenderPool
@@ -293,10 +294,16 @@ def load_transcript(
     silent: bool = False,
     _loaded_files: Optional[set[Path]] = None,
     _meta_maps: Optional[dict[Path, dict[str, str]]] = None,
+    entry_store: "Optional[ParsedEntryStore]" = None,
 ) -> list[TranscriptEntry]:
     """Load and parse JSONL transcript file, using cache if available.
 
     Args:
+        entry_store: Optional per-conversion store of entries this
+            conversion has already materialised (``entry_store.py``).
+            Consulted ahead of the cache, which it saves a
+            decompress + parse + validate pass over; a store miss or a
+            changed file falls through to exactly the path below.
         _loaded_files: Internal parameter to track loaded files and prevent infinite recursion.
         _meta_maps: Internal per-load memo of ``{dir: {toolUseId: agentId}}``
             sidecar maps, so one flat ``subagents/`` family is scanned once
@@ -313,6 +320,15 @@ def load_transcript(
         return []
 
     _loaded_files.add(jsonl_path)
+    # Entries this conversion already parsed beat both the cache and the
+    # source. Date filtering is excluded: the store holds whole files,
+    # and the filtered read below returns a subset.
+    if entry_store is not None and not from_date and not to_date:
+        held = entry_store.get(jsonl_path)
+        if held is not None:
+            if not silent:
+                print(f"Loading {jsonl_path} from this run's parsed entries...")
+            return held
     # Try to load from cache first
     if cache_manager is not None:
         # Use filtered loading if date parameters are provided
@@ -1141,6 +1157,7 @@ def _load_stale_session_transcripts(
     cache_manager: "CacheManager",
     stale_session_ids: list[str],
     silent: bool = False,
+    entry_store: "Optional[ParsedEntryStore]" = None,
 ) -> Optional[tuple[list[TranscriptEntry], SessionTree]]:
     """Load only the named trunk sessions, faithful to the full load.
 
@@ -1206,7 +1223,12 @@ def _load_stale_session_transcripts(
         return None
 
     return _load_sessions_partial(
-        directory_path, cache_manager, sidecar, trunk_files, silent
+        directory_path,
+        cache_manager,
+        sidecar,
+        trunk_files,
+        silent,
+        entry_store=entry_store,
     )
 
 
@@ -1262,6 +1284,7 @@ def _load_sessions_partial(
     silent: bool,
     reelect_uuids: Optional[set[str]] = None,
     native_junction_uuids: Optional[set[str]] = None,
+    entry_store: "Optional[ParsedEntryStore]" = None,
 ) -> tuple[list[TranscriptEntry], SessionTree]:
     """Load the given trunk files into a faithful partial (entries, tree).
 
@@ -1298,9 +1321,19 @@ def _load_sessions_partial(
     with cache_manager.batch():
         for jsonl_file in trunk_files:
             all_messages.extend(
-                load_transcript(jsonl_file, cache_manager, None, None, silent)
+                load_transcript(
+                    jsonl_file,
+                    cache_manager,
+                    None,
+                    None,
+                    silent,
+                    entry_store=entry_store,
+                )
             )
 
+    # NB: this mutates entries in place and is not idempotent (it appends
+    # `#agent-{id}` to sessionId), which is why the store hands out deep
+    # copies rather than the objects it holds.
     _integrate_agent_entries(all_messages)
 
     # Enforce the whole-project dedup outcome: drop every duplicated
@@ -3048,6 +3081,7 @@ def _try_current_or_session_scoped(
     no_recaps: bool,
     silent: bool,
     report: Optional["RegenerationReport"],
+    entry_store: "Optional[ParsedEntryStore]" = None,
 ) -> Optional[Path]:
     """Finish from the cache alone, when the combined output is current.
 
@@ -3139,6 +3173,7 @@ def _try_current_or_session_scoped(
         cache_manager,
         [sid for sid, _reason in stale_sessions],
         silent,
+        entry_store=entry_store,
     )
     if partial is None:
         return None
@@ -3416,9 +3451,21 @@ def convert_jsonl_to(
         if output_path is None:
             output_path = effective_output_dir / f"combined_transcripts{suffix}.{ext}"
 
+        # One store per conversion, holding whatever the cache refresh
+        # parses so Phase 1b doesn't rebuild it from the rows the refresh
+        # just wrote (entry_store.py). Deliberately not handed to the
+        # streaming path below, whose bounded residency depends on
+        # dropping each page's entries before the next page loads.
+        entry_store = _make_entry_store()
+
         # Phase 1: Ensure cache is fresh and populated
         cache_refresh = ensure_fresh_cache_detailed(
-            input_path, cache_manager, from_date, to_date, silent
+            input_path,
+            cache_manager,
+            from_date,
+            to_date,
+            silent,
+            entry_store=entry_store,
         )
         cache_was_updated = bool(cache_refresh)
 
@@ -3446,9 +3493,15 @@ def convert_jsonl_to(
             no_recaps=no_recaps,
             silent=silent,
             report=report,
+            entry_store=entry_store,
         )
         if settled is not None:
             return settled
+
+        # Past Phase 1b nothing reuses the store, and what it holds is a
+        # whole session's entries — drop it before the paths that load
+        # the project (or stream it page by page) start allocating.
+        entry_store = None
 
         # Phase 1c: convert a paginated project page-by-page instead of
         # loading it whole.
@@ -3801,6 +3854,7 @@ def _incremental_cache_refresh(
     session_jsonl_files: list[Path],
     modified_files: list[Path],
     silent: bool,
+    entry_store: "Optional[ParsedEntryStore]" = None,
 ) -> bool:
     """Refresh the cache from the modified files alone, never loading whole.
 
@@ -3839,6 +3893,7 @@ def _incremental_cache_refresh(
     full path's.
     """
     from .cache import CachedFileState
+    from .entry_store import stamp_file
 
     if not modified_files:
         return False
@@ -3875,7 +3930,13 @@ def _incremental_cache_refresh(
         old_rows = cache_manager.get_all_session_rows()
 
         for f in modified_files:
-            load_transcript(f, cache_manager, None, None, silent)
+            # Stamp BEFORE the parse: a file that grows while we read it
+            # must make the store decline (its stamp would then be older
+            # than the file), never serve a list its stamp misdescribes.
+            stamp = stamp_file(f)
+            parsed = load_transcript(f, cache_manager, None, None, silent)
+            if entry_store is not None:
+                entry_store.put(f, stamp, parsed)
         new_states = cache_manager.get_file_states(modified_names)
 
         closure: set[str] = set()
@@ -4061,6 +4122,7 @@ def _incremental_cache_refresh(
             silent,
             reelect_uuids=exempt_uuids,
             native_junction_uuids=native_junction_uuids,
+            entry_store=entry_store,
         )
 
         # Compute every write, validate, then write — no fact lands
@@ -4234,10 +4296,16 @@ def ensure_fresh_cache_detailed(
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
     silent: bool = False,
+    entry_store: "Optional[ParsedEntryStore]" = None,
 ) -> CacheRefresh:
     """Ensure cache is fresh and populated, reporting *how*.
 
     This does the heavy lifting of loading and parsing files.
+
+    ``entry_store`` is the caller's per-conversion store
+    (``entry_store.py``); the incremental refresh fills it with the files
+    it parses, so the conversion's later loads can reuse them instead of
+    rebuilding them from the rows just written.
     """
     if cache_manager is None:
         return CacheRefresh.NONE
@@ -4292,6 +4360,7 @@ def ensure_fresh_cache_detailed(
                 session_jsonl_files,
                 modified_files,
                 silent,
+                entry_store=entry_store,
             ):
                 return CacheRefresh.INCREMENTAL
 
@@ -4456,6 +4525,22 @@ def build_session_title(
                 preview = preview[:50] + "..."
             return f"{project_title}: {preview}"
     return f"{project_title}: Session {session_id[:8]}"
+
+
+def _make_entry_store() -> "Optional[ParsedEntryStore]":
+    """Create the per-conversion parsed-entry store, unless disabled.
+
+    ``CLAUDE_CODE_LOG_ENTRY_STORE=0`` opts out, for bisecting. There is
+    no memory valve here because an empty store costs nothing and the
+    only thing that can fill it — ``_incremental_cache_refresh`` — checks
+    available memory per file at ``put`` time, where the file's size is
+    actually known.
+    """
+    from .entry_store import ParsedEntryStore, entry_store_enabled
+
+    if not entry_store_enabled():
+        return None
+    return ParsedEntryStore()
 
 
 def _make_fragment_store(

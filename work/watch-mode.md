@@ -3,8 +3,13 @@
 Status: **Stages 0–2 landed** on `feat/watch-mode`.
 `claude-code-log watch` keeps Markdown (or HTML) on disk current, and
 `claude-code-log serve --watch` makes an open session page grow as the
-session does. Stages 3 (the `file://` sidecar) and 4 (SSE / fragment
-patching) remain speculative and are probably not worth building.
+session does. Stage 3 (the `file://` sidecar) remains speculative and is
+probably not worth building. Stage 4 was too — until the tick was
+profiled: see "Where a tick's time goes" and "Appending the HTML rather
+than replacing it" at the end. **Fixes A and C have landed** (tick
+1.03 s → 0.717 s on the 803 MB archive); Fix B, worth roughly another
+400 ms, has not. The HTML half found that patching does *not* need the
+per-message render seam C11 says is missing.
 
 Decisions below are settled; the measurements that forced them are
 recorded so a later reader can tell which choices were reasoned and which
@@ -640,4 +645,339 @@ so build it only if the no-server case proves to matter.
 Stage 2 has been lived with, and only if the poll interval or swap cost
 demonstrably hurts. Fragment patching additionally needs the *architecture*
 half of `render-format-once.md` step 3 — a real format phase and a
-per-message render seam — which has not landed (C11).
+per-message render seam — which has not landed (C11). **See C19 below:
+a patch protocol does not actually need that seam, because the delta can
+be taken between two whole renders rather than produced by rendering one
+message in isolation.**
+
+---
+
+## Where a tick's time goes — Stage 1's open question, measured
+
+Stage 1 ended with "the bottleneck has moved: `_incremental_cache_refresh`
+is 0.75 s of a 1.12 s tick; that is the next thing to attack". This
+section answers *why* it costs that, and what appending rather than
+replacing would and would not buy.
+
+Measured on the same real archive as Stage 1 —
+`downloads/projects/-Users-dain-workspace-claude-code-log`, **217 trunk
+files, 319 MB**, appending held-back real lines to the largest session
+file (**39.7 MB, 214 lines, 207 entries**), 8 cores, warm cache. The
+corroborating small-archive runs use the live `~/.claude/projects` copy
+(33 trunk files, 46 MB). Reproduced across three independent probes;
+ticks are steady to ±0.1 s.
+
+### C14. One appended line materialises the same 207 entries three times
+
+Per-call trace of a steady tick (1.10–1.24 s):
+
+| # | call site | what it does | cost |
+|---|---|---|---|
+| 1 | `_incremental_cache_refresh` → `load_transcript` | re-reads and re-parses the whole 39.7 MB file, then `save_cached_entries` **deletes every row for the file and re-inserts all 207** (re-`json.dumps` + `zlib.compress` each) | **488 ms** (307 ms of it the rewrite) |
+| 2 | `_load_sessions_partial` → `load_cached_entries` | rebuilds the same entries from the rows just written (`zlib.decompress` + `json.loads` + pydantic) | **129 ms** |
+| 3 | `_load_stale_session_transcripts` → `load_cached_entries` | rebuilds them a third time, for the render | **141 ms** |
+
+That is ~760 ms of a 1.1 s tick spent producing three copies of one
+list, and every one of the three costs is proportional to the *file*,
+not to the append. Phase totals for the rest of the tick:
+`get_stale_sessions` 85 ms, `get_session_file_map` ×3 53 ms,
+`get_file_states` ×2 47 ms, `get_uuid_owners` ×4 35 ms,
+`get_parent_uuid_dependents` / `get_request_id_entries` /
+`get_metadata_target_files` ~45 ms combined.
+
+Floors on the same file, for scale: `json.loads` over all 208 lines is
+**154 ms**, `blake2b` over the whole 39.7 MB is **33 ms**, and a
+`seek` + read of the last 200 KB is **0.13 ms**.
+
+### C15. `get_library_version()` runs 173 times a tick
+
+`is_transcript_stale` → `is_html_outdated` → `get_library_version()`, once
+per session, and each call re-parses installed package metadata through
+`importlib.metadata`: **35 ms a tick**, and it scales with the number of
+sessions in the project rather than with anything that changed. Memoising
+it took `get_stale_sessions` from 85 ms to 44 ms. The version cannot
+change inside a process; this is a one-line `lru_cache`.
+
+### Fix A — a parsed-entry store, measured — ✅ LANDED
+
+The same shape as the existing `fragment_store`, one layer down: hold the
+entries a conversion has already materialised, keyed on
+`(path, size, mtime_ns)`, populated by `save_cached_entries` and read by
+`load_cached_entries`. Prototyped by monkeypatch:
+
+| | |
+|---|---|
+| tick, baseline | **1.079 s** (mean of 3) |
+| tick, with the store | **0.750 s** (mean of 3) — **30% faster** |
+| store traffic per tick | 2 hits, 1 miss — exactly ①→②③ above |
+
+Equivalence: two copies of the 46 MB archive advanced through the same 8
+appends, store on and off. **27 of 28 pages byte-identical every tick.**
+The 28th is this session's own live transcript, whose *source* differed
+by one line between the two `copytree`s (205 vs 206) — a fixture
+artifact, not a divergence.
+
+**As built** (`claude_code_log/entry_store.py`, dev-docs § 2.16): the
+landed version reproduces the prototype — **0.997s → 0.702s (30%)**,
+2 hits / 0 misses per tick — and the phase table confirms where it went:
+the closure load fell from 255 ms to **7.1 ms**.
+
+Two things the prototype got away with and the real one must not:
+
+1. **The pipeline mutates entries in place.** `_integrate_agent_entries`
+   appends `#agent-{id}` to `sessionId` and is *not* idempotent, and
+   dedup re-parents around dropped copies. Today each consumer gets
+   freshly deserialised objects; handing both the same list renders
+   `…#agent-X#agent-X`. The prototype's fixture happened not to have
+   sidechain agents in the modified session, so its byte-identity result
+   was luck. `get` therefore returns a `deepcopy` — **2.0 ms and 0.83 MB**
+   for the 207-entry, 39.7 MB session, because the bulk of an entry is
+   immutable strings that `deepcopy` shares rather than copies. Pinned by
+   a test that fails with exactly the doubled suffix when the copy is
+   removed (verified by sabotage, not by assumption).
+2. **Scope, so it cannot cost RAM anywhere else.** Threaded as a
+   parameter like the fragment store, never a global and never on
+   `CacheManager` (the TUI holds one across conversions); filled only by
+   `_incremental_cache_refresh`, with the files it parsed; dropped after
+   Phase 1b. A cold conversion stores nothing, and the streaming path is
+   deliberately never handed one — its bounded residency depends on
+   dropping each page's entries, which a store spanning pages would
+   undo. Plus a per-file valve (decline under 6× available memory) and
+   `CLAUDE_CODE_LOG_ENTRY_STORE=0`.
+
+### Fix B — parse and write only the tail
+
+What remains after A is call ① — a full parse and a full row rewrite for
+one appended line. Both are avoidable, and the incremental refresh
+already proves the precondition: it only proceeds after showing the
+cached rows are an exact *prefix* of the current rows. Today that proof
+is a *consequence* of the full parse (`get_file_states` fingerprints
+every row, fetching each row's compressed blob just to SHA it). Store
+instead, per file, the byte length the cached rows cover plus a hash of
+those bytes; then a tick can
+
+1. hash the file's first `prefix_len` bytes (33 ms on 39.7 MB — and a
+   strictly *stronger* proof than the row-fingerprint prefix, since
+   identical bytes imply identical rows),
+2. parse only what follows (~1 ms for one line),
+3. `INSERT` only the new rows instead of `DELETE` + re-insert all
+   (`messages.id` order is already the ordering the readers rely on, and
+   appends preserve it).
+
+Estimated ~450 ms off the remaining tick, i.e. **~1.1 s → ~0.3 s** with
+A and B together. Not prototyped — unlike A it needs a migration and a
+new decline path (hash mismatch → today's full parse).
+
+### Fix C — the cheap ones — ✅ LANDED (the two that need no migration)
+
+`lru_cache` on `get_library_version` (C15, 35 ms) and reading the
+`sessions` / `html_cache` tables once each in `get_stale_sessions`
+instead of two queries per session through `is_transcript_stale`.
+Together: **85 ms → 4.5 ms**, better than the 44 ms the version memo
+alone predicted, because the per-session round-trips were most of the
+rest. The per-session logic is inlined faithfully — same check order,
+same reason strings; `is_transcript_stale` stays as it was for its other
+callers.
+
+Still open, because it needs a migration and belongs with Fix B: give
+`get_file_states` a stored fingerprint column so it stops fetching every
+row's compressed blob just to SHA it (47 ms).
+
+---
+
+## Appending the HTML rather than replacing it
+
+### C16. The file is the wrong thing to append
+
+Writing the whole page costs **5–6 ms for 3.9 MB** — about 1% of a tick.
+Appending in place would save that 1% and would give back the torn-read
+class D7/C8 just closed: `os.replace` is what makes a reader (Obsidian, a
+browser mid-fetch) safe, and `r+b` + seek + write + truncate is not
+atomic. **Recommendation: keep rewriting the file.** The cost worth
+attacking is the *browser's*, not the disk's — Stage 2 measured 202 ms of
+main-thread work per update on a 7 MB page (fetch 31 / `DOMParser` 63 /
+swap 17 / forced layout 91), and that number scales with the page while
+the change that caused it does not.
+
+### C17. The page's shape is delta-friendly
+
+Session pages split cleanly: **~140 KB of head** (styles, nav, toolbar)
+before `<div id="transcript">`, **~98% body**, then a **9,157-byte tail**
+— identical to the byte across the three largest pages sampled. Across 14
+page updates the head and the tail were **byte-identical every time**.
+
+### C18. But the body is *not* byte-append-only, for two nameable reasons
+
+Over 14 updates: **0 were exact byte appends.** Six preserved ≥99.9% of
+the old body, diverging only within the last ~1 KB; the other eight
+diverged at **byte 598**. The causes, read off the diffs:
+
+1. **Ancestor descendant counts.** `data-title-unfolded='Fold (all
+   levels) all 227 descendants'` → `…228 descendants` on the root's fold
+   bar. Any message added anywhere updates every ancestor's count, and
+   the root's is 598 bytes into the container.
+2. **Retroactive classes on existing cards.** `class='message thinking'`
+   → `class='message thinking pair_first'` when the other half of a pair
+   arrives — an already-rendered card legitimately changing.
+
+Both are small and both are client-derivable, which matters for the
+option below.
+
+### C19. What actually changes between two renders is ~0.1–0.3% of the body
+
+A line-level diff of the same updates, i.e. what a patch would have to
+ship rather than what a byte-prefix comparison can prove:
+
+| tick | body | change blocks | shipped | share of body | shape |
+|---|---|---|---|---|---|
+| 0 | 19,315 → 19,591 lines | 2 | +11.6 KB / −0.1 KB | 0.32% | tail-only |
+| 6 | 19,591 → 19,615 | 9 | +2.1 KB / −1.3 KB | 0.09% | tail + earlier edits |
+| 7 | 19,615 → 19,683 | 3 | +5.4 KB / −0.1 KB | 0.15% | tail-only |
+| 9 | 19,683 → 19,706 | 9 | +2.3 KB / −1.3 KB | 0.10% | tail + earlier edits |
+
+Even the "diverged at byte 598" ticks change **7 lines / 1.3 KB** away
+from the tail. A 3.6 MB body is re-shipped to move 2–12 KB.
+
+**The C11 blocker does not apply.** C11 says there is no seam that renders
+*one message in isolation* — true, and it stays true. A patch protocol
+does not need one: the server renders the whole page exactly as it does
+today, diffs that output against the previous render of the same page,
+and ships the difference. Renumbered `msg-d-N` ids (C10) and
+out-of-order arrivals (C3) stop being correctness hazards and become
+merely a *bigger diff*, with today's full container swap as the automatic
+fallback when the diff exceeds some fraction of the body.
+
+### Two ways to get there
+
+**Option 1 — structural delta (no markup change).** Diff by card, keyed
+on the `uuid → session-id → positional-id` + ordinal key `live_update.js`
+already computes for fold state, and ship
+`{replace: {key: html, …}, append: [html, …]}`. Handles C18's retro-edits
+and C3's out-of-order arrivals natively. Needs a place to put the patch:
+either a small `/api/` endpoint (the server would then need the previous
+render, which it has — it is the file on disk) or a sidecar file the
+poller `GET`s.
+
+**Option 2 — make the body append-stable, then range-fetch it.** Remove
+C18's two mutations from the server-rendered markup: compute descendant
+counts in JS at rehydrate (the subtree is right there), and apply
+`pair_first` client-side. The body then becomes byte-append-only for the
+common case, a `Range: bytes=N-` on the page itself is the whole
+protocol, and `SimpleHTTPRequestHandler` already serves ranges. Cheaper
+protocol, but it moves rendering responsibility into JS and weakens the
+`file://` page, so Option 1 is the safer first move.
+
+Either way the client work goes from "202 ms and growing with the page"
+to "a few ms, constant" and, unlike today, `claudeLogRehydrate` runs over
+the new cards rather than the whole tree.
+
+### C20. C2 from `identifier-consolidation.md` is the patch protocol's missing half
+
+That draft deferred C2 — the content-derived card id `m-{uuid}-{k}` —
+explicitly "pending a consumer", since "the stable-anchor benefit has no
+runtime consumer today". **A patch protocol is that consumer**, and it
+needs C2 for two things beyond tidiness:
+
+- **Addressing.** A patch says `replace m-<uuid>-0`, and the client does
+  one `getElementById`. Without it the client must rebuild the
+  `uuid → ordinal` map over the *whole* tree to locate anything —
+  `live_update.js` does exactly that today, three full-tree
+  `querySelectorAll` passes per update (capture, restore, mark-new).
+  That is O(page) work inside the update we are trying to make
+  O(delta), and it is a real part of the 202 ms.
+- **Insertions.** Every measured update here landed at the tail. C3 says
+  arrivals are *not* always in timestamp order, and with positional
+  `msg-d-N` one message landing mid-tree renumbers every later card and
+  every `#msg-d-N` anchor aimed at them — the diff goes from ~2 KB to
+  the whole body and the protocol falls back to a full swap. With
+  `m-{uuid}-{k}` an insertion changes nothing about its neighbours, so
+  the out-of-order case stays a small patch instead of a fallback.
+
+So the sequencing is: C2 is not a prerequisite for a *tail-append*
+patch, but it is what makes the patch robust rather than best-effort,
+and it turns C10 from a hazard into a non-issue. Its cost is unchanged
+from that draft (resolver plumbing through ~8 formatters / 4 modules,
+9 coupled test files, full `.ambr` regeneration, and the vacuous-guard
+trap).
+
+It does **not** help the cache. `msg-d-N` and `data-uuid` are
+render-only and never enter it; cache identity is the transcript uuid /
+`sessionId` / `parentUuid` / `requestId` family, plus the DAG *line* ids
+(`{trunk}@{uuid12}`, `{trunk}#agent-{id}`) that
+`_incremental_cache_refresh` keeps normalising back to a trunk id with
+its local `_trunk()`. Consolidating *that* family would simplify the
+refresh, but it is a different consolidation from C2 and a clarity win,
+not a speed one — the refresh's time is in parsing and serialising, not
+in identifier handling.
+
+### C21. B breaks A's seeding unless the store is cross-tick
+
+A and B attack disjoint costs — B kills call ① (488 ms), A kills ② and
+③ (270 ms) — so neither subsumes the other. But they interact, in a
+direction that is easy to get wrong:
+
+**A works today only because ① parses the whole file** and hands the
+list to `save_cached_entries`, which is what populates the store; ② and
+③ then hit it (measured: 2 hits, 1 miss per tick). Under B, ① parses
+only the appended tail, so there is no full list to seed with, and ②
+and ③ fall back to a full `load_cached_entries` each. **Implemented
+naively, B gives back most of what A won.**
+
+The fix makes them reinforce instead: keep the store **across ticks**,
+holding `(prefix_len, entries)` per file, and on a proven append
+*extend* the stored list with the tail entries B just parsed. A
+resident `watch` process then builds the full entry list once and never
+again — ① is a ~1 ms tail parse, ② and ③ are hits.
+
+Note this revises Stage 1's Q3 ("a resident watcher's warm memo helps
+barely — the ~0.5 s gap is interpreter startup"). That was measured on
+the *render* memo, which was never where the time went. An entry store
+is the thing that makes residency pay; a one-shot `convert` still
+rebuilds the list once per run, where A alone still earns its 30%.
+
+### C22. Neither fix grows the cache DB — B shrinks what it writes
+
+A is purely in-process: already-parsed `TranscriptEntry` objects held
+for the duration of a conversion. No schema, no rows, no bytes on disk.
+What it costs is **memory** — CONTRIBUTING already puts a project's
+in-memory transcript at ~3x its bytes on disk, so a 39.7 MB session is
+~100 MB resident while the tick runs, bounded by the sessions in play
+rather than by the archive. That is the argument for a valve like the
+fragment store's, and for evicting on session change.
+
+B adds two small columns to `cached_files` (`prefix_len`,
+`prefix_hash`) — tens of bytes per file row, ~8 KB across a 217-file
+project. Against that, it removes a large amount of *write* traffic.
+Measured on the 46 MB archive, appending one line to a 626-row file:
+
+| | |
+|---|---|
+| blobs rewritten per tick, today | **4.08 MB** (all 626 rows deleted and re-inserted) |
+| same, under B | ~7 KB (one row) |
+| cache DB file growth over 6 ticks | **0 KB** — SQLite reuses the freed pages, WAL checkpoints back |
+
+So the DB does not grow either way; today's cost is write amplification
+(~600x), not size.
+
+### Suggested order
+
+1. ✅ **Fix C and Fix A landed.** Tick **1.03 s → 0.717 s** on the 803 MB
+   archive. The phase table afterwards:
+
+   | phase | before | after |
+   |---|---|---|
+   | `load_transcript` (modified file) | 483 ms | 483 ms — *Fix B's target* |
+   | ↳ `save_cached_entries` | 310 ms | 310 ms |
+   | `_load_sessions_partial` (closure) | 255 ms | **7.1 ms** |
+   | `get_stale_sessions` | 85 ms | **4.5 ms** |
+   | `get_library_version` (×173) | 35 ms | **0.0 ms** |
+   | **tick** | **1.03 s** | **0.717 s** |
+
+2. **Fix B** if 0.72 s is still too slow — it is now two thirds of the
+   tick, all of it in re-parsing and rewriting a file that gained one
+   line. It is the one with a migration, and it must be designed
+   *against* A's store (C21), not dropped in beside it.
+3. **Option 1** for the browser, which is where the user-visible cost
+   actually is, and which no longer depends on `render-format-once.md`.
+   Land the tail-append case first; take C2 (C20) when the fallback
+   rate on out-of-order arrivals proves it is worth the migration.

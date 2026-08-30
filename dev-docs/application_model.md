@@ -1023,6 +1023,31 @@ cached rows are an exact prefix of its current rows, i.e. a pure append.
 output present, the session's growth makes it stale and the conversion
 falls to the streaming path instead.
 
+**What the tick then spends its time on** was, once §2.12 was reachable,
+no longer the render (12% of it) but the cache refresh. Profiled on the
+803MB / 217-file reference archive appending to its largest session file
+(39.7MB, 207 entries), a 1.03s tick materialised *the same entries three
+times*: §2.14's refresh parsed the file from source (488ms, of which
+307ms re-serialising and re-inserting every row), then the closure load
+rebuilt them from those rows (129ms), then the session-scoped render
+rebuilt them again (141ms). Two changes removed most of that:
+
+- **A per-conversion parsed-entry store** (`entry_store.py`, §2.16)
+  serves the refresh's list to the other two consumers: closure load
+  255ms → 7ms.
+- **The staleness sweep stopped scaling with the session count.**
+  `get_stale_sessions` ran two SQLite queries *per session* through
+  `is_transcript_stale`, and each of those called `get_library_version()`,
+  which re-parsed installed package metadata every time — 173 calls and
+  35ms a tick. The version lookup is now `lru_cache`d (it cannot change
+  inside a process) and the two tables are read once and joined in
+  Python: 85ms → 4.5ms.
+
+Tick: **1.03s → 0.717s**, with `load_transcript`'s full re-parse and
+full row rewrite of the modified file (483ms) now the remaining bulk —
+addressable only by parsing and writing the appended tail alone, which
+needs a stored prefix hash and is not built.
+
 **The served page updates itself** via
 `html/templates/components/live_update.js`, active only over `http(s)` —
 a `file://` page cannot fetch anything, not even its own URL, so the
@@ -1050,6 +1075,53 @@ the only foldable node.
 
 Measured: ~1s from append to visible; a 7.0MB session page costs 202ms to
 swap (31 fetch / 63 parse / 17 swap / 91 layout) and ~1ms per idle poll.
+
+
+### 2.16 Parsed-entry store
+
+`entry_store.py`. A conversion that refreshes the cache incrementally
+(§2.14) parses each modified file from source, and then loads those same
+entries back out of the rows it has just written — once for the closure
+load and once for the session-scoped render (§2.12). Each rebuild is a
+`zlib.decompress` + `json.loads` + Pydantic validation pass over the
+whole file, so a one-line append to a 39.7MB session paid it twice at
+~130ms each. The store holds the list the first pass produced and serves
+it to the other two.
+
+Four properties keep the invalidation surface at zero, and they are the
+reason it is a parameter rather than a memo:
+
+- **One store per conversion, threaded explicitly.** Never a global, and
+  never hung off `CacheManager` — the TUI keeps one of those across many
+  conversions.
+- **Only `_incremental_cache_refresh` fills it**, with the files it just
+  parsed, and `convert_jsonl_to` drops it after Phase 1b. A cold or full
+  conversion therefore stores nothing, and the streaming path (§2.13) is
+  deliberately never handed one: its bounded residency depends on
+  dropping each page's entries before the next page loads, which a store
+  spanning pages would defeat. What it holds is bounded by *what
+  changed*, not by the archive.
+- **Hits are verified against the file.** `get` re-stats and compares
+  `(size, mtime_ns)` against the stamp captured *before* the parse. A
+  stamp taken before the parse can only be older than the entries
+  describe, so a file that grew mid-parse declines to the cache rather
+  than serving a list its stamp misdescribes.
+- **Handouts are deep copies**, because the pipeline mutates entries in
+  place: `_integrate_agent_entries` appends `#agent-{id}` to `sessionId`
+  and is *not* idempotent, and dedup re-parents around dropped copies.
+  Today each consumer gets freshly deserialised objects; serving the same
+  objects twice would render `…#agent-X#agent-X`. The copy stays cheap
+  because the bulk of an entry is immutable strings, which `deepcopy`
+  shares rather than copies — 2.0ms and 0.83MB for the 207-entry, 39.7MB
+  session, against 123ms to rebuild it from the cache.
+
+Held to byte-identity with the store disabled, over repeated appends on a
+fixture whose 170 sidechain entries exercise the mutation above
+(`test/test_entry_store.py`), with the copy isolation pinned by a test
+that fails with exactly the doubled suffix when the copy is removed.
+`CLAUDE_CODE_LOG_ENTRY_STORE=0` is the kill switch; a per-file memory
+valve at `put` time declines to hold a file when available memory is
+under 6x its bytes, and `=1` overrides that valve.
 
 ---
 
