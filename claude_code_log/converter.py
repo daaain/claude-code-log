@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from .render_pool import RenderPool
 
 from .utils import (
+    atomic_write_text,
     coalesce_trunk_session_id,
     collect_trunk_session_ids,
     format_timestamp_range,
@@ -1827,7 +1828,7 @@ def _enable_next_link_on_previous_page(
     new_content, count = _NEXT_LINK_PATTERN.subn(r"\1\2", content)
 
     if count > 0:
-        page_path.write_text(new_content, encoding="utf-8", errors="replace")
+        atomic_write_text(page_path, new_content)
         return True
 
     return False
@@ -2274,9 +2275,7 @@ def _render_page_unit_inline(
     # JSONL may carry lone surrogates (issue #139); strict UTF-8
     # encoding crashes here. Replace with U+FFFD so output stays
     # valid UTF-8.
-    (output_dir / unit.file_name).write_text(
-        html_content, encoding="utf-8", errors="replace"
-    )
+    atomic_write_text(output_dir / unit.file_name, html_content)
 
 
 def _generate_paginated_html(
@@ -3695,7 +3694,7 @@ def convert_jsonl_to(
                 )
                 assert content is not None
                 # See issue #139: errors="replace" for lone-surrogate safety.
-                output_path.write_text(content, encoding="utf-8", errors="replace")
+                atomic_write_text(output_path, content)
 
                 # Update html_cache for the combined transcript. Written for the
                 # marker-tracked formats (HTML + Markdown); JSON tracks its own
@@ -4611,9 +4610,7 @@ def _generate_individual_session_files(
             )
             assert session_content is not None
             # See issue #139: errors="replace" for lone-surrogate safety.
-            (output_dir / unit.file_name).write_text(
-                session_content, encoding="utf-8", errors="replace"
-            )
+            atomic_write_text(output_dir / unit.file_name, session_content)
 
         def _record_session(unit: RenderUnit) -> None:
             """Cache bookkeeping for one written session file."""
@@ -4832,7 +4829,7 @@ def generate_single_session_file(
     )
     assert session_content is not None
     # See issue #139: errors="replace" for lone-surrogate safety.
-    output_file.write_text(session_content, encoding="utf-8", errors="replace")
+    atomic_write_text(output_file, session_content)
 
     return output_file
 
@@ -4878,7 +4875,7 @@ def render_normalized_session_file(
     )
     assert content is not None
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(content, encoding="utf-8", errors="replace")
+    atomic_write_text(output, content)
     return output
 
 
@@ -5330,9 +5327,7 @@ def render_provider_wholesale(
                 )
                 assert combined_content is not None
                 dest_dir.mkdir(parents=True, exist_ok=True)
-                (dest_dir / combined_name).write_text(
-                    combined_content, encoding="utf-8", errors="replace"
-                )
+                atomic_write_text(dest_dir / combined_name, combined_content)
                 if cache is not None:
                     cache.update_html_cache(combined_name, None, len(combined_messages))
 
@@ -5386,7 +5381,7 @@ def render_provider_wholesale(
     assert index_content is not None
     index_path = output_root / get_index_filename(output_format)
     output_root.mkdir(parents=True, exist_ok=True)
-    index_path.write_text(index_content, encoding="utf-8", errors="replace")
+    atomic_write_text(index_path, index_content)
 
     if not silent:
         print(
@@ -6522,7 +6517,7 @@ def process_projects_hierarchy(
     # Ensure the index root exists when projecting into a fresh dir.
     index_path.parent.mkdir(parents=True, exist_ok=True)
     # See issue #139: errors="replace" for lone-surrogate safety.
-    index_path.write_text(index_content, encoding="utf-8", errors="replace")
+    atomic_write_text(index_path, index_content)
 
     # The archive-wide search page sits next to the index. It is static and
     # self-contained; it only *works* when served (it needs the API to reach
@@ -6531,8 +6526,8 @@ def process_projects_hierarchy(
     if output_format == "html":
         from .html.renderer import generate_archive_search_html
 
-        (index_path.parent / "search.html").write_text(
-            generate_archive_search_html(), encoding="utf-8", errors="replace"
+        atomic_write_text(
+            index_path.parent / "search.html", generate_archive_search_html()
         )
 
     # Count total sessions from project summaries

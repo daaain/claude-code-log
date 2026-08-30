@@ -36,7 +36,7 @@ from .converter import (
     load_directory_transcripts,
 )
 from .renderer import get_renderer
-from .utils import get_project_display_name
+from .utils import atomic_write_text, get_project_display_name
 
 
 class ProjectSelector(App[Path]):
@@ -1876,7 +1876,7 @@ class SessionBrowser(App[Optional[str]]):
                 # is the worst outcome (worse than the CLI's loud crash,
                 # which is how #139 surfaced in the first place).
                 scrubbed = scrub_surrogates(session_content) or session_content
-                session_file.write_text(scrubbed, encoding="utf-8", errors="replace")
+                atomic_write_text(session_file, scrubbed)
                 return session_file
         except Exception:
             return None
