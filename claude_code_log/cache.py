@@ -977,6 +977,102 @@ class CacheManager:
             self._update_last_updated(conn)
             conn.commit()
 
+    def extend_cached_entries(
+        self,
+        jsonl_path: Path,
+        all_entries: List[TranscriptEntry],
+        appended: List[TranscriptEntry],
+        subagents_fp: Optional[str] = None,
+    ) -> bool:
+        """Insert only ``appended``, leaving the file's existing rows in place.
+
+        ``save_cached_entries`` deletes every row for a file and rewrites
+        it, which costs a ``json.dumps`` + ``zlib.compress`` per entry —
+        310 ms to add one line to a 39.7 MB session, and the largest item
+        in a watch tick (work/watch-mode.md). When the caller can show the
+        new entries are exactly the old ones plus a tail, only the tail
+        needs writing.
+
+        The caller owns that proof (a byte-verified file prefix, plus no
+        agent splicing — see ``load_transcript``); this method owns the
+        one part the caller cannot see, which is whether the *rows*
+        still match what the caller thinks it wrote. Another process may
+        have rewritten them since. Returns False whenever the row count
+        disagrees, and the caller falls back to the full rewrite; that
+        check is why the two stores cannot silently drift apart.
+        """
+        if self._project_id is None or not appended:
+            return False
+        expected_existing = len(all_entries) - len(appended)
+        if expected_existing <= 0:
+            return False
+
+        source_stat = jsonl_path.stat()
+        if subagents_fp is None:
+            subagents_fp = subagents_fingerprint(jsonl_path)
+
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT id FROM cached_files WHERE project_id = ? AND file_name = ?",
+                (self._project_id, jsonl_path.name),
+            ).fetchone()
+            if row is None:
+                return False
+            file_id = row["id"]
+
+            count = conn.execute(
+                "SELECT COUNT(*) AS n FROM messages WHERE file_id = ?", (file_id,)
+            ).fetchone()["n"]
+            if count != expected_existing:
+                return False
+
+            conn.execute(
+                """UPDATE cached_files
+                   SET file_path = ?, source_mtime = ?, source_size = ?,
+                       cached_mtime = ?, message_count = ?, subagents_fingerprint = ?
+                   WHERE id = ?""",
+                (
+                    str(jsonl_path),
+                    source_stat.st_mtime,
+                    source_stat.st_size,
+                    datetime.now().timestamp(),
+                    len(all_entries),
+                    subagents_fp,
+                    file_id,
+                ),
+            )
+            conn.executemany(
+                """
+                INSERT INTO messages (
+                    project_id, file_id, type, timestamp, session_id,
+                    _uuid, _parent_uuid, _is_sidechain, _user_type, _cwd, _version,
+                    _is_meta, _agent_id, _request_id,
+                    input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
+                    _leaf_uuid, _level, _operation, content
+                ) VALUES (
+                    :project_id, :file_id, :type, :timestamp, :session_id,
+                    :_uuid, :_parent_uuid, :_is_sidechain, :_user_type, :_cwd, :_version,
+                    :_is_meta, :_agent_id, :_request_id,
+                    :input_tokens, :output_tokens, :cache_creation_tokens, :cache_read_tokens,
+                    :_leaf_uuid, :_level, :_operation, :content
+                )
+                """,
+                [self._serialize_entry(entry, file_id) for entry in appended],
+            )
+
+            # The index still refreshes the whole file: `reindex_files`
+            # deletes and re-adds its rows, and an append-only variant
+            # would need its own correctness argument. Only users who have
+            # built an index pay it, exactly as before.
+            from .search import auto_index_enabled, reindex_files
+
+            if auto_index_enabled():
+                reindex_files(conn, [file_id], commit=False)
+
+            self._update_last_updated(conn)
+            conn.commit()
+        return True
+
     def update_session_cache(self, session_data: Dict[str, SessionCacheData]) -> None:
         """Update cached session information."""
         if self._project_id is None:

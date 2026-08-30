@@ -6,7 +6,13 @@ closure load and the session-scoped render each rebuild them from the
 rows the refresh has just written. The store keeps the first pass's list
 and serves it to the other two (work/watch-mode.md, C14).
 
-Two layers of coverage, and the second is the one that matters:
+A store owned *across* ticks (which ``watch`` does) goes further: it pins
+its entries to a byte offset plus a hash of the bytes below it, so a tick
+can prove the file still starts with what it already parsed and read only
+what was appended — and, when the rows are provably just those lines,
+write only the new ones instead of rewriting every row.
+
+Three layers of coverage, and the last two are the ones that matter:
 
 - Unit tests for the store's own contract — stamp verification, copy
   isolation, budget, kill switch.
@@ -18,6 +24,12 @@ Two layers of coverage, and the second is the one that matters:
   objects; serving the same objects to two consumers would apply it
   twice. That is exactly what the copy isolation exists to prevent, so
   the equivalence test is its real proof.
+- Parse and write equivalence for the resumable path: the byte reader
+  against the text reader it replaces, a resumed parse against a fresh
+  one, and — the bar a write-path change has to clear — the **cache
+  rows** an append-only write leaves behind against the rows a full
+  rewrite leaves, since the first bug of that kind is invisible in the
+  rendered HTML.
 """
 
 import json
@@ -358,3 +370,309 @@ class TestWatchTick:
             assert _session_files(on_dir) == _session_files(off_dir), (
                 f"diverged on tick {tick}"
             )
+
+
+# ---------------------------------------------------------------------------
+# Resumable parsing and append-only writes
+# ---------------------------------------------------------------------------
+
+
+def _dump(entries: list[Any]) -> list[dict[str, Any]]:
+    return [e.model_dump() for e in entries]
+
+
+def _synthetic_project(tmp_path: Path, sessions: int = 2, lines: int = 6) -> Path:
+    """A project with no subagents — the shape the append-only write covers."""
+    project = tmp_path / "-Users-dain-workspace-synthetic"
+    project.mkdir(parents=True)
+    for s in range(sessions):
+        sid = f"5eaf00d0-0000-4000-8000-00000000000{s}"
+        jsonl = project / f"{sid}.jsonl"
+        with jsonl.open("w", encoding="utf-8") as f:
+            parent = None
+            for i in range(lines):
+                uuid = f"{sid[:-2]}{s}{i}"
+                f.write(
+                    json.dumps(
+                        {
+                            "type": "user" if i % 2 == 0 else "assistant",
+                            "timestamp": f"2025-07-03T18:0{i}:00Z",
+                            "parentUuid": parent,
+                            "isSidechain": False,
+                            "userType": "human",
+                            "cwd": "/tmp",
+                            "sessionId": sid,
+                            "version": "1.0.0",
+                            "uuid": uuid,
+                            "message": (
+                                {
+                                    "role": "user",
+                                    "content": [{"type": "text", "text": f"q{i}"}],
+                                }
+                                if i % 2 == 0
+                                else {
+                                    "role": "assistant",
+                                    "model": "claude-opus-5",
+                                    "content": [{"type": "text", "text": f"a{i}"}],
+                                    "usage": {"input_tokens": 1, "output_tokens": 1},
+                                }
+                            ),
+                        }
+                    )
+                    + "\n"
+                )
+                parent = uuid
+    return project
+
+
+def _message_rows(project: Path) -> list[tuple[Any, ...]]:
+    """Every cached message row, in table order, content included."""
+    import sqlite3
+
+    db = project.parent / "claude-code-log-cache.db"
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        return [
+            tuple(r)
+            for r in con.execute(
+                """SELECT cf.file_name, m.type, m.timestamp, m.session_id,
+                          m._uuid, m._parent_uuid, m.content
+                   FROM messages m JOIN cached_files cf ON m.file_id = cf.id
+                   ORDER BY cf.file_name, m.id"""
+            )
+        ]
+    finally:
+        con.close()
+
+
+class TestByteParseEquivalence:
+    """The byte reader must produce exactly what the text reader produced."""
+
+    @pytest.mark.parametrize(
+        "fixture",
+        [p.name for p in sorted(AGENT_PROJECT.glob("*.jsonl")) if p.stat().st_size],
+    )
+    def test_whole_file(self, fixture: str) -> None:
+        path = AGENT_PROJECT / fixture
+        text_path = _dump(load_transcript(path, silent=True))
+        byte_path = _dump(
+            load_transcript(path, silent=True, entry_store=ParsedEntryStore())
+        )
+        assert text_path == byte_path
+
+    def test_resumed_parse_equals_a_fresh_one(self, tmp_path: Path) -> None:
+        source = _busiest_trunk(AGENT_PROJECT)
+        raw = source.read_bytes()
+        body = [ln for ln in raw.split(b"\n") if ln.strip()]
+        work = tmp_path / source.name
+
+        work.write_bytes(b"\n".join(body[:-3]) + b"\n")
+        store = ParsedEntryStore()
+        load_transcript(work, silent=True, entry_store=store)
+
+        work.write_bytes(b"\n".join(body) + b"\n")  # the append
+        resumed = _dump(load_transcript(work, silent=True, entry_store=store))
+        fresh = _dump(load_transcript(work, silent=True))
+
+        assert store.prefix_hits == 1
+        assert resumed == fresh
+
+    def test_rewritten_history_drops_the_prefix(self, tmp_path: Path) -> None:
+        """A rewound/replayed session must not be resumed onto."""
+        source = _busiest_trunk(AGENT_PROJECT)
+        body = [ln for ln in source.read_bytes().split(b"\n") if ln.strip()]
+        work = tmp_path / source.name
+
+        work.write_bytes(b"\n".join(body[:-3]) + b"\n")
+        store = ParsedEntryStore()
+        load_transcript(work, silent=True, entry_store=store)
+
+        # Same length, different history: the size/mtime check alone would
+        # miss this; the prefix hash is what catches it.
+        rewritten = list(body[:-3])
+        rewritten[1] = rewritten[-1]
+        work.write_bytes(b"\n".join(rewritten + body[-3:]) + b"\n")
+
+        resumed = _dump(load_transcript(work, silent=True, entry_store=store))
+        fresh = _dump(load_transcript(work, silent=True))
+        assert store.prefix_misses == 1
+        assert resumed == fresh
+
+    def test_a_torn_final_line_is_picked_up_next_time(self, tmp_path: Path) -> None:
+        """Mid-append bytes stay out of the prefix (C12)."""
+        work = tmp_path / "torn.jsonl"
+        entry = {
+            "type": "user",
+            "timestamp": "2025-07-03T18:00:00Z",
+            "parentUuid": None,
+            "isSidechain": False,
+            "userType": "human",
+            "cwd": "/tmp",
+            "sessionId": "torn",
+            "version": "1.0.0",
+            "uuid": "torn-1",
+            "message": {"role": "user", "content": [{"type": "text", "text": "one"}]},
+        }
+        complete = json.dumps(entry) + "\n"
+        second = json.dumps({**entry, "uuid": "torn-2"}) + "\n"
+
+        work.write_text(complete + second[:20], encoding="utf-8")  # torn tail
+        store = ParsedEntryStore()
+        first = load_transcript(work, silent=True, entry_store=store)
+        assert len(first) == 1
+
+        work.write_text(complete + second, encoding="utf-8")  # it lands
+        resumed = _dump(load_transcript(work, silent=True, entry_store=store))
+        assert _dump(load_transcript(work, silent=True)) == resumed
+        assert len(resumed) == 2
+
+
+def _count_append_proposals(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """Record every time the *caller's* gate offered rows for appending.
+
+    Separate from :func:`_count_append_only_writes` on purpose: the two
+    are different layers. This one is the parse-side proof ("the rows are
+    just this file's own new lines"); that one is the row-side check
+    ("the table still holds what we think we wrote"). Asserting only on
+    the write would let a broken gate hide behind the check.
+    """
+    proposals: list[int] = []
+    original = converter._appended_rows
+
+    def _spy(*args: Any, **kwargs: Any) -> Any:
+        out = original(*args, **kwargs)
+        if out is not None:
+            proposals.append(len(out))
+        return out
+
+    monkeypatch.setattr(converter, "_appended_rows", _spy)
+    return proposals
+
+
+def _count_append_only_writes(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """Record every append-only cache write that actually succeeded."""
+    from claude_code_log.cache import CacheManager
+
+    calls: list[int] = []
+    original = CacheManager.extend_cached_entries
+
+    def _spy(self: Any, jsonl_path: Path, all_entries: Any, appended: Any, **kw: Any):
+        result = original(self, jsonl_path, all_entries, appended, **kw)
+        if result:
+            calls.append(len(appended))
+        return result
+
+    monkeypatch.setattr(CacheManager, "extend_cached_entries", _spy)
+    return calls
+
+
+class TestAppendOnlyWrites:
+    """Only the new rows are written — and the table must not tell."""
+
+    def _tick(self, project: Path, store: Any) -> None:
+        convert_jsonl_to(
+            "html",
+            project,
+            silent=True,
+            write_combined=False,
+            generate_individual_sessions=True,
+            entry_store=store,
+        )
+
+    def test_rows_match_a_full_rewrite_over_repeated_appends(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The bar for a write-path change: DB state, not just HTML."""
+        extended = _count_append_only_writes(monkeypatch)
+        appended = _synthetic_project(tmp_path / "appended")
+        rewritten = _synthetic_project(tmp_path / "rewritten")
+        store = ParsedEntryStore()
+        self._tick(appended, store)
+        self._tick(rewritten, None)
+
+        for tick in range(4):
+            for project in (appended, rewritten):
+                target = sorted(project.glob("*.jsonl"))[0]
+                _append_entry(target, f"grow-{tick}", f"message {tick}")
+            self._tick(appended, store)
+            self._tick(rewritten, None)
+
+            assert _message_rows(appended) == _message_rows(rewritten), (
+                f"cache rows diverged on tick {tick}"
+            )
+            assert _session_files(appended).keys() == _session_files(rewritten).keys()
+
+        assert store.prefix_hits > 0, "the resumable path never engaged"
+        assert extended, (
+            "no append-only write happened — this equivalence test would "
+            "have compared two full rewrites and proved nothing"
+        )
+
+    def test_a_growing_agent_file_inserts_rows_mid_sequence(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Why the append-only write refuses agent-bearing transcripts.
+
+        A trunk's cached rows are not its lines: each referenced agent's
+        transcript is spliced in at its anchor. When a subagent is still
+        running — the normal case under ``watch`` — that block *grows*, so
+        rows land in the middle of the sequence even though the trunk file
+        itself only gained lines at the end. Treating that as an append
+        would leave the agent's new entries out of the cache.
+
+        Three ticks, because the hazard needs a resumable prefix to exist
+        first: cold, an append that establishes one, then an append that
+        lands alongside a growing agent file.
+        """
+        extended = _count_append_only_writes(monkeypatch)
+        proposed = _count_append_proposals(monkeypatch)
+        work_dir = _copy_project(tmp_path)
+        control = _copy_project(tmp_path / "control")
+
+        def advance(project: Path, store: Any, tick: int, grow_agent: bool) -> None:
+            _append_entry(
+                _busiest_trunk(project), f"trunk-{tick}", f"trunk message {tick}"
+            )
+            if grow_agent:
+                agent = project / "agent-668b5ac2.jsonl"
+                assert agent.exists(), "fixture lost its agent transcript"
+                _append_entry(agent, f"agent-{tick}", f"agent message {tick}")
+            self._tick(project, store)
+
+        store = ParsedEntryStore()
+        self._tick(work_dir, store)
+        self._tick(control, None)
+        advance(work_dir, store, 0, grow_agent=False)  # establishes a prefix
+        advance(control, None, 0, grow_agent=False)
+        advance(work_dir, store, 1, grow_agent=True)  # the hazard
+        advance(control, None, 1, grow_agent=True)
+
+        assert store.prefix_hits > 0, "no prefix was ever resumed from"
+        assert _message_rows(work_dir) == _message_rows(control)
+        # The gate must refuse to *offer* these rows. Asserting only on
+        # the write below would pass even with the gate gone, because the
+        # row-count check then catches the bad offer — measured: it
+        # proposes a wrong 96-entry slice and the check refuses it. Good
+        # defence in depth, useless as a test of the gate.
+        assert not proposed, (
+            f"the gate offered {proposed} rows for an agent-bearing file, "
+            "whose cached rows carry spliced agent blocks"
+        )
+        assert not extended, "an agent-bearing file took the append-only path"
+
+    def test_extend_refuses_when_the_rows_are_not_what_we_wrote(
+        self, tmp_path: Path
+    ) -> None:
+        """The cross-process guard: another writer changed the row count."""
+        from claude_code_log.cache import CacheManager, get_library_version
+
+        project = _synthetic_project(tmp_path)
+        cache = CacheManager(project, get_library_version())
+        target = sorted(project.glob("*.jsonl"))[0]
+        entries = load_transcript(target, cache, silent=True)
+
+        # Pretend the file has one more entry than the cache holds *and*
+        # that only that one is new — i.e. a count the table disagrees with.
+        assert not cache.extend_cached_entries(target, entries[:-2], entries[-1:])
+        # And the honest case still works.
+        assert cache.extend_cached_entries(target, entries + entries[-1:], entries[-1:])

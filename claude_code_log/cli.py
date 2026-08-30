@@ -2390,6 +2390,16 @@ def watch(
     write_combined = combined != "no"
     individual = combined != "only"
 
+    # One store for the whole watch, not one per tick: it lets each tick
+    # resume its parse from the bytes the previous tick already read,
+    # instead of re-reading a growing session's whole history every time
+    # a line lands (entry_store.py, work/watch-mode.md Fix B). Only the
+    # single-project path takes one — `--all-projects` re-converts a
+    # hierarchy and has no single growing file to follow.
+    from .entry_store import ParsedEntryStore, entry_store_enabled
+
+    store = ParsedEntryStore() if (entry_store_enabled() and not all_projects) else None
+
     def convert(_changed: set[Path]) -> None:
         started = time.monotonic()
         if all_projects:
@@ -2412,6 +2422,7 @@ def watch(
                 silent=True,
                 write_combined=write_combined,
                 generate_individual_sessions=individual,
+                entry_store=store,
             )
         click.echo(
             f"  {time.strftime('%H:%M:%S')}  converted in "

@@ -11,7 +11,7 @@ import os
 import re
 import time
 from collections import defaultdict
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -19,7 +19,7 @@ from enum import Enum
 from pathlib import Path
 import traceback
 from urllib.parse import quote
-from typing import Any, Dict, List, Optional, TYPE_CHECKING, cast
+from typing import Any, Dict, List, Optional, TextIO, TYPE_CHECKING, cast
 
 import dateparser
 
@@ -286,6 +286,160 @@ def filter_messages_by_date(
     return filtered_messages
 
 
+def _text_file_lines(f: "TextIO") -> Generator[tuple[int, str], None, None]:
+    """The historical line source: iterate an open text file, closing it after."""
+    try:
+        yield from enumerate(f, 1)  # Start counting from 1
+    finally:
+        f.close()
+
+
+@dataclass
+class _ByteParse:
+    """A byte-level parse that may resume from a previously held prefix.
+
+    Reading bytes rather than text is what makes resumption possible: the
+    store pins entries to a byte offset plus a hash of the bytes below it,
+    so the next tick can prove the file still *starts* with what it parsed
+    before and read only what was appended (work/watch-mode.md, Fix B).
+
+    Splitting on ``b"\\n"`` and decoding per line is equivalent to the
+    text read it replaces: a UTF-8 continuation byte is never 0x0A, so no
+    multi-byte sequence spans the split, and the same
+    ``errors="replace"`` applies either way.
+    """
+
+    path: Path
+    entries: list[TranscriptEntry]
+    agent_ids: set[str]
+    tail: bytes
+    hasher: Any
+    start_offset: int
+    start_line: int
+    resumed: bool
+    held_count: int
+
+    def lines(self) -> Generator[tuple[int, str], None, None]:
+        """Yield ``(line_no, text)`` for the bytes past the held prefix."""
+
+        def _iter() -> Generator[tuple[int, str], None, None]:
+            for offset, raw in enumerate(self.tail.split(b"\n"), self.start_line + 1):
+                yield offset, raw.decode("utf-8", errors="replace")
+
+        return _iter()
+
+    def commit(
+        self,
+        entry_store: "ParsedEntryStore",
+        messages: list[TranscriptEntry],
+        agent_ids: set[str],
+    ) -> None:
+        """Hold the parse for the next tick, up to the last *complete* line.
+
+        A torn final line (mid-append, C12) is parsed as before — it just
+        fails and is skipped — but its bytes stay out of the prefix, so
+        the next tick re-reads and parses it properly once it lands.
+        """
+        complete = self.tail.rfind(b"\n") + 1
+        if complete <= 0 and self.start_offset == 0:
+            return
+        self.hasher.update(self.tail[:complete])
+        consumed = self.start_offset + complete
+        line_count = self.start_line + self.tail[:complete].count(b"\n")
+        entry_store.put_prefix(
+            self.path,
+            consumed,
+            self.hasher.digest(),
+            messages,
+            agent_ids,
+            line_count,
+        )
+
+
+def _appended_rows(
+    byte_parse: "Optional[_ByteParse]",
+    messages: list[TranscriptEntry],
+    parsed_line_count: int,
+    any_agent_refs: bool,
+    any_subagent_meta: bool,
+    spliced_agents: bool,
+) -> Optional[list[TranscriptEntry]]:
+    """The entries a cache write may append, or None to rewrite the file.
+
+    The cached rows for a transcript are not simply its lines: agent
+    transcripts are spliced in at their anchors, and the sidecar passes
+    back-patch ``spawnedAgentId`` onto entries parsed long ago. So "the
+    file grew by an append" does **not** by itself imply "the rows grew by
+    an append" — a subagent running alongside the trunk inserts rows in
+    the *middle* of the sequence, which is common in exactly the watch
+    scenario this optimises.
+
+    Rather than track every way that can happen, this refuses unless the
+    row list is provably just the file's own lines:
+
+    * the parse resumed from a byte-verified prefix, so every entry below
+      the resume point came from bytes that have not changed;
+    * the file references no agents, has no sidecars, and spliced no agent
+      blocks, so none of the whole-file passes could add or alter an
+      entry;
+    * and nothing appeared in the list except those parsed lines.
+
+    On the reference archive that covers 136 of 185 trunk files. The rest
+    take the full rewrite, unchanged.
+    """
+    if byte_parse is None or not byte_parse.resumed:
+        return None
+    if any_agent_refs or any_subagent_meta or spliced_agents:
+        return None
+    if len(messages) != parsed_line_count:
+        return None
+    held = byte_parse.held_count
+    if held <= 0 or held > len(messages):
+        return None
+    appended = messages[held:]
+    return appended or None
+
+
+def _begin_byte_parse(
+    jsonl_path: Path, entry_store: "ParsedEntryStore"
+) -> "Optional[_ByteParse]":
+    """Read `jsonl_path`, resuming from the store's held prefix if it still fits.
+
+    The held prefix is accepted only when the file's first ``prefix_len``
+    bytes hash to the digest recorded with it — a *stronger* check than
+    the row-fingerprint prefix comparison it saves, since identical bytes
+    imply identical rows. A mismatch (rewound session, replayed history,
+    a shorter file) drops the prefix and re-reads from the top, which is
+    what the caller would have done anyway.
+    """
+    from .entry_store import new_hasher, read_prefix_and_tail
+
+    held = entry_store.get_prefix(jsonl_path)
+    hasher = new_hasher()
+    tail = read_prefix_and_tail(jsonl_path, held.prefix_len if held else 0, hasher)
+    if held is not None and (tail is None or hasher.digest() != held.digest):
+        entry_store.drop_prefix(jsonl_path)
+        entry_store.prefix_misses += 1
+        held = None
+        hasher = new_hasher()
+        tail = read_prefix_and_tail(jsonl_path, 0, hasher)
+    if tail is None:
+        return None  # unreadable — let the text path report it as before
+    if held is not None:
+        entry_store.prefix_hits += 1
+    return _ByteParse(
+        path=jsonl_path,
+        entries=held.entries if held else [],
+        agent_ids=set(held.agent_ids) if held else set(),
+        tail=tail,
+        hasher=hasher,
+        start_offset=held.prefix_len if held else 0,
+        start_line=held.line_count if held else 0,
+        resumed=held is not None,
+        held_count=len(held.entries) if held else 0,
+    )
+
+
 def load_transcript(
     jsonl_path: Path,
     cache_manager: Optional["CacheManager"] = None,
@@ -358,19 +512,37 @@ def load_transcript(
     # most one warning per distinct type per file (these tend to repeat a lot).
     warned_unrecognized_types: set[str | None] = set()
 
-    try:
-        f = open(jsonl_path, "r", encoding="utf-8", errors="replace")
-    except FileNotFoundError:
-        # Handle race condition: file may have been deleted between glob and open
-        # (e.g., Claude Code session cleanup)
-        if not silent:
-            print(f"Warning: File not found (may have been deleted): {jsonl_path}")
-        return []
+    # With a store, read bytes rather than text: that yields both the
+    # offset and the rolling hash a later tick needs to resume from what
+    # it already parsed, instead of re-reading the file's whole history
+    # (entry_store.py). A decline — no store, date filtering, an
+    # unreadable file — falls through to the pre-existing text read,
+    # which is left exactly as it was.
+    byte_parse = (
+        _begin_byte_parse(jsonl_path, entry_store)
+        if entry_store is not None and not from_date and not to_date
+        else None
+    )
 
-    with f:
+    if byte_parse is not None:
+        messages = byte_parse.entries
+        agent_ids = byte_parse.agent_ids
+        line_source = byte_parse.lines()
+    else:
+        try:
+            f = open(jsonl_path, "r", encoding="utf-8", errors="replace")
+        except FileNotFoundError:
+            # Handle race condition: file may have been deleted between glob and open
+            # (e.g., Claude Code session cleanup)
+            if not silent:
+                print(f"Warning: File not found (may have been deleted): {jsonl_path}")
+            return []
+        line_source = _text_file_lines(f)
+
+    with contextlib.closing(line_source):
         if not silent:
             print(f"Processing {jsonl_path}...")
-        for line_no, line in enumerate(f, 1):  # Start counting from 1
+        for line_no, line in line_source:
             line = line.strip()
             if line:
                 try:
@@ -475,15 +647,28 @@ def load_transcript(
                         f"\n{traceback.format_exc()}"
                     )
 
+    # Hold what we just parsed for the next tick, BEFORE the whole-file
+    # passes below — they mutate entries in place (back-patching
+    # `spawnedAgentId`) and splice agent blocks in, and a resumed parse
+    # must start from the raw per-line products and re-run them.
+    if byte_parse is not None and entry_store is not None:
+        byte_parse.commit(entry_store, messages, agent_ids)
+
+    # How many entries came straight off the file's own lines, before any
+    # of the whole-file passes below can add or alter one. The append-only
+    # cache write is gated on this being the whole story (see
+    # `_appended_rows`).
+    parsed_line_count = len(messages)
+    had_agent_refs = bool(agent_ids)
+
     # Sidecar-driven spawn linking (issue #213): resolve each spawning
     # tool_use to its sub-agent via the agent-<id>.meta.json files. This is
     # what makes NESTED spawns discoverable — a sub-agent's own spawn
     # tool_results carry no ``toolUseResult.agentId`` (trunk-only
     # enrichment), and an interrupted spawn has no usable tool_result at
     # all; the sidecar's ``toolUseId`` covers both.
-    _apply_subagent_meta_links(
-        messages, _subagent_meta_map(jsonl_path, _meta_maps), agent_ids, jsonl_path
-    )
+    subagent_meta = _subagent_meta_map(jsonl_path, _meta_maps)
+    _apply_subagent_meta_links(messages, subagent_meta, agent_ids, jsonl_path)
 
     # Prompt-hash fallback: link Task tool_results that lack a structured
     # agentId (common for true teammate subagents) by matching the
@@ -531,6 +716,11 @@ def load_transcript(
                 )
                 agent_messages_map[agent_id] = agent_messages
 
+    # `agent_messages_map` is drained by the splice below, so record now
+    # whether any splicing is about to happen — the append-only cache
+    # write needs to know, and by then the map would read as empty.
+    spliced_agents = bool(agent_messages_map)
+
     # Insert agent messages at their point of use (only once per agent)
     if agent_messages_map:
         # Iterate through messages and insert agent messages after the FIRST
@@ -557,11 +747,27 @@ def load_transcript(
 
         messages = result_messages
 
-    # Save to cache if cache manager is available
+    # Save to cache if cache manager is available. When this parse resumed
+    # from a verified prefix and nothing but the file's own new lines
+    # reached the list, the rows are the old rows plus a tail and only the
+    # tail needs writing — which is most of a watch tick (see
+    # `_appended_rows` for what has to hold, and `extend_cached_entries`
+    # for the row-level check that can still refuse).
     if cache_manager is not None:
-        cache_manager.save_cached_entries(
-            jsonl_path, messages, subagents_fp=subagents_fp
+        appended = _appended_rows(
+            byte_parse,
+            messages,
+            parsed_line_count,
+            had_agent_refs or bool(agent_ids),
+            bool(subagent_meta),
+            spliced_agents,
         )
+        if appended is None or not cache_manager.extend_cached_entries(
+            jsonl_path, messages, appended, subagents_fp=subagents_fp
+        ):
+            cache_manager.save_cached_entries(
+                jsonl_path, messages, subagents_fp=subagents_fp
+            )
 
     return messages
 
@@ -3329,6 +3535,7 @@ def convert_jsonl_to(
     report: Optional["RegenerationReport"] = None,
     archive_search_link: Optional[str] = None,
     render_jobs: Optional[int] = None,
+    entry_store: "Optional[ParsedEntryStore]" = None,
 ) -> Path:
     """Convert JSONL transcript(s) to the specified format.
 
@@ -3451,12 +3658,19 @@ def convert_jsonl_to(
         if output_path is None:
             output_path = effective_output_dir / f"combined_transcripts{suffix}.{ext}"
 
-        # One store per conversion, holding whatever the cache refresh
-        # parses so Phase 1b doesn't rebuild it from the rows the refresh
-        # just wrote (entry_store.py). Deliberately not handed to the
-        # streaming path below, whose bounded residency depends on
-        # dropping each page's entries before the next page loads.
-        entry_store = _make_entry_store()
+        # A store holds whatever the cache refresh parses, so Phase 1b
+        # doesn't rebuild it from the rows the refresh just wrote
+        # (entry_store.py). Deliberately not handed to the streaming path
+        # below, whose bounded residency depends on dropping each page's
+        # entries before the next page loads.
+        #
+        # A caller may own one instead — `watch` does, so that a tick can
+        # resume its parse from the bytes the previous tick already read.
+        # Ownership decides lifetime: ours dies with this call, theirs
+        # doesn't, which is the whole point of a resident loop having one.
+        caller_owned = entry_store is not None
+        if entry_store is None:
+            entry_store = _make_entry_store()
 
         # Phase 1: Ensure cache is fresh and populated
         cache_refresh = ensure_fresh_cache_detailed(
@@ -3499,9 +3713,12 @@ def convert_jsonl_to(
             return settled
 
         # Past Phase 1b nothing reuses the store, and what it holds is a
-        # whole session's entries — drop it before the paths that load
-        # the project (or stream it page by page) start allocating.
-        entry_store = None
+        # whole session's entries — stop referencing it before the paths
+        # that load the project (or stream it page by page) start
+        # allocating. A caller-owned store outlives us either way; this
+        # only drops *our* reference.
+        if not caller_owned:
+            entry_store = None
 
         # Phase 1c: convert a paginated project page-by-page instead of
         # loading it whole.
@@ -3934,7 +4151,9 @@ def _incremental_cache_refresh(
             # must make the store decline (its stamp would then be older
             # than the file), never serve a list its stamp misdescribes.
             stamp = stamp_file(f)
-            parsed = load_transcript(f, cache_manager, None, None, silent)
+            parsed = load_transcript(
+                f, cache_manager, None, None, silent, entry_store=entry_store
+            )
             if entry_store is not None:
                 entry_store.put(f, stamp, parsed)
         new_states = cache_manager.get_file_states(modified_names)
