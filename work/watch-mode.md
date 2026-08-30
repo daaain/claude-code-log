@@ -1,8 +1,10 @@
 # Real-time watch mode — Design
 
-Status: **Stage 0 and Stage 1 landed** on `feat/watch-mode`;
-`claude-code-log watch` works for the Markdown-on-disk case. Stage 2
-(the served page updating itself) is designed but not built.
+Status: **Stages 0–2 landed** on `feat/watch-mode`.
+`claude-code-log watch` keeps Markdown (or HTML) on disk current, and
+`claude-code-log serve --watch` makes an open session page grow as the
+session does. Stages 3 (the `file://` sidecar) and 4 (SSE / fragment
+patching) remain speculative and are probably not worth building.
 
 Decisions below are settled; the measurements that forced them are
 recorded so a later reader can tell which choices were reasoned and which
@@ -578,17 +580,56 @@ Answers to Stage 1's other questions:
   clean conversion afterwards. Combined with D8's read-during-write
   numbers, the WAL setup handles this.
 
-**Stage 2 — use case 2 under `serve`.** `serve --watch` runs the Stage 1
-engine on a thread; the session page polls its own URL, swaps
-`#transcript`, rehydrates, fades in new cards, offers follow-tail.
+**Stage 2 — use case 2 under `serve`. ✅ Landed.**
 
-*Questions to answer first:*
-1. What does the `claudeLogRehydrate` contract look like, and how much of
-   the D5 table can be scoped to a subtree without restructuring?
-2. Is fold-state restore by `data-uuid` + sibling ordinal actually clean?
-   If it turns out ugly, that is the argument for reconsidering full
-   reload.
-3. What is the swap cost on a large session page (the 27 MB case)?
+- `serve --watch` (`6f7850d`) runs the Stage 1 engine on a daemon thread.
+- `#transcript` wrapper (`1ec29ed`) — verified layout-neutral by
+  pixel-comparing full-page screenshots, not by reading the CSS.
+- The in-page poller + rehydrate contract (`f48de95`).
+
+Measured in Chromium against a live-fed session: **~1 s from append to
+visible**, scroll position preserved exactly, no navigation (a `window`
+marker set before the update survives it), fold state kept, timestamps
+localised on new cards, zero console errors.
+
+Two bugs that only measurement found, both worth remembering:
+
+1. **Fold state was preserved for nothing.** Keying the capture on
+   `data-uuid` misses session headers and fork points — which carry no
+   uuid, and on a single-session page the header is the *only* foldable
+   node there is. The key now falls back `uuid → session-id →
+   positional id`.
+2. **⚠️ `Last-Modified` has one-second granularity**, so two updates
+   inside the same second were invisible and the third append in a row
+   simply never arrived. `Content-Length` now joins the comparison —
+   *the same trap as C7's mtime tolerance, one layer up, with the same
+   fix.* Its test fails 3/3 without it and passes 3/3 with it.
+
+**Q3 answered — the swap cost is fine.** On a real **7.0 MB** session
+page (523 messages):
+
+| | |
+|---|---|
+| fetch | 31 ms |
+| parse (`DOMParser`) | 63 ms |
+| swap (`replaceWith`) | 17 ms |
+| forced layout | 91 ms |
+| **total** | **202 ms** |
+| idle HEAD poll | **~1 ms** (5.6 ms first, then 0.9–2.2 ms) |
+
+Extrapolating linearly, the 27 MB worst case would be ~800 ms of
+main-thread work — but only *when that page changes*, and a 27 MB page is
+a finished session nobody is appending to. The pages that actually update
+are live ones, which start small. No size threshold needed.
+
+Design points that survived contact:
+
+- Only active over `http(s)` — a `file://` page still cannot fetch (C4),
+  so the poller notices and does nothing. Pinned by a test.
+- The server still never renders; the page re-fetches its own URL, so the
+  conditional GET is both the change signal and the content, and there is
+  no endpoint to keep in sync with the renderer.
+- Container swap, not fragment patching (C3, C10, C11).
 
 **Stage 3 — `file://` sidecar (optional).** A `session-<id>.live.js`
 sidecar carrying a revision counter; the page injects it on a timer and

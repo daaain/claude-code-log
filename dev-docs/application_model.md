@@ -37,6 +37,7 @@ for user-facing operations docs see [`docs/`](../docs/).
 | Performance profiling | [`renderer_timings.py`](../claude_code_log/renderer_timings.py) | inlined below (§ 2.8) |
 | Intra-project render fan-out | [`render_pool.py`](../claude_code_log/render_pool.py) (mechanism) + [`render_dispatch.py`](../claude_code_log/render_dispatch.py) (policy) | inlined below (§ 2.10) |
 | Diagnosing hangs (SIGUSR1) | [`cli.py`](../claude_code_log/cli.py) `_install_stack_dump_signal` | inlined below (§ 2.11) |
+| Watch mode / live page updates | [`watch.py`](../claude_code_log/watch.py), `html/templates/components/live_update.js` | inlined below (§ 2.15); design in [`work/watch-mode.md`](../work/watch-mode.md); user-facing in [`docs/live-updates.md`](../docs/live-updates.md) |
 | Adding a new tool renderer | [`factories/tool_factory.py`](../claude_code_log/factories/tool_factory.py), `html/tool_formatters.py` | [implementing-a-tool-renderer.md](implementing-a-tool-renderer.md) (how-to) |
 | Which tools have a specialized renderer or provider adapter | `TOOL_INPUT_MODELS` / `TOOL_OUTPUT_PARSERS` in [`factories/tool_factory.py`](../claude_code_log/factories/tool_factory.py), plus provider adapters | [tools-coverage.md](tools-coverage.md) (Claude and Codex status vs. upstream references) |
 | Plugin system (third-party message transformers) | [`plugins.py`](../claude_code_log/plugins.py), [`factories/priorities.py`](../claude_code_log/factories/priorities.py), `Renderer._dispatch_format` | [plugins.md](plugins.md) |
@@ -984,6 +985,71 @@ render 901MB / 8.1s; incremental refresh + streamed render **582MB /
 peak — which is what this section removes, completing "no archive too
 big for the machine". `CLAUDE_CODE_LOG_INCREMENTAL_CACHE=0` is the
 kill switch.
+
+
+### 2.15 Watch mode and live page updates
+
+Two commands keep output current while a session is still being written:
+`claude-code-log watch` (a resident loop) and `claude-code-log serve
+--watch` (the same loop on a thread beside the HTTP server). See
+[`work/watch-mode.md`](../work/watch-mode.md) for the design and the
+measurements behind it.
+
+**The engine never renders.** `claude_code_log/watch.py` polls
+`(size, mtime_ns)` over `**/*.jsonl` and `**/agent-*.meta.json` under
+the watched roots, debounces, and calls a callback; the callback runs the
+ordinary conversion. The scan is a *trigger*, not a source of truth — a
+false positive costs one no-op conversion, while the conversion already
+knows precisely what is stale. Two file classes are excluded because both
+land in the watched tree and would make the loop feed itself: dot-prefixed
+atomic-write temp files, and generated output.
+
+Debounce is a quiet period (`--quiet-period`, 300ms) with a max-latency
+cap (`--max-latency`, 2s): a turn writes several entries in quick
+succession, so without the quiet period most of a turn is spent rendering
+states nobody sees; without the cap a long unbroken stream would never
+surface. `tick()` (poll once) is split from `run()` (wait) and the clock
+is injectable, so tests drive ticks by hand against a fake clock.
+
+**What makes a tick cheap** is §2.12's session-scoped path, which is
+reachable here only because `ensure_fresh_cache_detailed` reports *how*
+it refreshed (`CacheRefresh.NONE`/`INCREMENTAL`/`FULL`). Phase 1b's
+staleness test is per-session message counts, so it refuses a FULL
+refresh — which carries no guarantee that a session's content didn't
+change while its count stayed the same. An INCREMENTAL refresh does carry
+it: §2.14's ladder only succeeds after proving each modified file's
+cached rows are an exact prefix of its current rows, i.e. a pure append.
+`--combined` therefore defaults to `no` for `watch`: with a combined
+output present, the session's growth makes it stale and the conversion
+falls to the streaming path instead.
+
+**The served page updates itself** via
+`html/templates/components/live_update.js`, active only over `http(s)` —
+a `file://` page cannot fetch anything, not even its own URL, so the
+poller notices and does nothing. It polls a HEAD of its own URL and
+compares `Last-Modified` **and `Content-Length`**: HTTP dates have
+one-second granularity, so two updates inside the same second are
+otherwise invisible (the same trap as the cache's mtime tolerance, which
+§2.3 solves the same way). On a change it re-fetches the page and
+replaces `#transcript` wholesale rather than patching in messages —
+appends are not always in timestamp order, one entry can render as
+several cards, and `msg-d-N` anchors are positional, so inserting
+anywhere but the tail renumbers them.
+
+A swap destroys anything that decorated the old markup, so components
+register with `window.claudeLogOnRehydrate(fn)` (defined at the top of
+`<body>`, before every component include) and the poller calls
+`window.claudeLogRehydrate(root)` after swapping. Currently registered:
+timestamp localisation (scoped to a subtree) and the timeline rebuild.
+Delegated listeners and everything bound to the toolbar or floating
+buttons survive untouched and must **not** register. Fold state and
+`<details>` are captured and restored by the poller itself, keyed
+`data-uuid` → `data-session-id` → positional `id` — session headers and
+fork points carry no uuid, and on a single-session page the header is
+the only foldable node.
+
+Measured: ~1s from append to visible; a 7.0MB session page costs 202ms to
+swap (31 fetch / 63 parse / 17 swap / 91 layout) and ~1ms per idle poll.
 
 ---
 

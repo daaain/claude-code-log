@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [Unreleased]
+
+### Added
+
+- **Watch mode (`claude-code-log watch`)** — re-converts transcripts as they are
+  written, so Markdown open in an editor or an Obsidian vault stays current.
+  Defaults to the current directory's project.
+- **Live page updates (`claude-code-log serve --watch`)** — an open session page
+  grows as messages arrive, in place: scroll position, folded sections and open
+  disclosures survive, new messages fade in, and a follow pill pins the page to
+  the newest message. Only over the server; `file://` pages are unchanged.
+
+### Changed
+
+- Generated output is now written atomically (temp file + rename), so a reader
+  can never observe a truncated page or document.
+- The cache records each source file's size as well as its mtime (migration
+  011). The 1-second mtime tolerance could hide a write landing inside it,
+  which stranded the last message of a turn until something else touched the
+  file.
+- The session-scoped render path is now reachable after an append-only cache
+  refresh, which is what makes a watch tick cheap.
+
 ## [1.5.0] - 2026-07-09
 
 ### Changed
