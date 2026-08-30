@@ -14,7 +14,30 @@ behaviour.
 
 ## Open follow-ups
 
-### Cache-freshness checks resolve against `project_path` (source), not the output destination
+### ~~Cache-freshness checks resolve against `project_path` (source), not the output destination~~ — FIXED
+
+**Resolved.** `is_transcript_stale` and `is_page_stale` both take an
+`output_dir` and resolve `actual_file` against it, and the conversion
+passes the destination. Re-measured on a 28-file Markdown projection:
+
+| run | wall | files rewritten |
+|---|---|---|
+| `-o A` (cold) | 4.1s | all |
+| `-o A` again | **0.0s** | `index.md` only |
+| `-o B` (fresh dest) | 4.0s | all |
+| `-o A` again, after B | **0.0s** | `index.md` only |
+| `-o A` after one appended message | 0.8s | **2 of 28** — the changed session + `index.md` |
+
+So repeated runs against the same destination are no-ops, alternating
+destinations no longer forces a re-render, and an incremental run
+rewrites only what changed. `index.md` is rewritten every run by the
+deliberate always-regenerate contract (so variant-flag changes refresh
+its links); since `9b20d77` that write is atomic, so a vault indexer sees one
+clean replacement rather than a truncated file.
+
+The original finding, kept for context:
+
+
 
 `cache.is_html_stale(html_path, ...)` and `cache.is_page_stale(...)` both compute their `actual_file` check as `self.project_path / html_path` — the **source** project dir under `~/.claude/projects/`, not the actual output destination (`dest_dir`). With the legacy in-place behaviour the two are identical, so the check works as intended. With `--output` projecting to a different tree, the source path never has a `combined_transcripts.html`, so `is_html_stale` returns "file_missing" / "stale" on every run.
 

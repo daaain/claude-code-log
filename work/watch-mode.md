@@ -27,14 +27,14 @@ structural finding.
 | # | decision |
 |---|---|
 | D1 | A `watch` subcommand owns the loop; `serve --watch` runs the same engine on a thread. |
-| D2 | Add `source_size` to `cached_files` so the cache itself detects fast appends; the watcher then trusts `get_modified_files` rather than keeping parallel state. Detection is stat-polling. |
+| D2 | Add `source_size` to `cached_files` so the cache itself detects fast appends; the watcher then trusts `get_modified_files` rather than keeping parallel state. Detection is stat-polling. **Landed.** |
 | D3 | Default scope is one project; `--all-projects` is opt-in. |
 | D4 | Quiet-period debounce (~300 ms) with a max-latency cap (~2 s), both flags. |
 | D5 | Container swap (option B) with uuid-set diffing, not full reload and not fragment patching. |
 | D6 | Polling. SSE only if measurement later justifies it. |
-| D7 | Route every output write through temp-file + `os.replace`. |
+| D7 | Route every output write through temp-file + `os.replace`. **Landed.** |
 | D8 | Measured: the write + FTS update is fast enough. No lock-avoidance machinery needed. |
-| D9 | Fix `--output` destination-aware freshness; it pairs with D7. |
+| D9 | ~~Fix `--output` destination-aware freshness~~ — already fixed; the doc that reported it was stale. **No work needed.** |
 | D10 | Injectable clock and file-event source; unit tests drive ticks by hand. |
 | D11 | The `stream-json` piping request (#43 follow-up) is **subsumed** by watch mode. No stream-json parser. |
 
@@ -131,7 +131,7 @@ skipped, so `cache_was_updated` is genuinely the only blocker. This is a
 converter change, not a watcher change, and it is the prerequisite that
 makes watch mode cheap rather than merely possible.
 
-### C7. ⚠️ The cache's 1-second mtime tolerance silently swallows fast appends
+### C7. ~~⚠️~~ ✅ The cache's 1-second mtime tolerance silently swallows fast appends
 
 `cache.py:349` — `if abs(source_mtime - row["source_mtime"]) >= 1.0`. A
 change landing within 1.0 s of the recorded mtime is **invisible**.
@@ -140,14 +140,22 @@ seen) / 0.29 s (change missed), run after run.
 
 It fails in the worst shape: the *last* message of a turn, landing within
 a second of the previous tick and then followed by silence, is stranded
-until something else touches the file. See D2.
+until something else touches the file.
 
-### C8. Every output write is non-atomic
+**Fixed** by migration 011 (D2). End-to-end re-measurement of the same
+failure mode — append one line, convert immediately, no sleep — went
+from alternating SEEN/MISSED to six appends seen out of six.
+
+### C8. ✅ Every output write is non-atomic
 
 Eight `write_text` sites in `converter.py` plus `render_pool.py:570`; only
 image export uses temp-file + `os.replace` (`image_export.py:79`). Today a
 narrow race; under a watch loop rewriting the same file every few seconds
 while Obsidian re-reads it, routine. The 27 MB-page case is a wide window.
+
+Quantified against a concurrent reader over a 4 MB payload: 40 plain
+rewrites produced **142 torn reads**, including a fully-truncated 0-byte
+read. **Fixed** in `9b20d77` (D7) — the same run produces none.
 
 ### C9. There is no wrapping container around the message tree
 
@@ -362,15 +370,34 @@ Still open: a single-instance advisory guard per projects dir, so two
 watchers (or a watcher plus a manual run) don't fight. Cheap insurance,
 annoying to retrofit — decide during Stage 1.
 
-### D9. `--output` destination-aware freshness
+### D9. `--output` destination-aware freshness — ✅ already fixed, no work needed
 
-`work/obsidian-friendly-output.md` records it: `is_html_stale` /
-`is_page_stale` resolve against the *source* project dir, not `dest_dir`,
-so under `--output` every run re-renders everything. Under a watch loop
-pointed at an Obsidian vault — exactly use case 1 — that means every tick
-re-renders every session and (with C8) rewrites every file, thrashing the
-vault's own indexer. Prerequisite, not a nice-to-have. Pairs naturally
-with D7 since both touch the write path.
+`work/obsidian-friendly-output.md` recorded this as an open follow-up:
+freshness resolving against the *source* project dir, so `--output` runs
+re-render everything every time. **That doc was stale.**
+`is_transcript_stale` and `is_page_stale` both take an `output_dir` and
+resolve against it. Re-measured on a 28-file Markdown projection:
+
+| run | wall | files rewritten |
+|---|---|---|
+| `-o A` (cold) | 4.1 s | all |
+| `-o A` again | **0.0 s** | `index.md` only |
+| `-o B` (fresh dest) | 4.0 s | all |
+| `-o A` again, after B | **0.0 s** | `index.md` only |
+| `-o A` after one appended message | 0.8 s | **2 of 28** — the changed session + `index.md` |
+
+So a watch loop pointed at a vault rewrites the changed session and the
+index, not the whole projection. `obsidian-friendly-output.md` has been
+corrected.
+
+`index.md` is rewritten on every run by the deliberate always-regenerate
+contract (so variant-flag changes refresh its links) — including on a
+true no-op. That is not a problem under watch mode, which only converts
+when it has already seen a change, but it does mean *any* tick touches
+the index and wakes a vault indexer once. Acceptable; with D7 the write
+is an atomic rename rather than a truncation.
+
+**Stage 0 therefore has three items, not four.**
 
 ### D10. Testing
 
@@ -427,15 +454,20 @@ stdout — same engine, no new schema.
 Each stage answers its own open questions before it starts; each is
 independently shippable.
 
-**Stage 0 — prerequisites.** All four are independently justified and all
-move snapshots, so they land before, not during:
+**Stage 0 — prerequisites.**
 
-- D7 atomic writes.
-- D2 `source_size` column (migration 011).
-- D9 destination-aware freshness.
-- C9 `<div id="transcript">` wrapper.
-
-*Question to answer first:* none — these are all self-contained.
+- ✅ **D7 atomic writes** (`9b20d77`). Every output write goes through
+  `utils.atomic_write_text`. Pinned by a concurrent-reader test: 40
+  plain rewrites of a 4 MB payload produced 142 torn reads including a
+  0-byte one; the atomic path produces none.
+- ✅ **D2 `source_size` column** (migration 011). The end-to-end C7
+  failure mode — append, convert immediately, repeat — went from
+  alternating SEEN/MISSED to six-for-six SEEN.
+- ✅ **D9** — nothing to do; see above.
+- ⬜ **C9 `<div id="transcript">` wrapper.** The only remaining item, and
+  the only one that moves snapshots. Deferred to just before Stage 2,
+  which is the first thing that needs it — landing it now would carry a
+  large snapshot delta through two unrelated stages.
 
 **Stage 1 — the engine + use case 1.** `claude-code-log watch [path]`:
 stat-poll, debounce, call the existing conversion, one line per
