@@ -6,10 +6,11 @@ Status: **Stages 0–2 landed** on `feat/watch-mode`.
 session does. Stage 3 (the `file://` sidecar) remains speculative and is
 probably not worth building. Stage 4 was too — until the tick was
 profiled: see "Where a tick's time goes" and "Appending the HTML rather
-than replacing it" at the end. **Fixes A and C have landed** (tick
-1.03 s → 0.717 s on the 803 MB archive); Fix B, worth roughly another
-400 ms, has not. The HTML half found that patching does *not* need the
-per-message render seam C11 says is missing.
+than replacing it" at the end. **Fixes A, C and B have all landed**: a
+steady-state tick on the 803 MB archive went **1.03 s → 0.26 s**, and Fix
+B needed no migration in the end (the proof lives in the resident
+watcher's memory). The HTML half found that patching does *not* need the
+per-message render seam C11 says is missing; that is the open work.
 
 Decisions below are settled; the measurements that forced them are
 recorded so a later reader can tell which choices were reasoned and which
@@ -745,7 +746,13 @@ Two things the prototype got away with and the real one must not:
    undo. Plus a per-file valve (decline under 6× available memory) and
    `CLAUDE_CODE_LOG_ENTRY_STORE=0`.
 
-### Fix B — parse and write only the tail
+### Fix B — parse and write only the tail — ✅ LANDED, in memory rather than in the schema
+
+**Built, and the shape changed on contact.** What follows is the plan;
+"Fix B as built" below records what was actually true. Headline: the
+persisted columns turned out to be unnecessary — a resident watcher
+already knows what it parsed, so the proof lives in RAM and there is no
+migration. Steady-state tick **0.70 s → 0.26 s**.
 
 What remains after A is call ① — a full parse and a full row rewrite for
 one appended line. Both are avoidable, and the incremental refresh
@@ -767,6 +774,96 @@ those bytes; then a tick can
 Estimated ~450 ms off the remaining tick, i.e. **~1.1 s → ~0.3 s** with
 A and B together. Not prototyped — unlike A it needs a migration and a
 new decline path (hash mismatch → today's full parse).
+
+### Fix B as built — what the territory actually looked like
+
+The end number matched the estimate (**0.717 s → 0.257 s** steady state,
+measured on the 803 MB archive), but three things about the route were
+wrong in the plan above.
+
+**1. The migration was unnecessary.** The persisted `(prefix_len,
+prefix_hash)` columns exist to carry the append proof *across processes*.
+A resident watcher doesn't need that: it parsed the file last tick and
+can hold the offset and digest in RAM. So the store gained a
+prefix-pinned mode (`put_prefix`/`get_prefix`), `watch` owns one for the
+life of the loop, and `convert_jsonl_to` accepts a caller-owned store
+instead of always making its own. No schema change, no migration, and the
+proof is the same one either way — hash the prefix bytes (32 ms over
+39.7 MB, against 143 ms to re-parse them) and compare.
+
+The cost is scope: this only helps a resident loop. A one-shot run, the
+TUI, and every tick-one still parse whole. That is the right trade for
+the latency-sensitive case, but it is a narrower fix than the persisted
+version would have been, and it is why the columns may still be worth
+adding later.
+
+**2. The write half was the bigger prize *and* the harder proof.** The
+split, measured: of `load_transcript`'s 483 ms, the line loop is 143 ms
+and `save_cached_entries` is 310 ms; the whole-file post-processing
+(sidecar linking, prompt-hash linking, agent splicing) is **0.1 ms**, so
+re-running it over a concatenated list is free. But:
+
+> **A file being append-only does not make its *rows* append-only.** A
+> trunk's cached rows carry its subagents' transcripts, spliced in at
+> their anchors. A subagent still running — the normal case under
+> `watch` — grows a block in the *middle* of the row sequence while the
+> trunk file itself only gained lines at the end.
+
+That is why the write is gated on the row list being provably just the
+file's own parsed lines (no agent references, no sidecars, nothing
+spliced, no length change from the whole-file passes). On the reference
+archive that covers 136 of 185 trunk files; 26% reference subagents and
+take the unchanged full rewrite. Underneath it,
+`extend_cached_entries` independently refuses when the table no longer
+holds the row count we think we wrote — the guard against another process
+having rewritten the rows.
+
+**That third layer is not theoretical.** With the two gates removed, the
+caller offers a *wrong 96-entry slice* (splicing had shifted the
+positions the offset refers to) and the row-count check refuses it. Which
+also means the obvious test — "did an append-only write happen?" —
+passes with the gate gone, because the layer below rescues it. The test
+therefore asserts on the **offer**, not the write.
+
+**3. Two of my own probes lied before the code did**, both in the same
+way as the Stage 1 note above: a fixture that wasn't what it claimed.
+
+- Copying a *subset* of a project's trunk files breaks parent chains and
+  can make the session hierarchy cyclic — `renderer._depth` then blows
+  the stack. It reproduces with the store disabled, so it is a
+  pre-existing robustness edge (a truncated archive shouldn't recurse),
+  not a regression, but it cost a debugging cycle. Copy whole projects.
+- Copying the live source *twice* to compare two configurations captures
+  two different files when one of them is the session currently being
+  written. That showed up as a 3-row `messages` divergence and one
+  differing page. Clone one snapshot instead — the same trap that made
+  Fix A's first equivalence run report 27/28.
+
+**Equivalence, at three levels** (`test/test_entry_store.py`):
+
+| | |
+|---|---|
+| parse output, byte path vs text path | **162 fixture files, 0 mismatches** |
+| parse output, resumed vs fresh | **90 files, 0 mismatches** |
+| cache DB state vs a full-rewrite run | **6 ticks, 3 files growing, all tables match** |
+| rendered HTML | identical throughout |
+
+DB state is the bar rather than HTML for the same reason § 2.14 gives:
+the first bug a write-path change produces is invisible in the rendered
+bytes.
+
+**What is left in the tick.** At 0.26 s the remaining items are the cache
+queries around the refresh — `get_session_file_map` ×3 (50 ms),
+`get_file_states` ×2 (45 ms, still fetching every row's compressed blob
+to SHA it, now redundant with the prefix hash), `get_uuid_owners` ×4
+(37 ms). Those are the next 130 ms if anyone wants it.
+
+**One knob not taken.** `zlib` level 1 would cut the *full* rewrite from
+183 ms to 74 ms for 29% larger blobs (level 3: 81 ms, +18%) — measured,
+one line, backward compatible, since `decompress` doesn't care. It would
+help every path rather than just resumable ones, but it trades on-disk
+size for everyone to fix a watch-local problem, so it is a decision to
+take deliberately rather than fold into this.
 
 ### Fix C — the cheap ones — ✅ LANDED (the two that need no migration)
 
@@ -973,10 +1070,21 @@ So the DB does not grow either way; today's cost is write amplification
    | `get_library_version` (×173) | 35 ms | **0.0 ms** |
    | **tick** | **1.03 s** | **0.717 s** |
 
-2. **Fix B** if 0.72 s is still too slow — it is now two thirds of the
-   tick, all of it in re-parsing and rewriting a file that gained one
-   line. It is the one with a migration, and it must be designed
-   *against* A's store (C21), not dropped in beside it.
+2. ✅ **Fix B landed too**, as a cross-tick store rather than a
+   migration (see "Fix B as built"). Steady-state tick in a resident
+   `watch`:
+
+   | phase | after A+C | after B |
+   |---|---|---|
+   | `load_transcript` (modified file) | 483 ms | **~35 ms** |
+   | ↳ line loop | 143 ms | ~0 ms (tail only) |
+   | ↳ prefix hash (new) | — | 32 ms |
+   | ↳ `save_cached_entries` | 310 ms | ~5 ms (append-only) |
+   | **tick** | **0.717 s** | **0.257 s** |
+
+   C21 held exactly as written: B *does* break A's seeding, and the fix
+   was the cross-tick store it predicted. Cumulatively **1.03 s →
+   0.26 s**, a 4x tick.
 3. **Option 1** for the browser, which is where the user-visible cost
    actually is, and which no longer depends on `render-format-once.md`.
    Land the tail-append case first; take C2 (C20) when the fallback

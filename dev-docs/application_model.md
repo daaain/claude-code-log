@@ -1043,10 +1043,13 @@ rebuilt them again (141ms). Two changes removed most of that:
   inside a process) and the two tables are read once and joined in
   Python: 85ms → 4.5ms.
 
-Tick: **1.03s → 0.717s**, with `load_transcript`'s full re-parse and
-full row rewrite of the modified file (483ms) now the remaining bulk —
-addressable only by parsing and writing the appended tail alone, which
-needs a stored prefix hash and is not built.
+Tick: **1.03s → 0.717s**. `load_transcript`'s full re-parse and full row
+rewrite of the modified file (483ms) was then the remaining bulk, and
+§2.16's cross-tick resumption takes it to ~35ms: **0.257s** steady state
+in a resident `watch`. What is left at that point is the cache queries
+around the refresh — `get_session_file_map` ×3 (50ms), `get_file_states`
+×2 (45ms, still fetching every row's blob to hash it, now redundant with
+the prefix digest), `get_uuid_owners` ×4 (37ms).
 
 **The served page updates itself** via
 `html/templates/components/live_update.js`, active only over `http(s)` —
@@ -1122,6 +1125,61 @@ that fails with exactly the doubled suffix when the copy is removed.
 `CLAUDE_CODE_LOG_ENTRY_STORE=0` is the kill switch; a per-file memory
 valve at `put` time declines to hold a file when available memory is
 under 6x its bytes, and `=1` overrides that valve.
+
+**Owned across ticks, a store does more.** `watch` keeps one for the life
+of the loop and passes it to every conversion (`convert_jsonl_to` takes
+an optional store; a caller-owned one outlives the call, an internally
+made one doesn't). That turns the store from a within-tick cache into a
+*resumption* point, via a second, prefix-pinned mode:
+
+- **The parse resumes.** `put_prefix` records the byte offset the parse
+  consumed plus a BLAKE2b digest of the bytes below it, and the next tick
+  hashes that prefix and reads only the tail. The digest is a *stronger*
+  check than the row-fingerprint prefix comparison it saves — identical
+  bytes imply identical rows — and it costs 32 ms over 39.7 MB against
+  143 ms to re-parse them. A mismatch (rewound session, replayed history)
+  drops the prefix and re-reads from the top. Byte reading replaces text
+  reading only when a store is present; every other caller keeps the
+  identical text path, and the held entries are the *pre*-post-processing
+  parse products, since the whole-file passes (sidecar linking,
+  prompt-hash linking, agent splicing — 0.1 ms together) must re-run over
+  the concatenated list.
+- **The cache write appends.** `CacheManager.extend_cached_entries`
+  inserts only the new rows instead of `save_cached_entries`' delete-and-
+  rewrite, which re-runs `json.dumps` + `zlib.compress` over every entry
+  (310 ms of a tick, for one added line).
+
+The write needs a proof the read doesn't, and it is the subtle part:
+
+> **A file being append-only does not make its rows append-only.** A
+> trunk's cached rows carry its subagents' transcripts, spliced in at
+> their anchors, so a subagent still running — the normal case under
+> `watch` — grows a block in the *middle* of the row sequence while the
+> trunk file only gained lines at the end.
+
+So `_appended_rows` offers rows only when the list is provably just the
+file's own parsed lines: resumed from a verified prefix, no agent
+references, no sidecars, nothing spliced, and no length change from the
+whole-file passes. That covers 136 of the reference archive's 185 trunk
+files; the 26% that reference subagents take the unchanged full rewrite.
+Beneath it, `extend_cached_entries` independently refuses when the table
+no longer holds the row count the caller thinks it wrote — the guard
+against another process having rewritten them. With the gates removed the
+caller offers a *wrong 96-entry slice* and that check catches it, so the
+tests assert on the offer rather than only on the write.
+
+Steady-state tick on the 803MB reference archive: **0.717s → 0.257s**
+(cumulatively 1.03s → 0.26s). Equivalence is held at three levels — parse
+output against the text path (162 fixture files whole-file, 90 resumed),
+**cache DB state** against a full-rewrite run over 6 ticks with 3 files
+growing, and rendered HTML throughout. DB state is the bar for the same
+reason as §2.14: the first bug of this kind is invisible in the rendered
+bytes.
+
+Resumption only helps a resident loop — a one-shot run, the TUI, and
+every tick-one still parse whole. Persisting `(prefix_len, prefix_hash)`
+in `cached_files` would extend it across processes; that migration was
+considered and not needed for the case that motivated it.
 
 ---
 
