@@ -24,6 +24,34 @@
 </head>
 
 <body>
+    <script>
+        // ---- rehydrate contract -------------------------------------------
+        // A live update (see live_update.js) replaces #transcript wholesale.
+        // Anything that decorated the old markup after load has to run again
+        // over the new markup: timestamp localisation rewrites innerHTML,
+        // the timeline parses message types out of CSS classes, the filter
+        // toolbar hides message types, in-page search highlights matches.
+        //
+        // Delegated listeners (bound on `document`) and everything bound to
+        // the toolbar or the floating buttons survive a swap untouched and
+        // must NOT be registered here.
+        //
+        // Defined before any component script so registration never depends
+        // on include order.
+        (function () {
+            const hooks = [];
+            window.claudeLogOnRehydrate = function (fn) { hooks.push(fn); };
+            window.claudeLogRehydrate = function (root) {
+                hooks.forEach(function (fn) {
+                    // One broken hook must not strand the rest — a page that
+                    // updated but lost its timeline is better than one that
+                    // silently stopped updating.
+                    try { fn(root); } catch (err) { console.error('rehydrate hook failed', err); }
+                });
+            };
+        })();
+    </script>
+
     <h1 id="title">{{ title }}</h1>
 
     {% if page_info %}
@@ -288,6 +316,9 @@
 
             // Timezone conversion (included as component)
             {% include 'components/timezone_converter.js' %}
+
+            // Live update (no-op unless served over http -- see the file)
+            {% include 'components/live_update.js' %}
 
             // Debug UUID toggle
             debugButton.addEventListener('click', function () {

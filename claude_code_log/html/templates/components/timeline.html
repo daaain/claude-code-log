@@ -517,7 +517,31 @@
             });
         }
 
+        // Rebuild from the current DOM after a live update swapped the
+        // transcript. The timeline reads message types out of CSS classes,
+        // so new cards are invisible to it until this runs.
+        //
+        // A timeline that was never opened needs nothing: it is built
+        // lazily, and will read the new DOM when it is.
+        function rebuildTimeline() {
+            if (!timeline || !itemsDataSet) return;
+            const { timelineItems, timelineGroups } = buildTimelineData();
+            items = timelineItems;
+            groups = timelineGroups;
+            // Replace the contents rather than the DataSet so the user's
+            // current zoom/pan window survives the update.
+            itemsDataSet.clear();
+            itemsDataSet.add(items);
+            timeline.setGroups(new vis.DataSet(groups));
+            applyFilters();
+            applySearchFilter();
+        }
+
         // Export functions to global scope
+        window.rebuildTimeline = rebuildTimeline;
+        if (window.claudeLogOnRehydrate) {
+            window.claudeLogOnRehydrate(rebuildTimeline);
+        }
         window.toggleTimeline = toggleTimeline;
         window.applyTimelineFilters = applyFilters;
         window.applyTimelineSearchFilter = applySearchFilter;

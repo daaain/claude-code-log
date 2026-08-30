@@ -1832,3 +1832,45 @@ img.artifact-favicon {
     width: 1em;
     vertical-align: -0.125em;
 }
+
+/* Live update (serve --watch): a message that arrived since the last
+   poll. The fade is the whole "streaming" illusion — transcripts record
+   one complete message at a time, never partial tokens, so a card can
+   only ever appear whole. Announcing that arrival is the most honest
+   thing the page can do. */
+@keyframes live-new-in {
+    from {
+        opacity: 0;
+        transform: translateY(6px);
+    }
+    to {
+        opacity: 1;
+        transform: none;
+    }
+}
+
+.message.live-new {
+    animation: live-new-in 320ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .message.live-new {
+        animation: none;
+    }
+}
+
+.live-update-pill {
+    bottom: 20px;
+    left: 20px;
+    width: auto;
+    min-width: 3em;
+    padding: 0 0.9em;
+    border-radius: 999px;
+    font-size: 0.85em;
+    white-space: nowrap;
+}
+
+.live-update-pill[data-following="yes"] {
+    background-color: var(--highlight-light);
+    font-weight: 600;
+}

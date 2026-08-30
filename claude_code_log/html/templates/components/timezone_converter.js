@@ -1,8 +1,14 @@
 // Convert timestamps to user's timezone
 // This function can be called directly or will auto-run on DOMContentLoaded if included standalone
 (function() {
-    function convertTimestampsToLocalTimezone() {
-        const timestampElements = Array.from(document.querySelectorAll('.timestamp[data-timestamp]'));
+    // `root` scopes the work to a subtree. A live update replaces only the
+    // transcript container, and its new cards carry raw ISO timestamps;
+    // re-converting the whole document would redo every card that is
+    // already localised (and `innerHTML` has been rewritten on those, so
+    // they no longer match `[data-timestamp]`'s original text anyway).
+    function convertTimestampsToLocalTimezone(root) {
+        const scope = root || document;
+        const timestampElements = Array.from(scope.querySelectorAll('.timestamp[data-timestamp]'));
 
         if (timestampElements.length === 0) return;
 
@@ -112,4 +118,12 @@
 
     // Execute immediately - assumes this is included within a DOMContentLoaded handler
     convertTimestampsToLocalTimezone();
+
+    // Exposed so a live update can re-run it over freshly swapped-in
+    // markup. Registered with the rehydrate contract when one is present
+    // (transcript pages); harmless on pages without it (the index).
+    window.claudeLogLocalizeTimestamps = convertTimestampsToLocalTimezone;
+    if (window.claudeLogOnRehydrate) {
+        window.claudeLogOnRehydrate(convertTimestampsToLocalTimezone);
+    }
 })();
