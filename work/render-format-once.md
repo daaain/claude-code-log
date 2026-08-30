@@ -1,13 +1,36 @@
 # Render step 3: format once, assemble many
 
-**Status:** phase 1 (serial fragment store) landed on
-`perf/render-memo-and-intra-project-jobs`. Each entry-derived message is
-now formatted once per conversion and reused across the combined pages
-and session files — `fragment_store.py`, consumed by
+**Status: merged to `main`** in two squashes — `94134e8` (#313, steps 1–2
+plus the fragment store and worker feeding) and `9a0e29a` (#315,
+streaming stages 1–4, the sparse gate, and the §8 refactors). Each
+entry-derived message is formatted once per conversion and reused across
+the combined pages and session files — `fragment_store.py`, consumed by
 `_annotate_tree_for_render`, wired in `convert_jsonl_to`. Verified
 byte-identical on five real projects (including the 803MB / 187-file
 claude-code-log archive at a 50% hit rate) and by
 `test_render_cache_equivalence.py::test_fragment_store_render_is_byte_identical`.
+
+**What is still open:** the *architecture* §2 proposes — a distinct,
+parallel **format phase** — did not land. `RenderUnit.kind` is still only
+`"page"` or `"session"`; a message's fragment is computed the first time a
+tree containing it is rendered, and parallel formatting happens
+incidentally (page workers format and ship deltas back), not structurally.
+The flat pool (§2's third bullet, §7 item 4's tail) is likewise still
+open, as are the provider bypass (codex/agy) and the fragment-text spill.
+
+> ⚠️ **§1 below is stale** and is kept only for its problem statement and
+> measurements. Specifically: the commit shas it lists are pre-squash and
+> are not in `main`'s history; "each [worker] holds a full copy of the
+> transcript" is false since workers became fed (`RenderUnit.entries`);
+> the §7.5 conclusion about worker counts past ~8 was superseded by the
+> dispatch-gate finding (`render_dispatch._MIN_ENTRIES_FOR_RENDER_POOL`);
+> the "memory cap makes the fan-out inert on 16GB" claim was re-measured
+> and is not the binding constraint; the §3 seam table's line numbers are
+> all shifted and two rows moved module (`_dispatch_render_units` →
+> `render_dispatch.dispatch_render_units`, `_make_render_pool` →
+> `render_dispatch.build_render_pool`); and the as-built reference is now
+> `dev-docs/application_model.md` §§ 2.9, 2.10, **2.12, 2.13, 2.14**, not
+> just §§ 2.9–2.10.
 
 **Phase 2 progress (fed fragments):** three follow-up commits made the
 store process-portable and wired it through the fan-out — the
