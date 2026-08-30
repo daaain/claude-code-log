@@ -649,6 +649,18 @@ class RenderPool:
         """True once the pool has failed; callers should render inline."""
         return self._broken
 
+    @property
+    def started(self) -> bool:
+        """True once workers exist, so further dispatch is nearly free.
+
+        The executor is created on the first submitted unit and lives for
+        the rest of the conversion. Until then a batch has to be worth the
+        ~1s of ``spawn`` + package import each worker pays; afterwards that
+        cost is sunk, and a later batch only has to beat rendering inline
+        (see ``render_dispatch.worth_dispatching``).
+        """
+        return self._executor is not None and not self._broken
+
     def mark_broken(self) -> None:
         """Called by the parent when a pool-level failure surfaces on a
         result, so subsequent units go inline instead of re-failing."""

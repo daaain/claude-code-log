@@ -23,6 +23,7 @@ from claude_code_log.cli import main
 from claude_code_log.html.renderer import check_html_version
 from claude_code_log.json.renderer import JsonRenderer
 from claude_code_log.markdown.renderer import MarkdownRenderer
+from test.conftest import assert_regenerated
 
 
 _requires_mkfifo = pytest.mark.skipif(
@@ -235,7 +236,7 @@ class TestSingleFileStaleness:
         assert "skipping regeneration" not in r2.output
         second = out.read_text(encoding="utf-8")
         assert "SECOND_turn_marker" in second, "stale HTML served after source grew"
-        assert out.stat().st_mtime > out_mtime
+        assert_regenerated(out, out_mtime)
 
     def test_unchanged_source_skips_without_success_line(self, tmp_path: Path):
         src = _write_jsonl(tmp_path / "session.jsonl", "ONLY_turn_marker")
@@ -323,8 +324,13 @@ class TestSingleFileStaleness:
         # The session was regenerated...
         assert session_html.exists(), "session HTML not regenerated"
         assert "individual session files" in r2.output
-        # ...the combined was skipped (converter says so)...
-        assert "skipping regeneration" in r2.output
+        # ...the combined was skipped (converter says so — either the full
+        # path's per-file skip line, or the session-scoped path's message,
+        # which names the same fact)...
+        assert (
+            "skipping regeneration" in r2.output
+            or "combined output current" in r2.output
+        )
         # ...and the CLI does NOT falsely claim to have combined it.
         assert "Successfully combined" not in r2.output, (
             f"claimed 'combined' when combined was skipped; output:\n{r2.output}"
@@ -366,7 +372,7 @@ class TestDirectoryNoCacheStaleness:
         assert "SECOND_dir_marker" in second, (
             "stale combined HTML served on a --no-cache directory re-run"
         )
-        assert combined.stat().st_mtime > out_mtime
+        assert_regenerated(combined, out_mtime)
 
 
 if __name__ == "__main__":

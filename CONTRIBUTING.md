@@ -293,7 +293,47 @@ swapping. See
 [dev-docs/application_model.md § 2.10](dev-docs/application_model.md) for
 the measurements.
 
-To re-measure both on your own hardware (core count changes the answer for
+Orthogonal to both, a conversion whose cache is fresh and whose combined
+output is current regenerates stale *session files* from those sessions'
+own JSONL plus a persisted cross-session sidecar, instead of loading the
+whole project (session-scoped incremental rendering — see
+[dev-docs/application_model.md § 2.12](dev-docs/application_model.md)).
+Set `CLAUDE_CODE_LOG_SESSION_SCOPED=0` to force the full-load path when
+bisecting a rendering difference.
+
+When the combined output *is* stale, a paginated project converts
+page-by-page instead of loading whole when either of two gates opens:
+on a memory-tight machine (available memory under ~2.4x the project's
+transcript bytes — the same knee where the fragment store declines) it
+always streams, and on a roomy machine it streams when at most a third
+of the planned pages need work — the daily-run shape, where a couple of
+page loads beat the whole-project load the full path would pay (a dense
+rebuild still declines to the full load + fan-out, which wins it on
+wall time). Pages are planned from cached session data, and each page's
+sessions are loaded, rendered (page + stale session files, with a
+per-page fragment store) and dropped in turn, so peak residency is one
+page rather than the project — an archive's size stops being the bound;
+the largest page's source files become it.
+`CLAUDE_CODE_LOG_STREAMING=1` bypasses both gates (it streams on a roomy
+machine and on a dense rebuild), but not the structural preconditions:
+the conversion still has to be the paginated HTML path with every page's
+sessions resolvable to their source files, and the machine still has to
+hold the largest page. `=0` disables streaming for bisecting. See
+[dev-docs/application_model.md § 2.13](dev-docs/application_model.md).
+
+The cache refresh itself is also incremental: when source files
+changed over a populated cache, session rows, project aggregates, and
+the cross-session sidecar are recomputed from the modified files'
+bounded coupling closure (dedup partners, attachment owners, junction
+targets) instead of loading the whole project — the refresh's
+residency scales with what changed, not with the archive. Anything
+hairy (deleted files, rewritten history, closures past a third of the
+project, cross-boundary token attribution) declines to the unchanged
+full-load refresh. Set `CLAUDE_CODE_LOG_INCREMENTAL_CACHE=0` to force
+the full refresh when bisecting. See
+[dev-docs/application_model.md § 2.14](dev-docs/application_model.md).
+
+To re-measure on your own hardware (core count changes the answer for
 the fan-out), point the benchmark at a real project:
 
 ```bash
@@ -301,7 +341,8 @@ uv run python scripts/bench_render.py ~/.claude/projects/<project>
 ```
 
 It copies the project to scratch space, warms the cache, then times every
-combination of the two knobs plus a worker-count sweep — and hashes the
+combination of the knobs — including, on a paginated project, streaming
+rows and an incremental scenario, with a peak-RSS column — and hashes the
 output of each, so it doubles as an equivalence check across far more real
 data than the test fixtures cover.
 

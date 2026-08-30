@@ -35,6 +35,7 @@ for user-facing operations docs see [`docs/`](../docs/).
 | Depth filter | renderer.py § Depth filtering, `models.RenderingDepth` | inlined below (§ 2.6) |
 | Image export | [`image_export.py`](../claude_code_log/image_export.py) | inlined below (§ 2.7) |
 | Performance profiling | [`renderer_timings.py`](../claude_code_log/renderer_timings.py) | inlined below (§ 2.8) |
+| Intra-project render fan-out | [`render_pool.py`](../claude_code_log/render_pool.py) (mechanism) + [`render_dispatch.py`](../claude_code_log/render_dispatch.py) (policy) | inlined below (§ 2.10) |
 | Diagnosing hangs (SIGUSR1) | [`cli.py`](../claude_code_log/cli.py) `_install_stack_dump_signal` | inlined below (§ 2.11) |
 | Adding a new tool renderer | [`factories/tool_factory.py`](../claude_code_log/factories/tool_factory.py), `html/tool_formatters.py` | [implementing-a-tool-renderer.md](implementing-a-tool-renderer.md) (how-to) |
 | Which tools have a specialized renderer or provider adapter | `TOOL_INPUT_MODELS` / `TOOL_OUTPUT_PARSERS` in [`factories/tool_factory.py`](../claude_code_log/factories/tool_factory.py), plus provider adapters | [tools-coverage.md](tools-coverage.md) (Claude and Codex status vs. upstream references) |
@@ -142,6 +143,13 @@ at `~/.claude/projects/claude-code-log-cache.db` (or
 - Per-rendered-HTML: the HTML output itself, indexed by source file
   mtime + depth + compact flag (migrations 002–004) — so
   re-runs with unchanged inputs serve the cached HTML directly.
+- Cross-session sidecar (migration 008): compact projections of a full
+  load's `SessionTree` — per-session parent linkage, junction points,
+  and cross-session dedup winners — persisted so the session-scoped
+  incremental path (§ 2.12) can regenerate one stale session without
+  loading the project. Rewritten wholesale on every full directory
+  load, inside the same batch as the per-file writes, so it is exactly
+  as fresh as `cached_files`.
 
 Invalidation is mtime-based: when a JSONL's mtime is newer than its
 cache row, the session is reparsed. The schema-version row also
@@ -200,6 +208,19 @@ Current migrations:
   per-page HTML chunks for `--page-size`.
 - `005_session_team_name.sql` — adds `team_name` to sessions for the
   teammates feature (PR #125).
+- `006_session_ai_title.sql` / `007_subagents_fingerprint.sql` —
+  `ai_title` on sessions; subagent-sidecar fingerprint on cached files.
+- `008_session_sidecar.sql` — cross-session sidecar tables
+  (`session_parents`, `junction_uuids`, `dedup_winners`,
+  `sidecar_state`) for session-scoped incremental rendering (§ 2.12).
+- `009_sessions_hidden.sql` — adds `hidden` to sessions, so warmup /
+  empty sessions stay cached but out of the rendered set.
+- `010_sessions_residual_count.sql` — adds `residual_count` to
+  sessions: the per-session entries a full load traverses but
+  `message_count` doesn't cover, which the incremental cache refresh
+  needs to recompute `projects.total_message_count` by delta (§ 2.14).
+  Deliberately NULLable — a NULL means "unknown basis", and the
+  refresh declines rather than compute a delta from it.
 
 Recreating-tables migrations toggle `PRAGMA foreign_keys = OFF/ON`
 around the rebuild to avoid losing rows to cascade-deletes during the
@@ -413,8 +434,8 @@ Because the store is a RAM-for-CPU trade — measured serial peaks on the
 803MB reference project: 1252MB store-off vs 1521MB store-on, the
 +269MB being the fragment text plus per-entry overhead —
 `_make_fragment_store` carries a memory valve: when available memory is
-under `_FRAGMENT_STORE_MIN_AVAILABLE_PER_BYTE` (2.4×, the store-on peak
-plus margin) times the project's transcript bytes, the conversion runs
+under `_MIN_AVAILABLE_MEMORY_PER_TRANSCRIPT_BYTE` (2.4×, the store-on
+peak plus margin) times the project's transcript bytes, the conversion runs
 store-less at its pre-store footprint instead of trading its last RAM
 for CPU. An explicit `CLAUDE_CODE_LOG_FRAGMENT_STORE=1` overrides the
 valve; whenever the valve trips, the render pool's far higher memory
@@ -456,7 +477,14 @@ happened.
 
 [`render_pool.py`](../claude_code_log/render_pool.py) fans a single
 project's output files — its combined pages and its per-session files —
-out over worker processes. This sits *below* the project-level pool in
+out over worker processes, and
+[`render_dispatch.py`](../claude_code_log/render_dispatch.py) is the
+policy layer that decides when it is used: `build_render_pool` (should
+this conversion have a pool), `worth_dispatching` (is this batch worth
+sending) and `dispatch_render_units` (run the batch, falling back
+inline). The dependency runs one way — `render_dispatch` imports
+`render_pool`, never the reverse — so a worker never loads the policy it
+executes. This sits *below* the project-level pool in
 § 2.1 and exists because that one leaves cores idle in two shapes:
 the all-projects wall clock is bounded by the largest single project
 (measured: 5 real projects, 4 cores, 195s of work, 65.0s wall — exactly
@@ -487,6 +515,29 @@ pool starts lazily on first submit. `RenderPool.submit` declines a unit
 with no entry slice to the inline path, and a pool is only created when
 the conversion has a pre-built session tree — a worker-side DAG rebuild
 from a slice alone could genuinely differ.
+
+**Which batches are worth dispatching** is decided per batch by
+`render_dispatch.worth_dispatching`, on the work a batch carries rather than
+the number of units in it. A conversion dispatches two batches: its
+stale *pages* (one unit per ~`page_size` messages, where nearly all the
+render time is) and its stale *session files* (cheap, because the page
+pass has already put their fragments in the store). Weighing them by
+unit count got this exactly backwards — an 8-unit floor meant a project
+with fewer than 8 pages rendered its expensive page batch inline and
+fanned out only the cheap session batch, paying the pool's ~1s of
+`spawn` + import for the batch with the least to gain. Weighed by entry
+count against `_MIN_ENTRIES_FOR_RENDER_POOL` (4,000, about twice what
+that startup costs at the ~2,000 entries/s the render phase sustains),
+projects between ~4k and ~15k messages went from 0.86–1.05× to
+1.27–2.27×, and projects below it went from 0.82–0.94× — a real loss —
+back to 1.00×. Two refinements complete the rule: a lone unit never
+dispatches (it would render in a worker while the parent waits), and
+once the pool has started (`RenderPool.started`) any multi-unit batch
+does, since the startup is then sunk — which is how the session batch
+rides along behind the page batch that paid for it.
+`_MIN_MESSAGES_FOR_RENDER_POOL` is the same number, and only a
+short-circuit: every batch is a subset of the project's message list, so
+a project below it could never form a batch that clears the gate.
 
 Before the feed, each worker re-loaded the whole transcript from the
 warm cache in its initializer (~0.7s at 12k messages; ~12s of CPU per
@@ -547,11 +598,12 @@ below. `$CLAUDE_CODE_LOG_RENDER_JOBS` overrides: `1` or `off` disables it,
 `render_pool.resolve_render_jobs`. `--jobs` never enables or disables it;
 it only caps it, so the two pool levels together can't oversubscribe. An
 explicit `convert_jsonl_to(render_jobs=N)` overrides the environment; the
-default `None` consults it. `_make_render_pool` declines regardless for
+default `None` consults it. `render_dispatch.build_render_pool` declines regardless for
 single-file mode, a missing cache manager, a missing pre-built session
 tree (workers render fed slices against the conversion's tree),
 projects below `_MIN_MESSAGES_FOR_RENDER_POOL`, and machines without
-the memory the cap formula demands.
+the memory the cap formula demands; a pool that *is* created still only
+starts if some batch clears `worth_dispatching` above.
 `image_export_mode="referenced"` used to decline too, when renders
 allocated `images/image_NNNN.png` names from a per-call counter that
 collided across passes and processes; referenced filenames are now
@@ -673,6 +725,265 @@ Windows lacks `SIGUSR1`, the install is a silent no-op there. Unlike
 is already wired to dump itself on demand. Added by PR #135 to make
 the DAG cyclic-children class of bug diagnosable in the field; useful
 for any future hang.
+
+### 2.12 Session-scoped incremental rendering
+
+Converting a project used to load its entire transcript even when the
+cache was fresh and a single session file needed regenerating — the
+master list, DAG and trees exist before any staleness is consulted.
+The session-scoped path (streaming stage 2 of
+[`work/render-format-once.md`](../work/render-format-once.md)) removes
+that: when the Phase-1b gate in `convert_jsonl_to` finds the cache
+fresh, the combined output current, and only session files stale,
+`converter._load_stale_session_transcripts` loads *only the files
+holding those sessions' entries* and renders them through the ordinary
+`_generate_individual_session_files`, byte-identical to the full path.
+
+Three pieces make the partial load faithful:
+
+- **The cross-session sidecar** (migration 008, `cache.SessionSidecar`)
+  is persisted by every full unfiltered directory load, in the same
+  batch as the per-file cache writes: per-session parent linkage
+  (resume/fork attachment points), junction points with their ordered
+  target lists, and the dedup winner for every uuid carried by more
+  than one session (resume replay prefixes). All three are compact
+  projections of the `SessionTree` the load already built. A partial
+  load enforces the winner map up front (losing copies drop before the
+  DAG sees them), patches parent/junction facts whose other end isn't
+  loaded, and adds empty ancestor stub lines so depth chains resolve.
+- **Discovery by the cache's file map**, not by filename stem
+  (`CacheManager.get_session_file_map`): real archives contain files
+  whose entries span two sessions (a continuation written into the
+  previous session's file) and sessions with no file of their own.
+  Co-resident fresh sessions load along with a stale one and are
+  skipped by the per-session staleness check. An archived stale
+  session (cached rows, source deleted) is skipped outright — the
+  full path loads everything and still renders nothing for it.
+- **A pagination-aware combined-freshness check**
+  (`_combined_output_is_stale`): the gate used to ask
+  `is_transcript_stale("combined_transcripts.html")`, a name a
+  paginated project has no cache row for — so paginated projects never
+  early-exited and full-loaded on every direct conversion. The helper
+  replays the pagination pass's plan from cached session data alone
+  (same session→page assignment, same `is_page_stale` per page, same
+  invalidation triggers). This also makes the plain
+  "everything is current" early exit fire for paginated projects.
+
+Equivalence is held to byte-identity by
+`test/test_session_scoped_render.py` — real fixture projects with the
+full loader monkeypatched to raise, plus a synthetic project pinning
+resume-replay dedup, cross-session fork parents, junctions and
+ancestor chains — and by hash runs over real archives (85 and 187
+output files byte-identical on the two measured projects, with 64 and
+129 session files regenerated through the partial path; sidecars of
+300–742 dedup winners in play). Measured on the 8-core VM against the
+803MB reference archive, warm cache: one stale session file went
+4.6s → 0.6s (7.9x), and a fully-fresh direct conversion 4.6s → 0.4s
+(the early exit finally firing for a paginated project).
+
+`CLAUDE_CODE_LOG_SESSION_SCOPED=0` disables the path for bisecting.
+Every decline (no sidecar yet, date filters, `--no-cache`, an
+inconsistent file map) falls back to the full load, whose behaviour is
+unchanged — the sidecar is an optimization input, never a correctness
+requirement.
+
+### 2.13 Page-granular streaming conversion
+
+The session-scoped path (§ 2.12) still full-loads whenever the
+*combined* output is stale, so peak RAM stayed bounded below by the
+largest single project — a machine under ~2x its largest project could
+not convert it at all. The streaming path (stage 3 of
+[`work/render-format-once.md`](../work/render-format-once.md)) removes
+that floor for paginated HTML conversions:
+`converter._stream_paginated_conversion` plans the session→page
+assignment purely from cached session data (the same
+`_assign_sessions_to_pages` call, via the shared `_plan_page` helper,
+so the plans cannot drift), then for each page needing work — a stale
+page, or stale session files on it — loads *only the files holding
+that page's sessions* through the § 2.12 partial-load machinery,
+renders the page and its stale session files together against a
+per-page fragment store, and drops it all before the next page. Peak
+residency becomes max(one page's source files), not the project.
+
+When it runs:
+
+- **Structurally**: HTML directory conversions with a fresh-able cache,
+  no date filters, no `--force`-style regeneration, combined output
+  enabled, and pagination in play per the cached counts. The sidecar
+  must exist; since `ensure_fresh_cache` now persists it too (same
+  batch as the per-file cache writes), a run whose cache was just
+  refreshed can stream instead of loading the project a second time.
+- **By a memory valve, with a sparse fallback**: in auto mode the path
+  always engages when available memory is under 2.4x the project's
+  transcript bytes — literally the same knee as the fragment-store valve
+  (§ 2.9): both read `_MIN_AVAILABLE_MEMORY_PER_TRANSCRIPT_BYTE`, one
+  constant so the two can't drift. The ladder is continuous: below ~2.4x
+  the store had already declined, and streaming takes over the serial
+  conversion; the fan-out's own (far higher) memory bar has long since
+  declined by then, which is why streaming renders inline without
+  losing anything. With more memory than that (or none measurable),
+  the pass still runs — but in *sparse* mode: once it has planned its
+  pages and counted the ones needing work (stale/missing page, or
+  stale session files on it — pure cache and stat queries), it
+  declines itself unless that count is at most a third of the plan
+  (`_STREAMING_MAX_SPARSE_FRACTION`), falling through to the full load
+  + fan-out. The reasoning is measured, not structural: streaming's
+  wall scales with the pages needing work while the full path pays the
+  whole-project load regardless, so sparse work (the daily-run shape)
+  streams faster even where the fan-out is available — but a dense
+  rebuild renders serially and loses to the fan-out on a roomy
+  machine. On the 8-core/16GB VM against a 137MB/26-page archive
+  (`scripts/bench_render.py`): incremental (1 page + 3 sessions
+  stale) streamed 2.0s/276MB peak RSS vs the fan-out full path's
+  3.3s/542MB, while a full rebuild streamed 11.1s vs the fan-out's
+  6.7s; the crossover sits near 36% of pages stale and moves only
+  weakly with core count (the full load, not rendering, is the fixed
+  cost), so 1/3 keeps a margin under it.
+  `CLAUDE_CODE_LOG_STREAMING=1` forces the path wherever structurally
+  eligible, bypassing both the valve and the sparse gate; `=0`
+  disables it (the bisecting knob).
+
+Two details are load-bearing for correctness:
+
+- **Strict file resolution**: a page load requires every one of its
+  sessions to resolve to a complete, present source-file set
+  (`_resolve_session_source_files(strict=True)`); any gap declines the
+  whole pass to the full load rather than rendering a page with a
+  session's remnant.
+- **The co-resident-session restriction**: a source file can span two
+  sessions that sit on *different* pages, so one page's load can carry
+  a partially-loaded session from another page. The per-page session
+  pass is therefore restricted to that page's own stale sessions
+  (`_generate_individual_session_files(restrict_to_sessions=...)`) —
+  without it, the partial session renders truncated and its cache row
+  then reads current forever (pinned by mutation test in
+  `test/test_streaming_render.py::TestFileSpanningSessions`).
+
+Byte-identity is held by `test/test_streaming_render.py` (a real
+fixture with the full loader monkeypatched to raise, a synthetic
+project whose resume/fork couplings span the page split, and the
+file-spanning trap above) and by hash runs over the two coupling-heavy
+real archives — every scenario (warm parity, full rebuild,
+incremental) byte-identical on both. Measured on the 8-core/16GB VM,
+serial, warm cache (full path → streamed): 296MB project full rebuild
+454MB → 305MB peak RSS; 803MB project full rebuild 1490MB → 591MB at
+slightly lower wall (28.2s → 25.2s), incremental 1092MB → 587MB at
+7.6s → 4.6s. The remaining ~590MB is the largest page's co-resident
+files plus interpreter baseline — the floor scales with page size,
+not archive size.
+
+Declines fall through to the full load unchanged. The cache refresh
+itself no longer full-loads on changed sources — that is § 2.14.
+
+### 2.14 Incremental cache refresh
+
+The last full-residency path was `ensure_fresh_cache` itself: one
+changed file re-walked every file through `load_directory_transcripts`
+to recompute three things — per-session cache rows, project
+aggregates, and the sidecar. Streaming stage 4
+(`converter._incremental_cache_refresh`) recomputes all three from a
+bounded *closure* of the modified files instead:
+
+- **Per-file parse**: each modified file's old identity state
+  (sessions, uuids, parentUuids, requestIds, residual type counts) is
+  captured from the messages table, then `load_transcript` re-parses
+  it (rewriting its rows exactly as always). Old uuids must be a
+  subset of new — a shrunk/rewritten file means history changed and
+  declines.
+- **Closure** (SQL projections, no entry loading): the modified
+  files' sessions, plus every session holding a copy of a modified
+  uuid (re-election partners), plus owners of external attachment
+  points (the dedup winner's session when duplicated), plus the
+  complete old target list of any junction a modified entry touches
+  or whose uuid is re-elected (so target order rebuilds natively),
+  plus files holding cross-file metadata (summaries by leafUuid,
+  ai-titles by session) for closure sessions. Sidecar-derived ids are
+  trunk-normalized — junction owners/targets can be branch-qualified
+  `{trunk}@{uuid12}` line ids that the file map doesn't know.
+- **Partial load**: the closure's files go through
+  `_load_sessions_partial` with two refresh-mode deviations — old
+  dedup-winner enforcement *exempts* modified uuids (their election
+  re-runs natively on the full candidate set, which the closure
+  guarantees is loaded), and the sidecar junction patch *skips*
+  junctions marked native (the old row would erase a new fork/resume
+  target).
+- **Facts persist**, restricted to closure sessions (all complete by
+  strict file resolution — the co-resident partial-session trap
+  applies to cache facts too): session rows upserted; junction rows
+  rewritten for tree junctions owned by closure sessions (patched
+  ones rewrite their old rows identically — harmless); parent rows
+  and re-elected winners replaced; project aggregates move by *delta*
+  — new minus old session-row contributions, plus the modified files'
+  summary-row delta, with bookends extended from the loaded entries'
+  own timestamp strings (the DB normalizes formats).
+
+**The two migrations the delta needs.** `total_message_count` is
+`len(messages)` of a full load — the *traversed* entry list — so
+moving it by delta requires every traversed entry to be attributable
+to a persisted session row:
+
+- **009 (`sessions.hidden`)**: warmup-only and empty/agent-only
+  sessions used to be filtered before the write, leaving their
+  contribution off the record. The writer now persists them from one
+  unfiltered `compute_session_data` pass, flagged `hidden = 1`, and
+  every read site meaning "sessions a human would render" filters
+  `hidden = 0` — so the visible set is byte-identical to the old
+  filtered computation.
+- **010 (`sessions.residual_count`)**: entries a session owns that
+  `compute_session_data` skips (`attachment`, `ai-title`), counted
+  from the traversed list by `compute_session_residuals`. Counting
+  them from cached message rows instead is *wrong*, because
+  attachments are parsed into the cache but can be dropped by DAG
+  traversal — a real-archive holdback caught exactly that (+16). A
+  session owning only such entries gets a row of its own (hidden,
+  since it has no first user message) so the arithmetic has somewhere
+  to put them. The column is deliberately NULLable: a pre-010 row's
+  contribution is unknown rather than zero, and the refresh declines
+  on one.
+
+Together they close the identity the delta relies on, verified across
+the full 78-project corpus:
+
+    total_message_count = Σ(message_count + residual_count) + #summary rows
+
+`Summary` entries are the one class with no session attribution, and
+they bypass traversal (appended wholesale), so counting their cached
+rows is exact.
+
+**Decline ladder** (each falls through to the unchanged full load):
+missing sidecar/project data, deleted source files (archival is the
+full path's business), shrunk files, a pre-009 cache (a closure
+session with prior entries but no row) or a pre-010 one (a closure
+session whose `residual_count` is NULL), attachments involved in
+cross-session dedup, a requestId with independent surviving copies on
+both sides of the closure boundary (D1 attribution would need global
+traversal order — same-uuid replay spans are dedup-resolved and
+safe), any strict-resolution gap, and a closure larger than
+max(4 files, a third of the project).
+
+The design identities were verified empirically before implementation
+across the full 78-project real corpus (I1: total_message_count == Σ
+unfiltered per-session counts + typed residual; I2: token totals == Σ
+per-session tokens; I3: bookends == raw min/max; zero failures), and
+the implementation is held to *DB-state equivalence* — session rows,
+aggregates, and all three sidecar tables equal to a full refresh's,
+plus rendered byte-identity — by
+`test/test_incremental_cache_refresh.py` and by holdback runs on real
+archives (hold back the newest files, warm the cache, restore them,
+then compare the incremental refresh against the full one: matched on
+the 803MB reference archive, 296MB repower, and 1003MB
+platform-frontend-next). DB state is the bar rather than HTML because
+the first bug this caught — a modified file's new summaries titling
+sessions outside the closure — was invisible in the rendered bytes.
+
+Measured on the 8-core/16GB VM, first conversion after three new
+sessions appear in the 803MB reference archive (peak RSS / wall):
+full refresh + full render 1131MB / 10.6s; full refresh + streamed
+render 901MB / 8.1s; incremental refresh + streamed render **582MB /
+6.7s**. Once the render streams, the refresh's full load *is* the
+peak — which is what this section removes, completing "no archive too
+big for the machine". `CLAUDE_CODE_LOG_INCREMENTAL_CACHE=0` is the
+kill switch.
 
 ---
 

@@ -911,11 +911,11 @@ class TestLargeDatasetPerformance:
         cache_manager.save_cached_entries(jsonl_file, entries)
 
         # Time filtered loading
-        start = time.time()
+        start = time.monotonic()
         loaded = cache_manager.load_cached_entries_filtered(
             jsonl_file, "2024-01-15", "2024-01-20"
         )
-        elapsed = time.time() - start
+        elapsed = time.monotonic() - start
 
         assert loaded is not None
         assert elapsed < 2.0, f"Query took too long: {elapsed:.2f}s"

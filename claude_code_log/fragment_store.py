@@ -249,7 +249,7 @@ class RenderFragmentStore:
         This is what crosses the process boundary in the render fan-out: a
         page worker exports its fragments back to the parent, and the
         parent slices them into the session units it dispatches (see
-        converter._dispatch_render_units / render_pool._render_unit_worker).
+        render_dispatch.dispatch_render_units / render_pool._render_unit_worker).
         Returned by reference; callers must not mutate it.
         """
         return self._fragments

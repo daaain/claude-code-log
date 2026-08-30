@@ -18,14 +18,14 @@ from datetime import datetime
 from pathlib import Path
 import traceback
 from urllib.parse import quote
-from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING, cast
+from typing import Any, Dict, List, Optional, TYPE_CHECKING, cast
 
 import dateparser
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-    from .cache import CacheManager
+    from .cache import CacheManager, SessionSidecar
     from .fragment_store import RenderFragmentStore
     from .providers.base import ProviderTokenTotals
     from .render_pool import RenderPool
@@ -37,11 +37,14 @@ from .utils import (
     get_parent_session_id,
     get_project_display_name,
     is_agent_session,
+    project_transcript_bytes,
     should_use_as_session_starter,
     create_session_preview,
     get_warmup_session_ids,
+    trunk_jsonl_files,
 )
 from .render_pool import RenderUnit, memory_capped_workers, resolve_render_jobs
+from .render_dispatch import build_render_pool, dispatch_render_units
 from .cache import (
     CacheManager,
     SessionCacheData,
@@ -158,13 +161,20 @@ def get_index_filename(format: str) -> str:
     return "all-projects-summary.json" if ext == "json" else f"index.{ext}"
 
 
-def _scan_sidechain_uuids(directory: Path) -> set[str]:
+def _scan_sidechain_uuids(
+    directory: Path, session_stems: Optional[list[str]] = None
+) -> set[str]:
     """Collect UUIDs from sidechain/subagent files not loaded into the DAG.
 
     Some subagent files (e.g. aprompt_suggestion) are never referenced
     via agentId in the main session, so they aren't loaded by
     load_transcript(). Their UUIDs are needed to suppress false orphan
     warnings when main-chain entries reference sidechain parents.
+
+    ``session_stems`` restricts the scan to the named sessions' sidecar
+    directories — the session-scoped incremental path uses this so a
+    partial load doesn't re-read every subagent file in the project just
+    to suppress warnings.
     """
     uuids: set[str] = set()
     # ``*/subagents/*.jsonl`` covers ordinary sub-agent/teammate files;
@@ -172,8 +182,20 @@ def _scan_sidechain_uuids(directory: Path) -> set[str]:
     # transcripts (issue #174) — their agent UUIDs are otherwise unseen and
     # would raise false orphan warnings. ``journal.jsonl`` has no ``uuid`` so
     # scanning it is harmless.
-    workflow_files = directory.glob("*/subagents/workflows/*/*.jsonl")
-    for f in itertools.chain(directory.glob("*/subagents/*.jsonl"), workflow_files):
+    if session_stems is None:
+        workflow_files = directory.glob("*/subagents/workflows/*/*.jsonl")
+        scan_files = itertools.chain(
+            directory.glob("*/subagents/*.jsonl"), workflow_files
+        )
+    else:
+        scan_files = itertools.chain.from_iterable(
+            itertools.chain(
+                (directory / stem / "subagents").glob("*.jsonl"),
+                (directory / stem / "subagents" / "workflows").glob("*/*.jsonl"),
+            )
+            for stem in session_stems
+        )
+    for f in scan_files:
         try:
             with open(f, "r", encoding="utf-8", errors="replace") as fh:
                 for line in fh:
@@ -941,19 +963,25 @@ def load_directory_transcripts(
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
     silent: bool = False,
+    persist_sidecar: bool = False,
 ) -> tuple[list[TranscriptEntry], SessionTree]:
     """Load all JSONL transcript files from a directory and combine them.
 
     Returns (messages, session_tree) — the tree is reused by the renderer
     to avoid rebuilding the DAG.
+
+    ``persist_sidecar`` additionally writes the cross-session sidecar
+    (parent linkage, junction points, dedup winners — see
+    ``cache.SessionSidecar``) derived from this load's tree, enabling the
+    session-scoped incremental path on later runs. Only the conversion's
+    Phase-2 load passes it, and only for unfiltered loads — a date-filtered
+    subset must never masquerade as the whole project's sidecar.
     """
     all_messages: list[TranscriptEntry] = []
 
     # Find all .jsonl files, excluding agent files (they are loaded via load_transcript
     # when a session references them via agentId)
-    jsonl_files = [
-        f for f in directory_path.glob("*.jsonl") if not f.name.startswith("agent-")
-    ]
+    jsonl_files = trunk_jsonl_files(directory_path)
 
     # Reuse one connection across all per-file cache reads/writes in this load
     # pass. Nested under an outer batch() (e.g. ensure_fresh_cache) this is a
@@ -1013,6 +1041,373 @@ def load_directory_transcripts(
     # Resolve {tool_use_id: run} once, at full-session scope (BEFORE the renderer
     # paginates), so a Workflow tool_use links to its run even when its
     # tool_result lands on a different page (#174 PR3, pagination-boundary fix).
+    all_entries = (
+        _splice_queue_ops_chronologically(dag_ordered, queue_ops) + metadata_entries
+    )
+    tree.workflow_links = map_workflow_runs_by_tool_use(
+        all_entries, list(tree.workflow_runs.values())
+    )
+
+    if persist_sidecar and cache_manager is not None:
+        _persist_session_sidecar(cache_manager, all_messages, tree)
+
+    return all_entries, tree
+
+
+def _persist_session_sidecar(
+    cache_manager: "CacheManager",
+    all_messages: list[TranscriptEntry],
+    tree: SessionTree,
+) -> None:
+    """Project this load's cross-session facts into the cache sidecar.
+
+    Everything here is a cheap projection of state the full load already
+    built; the one extra pass is the duplicate-uuid scan, one dict walk
+    over the entries. Winners are read off ``tree.nodes`` — after
+    ``build_message_index`` the surviving node's ``session_id`` IS the
+    whole-project dedup winner for that uuid.
+    """
+    from .cache import SessionSidecar
+
+    seen_session_for_uuid: dict[str, str] = {}
+    duplicated_uuids: set[str] = set()
+    for entry in all_messages:
+        if isinstance(
+            entry,
+            (
+                SummaryTranscriptEntry,
+                AiTitleTranscriptEntry,
+                QueueOperationTranscriptEntry,
+            ),
+        ):
+            continue
+        prev = seen_session_for_uuid.get(entry.uuid)
+        if prev is None:
+            seen_session_for_uuid[entry.uuid] = entry.sessionId
+        elif prev != entry.sessionId:
+            duplicated_uuids.add(entry.uuid)
+
+    sidecar = SessionSidecar(
+        parents={
+            sid: (line.parent_session_id, line.attachment_uuid)
+            for sid, line in tree.sessions.items()
+            if line.parent_session_id is not None
+        },
+        junctions={
+            uuid: (jp.session_id, list(jp.target_sessions))
+            for uuid, jp in tree.junction_points.items()
+        },
+        dedup_winners={
+            # The surviving *entry's* raw sessionId, NOT node.session_id:
+            # branch splitting rewrites node ids to "{trunk}@{uuid12}", and
+            # a branch-qualified winner can never equal any raw
+            # entry.sessionId — the partial load's enforcement would then
+            # drop every copy of the uuid, silently deleting whole branches
+            # from partial renders (caught by the streaming hash runs on
+            # the reference archive).
+            uuid: winner_sid
+            for uuid in duplicated_uuids
+            if uuid in tree.nodes
+            and (winner_sid := tree.nodes[uuid].entry.sessionId) is not None
+        },
+    )
+    try:
+        cache_manager.save_session_sidecar(sidecar)
+    except Exception as e:
+        # The sidecar is an optimization input, never a correctness
+        # requirement — a failed write only means the next incremental
+        # run takes the full-load path.
+        logging.getLogger(__name__).warning("Failed to persist session sidecar: %s", e)
+
+
+def _session_scoped_enabled() -> bool:
+    """Whether the session-scoped incremental path may be used.
+
+    ``CLAUDE_CODE_LOG_SESSION_SCOPED=0`` (or ``off``/``no``/``false``)
+    forces the full-load path — the bisecting knob, mirroring
+    ``CLAUDE_CODE_LOG_FRAGMENT_STORE`` / ``CLAUDE_CODE_LOG_RENDER_JOBS``.
+    """
+    raw = os.getenv("CLAUDE_CODE_LOG_SESSION_SCOPED")
+    if raw is None:
+        return True
+    return raw.strip().lower() not in ("0", "off", "no", "false")
+
+
+def _load_stale_session_transcripts(
+    directory_path: Path,
+    cache_manager: "CacheManager",
+    stale_session_ids: list[str],
+    silent: bool = False,
+) -> Optional[tuple[list[TranscriptEntry], SessionTree]]:
+    """Load only the named trunk sessions, faithful to the full load.
+
+    The session-scoped incremental path: when the cache is fresh and only
+    session files are stale, the full pipeline's output for those sessions
+    is reproducible from the sessions' own files plus the persisted
+    cross-session sidecar — so a one-session change no longer loads the
+    whole project. Returns None to decline (missing sidecar or a stale
+    session whose JSONL is gone), in which case the caller falls back to
+    the full load, whose behaviour is unchanged.
+
+    Fidelity argument, piece by piece (the equivalence tests hold it to
+    byte-identity):
+
+    - *Discovery*: sessions map to source files via the cache's messages
+      table, not by filename stem — real archives contain files whose
+      entries span two sessions (a continuation written into the previous
+      session's file) and sessions with no file of their own. Every file
+      holding any stale session's entries is loaded whole, in the
+      directory's glob order, so per-file completeness and
+      ``build_message_index``'s first-encountered tie-break match the
+      full run. Co-resident fresh sessions ride along harmlessly — the
+      per-session staleness check skips them at render time.
+    - *Entries*: ``load_transcript`` per trunk file returns the same
+      spliced (agent-inlined) per-file list the full load concatenates,
+      and ``_integrate_agent_entries`` only consults anchors that live in
+      the same trunk's files.
+    - *Cross-session dedup*: every duplicated uuid's winner is enforced
+      from the sidecar — losing copies are dropped up front, which is
+      exactly the whole-project outcome, without depending on the loaded
+      subset's (possibly partial) per-session first-timestamps. Uuids
+      duplicated only *within* one session aren't in the winner map and
+      dedup identically in any subset (same-session ties keep the first
+      occurrence).
+    - *Order*: ``traverse_session_tree`` emits a session's subtree
+      contiguously, interleaving only child sessions at junctions —
+      children outside the loaded set are exactly the entries the
+      per-session filter drops from the full master list, so the loaded
+      projection's order is unchanged. Queue-op splicing anchors within
+      the session; metadata entries append per-file.
+    - *Tree facts*: parent linkage / junction targets that cross into
+      unloaded sessions are patched from the sidecar; ancestor sessions
+      appear as empty stub lines so depth chains resolve as in the full
+      tree. Workflow runs load per-session (the single-file loader).
+    """
+    sidecar = cache_manager.load_session_sidecar()
+    if sidecar is None:
+        return None
+
+    file_map = cache_manager.get_session_file_map()
+    needed_files = _resolve_session_source_files(
+        directory_path, file_map, stale_session_ids, strict=False
+    )
+    if needed_files is None:
+        return None
+
+    trunk_files = [
+        f
+        for f in directory_path.glob("*.jsonl")
+        if not f.name.startswith("agent-") and f.name in needed_files
+    ]
+    if {f.name for f in trunk_files} != needed_files:
+        return None
+
+    return _load_sessions_partial(
+        directory_path, cache_manager, sidecar, trunk_files, silent
+    )
+
+
+def _resolve_session_source_files(
+    directory_path: Path,
+    file_map: Dict[str, set[str]],
+    session_ids: list[str],
+    strict: bool,
+) -> Optional[set[str]]:
+    """Which trunk files hold the named sessions' entries, or None to decline.
+
+    Non-strict (the session-scoped incremental path): an *archived*
+    session (cached rows, source gone) is skipped, matching the full
+    path's outcome — it loads everything and still renders nothing for
+    that session. (Pre-change, archived-stale sessions blocked the
+    early exit forever AND full-loaded the project on every run.) A
+    session whose stem-named file exists but whose cached rows don't
+    point at it is an inconsistency this path declines to reason about.
+
+    Strict (the streaming path's page loads): every named session must
+    resolve to a complete, present file set — a partially-missing set
+    would silently render a page without that session's messages, where
+    the full path (loading whatever is on disk) renders its remnant. Any
+    gap declines the whole streaming pass instead.
+    """
+    needed_files: set[str] = set()
+    for sid in session_ids:
+        session_files = {
+            name for name in file_map.get(sid, set()) if not name.startswith("agent-")
+        }
+        missing = [
+            name for name in session_files if not (directory_path / name).exists()
+        ]
+        if not session_files:
+            if strict or (directory_path / f"{sid}.jsonl").exists():
+                return None
+            continue  # archived: no source anywhere, nothing to render
+        if missing:
+            if strict or len(missing) != len(session_files):
+                return None
+            if (directory_path / f"{sid}.jsonl").exists():
+                return None
+            continue  # archived: every mapped source is gone
+        needed_files |= session_files
+    return needed_files
+
+
+def _load_sessions_partial(
+    directory_path: Path,
+    cache_manager: "CacheManager",
+    sidecar: "SessionSidecar",
+    trunk_files: list[Path],
+    silent: bool,
+    reelect_uuids: Optional[set[str]] = None,
+    native_junction_uuids: Optional[set[str]] = None,
+) -> tuple[list[TranscriptEntry], SessionTree]:
+    """Load the given trunk files into a faithful partial (entries, tree).
+
+    The shared core of the session-scoped incremental path and the
+    streaming path's page loads — see ``_load_stale_session_transcripts``
+    for the piece-by-piece fidelity argument.
+
+    The two optional sets are the incremental cache refresh's deviations
+    (work/render-format-once.md, stage 4), where the sidecar predates
+    the modified files and is authoritative only for *old* facts:
+
+    - ``reelect_uuids``: uuids whose old dedup-winner row must NOT be
+      enforced — new copies changed the candidate set, and the refresh's
+      closure guarantees every copy's session is loaded, so
+      ``build_message_index`` re-runs the election natively with the
+      full run's semantics.
+    - ``native_junction_uuids``: junction uuids whose old sidecar row
+      must NOT overwrite the locally built junction — a new child
+      attached there, and the closure loaded all old targets, so the
+      local junction is complete (the old row would erase the new
+      target).
+    """
+    from .dag import (
+        JunctionPoint,
+        SessionDAGLine,
+        build_dag,
+        build_message_index,
+        build_session_tree,
+        extract_session_dag_lines,
+    )
+    from .workflow import load_session_workflow_runs, map_workflow_runs_by_tool_use
+
+    all_messages: list[TranscriptEntry] = []
+    with cache_manager.batch():
+        for jsonl_file in trunk_files:
+            all_messages.extend(
+                load_transcript(jsonl_file, cache_manager, None, None, silent)
+            )
+
+    _integrate_agent_entries(all_messages)
+
+    # Enforce the whole-project dedup outcome: drop every duplicated
+    # uuid's losing copies before the DAG sees them. (A co-resident
+    # session loaded only partially could otherwise present a skewed
+    # first-timestamp and flip an intra-subset winner.)
+    _metadata_types = (
+        SummaryTranscriptEntry,
+        AiTitleTranscriptEntry,
+        QueueOperationTranscriptEntry,
+    )
+    kept_messages: list[TranscriptEntry] = []
+    dropped_uuids: set[str] = set()
+    surviving_uuids: set[str] = set()
+    reelect = reelect_uuids or set()
+    for entry in all_messages:
+        if isinstance(entry, _metadata_types):
+            kept_messages.append(entry)
+            continue
+        winner = (
+            None if entry.uuid in reelect else sidecar.dedup_winners.get(entry.uuid)
+        )
+        # A winner is a raw sessionId, but sidecars persisted before the
+        # branch-winner fix carry "{trunk}@{uuid12}" for uuids whose
+        # surviving copy sits on a branch line — normalize to the trunk
+        # (== the surviving entry's raw sessionId by construction) so
+        # those sidecars enforce correctly instead of dropping every copy.
+        if winner is not None and "@" in winner:
+            winner = winner.split("@", 1)[0]
+        if winner is not None and entry.sessionId != winner:
+            dropped_uuids.add(entry.uuid)
+        else:
+            kept_messages.append(entry)
+            surviving_uuids.add(entry.uuid)
+    all_messages = kept_messages
+
+    # Orphan-warning suppression: uuids we know exist outside the loaded
+    # set (dropped dedup losers whose winner isn't loaded, cross-session
+    # attachment points) plus the loaded sessions' own unreferenced
+    # subagent files. Over-suppression only quiets a warning; it never
+    # changes output.
+    suppression = _scan_sidechain_uuids(directory_path, [f.stem for f in trunk_files])
+    suppression |= dropped_uuids - surviving_uuids
+    suppression |= {
+        attachment
+        for (_parent, attachment) in sidecar.parents.values()
+        if attachment is not None
+    }
+
+    with _dag_warnings_suppressed(silent):
+        nodes = build_message_index(all_messages)
+        build_dag(nodes, sidechain_uuids=suppression)
+        lines = extract_session_dag_lines(nodes)
+        tree = build_session_tree(nodes, lines)
+
+    # Patch the cross-session facts the partial build cannot see. A line
+    # whose parent resolved locally (both sessions loaded) keeps its local
+    # resolution — it matches the full run by construction.
+    for sid, line in tree.sessions.items():
+        if line.parent_session_id is not None:
+            continue
+        parent_info = sidecar.parents.get(sid)
+        if parent_info is not None:
+            line.parent_session_id, line.attachment_uuid = parent_info
+
+    # Ancestor stub lines (empty, never traversed from roots) so
+    # depth chains walk to the same root the full tree has.
+    for sid in list(tree.sessions.keys()):
+        seen_chain: set[str] = set()
+        current = tree.sessions[sid].parent_session_id
+        while current is not None and current not in seen_chain:
+            seen_chain.add(current)
+            if current in tree.sessions:
+                current = tree.sessions[current].parent_session_id
+                continue
+            parent_of_current = sidecar.parents.get(current, (None, None))
+            tree.sessions[current] = SessionDAGLine(
+                session_id=current,
+                uuids=[],
+                first_timestamp="",
+                parent_session_id=parent_of_current[0],
+                attachment_uuid=parent_of_current[1],
+            )
+            current = parent_of_current[0]
+
+    # Junction points carry the full run's complete, ordered target list —
+    # including targets in unloaded sessions the local build can't know.
+    # (Refresh mode: native_junction_uuids keep their locally built
+    # junction — a new child attached there and every target is loaded.)
+    for uuid, (junction_sid, targets) in sidecar.junctions.items():
+        if uuid in nodes and uuid not in (native_junction_uuids or set()):
+            tree.junction_points[uuid] = JunctionPoint(
+                uuid=uuid, session_id=junction_sid, target_sessions=list(targets)
+            )
+
+    # Workflow runs, scoped per loaded session (the single-file loader).
+    tree.workflow_runs = {}
+    for jsonl_file in trunk_files:
+        for run in load_session_workflow_runs(jsonl_file, silent=silent):
+            tree.workflow_runs[run.run_id] = run
+
+    dag_ordered = traverse_session_tree(tree)
+    queue_ops: list[QueueOperationTranscriptEntry] = [
+        e for e in all_messages if isinstance(e, QueueOperationTranscriptEntry)
+    ]
+    metadata_entries: list[TranscriptEntry] = [
+        e
+        for e in all_messages
+        if isinstance(e, (SummaryTranscriptEntry, AiTitleTranscriptEntry))
+    ]
     all_entries = (
         _splice_queue_ops_chronologically(dag_ordered, queue_ops) + metadata_entries
     )
@@ -1618,6 +2013,45 @@ def compute_session_data(
     return result
 
 
+def compute_session_residuals(messages: List[TranscriptEntry]) -> Dict[str, int]:
+    """Per-session count of traversed entries ``compute_session_data`` skips.
+
+    The complement of ``compute_session_data``'s ``message_count`` over
+    the same entry list: entries a session owns that that function
+    deliberately does not count — ``attachment`` and ``ai-title`` — so
+    that together the two account for every entry with a session
+    attribution. ``Summary`` entries carry no sessionId and are handled
+    project-wide instead (they bypass DAG traversal entirely, so a count
+    of their cached rows is exact).
+
+    This exists because ``projects.total_message_count`` is
+    ``len(messages)`` of the *traversed* list, while cached message rows
+    are the *parsed* list, and attachments can be dropped in between —
+    so the incremental refresh (§ 2.14) cannot derive the total from row
+    counts. Persisted per session (migration 010), it makes the identity
+
+        total = Σ(message_count + residual_count) + #summary rows
+
+    hold exactly, which is what lets the refresh move the total by delta.
+    """
+    residuals: Dict[str, int] = {}
+    for message in messages:
+        if not hasattr(message, "sessionId") or not isinstance(
+            message,
+            (
+                SummaryTranscriptEntry,
+                AiTitleTranscriptEntry,
+                AttachmentTranscriptEntry,
+            ),
+        ):
+            continue
+        session_id = coalesce_trunk_session_id(message, set())
+        if not session_id:
+            continue
+        residuals[session_id] = residuals.get(session_id, 0) + 1
+    return residuals
+
+
 def compute_project_aggregates(messages: List[TranscriptEntry]) -> Dict[str, Any]:
     """Compute project-wide aggregates (token totals + bookend timestamps).
 
@@ -1694,6 +2128,157 @@ def _build_session_data_from_messages(
     return compute_session_data(messages, include_cwd=False, warmup_session_ids=warmup)
 
 
+def _plan_page(
+    page_num: int,
+    total_pages: int,
+    page_session_ids: List[str],
+    session_data: Dict[str, SessionCacheData],
+    page_size: int,
+    suffix: str,
+    title: str,
+    page_message_count: int,
+) -> tuple[str, Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
+    """Plan one combined page from cached session data alone.
+
+    Returns ``(page_title, page_info, page_stats, page_cache_args)`` —
+    everything the render and the parent's cache write need, none of it
+    derived from loaded entries except ``page_message_count`` (the count
+    of entries actually rendered, which the caller measures from its own
+    message grouping). Shared by ``_generate_paginated_html`` and the
+    streaming path so the two can never drift.
+    """
+    from .utils import format_timestamp
+
+    html_path = _get_page_html_path(page_num, suffix)
+    first_timestamp = None
+    last_timestamp = None
+    total_input_tokens = 0
+    total_output_tokens = 0
+    total_cache_creation_tokens = 0
+    total_cache_read_tokens = 0
+    # The cached count must be the sessions-table sum, because
+    # is_page_stale() compares it against SUM(sessions.message_count)
+    # on the next run. len(page_messages) counts what's rendered
+    # (including Summary/AiTitle/Attachment entries that
+    # compute_session_data skips), so caching it left any page where
+    # the two rules diverge permanently "message_count_changed" —
+    # regenerating on every single run.
+    page_sessions_message_count = 0
+
+    for session_id in page_session_ids:
+        if session_id in session_data:
+            s = session_data[session_id]
+            page_sessions_message_count += s.message_count
+            if s.first_timestamp and (
+                first_timestamp is None or s.first_timestamp < first_timestamp
+            ):
+                first_timestamp = s.first_timestamp
+            if s.last_timestamp and (
+                last_timestamp is None or s.last_timestamp > last_timestamp
+            ):
+                last_timestamp = s.last_timestamp
+            total_input_tokens += s.total_input_tokens
+            total_output_tokens += s.total_output_tokens
+            total_cache_creation_tokens += s.total_cache_creation_tokens
+            total_cache_read_tokens += s.total_cache_read_tokens
+
+    # Build page_info for navigation
+    has_prev = page_num > 1
+    is_last_page = page_num == total_pages
+
+    page_info = {
+        "page_number": page_num,
+        "prev_link": _get_page_html_path(page_num - 1, suffix) if has_prev else None,
+        "next_link": _get_page_html_path(page_num + 1, suffix),
+        "is_last_page": is_last_page,
+    }
+
+    # Build page_stats
+    date_range = ""
+    if first_timestamp and last_timestamp:
+        first_fmt = format_timestamp(first_timestamp)
+        last_fmt = format_timestamp(last_timestamp)
+        if first_fmt == last_fmt:
+            date_range = first_fmt
+        else:
+            date_range = f"{first_fmt} - {last_fmt}"
+    elif first_timestamp:
+        date_range = format_timestamp(first_timestamp)
+
+    token_parts: List[str] = []
+    if total_input_tokens:
+        token_parts.append(f"Input: {total_input_tokens:,}")
+    if total_output_tokens:
+        token_parts.append(f"Output: {total_output_tokens:,}")
+    if total_cache_creation_tokens:
+        token_parts.append(f"Cache Create: {total_cache_creation_tokens:,}")
+    if total_cache_read_tokens:
+        token_parts.append(f"Cache Read: {total_cache_read_tokens:,}")
+    token_summary = " | ".join(token_parts) if token_parts else None
+
+    page_stats = {
+        "message_count": page_message_count,
+        "date_range": date_range,
+        "token_summary": token_summary,
+    }
+
+    page_title = f"{title} - Page {page_num}" if page_num > 1 else title
+    page_cache_args = {
+        "page_number": page_num,
+        "html_path": html_path,
+        "page_size_config": page_size,
+        "session_ids": page_session_ids,
+        "message_count": page_sessions_message_count,
+        "first_timestamp": first_timestamp,
+        "last_timestamp": last_timestamp,
+        "total_input_tokens": total_input_tokens,
+        "total_output_tokens": total_output_tokens,
+        "total_cache_creation_tokens": total_cache_creation_tokens,
+        "total_cache_read_tokens": total_cache_read_tokens,
+        "variant_suffix": suffix,
+    }
+    return page_title, page_info, page_stats, page_cache_args
+
+
+def _render_page_unit_inline(
+    unit: RenderUnit,
+    output_dir: Path,
+    *,
+    image_export_mode: Optional[str],
+    depth: RenderingDepth,
+    compact: bool,
+    no_recaps: bool,
+    fragment_store: "Optional[RenderFragmentStore]",
+    session_tree: Optional[SessionTree],
+    archive_search_link: Optional[str],
+) -> None:
+    """Render one combined-page unit in-process and write its file."""
+    from .html.renderer import HtmlRenderer
+
+    assert unit.entries is not None  # every page unit is planned with them
+    page_renderer = HtmlRenderer(image_export_mode=image_export_mode or "embedded")
+    page_renderer.depth = depth
+    page_renderer.compact = compact
+    page_renderer.no_recaps = no_recaps
+    page_renderer.fragment_store = fragment_store
+    html_content = page_renderer.generate(
+        unit.entries,
+        unit.title,
+        output_dir=output_dir,
+        page_info=unit.page_info,
+        page_stats=unit.page_stats,
+        session_tree=session_tree,
+        archive_search_link=archive_search_link,
+    )
+    # errors="replace": surrogateescape-decoded bytes from upstream
+    # JSONL may carry lone surrogates (issue #139); strict UTF-8
+    # encoding crashes here. Replace with U+FFFD so output stays
+    # valid UTF-8.
+    (output_dir / unit.file_name).write_text(
+        html_content, encoding="utf-8", errors="replace"
+    )
+
+
 def _generate_paginated_html(
     messages: List[TranscriptEntry],
     output_dir: Path,
@@ -1740,8 +2325,7 @@ def _generate_paginated_html(
         actually (re)written (False when every page was current/skipped), so
         the caller can report regeneration accurately.
     """
-    from .html.renderer import HtmlRenderer
-    from .utils import format_timestamp, variant_suffix as _variant_suffix
+    from .utils import variant_suffix as _variant_suffix
 
     suffix = _variant_suffix(depth, compact, "html", no_recaps=no_recaps)
 
@@ -1835,86 +2419,19 @@ def _generate_paginated_html(
                 page_messages.extend(messages_by_session[session_id])
                 page_ordinals.extend(ordinals_by_session[session_id])
 
-        # Calculate page stats
-        page_message_count = len(page_messages)
-        first_timestamp = None
-        last_timestamp = None
-        total_input_tokens = 0
-        total_output_tokens = 0
-        total_cache_creation_tokens = 0
-        total_cache_read_tokens = 0
-        # The cached count must be the sessions-table sum, because
-        # is_page_stale() compares it against SUM(sessions.message_count)
-        # on the next run. len(page_messages) counts what's rendered
-        # (including Summary/AiTitle/Attachment entries that
-        # compute_session_data skips), so caching it left any page where
-        # the two rules diverge permanently "message_count_changed" —
-        # regenerating on every single run.
-        page_sessions_message_count = 0
-
-        for session_id in page_session_ids:
-            if session_id in session_data:
-                s = session_data[session_id]
-                page_sessions_message_count += s.message_count
-                if s.first_timestamp and (
-                    first_timestamp is None or s.first_timestamp < first_timestamp
-                ):
-                    first_timestamp = s.first_timestamp
-                if s.last_timestamp and (
-                    last_timestamp is None or s.last_timestamp > last_timestamp
-                ):
-                    last_timestamp = s.last_timestamp
-                total_input_tokens += s.total_input_tokens
-                total_output_tokens += s.total_output_tokens
-                total_cache_creation_tokens += s.total_cache_creation_tokens
-                total_cache_read_tokens += s.total_cache_read_tokens
-
-        # Build page_info for navigation
-        has_prev = page_num > 1
-        is_last_page = page_num == len(pages)
-
-        page_info = {
-            "page_number": page_num,
-            "prev_link": _get_page_html_path(page_num - 1, suffix)
-            if has_prev
-            else None,
-            "next_link": _get_page_html_path(page_num + 1, suffix),
-            "is_last_page": is_last_page,
-        }
-
-        # Build page_stats
-        date_range = ""
-        if first_timestamp and last_timestamp:
-            first_fmt = format_timestamp(first_timestamp)
-            last_fmt = format_timestamp(last_timestamp)
-            if first_fmt == last_fmt:
-                date_range = first_fmt
-            else:
-                date_range = f"{first_fmt} - {last_fmt}"
-        elif first_timestamp:
-            date_range = format_timestamp(first_timestamp)
-
-        token_parts: List[str] = []
-        if total_input_tokens:
-            token_parts.append(f"Input: {total_input_tokens:,}")
-        if total_output_tokens:
-            token_parts.append(f"Output: {total_output_tokens:,}")
-        if total_cache_creation_tokens:
-            token_parts.append(f"Cache Create: {total_cache_creation_tokens:,}")
-        if total_cache_read_tokens:
-            token_parts.append(f"Cache Read: {total_cache_read_tokens:,}")
-        token_summary = " | ".join(token_parts) if token_parts else None
-
-        page_stats = {
-            "message_count": page_message_count,
-            "date_range": date_range,
-            "token_summary": token_summary,
-        }
-
         # Queue this page. Rendering is deferred so the whole stale set can
         # be dispatched together; the cache write below is replayed from
         # `page_cache_args` in the parent once the file lands.
-        page_title = f"{title} - Page {page_num}" if page_num > 1 else title
+        page_title, page_info, page_stats, cache_args = _plan_page(
+            page_num,
+            len(pages),
+            page_session_ids,
+            session_data,
+            page_size,
+            suffix,
+            title,
+            len(page_messages),
+        )
         stale_units.append(
             RenderUnit(
                 kind="page",
@@ -1928,43 +2445,19 @@ def _generate_paginated_html(
                 page_stats=page_stats,
             )
         )
-        page_cache_args[page_num] = {
-            "page_number": page_num,
-            "html_path": html_path,
-            "page_size_config": page_size,
-            "session_ids": page_session_ids,
-            "message_count": page_sessions_message_count,
-            "first_timestamp": first_timestamp,
-            "last_timestamp": last_timestamp,
-            "total_input_tokens": total_input_tokens,
-            "total_output_tokens": total_output_tokens,
-            "total_cache_creation_tokens": total_cache_creation_tokens,
-            "total_cache_read_tokens": total_cache_read_tokens,
-            "variant_suffix": suffix,
-        }
+        page_cache_args[page_num] = cache_args
 
     def _render_page_inline(unit: RenderUnit) -> None:
-        assert unit.entries is not None  # every page unit is planned with them
-        page_renderer = HtmlRenderer(image_export_mode=image_export_mode or "embedded")
-        page_renderer.depth = depth
-        page_renderer.compact = compact
-        page_renderer.no_recaps = no_recaps
-        page_renderer.fragment_store = fragment_store
-        html_content = page_renderer.generate(
-            unit.entries,
-            unit.title,
-            output_dir=output_dir,
-            page_info=unit.page_info,
-            page_stats=unit.page_stats,
+        _render_page_unit_inline(
+            unit,
+            output_dir,
+            image_export_mode=image_export_mode,
+            depth=depth,
+            compact=compact,
+            no_recaps=no_recaps,
+            fragment_store=fragment_store,
             session_tree=session_tree,
             archive_search_link=archive_search_link,
-        )
-        # errors="replace": surrogateescape-decoded bytes from upstream
-        # JSONL may carry lone surrogates (issue #139); strict UTF-8
-        # encoding crashes here. Replace with U+FFFD so output stays
-        # valid UTF-8.
-        (output_dir / unit.file_name).write_text(
-            html_content, encoding="utf-8", errors="replace"
         )
 
     def _record_page(unit: RenderUnit) -> None:
@@ -1972,7 +2465,7 @@ def _generate_paginated_html(
         wrote_any = True
         cache_manager.update_page_cache(**page_cache_args[unit.key])
 
-    _dispatch_render_units(
+    dispatch_render_units(
         stale_units,
         render_pool,
         _render_page_inline,
@@ -2022,6 +2515,739 @@ def convert_jsonl_to_html(
         page_size=page_size,
         depth=depth,
     )
+
+
+def _is_paginated(
+    *, total_message_count: int, page_size: int, existing_page_count: int
+) -> bool:
+    """Does this project's combined output come out as pages, not one file?
+
+    The rule three passes have to agree on, so it is written once:
+    ``convert_jsonl_to``'s ``use_pagination`` (which decides for real,
+    routing to ``_generate_paginated_html``), the Phase-1b staleness
+    replay in ``_combined_output_is_stale``, and the Phase-1c streaming
+    gate. The latter two plan work on the assumption that the pagination
+    pass will reach the same answer, and a divergence would show up as
+    pages silently not regenerating.
+
+    The second clause is what keeps an already-paginated project
+    paginated after its message count drops back under ``page_size``:
+    the pages exist on disk and in the cache, so the pass must keep
+    maintaining them rather than switch to a single combined file and
+    strand them.
+
+    Callers supply the counts because they source them differently (a
+    cache row, a loaded message list, or both), but the predicate they
+    feed them to is the same one.
+    """
+    return total_message_count > page_size or existing_page_count > 1
+
+
+def _combined_output_is_stale(
+    cache_manager: "CacheManager",
+    output_path: Path,
+    effective_output_dir: Path,
+    format: str,
+    page_size: int,
+    suffix: str,
+) -> bool:
+    """Cache-only combined-output staleness, pagination-aware.
+
+    The Phase-1b early exit used to ask ``is_transcript_stale`` about
+    ``combined_transcripts.html`` only — a name a *paginated* project has
+    no cache row for, so every paginated project read "stale" and
+    full-loaded on every direct conversion even when nothing changed.
+    This helper reproduces the actual decision: for a paginated project
+    it replays the pagination pass's plan (same session→page assignment
+    from cached session data, same ``is_page_stale`` per page, same
+    page-size / page-count invalidation triggers) without loading a
+    single entry. Any deviation the plan would act on — page-size change,
+    page-count change, a stale or missing page — reports stale, which
+    routes to the full path exactly as before.
+
+    Only sound when the cache is fresh (the caller's gate): the cached
+    session table then matches the source tree, so the recomputed
+    assignment is the one the pagination pass would compute after a load.
+    """
+    cached_data = cache_manager.get_cached_project_data()
+    existing_page_count = cache_manager.get_page_count(suffix)
+    paginated = (
+        format == "html"
+        and cached_data is not None
+        and _is_paginated(
+            total_message_count=cached_data.total_message_count,
+            page_size=page_size,
+            existing_page_count=existing_page_count,
+        )
+    )
+    if not paginated:
+        stale, _reason = cache_manager.is_transcript_stale(
+            output_path.name, None, output_dir=effective_output_dir
+        )
+        return stale
+
+    cached_page_size = cache_manager.get_page_size_config()
+    if cached_page_size is not None and cached_page_size != page_size:
+        return True
+
+    # The pagination pass assigns cached sessions ∩ sessions-on-disk (it
+    # intersects with the loaded transcripts; with a fresh cache, "some
+    # source file on disk holds this session's entries" is the same set).
+    assert cached_data is not None
+    on_disk = {
+        f.name
+        for f in cache_manager.project_path.glob("*.jsonl")
+        if not f.name.startswith("agent-")
+    }
+    file_map = cache_manager.get_session_file_map()
+    session_data = {
+        sid: data
+        for sid, data in cached_data.sessions.items()
+        if any(
+            name in on_disk
+            for name in file_map.get(sid, set())
+            if not name.startswith("agent-")
+        )
+    }
+    pages: List[List[str]] = _assign_sessions_to_pages(session_data, page_size)
+    if not pages:
+        pages = [[]]
+    if existing_page_count != len(pages):
+        return True
+    for page_num, page_session_ids in enumerate(pages, start=1):
+        page_file = effective_output_dir / _get_page_html_path(page_num, suffix)
+        is_stale, _reason = cache_manager.is_page_stale(
+            page_num,
+            page_size,
+            suffix,
+            output_dir=effective_output_dir,
+            expected_session_ids=page_session_ids,
+        )
+        if is_stale or not page_file.exists():
+            return True
+    return False
+
+
+# The memory knee both of the conversion's RAM-for-CPU trades decline at,
+# as a multiple of the project's transcript bytes. Two things read it, and
+# they are deliberately the *same* number so the degradation ladder is
+# continuous — which is why it is one constant: two that must move
+# together would eventually drift apart.
+#
+# Where the number comes from: measured serial peaks on the largest real
+# project (803MB of transcripts) are 1252MB with the fragment store off
+# (~1.56x bytes on disk) and 1521MB with it on (~1.9x — the +269MB is the
+# fragment text plus per-entry overhead, work/render-format-once.md § 4.9).
+# 2.4x is that store-on peak plus a ~25% margin.
+#
+# Beneath it, in order:
+#
+# - ``_make_fragment_store`` declines the store, so the conversion runs at
+#   its pre-store footprint instead of trading its last RAM for CPU.
+#   Whenever that happens the render pool's own memory cap (a far higher
+#   bar, ~10x bytes) has already declined too, so a store-less conversion
+#   is always a serial one and needs no worker-side coordination.
+# - ``_should_stream`` makes a paginated conversion stream page-by-page
+#   rather than full-load, picking up exactly where that ladder left off
+#   and bounding peak residency at one page.
+#
+# Above it, roomier machines keep the fanned full-load path untouched.
+_MIN_AVAILABLE_MEMORY_PER_TRANSCRIPT_BYTE = 2.4
+
+
+def _streaming_mode() -> str:
+    """``CLAUDE_CODE_LOG_STREAMING``: ``force`` | ``off`` | ``auto``.
+
+    ``1``/``on``/``true`` forces the streaming path wherever it is
+    structurally eligible; ``0``/``off``/``false`` disables it (the
+    bisecting knob, mirroring the branch's other kill-switches); unset
+    lets the memory valve decide.
+    """
+    raw = os.getenv("CLAUDE_CODE_LOG_STREAMING", "").strip().lower()
+    if raw in ("1", "on", "yes", "true"):
+        return "force"
+    if raw in ("0", "off", "no", "false"):
+        return "off"
+    return "auto"
+
+
+# On a roomy machine, streaming still wins whenever the work is
+# page-sparse, because per-page partial loads replace the whole-project
+# load that dominates an incremental run. Measured on the 8-core/16GB VM
+# against a 137MB/26-page archive (scripts/bench_render.py): incremental
+# (1 page + 3 sessions stale) streamed at 2.0s/276MB vs the fan-out full
+# path's 3.3s/542MB, while a full rebuild streamed at 11.1s vs the
+# fan-out's 6.7s — the crossover sits near 36% of pages stale (streamed
+# wall scales ~linearly with stale pages; the full path pays the full
+# load regardless and fans the rendering out). 1/3 keeps a margin under
+# that crossover, which moves only weakly with core count because the
+# full load, not rendering, is the fixed cost.
+_STREAMING_MAX_SPARSE_FRACTION = 1.0 / 3.0
+
+
+def _should_stream(transcript_bytes: int) -> Optional[str]:
+    """How this conversion should stream page-by-page, if at all.
+
+    Returns ``None`` (don't stream), ``"always"`` (stream every eligible
+    page pass), or ``"sparse"`` (stream only if the pass turns out
+    page-sparse — see ``_STREAMING_MAX_SPARSE_FRACTION``; the count of
+    pages needing work only exists once the pass has planned its pages,
+    so the final decision lives in ``_stream_paginated_conversion``).
+
+    Auto mode is a memory valve with a sparse fallback: under
+    ``_MIN_AVAILABLE_MEMORY_PER_TRANSCRIPT_BYTE`` times the project's
+    transcript bytes — the regime where the serial full load (~1.56x bytes
+    store-less, ~1.9x with the store) is at risk and every fan-out has
+    already declined — the pass always streams, bounding peak residency
+    at one page's sessions instead of the project. With more memory than
+    that (or none measurable), streaming is still the wall-clock winner
+    for page-sparse work, so the pass runs in sparse mode and declines
+    itself when the work turns out dense (falling through to the full
+    load + fan-out, which wins dense rebuilds on a roomy machine).
+    """
+    mode = _streaming_mode()
+    if mode == "off":
+        return None
+    if mode == "force":
+        return "always"
+    if transcript_bytes <= 0:
+        return None
+    from .render_pool import available_memory_bytes
+
+    available = available_memory_bytes()
+    if (
+        available is not None
+        and available < transcript_bytes * _MIN_AVAILABLE_MEMORY_PER_TRANSCRIPT_BYTE
+    ):
+        return "always"
+    return "sparse"
+
+
+def _stream_paginated_conversion(
+    input_path: Path,
+    effective_output_dir: Path,
+    cache_manager: "CacheManager",
+    title: str,
+    page_size: int,
+    *,
+    depth: RenderingDepth,
+    compact: bool,
+    no_timestamps: bool,
+    no_recaps: bool,
+    image_export_mode: Optional[str],
+    archive_search_link: Optional[str],
+    generate_individual_sessions: bool,
+    write_combined: bool,
+    silent: bool,
+    sparse_only: bool = False,
+) -> Optional[tuple[Path, bool, int]]:
+    """Convert a paginated project page-by-page, never loading it whole.
+
+    ``sparse_only`` is the roomy-machine mode (``_should_stream`` →
+    ``"sparse"``): once the pages needing work are known, the pass
+    declines itself unless they are at most
+    ``_STREAMING_MAX_SPARSE_FRACTION`` of the plan — dense rebuilds
+    belong to the full load + fan-out there.
+
+    Streaming stage 3 (work/render-format-once.md): the page plan is
+    computed from cached session data alone (the same assignment
+    ``_generate_paginated_html`` makes), then each page needing work —
+    a stale page, or stale session files on it — loads only the source
+    files holding that page's sessions through the stage-2 partial-load
+    machinery, renders the page and its stale session files together
+    against a per-page fragment store, and drops it all before the next
+    page. Peak residency becomes max(page, co-resident files) instead of
+    the whole project, which is what lets a machine under ~2x its largest
+    project convert it at all.
+
+    Fidelity leans entirely on already-verified pieces: page membership
+    and stats are cache-derived exactly as the full pagination pass
+    derives them; each page's entries are the same per-trunk projections
+    the stage-2 loader was proven byte-identical on; and cross-page
+    couplings (anchors, tool pairing) are already severed by pagination
+    itself in the full path. Rendering is inline/serial — this path runs
+    precisely where every fan-out has already declined for memory.
+
+    Returns ``(first_page_path, combined_regenerated,
+    sessions_regenerated)``, or None to decline — a missing sidecar or
+    project data, or any session whose source-file set is incomplete —
+    in which case the caller falls through to the full-load path,
+    unchanged. Cache writes made before a mid-loop decline are exactly
+    the writes the full path would make for those pages, so a partial
+    pass never leaves inconsistent state.
+    """
+    from .utils import variant_suffix as _variant_suffix
+
+    page_suffix = _variant_suffix(depth, compact, "html", no_recaps=no_recaps)
+    session_suffix = _variant_suffix(depth, compact, "html", no_timestamps, no_recaps)
+
+    sidecar = cache_manager.load_session_sidecar()
+    if sidecar is None:
+        return None
+    cached_data = cache_manager.get_cached_project_data()
+    if cached_data is None:
+        return None
+    file_map = cache_manager.get_session_file_map()
+
+    # The pagination pass assigns cached sessions ∩ sessions-on-disk (it
+    # intersects with the loaded transcripts; with a fresh cache, "some
+    # source file on disk holds this session's entries" is the same set —
+    # the _combined_output_is_stale equivalence).
+    on_disk = {
+        f.name for f in input_path.glob("*.jsonl") if not f.name.startswith("agent-")
+    }
+    session_data = {
+        sid: data
+        for sid, data in cached_data.sessions.items()
+        if any(
+            name in on_disk
+            for name in file_map.get(sid, set())
+            if not name.startswith("agent-")
+        )
+    }
+    if not session_data:
+        return None
+
+    first_page_path = effective_output_dir / _get_page_html_path(1, page_suffix)
+    wrote_any = False
+    sessions_regenerated = 0
+
+    with cache_manager.batch():
+        # Page-size change and orphan cleanup, exactly as the full
+        # pagination pass does them (idempotent: a mid-loop decline hands
+        # the full path the same state it would have produced itself).
+        cached_page_size = cache_manager.get_page_size_config()
+        if cached_page_size is not None and cached_page_size != page_size:
+            if not silent:
+                print(
+                    f"Page size changed from {cached_page_size} to {page_size}, "
+                    "regenerating all pages"
+                )
+            for html_path in cache_manager.invalidate_all_pages():
+                page_file = effective_output_dir / html_path
+                if page_file.exists():
+                    page_file.unlink()
+
+        pages: List[List[str]] = _assign_sessions_to_pages(session_data, page_size)
+        if not pages:
+            return None
+
+        old_page_count = cache_manager.get_page_count(page_suffix)
+        if old_page_count > len(pages):
+            for orphan_page_num in range(len(pages) + 1, old_page_count + 1):
+                orphan_path = effective_output_dir / _get_page_html_path(
+                    orphan_page_num, page_suffix
+                )
+                if orphan_path.exists():
+                    orphan_path.unlink()
+
+        stale_session_ids: set[str] = set()
+        if generate_individual_sessions:
+            stale_session_ids = {
+                sid
+                for sid, _reason in cache_manager.get_stale_sessions(
+                    variant=session_suffix,
+                    ext="html",
+                    output_dir=effective_output_dir,
+                )
+            }
+
+        # Plan the work before rendering any of it: which pages are stale
+        # (or missing), and which carry stale session files. Pure cache
+        # and stat queries — cheap enough to run before the sparse gate.
+        page_work: List[tuple[int, List[str], bool, str, set[str]]] = []
+        for page_num, page_session_ids in enumerate(pages, start=1):
+            page_file = effective_output_dir / _get_page_html_path(
+                page_num, page_suffix
+            )
+            is_stale, reason = cache_manager.is_page_stale(
+                page_num,
+                page_size,
+                page_suffix,
+                output_dir=effective_output_dir,
+                expected_session_ids=page_session_ids,
+            )
+            page_needs_render = is_stale or not page_file.exists()
+            page_stale_sessions = stale_session_ids & set(page_session_ids)
+            if page_needs_render or page_stale_sessions:
+                page_work.append(
+                    (
+                        page_num,
+                        page_session_ids,
+                        page_needs_render,
+                        reason,
+                        page_stale_sessions,
+                    )
+                )
+
+        # The sparse gate: on a roomy machine the streamed pass only wins
+        # while the work is a small slice of the plan; a dense pass
+        # declines to the full load + fan-out. Cache writes so far
+        # (page-size invalidation, orphan cleanup) are exactly what the
+        # full path would have done itself.
+        if sparse_only and len(page_work) > len(pages) * _STREAMING_MAX_SPARSE_FRACTION:
+            return None
+
+        if not silent:
+            print(
+                f"Streaming conversion for {input_path.name}: "
+                f"{len(page_work)} of {len(pages)} page(s) need work"
+            )
+
+        for (
+            page_num,
+            page_session_ids,
+            page_needs_render,
+            reason,
+            page_stale_sessions,
+        ) in page_work:
+            html_path = _get_page_html_path(page_num, page_suffix)
+
+            # Load just this page's sessions (plus whatever co-resides in
+            # their files), faithful to the full load via the sidecar.
+            needed_files = _resolve_session_source_files(
+                input_path, file_map, list(page_session_ids), strict=True
+            )
+            if needed_files is None:
+                return None
+            trunk_files = [
+                f
+                for f in input_path.glob("*.jsonl")
+                if not f.name.startswith("agent-") and f.name in needed_files
+            ]
+            if {f.name for f in trunk_files} != needed_files:
+                return None
+            page_entries, page_tree = _load_sessions_partial(
+                input_path, cache_manager, sidecar, trunk_files, silent
+            )
+            page_entries = deduplicate_messages(page_entries)
+
+            # One fragment store per page: the page render seeds it, the
+            # page's session files reuse it, and it dies with the page —
+            # so its keys (this load's entry ordinals) never cross loads,
+            # and its memory is bounded by the page. The valve compares
+            # against the page's own source bytes.
+            page_bytes = sum(f.stat().st_size for f in trunk_files)
+            fragment_store = _make_fragment_store("html", transcript_bytes=page_bytes)
+            if fragment_store is not None:
+                fragment_store.set_entry_ordinals(page_entries)
+
+            if page_needs_render:
+                if not silent:
+                    print(f"Generating page {page_num} ({reason})...")
+                messages_by_session: Dict[str, List[TranscriptEntry]] = {}
+                for msg in page_entries:
+                    msg_sid = getattr(msg, "sessionId", None)
+                    if msg_sid:
+                        messages_by_session.setdefault(
+                            get_parent_session_id(msg_sid), []
+                        ).append(msg)
+                page_messages: List[TranscriptEntry] = []
+                for session_id in page_session_ids:
+                    page_messages.extend(messages_by_session.get(session_id, []))
+
+                page_title, page_info, page_stats, cache_args = _plan_page(
+                    page_num,
+                    len(pages),
+                    page_session_ids,
+                    session_data,
+                    page_size,
+                    page_suffix,
+                    title,
+                    len(page_messages),
+                )
+                unit = RenderUnit(
+                    kind="page",
+                    key=page_num,
+                    file_name=html_path,
+                    title=page_title,
+                    entries=page_messages,
+                    session_ids=list(page_session_ids),
+                    page_info=page_info,
+                    page_stats=page_stats,
+                )
+                _render_page_unit_inline(
+                    unit,
+                    effective_output_dir,
+                    image_export_mode=image_export_mode,
+                    depth=depth,
+                    compact=compact,
+                    no_recaps=no_recaps,
+                    fragment_store=fragment_store,
+                    session_tree=page_tree,
+                    archive_search_link=archive_search_link,
+                )
+                cache_manager.update_page_cache(**cache_args)
+                wrote_any = True
+
+            if generate_individual_sessions and page_stale_sessions:
+                sessions_regenerated += _generate_individual_session_files(
+                    "html",
+                    page_entries,
+                    effective_output_dir,
+                    None,
+                    None,
+                    cache_manager,
+                    False,
+                    image_export_mode,
+                    silent=silent,
+                    session_tree=page_tree,
+                    depth=depth,
+                    compact=compact,
+                    write_combined=write_combined,
+                    no_timestamps=no_timestamps,
+                    no_recaps=no_recaps,
+                    render_pool=None,
+                    fragment_store=fragment_store,
+                    restrict_to_sessions=page_stale_sessions,
+                )
+
+        # Reveal the "Next" link on every page that is no longer last —
+        # the same idempotent post-pass the full pagination path runs.
+        for page_num in range(1, len(pages)):
+            _enable_next_link_on_previous_page(
+                effective_output_dir, page_num, page_suffix
+            )
+
+    return first_page_path, wrote_any, sessions_regenerated
+
+
+# ===== convert_jsonl_to's partial paths =====
+#
+# Two ways a directory conversion can finish without loading the whole
+# project, tried in order before the full load. Both have the same shape,
+# which is this branch's central contract: check preconditions, attempt a
+# partial path, and return the conversion's ``Path`` if it handled the
+# work or ``None`` to fall through to the next path (ultimately the
+# unchanged full load). A decline must be indistinguishable from never
+# having been attempted, so neither writes output or mutates ``report``
+# on any path that returns ``None``.
+
+
+def _try_current_or_session_scoped(
+    *,
+    input_path: Path,
+    output_path: Path,
+    effective_output_dir: Path,
+    cache_manager: Optional["CacheManager"],
+    cache_was_updated: bool,
+    format: str,
+    ext: str,
+    suffix: str,
+    page_size: int,
+    from_date: Optional[str],
+    to_date: Optional[str],
+    force_regenerate: bool,
+    write_combined: bool,
+    generate_individual_sessions: bool,
+    image_export_mode: Optional[str],
+    depth: RenderingDepth,
+    compact: bool,
+    no_timestamps: bool,
+    no_recaps: bool,
+    silent: bool,
+    report: Optional["RegenerationReport"],
+) -> Optional[Path]:
+    """Finish from the cache alone, when the combined output is current.
+
+    Covers the two outcomes that share those preconditions, in order:
+
+    - **Nothing is stale.** Return without loading anything.
+    - **Only session files are stale.** Their bytes are reproducible from
+      those sessions' own JSONL plus the persisted cross-session sidecar,
+      so regenerate just those — no whole-project load
+      (work/render-format-once.md, streaming stage 2).
+
+    Both need the same staleness answers, which is why they are one
+    function rather than two: splitting them would compute
+    ``_combined_output_is_stale`` and ``get_stale_sessions`` twice.
+
+    Returns ``None`` when the preconditions don't hold, when the combined
+    output is stale, or when the session-scoped load declines.
+    """
+    if (
+        cache_manager is None
+        or cache_was_updated
+        or from_date is not None
+        or to_date is not None
+        or force_regenerate
+    ):
+        return None
+
+    # Check if the combined output is stale — unless it isn't produced at
+    # all (`--combined no`), in which case its absence must not veto the
+    # early exit. For a single-file combined, `is_transcript_stale` runs
+    # the version-marker sniff on the same resolved file; for a
+    # *paginated* project (which has no `combined_transcripts.html` cache
+    # row, so that check would read "stale" on every run and this early
+    # exit never fired for them at all) the helper replays the pagination
+    # pass's own per-page staleness plan from cached session data alone.
+    if write_combined:
+        combined_stale = _combined_output_is_stale(
+            cache_manager,
+            output_path,
+            effective_output_dir,
+            format,
+            page_size,
+            suffix,
+        )
+    else:
+        combined_stale = False
+    if combined_stale:
+        return None
+
+    # Check if any session file of this variant is stale
+    stale_sessions = cache_manager.get_stale_sessions(
+        variant=suffix, ext=ext, output_dir=effective_output_dir
+    )
+    if not stale_sessions or not generate_individual_sessions:
+        # Nothing needs regeneration - skip loading
+        if not silent:
+            print(
+                f"All HTML files are current for {input_path.name}, "
+                "skipping regeneration"
+            )
+        # Nothing regenerated: report defaults (False / 0) stand.
+        return output_path
+
+    if not _session_scoped_enabled():
+        return None
+    partial = _load_stale_session_transcripts(
+        input_path,
+        cache_manager,
+        [sid for sid, _reason in stale_sessions],
+        silent,
+    )
+    if partial is None:
+        return None
+
+    partial_messages, partial_tree = partial
+    partial_messages = deduplicate_messages(partial_messages)
+    if not silent:
+        print(
+            f"Regenerating {len(stale_sessions)} stale "
+            f"session file(s) for {input_path.name} "
+            "(session-scoped, combined output current)"
+        )
+    sessions_regenerated = _generate_individual_session_files(
+        format,
+        partial_messages,
+        effective_output_dir,
+        None,
+        None,
+        cache_manager,
+        False,
+        image_export_mode,
+        silent=silent,
+        session_tree=partial_tree,
+        depth=depth,
+        compact=compact,
+        write_combined=write_combined,
+        no_timestamps=no_timestamps,
+        no_recaps=no_recaps,
+        render_pool=None,
+        fragment_store=None,
+    )
+    if report is not None:
+        report.combined_regenerated = False
+        report.sessions_regenerated = sessions_regenerated
+    return output_path
+
+
+def _try_streaming(
+    *,
+    input_path: Path,
+    effective_output_dir: Path,
+    cache_manager: Optional["CacheManager"],
+    format: str,
+    page_size: int,
+    from_date: Optional[str],
+    to_date: Optional[str],
+    force_regenerate: bool,
+    write_combined: bool,
+    generate_individual_sessions: bool,
+    image_export_mode: Optional[str],
+    archive_search_link: Optional[str],
+    depth: RenderingDepth,
+    compact: bool,
+    no_timestamps: bool,
+    no_recaps: bool,
+    silent: bool,
+    report: Optional["RegenerationReport"],
+) -> Optional[Path]:
+    """Convert a paginated project page-by-page, if this run should.
+
+    Streaming stage 3 (work/render-format-once.md). On a memory-tight
+    machine (or when forced by ``CLAUDE_CODE_LOG_STREAMING=1``) a
+    paginated project converts from cache-planned partial loads instead
+    of loading whole; a roomy machine streams too when the pass turns out
+    page-sparse (the daily-run shape), where partial loads beat the
+    whole-project load the full path would pay. The sidecar
+    ``ensure_fresh_cache`` just (re)persisted makes the partial loads
+    faithful even right after a cache update.
+
+    Returns ``None`` when the preconditions don't hold, when the project
+    isn't paginated, when ``_should_stream`` declines, or when the pass
+    itself declines (sparse mode meeting dense work).
+    """
+    if (
+        format != "html"
+        or cache_manager is None
+        or from_date is not None
+        or to_date is not None
+        or force_regenerate
+        or not write_combined
+    ):
+        return None
+
+    from .utils import variant_suffix as _page_variant_suffix
+
+    stream_page_suffix = _page_variant_suffix(
+        depth, compact, "html", no_recaps=no_recaps
+    )
+    stream_cached = cache_manager.get_cached_project_data()
+    stream_paginated = stream_cached is not None and _is_paginated(
+        total_message_count=stream_cached.total_message_count,
+        page_size=page_size,
+        existing_page_count=cache_manager.get_page_count(stream_page_suffix),
+    )
+    if not stream_paginated:
+        return None
+    stream_decision = _should_stream(project_transcript_bytes(input_path))
+    if stream_decision is None:
+        return None
+
+    stream_dirs = cache_manager.get_working_directories()
+    stream_title = (
+        f"Claude Transcripts - {get_project_display_name(input_path.name, stream_dirs)}"
+    )
+    streamed = _stream_paginated_conversion(
+        input_path,
+        effective_output_dir,
+        cache_manager,
+        stream_title,
+        page_size,
+        depth=depth,
+        compact=compact,
+        no_timestamps=no_timestamps,
+        no_recaps=no_recaps,
+        image_export_mode=image_export_mode,
+        archive_search_link=archive_search_link,
+        generate_individual_sessions=(
+            generate_individual_sessions and input_path.is_dir()
+        ),
+        write_combined=write_combined,
+        silent=silent,
+        sparse_only=stream_decision == "sparse",
+    )
+    if streamed is None:
+        return None
+
+    streamed_path, streamed_combined, streamed_sessions = streamed
+    if report is not None:
+        report.combined_regenerated = streamed_combined
+        report.sessions_regenerated = streamed_sessions
+    return streamed_path
 
 
 def convert_jsonl_to(
@@ -2092,7 +3318,7 @@ def convert_jsonl_to(
             to the CPU count — the fan-out is on by default — while ``1``
             or ``off`` opts out into inline rendering, the historical
             single-threaded behaviour. An explicit int overrides the
-            environment. See ``_make_render_pool`` for the further
+            environment. See ``build_render_pool`` for the further
             conditions under which a pool is actually created.
     """
     if not input_path.exists():
@@ -2172,44 +3398,69 @@ def convert_jsonl_to(
             input_path, cache_manager, from_date, to_date, silent
         )
 
-        # Phase 1b: Early exit if nothing needs regeneration
-        # Skip expensive message loading if all output files are up to date
-        if (
-            cache_manager is not None
-            and not cache_was_updated
-            and from_date is None
-            and to_date is None
-            and not force_regenerate
-        ):
-            # Check if the combined output is stale — unless it isn't
-            # produced at all (`--combined no`), in which case its
-            # absence must not veto the early exit. `is_transcript_stale`
-            # already runs the version-marker sniff on the same resolved
-            # file, so no separate `is_html_outdated(output_path)` is needed.
-            if write_combined:
-                combined_stale, _ = cache_manager.is_transcript_stale(
-                    output_path.name, None, output_dir=effective_output_dir
-                )
-            else:
-                combined_stale = False
-            if not combined_stale:
-                # Check if any session file of this variant is stale
-                stale_sessions = cache_manager.get_stale_sessions(
-                    variant=suffix, ext=ext, output_dir=effective_output_dir
-                )
-                if not stale_sessions or not generate_individual_sessions:
-                    # Nothing needs regeneration - skip loading
-                    if not silent:
-                        print(
-                            f"All HTML files are current for {input_path.name}, "
-                            "skipping regeneration"
-                        )
-                    # Nothing regenerated: report defaults (False / 0) stand.
-                    return output_path
+        # Phase 1b: finish without loading the project at all, if the
+        # cache says we can.
+        settled = _try_current_or_session_scoped(
+            input_path=input_path,
+            output_path=output_path,
+            effective_output_dir=effective_output_dir,
+            cache_manager=cache_manager,
+            cache_was_updated=cache_was_updated,
+            format=format,
+            ext=ext,
+            suffix=suffix,
+            page_size=page_size,
+            from_date=from_date,
+            to_date=to_date,
+            force_regenerate=force_regenerate,
+            write_combined=write_combined,
+            generate_individual_sessions=generate_individual_sessions,
+            image_export_mode=image_export_mode,
+            depth=depth,
+            compact=compact,
+            no_timestamps=no_timestamps,
+            no_recaps=no_recaps,
+            silent=silent,
+            report=report,
+        )
+        if settled is not None:
+            return settled
+
+        # Phase 1c: convert a paginated project page-by-page instead of
+        # loading it whole.
+        streamed_path = _try_streaming(
+            input_path=input_path,
+            effective_output_dir=effective_output_dir,
+            cache_manager=cache_manager,
+            format=format,
+            page_size=page_size,
+            from_date=from_date,
+            to_date=to_date,
+            force_regenerate=force_regenerate,
+            write_combined=write_combined,
+            generate_individual_sessions=generate_individual_sessions,
+            image_export_mode=image_export_mode,
+            archive_search_link=archive_search_link,
+            depth=depth,
+            compact=compact,
+            no_timestamps=no_timestamps,
+            no_recaps=no_recaps,
+            silent=silent,
+            report=report,
+        )
+        if streamed_path is not None:
+            return streamed_path
 
         # Phase 2: Load messages (will use fresh cache when available)
         messages, session_tree = load_directory_transcripts(
-            input_path, cache_manager, from_date, to_date, silent
+            input_path,
+            cache_manager,
+            from_date,
+            to_date,
+            silent,
+            # A full unfiltered load is the moment the cross-session
+            # sidecar can be (re)derived for the session-scoped path.
+            persist_sidecar=(from_date is None and to_date is None),
         )
 
         # Get working directories from cache
@@ -2253,13 +3504,9 @@ def convert_jsonl_to(
     # work/render-format-once.md). Scoped to this call: it dies with the
     # conversion, so nothing about it needs invalidating. The byte count
     # feeds the store's memory valve (same source-size measure as
-    # _make_render_pool's cap: top-level JSONL, agent files excluded).
+    # build_render_pool's cap: top-level JSONL, agent files excluded).
     if input_path.is_dir():
-        source_bytes = sum(
-            f.stat().st_size
-            for f in input_path.glob("*.jsonl")
-            if not f.name.startswith("agent-")
-        )
+        source_bytes = project_transcript_bytes(input_path)
     else:
         source_bytes = input_path.stat().st_size
     fragment_store = _make_fragment_store(format, transcript_bytes=source_bytes)
@@ -2289,8 +3536,11 @@ def convert_jsonl_to(
         and from_date is None
         and to_date is None
     ):
-        # Use pagination if total messages exceed page_size or there are existing pages
-        use_pagination = total_message_count > page_size or existing_page_count > 1
+        use_pagination = _is_paginated(
+            total_message_count=total_message_count,
+            page_size=page_size,
+            existing_page_count=existing_page_count,
+        )
 
     # `write_combined=False` (#151 follow-up: --combined no) skips
     # combined-transcript generation entirely. Per-session files (if
@@ -2303,7 +3553,7 @@ def convert_jsonl_to(
     # the per-session files: starting a second pool would pay `spawn` +
     # import all over again. Creation is cheap — no worker starts until
     # the first unit is submitted.
-    render_pool = _make_render_pool(
+    render_pool = build_render_pool(
         format=format,
         input_path=input_path,
         effective_output_dir=effective_output_dir,
@@ -2508,6 +3758,407 @@ def convert_jsonl_to(
     return output_path
 
 
+def _incremental_refresh_enabled() -> bool:
+    """Whether the incremental cache refresh may be used.
+
+    ``CLAUDE_CODE_LOG_INCREMENTAL_CACHE=0`` (or ``off``/``no``/``false``)
+    forces the full-load refresh — the bisecting knob, mirroring the
+    branch's other kill-switches.
+    """
+    raw = os.getenv("CLAUDE_CODE_LOG_INCREMENTAL_CACHE")
+    if raw is None:
+        return True
+    return raw.strip().lower() not in ("0", "off", "no", "false")
+
+
+def _incremental_cache_refresh(
+    project_dir: Path,
+    cache_manager: CacheManager,
+    session_jsonl_files: list[Path],
+    modified_files: list[Path],
+    silent: bool,
+) -> bool:
+    """Refresh the cache from the modified files alone, never loading whole.
+
+    Streaming stage 4 (work/render-format-once.md): the full-load
+    refresh exists to recompute per-session rows, project aggregates,
+    and the sidecar — all three are recomputable from a bounded
+    *closure* of the modified files. Modified files are re-parsed
+    per-file (their message rows rewritten as always); every
+    cross-session fact a new entry can touch — dedup partners of its
+    uuids, owners of its attachment points, entries that reference its
+    uuids, the complete old target list of any junction it attaches to,
+    cross-file metadata for its
+    sessions — pulls those sessions' files into the closure, which is
+    then loaded through the proven partial-load machinery with two
+    refresh-mode deviations (re-election of modified uuids, native
+    junctions at touched attachment points). Facts are persisted only
+    for closure sessions (all complete by strict resolution); aggregates
+    move by delta over the hidden-inclusive session rows plus the
+    per-file residual counts (summary/ai-title/attachment); bookends
+    extend monotonically (append-only).
+
+    Returns True when the cache was refreshed; False *declines* to the
+    unchanged full-load refresh. Decline ladder: missing sidecar or
+    project data, deleted source files (archival is the full path's
+    business), a shrunk/rewritten file (the old ordered rows must be an
+    exact prefix of the new rows), a pre-migration-009 cache (a closure
+    session with prior entries but no session row), attachment entries involved in
+    cross-session dedup, a requestId with independent surviving copies
+    on both sides of the closure boundary (D1 attribution would need
+    global order), any structural gap in file resolution, or a closure
+    exceeding a third of the project's files (past which the full load
+    is competitive anyway). Message rows written before a decline are
+    exactly what the full path would write for those files, so a
+    declined attempt never leaves inconsistent state — the crash-window
+    posture (per-file commits before fact writes) likewise matches the
+    full path's.
+    """
+    from .cache import CachedFileState
+
+    if not modified_files:
+        return False
+    sidecar = cache_manager.load_session_sidecar()
+    if sidecar is None:
+        return False
+    cached_project = cache_manager.get_cached_project_data()
+    if cached_project is None or cached_project.total_message_count <= 0:
+        return False
+
+    # Deleted source files mean archival semantics — full path's job.
+    on_disk_names = {f.name for f in session_jsonl_files}
+    cached_trunk_names = {
+        n for n in cache_manager.get_cached_file_names() if not n.startswith("agent-")
+    }
+    if cached_trunk_names - on_disk_names:
+        return False
+
+    # Early size gate on the modified set itself; the closure can only
+    # be larger, and past a third of the project the full load competes.
+    # The floor keeps small projects eligible — their full load is cheap
+    # either way, and coupling scenarios routinely span 2-4 files.
+    closure_limit = max(4, len(session_jsonl_files) // 3)
+    if len(modified_files) > closure_limit:
+        return False
+
+    modified_names = [f.name for f in modified_files]
+
+    with cache_manager.batch():
+        # Old identity state must be captured before the parse replaces
+        # each file's rows; the old file map likewise (pre-009 check).
+        old_states = cache_manager.get_file_states(modified_names)
+        old_file_map = cache_manager.get_session_file_map()
+        old_rows = cache_manager.get_all_session_rows()
+
+        for f in modified_files:
+            load_transcript(f, cache_manager, None, None, silent)
+        new_states = cache_manager.get_file_states(modified_names)
+
+        closure: set[str] = set()
+        exempt_uuids: set[str] = set()
+        parent_uuids: set[str] = set()
+        summary_leafs: set[str] = set()
+        for name in modified_names:
+            new = new_states.get(name)
+            if new is None:
+                return False
+            old = old_states.get(name, CachedFileState())
+            old_count = len(old.row_fingerprints)
+            if old.row_fingerprints != new.row_fingerprints[:old_count]:
+                return False  # not an exact append: existing history changed
+            closure |= new.sessions | old.sessions
+            exempt_uuids |= new.uuids | old.uuids
+            parent_uuids |= new.parent_uuids | old.parent_uuids
+            summary_leafs |= new.summary_leaf_uuids | old.summary_leaf_uuids
+            # A modified file's ai-title / summary entries title OTHER
+            # sessions (a summary routinely lives in a different
+            # session's file); those rows must be recomputed even though
+            # none of their own entries changed. Summary leafUuids
+            # resolve to owner sessions below; every owner joins, since
+            # which copy of a duplicated leaf wins the attribution is
+            # settled by the loaded set.
+            closure |= new.ai_title_sessions | old.ai_title_sessions
+        for _leaf, owner_set in cache_manager.get_uuid_owners(
+            sorted(summary_leafs)
+        ).items():
+            closure |= {s for s, _t in owner_set}
+
+        # Dedup partners: every session holding a copy of a modified
+        # uuid joins the closure so re-election runs on the full
+        # candidate set. Attachments in dedup are declined outright —
+        # their post-DAG residual count would stop being per-file linear.
+        owners = cache_manager.get_uuid_owners(sorted(exempt_uuids))
+        for _uuid, owner_set in owners.items():
+            sess = {s for s, _t in owner_set}
+            if len(sess) > 1:
+                if any(t == "attachment" for _s, t in owner_set):
+                    return False
+                closure |= sess
+
+        # Inverse attachment edges: an untouched orphan may already name a
+        # UUID that was just appended in a modified file. Loading only the
+        # UUID's owner misses the newly resolved child session and therefore
+        # its parent/junction sidecar updates.
+        inverse_attachments = cache_manager.get_parent_uuid_dependents(
+            sorted(exempt_uuids)
+        )
+        inverse_attachment_uuids: set[str] = set()
+        for uuid, dependent_sessions in inverse_attachments.items():
+            if dependent_sessions:
+                closure |= dependent_sessions
+                inverse_attachment_uuids.add(uuid)
+
+        # Attachment-point owners: a modified entry whose parentUuid
+        # lives elsewhere attaches there — the owning session (the dedup
+        # winner's, when duplicated) must be loaded for the DAG to build
+        # the junction natively.
+        external_parents = sorted(parent_uuids - exempt_uuids)
+        touched_attachments: set[str] = set()
+        for uuid, owner_set in cache_manager.get_uuid_owners(external_parents).items():
+            sess = {s for s, _t in owner_set}
+            if not sess:
+                continue  # globally dangling parent — orphan, as in full
+            if len(sess) > 1:
+                winner = sidecar.dedup_winners.get(uuid)
+                if winner is None:
+                    return False
+                if "@" in winner:
+                    winner = winner.split("@", 1)[0]
+                closure.add(winner)
+            else:
+                closure |= sess
+            touched_attachments.add(uuid)
+
+        # Old junctions that may gain a child (a modified entry attaches
+        # at their uuid) or whose node may move (the uuid is re-elected):
+        # pull the complete old target list so the native junction is
+        # rebuilt from every child, in the full run's chronological
+        # target order, and mark it native so the sidecar patch doesn't
+        # overwrite the new target away. New junctions (no old row) need
+        # no prediction — the tree builds them from the loaded entries.
+        # Sidecar junction owners/targets can be branch-qualified line
+        # ids ("{trunk}@{uuid12}") — the closure holds trunk sessionIds
+        # (what the file map and messages table key on), so normalize.
+        # Integrated subagents similarly use "{trunk}#agent-{id}" DAG-line
+        # ids even though their cached source rows retain the trunk id.
+        def _trunk(sid: str) -> str:
+            return sid.split("@", 1)[0].split("#agent-", 1)[0]
+
+        native_junction_uuids: set[str] = set()
+        for u in (
+            touched_attachments
+            | inverse_attachment_uuids
+            | (exempt_uuids & sidecar.junctions.keys())
+        ):
+            j = sidecar.junctions.get(u)
+            if j is not None:
+                closure.add(_trunk(j[0]))
+                closure |= {_trunk(t) for t in j[1]}
+                native_junction_uuids.add(u)
+
+        # Pre-009 caches lack hidden rows: a closure session with prior
+        # entries but no row has an unknown old contribution — decline
+        # (the full refresh backfills). Genuinely new sessions are fine.
+        for sid in closure:
+            if sid not in old_rows and sid in old_file_map:
+                return False
+
+        # Resolve the closure to files (strict: an archived dedup
+        # partner or any gap declines), plus files holding cross-file
+        # metadata (summaries by leafUuid, ai-titles by session) for
+        # closure sessions, so the partial metadata view matches the
+        # full one.
+        file_map = cache_manager.get_session_file_map()
+        needed = _resolve_session_source_files(
+            project_dir, file_map, sorted(closure), strict=True
+        )
+        if needed is None:
+            return False
+        meta_rows = cache_manager.get_metadata_target_files()
+        leaf_uuids = sorted({t for typ, t, _f in meta_rows if typ == "summary" and t})
+        leaf_owners = cache_manager.get_uuid_owners(leaf_uuids)
+        for typ, target, fname in meta_rows:
+            if fname.startswith("agent-"):
+                continue
+            if typ == "summary":
+                owner_sess = {s for s, _t in leaf_owners.get(target or "", set())}
+                if owner_sess & closure:
+                    needed.add(fname)
+            elif target in closure:
+                needed.add(fname)
+
+        if len(needed) > closure_limit:
+            return False
+
+        # Token-attribution guard: a requestId with independent
+        # surviving copies inside AND outside the closure would need the
+        # global traversal order to attribute (D1). Same-uuid spans are
+        # dedup-resolved (only the winner survives) and safe.
+        def _survives(uuid: str, sess: str) -> bool:
+            if uuid in exempt_uuids:
+                # A modified uuid's copies all sit inside the closure and
+                # at least one survives re-election there — so it counts
+                # as an inside survivor, never an outside one.
+                return sess in closure
+            winner = sidecar.dedup_winners.get(uuid)
+            if winner is not None and "@" in winner:
+                winner = winner.split("@", 1)[0]
+            return winner is None or winner == sess
+
+        closure_rids = cache_manager.get_session_request_ids(sorted(closure))
+        for _rid, pairs in cache_manager.get_request_id_entries(
+            sorted(closure_rids)
+        ).items():
+            inside = any(s in closure for u, s in pairs if _survives(u, s))
+            outside = any(s not in closure for u, s in pairs if _survives(u, s))
+            if inside and outside:
+                return False
+
+        trunk_files = [
+            f
+            for f in project_dir.glob("*.jsonl")
+            if not f.name.startswith("agent-") and f.name in needed
+        ]
+        if {f.name for f in trunk_files} != needed:
+            return False
+
+        if not silent:
+            print(
+                f"Incrementally refreshing cache for {project_dir.name}: "
+                f"{len(modified_files)} changed file(s), "
+                f"{len(needed)} of {len(session_jsonl_files)} file(s) loaded"
+            )
+
+        partial_entries, partial_tree = _load_sessions_partial(
+            project_dir,
+            cache_manager,
+            sidecar,
+            trunk_files,
+            silent,
+            reelect_uuids=exempt_uuids,
+            native_junction_uuids=native_junction_uuids,
+        )
+
+        # Compute every write, validate, then write — no fact lands
+        # before all decline checks have passed.
+        warmup = get_warmup_session_ids(partial_entries)
+        session_data = compute_session_data(
+            partial_entries, include_cwd=True, warmup_session_ids=None
+        )
+        _attach_session_residuals(session_data, partial_entries)
+        for sid, data in session_data.items():
+            data.hidden = sid in warmup or not data.first_user_message
+        p_rows = {sid: d for sid, d in session_data.items() if sid in closure}
+
+        # Junction rows to write: every junction the tree holds whose
+        # owner is a closure session. Sidecar-patched ones rewrite their
+        # old rows byte-identically (harmless); native ones (new
+        # attachments, re-elected nodes) carry the new truth. Junctions
+        # owned by partially-loaded co-resident sessions are excluded
+        # with the rest of their facts.
+        junction_replacements: Dict[str, tuple[str, List[str]]] = {}
+        for u, jp in partial_tree.junction_points.items():
+            if _trunk(jp.session_id) in closure:
+                junction_replacements[u] = (jp.session_id, list(jp.target_sessions))
+        for u in native_junction_uuids:
+            if u not in junction_replacements:
+                return False  # predicted junction absent — bail before writes
+
+        parent_updates: Dict[str, Optional[tuple[Optional[str], Optional[str]]]] = {}
+        for sid, line in partial_tree.sessions.items():
+            # Parent rows are keyed by DAG-line id, so synthetic agent and
+            # branch lines have no corresponding SessionCacheData row. Their
+            # owning trunk is nevertheless complete whenever it is in the
+            # closure and its sidecar facts must be refreshed with it.
+            if _trunk(sid) not in closure:
+                continue
+            parent_updates[sid] = (
+                (line.parent_session_id, line.attachment_uuid)
+                if line.parent_session_id is not None
+                else None
+            )
+
+        winner_upserts: Dict[str, str] = {}
+        for u in exempt_uuids:
+            sess = {s for s, _t in owners.get(u, set())}
+            # owners predates nothing for exempt uuids: modified files'
+            # rows were already rewritten when it was queried.
+            if len(sess) > 1 and u in partial_tree.nodes:
+                winner_sid = partial_tree.nodes[u].entry.sessionId
+                if winner_sid is not None:
+                    winner_upserts[u] = winner_sid
+
+        d_count = d_in = d_out = d_cc = d_cr = 0
+        for sid, new_row in p_rows.items():
+            old_row = old_rows.get(sid)
+            if old_row is not None and old_row.residual_count is None:
+                # Pre-migration-010 row: its residual contribution is
+                # unknown (NULL is not a zero), so the delta has no
+                # basis. The full refresh backfills every row.
+                return False
+            d_count += (new_row.message_count + (new_row.residual_count or 0)) - (
+                (old_row.message_count + (old_row.residual_count or 0))
+                if old_row
+                else 0
+            )
+            d_in += new_row.total_input_tokens - (
+                old_row.total_input_tokens if old_row else 0
+            )
+            d_out += new_row.total_output_tokens - (
+                old_row.total_output_tokens if old_row else 0
+            )
+            d_cc += new_row.total_cache_creation_tokens - (
+                old_row.total_cache_creation_tokens if old_row else 0
+            )
+            d_cr += new_row.total_cache_read_tokens - (
+                old_row.total_cache_read_tokens if old_row else 0
+            )
+        # Summaries are the only entries with no session attribution.
+        # They bypass DAG traversal (appended wholesale), so their cached
+        # rows are an exact count — unlike attachments, which a session
+        # row now accounts for precisely because traversal can drop them.
+        d_residual = 0
+        for name in modified_names:
+            old_state = old_states.get(name, CachedFileState())
+            d_residual += new_states[name].type_counts.get(
+                "summary", 0
+            ) - old_state.type_counts.get("summary", 0)
+
+        # Bookends extend from the loaded entries' own timestamp strings
+        # (the DB normalizes timestamps, so row-derived strings can
+        # differ byte-wise from what compute_project_aggregates yields).
+        # Every new timestamp is in a modified file, and modified files
+        # are all in the closure, so partial_entries covers the
+        # extension candidates — attachments included.
+        earliest = cached_project.earliest_timestamp
+        latest = cached_project.latest_timestamp
+        for e in partial_entries:
+            ts = getattr(e, "timestamp", "")
+            if ts:
+                if not earliest or ts < earliest:
+                    earliest = ts
+                if not latest or ts > latest:
+                    latest = ts
+
+        cache_manager.update_session_cache(p_rows)
+        cache_manager.update_project_aggregates(
+            total_message_count=cached_project.total_message_count
+            + d_count
+            + d_residual,
+            total_input_tokens=cached_project.total_input_tokens + d_in,
+            total_output_tokens=cached_project.total_output_tokens + d_out,
+            total_cache_creation_tokens=cached_project.total_cache_creation_tokens
+            + d_cc,
+            total_cache_read_tokens=cached_project.total_cache_read_tokens + d_cr,
+            earliest_timestamp=earliest,
+            latest_timestamp=latest,
+        )
+        cache_manager.merge_session_sidecar(
+            parent_updates, junction_replacements, winner_upserts
+        )
+    return True
+
+
 def ensure_fresh_cache(
     project_dir: Path,
     cache_manager: Optional[CacheManager],
@@ -2526,9 +4177,7 @@ def ensure_fresh_cache(
     # Exclude agent files from direct check - they are loaded via session references
     # Note: If only an agent file changes (session unchanged), cache won't detect it.
     # This is acceptable since agent files typically change alongside their sessions.
-    session_jsonl_files = [
-        f for f in project_dir.glob("*.jsonl") if not f.name.startswith("agent-")
-    ]
+    session_jsonl_files = trunk_jsonl_files(project_dir)
     if not session_jsonl_files:
         return False
 
@@ -2556,11 +4205,41 @@ def ensure_fresh_cache(
         if not needs_update:
             return False  # Cache is already fresh
 
+        # Streaming stage 4: when the update is driven purely by changed
+        # files over a populated cache, refresh from those files' bounded
+        # closure instead of loading the whole project. Declines (False)
+        # fall through to the unchanged full load below.
+        if (
+            from_date is None
+            and to_date is None
+            and modified_files
+            and cached_project_data is not None
+            and cached_project_data.total_message_count > 0
+            and _incremental_refresh_enabled()
+        ):
+            if _incremental_cache_refresh(
+                project_dir,
+                cache_manager,
+                session_jsonl_files,
+                modified_files,
+                silent,
+            ):
+                return True
+
         # Load and process messages to populate cache
         if not silent:
             print(f"Updating cache for {project_dir.name}...")
         messages, _tree = load_directory_transcripts(
-            project_dir, cache_manager, from_date, to_date, silent
+            project_dir,
+            cache_manager,
+            from_date,
+            to_date,
+            silent,
+            # An unfiltered refresh is a full load of the current tree, so
+            # persist the cross-session sidecar here too (same batch as the
+            # per-file writes). This is what lets the streaming path run
+            # right after a cache update without a second full load.
+            persist_sidecar=(from_date is None and to_date is None),
         )
 
         # Update cache with fresh data
@@ -2575,27 +4254,61 @@ def _update_cache_with_session_data(
 
     Thin writer wrapper over the two shared computation helpers
     (``compute_session_data`` + ``compute_project_aggregates``).
-    Filters the warmup + empty-session sets before persisting — the
-    cache stores only sessions a human would expect to render
-    (agent-only and warmup-only sessions are skipped).
+    Historically the warmup + empty-session sets were filtered before
+    persisting; since migration 009 they are persisted too, flagged
+    ``hidden`` — the incremental cache refresh computes aggregate
+    deltas over per-session rows, so every session's contribution must
+    be on record. Read sites filter ``hidden = 0``, so the visible set
+    is unchanged.
+
+    One unfiltered pass replaces the filtered one. For visible
+    sessions the result is identical except in one theoretical corner:
+    a warmup session's assistant ``requestId`` reappearing in a
+    visible session would shift D1 token attribution between the two
+    computations. Never observed across the 78-project survey corpus
+    (work/render-format-once.md, stage-4 design); warmup requests are
+    their own API calls.
     """
     warmup = get_warmup_session_ids(messages)
     sessions_cache_data = compute_session_data(
-        messages, include_cwd=True, warmup_session_ids=warmup
+        messages, include_cwd=True, warmup_session_ids=None
     )
-    # Filter empty sessions (agent-only). The warmup filter happens
-    # upstream inside compute_session_data; the empty filter here
-    # remains a cache-only policy (the pagination fallback returns
-    # all sessions verbatim).
-    sessions_cache_data = {
-        sid: data
-        for sid, data in sessions_cache_data.items()
-        if data.first_user_message
-    }
+    _attach_session_residuals(sessions_cache_data, messages)
+    for sid, data in sessions_cache_data.items():
+        data.hidden = sid in warmup or not data.first_user_message
     cache_manager.update_session_cache(sessions_cache_data)
 
     aggregates = compute_project_aggregates(messages)
     cache_manager.update_project_aggregates(**aggregates)
+
+
+def _attach_session_residuals(
+    sessions: Dict[str, SessionCacheData], messages: List[TranscriptEntry]
+) -> None:
+    """Set ``residual_count`` on every row, adding residual-only rows.
+
+    A session can own attachments or an ai-title without owning a single
+    entry ``compute_session_data`` counts; it gets a row here so the
+    total identity has somewhere to put those entries. Such a row has no
+    first user message, so it is hidden and invisible to every
+    render-facing read site — the same treatment as an agent-only
+    session.
+    """
+    for sid, count in compute_session_residuals(messages).items():
+        data = sessions.get(sid)
+        if data is None:
+            data = SessionCacheData(
+                session_id=sid,
+                first_timestamp="",
+                last_timestamp="",
+                message_count=0,
+                first_user_message="",
+            )
+            sessions[sid] = data
+        data.residual_count = count
+    for data in sessions.values():
+        if data.residual_count is None:
+            data.residual_count = 0
 
 
 def _collect_project_sessions(messages: list[TranscriptEntry]) -> list[dict[str, Any]]:
@@ -2676,42 +4389,6 @@ def build_session_title(
     return f"{project_title}: Session {session_id[:8]}"
 
 
-# Below this many stale output files, the fan-out is not worth the ~1s of
-# `spawn` + package import each worker pays before it can render anything.
-# Units average well under 200ms, so a handful of them finish inline
-# before a pool has even started.
-_MIN_UNITS_FOR_RENDER_POOL = 8
-
-
-# ...and below this many messages the project's render work is too small to
-# repay the pool's startup. Re-measured post-feeding (2026-08-26, 8-core
-# VM, workers fed entry slices — the work/render-format-once.md § 7.5
-# revisit), best fanned configuration vs the serial memo-only row:
-#
-#   12.2k messages  serial  7.7s  ->  8.2s   (a loss)
-#   15.5k messages  serial  7.7s  ->  8.3s   (a loss)
-#   25.2k messages  serial 12.7s  ->  6.0s   (2.13x)
-#
-# so the crossover sits between 15.5k and 25.2k and the threshold sits at
-# its upper edge: below it the cost is a certain (if now small)
-# regression, above it the win grows with project size and core count.
-# The loss below the line shrank with the feed (workers no longer reload
-# the transcript) but did not flip sign — spawn + import + cold memo
-# caches still outweigh a few seconds of render work.
-# Memory valve for the fragment store: keep it only when available memory
-# comfortably covers a store-carrying conversion. Measured serial peaks on
-# the largest real project (803MB of transcripts): 1252MB with the store
-# off (~1.56x bytes on disk), 1521MB with it on (~1.9x — the +269MB is the
-# fragment text plus per-entry overhead, work/render-format-once.md § 4.9).
-# 2.4x is that store-on peak plus a ~25% margin, so on a machine inside
-# the margin the conversion quietly runs store-less — the pre-store
-# footprint — instead of trading its last RAM for CPU. Whenever this valve
-# trips, the render pool's own memory cap (a far higher bar, ~10x bytes)
-# has already declined, so a store-less conversion is always a serial one
-# and no worker-side coordination is needed.
-_FRAGMENT_STORE_MIN_AVAILABLE_PER_BYTE = 2.4
-
-
 def _make_fragment_store(
     format: str, transcript_bytes: int = 0
 ) -> "Optional[RenderFragmentStore]":
@@ -2722,7 +4399,7 @@ def _make_fragment_store(
     renderer consults it. ``CLAUDE_CODE_LOG_FRAGMENT_STORE=0`` disables it
     for bisecting rendering differences; an explicit ``=1`` forces it past
     the memory valve below, which otherwise skips the store when available
-    memory is under ``_FRAGMENT_STORE_MIN_AVAILABLE_PER_BYTE`` times the
+    memory is under ``_MIN_AVAILABLE_MEMORY_PER_TRANSCRIPT_BYTE`` times the
     project's transcript bytes (the store is a RAM-for-CPU trade, and on a
     machine that tight the RAM matters more). ``transcript_bytes`` of 0
     (unknown) skips the valve, as does an unreadable memory probe.
@@ -2743,171 +4420,10 @@ def _make_fragment_store(
         available = available_memory_bytes()
         if (
             available is not None
-            and available < transcript_bytes * _FRAGMENT_STORE_MIN_AVAILABLE_PER_BYTE
+            and available < transcript_bytes * _MIN_AVAILABLE_MEMORY_PER_TRANSCRIPT_BYTE
         ):
             return None
     return RenderFragmentStore()
-
-
-_MIN_MESSAGES_FOR_RENDER_POOL = 25_000
-
-
-def _make_render_pool(
-    *,
-    format: str,
-    input_path: Path,
-    effective_output_dir: Path,
-    cache_manager: Optional["CacheManager"],
-    message_count: int,
-    from_date: Optional[str],
-    to_date: Optional[str],
-    depth: RenderingDepth,
-    compact: bool,
-    no_timestamps: bool,
-    no_recaps: bool,
-    image_export_mode: Optional[str],
-    archive_search_link: Optional[str],
-    render_jobs: Optional[int],
-    session_tree: Optional[SessionTree],
-) -> "Optional[RenderPool]":
-    """Build a render pool for this conversion, or None to render inline.
-
-    Returns None whenever fanning out would be wrong or wasteful:
-
-    - ``render_jobs`` resolves to 1. The fan-out is on by default (an
-      unset ``$CLAUDE_CODE_LOG_RENDER_JOBS`` means the CPU count), so this
-      takes ``1``/``off`` opting out via the environment (see
-      ``render_pool.resolve_render_jobs``) — or a project worker in the
-      all-projects pool getting 1 because there is no spare capacity,
-      since nesting pools would oversubscribe.
-    - Single-file mode, or no cache manager (staleness planning needs one).
-    - No pre-built ``session_tree``. Workers render fed entry slices
-      against the conversion's tree; without one they would rebuild a DAG
-      from their slice alone, which can genuinely differ (missing
-      cross-session hierarchy) — a correctness cliff, so decline instead.
-    - Projects too small for the pool's startup to pay for itself.
-
-    ``image_export_mode="referenced"`` used to decline too, when each
-    render allocated ``images/image_NNNN.png`` names from a per-call
-    counter. Filenames are content-addressed now (see
-    ``image_export.export_image``), so concurrent workers exporting the
-    same image write the same name atomically with identical bytes — the
-    mode is pool-safe.
-    - Not enough memory for the fan-out's footprint.
-
-    The worker count is also capped by available memory, with the parent
-    charged its full master-list footprint and each fed worker only its
-    measured slice-holding cost — see ``render_pool.memory_capped_workers``.
-    """
-    from .render_pool import memory_capped_workers, resolve_render_jobs
-
-    max_workers = resolve_render_jobs(render_jobs)
-    if max_workers <= 1:
-        return None
-    if cache_manager is None or not input_path.is_dir():
-        return None
-    if session_tree is None:
-        return None
-    if message_count < _MIN_MESSAGES_FOR_RENDER_POOL:
-        return None
-
-    transcript_bytes = sum(
-        f.stat().st_size
-        for f in input_path.glob("*.jsonl")
-        if not f.name.startswith("agent-")
-    )
-    max_workers = memory_capped_workers(max_workers, transcript_bytes)
-    if max_workers <= 1:
-        return None
-
-    from .dag import slim_session_tree
-    from .render_pool import make_render_pool
-
-    return make_render_pool(
-        session_tree=slim_session_tree(session_tree),
-        format=format,
-        project_dir=input_path,
-        output_dir=effective_output_dir,
-        from_date=from_date,
-        to_date=to_date,
-        depth=depth,
-        compact=compact,
-        no_timestamps=no_timestamps,
-        no_recaps=no_recaps,
-        image_export_mode=image_export_mode,
-        archive_search_link=archive_search_link,
-        library_version=get_library_version(),
-        max_workers=max_workers,
-    )
-
-
-def _dispatch_render_units(
-    units: "list[RenderUnit]",
-    render_pool: "Optional[RenderPool]",
-    render_inline: "Callable[[RenderUnit], None]",
-    on_written: "Callable[[RenderUnit], None]",
-    label: "Callable[[RenderUnit], str]",
-    fragment_store: "Optional[RenderFragmentStore]" = None,
-) -> None:
-    """Render ``units``, over the pool when there is one, else inline.
-
-    ``on_written`` runs in the parent for every unit that made it to disk,
-    in completion order — it owns the cache bookkeeping, which is why the
-    workers never touch the DB for writes.
-
-    ``fragment_store`` absorbs the fragment deltas page workers return, so
-    the fragments a worker formatted still reach the conversion's store —
-    the session pass then feeds on them exactly as if the pages had
-    rendered inline (see RenderUnit.fed_fragments).
-
-    Every path back to inline rendering is a *fallback*, never an error:
-    a pool that can't bootstrap (a library caller without the
-    ``if __name__ == "__main__"`` guard ``spawn`` requires) or a worker
-    that dies mid-run must still produce complete output. Only a genuine
-    render failure inside a unit propagates.
-    """
-    if not units:
-        return
-
-    if render_pool is None or len(units) < _MIN_UNITS_FOR_RENDER_POOL:
-        for unit in units:
-            render_inline(unit)
-            on_written(unit)
-        return
-
-    futures: dict[Any, RenderUnit] = {}
-    unsubmitted: list[RenderUnit] = []
-    for unit in units:
-        future = render_pool.submit(unit)
-        if future is None:
-            unsubmitted.append(unit)
-        else:
-            futures[future] = unit
-
-    for future in as_completed(futures):
-        unit = futures[future]
-        try:
-            _kind, _key, error, fragments_delta = future.result()
-        except Exception as e:
-            # The pool itself broke (BrokenProcessPool, a worker killed by
-            # the OOM killer, …). Re-render this unit inline and send the
-            # rest of the batch the same way.
-            print(
-                f"Warning: render worker failed on {label(unit)} "
-                f"({e.__class__.__name__}: {e}); rendering inline."
-            )
-            render_pool.mark_broken()
-            unsubmitted.append(unit)
-            continue
-        if error is not None:
-            raise RuntimeError(f"Failed to render {label(unit)}:\n{error}")
-        if fragments_delta and fragment_store is not None:
-            fragment_store.absorb(fragments_delta)
-        on_written(unit)
-
-    for unit in unsubmitted:
-        render_inline(unit)
-        on_written(unit)
 
 
 def _generate_individual_session_files(
@@ -2928,6 +4444,7 @@ def _generate_individual_session_files(
     no_recaps: bool = False,
     render_pool: "Optional[RenderPool]" = None,
     fragment_store: "Optional[RenderFragmentStore]" = None,
+    restrict_to_sessions: Optional[set[str]] = None,
 ) -> int:
     """Generate individual files for each session in the specified format.
 
@@ -2937,6 +4454,13 @@ def _generate_individual_session_files(
         fragment_store: Optional per-conversion fragment store (HTML only)
             shared with the combined-page pass, so inline session renders
             reuse the fragments that pass already formatted.
+        restrict_to_sessions: Only consider these trunk session ids. The
+            streaming path passes each page's session set here because its
+            page loads can carry a *partially loaded* co-resident session
+            from another page (a source file spanning two sessions) —
+            rendering that remnant would silently truncate the session's
+            file. Restricted out, it renders complete when its own page's
+            load comes around. None (every other caller) considers all.
 
     Returns:
         Number of sessions regenerated
@@ -2953,6 +4477,8 @@ def _generate_individual_session_files(
     # get_stale_sessions() flagged them "not_cached" on every run —
     # regenerating the project forever without ever writing the file.
     session_ids = collect_trunk_session_ids(messages, get_warmup_session_ids(messages))
+    if restrict_to_sessions is not None:
+        session_ids = session_ids & restrict_to_sessions
 
     # Get session data from cache for better titles
     session_data: dict[str, Any] = {}
@@ -3158,7 +4684,7 @@ def _generate_individual_session_files(
                     if unit_keys:
                         unit.fed_fragments = {k: all_fragments[k] for k in unit_keys}
 
-        _dispatch_render_units(
+        dispatch_render_units(
             stale_units,
             render_pool,
             _render_session_inline,
@@ -3940,10 +5466,22 @@ class _ProjectPlan:
     error: Optional[str] = None
 
 
-# Bytes stand-in for _MIN_MESSAGES_FOR_RENDER_POOL when the hold-back
+# How big a project has to be before holding it out of the project pool
+# can pay. Deliberately *not* the render pool's own floor, which is far
+# lower: a project only just past that floor does fan out, but at the
+# 1.2-1.6x measured for 3-4 page batches, well under the 2.5x
+# `_fanned_speedup` promises at 8+ workers. Holding such a project back
+# would serialize it after the pool for a win the table over-states,
+# which is the expensive direction to be wrong in. 25,000 messages is
+# where a lone fanned conversion actually reaches that table (2.7-3.2x
+# measured) — the number this floor has always been in practice, kept
+# here now that the pool floor has moved out from under it.
+_MIN_MESSAGES_FOR_HOLDBACK = 25_000
+
+# Bytes stand-in for _MIN_MESSAGES_FOR_HOLDBACK when the hold-back
 # comparison has to rank plans by source bytes (a plan without a cache row
 # has no message count). Real projects measure ~3-3.4KB of JSONL per
-# message, so 75MB ≈ the 25k-message pool floor.
+# message, so 75MB ≈ the 25k-message hold-back floor.
 _MIN_SOURCE_BYTES_FOR_HOLDBACK = 75 * 1024 * 1024
 
 
@@ -3983,9 +5521,10 @@ def _holdback_plans(
     can't fan the project never holds it back). The loop stops at the
     first losing hold, which keeps every known pathology out by
     construction: level-sized projects pool (serializing them wastes the
-    concurrency they already saturate), sub-pool-threshold projects never
-    hold (they can't fan, so holding gains nothing), and a core-bound
-    pool that already dwarfs the largest project keeps it.
+    concurrency they already saturate), projects under
+    ``_MIN_MESSAGES_FOR_HOLDBACK`` never hold (they fan out too weakly for
+    the speedup table to be honest about them), and a core-bound pool that
+    already dwarfs the largest project keeps it.
 
     Message count predicts conversion cost far better than bytes — the
     reference archive's 329MB/97k-message giant takes as long as its
@@ -4002,7 +5541,7 @@ def _holdback_plans(
     if len(plans) < 2 or job_budget <= 1 or render_budget <= 1:
         return []
     if all(plan.cached_message_count for plan in plans):
-        eligible_floor = _MIN_MESSAGES_FOR_RENDER_POOL
+        eligible_floor = _MIN_MESSAGES_FOR_HOLDBACK
 
         def cost(plan: "_ProjectPlan") -> int:
             return plan.cached_message_count or 0
@@ -4065,7 +5604,7 @@ def _plan_project(
     """
     from .utils import project_destination
 
-    plan_start = time.time()
+    plan_start = time.monotonic()
     stats = GenerationStats()
     cache_manager: Optional[CacheManager] = None
     if use_cache:
@@ -4096,9 +5635,7 @@ def _plan_project(
 
     # Fast staleness check (mtime comparison only). Exclude agent
     # files - they are loaded via session references, not directly.
-    jsonl_files = [
-        f for f in project_dir.glob("*.jsonl") if not f.name.startswith("agent-")
-    ]
+    jsonl_files = trunk_jsonl_files(project_dir)
     # Valid session IDs are from existing JSONL files (file stem = session ID)
     valid_session_ids = {f.stem for f in jsonl_files}
     modified_files = (
@@ -4172,7 +5709,7 @@ def _plan_project(
     else:
         # Fast path: nothing to do, just collect stats for index
         stats.files_loaded_from_cache = len(jsonl_files)
-    stats.total_time = time.time() - plan_start
+    stats.total_time = time.monotonic() - plan_start
 
     cached_message_count: Optional[int] = None
     if cache_manager is not None:
@@ -4201,45 +5738,23 @@ def _convert_project_worker(
 ) -> "tuple[str, float, Optional[str]]":
     """Convert one project inside a pool worker process.
 
+    ``worker_args`` is a complete keyword-argument set for
+    ``convert_jsonl_to``, built by the parent's ``_conversion_kwargs``
+    (which is also what the inline path calls with) — so this function
+    holds no knowledge of that signature and cannot fall behind it.
+
     Module-level, with dict-of-picklables in and primitives out, so it
     works under the ``spawn`` start method. Failures are returned as a
     formatted traceback instead of raised so the parent can attribute
     them to the right project and keep processing the rest.
     """
-    start = time.time()
+    start = time.monotonic()
     error: Optional[str] = None
     try:
-        convert_jsonl_to(
-            worker_args["format"],
-            Path(worker_args["project_dir"]),
-            None,
-            worker_args["from_date"],
-            worker_args["to_date"],
-            worker_args["generate_individual_sessions"],
-            worker_args["use_cache"],
-            # Workers always run silent: per-file progress lines from N
-            # concurrent processes would interleave illegibly. The
-            # parent prints one line per project as results arrive.
-            silent=True,
-            image_export_mode=worker_args["image_export_mode"],
-            page_size=worker_args["page_size"],
-            depth=worker_args["depth"],
-            compact=worker_args["compact"],
-            output_root=(
-                Path(worker_args["output_root"]) if worker_args["output_root"] else None
-            ),
-            write_combined=worker_args["write_combined"],
-            no_timestamps=worker_args["no_timestamps"],
-            no_recaps=worker_args["no_recaps"],
-            archive_search_link=worker_args["archive_search_link"],
-            # Nested pools: this project worker gets its own share of the
-            # job budget for the render fan-out, computed by the parent so
-            # the two levels together never exceed `--jobs`.
-            render_jobs=worker_args["render_jobs"],
-        )
+        convert_jsonl_to(**worker_args)
     except Exception:
         error = traceback.format_exc()
-    return (worker_args["project_dir"], time.time() - start, error)
+    return (str(worker_args["input_path"]), time.monotonic() - start, error)
 
 
 def process_projects_hierarchy(
@@ -4292,7 +5807,7 @@ def process_projects_hierarchy(
     """
     import time
 
-    start_time = time.time()
+    start_time = time.monotonic()
 
     if not projects_path.exists():
         raise FileNotFoundError(f"Projects path not found: {projects_path}")
@@ -4534,41 +6049,64 @@ def process_projects_hierarchy(
             ),
         )
 
+    def _conversion_kwargs(
+        plan: _ProjectPlan, *, silent: bool, render_jobs: int
+    ) -> Dict[str, Any]:
+        """The full argument set for converting one project.
+
+        Both execution paths build their call from this: the inline one
+        applies it directly, the pool ships the same dict to
+        `_convert_project_worker`, which applies it there. Everything in
+        it is picklable, which is what lets the pool send it unchanged.
+
+        Written once because it used to be written three times — the
+        inline call, the `pool.submit` payload, and the worker's
+        unpacking of that payload — so a new `convert_jsonl_to`
+        parameter had to be added in all three or pooled projects would
+        silently convert differently from inline ones.
+        """
+        return {
+            "format": output_format,
+            "input_path": plan.project_dir,
+            "output_path": None,
+            "from_date": from_date,
+            "to_date": to_date,
+            "generate_individual_sessions": generate_individual_sessions,
+            "use_cache": use_cache,
+            "silent": silent,
+            "image_export_mode": image_export_mode,
+            "page_size": page_size,
+            "depth": depth,
+            "compact": compact,
+            "output_root": (
+                plan.dest_dir if plan.dest_dir != plan.project_dir else None
+            ),
+            "write_combined": write_combined,
+            "no_timestamps": no_timestamps,
+            "no_recaps": no_recaps,
+            "archive_search_link": _archive_search_link(plan),
+            # Nested pools: a project worker gets its own share of the job
+            # budget for the render fan-out, computed by the parent so the
+            # two levels together never exceed `--jobs`.
+            "render_jobs": render_jobs,
+        }
+
     def _convert_plan_inline(
         plan: _ProjectPlan, render_jobs: Optional[int] = None
     ) -> None:
         """Convert one project in this process, reporting progress/failure."""
         if render_jobs is None:
             render_jobs = per_project_render_jobs
-        project_start_time = time.time()
+        project_start_time = time.monotonic()
         try:
             # Generate output for this project (handles cache updates internally)
             convert_jsonl_to(
-                output_format,
-                plan.project_dir,
-                None,
-                from_date,
-                to_date,
-                generate_individual_sessions,
-                use_cache,
-                silent=silent,
-                image_export_mode=image_export_mode,
-                page_size=page_size,
-                depth=depth,
-                compact=compact,
-                output_root=(
-                    plan.dest_dir if plan.dest_dir != plan.project_dir else None
-                ),
-                write_combined=write_combined,
-                no_timestamps=no_timestamps,
-                no_recaps=no_recaps,
-                archive_search_link=_archive_search_link(plan),
-                render_jobs=render_jobs,
+                **_conversion_kwargs(plan, silent=silent, render_jobs=render_jobs)
             )
         except Exception:
             _print_project_failed(plan, traceback.format_exc())
             return
-        _print_project_done(plan, time.time() - project_start_time)
+        _print_project_done(plan, time.monotonic() - project_start_time)
 
     if resolved_jobs <= 1:
         for plan in pooled:
@@ -4590,28 +6128,15 @@ def process_projects_hierarchy(
                 future_to_plan = {
                     pool.submit(
                         _convert_project_worker,
-                        {
-                            "format": output_format,
-                            "project_dir": str(plan.project_dir),
-                            "from_date": from_date,
-                            "to_date": to_date,
-                            "generate_individual_sessions": generate_individual_sessions,
-                            "use_cache": use_cache,
-                            "image_export_mode": image_export_mode,
-                            "page_size": page_size,
-                            "depth": depth,
-                            "compact": compact,
-                            "output_root": (
-                                str(plan.dest_dir)
-                                if plan.dest_dir != plan.project_dir
-                                else None
-                            ),
-                            "write_combined": write_combined,
-                            "no_timestamps": no_timestamps,
-                            "no_recaps": no_recaps,
-                            "archive_search_link": _archive_search_link(plan),
-                            "render_jobs": per_project_render_jobs,
-                        },
+                        # Workers always run silent: per-file progress lines
+                        # from N concurrent processes would interleave
+                        # illegibly. The parent prints one line per project
+                        # as results arrive.
+                        _conversion_kwargs(
+                            plan,
+                            silent=True,
+                            render_jobs=per_project_render_jobs,
+                        ),
                     ): plan
                     for plan in by_size
                 }
@@ -4642,7 +6167,7 @@ def process_projects_hierarchy(
 
     # The pool has drained and nothing else is resident, so each held-back
     # project gets the whole machine (`--jobs` still caps it; the memory
-    # cap re-checks inside `_make_render_pool`). Smallest first, so the
+    # cap re-checks inside `build_render_pool`). Smallest first, so the
     # run ends on the project that dominates the wall.
     for plan in reversed(holdbacks):
         _convert_plan_inline(plan, render_jobs=min(render_budget, job_budget))
@@ -4667,11 +6192,7 @@ def process_projects_hierarchy(
         try:
             # Get project info for index - use cached data if available
             # Exclude agent files (they are loaded via session references)
-            jsonl_files = [
-                f
-                for f in project_dir.glob("*.jsonl")
-                if not f.name.startswith("agent-")
-            ]
+            jsonl_files = trunk_jsonl_files(project_dir)
             jsonl_count = len(jsonl_files)
             last_modified: float = (
                 max(f.stat().st_mtime for f in jsonl_files) if jsonl_files else 0.0
@@ -5019,7 +6540,7 @@ def process_projects_hierarchy(
         total_sessions += len(summary.get("sessions", []))
 
     # Print summary
-    elapsed = time.time() - start_time
+    elapsed = time.monotonic() - start_time
 
     # Print any errors/warnings that occurred
     for project_name, stats in project_stats:

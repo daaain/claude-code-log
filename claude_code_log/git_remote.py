@@ -80,6 +80,19 @@ _HOST_URL_PATTERNS: dict[str, str] = {
 # ``--git-link`` flag is a UX convenience that sets this env var.
 _FALLBACK_TEMPLATE_ENV = "CLAUDE_CODE_LOG_GIT_LINK"
 
+# Wall-clock cap on each ``git`` invocation. It is a safety valve, not a
+# budget: the calls are sub-100ms on a normal repo and every one of them
+# is memoized per (cwd, sha), so the cap only ever bites when the
+# environment — not the repo — is pathologically slow. It was 2s, which
+# the Windows CI runner exceeded under parallel test workers (git process
+# spawn there is slow enough on its own that ~2s of contention is
+# reachable; see the TEMP-redirect note in .github/workflows/ci.yml), and
+# a timeout is indistinguishable from "not resolvable" — the SHA silently
+# renders as plain text. 5s matches the other subprocess timeouts in the
+# codebase and buys ~2.5x headroom without making a genuinely broken git
+# stall a render for long.
+_GIT_TIMEOUT_SECONDS = 5
+
 
 # SSH form ``git@host:path`` or HTTPS ``https://host/path``. The trailing
 # ``.git`` is optional; trailing slash is optional.
@@ -146,7 +159,7 @@ def _git_remote_for(cwd: str) -> Optional[tuple[str, str]]:
             ["git", "-C", cwd, "config", "--get", "remote.origin.url"],
             capture_output=True,
             text=True,
-            timeout=2,
+            timeout=_GIT_TIMEOUT_SECONDS,
             check=False,
         )
     except (OSError, subprocess.SubprocessError):
@@ -171,7 +184,7 @@ def _commit_reachable_from_remote(cwd: str, sha: str) -> bool:
             ["git", "-C", cwd, "branch", "-r", "--contains", sha],
             capture_output=True,
             text=True,
-            timeout=2,
+            timeout=_GIT_TIMEOUT_SECONDS,
             check=False,
         )
     except (OSError, subprocess.SubprocessError):
@@ -191,7 +204,7 @@ def _expand_to_full_sha(cwd: str, sha: str) -> Optional[str]:
             ["git", "-C", cwd, "rev-parse", "--verify", f"{sha}^{{commit}}"],
             capture_output=True,
             text=True,
-            timeout=2,
+            timeout=_GIT_TIMEOUT_SECONDS,
             check=False,
         )
     except (OSError, subprocess.SubprocessError):

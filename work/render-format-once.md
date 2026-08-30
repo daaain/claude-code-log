@@ -183,28 +183,707 @@ pool's own (far higher) memory bar has already declined, so the
 store-less conversion is always serial. Unit-pinned in
 `test_render_cache.py::TestFragmentStoreMemoryValve`.
 
+**Phase 8 progress (streaming stages 1–2 — session-scoped
+incremental, 2026-08-27, stacked branch `perf/streaming-conversion`):**
+the first two stages of the streaming plan below are implemented. A
+full unfiltered directory load now persists the cross-session sidecar
+(migration 008: per-session parent linkage, junction points with
+ordered targets, dedup winners for cross-session-duplicated uuids —
+compact projections of the tree it already built, written in the same
+batch as the per-file cache writes so they're exactly as fresh as
+`cached_files`). When the Phase-1b gate finds the cache fresh, the
+combined output current, and only session files stale,
+`_load_stale_session_transcripts` loads only the files holding those
+sessions' entries, enforces the sidecar's winner map up front, patches
+parent/junction facts from the sidecar (ancestor chains as empty stub
+lines), and renders through the unchanged
+`_generate_individual_session_files`. `CLAUDE_CODE_LOG_SESSION_SCOPED=0`
+is the bisecting knob; every decline falls back to the full load.
+Byte-identical on the two coupling-heavy real archives (the 296MB
+document-processing project: 85 output files, 64 sessions regenerated
+partially, 742-winner sidecar; the 803MB reference archive: 187 files,
+129 regenerated, 117 of them resume/fork-coupled), plus fixture and
+synthetic pins in `test_session_scoped_render.py` with the full loader
+monkeypatched to *raise*. Measured on the 8-core VM, warm cache: one
+stale session on the 803MB project **4.6s → 0.6s (7.9x)**; a
+fully-fresh direct conversion **→ 0.4s** (see next paragraph for why
+that wasn't already fast).
+
+Three things the implementation surfaced, for the record:
+
+1. **sessionId → file is NOT 1:1** (an assumption the design survey
+   carried, e.g. "one trunk file per session, named
+   `<session-id>.jsonl`"): real archives contain files whose entries
+   span two sessions — a continuation written into the previous
+   session's file — and sessions with no file of their own (the
+   fixture archive has one; document-processing has more). Discovery
+   therefore goes through the cache's messages table
+   (`CacheManager.get_session_file_map`), never by filename stem.
+   Latent pre-existing quirk this exposes: `_plan_project`'s
+   `valid_session_ids = {f.stem}` treats such sessions as archived,
+   so their staleness never marks the project needing work at the
+   plan level.
+2. **Paginated projects never hit the Phase-1b early exit at all** —
+   the gate asked `is_transcript_stale("combined_transcripts.html")`,
+   a name paginated projects have no cache row for, so every direct
+   conversion of a paginated project full-loaded even when everything
+   was current. `_combined_output_is_stale` now replays the
+   pagination pass's plan cache-only (same assignment from cached
+   session data, same `is_page_stale` + invalidation triggers), which
+   both enables the session-scoped path and makes the plain early
+   exit fire for paginated projects (the 0.4s above; it was ~4.6s).
+3. **Archived-stale sessions used to pin projects to the slow path
+   forever**: a session with cached rows but deleted source and a
+   missing rendered file blocked the early exit on every run, and the
+   full load it forced rendered nothing for it. The partial path
+   skips them with identical outcome and no load.
+
+Remaining from the staged plan: stage 3 (page-granular streaming for
+full rebuilds — the actual peak-memory fix) and stage 4 (threshold
+re-size once the floor moves). The stage-2 machinery (sidecar,
+file-map discovery, faithful partial DAG build) is exactly what stage
+3 drives from the page plan.
+
+**Phase 9 progress (streaming stage 3 — page-granular streaming,
+2026-08-28, same stacked branch):** stage 3 is implemented as a
+render-side streaming pass. `_stream_paginated_conversion` plans the
+session→page assignment purely from cached session data (via a shared
+`_plan_page` helper factored out of `_generate_paginated_html`, so the
+two plans cannot drift), then for each page needing work — stale page,
+or stale session files on it — loads only the files holding that
+page's sessions through the stage-2 partial-load machinery
+(`_resolve_session_source_files` + `_load_sessions_partial`, factored
+out of `_load_stale_session_transcripts`), renders the page and its
+stale session files together against a per-page fragment store, and
+drops it all before the next page. Peak residency becomes one page's
+files, not the project. Gating: structurally, paginated HTML directory
+conversions with no date filter / force / `--combined no`; then a
+memory valve — auto mode streams only when available memory is under
+2.4x the project's transcript bytes, deliberately the same knee as the
+fragment-store valve, so the ladder is continuous (roomy → full load +
+fan-out + store; tight → streaming, exactly where the fan-out and
+store already declined; streaming is inline/serial for that reason).
+`CLAUDE_CODE_LOG_STREAMING=1` forces it, `=0` kills it.
+`ensure_fresh_cache` now persists the sidecar too, so a run whose
+cache was just refreshed streams instead of loading the project a
+second time. Every decline (missing sidecar, incomplete file set for
+any page session — strict resolution, unlike stage 2's archived-skip)
+falls through to the unchanged full path.
+
+Two traps found while landing it, both now pinned:
+
+1. **The sidecar recorded branch-qualified dedup winners** — a
+   *stage-2 bug the streaming hash runs caught*: `tree.nodes[uuid]
+   .session_id` is rewritten to `{trunk}@{uuid12}` by branch
+   splitting, and a branch-qualified winner matches no raw
+   `entry.sessionId`, so the partial load's enforcement dropped
+   *every* copy of such uuids — silently deleting a whole branch
+   from `session-40f8af00…` on the reference archive (and from its
+   combined page under streaming). Fixed at persist time (record the
+   surviving entry's raw sessionId) plus a load-side normalization so
+   sidecars written by the buggy code still enforce correctly.
+   Pinned in `test_session_scoped_render.py::TestBranchWinnerMechanics`
+   (branch replayed by a resume; winner sits on the branch line).
+   The phase-8 hash-run claim stands for what it measured, but its
+   stale sets evidently never included a branch-winner session —
+   assume nothing about partial-load coverage that a hash run didn't
+   regenerate through the partial path.
+2. **A page load can carry a partially-loaded co-resident session
+   from another page** (a file spanning two sessions — discovery 1 of
+   phase 8): rendering it would truncate that session's file *and*
+   mark its cache row current with the full count, freezing the
+   truncation. The per-page session pass is therefore restricted to
+   the page's own stale sessions
+   (`_generate_individual_session_files(restrict_to_sessions=...)`);
+   the mutation reproduces the truncation and the pin is
+   `test_streaming_render.py::TestFileSpanningSessions`.
+
+Verification at the branch's bar: `test/test_streaming_render.py`
+(14 tests — real fixture with the full loader monkeypatched to raise,
+fully-streamed virgin conversion, page-size change, new-session-after-
+cache-refresh, memory-valve gating, cross-page fork/resume synthetics,
+the spanning-file trap) plus hash runs over both coupling-heavy real
+archives (hashrun harness in the session scratchpad): warm parity,
+full rebuild, and incremental scenarios all byte-identical — 85 files
+on the 296MB document-processing project, 187 on the 803MB reference
+archive. Measured on the 8-core/16GB VM (serial, warm cache), peak
+RSS / wall, full path → streamed: 296MB project full rebuild
+454MB / 9.0s → 305MB / 8.5s; 803MB project full rebuild
+1490MB / 28.2s → **591MB / 25.2s**, incremental (1 page + 5 sessions,
+hand-marked — this predates `bench_render.py` carrying the scenario,
+which later fixed it at 1 page + 3 sessions)
+1092MB / 7.6s → 587MB / 4.6s — the streamed pass is *both* smaller
+and faster than the serial full path, because per-page cache loads
+replace the one giant master-list materialization. The ~590MB is
+dominated by the largest single page's co-resident files plus
+interpreter baseline; the floor now scales with page size, not
+archive size.
+
+Remaining: stage 4 — the cache refresh itself (`ensure_fresh_cache`)
+still full-loads when source files changed, so the *first* conversion
+after new sessions still pays full residency once; making the cache
+build per-file (with the order-dependent requestId dedup and
+incremental sidecar maintenance that entails) is the last piece of
+"no archive too big for the machine", along with the § 7.5-style
+threshold revisit once that floor moves.
+
+**Phase 11 — stage 4 landed (incremental cache refresh, 2026-08-27).** Measured
+on the 8-core/16GB VM, first conversion after three new sessions
+appear in the 803MB reference archive (peak RSS / wall): full refresh
++ full render 1131MB / 10.6s → full refresh + streamed render 901MB /
+8.1s → **incremental refresh + streamed render 582MB / 6.7s**. Once
+the render streams, the refresh's full load *is* the peak, so this is
+the step that finishes "no archive too big for the machine" — the
+whole pipeline now scales with what changed, not with the archive.
+Equivalence verified by holdback runs (hold back the newest files,
+warm, restore, compare against a full refresh) on the 803MB reference
+archive, 296MB repower and 1003MB platform-frontend-next: cache DB
+state (session rows incl. hidden, aggregates, all three sidecar
+tables) and every rendered byte matched on all three, plus 14 tests
+in `test_incremental_cache_refresh.py` and a full green `just ci`.
+`CLAUDE_CODE_LOG_INCREMENTAL_CACHE=0` is the kill switch. The design
+as landed, and the two traps found landing it:
+
+**Stage-4 design (incremental cache refresh, survey-grounded):** the
+refresh's full load exists
+to recompute three things — per-session cache rows, project
+aggregates, and the sidecar. All three are recomputable from a
+*bounded closure* of the modified files, with a decline-to-full-load
+ladder for every hairy case.
+
+Empirical ground (scratchpad `stage4_survey.py`, run over the full
+7.9GB/78-project real corpus, zero failures): **I1** project
+`total_message_count` == Σ unfiltered per-session `message_count` +
+typed residual (summary/ai-title/attachment rows — countable from the
+messages table by type); **I2** project token totals == Σ unfiltered
+per-session tokens; **I3** bookend timestamps == raw min/max. Also:
+cross-session distinct-uuid shared requestIds are 0 in 76/78 projects
+(8 and 64 in platform-frontend-next and repower) — so a
+decline-on-boundary-rid guard almost never fires.
+
+The algorithm (each step declines → unchanged full load):
+
+1. *Preconditions*: cached project data + sidecar present, no date
+   filters, no files deleted since cache (deletion = archival
+   semantics, full path's job), agent-file-only changes excluded as
+   today.
+2. *Per-file parse*: capture each modified file's OLD state from the
+   messages table (sessions, uuid set, rid set, per-type metadata
+   counts), then `load_transcript` it (rewrites its rows). Decline
+   unless old uuids ⊆ new uuids per pre-existing file (append-only
+   check — a shrunk/rewritten file means history changed).
+3. *Closure fixpoint* (SQL over messages + old sidecar, no entry
+   loading): start C = old ∪ new sessions of modified files; add (a)
+   owner sessions of dangling parentUuids in new entries (attachment
+   targets — via dedup-winner rows when duplicated), (b) all sessions
+   holding any uuid that appears in modified files (re-election
+   partners; only modified-file uuids need re-election — other
+   winners' candidate sets are unchanged), (c) for each old junction
+   uuid that is a parentUuid-target of new entries, its full old
+   target list (so target order recomputes natively; junctions not
+   touched by new entries keep their old rows), (d) any session a
+   loaded-file co-residency would otherwise leave partially loaded
+   when it holds an exempt uuid. Decline past a size threshold
+   (closure files > ~1/3 of project files — beyond that the full
+   load is competitive anyway, mirroring the sparse gate).
+4. *rid guard*: any closure-session requestId also present outside
+   the closure → decline (token attribution would need global
+   order; survey says ~never).
+5. *Partial load*: `_load_sessions_partial` variant over the
+   closure's files with two refresh-specific deviations — (i) old
+   dedup-winner enforcement *exempts* uuids present in modified
+   files (their election must re-run natively; partners are loaded
+   by closure, and elections restricted to a superset-consistent
+   candidate set agree with the full tree by the min-first-timestamp
+   + encounter-order semantics), (ii) the sidecar junction patch
+   must *merge*, not overwrite — a new fork child would otherwise be
+   erased by the old target list (in practice: native rows win for
+   touched uuids, old rows stand for untouched ones).
+6. *Facts persist*, restricted to P = sessions whose complete file
+   set was loaded (the co-resident partial-session trap, stage-3's
+   lesson, applies to cache facts too): session rows for P upserted;
+   sidecar parents/junction/winner rows replaced for P-owned facts
+   and re-elected uuids, others untouched; project aggregates by
+   *delta* (new P rows − old P rows, metadata counts per file old →
+   new, bookends extended min/max — append-only makes shrink
+   impossible).
+7. Page cache rows untouched — render-side staleness (sessions
+   changed) drives regeneration exactly as after a full refresh.
+
+**Discovery while landing it — the forward metadata direction (the
+803MB holdback caught it):** the design closed over files holding
+metadata *for* closure sessions (a summary elsewhere titling a session
+whose row is being recomputed) but not the reverse: a *modified* file
+whose new `summary` entries name **other** sessions by leafUuid.
+Those sessions' own entries never changed, so nothing pulled them
+into the closure, and their `summary` column stayed at its old value
+(None) while the full refresh filled it in — 8 sessions on the
+reference archive, invisible in the rendered bytes, which is exactly
+why the acceptance bar is DB state rather than HTML. Fixed by
+capturing each file's summary leafUuids / ai-title sessionIds in
+`CachedFileState` and closing over every owner session of those
+leafUuids (all owners, since which copy of a duplicated leaf wins the
+attribution is settled by the loaded set). Pinned in
+`TestIncrementalEquivalence::test_new_summary_titles_an_untouched_
+session`, which fails under mutation; the ai-title arm turns out to
+be covered already (its target sits in the messages table's
+`session_id` column, so the file's own session set carries it), and
+its test says so rather than overclaiming. Second trap, caught in the
+same run: sidecar junction owners/targets can be branch-qualified
+`{trunk}@{uuid12}` line ids, which match no file-map key — closure
+membership must trunk-normalize them or strict resolution declines
+forever (this is the same branch-qualified-id class as phase 9's
+dedup-winner bug; assume any sidecar-derived session id may be a
+line id, not a raw sessionId).
+
+**Third trap — attachments are lossy between parse and traversal (the
+pre-009-cache upgrade run caught it):** `total_message_count` is
+`len(messages)` of the *traversed* list, but cached message rows are
+the *parsed* list, and an attachment whose parent never resolves is
+parsed yet never traversed. Counting the residual classes from cached
+rows therefore over-counted the project total by exactly the dropped
+attachments (+16 on a real upgrade scenario; session rows and every
+rendered byte matched, so only the DB-state bar caught it). Fixed by
+migration 010 (`sessions.residual_count`, NULLable so a pre-010 row
+reads as "unknown" and declines rather than as a zero): residuals are
+counted per session *from the traversed entries*, and the identity
+becomes `total = Σ(message_count + residual_count) + #summary rows` —
+summaries being the one class with no session attribution, and one
+that bypasses traversal so its row count is exact. Re-verified across
+all 78 corpus projects. Pinned by
+`test_attachments_in_a_new_session` (a new session carrying one
+attached and one orphaned attachment), which fails under mutation.
+Lesson for the next session: **cached rows are the parsed list, the
+project total is the traversed list** — never assume a per-type row
+count equals a contribution to `len(messages)`.
+
+Delta arithmetic needs old contributions for *every* closure session
+including warmup/agent-only ones, which today's cache filters out
+before persisting — so migration 009 adds a ``hidden`` flag to the
+sessions table: the writer persists *all* sessions from one
+unfiltered `compute_session_data` pass, flagging warmup/empty rows,
+and every read site filters hidden. Visible rows must stay
+byte-identical to today's filtered computation — the only semantic
+coupling is a warmup-session requestId shared with a visible session
+(would shift D1 token attribution between the passes), guarded by
+survey + a decline check. Verification bar: DB-state equivalence
+(session rows, aggregates, all sidecar tables) between incremental
+and full refresh, plus rendered byte-identity, across synthetic
+scenarios (append, new session, resume/fork/replay coupling, shrunk
+file → decline, deleted file → decline, boundary rid → decline) and
+real-archive holdback runs.
+
+**Phase 10 (the sparse gate — "should streaming just be the default?",
+2026-08-27, same branch):** Dain asked whether streaming, being faster
+in every phase-9 measurement, should simply always run. The phase-9
+numbers couldn't answer that: they compared streaming against the
+*serial* full path, because the memory valve only ever ran streaming
+where the fan-out had already declined. The missing comparison was
+streaming (inline by design) vs the full load + parallel fan-out on a
+roomy machine.
+
+Measured on the 8-core/16GB VM against a 137MB/26-page/50k-message
+archive (a real 40MB project cloned 4x with bijectively-rotated UUIDs
+and suffixed requestIds so dedup can't collapse the copies —
+`scripts/clone_project_nx.py`), warm cache,
+`scripts/bench_render.py` now sweeping the streaming knob with a
+peak-RSS column:
+
+    full rebuild    wall     CPU    peak RSS
+    memo only       12.3s   10.9s     681MB
+    both (auto)      6.7s   19.0s     706MB   ← wins
+    streaming       11.1s    9.7s     325MB
+
+    incremental (page 1 + 3 sessions stale)
+    memo only        3.2s    3.0s     542MB
+    both (auto)      3.3s    3.1s     542MB
+    streaming        2.0s    1.8s     276MB   ← wins
+
+So: *not* always. Streaming beats the serial full path everywhere
+(confirming phase 9), but a dense rebuild belongs to the fan-out on a
+roomy machine (6.7s vs 11.1s), while sparse work — the daily-run
+shape — streams faster than the fan-out *and* at half the RSS and
+less total CPU, because a couple of page loads replace the
+whole-project load that dominates an incremental run, and the fan-out
+has too few stale units to help there. Streamed wall scales
+~linearly with pages needing work; the full path pays the load
+regardless; the crossover lands near 36% of pages stale and moves
+only weakly with core count.
+
+**Real-archive verification (2026-08-27, Dain's 7.9GB/82-project
+copy at `downloads/projects`):** the sparse gate re-measured and
+byte-verified on the two reference archives via the extended
+`bench_render.py`. 803MB reference (319MB transcripts, 16 pages):
+full rebuild fan-out 10.8s/1634MB vs streamed 26.2s/629MB (dense
+belongs to the fan-out); incremental streamed 4.0s/441MB vs fan-out
+6.5s/1128MB. 296MB document-processing: fan-out never engages (below
+the floor), streamed parity on dense (9.5s vs 9.2s) and wins sparse
+(2.1s vs 3.1s, 293MB vs 396MB). Every configuration byte-identical on
+both. Auto-mode spot checks on the real copies picked correctly both
+ways (sparse "3 of 16 pages" streamed at 3.7s; 8-of-16 dense took the
+fan-out), including inside `--all-projects` hierarchy runs — where a
+restored mid-chronology session correctly declined as dense, because
+its insertion shifts every later page's membership (the full path
+regenerated pages 2-4 for the same reason). The measured crossover on
+the 803MB archive brackets ~0.25-0.35 depending on fit; 1/3 sits in
+the wash zone where wall is within ~1-2s either way and streaming
+holds a 2.5x RSS advantage. Two observations for the record: (1)
+*pre-existing hierarchy planner gap* — a manually deleted non-first
+page file, as the only staleness, is not detected by `_plan_project`
+(the project reports "cached"); reproduced with streaming disabled,
+so unrelated to this branch — single-project invocations catch it;
+(2) `scripts/clone_project_nx.py` generates a >25k-message archive
+from any real project when no big one is at hand.
+
+The landed policy (`_should_stream` now returns None/"always"/
+"sparse"): force and memory-tight behave exactly as before; roomy (or
+unmeasurable) auto runs the streaming pass in *sparse* mode — it
+plans its pages, counts the ones needing work (cache/stat queries
+only), and declines itself past `_STREAMING_MAX_SPARSE_FRACTION`
+(1/3, margin under the crossover) so dense rebuilds fall through to
+the full load + fan-out unchanged. The staleness scan moved out of
+the render loop into a pre-pass to make that count exist before any
+rendering; cache writes before the decline (page-size invalidation,
+orphan cleanup) are the same writes the full path would make.
+Verified end-to-end on the synthetic archive with default env: sparse
+run streams ("3 of 12 page(s) need work", 1.6s), dense rebuild takes
+the fan-out (5.6s wall / 12.1s CPU). Pinned in
+`test_streaming_render.py::TestSparseGate` (sparse streams with the
+full loader forbidden; dense declines; a stale session pulls its page
+into the count), and the pre-existing auto-mode test's roomy branch
+is now explicitly the dense case. Byte-identity: bench hash runs
+(all configurations identical, both scenarios) + the suite.
+`scripts/bench_render.py` grew the streaming rows, the single-project
+incremental scenario, the peak-RSS column, and per-row pinning of
+`CLAUDE_CODE_LOG_STREAMING` (unpinned rows would silently stream on a
+tight machine under full-path labels).
+
+**Phase 12 — the § 7.5 threshold revisit, finished (2026-08-28).** The
+tail § 7 item 5 left open. It asked whether `memory_capped_workers`,
+`_MIN_MESSAGES_FOR_RENDER_POOL` and `per_project_render_jobs` were
+still right now that workers are fed slices instead of loading the
+transcript. The answer turned out to be about a *fourth* threshold
+nobody had listed, and it was costing more than all three:
+
+**The dispatch gate counted units, and pages are the fat units.**
+`_dispatch_render_units` fanned a batch out only at
+`_MIN_UNITS_FOR_RENDER_POOL = 8` units, justified by "units average
+well under 200ms". That is true of *session* units — cheap, because
+the page pass already put their fragments in the store — and false of
+*page* units, which carry ~`page_size` messages each and are where
+nearly all of a conversion's render time lives. So a project with
+fewer than 8 pages (~16k messages at the default page size) rendered
+its expensive page batch inline and fanned out only its cheap session
+batch: it paid the pool's ~1s of `spawn` + import for the batch with
+the least to gain. That is the whole explanation for a cliff that
+looked inexplicable while measuring by project size — 15.5k messages
+gave 1.01x and 25k gave 2.67x, because 25k is where the eighth page
+appears.
+
+Measured on the 8-core/16GB VM, 16 real projects from
+`downloads/projects`, full rebuild off a warm cache, every
+configuration byte-identical (harness in the session scratchpad; it
+copies each project to scratch, warms, then times serial vs `auto`
+and hashes the output):
+
+    msgs    project                     serial   before    after
+     2.5k   homelab                      1.71s    0.82x    1.02x
+     3.3k   feat-tangie-state-and-eval   2.23s    0.97x    1.00x
+     4.4k   infra-pulumi                 2.53s    0.89x    1.31x
+     4.5k   platform-frontend-next-…      3.52s    0.98x    1.35x
+     5.0k   chore-remove-all-mui         4.00s    0.99x    1.02x
+     6.3k   cook-anything                3.63s    0.86x    1.37x
+     6.8k   immich-smart-metadata        4.31s    0.90x    1.57x
+     8.2k   visual-ml                    4.88s    0.94x    1.59x
+    12.2k   repower                      7.71s    1.04x    1.79x
+    13.2k   document-processing          9.37s    1.00x    2.27x
+    15.5k   bulk-order-coop              7.79s    1.01x    2.04x
+    25.0k   -workspace                  12.20s    2.67x    2.57x
+    35.4k   claude-code-log             31.09s    2.81x    2.69x
+
+Two directions of win: the mid band gains what it should have been
+getting all along, and the small band stops *losing* — those
+0.82-0.94x rows were the count gate fanning out a session batch that
+had nothing to gain. Note this also retires an earlier claim in this
+doc: "296MB document-processing: fan-out never engages (below the
+floor)" was true of the code as it stood, not of the shape of the
+work.
+
+**The landed rule** (`converter._worth_dispatching`) weighs the batch
+instead of counting it: a lone unit never dispatches (it would render
+in a worker while the parent waits); once the pool has *started*
+(`RenderPool.started` — the executor is lazy and lives for the whole
+conversion) any multi-unit batch does, since the startup is sunk,
+which is how the session batch rides along behind the page batch that
+paid for it; otherwise the batch must carry
+`_MIN_ENTRIES_FOR_RENDER_POOL = 4,000` entries. That number is the
+pool's startup (~1s ≈ 2,000 entries at the ~2,000 entries/s the render
+phase sustains) with the same 2x margin the rest of this branch uses.
+
+**On the three thresholds § 7.5 actually named:**
+
+- `_MIN_MESSAGES_FOR_RENDER_POOL` (25,000) is now the same number as
+  the batch gate, and provably non-binding: every batch is a subset of
+  the project's message list, so a project below the gate can't form a
+  batch that clears it. It survives only as a short-circuit that skips
+  building a pool object nothing would start.
+- `memory_capped_workers` needed nothing. Re-measured on this code:
+  the conversion parent peaked at 1610MB on a 315MB project (5.1x) and
+  the phase-4 fit was 4.4x on 329MB — project-to-project variance
+  (±15%) is larger than any drift, the 4.5x charge sits inside it, and
+  the 0.6 headroom absorbs the rest. Its charge was never the binding
+  constraint on the fan-out; the dispatch gate was.
+- `per_project_render_jobs` is unchanged. On a full rebuild the *core*
+  split (`job_budget // len(pooled)`) still binds at 1 worker/project
+  before memory does — the flat pool remains the fix for that tail —
+  and on an incremental run the projects that now qualify are the ones
+  that finally use the workers they were already being granted.
+
+**The hold-back floor is now its own constant** (`_MIN_MESSAGES_FOR_
+HOLDBACK = 25,000`). It had been reading `_MIN_MESSAGES_FOR_RENDER_
+POOL`, so lowering the pool floor would have silently made 4k-message
+projects hold-back-eligible — and `_fanned_speedup` promises 2.5x at
+8+ workers, which a 3-page project does not deliver (1.3-1.6x
+measured). Over-estimating there serializes a project that was better
+off pooled, the expensive direction. Hold-back decisions are therefore
+bit-for-bit what they were.
+
+**No-regression check on the archive-level scenarios**
+(`bench_render.py --all-projects --projects 8`, the same 1539MB
+subset every table in this doc uses, every configuration
+byte-identical): full rebuild 64.8s memo-only → 57.5s both (1.13x,
+vs 1.15x at phase 6), incremental 61.8s → 18.0s (3.43x, vs 3.48x) —
+unchanged within run-to-run noise, which is the expected result. A
+full rebuild gives each pooled project 1 render worker (the core
+split binds), so no pool is built there at any floor; the
+incremental scenario's one stale project is the 97k-message giant,
+already far above both the old floor and the new gate. The projects
+this phase unlocks are the ones a *partially* stale archive leaves
+in the pool with spare budget.
+
+**Measurement lesson, worth more than the numbers:** in the marginal
+band a single timed run is not evidence. `chore-remove-all-mui` read
+0.91x on one sample and 1.02x as the median of five, and the *serial*
+baseline was stable (3.89-3.95s) while the fanned one swung
+3.30-4.04s — the fan-out has the higher variance, so a single sample
+biases against it. Every threshold decision here that fell inside
+±15% was re-run five times and taken as a median. Two forgone cases
+sit just under the gate: `docling-extraction` (3.2k entries) measures
+1.14x if forced, and `feat-tangie` (3.3k) measures 0.98x — no
+consistent sign below 4,000, which is exactly why the gate is there
+and not lower.
+
+Pinned in `test_render_cache.py::TestWorthDispatching` (lone unit,
+light batch, few-fat-units — the case the count gate got wrong —
+ride-along after start, broken pool is not started, entry-less units
+carry no work, and the floor-can't-bind invariant).
+
+**Streaming-conversion design analysis (2026-08-27, so nobody
+re-derives it):** a code-level survey of every full-residency
+assumption behind the § "Still open" streaming item. The load-bearing
+findings, then the refined hard parts, then a staged path.
+
+*What already exists.* Three of the four planning inputs are pure
+cache reads today, before any entry is loaded:
+
+- Global session ordering and page assignment:
+  `_assign_sessions_to_pages` (`converter.py:1441`) sorts on
+  `sessions.first_timestamp` and sums `sessions.message_count` —
+  both indexed columns. The page plan is cache-computable.
+- Per-session staleness is *already computed pre-load* in
+  `_plan_project` (`converter.py:4112-4120`) — then thrown away
+  except as a count (`_ProjectPlan` carries only `needs_work`).
+  Keeping the list is step zero.
+- The cache stores full per-entry rows (compressed content blobs in
+  the `messages` table) with an existing session-keyed reader —
+  `load_session_entries` (`cache.py:1493`, used by archived-session
+  restore) — an embryonic per-session load path. Caveat: rows come
+  back `ORDER BY timestamp`, not file order, and there is no
+  ordinal/line-number column.
+
+And the render semantics already exist: the paginated path renders
+*page-scoped trees* (a page's sessions only), so page-granular
+streaming preserves today's paginated bytes by construction — the
+cross-page couplings streaming would sever (anchors, tool pairing
+across pages) are already severed under pagination
+(`dev-docs/dag.md` on `#msg-d-{N}` being single-page). What's
+missing is page/session-scoped *loading* and a set of compact
+cross-session sidecars. The natural streaming unit is the page
+(sessions never split across pages), so the entry-list peak becomes
+max(page ≈ 2000 messages default, largest single session) instead of
+the whole project. Non-paginated combined output keeps the old floor
+unless forced through pagination.
+
+*The four named hard parts, refined:*
+
+1. **Dedup** is two mechanisms, both global, both sidecar-able.
+   (i) `dag.build_message_index` (`dag.py:127-172`) dedups uuids
+   across sessions, survivor = copy in the session with the earliest
+   first-timestamp (resume-replay prefixes). The winner map
+   `{uuid → winning sid}` is derivable *by SQL* from the `messages`
+   table (`_uuid`, `session_id`, timestamps) — no entry loading.
+   (ii) `converter.deduplicate_messages` (`converter.py:1058`) keys
+   on a tuple that *includes* `session_id` (`converter.py:1090`), so
+   its drops are intra-session and per-session-computable; only the
+   final `parentUuid`/`leafUuid` rewrite (`converter.py:1186-1199`)
+   needs the assembled global dropped→survivor map. Sidecars are
+   ~100 bytes/entry of uuid strings — 1-2% of entry bytes.
+2. **The DAG**: `SessionTree.nodes` pins every entry, but the render
+   path already runs on `slim_session_tree` (phase 3) — streaming
+   needs the slim form built without ever materializing `nodes`
+   whole. The cross-session inputs are small (session-root
+   `parent_uuid` linkage for junctions, `dag.py:1035-1058`); the big
+   term is `sessions[*].uuids` (an O(entries) uuid copy), which
+   `_extract_session_hierarchy` re-copies per render call
+   (`renderer.py:1010-1013`) — restrict it to the tree's own
+   sessions. Forks/branches (`{trunk}@{uuid12}`) are intra-session
+   and stream fine.
+3. **Global session ordering**: solved by cache (above). Within-page
+   order today comes from master-list DAG-traversal order
+   (`converter.py:1786-1793`); a per-session DAG line ordered the
+   same way is the requirement.
+4. **Fragment-store ordinals**: confirmed master-list positions
+   (`fragment_store.py:238-240`, set at `converter.py:2271`).
+   Independent session loads would collide at ordinal 0. Re-key to
+   `(trunk sid, within-session ordinal, part_ordinal)` — every
+   process loading the same session slice agrees, no master list
+   needed. Don't derive global ordinals from planned count offsets:
+   the cached count and the render count genuinely diverge
+   (`converter.py:1841-1849`).
+
+*Global couplings the four didn't name* (each found in the survey,
+each small enough for a sidecar unless noted):
+
+- **`requestId` dedup for token totals** — `compute_project_aggregates`
+  / `compute_session_data` carry a project-global `seen_request_ids`
+  because a retried assistant entry shares its requestId across
+  sessions (`converter.py:1553-1556`). Thread one set through the
+  stream or cross-session retries double-count.
+- **Warmup detection** (`utils.py:776`) needs a whole session (fine —
+  that's the stream unit) but is consumed project-wide
+  (`converter.py:2954`) and is *not* a cached column — worth caching.
+- **Cross-session tool_use→result pairing** (`ctx.tool_use_context`,
+  `factories/tool_factory.py:1671`): sidecar of
+  `{tool_use_id → (name, file_path, favicon, label)}` — scalars only.
+  This is the same divergence class the store's § 4.8 digest guard
+  covers.
+- **Summary/leafUuid resolution** (`renderer.py:1115`) needs
+  uuid→session; `sessions.summary` is already the cached answer.
+- **`map_workflow_runs_by_tool_use`** (`workflow.py:614`) is
+  explicitly whole-project "before pagination splits it" — its
+  output `{tool_use_id → run_id}` is a compact sidecar.
+- **`_scan_sidechain_uuids`** (`converter.py:161`) re-reads every
+  subagent/workflow JSONL per load just to suppress orphan warnings —
+  make it per-session or cache it.
+- `ensure_fresh_cache` is itself all-or-nothing: one changed file
+  re-walks every file through `load_directory_transcripts`
+  (`converter.py:2542-2562`) — under streaming the cache build must
+  also go per-file (the pieces exist: `load_transcript` is per-file,
+  `save_cached_entries`/search reindex already are).
+
+*Staged path* (each stage byte-equivalence-tested at page
+granularity):
+
+1. ~~Keep `_plan_project`'s stale-session list; add the dedup-winner
+   sidecar.~~ **Landed in phase 8** — the sidecar is persisted from
+   the built tree at full-load time (cheaper and safer than the SQL
+   derivation this doc proposed: winners read off `tree.nodes`, so
+   the tie-break semantics are the full run's by construction).
+2. ~~**Session-scoped incremental**.~~ **Landed in phase 8** — see
+   the progress block above, including the discoveries that changed
+   the design (file-map discovery instead of stems; winner map
+   enforced for all duplicated uuids rather than only external ones).
+3. ~~**Page-granular streaming for full rebuilds**.~~ **Landed in
+   phase 9** — see the progress block above. The fragment-store
+   re-key from hard part 4 turned out unnecessary for the serial
+   streaming shape: one store per page, dying with the page, keeps
+   `id(entry)`-to-ordinal keys consistent within the only scope that
+   shares them (the page render and that page's session files use the
+   same loaded objects). The re-key becomes relevant only if pages
+   ever fan out across processes.
+4. ~~The remaining floor: `ensure_fresh_cache`'s full load on changed
+   sources.~~ **Landed in phase 11** — the incremental cache refresh;
+   see the stage-4 block above. Its tail — the § 7.5-style threshold
+   revisit, once the floor was gone — **finished in phase 12**: the
+   binding threshold turned out to be the unit-count dispatch gate
+   rather than any of the three the item named.
+
+This is a restructuring of `load_directory_transcripts` +
+`convert_jsonl_to`'s spine — comparable invasiveness to the fed-worker
+sequence (phases 2-4), delivered incrementally the same way. Nothing
+else on this list delivers the "no archive too big for the machine"
+property; stage 2 alone delivers most of the everyday value.
+
+**Provider coverage check (Codex / Antigravity, 2026-08-27):** none
+of this branch's structural work reaches the provider paths, because
+providers do not flow through `convert_jsonl_to` at all — they render
+via `render_normalized_session_file` (`converter.py:3314`) and
+`render_provider_wholesale` (`converter.py:3477`), which never call
+`_make_fragment_store`, `_make_render_pool`, `_dispatch_render_units`,
+or build a `SessionTree`. Per feature:
+
+- **Leaf memo: applies** (module-global caches under the shared HTML
+  formatters). Verified empirically on a real 28MB/30-session Codex
+  tree (`downloads/codex/sessions`): 66-68% Markdown / ~50% Pygments
+  hit rates, and the § 4.2 git-cwd key is safe because codex
+  populates `entry.cwd` (`providers/codex.py:999-1034`); agy leaves
+  it empty (no SHA links, consistent, pre-existing).
+- **Fragment store: bypassed**, and it's a real miss — the wholesale
+  walker has the same session-vs-combined duplication (sessions
+  first at `converter.py:3734`, combined from the same entry objects
+  at `converter.py:3792-3809`), and `fragment_key` stamping already
+  happens for provider entries and is thrown away. Wiring is cheap:
+  one store per cwd group, `set_entry_ordinals(combined_messages)`,
+  a `fragment_store` parameter on `render_normalized_session_file`.
+- **Render pool: bypassed**, and naive wiring would silently decline
+  on the missing session tree (`converter.py:2809`) — providers
+  rebuild a DAG from entries on *every* render call
+  (`renderer.py:977-982`), a pre-existing inefficiency a per-group
+  SessionTree would fix anyway. Also needed: a provider-supplied
+  byte measure (the `*.jsonl` glob reads 0 on codex's nested
+  `sessions/YYYY/MM/DD/` tree, which would over-grant workers), a
+  `db_path` field on `_WorkerSetup` (the provider path's shared
+  output-root DB is not `project_dir.parent`-derivable under
+  `--expand-paths`), a `RenderUnit` refactor of the wholesale loop,
+  and un-rejecting `--jobs` (`cli.py:1217`). The trunk predicate
+  needs no change — codex/agy sessionIds are flat.
+- **Hold-back / memory cap: not applicable** — provider projects are
+  never enumerated by `process_projects_hierarchy` (its discovery is
+  `*.jsonl`-glob under `~/.claude/projects`). The cached message
+  counts the planner would need *are* written by the codex walker;
+  the loop just never sees them. Codex wholesale has no planning
+  phase at all.
+- **Antigravity is single-session-only** (`--session-id`): no
+  `discover_sessions_under`/`load_session_under`/`source_path`
+  (`providers/agy.py:34-55`; wholesale fails loudly, pinned in
+  `test_codex_walker.py:858-880`), so there is nothing to wire until
+  the wholesale surface exists.
+- **No test** exercises the fragment store or render pool with a
+  provider fixture; `work/codex-backlog.md:78-84,134-142` already
+  tracks the integration gap (cache/TUI/all-projects, `--jobs`).
+
 **Still open after phase 7:**
 
 - **The flat pool** (above — residual ~1.1-1.3x on measured archives,
   token-governed nested pools the most implementable shape).
-- **Streaming conversion — the actual fix for peak memory.** Named
-  here so it stops hiding behind the spill: converting a project has
-  *always* loaded its entire transcript (master entry list + DAG +
-  trees), so peak RAM is bounded below by the largest single project
-  regardless of every knob — measured 1252MB store-less serial on the
-  803MB project (~1.56x bytes on disk), ~1.9x with the store. A
-  machine under ~2x its largest project cannot convert it, and no
-  optimisation on this branch moves that floor; the valve above only
-  stops the store from lowering the cliff's edge. The fix is a
-  metadata-planned streaming pass (the cache DB already holds
-  session-level metadata): plan sessions/pages from cache, then load,
-  render and drop one session or page at a time. Hard parts, from the
-  code as-built: dedup and cross-session tool_use/result pairing
-  assume the whole list is resident, the DAG builds from all entries,
-  combined pages need global session ordering, and fragment-store
-  ordinals are master-list positions. Big feature; nothing else on
-  this list delivers the "no archive too big for the machine"
-  property.
+- ~~**Streaming conversion — the actual fix for peak memory.**~~
+  **All four stages landed** (phases 8–10 on
+  `perf/streaming-conversion`): page-granular streaming for the
+  render (stage 3, now also engaging for page-sparse work on roomy
+  machines — phase 10) and an incremental cache refresh (stage 4), so
+  neither the refresh nor the render loads a project whole in the
+  everyday shapes. 803MB archive, first conversion after new
+  sessions: 1131MB → 582MB peak RSS at 10.6s → 6.7s. What is left is
+  the *threshold revisit* the staged path always listed as stage 4's
+  tail: with the floor gone, `memory_capped_workers`' 4.5x parent
+  charge is no longer the binding constraint on small machines, and
+  the § 7.5 numbers deserve a re-derivation. Remaining full-load
+  paths, all deliberate: date-filtered runs, `--force`, non-paginated
+  projects, provider (codex/agy) conversions, and every decline in
+  the two ladders.
+- **Provider wiring** — the fragment store for codex wholesale is the
+  cheap win; the pool needs the per-group SessionTree first (see the
+  provider coverage check above).
 - **The fragment-text spill** — demoted from headline to footnote by
   the § 4.9 measurement: it bounds only the store's own +269MB, not
   the master-list floor above, so it is a ~15-20% peak shave, not a
@@ -600,9 +1279,85 @@ Full suite before pushing: `just ci`.
   pyright wrapper uses its bundled JS instead of fetching node past
   the wall). `.venv` lives on a box-local shadow volume, so host and
   box binaries never clobber each other.
-- Real transcripts for local testing: `downloads/projects/` (7.9GB, 84
-  projects, with a warm cache DB). Test fixtures:
-  `test/test_data/real_projects/`.
+- **The box's wall clock is not monotonic** (measured 2026-08-27: a
+  0.26s *backwards* jump inside a 4-second sample, while
+  `time.monotonic()` advanced normally — Lima guest clock sync).
+  Consequences: `test_integration_realistic.py::TestAddingNewJSONLFiles
+  ::test_index_html_updated_with_new_project_stats` flakes roughly
+  1 run in 6 (it asserts a regenerated file's mtime increased), and
+  the CLI can print a *negative* per-project duration. Not caused by
+  any change on this branch — reproduced with every knob disabled.
+  **Both are fixed now** (2026-08-28): every production elapsed-time
+  measurement reads `time.monotonic()` — the 8 sites in `converter.py`
+  (plan, project-worker, hierarchy total, per-project line) plus
+  `renderer_timings.py`, `renderer.py` and `html/renderer.py`, which
+  share a clock domain through `log_timing(t_start=...)` and so had to
+  move together (its docstring now says the reading must be
+  monotonic). Wall-clock readings that are genuinely *timestamps* —
+  `cache.py`'s `datetime.now()` rows, the mtime freshness compare —
+  stay on `time.time()`. Since file mtimes come from the OS and can
+  still step backwards, the mtime assertions moved to
+  `conftest.assert_regenerated` (mtime *changed*, not "increased"),
+  which is what those 7 call sites actually mean; it sits next to
+  `bump_mtime`, whose comment block documents the sibling
+  filesystem-clock flake.
+- **The browser suite hung under xdist once, on 2026-08-28, and has
+  not since.** What was seen: `uv run pytest -m browser -q` — the
+  parallel default, and what `just ci` runs — reached ~93% and stopped
+  dead, with zero CPU accumulation in the pytest process *and* in
+  Chromium, so a hang rather than slowness; `just ci` sat there 75+
+  minutes before being killed. Checking out the pre-change commit
+  reproduced it (with a screenful of collection `E`s), so it was never
+  the render work on this branch. `-n0` ran the same 90 tests green in
+  75s, and that was the workaround.
+
+  **Later the same day it stopped reproducing entirely**, with nothing
+  in the repo changed to address it: six consecutive clean parallel
+  runs (15s each), including at `-n 16` on this 8-core box and one with
+  available memory squeezed to 2.8GB by an 11GB balloon — the two
+  hypotheses worth testing cheaply, both negative — plus a full green
+  `just ci` in ~2 minutes. So the cause was environmental to that
+  session (the box had been running `downloads/projects`-scale
+  benchmarks), not something in `conftest.py`'s shared persistent
+  Chromium context, which was the standing suspect. Don't hunt it
+  without a fresh reproduction.
+
+  **What did change is that a hang is now a failure.** `pytest-timeout`
+  is in the dev group with `timeout = 300` / `timeout_method =
+  "thread"` in `pyproject.toml`, so a wedged test is killed and
+  reported instead of stalling the suite forever; under xdist that
+  surfaces as `worker 'gwN' crashed while running <nodeid>`, which
+  names the test — the fact this episode never produced. Re-run that
+  one test under `-n0` for the thread dump. Note the gap: the timer
+  covers a test item, not *session*-scoped fixture teardown, so a hang
+  in closing the shared browser context after the last test would still
+  wedge. Note too the sibling xdist hazard already documented in
+  CONTRIBUTING (`--snapshot-update` races) — the parallel runner is
+  where this repo's flakes live.
+- Real transcripts for local testing: `downloads/projects/` (7.9GB on
+  disk, 84 projects, with a warm cache DB). Note it is a *snapshot*,
+  not the live tree: measure against it, not `~/.claude/projects`,
+  whose active session file grows mid-run and will show up as a
+  spurious diff between two copies. **Every `--all-projects`
+  timing in this doc runs on its 8 largest projects, never the full
+  corpus** — `bench_render.py`'s `--projects 8` default selects them
+  by top-level `*.jsonl` bytes (`_transcript_bytes` — subagent
+  sidecar files in subdirectories don't count), which today totals
+  1539MB with the largest at 329MB, matching the post-feeding tables
+  (the pre-feeding tables' 1543MB is the same subset, measured
+  earlier). **That figure reads 1493MB from 2026-08-28 on**, because
+  `_transcript_bytes` now calls the converter's own
+  `utils.project_transcript_bytes` and so excludes top-level
+  `agent-*.jsonl` as every production heuristic already did — it had
+  been predicting a worker cap the conversion would not apply (16 of
+  79 corpus projects carry such files, one inflating by 30%). The
+  *subset* is unchanged — the same 8 projects, largest still 329MB —
+  so every table above stays comparable; only the quoted total moved. Single-project rows use individual projects from the same
+  tree. The "803MB / 187-file" fragment-store reference project is
+  the corpus's own claude-code-log archive quoted at its *all-files*
+  size, subagent sidecars included (its top-level trunk files are
+  319MB — which is why it can sit inside a "largest 329MB" subset).
+  Test fixtures: `test/test_data/real_projects/`.
 
 ---
 
@@ -620,7 +1375,75 @@ Full suite before pushing: `just ci`.
 5. Revisit `memory_capped_workers`, `_MIN_MESSAGES_FOR_RENDER_POOL`
    (`converter.py:2645`) and `per_project_render_jobs`
    (`converter.py:4204`) — all three were sized around a per-worker
-   transcript copy that step 3 should make unnecessary.
+   transcript copy that step 3 should make unnecessary. **Done** —
+   phase 4 re-sized the memory charges, phase 12 finished the rest.
+   The item's premise was half right: the binding threshold was a
+   fourth one it didn't name (the unit-count dispatch gate), and of
+   the three listed, only the pool floor actually moved.
 
 If step 3 turns out to be too invasive, the three landed pieces are
 independently useful and each commit reverts cleanly.
+
+---
+
+## 8. Structural backlog for `converter.py`
+
+Raised by a review pass over the finished branch (2026-08-28), then
+worked through. The theme is that `converter.py` has grown to five
+modules in one 6.6k-line file, and that the branch's own performance
+work added several near-duplicated rules that must agree.
+
+**Landed:**
+
+- The transcript-byte sum ("top-level `*.jsonl`, excluding `agent-`
+  sidecars") was written out at eight sites, four of them the identical
+  sum every memory heuristic is calibrated against → `utils
+  .trunk_jsonl_files` / `project_transcript_bytes`. This had *already*
+  drifted: `bench_render.py` computed it without the exclusion, so its
+  memory preview and worker-count labels predicted a cap the converter
+  would not apply (16 of 79 corpus projects carry such files, one
+  inflating by 30%).
+- The two 2.4× memory valves, each documented as deliberately the same
+  knee, → one `_MIN_AVAILABLE_MEMORY_PER_TRANSCRIPT_BYTE`.
+- The "is this project paginated?" rule, written out at three sites that
+  exist to predict each other, → `_is_paginated`.
+- `convert_jsonl_to`'s Phase 1b/1c gate-and-dispatch blocks (~165 lines
+  inline) → `_try_current_or_session_scoped` / `_try_streaming`, both
+  `-> Optional[Path]`, with the shared contract (a decline must be
+  indistinguishable from never having been attempted) stated once.
+- The fan-out glue → `render_dispatch.py`, the policy layer over
+  `render_pool.py`'s mechanism. This was the most tractable seam of the
+  file split: no back-edges, and both thresholds it reads exist only for
+  it.
+- The per-project conversion argument set, previously written three
+  times (inline call, `pool.submit` payload, worker unpacking) → one
+  `_conversion_kwargs` closure. This was a live hazard rather than
+  untidiness: a parameter added to `convert_jsonl_to` and missed in one
+  copy would not fail, it would make pooled projects convert
+  differently from inline ones, only under `--jobs > 1`.
+
+**Deferred, with reasons:**
+
+- **Splitting `converter.py` further.** After `render_dispatch.py` the
+  remaining seams are `_incremental_cache_refresh` (~370 lines, one
+  entry point), the streaming/partial-load cluster (~800) and the
+  all-projects hierarchy (~1,200). The last two call back into
+  `convert_jsonl_to`, so a naive split cycles, and tests monkeypatch
+  these by `converter.<name>`, so each move carries test churn.
+- **Splitting `process_projects_hierarchy`** (797 lines, already
+  commented as three phases). Phase 2 is the bulk of it and its
+  closures (`_convert_plan_inline`, `_print_project_done`,
+  `_print_project_failed`, `_conversion_kwargs`) read a dozen of the
+  function's own parameters and share mutable plan state. A faithful
+  module-level extraction needs a ~25-parameter signature or a
+  conversion-request parameter object — and the parameter object is the
+  better answer, but it is a design change that would want to sweep
+  `convert_jsonl_to`, `_try_streaming`, `_stream_paginated_conversion`
+  and `_convert_project_worker` together. Worth its own pass; not worth
+  a half-version.
+- **`RenderUnit` is two record types in one dataclass** (page-only vs
+  session-only fields). Only worth acting on if a third kind appears.
+- **`test_render_cache.py` is 787 lines** spanning memo caches, pool
+  creation, memory probes, hold-back, valves and the dispatch gate —
+  plausibly three files. Note the dispatch-gate and pool-creation tests
+  now import `render_dispatch`, which is a natural split line.

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """SQLite-based cache management for Claude Code Log."""
 
+import hashlib
 import json
 import logging
 import os
@@ -10,7 +11,7 @@ import zlib
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, Generator, List, Optional
+from typing import Any, Callable, Dict, Generator, List, Optional, Tuple
 
 from packaging import version
 from pydantic import BaseModel
@@ -41,6 +42,37 @@ class CachedFileInfo(BaseModel):
     message_count: int
 
 
+class CachedFileState(BaseModel):
+    """One file's identity-relevant cached state, for the incremental
+    cache refresh (work/render-format-once.md, stage 4).
+
+    Captured from the messages table *before* a modified file is
+    re-parsed (the parse replaces its rows), so the refresh can compute
+    the append-only check, the coupling closure, and the metadata /
+    attachment count deltas against what the last refresh saw.
+    """
+
+    sessions: set[str] = set()
+    uuids: set[str] = set()
+    parent_uuids: set[str] = set()
+    request_ids: set[str] = set()
+    # Counts by entry type for the classes compute_session_data skips
+    # (summary / ai-title / attachment) — the residual terms of the
+    # total_message_count identity.
+    type_counts: Dict[str, int] = {}
+    # Metadata this file *names*: summary leafUuids (resolve to owner
+    # sessions) and ai-title sessionIds. A summary in one session's file
+    # routinely titles another session, so these sessions' cache rows
+    # must be recomputed when this file changes even though none of
+    # their own entries did.
+    summary_leaf_uuids: set[str] = set()
+    ai_title_sessions: set[str] = set()
+    # SHA-256 of each cached entry's complete serialized model, in source
+    # insertion order. The old sequence must be an exact prefix of the new
+    # one for an incremental refresh to be append-only.
+    row_fingerprints: List[bytes] = []
+
+
 class SessionCacheData(BaseModel):
     """Cached session-level information."""
 
@@ -62,6 +94,18 @@ class SessionCacheData(BaseModel):
     # Teammates feature — set when the session was active in a team.
     # First non-None ``teamName`` of any entry in the session.
     team_name: Optional[str] = None
+    # Migration 010: traversed entries this session owns that
+    # ``compute_session_data`` does not count (attachment / ai-title).
+    # ``None`` marks a row written before the migration — an unknown
+    # basis the incremental refresh must decline on, never a zero.
+    residual_count: Optional[int] = None
+    # Migration 009: warmup-only and empty/agent-only sessions are
+    # persisted with hidden=True instead of being filtered before the
+    # write, so the incremental cache refresh can compute aggregate
+    # deltas over every session's contribution. Read sites that mean
+    # "sessions a human would render" filter these out, preserving the
+    # pre-009 visible set byte-for-byte.
+    hidden: bool = False
 
 
 class HtmlCacheEntry(BaseModel):
@@ -123,6 +167,31 @@ class ProjectCache(BaseModel):
     # Timeline information
     earliest_timestamp: str = ""
     latest_timestamp: str = ""
+
+
+class SessionSidecar(BaseModel):
+    """Cross-session facts persisted at full-load time (migration 008).
+
+    Compact projections of a full directory load's ``SessionTree``, kept
+    so a later run can regenerate one stale session's file from that
+    session's own JSONL alone (the session-scoped incremental path —
+    ``converter._load_stale_session_transcripts``). Each field answers
+    one question a partial load cannot answer from its own entries:
+
+    - ``parents``: ``{session_id: (parent_session_id, attachment_uuid)}``
+      for every DAG-line attached to a parent session — restores the
+      resume/fork linkage when the parent session isn't loaded.
+    - ``junctions``: ``{uuid: (session_id, [target_session_ids])}`` for
+      every junction point, targets in the tree's chronological order —
+      restores fork markers whose target sessions aren't loaded.
+    - ``dedup_winners``: ``{uuid: winner_session_id}`` for uuids carried
+      by more than one session (resume replay prefixes) — tells a
+      partial load which of its entries the whole-project dedup drops.
+    """
+
+    parents: dict[str, tuple[Optional[str], Optional[str]]]
+    junctions: dict[str, tuple[str, list[str]]]
+    dedup_winners: dict[str, str]
 
 
 # ========== Helper Functions ==========
@@ -885,8 +954,8 @@ class CacheManager:
                         message_count, first_user_message, cwd,
                         total_input_tokens, total_output_tokens,
                         total_cache_creation_tokens, total_cache_read_tokens,
-                        team_name, ai_title
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        team_name, ai_title, hidden, residual_count
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(project_id, session_id) DO UPDATE SET
                         summary = excluded.summary,
                         first_timestamp = excluded.first_timestamp,
@@ -899,7 +968,9 @@ class CacheManager:
                         total_cache_creation_tokens = excluded.total_cache_creation_tokens,
                         total_cache_read_tokens = excluded.total_cache_read_tokens,
                         team_name = excluded.team_name,
-                        ai_title = excluded.ai_title
+                        ai_title = excluded.ai_title,
+                        hidden = excluded.hidden,
+                        residual_count = excluded.residual_count
                     """,
                     (
                         self._project_id,
@@ -920,6 +991,8 @@ class CacheManager:
                         data.total_cache_read_tokens,
                         scrub_surrogates(data.team_name),
                         scrub_surrogates(data.ai_title),
+                        1 if data.hidden else 0,
+                        data.residual_count or 0,
                     ),
                 )
 
@@ -968,6 +1041,435 @@ class CacheManager:
             )
             conn.commit()
 
+    def save_session_sidecar(self, sidecar: SessionSidecar) -> None:
+        """Persist the cross-session sidecar (migration 008), wholesale.
+
+        Called at the end of every full directory load, inside the same
+        ``batch()`` scope as the per-file cache writes, so the sidecar is
+        exactly as fresh as ``cached_files``: whenever ``get_modified_files``
+        reports nothing modified, a present sidecar describes the current
+        source tree. Delete + insert in one transaction — a crash leaves
+        either the old sidecar or the new one, never a mix, and the
+        ``sidecar_state`` marker row is only written alongside the rows it
+        vouches for.
+        """
+        if self._project_id is None or self._read_only:
+            return
+
+        with self._get_connection() as conn:
+            pid = self._project_id
+            conn.execute("DELETE FROM session_parents WHERE project_id = ?", (pid,))
+            conn.execute("DELETE FROM junction_uuids WHERE project_id = ?", (pid,))
+            conn.execute("DELETE FROM dedup_winners WHERE project_id = ?", (pid,))
+            conn.executemany(
+                """INSERT INTO session_parents
+                   (project_id, session_id, parent_session_id, attachment_uuid)
+                   VALUES (?, ?, ?, ?)""",
+                [
+                    (pid, sid, parent, attachment)
+                    for sid, (parent, attachment) in sidecar.parents.items()
+                ],
+            )
+            conn.executemany(
+                """INSERT INTO junction_uuids
+                   (project_id, uuid, session_id, target_session_id, seq)
+                   VALUES (?, ?, ?, ?, ?)""",
+                [
+                    (pid, uuid, session_id, target, seq)
+                    for uuid, (session_id, targets) in sidecar.junctions.items()
+                    for seq, target in enumerate(targets)
+                ],
+            )
+            conn.executemany(
+                """INSERT INTO dedup_winners (project_id, uuid, winner_session_id)
+                   VALUES (?, ?, ?)""",
+                [(pid, uuid, winner) for uuid, winner in sidecar.dedup_winners.items()],
+            )
+            conn.execute(
+                """INSERT INTO sidecar_state (project_id, populated_at)
+                   VALUES (?, ?)
+                   ON CONFLICT(project_id) DO UPDATE SET
+                       populated_at = excluded.populated_at""",
+                (pid, datetime.now().isoformat()),
+            )
+            conn.commit()
+
+    def load_session_sidecar(self) -> Optional[SessionSidecar]:
+        """Load the cross-session sidecar, or None when never populated.
+
+        ``None`` (no ``sidecar_state`` row — e.g. a cache built before
+        migration 008, or a project never fully loaded since) tells the
+        caller to decline the session-scoped path and fall back to a full
+        load, which repopulates the sidecar. An *empty* sidecar with a
+        state row is a valid answer: most projects have no cross-session
+        coupling at all.
+        """
+        if self._project_id is None:
+            return None
+
+        with self._get_connection() as conn:
+            pid = self._project_id
+            state = conn.execute(
+                "SELECT 1 FROM sidecar_state WHERE project_id = ?", (pid,)
+            ).fetchone()
+            if state is None:
+                return None
+
+            parents: dict[str, tuple[Optional[str], Optional[str]]] = {}
+            for row in conn.execute(
+                """SELECT session_id, parent_session_id, attachment_uuid
+                   FROM session_parents WHERE project_id = ?""",
+                (pid,),
+            ):
+                parents[row["session_id"]] = (
+                    row["parent_session_id"],
+                    row["attachment_uuid"],
+                )
+
+            junctions: dict[str, tuple[str, list[str]]] = {}
+            for row in conn.execute(
+                """SELECT uuid, session_id, target_session_id
+                   FROM junction_uuids WHERE project_id = ?
+                   ORDER BY uuid, seq""",
+                (pid,),
+            ):
+                entry = junctions.setdefault(row["uuid"], (row["session_id"], []))
+                entry[1].append(row["target_session_id"])
+
+            dedup_winners: dict[str, str] = {}
+            for row in conn.execute(
+                "SELECT uuid, winner_session_id FROM dedup_winners WHERE project_id = ?",
+                (pid,),
+            ):
+                dedup_winners[row["uuid"]] = row["winner_session_id"]
+
+        return SessionSidecar(
+            parents=parents, junctions=junctions, dedup_winners=dedup_winners
+        )
+
+    def get_session_file_map(self) -> Dict[str, set[str]]:
+        """``{session_id: {file_name, ...}}`` from the cached messages table.
+
+        Which source files hold each session's entries. Usually 1:1 with
+        the ``<session-id>.jsonl`` naming, but not always — real archives
+        contain files whose entries span two sessions (a continuation
+        written into the previous session's file), and sessions with no
+        file of their own. The session-scoped incremental path loads by
+        this map instead of by filename stem for exactly that reason.
+
+        Entries with a NULL session_id (summaries) are skipped; agent
+        file rows are included and it is the caller's business to know
+        that ``agent-*`` files load via trunk-file recursion.
+        """
+        if self._project_id is None:
+            return {}
+
+        result: Dict[str, set[str]] = {}
+        with self._get_connection() as conn:
+            for row in conn.execute(
+                """SELECT DISTINCT m.session_id, cf.file_name
+                   FROM messages m JOIN cached_files cf ON m.file_id = cf.id
+                   WHERE m.project_id = ? AND m.session_id IS NOT NULL""",
+                (self._project_id,),
+            ):
+                result.setdefault(row["session_id"], set()).add(row["file_name"])
+        return result
+
+    # ----- Incremental cache refresh queries (stage 4) -----------------
+    # All of these are metadata projections over the messages table —
+    # the point is answering coupling/identity questions *without*
+    # materializing entries. See work/render-format-once.md, stage-4
+    # design, for who consumes what.
+
+    _IN_CHUNK = 500
+
+    _RESIDUAL_TYPES = ("summary", "ai-title", "attachment")
+
+    def get_cached_file_names(self) -> set[str]:
+        """Every file name the cache has rows for (trunk + agent files)."""
+        if self._project_id is None:
+            return set()
+        with self._get_connection() as conn:
+            return {
+                row["file_name"]
+                for row in conn.execute(
+                    "SELECT file_name FROM cached_files WHERE project_id = ?",
+                    (self._project_id,),
+                )
+            }
+
+    def get_file_states(self, file_names: List[str]) -> Dict[str, CachedFileState]:
+        """Identity-relevant cached state per file (see CachedFileState).
+
+        Files without cached rows simply have no key in the result —
+        that is the "new file" signature.
+        """
+        result: Dict[str, CachedFileState] = {}
+        if self._project_id is None or not file_names:
+            return result
+        with self._get_connection() as conn:
+            for i in range(0, len(file_names), self._IN_CHUNK):
+                chunk = file_names[i : i + self._IN_CHUNK]
+                placeholders = ",".join("?" * len(chunk))
+                for row in conn.execute(
+                    f"""SELECT cf.file_name, m.session_id, m._uuid, m._parent_uuid,
+                               m._request_id, m.type, m._leaf_uuid, m.content
+                        FROM messages m JOIN cached_files cf ON m.file_id = cf.id
+                        WHERE m.project_id = ? AND cf.file_name IN ({placeholders})
+                        ORDER BY cf.file_name, m.id""",
+                    (self._project_id, *chunk),
+                ):
+                    state = result.setdefault(row["file_name"], CachedFileState())
+                    state.row_fingerprints.append(
+                        hashlib.sha256(bytes(row["content"])).digest()
+                    )
+                    row_type = row["type"]
+                    if row_type == "summary":
+                        if row["_leaf_uuid"]:
+                            state.summary_leaf_uuids.add(row["_leaf_uuid"])
+                    elif row_type == "ai-title":
+                        if row["session_id"]:
+                            state.ai_title_sessions.add(row["session_id"])
+                    if row["session_id"]:
+                        state.sessions.add(row["session_id"])
+                    if row["_uuid"]:
+                        state.uuids.add(row["_uuid"])
+                    if row["_parent_uuid"]:
+                        state.parent_uuids.add(row["_parent_uuid"])
+                    if row["_request_id"]:
+                        state.request_ids.add(row["_request_id"])
+                    if row_type in self._RESIDUAL_TYPES:
+                        state.type_counts[row_type] = (
+                            state.type_counts.get(row_type, 0) + 1
+                        )
+                # A cached file whose rows are all filtered (e.g. empty
+                # file) still needs a key, or it would read as "new".
+                for row in conn.execute(
+                    f"""SELECT file_name FROM cached_files
+                        WHERE project_id = ? AND file_name IN ({placeholders})""",
+                    (self._project_id, *chunk),
+                ):
+                    result.setdefault(row["file_name"], CachedFileState())
+        return result
+
+    def get_parent_uuid_dependents(self, uuids: List[str]) -> Dict[str, set[str]]:
+        """Return sessions whose entries reference any named parent UUID.
+
+        This is the inverse edge of :meth:`get_uuid_owners`. A newly added
+        UUID can resolve an orphan already cached in an untouched file, so
+        the incremental DAG closure needs both directions.
+        """
+        result: Dict[str, set[str]] = {}
+        if self._project_id is None or not uuids:
+            return result
+        with self._get_connection() as conn:
+            for i in range(0, len(uuids), self._IN_CHUNK):
+                chunk = uuids[i : i + self._IN_CHUNK]
+                placeholders = ",".join("?" * len(chunk))
+                for row in conn.execute(
+                    f"""SELECT _parent_uuid, session_id FROM messages
+                        WHERE project_id = ? AND _parent_uuid IN ({placeholders})
+                          AND session_id IS NOT NULL""",
+                    (self._project_id, *chunk),
+                ):
+                    result.setdefault(row["_parent_uuid"], set()).add(row["session_id"])
+        return result
+
+    def get_uuid_owners(self, uuids: List[str]) -> Dict[str, set[Tuple[str, str]]]:
+        """``{uuid: {(session_id, entry_type), ...}}`` across the project.
+
+        The coupling-closure query: which sessions hold copies of these
+        uuids (dedup partners / attachment-point owners), and of what
+        entry type (the attachment-dedup decline guard).
+        """
+        result: Dict[str, set[Tuple[str, str]]] = {}
+        if self._project_id is None or not uuids:
+            return result
+        with self._get_connection() as conn:
+            for i in range(0, len(uuids), self._IN_CHUNK):
+                chunk = uuids[i : i + self._IN_CHUNK]
+                placeholders = ",".join("?" * len(chunk))
+                for row in conn.execute(
+                    f"""SELECT _uuid, session_id, type FROM messages
+                        WHERE project_id = ? AND _uuid IN ({placeholders})
+                          AND session_id IS NOT NULL""",
+                    (self._project_id, *chunk),
+                ):
+                    result.setdefault(row["_uuid"], set()).add(
+                        (row["session_id"], row["type"])
+                    )
+        return result
+
+    def get_request_id_entries(
+        self, rids: List[str]
+    ) -> Dict[str, set[Tuple[str, str]]]:
+        """``{request_id: {(uuid, session_id), ...}}`` across the project.
+
+        The refresh's token-attribution guard needs the uuid alongside
+        the session: a requestId spanning sessions via *the same* uuid
+        is a dedup-resolved replay (only the winner's copy survives to
+        be counted), while distinct uuids mean genuinely independent
+        surviving copies whose D1 attribution depends on global order.
+        """
+        result: Dict[str, set[Tuple[str, str]]] = {}
+        if self._project_id is None or not rids:
+            return result
+        with self._get_connection() as conn:
+            for i in range(0, len(rids), self._IN_CHUNK):
+                chunk = rids[i : i + self._IN_CHUNK]
+                placeholders = ",".join("?" * len(chunk))
+                for row in conn.execute(
+                    f"""SELECT _request_id, _uuid, session_id FROM messages
+                        WHERE project_id = ? AND _request_id IN ({placeholders})
+                          AND session_id IS NOT NULL""",
+                    (self._project_id, *chunk),
+                ):
+                    result.setdefault(row["_request_id"], set()).add(
+                        (row["_uuid"] or "", row["session_id"])
+                    )
+        return result
+
+    def get_session_request_ids(self, session_ids: List[str]) -> set[str]:
+        """Every requestId carried by entries of the named sessions."""
+        result: set[str] = set()
+        if self._project_id is None or not session_ids:
+            return result
+        with self._get_connection() as conn:
+            for i in range(0, len(session_ids), self._IN_CHUNK):
+                chunk = session_ids[i : i + self._IN_CHUNK]
+                placeholders = ",".join("?" * len(chunk))
+                for row in conn.execute(
+                    f"""SELECT DISTINCT _request_id FROM messages
+                        WHERE project_id = ? AND session_id IN ({placeholders})
+                          AND _request_id IS NOT NULL""",
+                    (self._project_id, *chunk),
+                ):
+                    result.add(row["_request_id"])
+        return result
+
+    def get_metadata_target_files(self) -> List[Tuple[str, Optional[str], str]]:
+        """Summary / ai-title rows as ``(type, target, file_name)``.
+
+        ``target`` is the summary's leafUuid (resolve to a session via
+        ``get_uuid_owners``) or the ai-title's session_id. The refresh
+        uses this to pull files holding cross-file metadata for closure
+        sessions, so a partial ``prepare_session_summaries`` sees the
+        same rows the full load would.
+        """
+        result: List[Tuple[str, Optional[str], str]] = []
+        if self._project_id is None:
+            return result
+        with self._get_connection() as conn:
+            for row in conn.execute(
+                """SELECT m.type, m._leaf_uuid, m.session_id, cf.file_name
+                   FROM messages m JOIN cached_files cf ON m.file_id = cf.id
+                   WHERE m.project_id = ? AND m.type IN ('summary', 'ai-title')""",
+                (self._project_id,),
+            ):
+                target = (
+                    row["_leaf_uuid"] if row["type"] == "summary" else row["session_id"]
+                )
+                result.append((row["type"], target, row["file_name"]))
+        return result
+
+    def get_all_session_rows(self) -> Dict[str, SessionCacheData]:
+        """Every persisted session row, hidden ones included.
+
+        The delta basis for the incremental refresh's aggregate
+        arithmetic — unlike ``get_cached_project_data``, which serves
+        render-facing consumers and filters ``hidden = 0``.
+        """
+        result: Dict[str, SessionCacheData] = {}
+        if self._project_id is None:
+            return result
+        with self._get_connection() as conn:
+            for row in conn.execute(
+                "SELECT * FROM sessions WHERE project_id = ?",
+                (self._project_id,),
+            ):
+                result[row["session_id"]] = SessionCacheData(
+                    session_id=row["session_id"],
+                    summary=row["summary"],
+                    ai_title=row["ai_title"] if "ai_title" in row.keys() else None,
+                    first_timestamp=row["first_timestamp"],
+                    last_timestamp=row["last_timestamp"],
+                    message_count=row["message_count"],
+                    first_user_message=row["first_user_message"],
+                    cwd=row["cwd"],
+                    total_input_tokens=row["total_input_tokens"],
+                    total_output_tokens=row["total_output_tokens"],
+                    total_cache_creation_tokens=row["total_cache_creation_tokens"],
+                    total_cache_read_tokens=row["total_cache_read_tokens"],
+                    team_name=row["team_name"] if "team_name" in row.keys() else None,
+                    hidden=bool(row["hidden"]),
+                    residual_count=row["residual_count"],
+                )
+        return result
+
+    def merge_session_sidecar(
+        self,
+        parent_updates: Dict[str, Optional[Tuple[Optional[str], Optional[str]]]],
+        junction_replacements: Dict[str, Tuple[str, List[str]]],
+        winner_upserts: Dict[str, str],
+    ) -> None:
+        """Targeted sidecar maintenance for the incremental refresh.
+
+        Unlike ``save_session_sidecar`` (wholesale delete + insert on a
+        full load), this touches only the named facts: parent rows are
+        replaced per session (None value = ensure absent), junction rows
+        are replaced per uuid with the given ordered target list, winner
+        rows are upserted per uuid. Everything else stands — the stage-4
+        design's argument is that untouched facts remain valid under the
+        append-only precondition. One transaction; ``sidecar_state`` is
+        refreshed so the marker's timestamp reflects the merge.
+        """
+        if self._project_id is None or self._read_only:
+            return
+        with self._get_connection() as conn:
+            pid = self._project_id
+            for sid, value in parent_updates.items():
+                conn.execute(
+                    "DELETE FROM session_parents"
+                    " WHERE project_id = ? AND session_id = ?",
+                    (pid, sid),
+                )
+                if value is not None:
+                    conn.execute(
+                        """INSERT INTO session_parents
+                           (project_id, session_id, parent_session_id,
+                            attachment_uuid)
+                           VALUES (?, ?, ?, ?)""",
+                        (pid, sid, value[0], value[1]),
+                    )
+            for uuid, (owner_sid, targets) in junction_replacements.items():
+                conn.execute(
+                    "DELETE FROM junction_uuids WHERE project_id = ? AND uuid = ?",
+                    (pid, uuid),
+                )
+                for seq, target in enumerate(targets):
+                    conn.execute(
+                        """INSERT INTO junction_uuids
+                           (project_id, uuid, session_id, target_session_id, seq)
+                           VALUES (?, ?, ?, ?, ?)""",
+                        (pid, uuid, owner_sid, target, seq),
+                    )
+            for uuid, winner in winner_upserts.items():
+                conn.execute(
+                    """INSERT INTO dedup_winners (project_id, uuid, winner_session_id)
+                       VALUES (?, ?, ?)
+                       ON CONFLICT(project_id, uuid) DO UPDATE SET
+                           winner_session_id = excluded.winner_session_id""",
+                    (pid, uuid, winner),
+                )
+            conn.execute(
+                """INSERT INTO sidecar_state (project_id, populated_at)
+                   VALUES (?, ?)
+                   ON CONFLICT(project_id) DO UPDATE SET
+                       populated_at = excluded.populated_at""",
+                (pid, datetime.now().isoformat()),
+            )
+            conn.commit()
+
     def get_working_directories(self) -> List[str]:
         """Get list of working directories associated with this project.
 
@@ -982,7 +1484,8 @@ class CacheManager:
     def _get_working_directories(self, conn: sqlite3.Connection) -> List[str]:
         """get_working_directories() on an already-open connection."""
         rows = conn.execute(
-            "SELECT DISTINCT cwd FROM sessions WHERE project_id = ? AND cwd IS NOT NULL",
+            "SELECT DISTINCT cwd FROM sessions"
+            " WHERE project_id = ? AND cwd IS NOT NULL AND hidden = 0",
             (self._project_id,),
         ).fetchall()
         return [row["cwd"] for row in rows]
@@ -1083,7 +1586,8 @@ class CacheManager:
 
             # Get sessions
             session_rows = conn.execute(
-                "SELECT * FROM sessions WHERE project_id = ?", (self._project_id,)
+                "SELECT * FROM sessions WHERE project_id = ? AND hidden = 0",
+                (self._project_id,),
             ).fetchall()
 
             sessions: Dict[str, SessionCacheData] = {}
@@ -1191,7 +1695,8 @@ class CacheManager:
             ).fetchone()
 
             session_count = conn.execute(
-                "SELECT COUNT(*) as cnt FROM sessions WHERE project_id = ?",
+                "SELECT COUNT(*) as cnt FROM sessions"
+                " WHERE project_id = ? AND hidden = 0",
                 (self._project_id,),
             ).fetchone()
 
@@ -1316,7 +1821,7 @@ class CacheManager:
                 # For individual session HTML: check if session message count changed
                 row = conn.execute(
                     """SELECT message_count FROM sessions
-                       WHERE project_id = ? AND session_id = ?""",
+                       WHERE project_id = ? AND session_id = ? AND hidden = 0""",
                     (self._project_id, session_id),
                 ).fetchone()
 
@@ -1374,7 +1879,7 @@ class CacheManager:
             # Get all sessions
             session_rows = conn.execute(
                 """SELECT session_id, last_timestamp FROM sessions
-                   WHERE project_id = ?""",
+                   WHERE project_id = ? AND hidden = 0""",
                 (self._project_id,),
             ).fetchall()
 
@@ -1414,7 +1919,7 @@ class CacheManager:
 
         with self._get_connection() as conn:
             cached_rows = conn.execute(
-                "SELECT session_id FROM sessions WHERE project_id = ?",
+                "SELECT session_id FROM sessions WHERE project_id = ? AND hidden = 0",
                 (self._project_id,),
             ).fetchall()
 
@@ -1440,7 +1945,7 @@ class CacheManager:
 
         with self._get_connection() as conn:
             session_rows = conn.execute(
-                "SELECT * FROM sessions WHERE project_id = ?",
+                "SELECT * FROM sessions WHERE project_id = ? AND hidden = 0",
                 (self._project_id,),
             ).fetchall()
 

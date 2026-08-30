@@ -277,3 +277,19 @@ def bump_mtime(path: "Path", seconds: float = 10.0) -> float:
     new_mtime = stat.st_mtime + seconds
     os.utime(path, (stat.st_atime, new_mtime))
     return new_mtime
+
+
+def assert_regenerated(path: "Path", previous_mtime: float) -> None:
+    """Assert a file has been rewritten since ``previous_mtime`` was read.
+
+    Compares for *change*, not for "later". These call sites mean "this is
+    no longer the file from before", and ``>`` only expresses that on a
+    host whose wall clock advances monotonically — this VM's does not (a
+    0.26 s *backwards* jump measured inside a 4-second sample, guest clock
+    sync), so a genuinely regenerated file can carry an *earlier* mtime and
+    fail a ``>`` comparison with no bug behind it. Equality still catches
+    the real failure: a file that was never rewritten keeps its mtime.
+    """
+    assert path.stat().st_mtime != previous_mtime, (
+        f"{path.name} was not regenerated (mtime unchanged)"
+    )
