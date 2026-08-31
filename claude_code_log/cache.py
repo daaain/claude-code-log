@@ -1477,7 +1477,7 @@ class CacheManager:
                 # The `session_id IS NOT NULL` filter is applied in Python
                 # rather than SQL, and the difference is not cosmetic: as a
                 # SQL predicate SQLite can satisfy it from
-                # `idx_messages_project_session_file` as a range scan —
+                # `idx_messages_project_session_ts` as a range scan —
                 # walking every session-bearing row in the project — and
                 # prefers that to seeking the uuids actually asked for.
                 # Measured on a 38,706-row archive, 500 uuids: **17.2 ms

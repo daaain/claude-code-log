@@ -896,6 +896,38 @@ Cost: cache DB **+8.4%** (39.5 → 42.8 MB on a 49 MB archive) and no write
 regression — a cold conversion went 5.85 s → 5.79 s, five more indexes on
 an INSERT being small next to compressing the row's content blob.
 
+**Do these indexes help anything outside watch?** Checked every query the
+codebase runs against `messages`, with the indexes present and dropped.
+Mostly no — `load_cached_entries` and the FTS indexer already seek by
+`file_id` (0.00 ms either way), and archiving's session DELETE is 0.4 ms
+to begin with. Two things did come out of it:
+
+- The refresh queries aren't watch-specific: `_incremental_cache_refresh`
+  runs on *any* invocation with changed files over a warm cache, i.e. the
+  ordinary daily run.
+- **`load_session_entries` was scanning the whole project to load one
+  session** — the TUI (`tui.py:1843`) and archived-session rendering
+  (`converter.py:5153`). Same trap as the `session_id IS NOT NULL` one:
+  `ORDER BY timestamp NULLS LAST` lets the planner take the *timestamp*
+  index to get the sort free, then filter session by session. 84.5 ms for
+  a 19 k-row archive's twelve busiest sessions.
+
+  The fix that looked obvious — `ANALYZE` — is the *worse* of the two
+  candidates, and measuring saved shipping it: it gets to 15.8 ms,
+  `PRAGMA optimize` writes partial statistics that **don't change the
+  plan at all** (verified: stats present, plan unchanged), and either way
+  the plan then depends on when statistics were last gathered. Putting
+  `timestamp` into the session index instead makes one index serve both
+  the seek and the ordering: **84.5 ms → 7.2 ms**, no sort, no
+  statistics, deterministic. End to end (the method also decompresses and
+  validates) a caller sees 21.7 ms → 15.0 ms per session, for 0.4 MB.
+
+  Ordering is the risk with any such change, so it is pinned: 234
+  sessions, **29,605 tied-timestamp rows**, 1,237 NULL timestamps, zero
+  ordering differences — plus a test that asserts the plan still uses the
+  index and still needs no temp B-tree, which fails on exactly that
+  message if the column is dropped.
+
 **Steady-state tick: 0.257 s → 0.145 s.** Cumulatively **1.03 s →
 0.145 s, a 7x tick**, and the render — where this investigation started —
 is now a rounding error against it.

@@ -676,3 +676,90 @@ class TestAppendOnlyWrites:
         assert not cache.extend_cached_entries(target, entries[:-2], entries[-1:])
         # And the honest case still works.
         assert cache.extend_cached_entries(target, entries + entries[-1:], entries[-1:])
+
+
+class TestSessionLoadOrdering:
+    """`load_session_entries` must not reorder when its index changes.
+
+    Migration 012's session index carries `timestamp` before `file_id`
+    specifically so the planner can satisfy this query's filter *and* its
+    `ORDER BY` from one index, instead of walking the whole project to
+    load a single session (84.5 ms -> 7.2 ms for the twelve busiest
+    sessions of a 19k-row archive).
+
+    An index that changes the returned order would be a silent rendering
+    change, and ties are not rare — real archives have tens of thousands
+    of rows sharing a timestamp with another row. This pins the property
+    against a fixture built to be hostile: duplicate timestamps, rows
+    split across two files within one session, and NULL timestamps.
+    """
+
+    @staticmethod
+    def _entry(sid: str, uuid: str, ts: Any, text: str) -> dict[str, Any]:
+        entry: dict[str, Any] = {
+            "type": "user",
+            "parentUuid": None,
+            "isSidechain": False,
+            "userType": "human",
+            "cwd": "/tmp",
+            "sessionId": sid,
+            "version": "1.0.0",
+            "uuid": uuid,
+            "message": {"role": "user", "content": [{"type": "text", "text": text}]},
+        }
+        if ts is not None:
+            entry["timestamp"] = ts
+        return entry
+
+    def test_order_matches_an_explicit_timestamp_sort(self, tmp_path: Path) -> None:
+        from claude_code_log.cache import CacheManager, get_library_version
+
+        project = tmp_path / "-Users-dain-workspace-ordering"
+        project.mkdir(parents=True)
+        sid = "5eaf00d0-0000-4000-8000-000000000099"
+
+        # One session, two files, interleaved and duplicated timestamps.
+        first = project / f"{sid}.jsonl"
+        second = project / "5eaf00d0-0000-4000-8000-000000000100.jsonl"
+        with first.open("w", encoding="utf-8") as f:
+            for i, ts in enumerate(
+                ["2025-07-03T18:00:00Z", "2025-07-03T18:00:00Z", "2025-07-03T18:02:00Z"]
+            ):
+                f.write(json.dumps(self._entry(sid, f"a{i}", ts, f"a{i}")) + "\n")
+        with second.open("w", encoding="utf-8") as f:
+            for i, ts in enumerate(
+                ["2025-07-03T18:00:00Z", "2025-07-03T18:01:00Z", "2025-07-03T18:02:00Z"]
+            ):
+                f.write(json.dumps(self._entry(sid, f"b{i}", ts, f"b{i}")) + "\n")
+
+        convert_jsonl_to("html", project, silent=True, write_combined=False)
+        cache = CacheManager(project, get_library_version())
+
+        entries = cache.load_session_entries(sid)
+        assert len(entries) == 6, "fixture did not land in one session"
+
+        stamps = [getattr(e, "timestamp", None) for e in entries]
+        non_null = [s for s in stamps if s]
+        assert non_null == sorted(non_null), (
+            f"session load came back out of timestamp order: {stamps}"
+        )
+        assert len({getattr(e, "uuid", None) for e in entries}) == 6
+
+        # The index must be the one serving it — otherwise this test would
+        # keep passing while the query silently went back to scanning.
+        with cache._get_connection() as conn:
+            plan = [
+                r[-1]
+                for r in conn.execute(
+                    "EXPLAIN QUERY PLAN SELECT content FROM messages "
+                    "WHERE project_id = ? AND session_id = ? "
+                    "ORDER BY timestamp NULLS LAST",
+                    (cache._project_id, sid),
+                )
+            ]
+        assert any("idx_messages_project_session_ts" in p for p in plan), (
+            f"session load is not using its index — plan was {plan}"
+        )
+        assert not any("TEMP B-TREE" in p.upper() for p in plan), (
+            f"the index no longer satisfies the ORDER BY — plan was {plan}"
+        )

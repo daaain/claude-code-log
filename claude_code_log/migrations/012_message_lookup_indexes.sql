@@ -13,7 +13,7 @@
 --   get_parent_uuid_dependents     21.5 ms -> 0.6 ms   (project_id, _parent_uuid)
 --   get_request_id_entries         17.0 ms -> 0.3 ms   (project_id, _request_id)
 --   get_metadata_target_files      14.5 ms -> 0.2 ms   partial, on type
---   get_session_file_map           16.8 ms -> 2.5 ms   (project_id, session_id, file_id)
+--   get_session_file_map           16.8 ms -> 2.5 ms   (project_id, session_id, …)
 --
 -- `get_uuid_owners` is the instructive one: an `idx_messages_uuid(_uuid)`
 -- index has existed since 001, but the query filters `project_id = ? AND
@@ -55,5 +55,27 @@ CREATE INDEX IF NOT EXISTS idx_messages_project_request_id
 CREATE INDEX IF NOT EXISTS idx_messages_project_metadata_type
     ON messages(project_id, type) WHERE type IN ('summary', 'ai-title');
 
-CREATE INDEX IF NOT EXISTS idx_messages_project_session_file
-    ON messages(project_id, session_id, file_id);
+-- `timestamp` sits before `file_id` deliberately, and it is what makes
+-- this index serve a second caller outside the refresh entirely:
+-- `load_session_entries` / `export_session_to_jsonl` (the TUI, and
+-- rendering an archived session) filter `project_id AND session_id` but
+-- order by `timestamp`. Given only (project_id, session_id, file_id) the
+-- planner takes the *timestamp* index instead — the sort comes free and
+-- it filters session_id row by row — and walks the whole project to load
+-- one session: 84.5 ms for the twelve busiest sessions of a 19k-row
+-- archive. With `timestamp` in the index the seek and the ordering are
+-- both satisfied, no sort is needed, and the same work takes **7.2 ms**.
+-- End to end the method also decompresses and validates its entries, so
+-- what a caller sees is 21.7 ms -> 15.0 ms per session; the extra column
+-- costs 0.4 MB on a 45 MB cache.
+--
+-- (Statistics were the other candidate fix and are worse: `ANALYZE` gets
+-- to 15.8 ms, `PRAGMA optimize` writes partial stats that do not change
+-- the plan at all, and either way the plan then depends on when stats
+-- were last gathered. An index that dominates needs no stats.)
+--
+-- Verified not to change the order rows come back in — 234 sessions,
+-- 29,605 rows sharing a timestamp with another row, 1,237 NULL
+-- timestamps, zero ordering differences.
+CREATE INDEX IF NOT EXISTS idx_messages_project_session_ts
+    ON messages(project_id, session_id, timestamp, file_id);

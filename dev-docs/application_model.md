@@ -234,12 +234,19 @@ Current migrations:
 - `012_message_lookup_indexes.sql` — composite indexes for the
   refresh's per-tick lookups, each of which was walking every row in
   the project (17–22 ms a call on a 38,706-row archive, 0.2–2.5 ms
-  after). Pure performance: no columns, nothing to backfill. One of
-  them, `(project_id, session_id, file_id)`, is double-edged — it also
-  lets the planner satisfy a bare `session_id IS NOT NULL` as a range
-  scan over every session-bearing row and *prefer* that to seeking the
-  uuids a query asked for, so three queries had to move that predicate
-  out of SQL and into Python to keep it from making them slower.
+  after). Pure performance: no columns, nothing to backfill. Two
+  things about it are worth knowing:
+  - `(project_id, session_id, timestamp, file_id)` carries `timestamp`
+    for a caller *outside* the refresh: `load_session_entries` (the TUI,
+    and rendering an archived session) filters on session but orders by
+    timestamp, and without that column the planner takes the timestamp
+    index and walks the whole project to load one session. With it, the
+    seek and the ordering come from one index and no sort is needed.
+  - That same index is double-edged — it also lets the planner satisfy
+    a bare `session_id IS NOT NULL` as a range scan over every
+    session-bearing row and *prefer* that to seeking the uuids a query
+    asked for, so three queries had to move that predicate out of SQL
+    and into Python to keep it from making them slower.
 
 Recreating-tables migrations toggle `PRAGMA foreign_keys = OFF/ON`
 around the rebuild to avoid losing rows to cascade-deletes during the
