@@ -254,16 +254,24 @@ Markdown export provides a lightweight, portable alternative to HTML:
 
 ## Installation
 
-Install using pip:
+The recommended way is installing as a `uv` tool:
 
 ```bash
-pip install claude-code-log
+uv tool install claude-code-log
 ```
 
-Or run directly with uvx (no separate installation step required):
+This will create a `claude-code-log` binary that you can call directly.
+
+Or run directly with `uvx` (no separate installation step required):
 
 ```bash
 uvx claude-code-log@latest
+```
+
+Alternatively, if you prefer, install using `pip`:
+
+```bash
+pip install claude-code-log
 ```
 
 Or install from source:
@@ -273,6 +281,8 @@ git clone https://github.com/daaain/claude-code-log.git
 cd claude-code-log
 uv sync
 uv run claude-code-log
+# or if you want `claude-code-log` binary that works everywhere:
+uv tool install --editable .
 ```
 
 ## Contributing
@@ -303,6 +313,4 @@ Cross-platform (macOS and Windows/MSYS).
 - feed the filtered user messages to headless claude CLI to distill the user intent from the session
 - filter message type on Python (CLI) side too, not just UI
 - add minimalist theme and make it light + dark; animate gradient background in fancy theme
-- do we need special handling for hooks?
-- make processing parallel, currently we only use 1 CPU (core) and it's slow
 - merge git worktree directories
