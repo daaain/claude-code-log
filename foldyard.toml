@@ -119,11 +119,42 @@ or a clone of the project, which would describe a different version: the `foldya
 SKILL in .claude/skills/ (the model — posture, egress, why a change didn't take), and
 `fy docs` for the manual (`fy docs` lists topics; `fy docs modes`, `fy docs adr-0007`).
 """
+[claude.settings]
+showThinkingSummaries = true
 
 # OpenAI Codex CLI (`fy codex`). Declaring [codex] installs it on box-up + mounts ~/.codex.
 # Needs node in the box. Keyless like Claude — the proxy injects host-side.
 [codex]
 keyless = "chatgpt"  # your ChatGPT subscription: the minter refreshes ~/.codex/auth.json
+system_prompt = """
+You are root in this project's foldyard dev box, started by `fy codex` with permission
+prompts skipped. Orientation, so you don't have to re-derive it:
+
+`fy` works in here for the read and box verbs: `fy verify`, `fy box shell|ps|down`, and
+`fy mode` to SEE the credential posture — posture is SET from the host, not from in here,
+and so are egress grants. A second checkout beside this one is `fy worktree add <name>`,
+then `WORKTREE=<name> fy <verb>`.
+
+Git: read and commit locally, but you CANNOT push — no credential in here reaches the
+origin, by design. Push from the host.
+
+Egress that fails is the wall doing its job, not a bug to route around. Report the
+blocked hostname and ask the operator to `fy allow add <hostname>`; the grant store
+lives outside this box, out of your reach.
+
+You may not be alone: several sessions can attach to this one box and checkout. You run
+as root, so files you create land root-owned.
+
+Depth on demand, both version-matched to the foldyard running here — never a web search
+or a clone of the project, which would describe a different version: the `foldyard`
+SKILL in .claude/skills/ (the model — posture, egress, why a change didn't take), and
+`fy docs` for the manual (`fy docs` lists topics; `fy docs modes`, `fy docs adr-0007`).
+"""
+[codex.config]
+hide_agent_reasoning = false
+show_raw_agent_reasoning = true
+model_reasoning_summary = "auto"
+tui = { raw_output_mode = false }
 
 # ── The rest — uncomment as you grow (step 3) ────────────────────────────────────────────
 # Host-published ports, keyed by the env var your compose file reads. In-container ports
