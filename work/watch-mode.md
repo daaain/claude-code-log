@@ -6,10 +6,11 @@ Status: **Stages 0–2 landed** on `feat/watch-mode`.
 session does. Stage 3 (the `file://` sidecar) remains speculative and is
 probably not worth building. Stage 4 was too — until the tick was
 profiled: see "Where a tick's time goes" and "Appending the HTML rather
-than replacing it" at the end. **Fixes A, C and B have all landed**: a
-steady-state tick on the 803 MB archive went **1.03 s → 0.26 s**, and Fix
-B needed no migration in the end (the proof lives in the resident
-watcher's memory). The HTML half found that patching does *not* need the
+than replacing it" at the end. **Fixes A, C and B have all landed**, plus
+a follow-up round on the refresh's own queries: a steady-state tick on
+the 803 MB archive went **1.03 s → 0.145 s, a 7x tick**, and Fix B needed
+no migration in the end — the proof lives in the resident watcher's
+memory. The HTML half found that patching does *not* need the
 per-message render seam C11 says is missing; that is the open work.
 
 Decisions below are settled; the measurements that forced them are
@@ -852,11 +853,52 @@ DB state is the bar rather than HTML for the same reason § 2.14 gives:
 the first bug a write-path change produces is invisible in the rendered
 bytes.
 
-**What is left in the tick.** At 0.26 s the remaining items are the cache
-queries around the refresh — `get_session_file_map` ×3 (50 ms),
-`get_file_states` ×2 (45 ms, still fetching every row's compressed blob
-to SHA it, now redundant with the prefix hash), `get_uuid_owners` ×4
-(37 ms). Those are the next 130 ms if anyone wants it.
+**What was left in the tick — ✅ also done.** At 0.26 s the remaining
+items were the refresh's own cache queries, and they turned out to be
+much cheaper to fix than "restructure the refresh". Every one of them was
+scanning the entire project, which `EXPLAIN QUERY PLAN` says plainly:
+
+    SEARCH m USING INDEX idx_messages_project_timestamp (project_id=?)
+
+Measured per call on a 38,706-row archive:
+
+| | before | after | how |
+|---|---|---|---|
+| `get_uuid_owners` | 17.2 ms | **0.9 ms** | index `(project_id, _uuid)` |
+| `get_parent_uuid_dependents` | 21.5 ms | **0.6 ms** | index `(project_id, _parent_uuid)` |
+| `get_request_id_entries` | 17.0 ms | **0.3 ms** | index `(project_id, _request_id)` |
+| `get_metadata_target_files` | 14.5 ms | **0.2 ms** | *partial* index on `type` |
+| `get_session_file_map` | 16.8 ms | **2.5 ms** | index `(project_id, session_id, file_id)` |
+| `get_file_states` | 15.9 ms | **0.0 ms** | **query rewrite, no index** |
+
+Three things worth keeping:
+
+1. **`get_file_states` needed no migration at all.** It joined
+   `cached_files` and filtered on `cf.file_name IN (...)`, which gives
+   SQLite no indexed way in — resolving the names to `file_id` first and
+   filtering on that uses the `idx_messages_file` index that has existed
+   since 001.
+2. **`get_uuid_owners` already had an index it wasn't using.**
+   `idx_messages_uuid(_uuid)` has been there since 001, but the query
+   filters `project_id = ? AND _uuid IN (...)`, and SQLite uses one index
+   per table reference — so it took the `project_id` one and scanned.
+3. **⚠️ The session index made three queries *slower* before it made
+   them faster.** `(project_id, session_id, file_id)` lets the planner
+   satisfy a bare `session_id IS NOT NULL` as a range scan over every
+   session-bearing row, and it *prefers* that to seeking the handful of
+   uuids the query asked for. `get_uuid_owners` went from 37 ms to
+   **45 ms** on first measurement. Moving that predicate out of SQL and
+   into Python — a one-line `if row["session_id"] is not None` — took it
+   to 1.4 ms. Adding an index is not automatically safe for queries that
+   don't want it.
+
+Cost: cache DB **+8.4%** (39.5 → 42.8 MB on a 49 MB archive) and no write
+regression — a cold conversion went 5.85 s → 5.79 s, five more indexes on
+an INSERT being small next to compressing the row's content blob.
+
+**Steady-state tick: 0.257 s → 0.145 s.** Cumulatively **1.03 s →
+0.145 s, a 7x tick**, and the render — where this investigation started —
+is now a rounding error against it.
 
 **The zlib knob — taken, at level 3, and I had the cost wrong.** Level 3
 cuts the *full* row rewrite from 183 ms to 81 ms; `decompress` is
@@ -1100,8 +1142,11 @@ So the DB does not grow either way; today's cost is write amplification
    | **tick** | **0.717 s** | **0.257 s** |
 
    C21 held exactly as written: B *does* break A's seeding, and the fix
-   was the cross-tick store it predicted. Cumulatively **1.03 s →
-   0.26 s**, a 4x tick.
+   was the cross-tick store it predicted.
+
+3. ✅ **The refresh's own queries** (migration 012 + one query rewrite),
+   taking the tick to **0.145 s** — cumulatively **1.03 s → 0.145 s, a
+   7x tick**. See "What was left in the tick" above.
 3. **Option 1** for the browser, which is where the user-visible cost
    actually is, and which no longer depends on `render-format-once.md`.
    Land the tail-append case first; take C2 (C20) when the fallback

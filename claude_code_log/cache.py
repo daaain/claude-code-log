@@ -1358,23 +1358,47 @@ class CacheManager:
 
         Files without cached rows simply have no key in the result —
         that is the "new file" signature.
+
+        Resolves names to ``file_id`` first and filters the messages
+        table on that, rather than joining ``cached_files`` and filtering
+        on ``file_name``. The join form gives SQLite no indexed way in:
+        it falls back to ``idx_messages_project_timestamp`` and walks
+        every row in the project, which on a real archive is ~16 ms a
+        call to read a handful of files. Filtering on ``file_id`` uses
+        ``idx_messages_file`` and the same call measures 0.0 ms.
         """
         result: Dict[str, CachedFileState] = {}
         if self._project_id is None or not file_names:
             return result
         with self._get_connection() as conn:
+            names_by_id: Dict[int, str] = {}
             for i in range(0, len(file_names), self._IN_CHUNK):
                 chunk = file_names[i : i + self._IN_CHUNK]
                 placeholders = ",".join("?" * len(chunk))
                 for row in conn.execute(
-                    f"""SELECT cf.file_name, m.session_id, m._uuid, m._parent_uuid,
-                               m._request_id, m.type, m._leaf_uuid, m.content
-                        FROM messages m JOIN cached_files cf ON m.file_id = cf.id
-                        WHERE m.project_id = ? AND cf.file_name IN ({placeholders})
-                        ORDER BY cf.file_name, m.id""",
+                    f"""SELECT id, file_name FROM cached_files
+                        WHERE project_id = ? AND file_name IN ({placeholders})""",
                     (self._project_id, *chunk),
                 ):
-                    state = result.setdefault(row["file_name"], CachedFileState())
+                    names_by_id[row["id"]] = row["file_name"]
+
+            file_ids = sorted(names_by_id)
+            for i in range(0, len(file_ids), self._IN_CHUNK):
+                chunk_ids = file_ids[i : i + self._IN_CHUNK]
+                placeholders = ",".join("?" * len(chunk_ids))
+                # Ordering within a file is what matters — row_fingerprints
+                # is positional — and `file_id, id` gives it.
+                for row in conn.execute(
+                    f"""SELECT file_id, session_id, _uuid, _parent_uuid,
+                               _request_id, type, _leaf_uuid, content
+                        FROM messages
+                        WHERE file_id IN ({placeholders})
+                        ORDER BY file_id, id""",
+                    chunk_ids,
+                ):
+                    state = result.setdefault(
+                        names_by_id[row["file_id"]], CachedFileState()
+                    )
                     state.row_fingerprints.append(
                         hashlib.sha256(bytes(row["content"])).digest()
                     )
@@ -1397,14 +1421,13 @@ class CacheManager:
                         state.type_counts[row_type] = (
                             state.type_counts.get(row_type, 0) + 1
                         )
-                # A cached file whose rows are all filtered (e.g. empty
-                # file) still needs a key, or it would read as "new".
-                for row in conn.execute(
-                    f"""SELECT file_name FROM cached_files
-                        WHERE project_id = ? AND file_name IN ({placeholders})""",
-                    (self._project_id, *chunk),
-                ):
-                    result.setdefault(row["file_name"], CachedFileState())
+
+            # A cached file whose rows are all filtered (e.g. an empty
+            # file) still needs a key, or it would read as "new". The
+            # name resolution above already enumerated exactly those
+            # files, so no second query is needed.
+            for name in names_by_id.values():
+                result.setdefault(name, CachedFileState())
         return result
 
     def get_parent_uuid_dependents(self, uuids: List[str]) -> Dict[str, set[str]]:
@@ -1421,13 +1444,20 @@ class CacheManager:
             for i in range(0, len(uuids), self._IN_CHUNK):
                 chunk = uuids[i : i + self._IN_CHUNK]
                 placeholders = ",".join("?" * len(chunk))
+                # `session_id IS NOT NULL` is filtered in Python, not SQL:
+                # as a SQL predicate it lets the planner satisfy the query
+                # with the (project_id, session_id, …) index as a range
+                # scan over every session-bearing row, instead of seeking
+                # the handful of uuids asked for. See `get_uuid_owners`.
                 for row in conn.execute(
                     f"""SELECT _parent_uuid, session_id FROM messages
-                        WHERE project_id = ? AND _parent_uuid IN ({placeholders})
-                          AND session_id IS NOT NULL""",
+                        WHERE project_id = ? AND _parent_uuid IN ({placeholders})""",
                     (self._project_id, *chunk),
                 ):
-                    result.setdefault(row["_parent_uuid"], set()).add(row["session_id"])
+                    if row["session_id"] is not None:
+                        result.setdefault(row["_parent_uuid"], set()).add(
+                            row["session_id"]
+                        )
         return result
 
     def get_uuid_owners(self, uuids: List[str]) -> Dict[str, set[Tuple[str, str]]]:
@@ -1444,15 +1474,23 @@ class CacheManager:
             for i in range(0, len(uuids), self._IN_CHUNK):
                 chunk = uuids[i : i + self._IN_CHUNK]
                 placeholders = ",".join("?" * len(chunk))
+                # The `session_id IS NOT NULL` filter is applied in Python
+                # rather than SQL, and the difference is not cosmetic: as a
+                # SQL predicate SQLite can satisfy it from
+                # `idx_messages_project_session_file` as a range scan —
+                # walking every session-bearing row in the project — and
+                # prefers that to seeking the uuids actually asked for.
+                # Measured on a 38,706-row archive, 500 uuids: **17.2 ms
+                # with the predicate in SQL, 0.9 ms without**.
                 for row in conn.execute(
                     f"""SELECT _uuid, session_id, type FROM messages
-                        WHERE project_id = ? AND _uuid IN ({placeholders})
-                          AND session_id IS NOT NULL""",
+                        WHERE project_id = ? AND _uuid IN ({placeholders})""",
                     (self._project_id, *chunk),
                 ):
-                    result.setdefault(row["_uuid"], set()).add(
-                        (row["session_id"], row["type"])
-                    )
+                    if row["session_id"] is not None:
+                        result.setdefault(row["_uuid"], set()).add(
+                            (row["session_id"], row["type"])
+                        )
         return result
 
     def get_request_id_entries(
@@ -1473,15 +1511,16 @@ class CacheManager:
             for i in range(0, len(rids), self._IN_CHUNK):
                 chunk = rids[i : i + self._IN_CHUNK]
                 placeholders = ",".join("?" * len(chunk))
+                # Filtered in Python for the reason `get_uuid_owners` gives.
                 for row in conn.execute(
                     f"""SELECT _request_id, _uuid, session_id FROM messages
-                        WHERE project_id = ? AND _request_id IN ({placeholders})
-                          AND session_id IS NOT NULL""",
+                        WHERE project_id = ? AND _request_id IN ({placeholders})""",
                     (self._project_id, *chunk),
                 ):
-                    result.setdefault(row["_request_id"], set()).add(
-                        (row["_uuid"] or "", row["session_id"])
-                    )
+                    if row["session_id"] is not None:
+                        result.setdefault(row["_request_id"], set()).add(
+                            (row["_uuid"] or "", row["session_id"])
+                        )
         return result
 
     def get_session_request_ids(self, session_ids: List[str]) -> set[str]:

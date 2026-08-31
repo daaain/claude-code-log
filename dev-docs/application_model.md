@@ -228,6 +228,18 @@ Current migrations:
   needs to recompute `projects.total_message_count` by delta (§ 2.14).
   Deliberately NULLable — a NULL means "unknown basis", and the
   refresh declines rather than compute a delta from it.
+- `011_cached_file_size.sql` — adds `source_size` to cached files, so
+  freshness no longer misses an append that lands inside the mtime
+  tolerance (§ 2.15). NULL on pre-011 rows falls back to mtime alone.
+- `012_message_lookup_indexes.sql` — composite indexes for the
+  refresh's per-tick lookups, each of which was walking every row in
+  the project (17–22 ms a call on a 38,706-row archive, 0.2–2.5 ms
+  after). Pure performance: no columns, nothing to backfill. One of
+  them, `(project_id, session_id, file_id)`, is double-edged — it also
+  lets the planner satisfy a bare `session_id IS NOT NULL` as a range
+  scan over every session-bearing row and *prefer* that to seeking the
+  uuids a query asked for, so three queries had to move that predicate
+  out of SQL and into Python to keep it from making them slower.
 
 Recreating-tables migrations toggle `PRAGMA foreign_keys = OFF/ON`
 around the rebuild to avoid losing rows to cascade-deletes during the
@@ -1051,11 +1063,16 @@ rebuilt them again (141ms). Two changes removed most of that:
 
 Tick: **1.03s → 0.717s**. `load_transcript`'s full re-parse and full row
 rewrite of the modified file (483ms) was then the remaining bulk, and
-§2.16's cross-tick resumption takes it to ~35ms: **0.257s** steady state
-in a resident `watch`. What is left at that point is the cache queries
-around the refresh — `get_session_file_map` ×3 (50ms), `get_file_states`
-×2 (45ms, still fetching every row's blob to hash it, now redundant with
-the prefix digest), `get_uuid_owners` ×4 (37ms).
+§2.16's cross-tick resumption takes it to ~35ms: 0.257s steady state in a
+resident `watch`. What remained after that was the refresh's own cache
+queries, every one of which was scanning the whole project — fixed by
+migration 012's indexes plus one query rewrite (`get_file_states` joined
+`cached_files` and filtered on `file_name`, which no index could serve;
+resolving names to `file_id` first made it 15.9ms → 0.0ms).
+
+**A steady-state watch tick on the 803MB reference archive is 0.145s**,
+from 1.03s — with rendering, which was where this began, now a rounding
+error against it.
 
 **The served page updates itself** via
 `html/templates/components/live_update.js`, active only over `http(s)` —
