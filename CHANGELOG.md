@@ -6,6 +6,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [1.6.0] - 2026-08-31
+
+### Changed
+
+- **Watch mode (#318)**
+- **Perf/streaming conversion (#315)**
+- **Perf/render memo and intra project jobs (#313)**
+- **Archive search server (#312)**
+- **Config for Foldyard (a currently unreleased sandbox library)**
+- **PR #308 continuation (#311)**
+- **Regenerate paginated pages when their session membership changes (#310)**
+- **Codex provider: decode each rollout once (token-totals seam + fork-prefix fan-out) (#302)**
+- **docs: trim the User Steering section to what a reader needs (#307)**
+- **Resolve [Image #N] placeholders from the recorded paste ids (#306)**
+- **Render image-bearing steering prompts instead of dropping them (#294) (#305)**
+- **Fail fast on --snapshot-update under xdist parallelism (#304)**
+- **Place UUID-less queue-op/steering entries in chronological order (#303)**
+- **Render <system-reminder> blocks in user messages (#275) (#301)**
+- **Provider wholesale: --expand-paths/--filter-path + generic index-label disambiguation (#299)**
+- **Recover provenance-laundered Codex tool-result correlations (#298)**
+- **Codex provider rendering across all CLI modalities (#296)**
+- **Fix 4 GitPython CVEs (#293)**
+- **Execute Codex `exec` snippets in a sandboxed QuickJS engine (replace the Tree-sitter analyzer) (#291)**
+- **Fix codex_docs plugin broken by the #287 rename landing under #288**
+- **Expand Codex tool execution normalization with Tree-sitter (#288)**
+- **Add --depth option; make tool/high the default output level (#159) (#287)**
+- **Style blockquotes in rendered Markdown (+ .editorconfig / whitespace hygiene) (#286)**
+- **Fix ty on Windows: pin platform to "all" + guard POSIX-only members (#276) (#289)**
+- **Rework in-page search: / shortcut, search-as-filter, highlight + unfold (#273)**
+- **docs: steering follow-ups from the #284 review thread**
+- **Build(deps): bump mistune from 3.2.1 to 3.3.0 (#285)**
+- **Render steering from queued_command attachments; fix empty steering cards (#284)**
+- **feat: add Codex provider and specialized tool rendering (#279)**
+- **feat: AGY (Antigravity) provider — with threading + full type coverage (#243)**
+- **feat: add provider abstraction layer with Claude adapter (#242)**
+- **Document tool-renderer coverage + fix docs-build dependency-group install (#282)**
+- **Parallelise per-project processing in --all-projects mode (#272)**
+- **Track output freshness for all formats and --output runs (#271)**
+- **Memoize build_dag's cycle check: O(n·depth) → amortized O(n) (#270)**
+
+
 ## [Unreleased]
 
 ### Added
