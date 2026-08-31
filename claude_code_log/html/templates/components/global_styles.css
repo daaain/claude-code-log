@@ -21,6 +21,11 @@
     --session-bg-dimmed: #e8f4fd66;
     --ide-notification-dimmed: #d2d6d966;
 
+    /* Where the resume-session button sits in the floating stack. Named
+     * because its toast is positioned beside it and must follow it when
+     * the stack is reordered. */
+    --resume-btn-bottom: 380px;
+
     /* Fully transparent variants (88 = ~53% opacity) */
     --highlight-semi: #e3f2fd88;
     --error-semi: #ffebee88;
@@ -361,18 +366,28 @@ body.show-raw-user .user-content:not([data-user-view="md"]) .user-raw {
 /* Resume-session button (single-session pages only): copies the
  * `pushd … && claude -r <session-id>` command to the clipboard. */
 .resume-session.floating-btn {
-    bottom: 380px;
+    bottom: var(--resume-btn-bottom);
 }
 
 /* Transient confirmation shown after the resume command is copied.
  * Opaque background (not the `…-dimmed` variant the buttons use) so
  * the transcript text underneath doesn't bleed through the message.
- * Sits above the follow toggle (440px), which is the top of the stack. */
+ *
+ * Sits to the *left* of its own button, centred on it: stacking it above
+ * the buttons meant every new one added to the stack pushed the toast up
+ * too, over buttons it has nothing to do with. Anchoring it beside the
+ * button it belongs to keeps that a one-number change
+ * (`--resume-btn-bottom`), and the column to the left is empty.
+ *
+ * The centring is height-agnostic — bottom edge at the button's middle,
+ * then shifted down by half the toast's own height — because the message
+ * wraps to one or two lines depending on the viewport. */
 .resume-toast {
     position: fixed;
-    right: 20px;
-    bottom: 500px;
-    max-width: 320px;
+    right: calc(20px + 50px + 12px);  /* button right + width + gap */
+    bottom: calc(var(--resume-btn-bottom) + 25px);
+    transform: translateY(50%);
+    max-width: min(320px, calc(100vw - 120px));
     padding: 8px 12px;
     background-color: #e8f4fd;
     color: var(--text-muted);

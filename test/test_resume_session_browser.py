@@ -121,6 +121,45 @@ class TestResumeSessionBrowser:
         expect(toast).to_contain_text("Paste into your terminal")
 
     @pytest.mark.browser
+    def test_the_toast_sits_beside_its_button_and_clears_the_stack(
+        self, page: Page
+    ) -> None:
+        """It used to stack *above* the floating buttons, which meant every
+        button added to the stack pushed the toast further up, over
+        controls it has nothing to do with. Beside its own button, the
+        column is empty and stays empty."""
+        html = self._render(
+            [_user_entry("u1", "hello", session_id="ab12cd34", cwd="/tmp/project")]
+        )
+        self._goto_with_clipboard_stub(page, html)
+        page.locator("#resumeSession").click()
+        page.wait_for_selector("#resumeToast.visible")
+
+        geometry = page.evaluate(
+            "() => {"
+            " const toast = document.getElementById('resumeToast')"
+            "   .getBoundingClientRect();"
+            " const btn = document.getElementById('resumeSession')"
+            "   .getBoundingClientRect();"
+            " const hits = [...document.querySelectorAll('.floating-btn')]"
+            "   .filter(el => { const r = el.getBoundingClientRect();"
+            "     return !(r.right < toast.left || r.left > toast.right"
+            "              || r.bottom < toast.top || r.top > toast.bottom); })"
+            "   .map(el => el.id);"
+            " return { leftOf: toast.right <= btn.left,"
+            "          onScreen: toast.left >= 0,"
+            "          centred: Math.abs((toast.top + toast.bottom) / 2"
+            "                            - (btn.top + btn.bottom) / 2) < 2,"
+            "          hits }; }"
+        )
+        assert geometry["leftOf"], "the toast is not to the left of its button"
+        assert geometry["centred"], "the toast is not centred on its button"
+        assert geometry["onScreen"], "the toast runs off the left edge"
+        assert geometry["hits"] == [], (
+            f"the toast covers other floating buttons: {geometry['hits']}"
+        )
+
+    @pytest.mark.browser
     def test_no_button_on_multi_session_page(self, page: Page) -> None:
         """Combined pages spanning several sessions render no button."""
         html = self._render(
