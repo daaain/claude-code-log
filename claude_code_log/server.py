@@ -21,22 +21,47 @@ Design notes, in case the shape looks arbitrary:
   exists, not after.
 * **The search core is HTTP-free.** Everything interesting lives in
   `search.py` as plain functions; this module is the adapter.
+* **File responses carry `X-Content-Revision`.** The live page asks "did
+  this change?" with a HEAD, and the stock validators cannot always
+  answer: `Last-Modified` has one-second granularity and `Content-Length`
+  is blind to an edit that keeps the size. See `_content_revision`.
 """
 
 from __future__ import annotations
 
 import functools
+import hashlib
 import http.server
 import json
+import os
+import stat
 import threading
+import time
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, BinaryIO, Callable, Optional
 
 from .cache import get_library_version
 
 # Requests under this prefix are the JSON API and never hit the filesystem.
 # Reserved so a project directory literally named `api` can't shadow it.
 API_PREFIX = "/api/"
+
+# The header the live page adds to its change comparison (see
+# `_content_revision` and `live_update.js`). Deliberately *not* `ETag`:
+# the stock `send_head` skips its `If-Modified-Since` check whenever the
+# request carries an `If-None-Match`, and it never evaluates one — so
+# advertising an ETag would make browsers stop getting 304s on the
+# multi-MB pages that make 304s worth having.
+REVISION_HEADER = "X-Content-Revision"
+
+# How long a file's mtime must have been in the past before a cached
+# digest for it can be trusted. A write landing after we hashed can only
+# reuse the same (mtime_ns, size) key if the filesystem's timestamp
+# resolution is coarse enough to give it the same mtime — so once the
+# recorded mtime is a full second old, no later write can hide behind it,
+# whatever the resolution. Below that, re-hash: an actively-written page
+# is exactly the case this header exists for.
+_REVISION_SETTLE_NS = 1_000_000_000
 
 
 class ArchiveHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
@@ -47,6 +72,16 @@ class ArchiveHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
     allowed_hosts: frozenset[str] = frozenset()
     server_version = f"claude-code-log/{get_library_version()}"
     sys_version = ""
+
+    # Digest of the file this request is answering with, computed in
+    # `send_head` and emitted by `end_headers`. `None` for everything
+    # that is not a file response (the API, errors, directory listings).
+    _revision: Optional[str] = None
+
+    # (path, mtime_ns, size) -> digest, shared by every request. Written
+    # from several server threads: dict get/set are atomic, and the worst
+    # a race can do is hash the same file twice.
+    _revision_cache: dict[tuple[str, int, int], str] = {}
 
     # ---- security -------------------------------------------------------
 
@@ -92,6 +127,67 @@ class ArchiveHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
+
+    # ---- content revision -----------------------------------------------
+
+    def _content_revision(self, path: str) -> Optional[str]:
+        """A validator derived from the bytes, not from the metadata.
+
+        `live_update.js` polls a HEAD of its own URL and re-fetches when
+        the response's identity moves. `Last-Modified` alone misses two
+        conversions inside one second (HTTP dates are second-granular),
+        and adding `Content-Length` still misses a rewrite that changes
+        content without changing size — a re-render where a counter, a
+        status word or a timestamp keeps its width. Watch mode produces
+        rewrites a few hundred ms apart, so both gaps are reachable.
+
+        Hashing the file closes them for any filesystem. It is not free
+        on a 27 MB page, so a settled file (see `_REVISION_SETTLE_NS`)
+        answers from the cache and only a file being written right now
+        is re-read — which is the case that has to be exact.
+        """
+        try:
+            st = os.stat(path)
+        except OSError:
+            return None
+        if not stat.S_ISREG(st.st_mode):
+            return None
+
+        key = (path, st.st_mtime_ns, st.st_size)
+        settled = time.time_ns() - st.st_mtime_ns > _REVISION_SETTLE_NS
+        if settled:
+            cached = self._revision_cache.get(key)
+            if cached is not None:
+                return cached
+
+        digest = hashlib.blake2b(digest_size=16)
+        try:
+            with open(path, "rb") as handle:
+                for chunk in iter(lambda: handle.read(1 << 20), b""):
+                    digest.update(chunk)
+        except OSError:
+            return None
+        revision = digest.hexdigest()
+
+        if settled:
+            # One entry per served file; a long-running server over a
+            # whole archive would otherwise accumulate them forever.
+            if len(self._revision_cache) > 256:
+                self._revision_cache.clear()
+            self._revision_cache[key] = revision
+        return revision
+
+    def send_head(self) -> Optional[BinaryIO]:
+        self._revision = None
+        path = self.translate_path(self.path)
+        if not os.path.isdir(path):
+            self._revision = self._content_revision(path)
+        return super().send_head()
+
+    def end_headers(self) -> None:
+        if self._revision is not None:
+            self.send_header(REVISION_HEADER, self._revision)
+        super().end_headers()
 
     def _split_query(self) -> tuple[str, dict[str, str]]:
         from urllib.parse import parse_qs, urlparse

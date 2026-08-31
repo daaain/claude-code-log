@@ -75,6 +75,7 @@ nav:
   - Example output: example.md
   - User Guide:
       - Searching the whole archive: archive-search.md
+      - Watching a session as it runs: live-updates.md
       - Restoring archived sessions: restoring-archived-sessions.md
   - Reference:
       - CLI: reference/cli.md

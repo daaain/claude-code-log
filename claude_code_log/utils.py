@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Utility functions for message filtering and processing."""
 
+import os
 import re
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -304,6 +306,16 @@ def _split_real_path_for_join(real_path_str: str) -> list[str]:
         return [drive, *rest] if drive else rest
     # Relative — POSIX-style component split.
     return list(p_posix.parts)
+
+
+def real_path_to_project_dirname(cwd: Path) -> str:
+    """Encode a real path the way Claude Code names its project directory.
+
+    ``/home/joe/proj`` → ``-home-joe-proj``. The inverse,
+    `project_dir_to_real_path`, is lossy and needs the cache to
+    disambiguate; this direction is not.
+    """
+    return str(cwd).replace("/", "-").replace("\\", "-")
 
 
 def project_dir_to_real_path(
@@ -942,3 +954,77 @@ def generate_unified_diff(old_string: str, new_string: str) -> str:
         diff_lines = diff_lines[2:]
 
     return "".join(diff_lines).rstrip("\n")
+
+
+# Windows refuses to replace a file another process holds open unless
+# that process opened it with FILE_SHARE_DELETE, which Python's `open`
+# does not — so a reader (an editor, a vault indexer, the browser poll
+# this helper exists for) makes `os.replace` fail with PermissionError
+# until it closes, rather than the write being torn. A read of even a
+# 27 MB page is short, so a brief retry outlasts one; POSIX never takes
+# this path, where the replace succeeds with readers mid-read.
+_REPLACE_ATTEMPTS = 10
+_REPLACE_BACKOFF_S = 0.02
+
+
+def _replace_with_retry(tmp_path: Path, path: Path) -> None:
+    """`os.replace`, retried briefly past a concurrent reader on Windows."""
+    for attempt in range(_REPLACE_ATTEMPTS):
+        try:
+            os.replace(tmp_path, path)
+            return
+        except PermissionError:
+            if attempt == _REPLACE_ATTEMPTS - 1:
+                raise
+            time.sleep(_REPLACE_BACKOFF_S)
+
+
+def atomic_write_text(
+    path: Path, content: str, *, encoding: str = "utf-8", errors: str = "replace"
+) -> None:
+    """Write ``content`` to ``path`` so a concurrent reader never sees a partial file.
+
+    ``Path.write_text`` truncates and then writes, so anything reading the
+    file during the write gets a torn document. That is a narrow race for
+    a one-shot conversion, but watch mode rewrites the same file every few
+    seconds while an editor, a vault indexer, or a browser poll re-reads
+    it, which makes it routine — and a 27 MB session page is a wide window
+    to be caught in.
+
+    The fix is the one ``image_export.export_image`` already uses: write a
+    uniquely-named temp file beside the target, then ``os.replace`` it into
+    position. ``os.replace`` is atomic on POSIX and on Windows, and "beside
+    the target" matters — a temp file on another filesystem would make the
+    replace a copy, which is not atomic.
+
+    The temp name carries the pid so concurrent render workers writing the
+    same path (the fan-out can, harmlessly, since they write identical
+    bytes) cannot clobber each other's partial file. It is dot-prefixed so
+    a crash between write and replace leaves something obviously
+    disposable rather than a plausible-looking output file.
+
+    Falls back to a plain write when the target exists but is not a
+    regular file. ``os.replace`` would *replace* a symlink rather than
+    write through it, and would clobber a fifo or device node outright —
+    both worse surprises than a non-atomic write to something the user
+    deliberately put there.
+
+    On Windows the replace is retried briefly, because a reader holding
+    the target open blocks it there — see `_replace_with_retry`.
+    """
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        path.write_text(content, encoding=encoding, errors=errors)
+        return
+
+    tmp_path = path.parent / f".{path.name}.{os.getpid()}.tmp"
+    try:
+        tmp_path.write_text(content, encoding=encoding, errors=errors)
+        _replace_with_retry(tmp_path, path)
+    except BaseException:
+        # Includes KeyboardInterrupt: a half-written temp file left in an
+        # output directory is litter that the next run would not clean up.
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+        raise

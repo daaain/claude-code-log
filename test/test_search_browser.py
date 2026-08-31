@@ -64,11 +64,25 @@ class TestSearchBrowser:
         return temp_file
 
     def _search_for(self, page: Page, query: str):
-        """Open the search toolbar via `/` and type a query."""
+        """Open the search toolbar via `/`, type a query, and let it run.
+
+        The input handler debounces by 300 ms, so filling returns before
+        anything has been searched. Without waiting here, every later
+        assertion spends part of its own budget on that debounce — and on
+        a CI box with four browsers on four cores, "part of" has been the
+        whole of it (a Windows run resolved the locator three times in
+        five seconds, i.e. ~1.6 s per poll, and never saw the filter
+        applied). The counter is the component's own "I have run" signal:
+        idle it reads "No results", and after a search it reads either
+        "N of M matches" or "No matches".
+        """
         page.keyboard.press("/")
         search_input = page.locator("#searchInput")
         expect(search_input).to_be_focused()
         search_input.fill(query)
+        expect(page.locator("#searchResultCount")).to_have_text(
+            re.compile(r"match", re.IGNORECASE)
+        )
 
     @pytest.mark.browser
     def test_slash_opens_search(self, page: Page):

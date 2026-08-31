@@ -11,14 +11,15 @@ import os
 import re
 import time
 from collections import defaultdict
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
 import traceback
 from urllib.parse import quote
-from typing import Any, Dict, List, Optional, TYPE_CHECKING, cast
+from typing import Any, Dict, List, Optional, TextIO, TYPE_CHECKING, cast
 
 import dateparser
 
@@ -26,11 +27,14 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
 
     from .cache import CacheManager, SessionSidecar
+    from .entry_store import ParsedEntryStore
     from .fragment_store import RenderFragmentStore
     from .providers.base import ProviderTokenTotals
     from .render_pool import RenderPool
 
 from .utils import (
+    atomic_write_text,
+    real_path_to_project_dirname,
     coalesce_trunk_session_id,
     collect_trunk_session_ids,
     format_timestamp_range,
@@ -282,6 +286,192 @@ def filter_messages_by_date(
     return filtered_messages
 
 
+def _text_file_lines(f: "TextIO") -> Generator[tuple[int, str], None, None]:
+    """The historical line source: iterate an open text file, closing it after."""
+    try:
+        yield from enumerate(f, 1)  # Start counting from 1
+    finally:
+        f.close()
+
+
+@dataclass
+class _ByteParse:
+    """A byte-level parse that may resume from a previously held prefix.
+
+    Reading bytes rather than text is what makes resumption possible: the
+    store pins entries to a byte offset plus a hash of the bytes below it,
+    so the next tick can prove the file still *starts* with what it parsed
+    before and read only what was appended (work/watch-mode.md, Fix B).
+
+    Splitting on ``b"\\n"`` and decoding per line is equivalent to the
+    text read it replaces: a UTF-8 continuation byte is never 0x0A, so no
+    multi-byte sequence spans the split, and the same
+    ``errors="replace"`` applies either way.
+    """
+
+    path: Path
+    entries: list[TranscriptEntry]
+    agent_ids: set[str]
+    tail: bytes
+    hasher: Any
+    start_offset: int
+    start_line: int
+    resumed: bool
+    held_count: int
+    # What the parse had produced when it reached the first line past the
+    # prefix cut — i.e. the products of complete lines only. None until
+    # that line is reached, which for a newline-terminated tail is the
+    # empty string after the last ``\n``, so the common case still holds
+    # everything. See :meth:`mark_incomplete` and :meth:`commit`.
+    complete_count: Optional[int] = None
+    complete_agent_ids: Optional[set[str]] = None
+
+    @property
+    def mark_line(self) -> int:
+        """Line number of the first line whose bytes fall outside the cut."""
+        return (
+            self.start_line + self.tail[: self.tail.rfind(b"\n") + 1].count(b"\n") + 1
+        )
+
+    def mark_incomplete(
+        self, messages: list[TranscriptEntry], agent_ids: set[str]
+    ) -> None:
+        """Snapshot what complete lines produced, before the trailing fragment."""
+        if self.complete_count is None:
+            self.complete_count = len(messages)
+            self.complete_agent_ids = set(agent_ids)
+
+    def lines(self) -> Generator[tuple[int, str], None, None]:
+        """Yield ``(line_no, text)`` for the bytes past the held prefix."""
+
+        def _iter() -> Generator[tuple[int, str], None, None]:
+            for offset, raw in enumerate(self.tail.split(b"\n"), self.start_line + 1):
+                yield offset, raw.decode("utf-8", errors="replace")
+
+        return _iter()
+
+    def commit(
+        self,
+        entry_store: "ParsedEntryStore",
+        messages: list[TranscriptEntry],
+        agent_ids: set[str],
+    ) -> None:
+        """Hold the parse for the next tick, up to the last *complete* line.
+
+        A torn final line (mid-append, C12) is parsed as before — it just
+        fails and is skipped — but its bytes stay out of the prefix, so
+        the next tick re-reads and parses it properly once it lands.
+
+        The cut is on **entries as well as bytes**, and it has to be:
+        a final line whose newline hasn't landed yet can be a whole,
+        valid record (a flush that split on the newline, or simply a file
+        stored without a trailing one). That parses into an entry whose
+        bytes are below the cut, so holding it would have the next tick
+        parse the same line again and hand back the entry twice.
+        """
+        complete = self.tail.rfind(b"\n") + 1
+        if complete <= 0 and self.start_offset == 0:
+            return
+        self.hasher.update(self.tail[:complete])
+        consumed = self.start_offset + complete
+        line_count = self.start_line + self.tail[:complete].count(b"\n")
+        if self.complete_count is not None:
+            messages = messages[: self.complete_count]
+            agent_ids = self.complete_agent_ids or set()
+        entry_store.put_prefix(
+            self.path,
+            consumed,
+            self.hasher.digest(),
+            messages,
+            agent_ids,
+            line_count,
+        )
+
+
+def _appended_rows(
+    byte_parse: "Optional[_ByteParse]",
+    messages: list[TranscriptEntry],
+    parsed_line_count: int,
+    any_agent_refs: bool,
+    any_subagent_meta: bool,
+    spliced_agents: bool,
+) -> Optional[list[TranscriptEntry]]:
+    """The entries a cache write may append, or None to rewrite the file.
+
+    The cached rows for a transcript are not simply its lines: agent
+    transcripts are spliced in at their anchors, and the sidecar passes
+    back-patch ``spawnedAgentId`` onto entries parsed long ago. So "the
+    file grew by an append" does **not** by itself imply "the rows grew by
+    an append" — a subagent running alongside the trunk inserts rows in
+    the *middle* of the sequence, which is common in exactly the watch
+    scenario this optimises.
+
+    Rather than track every way that can happen, this refuses unless the
+    row list is provably just the file's own lines:
+
+    * the parse resumed from a byte-verified prefix, so every entry below
+      the resume point came from bytes that have not changed;
+    * the file references no agents, has no sidecars, and spliced no agent
+      blocks, so none of the whole-file passes could add or alter an
+      entry;
+    * and nothing appeared in the list except those parsed lines.
+
+    On the reference archive that covers 136 of 185 trunk files. The rest
+    take the full rewrite, unchanged.
+    """
+    if byte_parse is None or not byte_parse.resumed:
+        return None
+    if any_agent_refs or any_subagent_meta or spliced_agents:
+        return None
+    if len(messages) != parsed_line_count:
+        return None
+    held = byte_parse.held_count
+    if held <= 0 or held > len(messages):
+        return None
+    appended = messages[held:]
+    return appended or None
+
+
+def _begin_byte_parse(
+    jsonl_path: Path, entry_store: "ParsedEntryStore"
+) -> "Optional[_ByteParse]":
+    """Read `jsonl_path`, resuming from the store's held prefix if it still fits.
+
+    The held prefix is accepted only when the file's first ``prefix_len``
+    bytes hash to the digest recorded with it — a *stronger* check than
+    the row-fingerprint prefix comparison it saves, since identical bytes
+    imply identical rows. A mismatch (rewound session, replayed history,
+    a shorter file) drops the prefix and re-reads from the top, which is
+    what the caller would have done anyway.
+    """
+    from .entry_store import new_hasher, read_prefix_and_tail
+
+    held = entry_store.get_prefix(jsonl_path)
+    hasher = new_hasher()
+    tail = read_prefix_and_tail(jsonl_path, held.prefix_len if held else 0, hasher)
+    if held is not None and (tail is None or hasher.digest() != held.digest):
+        entry_store.drop_prefix(jsonl_path)
+        entry_store.prefix_misses += 1
+        held = None
+        hasher = new_hasher()
+        tail = read_prefix_and_tail(jsonl_path, 0, hasher)
+    if tail is None:
+        return None  # unreadable — let the text path report it as before
+    if held is not None:
+        entry_store.prefix_hits += 1
+    return _ByteParse(
+        path=jsonl_path,
+        entries=held.entries if held else [],
+        agent_ids=set(held.agent_ids) if held else set(),
+        tail=tail,
+        hasher=hasher,
+        start_offset=held.prefix_len if held else 0,
+        start_line=held.line_count if held else 0,
+        resumed=held is not None,
+        held_count=len(held.entries) if held else 0,
+    )
+
+
 def load_transcript(
     jsonl_path: Path,
     cache_manager: Optional["CacheManager"] = None,
@@ -290,10 +480,16 @@ def load_transcript(
     silent: bool = False,
     _loaded_files: Optional[set[Path]] = None,
     _meta_maps: Optional[dict[Path, dict[str, str]]] = None,
+    entry_store: "Optional[ParsedEntryStore]" = None,
 ) -> list[TranscriptEntry]:
     """Load and parse JSONL transcript file, using cache if available.
 
     Args:
+        entry_store: Optional per-conversion store of entries this
+            conversion has already materialised (``entry_store.py``).
+            Consulted ahead of the cache, which it saves a
+            decompress + parse + validate pass over; a store miss or a
+            changed file falls through to exactly the path below.
         _loaded_files: Internal parameter to track loaded files and prevent infinite recursion.
         _meta_maps: Internal per-load memo of ``{dir: {toolUseId: agentId}}``
             sidecar maps, so one flat ``subagents/`` family is scanned once
@@ -310,6 +506,15 @@ def load_transcript(
         return []
 
     _loaded_files.add(jsonl_path)
+    # Entries this conversion already parsed beat both the cache and the
+    # source. Date filtering is excluded: the store holds whole files,
+    # and the filtered read below returns a subset.
+    if entry_store is not None and not from_date and not to_date:
+        held = entry_store.get(jsonl_path)
+        if held is not None:
+            if not silent:
+                print(f"Loading {jsonl_path} from this run's parsed entries...")
+            return held
     # Try to load from cache first
     if cache_manager is not None:
         # Use filtered loading if date parameters are provided
@@ -333,25 +538,58 @@ def load_transcript(
     from .cache import subagents_fingerprint
 
     subagents_fp = subagents_fingerprint(jsonl_path)
+    # The file's own identity, for the same reason and at the same moment:
+    # a session appended to *during* this read must leave the cache
+    # stamped with what we parsed, not with what the file reached, or the
+    # next run finds a fresh-looking cache missing those lines. Unreadable
+    # here means the writers stat it themselves, exactly as before.
+    try:
+        source_stat: Optional[os.stat_result] = jsonl_path.stat()
+    except OSError:
+        source_stat = None
     messages: list[TranscriptEntry] = []
     agent_ids: set[str] = set()  # Collect agentId references while parsing
     # Track unrecognized message types already warned about so we emit at
     # most one warning per distinct type per file (these tend to repeat a lot).
     warned_unrecognized_types: set[str | None] = set()
 
-    try:
-        f = open(jsonl_path, "r", encoding="utf-8", errors="replace")
-    except FileNotFoundError:
-        # Handle race condition: file may have been deleted between glob and open
-        # (e.g., Claude Code session cleanup)
-        if not silent:
-            print(f"Warning: File not found (may have been deleted): {jsonl_path}")
-        return []
+    # With a store, read bytes rather than text: that yields both the
+    # offset and the rolling hash a later tick needs to resume from what
+    # it already parsed, instead of re-reading the file's whole history
+    # (entry_store.py). A decline — no store, date filtering, an
+    # unreadable file — falls through to the pre-existing text read,
+    # which is left exactly as it was.
+    byte_parse = (
+        _begin_byte_parse(jsonl_path, entry_store)
+        if entry_store is not None and not from_date and not to_date
+        else None
+    )
 
-    with f:
+    if byte_parse is not None:
+        messages = byte_parse.entries
+        agent_ids = byte_parse.agent_ids
+        line_source = byte_parse.lines()
+        # The first line whose bytes fall outside the prefix cut: reaching
+        # it is what tells `commit` where the holdable entries stop.
+        mark_line = byte_parse.mark_line
+    else:
+        try:
+            f = open(jsonl_path, "r", encoding="utf-8", errors="replace")
+        except FileNotFoundError:
+            # Handle race condition: file may have been deleted between glob and open
+            # (e.g., Claude Code session cleanup)
+            if not silent:
+                print(f"Warning: File not found (may have been deleted): {jsonl_path}")
+            return []
+        line_source = _text_file_lines(f)
+        mark_line = -1
+
+    with contextlib.closing(line_source):
         if not silent:
             print(f"Processing {jsonl_path}...")
-        for line_no, line in enumerate(f, 1):  # Start counting from 1
+        for line_no, line in line_source:
+            if line_no == mark_line and byte_parse is not None:
+                byte_parse.mark_incomplete(messages, agent_ids)
             line = line.strip()
             if line:
                 try:
@@ -456,15 +694,28 @@ def load_transcript(
                         f"\n{traceback.format_exc()}"
                     )
 
+    # Hold what we just parsed for the next tick, BEFORE the whole-file
+    # passes below — they mutate entries in place (back-patching
+    # `spawnedAgentId`) and splice agent blocks in, and a resumed parse
+    # must start from the raw per-line products and re-run them.
+    if byte_parse is not None and entry_store is not None:
+        byte_parse.commit(entry_store, messages, agent_ids)
+
+    # How many entries came straight off the file's own lines, before any
+    # of the whole-file passes below can add or alter one. The append-only
+    # cache write is gated on this being the whole story (see
+    # `_appended_rows`).
+    parsed_line_count = len(messages)
+    had_agent_refs = bool(agent_ids)
+
     # Sidecar-driven spawn linking (issue #213): resolve each spawning
     # tool_use to its sub-agent via the agent-<id>.meta.json files. This is
     # what makes NESTED spawns discoverable — a sub-agent's own spawn
     # tool_results carry no ``toolUseResult.agentId`` (trunk-only
     # enrichment), and an interrupted spawn has no usable tool_result at
     # all; the sidecar's ``toolUseId`` covers both.
-    _apply_subagent_meta_links(
-        messages, _subagent_meta_map(jsonl_path, _meta_maps), agent_ids, jsonl_path
-    )
+    subagent_meta = _subagent_meta_map(jsonl_path, _meta_maps)
+    _apply_subagent_meta_links(messages, subagent_meta, agent_ids, jsonl_path)
 
     # Prompt-hash fallback: link Task tool_results that lack a structured
     # agentId (common for true teammate subagents) by matching the
@@ -512,6 +763,11 @@ def load_transcript(
                 )
                 agent_messages_map[agent_id] = agent_messages
 
+    # `agent_messages_map` is drained by the splice below, so record now
+    # whether any splicing is about to happen — the append-only cache
+    # write needs to know, and by then the map would read as empty.
+    spliced_agents = bool(agent_messages_map)
+
     # Insert agent messages at their point of use (only once per agent)
     if agent_messages_map:
         # Iterate through messages and insert agent messages after the FIRST
@@ -538,11 +794,31 @@ def load_transcript(
 
         messages = result_messages
 
-    # Save to cache if cache manager is available
+    # Save to cache if cache manager is available. When this parse resumed
+    # from a verified prefix and nothing but the file's own new lines
+    # reached the list, the rows are the old rows plus a tail and only the
+    # tail needs writing — which is most of a watch tick (see
+    # `_appended_rows` for what has to hold, and `extend_cached_entries`
+    # for the row-level check that can still refuse).
     if cache_manager is not None:
-        cache_manager.save_cached_entries(
-            jsonl_path, messages, subagents_fp=subagents_fp
+        appended = _appended_rows(
+            byte_parse,
+            messages,
+            parsed_line_count,
+            had_agent_refs or bool(agent_ids),
+            bool(subagent_meta),
+            spliced_agents,
         )
+        if appended is None or not cache_manager.extend_cached_entries(
+            jsonl_path,
+            messages,
+            appended,
+            subagents_fp=subagents_fp,
+            source_stat=source_stat,
+        ):
+            cache_manager.save_cached_entries(
+                jsonl_path, messages, subagents_fp=subagents_fp, source_stat=source_stat
+            )
 
     return messages
 
@@ -1138,6 +1414,7 @@ def _load_stale_session_transcripts(
     cache_manager: "CacheManager",
     stale_session_ids: list[str],
     silent: bool = False,
+    entry_store: "Optional[ParsedEntryStore]" = None,
 ) -> Optional[tuple[list[TranscriptEntry], SessionTree]]:
     """Load only the named trunk sessions, faithful to the full load.
 
@@ -1203,7 +1480,12 @@ def _load_stale_session_transcripts(
         return None
 
     return _load_sessions_partial(
-        directory_path, cache_manager, sidecar, trunk_files, silent
+        directory_path,
+        cache_manager,
+        sidecar,
+        trunk_files,
+        silent,
+        entry_store=entry_store,
     )
 
 
@@ -1259,6 +1541,7 @@ def _load_sessions_partial(
     silent: bool,
     reelect_uuids: Optional[set[str]] = None,
     native_junction_uuids: Optional[set[str]] = None,
+    entry_store: "Optional[ParsedEntryStore]" = None,
 ) -> tuple[list[TranscriptEntry], SessionTree]:
     """Load the given trunk files into a faithful partial (entries, tree).
 
@@ -1295,9 +1578,19 @@ def _load_sessions_partial(
     with cache_manager.batch():
         for jsonl_file in trunk_files:
             all_messages.extend(
-                load_transcript(jsonl_file, cache_manager, None, None, silent)
+                load_transcript(
+                    jsonl_file,
+                    cache_manager,
+                    None,
+                    None,
+                    silent,
+                    entry_store=entry_store,
+                )
             )
 
+    # NB: this mutates entries in place and is not idempotent (it appends
+    # `#agent-{id}` to sessionId), which is why the store hands out deep
+    # copies rather than the objects it holds.
     _integrate_agent_entries(all_messages)
 
     # Enforce the whole-project dedup outcome: drop every duplicated
@@ -1827,7 +2120,7 @@ def _enable_next_link_on_previous_page(
     new_content, count = _NEXT_LINK_PATTERN.subn(r"\1\2", content)
 
     if count > 0:
-        page_path.write_text(new_content, encoding="utf-8", errors="replace")
+        atomic_write_text(page_path, new_content)
         return True
 
     return False
@@ -2274,9 +2567,7 @@ def _render_page_unit_inline(
     # JSONL may carry lone surrogates (issue #139); strict UTF-8
     # encoding crashes here. Replace with U+FFFD so output stays
     # valid UTF-8.
-    (output_dir / unit.file_name).write_text(
-        html_content, encoding="utf-8", errors="replace"
-    )
+    atomic_write_text(output_dir / unit.file_name, html_content)
 
 
 def _generate_paginated_html(
@@ -3030,7 +3321,7 @@ def _try_current_or_session_scoped(
     output_path: Path,
     effective_output_dir: Path,
     cache_manager: Optional["CacheManager"],
-    cache_was_updated: bool,
+    cache_refresh: "CacheRefresh",
     format: str,
     ext: str,
     suffix: str,
@@ -3047,6 +3338,7 @@ def _try_current_or_session_scoped(
     no_recaps: bool,
     silent: bool,
     report: Optional["RegenerationReport"],
+    entry_store: "Optional[ParsedEntryStore]" = None,
 ) -> Optional[Path]:
     """Finish from the cache alone, when the combined output is current.
 
@@ -3062,12 +3354,33 @@ def _try_current_or_session_scoped(
     function rather than two: splitting them would compute
     ``_combined_output_is_stale`` and ``get_stale_sessions`` twice.
 
+    **On ``cache_refresh``.** This used to refuse outright whenever the
+    cache had been updated, which made the path unreachable for the case
+    it helps most: a live session gaining messages, where every run has
+    new bytes by definition. The refusal was really about one risk — the
+    staleness check here is per-session *message counts*, so a session
+    whose content changed without its count changing would be missed.
+
+    An INCREMENTAL refresh rules that out. It only succeeds after
+    proving every modified file's cached rows are an exact prefix of its
+    current rows (``_incremental_cache_refresh``), i.e. the change was a
+    pure append; with append-only sources a changed session always
+    changes its count. It also keeps the cross-session sidecar current
+    (``merge_session_sidecar``), which is the other thing the partial
+    load needs. A FULL refresh carries neither guarantee, so it still
+    refuses.
+
+    Note this mostly unlocks ``--combined no``: when a combined output
+    exists, the session's growth makes it stale and
+    ``_combined_output_is_stale`` bails us out to the streaming path
+    anyway.
+
     Returns ``None`` when the preconditions don't hold, when the combined
     output is stale, or when the session-scoped load declines.
     """
     if (
         cache_manager is None
-        or cache_was_updated
+        or cache_refresh is CacheRefresh.FULL
         or from_date is not None
         or to_date is not None
         or force_regenerate
@@ -3117,6 +3430,7 @@ def _try_current_or_session_scoped(
         cache_manager,
         [sid for sid, _reason in stale_sessions],
         silent,
+        entry_store=entry_store,
     )
     if partial is None:
         return None
@@ -3272,6 +3586,7 @@ def convert_jsonl_to(
     report: Optional["RegenerationReport"] = None,
     archive_search_link: Optional[str] = None,
     render_jobs: Optional[int] = None,
+    entry_store: "Optional[ParsedEntryStore]" = None,
 ) -> Path:
     """Convert JSONL transcript(s) to the specified format.
 
@@ -3360,7 +3675,8 @@ def convert_jsonl_to(
         # directory mode) so DAG-based ordering handles sidechain placement.
         _integrate_agent_entries(messages)
         title = f"Claude Transcript - {input_path.stem}"
-        cache_was_updated = False  # No cache in single file mode
+        cache_refresh = CacheRefresh.NONE  # No cache in single file mode
+        cache_was_updated = False
 
         # Single-file workflow support (#174 PR3): a lone ``<SID>.jsonl`` still
         # has its run data in the sibling ``<SID>/subagents/workflows/`` dir, so
@@ -3393,10 +3709,30 @@ def convert_jsonl_to(
         if output_path is None:
             output_path = effective_output_dir / f"combined_transcripts{suffix}.{ext}"
 
+        # A store holds whatever the cache refresh parses, so Phase 1b
+        # doesn't rebuild it from the rows the refresh just wrote
+        # (entry_store.py). Deliberately not handed to the streaming path
+        # below, whose bounded residency depends on dropping each page's
+        # entries before the next page loads.
+        #
+        # A caller may own one instead — `watch` does, so that a tick can
+        # resume its parse from the bytes the previous tick already read.
+        # Ownership decides lifetime: ours dies with this call, theirs
+        # doesn't, which is the whole point of a resident loop having one.
+        caller_owned = entry_store is not None
+        if entry_store is None:
+            entry_store = _make_entry_store()
+
         # Phase 1: Ensure cache is fresh and populated
-        cache_was_updated = ensure_fresh_cache(
-            input_path, cache_manager, from_date, to_date, silent
+        cache_refresh = ensure_fresh_cache_detailed(
+            input_path,
+            cache_manager,
+            from_date,
+            to_date,
+            silent,
+            entry_store=entry_store,
         )
+        cache_was_updated = bool(cache_refresh)
 
         # Phase 1b: finish without loading the project at all, if the
         # cache says we can.
@@ -3405,7 +3741,7 @@ def convert_jsonl_to(
             output_path=output_path,
             effective_output_dir=effective_output_dir,
             cache_manager=cache_manager,
-            cache_was_updated=cache_was_updated,
+            cache_refresh=cache_refresh,
             format=format,
             ext=ext,
             suffix=suffix,
@@ -3422,9 +3758,18 @@ def convert_jsonl_to(
             no_recaps=no_recaps,
             silent=silent,
             report=report,
+            entry_store=entry_store,
         )
         if settled is not None:
             return settled
+
+        # Past Phase 1b nothing reuses the store, and what it holds is a
+        # whole session's entries — stop referencing it before the paths
+        # that load the project (or stream it page by page) start
+        # allocating. A caller-owned store outlives us either way; this
+        # only drops *our* reference.
+        if not caller_owned:
+            entry_store = None
 
         # Phase 1c: convert a paginated project page-by-page instead of
         # loading it whole.
@@ -3695,7 +4040,7 @@ def convert_jsonl_to(
                 )
                 assert content is not None
                 # See issue #139: errors="replace" for lone-surrogate safety.
-                output_path.write_text(content, encoding="utf-8", errors="replace")
+                atomic_write_text(output_path, content)
 
                 # Update html_cache for the combined transcript. Written for the
                 # marker-tracked formats (HTML + Markdown); JSON tracks its own
@@ -3777,6 +4122,7 @@ def _incremental_cache_refresh(
     session_jsonl_files: list[Path],
     modified_files: list[Path],
     silent: bool,
+    entry_store: "Optional[ParsedEntryStore]" = None,
 ) -> bool:
     """Refresh the cache from the modified files alone, never loading whole.
 
@@ -3815,6 +4161,7 @@ def _incremental_cache_refresh(
     full path's.
     """
     from .cache import CachedFileState
+    from .entry_store import stamp_file
 
     if not modified_files:
         return False
@@ -3851,7 +4198,15 @@ def _incremental_cache_refresh(
         old_rows = cache_manager.get_all_session_rows()
 
         for f in modified_files:
-            load_transcript(f, cache_manager, None, None, silent)
+            # Stamp BEFORE the parse: a file that grows while we read it
+            # must make the store decline (its stamp would then be older
+            # than the file), never serve a list its stamp misdescribes.
+            stamp = stamp_file(f)
+            parsed = load_transcript(
+                f, cache_manager, None, None, silent, entry_store=entry_store
+            )
+            if entry_store is not None:
+                entry_store.put(f, stamp, parsed)
         new_states = cache_manager.get_file_states(modified_names)
 
         closure: set[str] = set()
@@ -4037,6 +4392,7 @@ def _incremental_cache_refresh(
             silent,
             reelect_uuids=exempt_uuids,
             native_junction_uuids=native_junction_uuids,
+            entry_store=entry_store,
         )
 
         # Compute every write, validate, then write — no fact lands
@@ -4159,6 +4515,32 @@ def _incremental_cache_refresh(
     return True
 
 
+class CacheRefresh(Enum):
+    """How `ensure_fresh_cache` brought the cache up to date.
+
+    The distinction that matters to callers is INCREMENTAL vs FULL, not
+    "did anything change". The incremental path only runs after proving
+    that every modified file's cached rows are an exact *prefix* of its
+    current rows — i.e. the change was a pure append and no existing
+    entry was rewritten (`_incremental_cache_refresh`). That proof is
+    what lets the session-scoped render path trust a per-session
+    staleness check based on message counts: with append-only sources a
+    changed session always changes its count, so nothing can change
+    underneath a count that stayed the same.
+
+    A FULL refresh carries no such proof — it is the fallback for
+    rewritten history, deleted files, and everything else hairy — so
+    callers that need the guarantee must treat it like a cold cache.
+    """
+
+    NONE = "none"
+    INCREMENTAL = "incremental"
+    FULL = "full"
+
+    def __bool__(self) -> bool:
+        return self is not CacheRefresh.NONE
+
+
 def ensure_fresh_cache(
     project_dir: Path,
     cache_manager: Optional[CacheManager],
@@ -4168,10 +4550,35 @@ def ensure_fresh_cache(
 ) -> bool:
     """Ensure cache is fresh and populated. Returns True if cache was updated.
 
+    Thin bool wrapper over `ensure_fresh_cache_detailed` for callers that
+    only need "did anything change".
+    """
+    return bool(
+        ensure_fresh_cache_detailed(
+            project_dir, cache_manager, from_date, to_date, silent
+        )
+    )
+
+
+def ensure_fresh_cache_detailed(
+    project_dir: Path,
+    cache_manager: Optional[CacheManager],
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    silent: bool = False,
+    entry_store: "Optional[ParsedEntryStore]" = None,
+) -> CacheRefresh:
+    """Ensure cache is fresh and populated, reporting *how*.
+
     This does the heavy lifting of loading and parsing files.
+
+    ``entry_store`` is the caller's per-conversion store
+    (``entry_store.py``); the incremental refresh fills it with the files
+    it parses, so the conversion's later loads can reuse them instead of
+    rebuilding them from the rows just written.
     """
     if cache_manager is None:
-        return False
+        return CacheRefresh.NONE
 
     # Check if cache needs updating
     # Exclude agent files from direct check - they are loaded via session references
@@ -4179,7 +4586,7 @@ def ensure_fresh_cache(
     # This is acceptable since agent files typically change alongside their sessions.
     session_jsonl_files = trunk_jsonl_files(project_dir)
     if not session_jsonl_files:
-        return False
+        return CacheRefresh.NONE
 
     # Reuse one connection for the invalidation reads AND the whole populate
     # pass (per-file load + save + the session/aggregate writes) instead of
@@ -4203,7 +4610,7 @@ def ensure_fresh_cache(
         )
 
         if not needs_update:
-            return False  # Cache is already fresh
+            return CacheRefresh.NONE  # Cache is already fresh
 
         # Streaming stage 4: when the update is driven purely by changed
         # files over a populated cache, refresh from those files' bounded
@@ -4223,8 +4630,9 @@ def ensure_fresh_cache(
                 session_jsonl_files,
                 modified_files,
                 silent,
+                entry_store=entry_store,
             ):
-                return True
+                return CacheRefresh.INCREMENTAL
 
         # Load and process messages to populate cache
         if not silent:
@@ -4244,7 +4652,7 @@ def ensure_fresh_cache(
 
         # Update cache with fresh data
         _update_cache_with_session_data(cache_manager, messages)
-    return True
+    return CacheRefresh.FULL
 
 
 def _update_cache_with_session_data(
@@ -4387,6 +4795,22 @@ def build_session_title(
                 preview = preview[:50] + "..."
             return f"{project_title}: {preview}"
     return f"{project_title}: Session {session_id[:8]}"
+
+
+def _make_entry_store() -> "Optional[ParsedEntryStore]":
+    """Create the per-conversion parsed-entry store, unless disabled.
+
+    ``CLAUDE_CODE_LOG_ENTRY_STORE=0`` opts out, for bisecting. There is
+    no memory valve here because an empty store costs nothing and the
+    only thing that can fill it — ``_incremental_cache_refresh`` — checks
+    available memory per file at ``put`` time, where the file's size is
+    actually known.
+    """
+    from .entry_store import ParsedEntryStore, entry_store_enabled
+
+    if not entry_store_enabled():
+        return None
+    return ParsedEntryStore()
 
 
 def _make_fragment_store(
@@ -4611,9 +5035,7 @@ def _generate_individual_session_files(
             )
             assert session_content is not None
             # See issue #139: errors="replace" for lone-surrogate safety.
-            (output_dir / unit.file_name).write_text(
-                session_content, encoding="utf-8", errors="replace"
-            )
+            atomic_write_text(output_dir / unit.file_name, session_content)
 
         def _record_session(unit: RenderUnit) -> None:
             """Cache bookkeeping for one written session file."""
@@ -4832,7 +5254,7 @@ def generate_single_session_file(
     )
     assert session_content is not None
     # See issue #139: errors="replace" for lone-surrogate safety.
-    output_file.write_text(session_content, encoding="utf-8", errors="replace")
+    atomic_write_text(output_file, session_content)
 
     return output_file
 
@@ -4878,7 +5300,7 @@ def render_normalized_session_file(
     )
     assert content is not None
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(content, encoding="utf-8", errors="replace")
+    atomic_write_text(output, content)
     return output
 
 
@@ -4888,7 +5310,7 @@ def _provider_project_dirname(cwd: Optional[Path]) -> str:
     index always has a home for them (DECIDED #3)."""
     if cwd is None:
         return "no-project"
-    return str(cwd).replace("/", "-").replace("\\", "-")
+    return real_path_to_project_dirname(cwd)
 
 
 def _entry_timestamp_range(
@@ -5330,9 +5752,7 @@ def render_provider_wholesale(
                 )
                 assert combined_content is not None
                 dest_dir.mkdir(parents=True, exist_ok=True)
-                (dest_dir / combined_name).write_text(
-                    combined_content, encoding="utf-8", errors="replace"
-                )
+                atomic_write_text(dest_dir / combined_name, combined_content)
                 if cache is not None:
                     cache.update_html_cache(combined_name, None, len(combined_messages))
 
@@ -5386,7 +5806,7 @@ def render_provider_wholesale(
     assert index_content is not None
     index_path = output_root / get_index_filename(output_format)
     output_root.mkdir(parents=True, exist_ok=True)
-    index_path.write_text(index_content, encoding="utf-8", errors="replace")
+    atomic_write_text(index_path, index_content)
 
     if not silent:
         print(
@@ -6522,7 +6942,7 @@ def process_projects_hierarchy(
     # Ensure the index root exists when projecting into a fresh dir.
     index_path.parent.mkdir(parents=True, exist_ok=True)
     # See issue #139: errors="replace" for lone-surrogate safety.
-    index_path.write_text(index_content, encoding="utf-8", errors="replace")
+    atomic_write_text(index_path, index_content)
 
     # The archive-wide search page sits next to the index. It is static and
     # self-contained; it only *works* when served (it needs the API to reach
@@ -6531,8 +6951,8 @@ def process_projects_hierarchy(
     if output_format == "html":
         from .html.renderer import generate_archive_search_html
 
-        (index_path.parent / "search.html").write_text(
-            generate_archive_search_html(), encoding="utf-8", errors="replace"
+        atomic_write_text(
+            index_path.parent / "search.html", generate_archive_search_html()
         )
 
     # Count total sessions from project summaries

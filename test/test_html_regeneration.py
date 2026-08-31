@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 
+from claude_code_log import converter as converter_module
 from claude_code_log.converter import (
     convert_jsonl_to_html,
     process_projects_hierarchy,
@@ -184,11 +185,17 @@ class TestHtmlRegeneration:
         # no-op run produces byte-identical content, and an mtime
         # comparison can falsely fail (or pass) within the filesystem's
         # timestamp granularity.
-        real_write_text = Path.write_text
+        #
+        # The seam is `atomic_write_text`, not `Path.write_text`: output
+        # writes go to a uniquely-named temp file and are then renamed
+        # into place, so the destination path only appears at this call.
+        real_atomic_write = converter_module.atomic_write_text
         with (
             patch("builtins.print") as mock_print,
             patch.object(
-                Path, "write_text", autospec=True, side_effect=real_write_text
+                converter_module,
+                "atomic_write_text",
+                side_effect=real_atomic_write,
             ) as write_spy,
         ):
             process_projects_hierarchy(projects_dir, silent=False)

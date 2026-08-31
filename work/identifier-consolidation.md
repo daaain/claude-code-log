@@ -120,8 +120,43 @@ Unpacking that:
    (watch the vacuous-guard trap). Use `f57deeb` as the reference for *what* to
    build (scheme + gate), not as the diff to merge.
 
+## Update: the consumer arrived, and did not need C2
+
+Recommendation 2 gated C2 on "the archive-search-server feature actually
+being built", on the grounds that the stable-anchor benefit had no runtime
+consumer. A different consumer appeared first — the live-update **patch
+protocol** in [`watch-mode.md`](watch-mode.md), which reconciles the DOM by
+card id instead of replacing the transcript container. That doc's C20
+argued C2 was its missing half. **Building the patch showed otherwise.**
+
+- **Addressing.** C20 expected C2 to replace an O(page) key-map rebuild with
+  one `getElementById`. It does not: the patch must fetch, parse and hash
+  the whole page regardless, because the comparison hash cannot be taken
+  from the live DOM (decoration has rewritten it — a prototype that tried
+  skipped 0 of 1,181 nodes). The O(page) pass is structural; only a
+  server-shipped delta removes it.
+- **Insertions.** C2's advantage is real and was measured — on an
+  out-of-order arrival, positional ids give 104 insertions + 103 deletions
+  where `m-{uuid}-{k}` gives 1 and 0. But replaying three real sessions
+  through the renderer, **45 of 47 growth steps were pure tail extensions**;
+  the id sequence broke in exactly the other 2. So C2 buys the difference
+  between a patch and a swap on **4% of ticks**, and the swap is correct,
+  already implemented, and cheap.
+
+Those two mid-tree arrivals also landed *near* the tail (index 306 of 311;
+308/310/312 of 312) — interleavings, not deep insertions. If 4% ever
+matters, widening the patch's extension test to tolerate a bounded
+reordering window near the tail is one function, against a migration
+through ~8 formatters, 4 modules and 9 coupled test files.
+
+**C2 stays deferred.** The gate is unchanged in form but should now read:
+take it when a consumer needs *stable anchors that outlive a render* —
+archive-search annotations and cross-session deep-links, as originally
+envisaged — not for patch addressing, which turned out not to need it.
+
 ## Status
 
 - C1: implemented on `improved-search` (commit above this one).
-- C2: prototype only, on `review/PR-273-monk` @ `f57deeb`; deferred pending a
-  consumer. This doc is the record.
+- C2: prototype only, on `review/PR-273-monk` @ `f57deeb`; still deferred.
+  Its first candidate consumer was built without it — see the update above.
+  This doc is the record.

@@ -10,7 +10,13 @@ from pathlib import Path
 
 import pytest
 
-from claude_code_log.cache import CacheManager, SessionCacheData
+from claude_code_log.cache import (
+    CacheManager,
+    SessionCacheData,
+    _migrated_db_paths,
+    discard_database_files,
+    is_corrupt_database_error,
+)
 from claude_code_log.models import (
     AssistantMessageModel,
     AssistantTranscriptEntry,
@@ -1154,3 +1160,223 @@ class TestMigrationIntegrity:
             ).fetchone()[0]
 
         assert initial_count == final_count
+
+
+class TestCorruptDatabaseRecovery:
+    """A cache file damaged past reading is discarded and rebuilt.
+
+    Written against two real shapes. The first is the reported one: a cache
+    truncated to 11.6 MB while its header still claimed 58.1 MB, on which no
+    statement at all succeeded. The second is what made it *visible* —
+    migration 012's `CREATE INDEX` is the first operation to full-scan
+    `messages`, so damage confined to that table's leaf pages had been sitting
+    unnoticed under earlier versions, which never read those pages.
+    """
+
+    @staticmethod
+    def _populate(cache_dir: Path, db_path: Path, user_entry, assistant_entry) -> None:
+        """Build a real, healthy cache with enough rows to damage."""
+        cache_manager = CacheManager(cache_dir, "1.0.0", db_path=db_path)
+        jsonl_file = cache_dir / "test.jsonl"
+        jsonl_file.write_text(
+            json.dumps(user_entry.model_dump())
+            + "\n"
+            + json.dumps(assistant_entry.model_dump())
+            + "\n",
+            encoding="utf-8",
+        )
+        cache_manager.save_cached_entries(jsonl_file, [user_entry, assistant_entry])
+
+    def test_truncated_database_is_discarded_and_rebuilt(
+        self,
+        isolated_cache_dir,
+        isolated_db_path,
+        sample_user_entry,
+        sample_assistant_entry,
+        capsys,
+    ):
+        """The reported failure: header claims more pages than the file holds."""
+        self._populate(
+            isolated_cache_dir,
+            isolated_db_path,
+            sample_user_entry,
+            sample_assistant_entry,
+        )
+        original_size = isolated_db_path.stat().st_size
+        with open(isolated_db_path, "r+b") as f:
+            f.truncate(original_size // 4)
+
+        # Constructing over the damaged file must succeed, not raise.
+        cache_manager = CacheManager(
+            isolated_cache_dir, "1.0.0", db_path=isolated_db_path
+        )
+
+        assert "corrupt" in capsys.readouterr().out.lower()
+        with cache_manager._get_connection() as conn:
+            assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        # Rebuilt empty rather than carrying damaged rows forward: the project
+        # row exists again, but the messages the old file held are gone, so the
+        # next conversion re-ingests them from the JSONL source.
+        assert cache_manager._project_id is not None
+        with cache_manager._get_connection() as conn:
+            assert conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0] == 0
+            assert conn.execute("SELECT COUNT(*) FROM cached_files").fetchone()[0] == 0
+
+    def test_corrupt_messages_pages_surface_and_heal_during_migration(
+        self,
+        isolated_cache_dir,
+        isolated_db_path,
+        sample_user_entry,
+        sample_assistant_entry,
+        capsys,
+    ):
+        """Damage only a full table scan reaches still heals.
+
+        Models the reported sequence exactly: a cache written by a version
+        that lacked migration 012, damaged in `messages`, then opened by one
+        that has it. The pending `CREATE INDEX` scans the damaged pages and
+        raises where nothing else would.
+        """
+        self._populate(
+            isolated_cache_dir,
+            isolated_db_path,
+            sample_user_entry,
+            sample_assistant_entry,
+        )
+        # Roll the schema back to pre-012 so the index build is pending again.
+        conn = sqlite3.connect(isolated_db_path)
+        conn.execute("PRAGMA journal_mode=DELETE")
+        conn.execute("DELETE FROM _schema_version WHERE version >= 12")
+        for name in (
+            "idx_messages_project_uuid",
+            "idx_messages_project_parent_uuid",
+            "idx_messages_project_request_id",
+            "idx_messages_project_metadata_type",
+            "idx_messages_project_session_ts",
+        ):
+            conn.execute(f"DROP INDEX IF EXISTS {name}")
+        conn.commit()
+        pages = [
+            r[0]
+            for r in conn.execute(
+                "SELECT pageno FROM dbstat WHERE name='messages' AND pagetype='leaf'"
+            )
+        ]
+        # `dbstat.pageno` counts pages of whatever size this database was
+        # built with, so read it rather than assuming SQLite's 4096 default.
+        page_size = conn.execute("PRAGMA page_size").fetchone()[0]
+        conn.close()
+        assert pages, "expected messages to occupy at least one leaf page"
+        # Overwrite the whole page, not a slice of it. A page holding two small
+        # rows is mostly free space, and cells are laid out from the *end*, so
+        # scribbling near the start damages nothing SQLite reads.
+        with open(isolated_db_path, "r+b") as f:
+            for pageno in pages:
+                f.seek((pageno - 1) * page_size)
+                f.write(b"\xff" * page_size)
+        # `_populate` left this path in the process-level "migrations already
+        # checked" memo, which would skip the pending migration. Real runs meet
+        # this across processes; drop the entry to stand in for a fresh one.
+        _migrated_db_paths.discard(str(isolated_db_path))
+
+        cache_manager = CacheManager(
+            isolated_cache_dir, "1.0.0", db_path=isolated_db_path
+        )
+
+        assert "corrupt" in capsys.readouterr().out.lower()
+        with cache_manager._get_connection() as conn2:
+            assert conn2.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+            applied = [
+                r[0] for r in conn2.execute("SELECT version FROM _schema_version")
+            ]
+        # The migration that failed is applied on the rebuilt database, so the
+        # failure cannot repeat on every subsequent run.
+        assert 12 in applied
+
+    def test_garbage_file_is_replaced(
+        self, isolated_cache_dir, isolated_db_path, capsys
+    ):
+        """A non-database file at the cache path is replaced, not fatal."""
+        isolated_db_path.write_bytes(b"this is not a database" * 500)
+
+        cache_manager = CacheManager(
+            isolated_cache_dir, "1.0.0", db_path=isolated_db_path
+        )
+
+        assert "corrupt" in capsys.readouterr().out.lower()
+        assert cache_manager._project_id is not None
+
+    def test_wal_sidecars_are_removed_with_the_database(self, isolated_db_path):
+        """A stale -wal beside a fresh database is its own route to malformed."""
+        isolated_db_path.write_bytes(b"x")
+        wal = isolated_db_path.with_name(isolated_db_path.name + "-wal")
+        shm = isolated_db_path.with_name(isolated_db_path.name + "-shm")
+        wal.write_bytes(b"x")
+        shm.write_bytes(b"x")
+
+        assert discard_database_files(isolated_db_path) is True
+
+        assert not isolated_db_path.exists()
+        assert not wal.exists()
+        assert not shm.exists()
+
+    def test_empty_file_is_not_treated_as_corruption(
+        self, isolated_cache_dir, isolated_db_path, capsys
+    ):
+        """SQLite adopts a zero-byte file as a new database; don't panic."""
+        isolated_db_path.write_bytes(b"")
+
+        cache_manager = CacheManager(
+            isolated_cache_dir, "1.0.0", db_path=isolated_db_path
+        )
+
+        assert "corrupt" not in capsys.readouterr().out.lower()
+        assert cache_manager._project_id is not None
+
+    def test_read_only_manager_never_deletes_the_database(
+        self,
+        isolated_cache_dir,
+        isolated_db_path,
+        sample_user_entry,
+        sample_assistant_entry,
+    ):
+        """Render workers open read-only and must not delete a shared file.
+
+        Several run concurrently against one database; a worker that reacted
+        to corruption by unlinking it would pull the file out from under its
+        siblings. Degrading to "no cached data" is the contract.
+        """
+        self._populate(
+            isolated_cache_dir,
+            isolated_db_path,
+            sample_user_entry,
+            sample_assistant_entry,
+        )
+        with open(isolated_db_path, "r+b") as f:
+            f.truncate(isolated_db_path.stat().st_size // 4)
+        size_before = isolated_db_path.stat().st_size
+
+        cache_manager = CacheManager(
+            isolated_cache_dir, "1.0.0", db_path=isolated_db_path, read_only=True
+        )
+
+        assert cache_manager._project_id is None
+        assert isolated_db_path.exists()
+        assert isolated_db_path.stat().st_size == size_before
+
+    @pytest.mark.parametrize(
+        "exc,expected",
+        [
+            (sqlite3.DatabaseError("database disk image is malformed"), True),
+            (sqlite3.DatabaseError("file is not a database"), True),
+            (sqlite3.DatabaseError("malformed database schema (message_fts)"), True),
+            # Transient and environmental failures must never delete a cache
+            # that is merely busy, or on a disk that is merely full.
+            (sqlite3.OperationalError("database is locked"), False),
+            (sqlite3.OperationalError("database or disk is full"), False),
+            (sqlite3.OperationalError("no such table: messages"), False),
+            (OSError("permission denied"), False),
+        ],
+    )
+    def test_only_corruption_triggers_a_rebuild(self, exc, expected):
+        assert is_corrupt_database_error(exc) is expected

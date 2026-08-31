@@ -1832,3 +1832,90 @@ img.artifact-favicon {
     width: 1em;
     vertical-align: -0.125em;
 }
+
+/* Live update (serve --watch): a message that arrived since the last
+   poll. The fade is the whole "streaming" illusion — transcripts record
+   one complete message at a time, never partial tokens, so a card can
+   only ever appear whole. Announcing that arrival is the most honest
+   thing the page can do. */
+@keyframes live-new-in {
+    from {
+        opacity: 0;
+        transform: translateY(6px);
+    }
+    to {
+        opacity: 1;
+        transform: none;
+    }
+}
+
+.message.live-new {
+    animation: live-new-in 320ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .message.live-new {
+        animation: none;
+    }
+}
+
+/* Follow toggle (`serve --watch`): a member of the floating stack, at the
+   top of it. It is rendered on every transcript page but stays hidden
+   until the poller actually starts — a `file://` page cannot poll at all
+   (see live_update.js), and a visible control there would promise
+   something it can never do.
+
+   It was previously built in JS as a wide `.live-update-pill`, which set
+   `left: 20px` on top of `.floating-btn`'s `right: 20px`: with `width:
+   auto`, a fixed box with both insets stretches, and the "pill" was
+   measured at 1360px across a 1400px viewport. */
+.follow-updates.floating-btn {
+    bottom: 440px;
+    display: none;
+}
+
+.follow-updates.floating-btn.live-active {
+    display: flex;
+}
+
+/* Opaque, as `.debug-toggle.active` is. The old pill signalled
+   "following" with `--highlight-light`, which computes to
+   rgba(227,242,253,0.333) against an idle `--session-bg-dimmed` of
+   rgba(232,244,253,0.4) — i.e. the engaged state rendered *fainter*
+   than the disengaged one. */
+.follow-updates.floating-btn.following {
+    background-color: #d4e8f7;
+    color: #333;
+}
+
+/* Unseen-message count, as a corner badge so the button keeps the round
+   50px footprint the rest of the stack has. */
+.follow-updates[data-unseen]:not([data-unseen="0"])::after {
+    content: attr(data-unseen);
+    position: absolute;
+    top: 0;
+    right: 0;
+    box-sizing: border-box;
+    min-width: 17px;
+    height: 17px;
+    padding: 0 4px;
+    border-radius: 9px;
+    background-color: #d64545;
+    color: #fff;
+    font-family: 'SFMono-Regular', Consolas, monospace;
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 17px;
+}
+
+/* Room under the last card while following, so a newly-arrived message
+   lands clear of the viewport edge instead of flush against it.
+   Measured: with neither, the gap is 0px — the last card's bottom is
+   exactly the viewport bottom. The padding is what supplies the
+   scrollable space; `scrollToEnd` then scrolls the document to its end
+   rather than aligning the card, and the gap becomes this much. Kept
+   small deliberately — enough to read as breathing room, not enough to
+   leave the newest message stranded above a band of empty page. */
+body.live-following {
+    padding-bottom: 20px;
+}

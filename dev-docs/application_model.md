@@ -37,6 +37,7 @@ for user-facing operations docs see [`docs/`](../docs/).
 | Performance profiling | [`renderer_timings.py`](../claude_code_log/renderer_timings.py) | inlined below (§ 2.8) |
 | Intra-project render fan-out | [`render_pool.py`](../claude_code_log/render_pool.py) (mechanism) + [`render_dispatch.py`](../claude_code_log/render_dispatch.py) (policy) | inlined below (§ 2.10) |
 | Diagnosing hangs (SIGUSR1) | [`cli.py`](../claude_code_log/cli.py) `_install_stack_dump_signal` | inlined below (§ 2.11) |
+| Watch mode / live page updates | [`watch.py`](../claude_code_log/watch.py), `html/templates/components/live_update.js` | inlined below (§ 2.15); design in [`work/watch-mode.md`](../work/watch-mode.md); user-facing in [`docs/live-updates.md`](../docs/live-updates.md) |
 | Adding a new tool renderer | [`factories/tool_factory.py`](../claude_code_log/factories/tool_factory.py), `html/tool_formatters.py` | [implementing-a-tool-renderer.md](implementing-a-tool-renderer.md) (how-to) |
 | Which tools have a specialized renderer or provider adapter | `TOOL_INPUT_MODELS` / `TOOL_OUTPUT_PARSERS` in [`factories/tool_factory.py`](../claude_code_log/factories/tool_factory.py), plus provider adapters | [tools-coverage.md](tools-coverage.md) (Claude and Codex status vs. upstream references) |
 | Plugin system (third-party message transformers) | [`plugins.py`](../claude_code_log/plugins.py), [`factories/priorities.py`](../claude_code_log/factories/priorities.py), `Renderer._dispatch_format` | [plugins.md](plugins.md) |
@@ -139,7 +140,13 @@ at `~/.claude/projects/claude-code-log-cache.db` (or
   per-role token totals, `team_name` (added in migration 005).
 - Per-message: a denormalised view used by archived-session
   restoration (the cache holds enough to re-render even after the
-  source JSONL is deleted).
+  source JSONL is deleted). Each row's `content` is the entry as
+  zlib-compressed JSON, written at `CONTENT_COMPRESSION_LEVEL` (3, not
+  zlib's default 6: levels only diverge on large payloads, so across a
+  real 18,288-row archive it costs 2.6% more bytes and makes a cold
+  conversion 11% faster — compressing rows is the largest item in a
+  watch tick). Reading is level-agnostic, so rows written at any level
+  still load.
 - Per-rendered-HTML: the HTML output itself, indexed by source file
   mtime + depth + compact flag (migrations 002–004) — so
   re-runs with unchanged inputs serve the cached HTML directly.
@@ -155,6 +162,32 @@ Invalidation is mtime-based: when a JSONL's mtime is newer than its
 cache row, the session is reparsed. The schema-version row also
 invalidates the entire HTML cache when migrations bump the version,
 since rendered output may have changed even when source data hasn't.
+
+**Corruption is recovered by discarding, not repairing.** A damaged
+cache file is unusable and, left alone, permanently so: `apply_migration`
+records only a migration that completed, so a `CREATE INDEX` that hits a
+damaged page re-fails on every subsequent run. The writing
+`CacheManager.__init__` therefore catches SQLite's corruption errors
+(`is_corrupt_database_error` — narrowly matched on message text, since
+Python funnels "malformed", "not a database", "locked" and "disk full"
+into the same exception classes), deletes the `.db` with its `-wal`/`-shm`
+sidecars, and rebuilds. Everything in the cache is regenerable from the
+JSONL source, so the cost is one slow run.
+
+Two boundaries matter. A `read_only` manager — every spawned render
+worker (§ 2.10) — never deletes: several run concurrently against one
+file, and `_lookup_project_id` already degrades to "no cached data".
+And a zero-byte file is *not* corruption; SQLite adopts one as a new
+database, so an interrupted create heals without intervention.
+
+Note the cause is usually outside this tool. The case this was built
+for was a cache truncated to 2833 pages while its own header still
+claimed 14189 — traced to the virtiofs mount it lived on, not to
+anything the writer did. It had also been corrupt for some time
+*before* it was noticed: migration 012's index build is the first
+operation that full-scans `messages`, so earlier versions read around
+the damage and reported success. Assume corruption can recur on such
+filesystems, and that recovery, not prevention, is the tool's job.
 
 Paginated output carries an extra invalidation axis. `--page-size`
 assigns sessions to pages chronologically, and that assignment is
@@ -221,6 +254,25 @@ Current migrations:
   needs to recompute `projects.total_message_count` by delta (§ 2.14).
   Deliberately NULLable — a NULL means "unknown basis", and the
   refresh declines rather than compute a delta from it.
+- `011_cached_file_size.sql` — adds `source_size` to cached files, so
+  freshness no longer misses an append that lands inside the mtime
+  tolerance (§ 2.15). NULL on pre-011 rows falls back to mtime alone.
+- `012_message_lookup_indexes.sql` — composite indexes for the
+  refresh's per-tick lookups, each of which was walking every row in
+  the project (17–22 ms a call on a 38,706-row archive, 0.2–2.5 ms
+  after). Pure performance: no columns, nothing to backfill. Two
+  things about it are worth knowing:
+  - `(project_id, session_id, timestamp, file_id)` carries `timestamp`
+    for a caller *outside* the refresh: `load_session_entries` (the TUI,
+    and rendering an archived session) filters on session but orders by
+    timestamp, and without that column the planner takes the timestamp
+    index and walks the whole project to load one session. With it, the
+    seek and the ordering come from one index and no sort is needed.
+  - That same index is double-edged — it also lets the planner satisfy
+    a bare `session_id IS NOT NULL` as a range scan over every
+    session-bearing row and *prefer* that to seeking the uuids a query
+    asked for, so three queries had to move that predicate out of SQL
+    and into Python to keep it from making them slower.
 
 Recreating-tables migrations toggle `PRAGMA foreign_keys = OFF/ON`
 around the rebuild to avoid losing rows to cascade-deletes during the
@@ -984,6 +1036,272 @@ render 901MB / 8.1s; incremental refresh + streamed render **582MB /
 peak — which is what this section removes, completing "no archive too
 big for the machine". `CLAUDE_CODE_LOG_INCREMENTAL_CACHE=0` is the
 kill switch.
+
+
+### 2.15 Watch mode and live page updates
+
+Two commands keep output current while a session is still being written:
+`claude-code-log watch` (a resident loop) and `claude-code-log serve
+--watch` (the same loop on a thread beside the HTTP server). See
+[`work/watch-mode.md`](../work/watch-mode.md) for the design and the
+measurements behind it.
+
+**The engine never renders.** `claude_code_log/watch.py` polls
+`(size, mtime_ns)` over `**/*.jsonl` and `**/agent-*.meta.json` under
+the watched roots, debounces, and calls a callback; the callback runs the
+ordinary conversion. The scan is a *trigger*, not a source of truth — a
+false positive costs one no-op conversion, while the conversion already
+knows precisely what is stale. Two file classes are excluded because both
+land in the watched tree and would make the loop feed itself: dot-prefixed
+atomic-write temp files, and generated output.
+
+Debounce is a quiet period (`--quiet-period`, 300ms) with a max-latency
+cap (`--max-latency`, 2s): a turn writes several entries in quick
+succession, so without the quiet period most of a turn is spent rendering
+states nobody sees; without the cap a long unbroken stream would never
+surface. `tick()` (poll once) is split from `run()` (wait) and the clock
+is injectable, so tests drive ticks by hand against a fake clock.
+
+**What makes a tick cheap** is §2.12's session-scoped path, which is
+reachable here only because `ensure_fresh_cache_detailed` reports *how*
+it refreshed (`CacheRefresh.NONE`/`INCREMENTAL`/`FULL`). Phase 1b's
+staleness test is per-session message counts, so it refuses a FULL
+refresh — which carries no guarantee that a session's content didn't
+change while its count stayed the same. An INCREMENTAL refresh does carry
+it: §2.14's ladder only succeeds after proving each modified file's
+cached rows are an exact prefix of its current rows, i.e. a pure append.
+`--combined` therefore defaults to `no` for `watch`: with a combined
+output present, the session's growth makes it stale and the conversion
+falls to the streaming path instead.
+
+**What the tick then spends its time on** was, once §2.12 was reachable,
+no longer the render (12% of it) but the cache refresh. Profiled on the
+803MB / 217-file reference archive appending to its largest session file
+(39.7MB, 207 entries), a 1.03s tick materialised *the same entries three
+times*: §2.14's refresh parsed the file from source (488ms, of which
+307ms re-serialising and re-inserting every row), then the closure load
+rebuilt them from those rows (129ms), then the session-scoped render
+rebuilt them again (141ms). Two changes removed most of that:
+
+- **A per-conversion parsed-entry store** (`entry_store.py`, §2.16)
+  serves the refresh's list to the other two consumers: closure load
+  255ms → 7ms.
+- **The staleness sweep stopped scaling with the session count.**
+  `get_stale_sessions` ran two SQLite queries *per session* through
+  `is_transcript_stale`, and each of those called `get_library_version()`,
+  which re-parsed installed package metadata every time — 173 calls and
+  35ms a tick. The version lookup is now `lru_cache`d (it cannot change
+  inside a process) and the two tables are read once and joined in
+  Python: 85ms → 4.5ms.
+
+Tick: **1.03s → 0.717s**. `load_transcript`'s full re-parse and full row
+rewrite of the modified file (483ms) was then the remaining bulk, and
+§2.16's cross-tick resumption takes it to ~35ms: 0.257s steady state in a
+resident `watch`. What remained after that was the refresh's own cache
+queries, every one of which was scanning the whole project — fixed by
+migration 012's indexes plus one query rewrite (`get_file_states` joined
+`cached_files` and filtered on `file_name`, which no index could serve;
+resolving names to `file_id` first made it 15.9ms → 0.0ms).
+
+**A steady-state watch tick on the 803MB reference archive is 0.145s**,
+from 1.03s — with rendering, which was where this began, now a rounding
+error against it.
+
+**The served page updates itself** via
+`html/templates/components/live_update.js`, active only over `http(s)` —
+a `file://` page cannot fetch anything, not even its own URL, so the
+poller notices and does nothing. It polls a HEAD of its own URL and
+compares `Last-Modified`, `Content-Length` **and `X-Content-Revision`**.
+Each covers the one before it: HTTP dates have one-second granularity, so
+two updates inside the same second are otherwise invisible (the same trap
+as the cache's mtime tolerance, which §2.3 solves the same way), and size
+is blind to a rewrite that keeps it — a counter or a status word changing
+width-for-width. `X-Content-Revision` is a digest of the served bytes,
+added by `server.py` to every file response; it is deliberately not an
+`ETag`, because the stock `send_head` skips its `If-Modified-Since` check
+whenever a request carries an `If-None-Match` and never evaluates one, so
+advertising an ETag would cost the 304s on multi-MB pages. Hashing is
+cached per `(path, mtime_ns, size)` but only once the file's mtime is a
+second old — a file being written right now is re-read, which is exactly
+the case the header exists for. On a change the page re-fetches and
+either **patches** or **swaps**.
+
+**Patching** applies when the new render's node-key sequence *extends*
+the one on screen: the nodes whose own markup changed are replaced, new
+ones are inserted, and everything else is left alone — keeping its
+scroll, fold, `<details>` and localised timestamps because it is
+literally the same DOM. Change detection is a per-node hash of the
+node's own markup, taken from the **freshly parsed document, never from
+the live DOM**: decoration rewrites the live tree (timestamp
+localisation replaces `innerHTML`), so a hash taken from it never
+matches one taken from server bytes. Nothing is emitted server-side for
+this.
+
+A node's own markup is its `:scope > .message` *plus* every
+non-`.message-node` child of its `.children` — a fork point renders
+inside `.children` so folding hides it with the subtree, and on a
+fork-only slot it is the node's only content and carries its id.
+
+**Swapping** (replace `#transcript` wholesale) is the fallback for
+everything else: renumbered or reordered ids, deletions, a node with no
+key, more than 40 changed nodes, and the first update of a session,
+which is where the hashes are first taken. It is also what every update
+did before patching existed. Measured across three real sessions
+replayed through the renderer, 45 of 47 growth steps are pure
+extensions; the other 2 are out-of-order arrivals that renumber the
+positional `msg-d-N` ids and take the swap.
+
+A swap destroys anything that decorated the old markup, so components
+register with `window.claudeLogOnRehydrate(fn)` (defined at the top of
+`<body>`, before every component include) and the poller calls
+`window.claudeLogRehydrate(root)` — over the whole container after a
+swap, and over *only the elements it placed* after a patch. Passing the
+containing node instead is a live trap: the session header's fold bar
+counts its descendants, so it is replaced on every append, and its node
+is the entire page. Currently registered: timestamp localisation (scoped
+to a subtree) and the timeline rebuild. Delegated listeners and
+everything bound to the toolbar or floating buttons survive untouched
+and must **not** register. On the swap path only, fold state and
+`<details>` are captured and restored by the poller, keyed `data-uuid` →
+`data-session-id` → positional `id` — session headers and fork points
+carry no uuid, and on a single-session page the header is the only
+foldable node.
+
+Measured: ~1s from append to visible. On a 2.4MB / 896-card page, a swap
+touches 897 cards, re-localises 896 timestamps and blocks the main
+thread 107ms; a patch of the same append touches **3 cards, 2
+timestamps, 61ms**. The remaining 61ms is fetch plus `DOMParser` of the
+whole page, which only a server-shipped delta would remove. Idle polls
+cost ~1ms.
+
+**Timestamp localisation drains against the idle deadline**, not in
+fixed batches. `timezone_converter.js` used 25 elements per
+`requestIdleCallback`, which made the *callback count* the cost: a 4MB
+page's 1,180 timestamps are 8ms of work but took 766ms of wall clock,
+and a 27MB page's 5,010 took 3.3s — in document order, so a live
+update's new cards were localised last and the fade-in played over a raw
+ISO string. Draining while `timeRemaining()` allows (checked per 32
+elements, `{timeout: 200}`, first slice on the current task under a 24ms
+budget) takes those to **13ms and 35ms**.
+
+
+### 2.16 Parsed-entry store
+
+`entry_store.py`. A conversion that refreshes the cache incrementally
+(§2.14) parses each modified file from source, and then loads those same
+entries back out of the rows it has just written — once for the closure
+load and once for the session-scoped render (§2.12). Each rebuild is a
+`zlib.decompress` + `json.loads` + Pydantic validation pass over the
+whole file, so a one-line append to a 39.7MB session paid it twice at
+~130ms each. The store holds the list the first pass produced and serves
+it to the other two.
+
+Four properties keep the invalidation surface at zero, and they are the
+reason it is a parameter rather than a memo:
+
+- **One store per conversion, threaded explicitly.** Never a global, and
+  never hung off `CacheManager` — the TUI keeps one of those across many
+  conversions.
+- **Only `_incremental_cache_refresh` fills it**, with the files it just
+  parsed, and `convert_jsonl_to` drops it after Phase 1b. A cold or full
+  conversion therefore stores nothing, and the streaming path (§2.13) is
+  deliberately never handed one: its bounded residency depends on
+  dropping each page's entries before the next page loads, which a store
+  spanning pages would defeat. What it holds is bounded by *what
+  changed*, not by the archive.
+- **Hits are verified against the file.** `get` re-stats and compares
+  `(size, mtime_ns)` against the stamp captured *before* the parse. A
+  stamp taken before the parse can only be older than the entries
+  describe, so a file that grew mid-parse declines to the cache rather
+  than serving a list its stamp misdescribes.
+- **Handouts are deep copies**, because the pipeline mutates entries in
+  place: `_integrate_agent_entries` appends `#agent-{id}` to `sessionId`
+  and is *not* idempotent, and dedup re-parents around dropped copies.
+  Today each consumer gets freshly deserialised objects; serving the same
+  objects twice would render `…#agent-X#agent-X`. The copy stays cheap
+  because the bulk of an entry is immutable strings, which `deepcopy`
+  shares rather than copies — 2.0ms and 0.83MB for the 207-entry, 39.7MB
+  session, against 123ms to rebuild it from the cache.
+
+Held to byte-identity with the store disabled, over repeated appends on a
+fixture whose 170 sidechain entries exercise the mutation above
+(`test/test_entry_store.py`), with the copy isolation pinned by a test
+that fails with exactly the doubled suffix when the copy is removed.
+`CLAUDE_CODE_LOG_ENTRY_STORE=0` is the kill switch; a per-file memory
+valve at `put` time declines to hold a file when available memory is
+under 6x its bytes, and `=1` overrides that valve.
+
+**Owned across ticks, a store does more.** `watch` keeps one for the life
+of the loop and passes it to every conversion (`convert_jsonl_to` takes
+an optional store; a caller-owned one outlives the call, an internally
+made one doesn't). That turns the store from a within-tick cache into a
+*resumption* point, via a second, prefix-pinned mode:
+
+- **The parse resumes.** `put_prefix` records the byte offset the parse
+  consumed plus a BLAKE2b digest of the bytes below it, and the next tick
+  hashes that prefix and reads only the tail. The digest is a *stronger*
+  check than the row-fingerprint prefix comparison it saves — identical
+  bytes imply identical rows — and it costs 32 ms over 39.7 MB against
+  143 ms to re-parse them. A mismatch (rewound session, replayed history)
+  drops the prefix and re-reads from the top. Byte reading replaces text
+  reading only when a store is present; every other caller keeps the
+  identical text path, and the held entries are the *pre*-post-processing
+  parse products, since the whole-file passes (sidecar linking,
+  prompt-hash linking, agent splicing — 0.1 ms together) must re-run over
+  the concatenated list. The cut is on **entries as well as bytes**: a
+  final line whose newline hasn't landed — a torn append, or a file
+  simply stored without a trailing one — parses and is returned like any
+  other, but neither its bytes nor its entry is held, so the next tick
+  re-reads that line instead of handing its entry back a second time.
+  Prefixes are charged against the same budget as whole-file entries and
+  evicted alongside them, since a `watch` store never goes out of scope.
+- **The cache write appends.** `CacheManager.extend_cached_entries`
+  inserts only the new rows instead of `save_cached_entries`' delete-and-
+  rewrite, which re-runs `json.dumps` + `zlib.compress` over every entry
+  (310 ms of a tick, for one added line).
+
+The write needs a proof the read doesn't, and it is the subtle part:
+
+> **A file being append-only does not make its rows append-only.** A
+> trunk's cached rows carry its subagents' transcripts, spliced in at
+> their anchors, so a subagent still running — the normal case under
+> `watch` — grows a block in the *middle* of the row sequence while the
+> trunk file only gained lines at the end.
+
+So `_appended_rows` offers rows only when the list is provably just the
+file's own parsed lines: resumed from a verified prefix, no agent
+references, no sidecars, nothing spliced, and no length change from the
+whole-file passes. That covers 136 of the reference archive's 185 trunk
+files; the 26% that reference subagents take the unchanged full rewrite.
+Beneath it, `extend_cached_entries` independently refuses when the table
+no longer holds the row count the caller thinks it wrote — the guard
+against another process having rewritten them. With the gates removed the
+caller offers a *wrong 96-entry slice* and that check catches it, so the
+tests assert on the offer rather than only on the write. That count and
+the insert run inside one `BEGIN IMMEDIATE`, because Python's sqlite3
+opens a transaction on the first write and not on a `SELECT`: without
+the explicit lock a second writer sharing the cache could append in
+between, and the check would let both appends land.
+
+Both cache writers are stamped with the source file's `(mtime, size)` as
+captured **before** the parse — the same discipline as the sidecar
+fingerprint beside it, and as the entry store's own stamp. A session
+appended to mid-read would otherwise be recorded at the size it reached
+while the rows are only what was parsed, marking an incomplete cache
+current; stamped with what was parsed, the growth invalidates instead.
+
+Steady-state tick on the 803MB reference archive: **0.717s → 0.257s**
+(cumulatively 1.03s → 0.26s). Equivalence is held at three levels — parse
+output against the text path (162 fixture files whole-file, 90 resumed),
+**cache DB state** against a full-rewrite run over 6 ticks with 3 files
+growing, and rendered HTML throughout. DB state is the bar for the same
+reason as §2.14: the first bug of this kind is invisible in the rendered
+bytes.
+
+Resumption only helps a resident loop — a one-shot run, the TUI, and
+every tick-one still parse whole. Persisting `(prefix_len, prefix_hash)`
+in `cached_files` would extend it across processes; that migration was
+considered and not needed for the case that motivated it.
 
 ---
 

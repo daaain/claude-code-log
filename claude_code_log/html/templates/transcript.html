@@ -24,6 +24,34 @@
 </head>
 
 <body>
+    <script>
+        // ---- rehydrate contract -------------------------------------------
+        // A live update (see live_update.js) replaces #transcript wholesale.
+        // Anything that decorated the old markup after load has to run again
+        // over the new markup: timestamp localisation rewrites innerHTML,
+        // the timeline parses message types out of CSS classes, the filter
+        // toolbar hides message types, in-page search highlights matches.
+        //
+        // Delegated listeners (bound on `document`) and everything bound to
+        // the toolbar or the floating buttons survive a swap untouched and
+        // must NOT be registered here.
+        //
+        // Defined before any component script so registration never depends
+        // on include order.
+        (function () {
+            const hooks = [];
+            window.claudeLogOnRehydrate = function (fn) { hooks.push(fn); };
+            window.claudeLogRehydrate = function (root) {
+                hooks.forEach(function (fn) {
+                    // One broken hook must not strand the rest — a page that
+                    // updated but lost its timeline is better than one that
+                    // silently stopped updating.
+                    try { fn(root); } catch (err) { console.error('rehydrate hook failed', err); }
+                });
+            };
+        })();
+    </script>
+
     <h1 id="title">{{ title }}</h1>
 
     {% if page_info %}
@@ -249,13 +277,33 @@
     {% endif %}
     {% endmacro %}
 
-    {% for root in roots %}{{ render_message(root) }}{% endfor %}
+    {#
+      The message tree lives in one addressable container so a client can
+      replace it wholesale — that is what `serve --watch` needs to update
+      a page in place without a navigation, and it keeps scroll position
+      because everything above the viewport is untouched.
+
+      Deliberately unstyled: `body` is already the 1200px centred column,
+      so a plain block wrapper is layout-neutral (verified by comparing
+      full-page screenshots and the first message's box before and after
+      adding it).
+    #}
+    <div id="transcript">{% for root in roots %}{{ render_message(root) }}{% endfor %}</div>
 
     {% if resume_command %}
     <button class="resume-session floating-btn" id="resumeSession" data-command="{{ resume_command }}"
         title="Resume session: copy the command that resumes this session in Claude Code"
         aria-label="Resume session">▶️</button>
     {% endif %}
+    {#
+      Follow toggle for `serve --watch`. Rendered unconditionally but
+      hidden by CSS until live_update.js finds it can actually poll, so
+      the markup stays identical between a served page and the same file
+      opened from disk.
+    #}
+    <button class="follow-updates floating-btn" id="followUpdates" data-unseen="0"
+        title="Follow new messages as they arrive" aria-label="Follow new messages"
+        aria-pressed="false">⏬</button>
     <button class="timeline-toggle floating-btn" id="toggleTimeline" title="Show timeline">📆</button>
     <button class="filter-messages floating-btn" id="filterMessages" title="Search & Filter (/)">🔍</button>
     <button class="toggle-details floating-btn" id="toggleDetails" title="Toggle all details">📋</button>
@@ -277,6 +325,9 @@
 
             // Timezone conversion (included as component)
             {% include 'components/timezone_converter.js' %}
+
+            // Live update (no-op unless served over http -- see the file)
+            {% include 'components/live_update.js' %}
 
             // Debug UUID toggle
             debugButton.addEventListener('click', function () {
@@ -862,24 +913,30 @@
             // Apply all filters on page load
             applyFilter();
 
-            // Fold/unfold functionality with horizontal fold bars
-            const foldBarSections = document.querySelectorAll('.fold-bar-section');
+            // Fold/unfold functionality with horizontal fold bars.
+            //
+            // Delegated on `document` rather than bound per section, because
+            // a live update (`serve --watch`) replaces fold bars: a card's
+            // bar carries its descendant count, so every append re-renders
+            // the ancestors' bars, and the container swap replaces all of
+            // them. Bound directly, those listeners died with the elements
+            // and the fold controls silently stopped responding — measured:
+            // one update was enough to leave every bar on the page inert.
+            document.addEventListener('click', function (event) {
+                const section = event.target.closest('.fold-bar-section');
+                if (!section) return;
+                event.stopPropagation();
+                const action = section.getAttribute('data-action');
+                const targetId = section.getAttribute('data-target');
+                const isFolded = section.classList.contains('folded');
 
-            foldBarSections.forEach(section => {
-                section.addEventListener('click', function(e) {
-                    e.stopPropagation();
-                    const action = this.getAttribute('data-action');
-                    const targetId = this.getAttribute('data-target');
-                    const isFolded = this.classList.contains('folded');
-
-                    if (action === 'fold-one') {
-                        // Fold/unfold immediate children only
-                        handleFoldOne(targetId, isFolded, this);
-                    } else if (action === 'fold-all') {
-                        // Fold/unfold all descendants recursively
-                        handleFoldAll(targetId, isFolded, this);
-                    }
-                });
+                if (action === 'fold-one') {
+                    // Fold/unfold immediate children only
+                    handleFoldOne(targetId, isFolded, section);
+                } else if (action === 'fold-all') {
+                    // Fold/unfold all descendants recursively
+                    handleFoldAll(targetId, isFolded, section);
+                }
             });
 
             // Update tooltip based on fold state
@@ -1004,6 +1061,42 @@
 
             // Apply initial fold state
             setInitialFoldState();
+
+            // Re-sync a fold bar to what its children container is actually
+            // doing. A live update re-renders a card whenever its descendant
+            // count changes — which is every ancestor of every append — and
+            // the replacement arrives with the server's default icons, not
+            // the state the user left it in. The children container is never
+            // replaced, so its own `display` is the truth; without this the
+            // bar claims "unfolded" over a hidden subtree, and the next
+            // click folds what is already folded and appears to do nothing.
+            function syncFoldBar(card) {
+                const foldBar = card.querySelector(':scope > .fold-bar');
+                if (!foldBar) return;
+                const cc = getChildrenContainer(card);
+                const oneSection = foldBar.querySelector('.fold-one-level');
+                const allSection = foldBar.querySelector('.fold-all-levels');
+                if (!cc || cc.style.display === 'none') {
+                    setSectionState(oneSection, true, '⏵');
+                    setSectionState(allSection, true, '⏵⏵');
+                    return;
+                }
+                // Immediate children are visible; `fold-all` reads as open
+                // only when their own subtrees are open too.
+                const kids = getImmediateChildMessages(card);
+                const allOpen = kids.every(child => {
+                    const childCc = getChildrenContainer(child);
+                    return !childCc || childCc.style.display !== 'none';
+                });
+                setSectionState(oneSection, false, '⏷');
+                setSectionState(allSection, !allOpen, allOpen ? '⏷⏷' : '⏵⏵');
+            }
+            if (window.claudeLogOnRehydrate) {
+                window.claudeLogOnRehydrate(function (root) {
+                    if (root.matches && root.matches('.message')) syncFoldBar(root);
+                    root.querySelectorAll('.message').forEach(syncFoldBar);
+                });
+            }
 
             // Unfold any folded ancestors so an anchor target (e.g. a tool_use
             // jumped to from the session index) is actually visible. In the

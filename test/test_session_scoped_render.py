@@ -616,3 +616,100 @@ class TestBranchWinnerMechanics:
         _convert(branch_replay_project)
 
         assert _session_files(branch_replay_project) == baseline
+
+
+class TestSessionScopedAfterAppend:
+    """The watch-mode shape: the cache *was* updated, by a pure append.
+
+    Phase 1b used to refuse outright whenever `ensure_fresh_cache`
+    reported an update, which made it unreachable for the one case it
+    helps most — a live session gaining messages, where every run has new
+    bytes by definition. It now refuses only for a FULL refresh; an
+    INCREMENTAL one has already proven the change was a pure append
+    (`_incremental_cache_refresh` requires each modified file's cached
+    rows to be an exact prefix of its current rows), which is exactly the
+    premise the per-session message-count staleness check needs.
+    """
+
+    @staticmethod
+    def _append_entry(jsonl: Path, uuid: str, text: str) -> None:
+        entry = {
+            "type": "user",
+            "timestamp": "2025-07-03T18:00:00Z",
+            "parentUuid": None,
+            "isSidechain": False,
+            "userType": "human",
+            "cwd": "/tmp",
+            "sessionId": jsonl.stem,
+            "version": "1.0.0",
+            "uuid": uuid,
+            "message": {"role": "user", "content": [{"type": "text", "text": text}]},
+        }
+        with jsonl.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+
+    def _grown_project(self, tmp_path: Path) -> tuple[Path, Path]:
+        work_dir = _copy_project(tmp_path, MULTI_SESSION_PROJECT)
+        convert_jsonl_to("html", work_dir, silent=True, write_combined=False)
+        jsonl = sorted(work_dir.glob("*.jsonl"))[0]
+        return work_dir, jsonl
+
+    def test_append_reaches_the_partial_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The regression this whole change exists to prevent."""
+        work_dir, jsonl = self._grown_project(tmp_path)
+        self._append_entry(jsonl, "watch-append-1", "a new message arrives")
+
+        _forbid_full_load(monkeypatch)
+        convert_jsonl_to("html", work_dir, silent=True, write_combined=False)
+
+    def test_append_output_is_byte_identical_to_the_full_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Two copies advance through the same append; bytes must match."""
+        scoped_dir, scoped_jsonl = self._grown_project(tmp_path / "scoped")
+        full_dir, full_jsonl = self._grown_project(tmp_path / "full")
+
+        for jsonl in (scoped_jsonl, full_jsonl):
+            self._append_entry(jsonl, "watch-append-1", "a new message arrives")
+
+        convert_jsonl_to("html", scoped_dir, silent=True, write_combined=False)
+        monkeypatch.setenv("CLAUDE_CODE_LOG_SESSION_SCOPED", "0")
+        convert_jsonl_to("html", full_dir, silent=True, write_combined=False)
+
+        assert _session_files(scoped_dir) == _session_files(full_dir)
+
+    def test_the_appended_message_actually_lands_in_the_output(
+        self, tmp_path: Path
+    ) -> None:
+        """Guards against the failure mode where nothing is regenerated.
+
+        A cheaper path that renders *nothing* would pass an equivalence
+        test against another path that also renders nothing.
+        """
+        work_dir, jsonl = self._grown_project(tmp_path)
+        before = _session_files(work_dir)
+
+        self._append_entry(jsonl, "watch-append-1", "UNIQUE-MARKER-9f3a")
+        convert_jsonl_to("html", work_dir, silent=True, write_combined=False)
+        after = _session_files(work_dir)
+
+        assert before != after, "the append did not change any session file"
+        assert any(b"UNIQUE-MARKER-9f3a" in b for b in after.values())
+
+    def test_a_full_refresh_still_declines(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FULL carries no append-only proof, so the veto must survive.
+
+        The incremental refresh is disabled, forcing `ensure_fresh_cache`
+        down its full-load path; Phase 1b must then refuse.
+        """
+        work_dir, jsonl = self._grown_project(tmp_path)
+        self._append_entry(jsonl, "watch-append-1", "a new message arrives")
+
+        monkeypatch.setenv("CLAUDE_CODE_LOG_INCREMENTAL_CACHE", "0")
+        calls = _spy_full_load(monkeypatch)
+        convert_jsonl_to("html", work_dir, silent=True, write_combined=False)
+        assert calls, "a FULL cache refresh must not reach the session-scoped path"

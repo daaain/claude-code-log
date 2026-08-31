@@ -35,6 +35,7 @@ uvx claude-code-log@latest --open-browser
 ## Key Features
 
 - **Interactive TUI (Terminal User Interface)**: Browse and manage Claude Code sessions with real-time navigation, summaries, and quick actions for HTML export and session resuming
+- **Watch Mode**: `claude-code-log watch` re-converts as a session is written, so Markdown in an editor or Obsidian stays current; `claude-code-log serve --watch` makes an open session page grow as messages arrive, keeping your scroll position and folded sections
 - **Project Hierarchy Processing**: Process entire `~/.claude/projects/` directory with linked index page
 - **Individual Session Files**: Generate separate HTML files for each session with navigation links
 - **Single File or Directory Processing**: Convert individual JSONL files or specific directories

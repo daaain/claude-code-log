@@ -7,12 +7,20 @@ import os
 import signal
 import sqlite3
 import sys
+import threading
+import time
+import traceback
 from pathlib import Path
 from typing import Any, Callable, Optional
 
 import click
 from git import Repo, InvalidGitRepositoryError
 
+from .watch import (
+    DEFAULT_MAX_LATENCY,
+    DEFAULT_POLL_INTERVAL,
+    DEFAULT_QUIET_PERIOD,
+)
 from .converter import (
     RegenerationReport,
     convert_jsonl_to,
@@ -31,6 +39,7 @@ from .cache import (
     get_all_cached_projects,
     get_cache_db_path,
     get_library_version,
+    is_corrupt_database_error,
 )
 from .models import RenderingDepth
 from .render_pool import resolve_render_jobs
@@ -2104,6 +2113,16 @@ def convert(
         "page will report the index as unavailable."
     ),
 )
+@click.option(
+    "--watch",
+    "watch_sources",
+    is_flag=True,
+    default=False,
+    help=(
+        "Keep the served pages current: re-convert whenever a transcript "
+        "changes, in the background. Reload a page to see new messages."
+    ),
+)
 def serve(
     port: int,
     projects_dir: Optional[Path],
@@ -2113,6 +2132,7 @@ def serve(
     index_fields: Optional[str],
     reindex: bool,
     no_index: bool,
+    watch_sources: bool,
 ) -> None:
     """Serve the projects directory over loopback, with full-archive search.
 
@@ -2168,11 +2188,38 @@ def serve(
     if open_browser:
         click.launch(f"{server.url}/index.html")
 
+    watch_stop: Optional[threading.Event] = None
+    watch_thread: Optional[threading.Thread] = None
+    if watch_sources:
+        from .watch import WatchEngine
+
+        def reconvert(_changed: set[Path]) -> None:
+            # The server never renders. It re-runs the ordinary conversion
+            # and lets the pages on disk stay canonical, so a page served
+            # over http and the same file opened from file:// can never
+            # disagree.
+            process_projects_hierarchy(projects_path, silent=True)
+
+        def report(exc: BaseException) -> None:
+            click.echo(f"  watch: conversion failed: {exc!r}", err=True)
+
+        engine = WatchEngine([projects_path], reconvert, on_error=report)
+        # Prime before starting the thread so the baseline is taken at a
+        # known moment rather than whenever the thread gets scheduled.
+        engine.prime()
+        watch_stop = threading.Event()
+        watch_thread = engine.run_in_thread(watch_stop)
+        click.echo("  watching for changes (reload a page to see new messages)")
+
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         click.echo("\nStopping...")
     finally:
+        if watch_stop is not None:
+            watch_stop.set()
+        if watch_thread is not None:
+            watch_thread.join(timeout=5)
         server.stop()
 
 
@@ -2215,9 +2262,27 @@ def _build_search_index(
                 bar.__enter__()
             bar.update(1)
 
-        status = ensure_index(
-            conn, index_fields=index_fields, progress=report, rebuild=rebuild
-        )
+        try:
+            status = ensure_index(
+                conn, index_fields=index_fields, progress=report, rebuild=rebuild
+            )
+        except sqlite3.DatabaseError as e:
+            if not is_corrupt_database_error(e):
+                raise
+            # The ordinary conversion heals a corrupt cache when it builds a
+            # CacheManager, so the only way to arrive here is --no-convert,
+            # which skipped it. Don't delete the database behind the user's
+            # back on the one flag that asked us to touch nothing; serving
+            # the pages without search beats refusing to start.
+            if bar is not None:
+                bar.__exit__(None, None, None)
+            click.echo(f"Cache database is corrupt ({e}): {db_path}", err=True)
+            click.echo(
+                "  Search is unavailable. Re-run without --no-convert to "
+                "rebuild the cache.",
+                err=True,
+            )
+            return
         if bar is not None:
             bar.__exit__(None, None, None)
             click.echo(
@@ -2226,6 +2291,234 @@ def _build_search_index(
             )
     finally:
         conn.close()
+
+
+@main.command(name="watch")
+@click.argument(
+    "input_path",
+    type=click.Path(exists=True, path_type=Path, file_okay=False),
+    required=False,
+)
+@click.option(
+    "-o",
+    "--output",
+    type=click.Path(path_type=Path),
+    help=(
+        "Output destination, as for `convert`. Pair with --format md to "
+        "keep an Obsidian vault current."
+    ),
+)
+@click.option(
+    "-f",
+    "--format",
+    "output_format",
+    type=click.Choice(["html", "md", "markdown"]),
+    default="html",
+    show_default=True,
+    help="Output format.",
+)
+@click.option(
+    "--combined",
+    type=click.Choice(["yes", "no", "only"]),
+    default="no",
+    show_default=True,
+    help=(
+        "As for `convert`, but defaulting to 'no'. Per-session files are "
+        "what a watch is for, and skipping the combined page is what lets "
+        "a tick regenerate just the changed session instead of reloading "
+        "the whole project."
+    ),
+)
+@click.option(
+    "--projects-dir",
+    type=click.Path(exists=True, path_type=Path, file_okay=False),
+    help="Projects directory (default: ~/.claude/projects/).",
+)
+@click.option(
+    "--all-projects",
+    is_flag=True,
+    default=False,
+    help=(
+        "Watch every project instead of one. Off by default: a tick over a "
+        "large archive is far more expensive than over a single project."
+    ),
+)
+@click.option(
+    "--interval",
+    type=float,
+    default=DEFAULT_POLL_INTERVAL,
+    show_default=True,
+    help="Seconds between filesystem polls.",
+)
+@click.option(
+    "--quiet-period",
+    type=float,
+    default=DEFAULT_QUIET_PERIOD,
+    show_default=True,
+    help=(
+        "Seconds of no further change before converting. Claude Code writes "
+        "several entries per turn; without this every one would trigger its "
+        "own render."
+    ),
+)
+@click.option(
+    "--max-latency",
+    type=float,
+    default=DEFAULT_MAX_LATENCY,
+    show_default=True,
+    help=(
+        "Convert anyway after this long, so an unbroken stream of appends "
+        "still surfaces instead of starving behind the quiet period."
+    ),
+)
+@click.option("--debug", is_flag=True, default=False, help="Show full tracebacks.")
+def watch(
+    input_path: Optional[Path],
+    output: Optional[Path],
+    output_format: str,
+    combined: str,
+    projects_dir: Optional[Path],
+    all_projects: bool,
+    interval: float,
+    quiet_period: float,
+    max_latency: float,
+    debug: bool,
+) -> None:
+    """Re-convert transcripts as they change, until interrupted.
+
+    Points at one project by default -- the one for the current directory
+    if it has transcripts, otherwise the given INPUT_PATH. Watching the
+    whole archive is available via --all-projects but is rarely what you
+    want: a tick's cost scales with the project, and only one project is
+    ever being written to.
+
+    The generated files on disk stay canonical, so anything that reloads
+    them picks the changes up: an editor or Obsidian for Markdown, a
+    browser refresh for HTML.
+    """
+    from .watch import WatchEngine
+
+    projects_path = projects_dir or get_default_projects_dir()
+    root = _resolve_watch_root(input_path, projects_path, all_projects)
+    if root is None:
+        # `raise` rather than `sys.exit` so the type checkers can see that
+        # `root` is a Path from here on.
+        raise SystemExit(1)
+
+    fmt = "markdown" if output_format == "md" else output_format
+    write_combined = combined != "no"
+    individual = combined != "only"
+
+    # One store for the whole watch, not one per tick: it lets each tick
+    # resume its parse from the bytes the previous tick already read,
+    # instead of re-reading a growing session's whole history every time
+    # a line lands (entry_store.py, work/watch-mode.md Fix B). Only the
+    # single-project path takes one — `--all-projects` re-converts a
+    # hierarchy and has no single growing file to follow.
+    from .entry_store import ParsedEntryStore, entry_store_enabled
+
+    store = ParsedEntryStore() if (entry_store_enabled() and not all_projects) else None
+
+    def convert(_changed: set[Path]) -> None:
+        started = time.monotonic()
+        if all_projects:
+            process_projects_hierarchy(
+                root,
+                silent=True,
+                output_format=fmt,
+                output_dir=output,
+                write_combined=write_combined,
+                generate_individual_sessions=individual,
+            )
+        else:
+            convert_jsonl_to(
+                fmt,
+                root,
+                # `output_root` is the directory form; leaving output_path
+                # unset lets the converter derive the filenames, which is
+                # what keeps the destination-aware freshness check working.
+                output_root=output,
+                silent=True,
+                write_combined=write_combined,
+                generate_individual_sessions=individual,
+                entry_store=store,
+            )
+        click.echo(
+            f"  {time.strftime('%H:%M:%S')}  converted in "
+            f"{time.monotonic() - started:.2f}s"
+        )
+
+    def report(exc: BaseException) -> None:
+        if debug:
+            traceback.print_exc()
+        click.echo(f"  conversion failed: {exc!r}", err=True)
+
+    engine = WatchEngine(
+        [root],
+        convert,
+        poll_interval=interval,
+        quiet_period=quiet_period,
+        max_latency=max_latency,
+        on_error=report,
+    )
+
+    click.echo(f"Watching {root}")
+    click.echo("Press Ctrl+C to stop.")
+    # Convert once up front so the output is current before the first
+    # change, then prime -- priming after means our own output writes are
+    # already in the baseline and can't trigger a spurious first tick.
+    #
+    # A failure here is a misconfigured watch, not a transient one: the
+    # root doesn't exist, or `--all-projects` was pointed at a single
+    # project rather than an archive. `report` is for the per-tick case
+    # where the loop should carry on; this one is fatal, and gets the
+    # same one-line diagnosis `convert` gives rather than a traceback.
+    try:
+        convert(set())
+    except Exception as e:
+        if debug:
+            traceback.print_exc()
+        click.echo(f"Error: {e}", err=True)
+        raise SystemExit(1)
+    engine.prime()
+    try:
+        engine.run()
+    except KeyboardInterrupt:
+        click.echo("\nStopping.")
+    click.echo(
+        f"{engine.stats.conversions} conversions, "
+        f"{engine.stats.polls} polls, {engine.stats.errors} errors."
+    )
+
+
+def _resolve_watch_root(
+    input_path: Optional[Path], projects_path: Path, all_projects: bool
+) -> Optional[Path]:
+    """Pick the directory to watch, or report why we can't.
+
+    Order: an explicit path wins; --all-projects means the hierarchy;
+    otherwise the project for the current directory, which is what someone
+    running this alongside a live session almost always means.
+    """
+    if input_path is not None:
+        return input_path
+    if all_projects:
+        return projects_path
+
+    from .utils import real_path_to_project_dirname
+
+    encoded = real_path_to_project_dirname(Path.cwd())
+    candidate = projects_path / encoded
+    if candidate.is_dir():
+        return candidate
+
+    click.echo(
+        f"No transcripts found for the current directory ({Path.cwd()}).\n"
+        f"  Looked for: {candidate}\n"
+        "  Pass a project directory explicitly, or use --all-projects.",
+        err=True,
+    )
+    return None
 
 
 convert.epilog = _subcommand_epilog(main)

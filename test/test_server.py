@@ -7,6 +7,7 @@ path traversal, conditional GET, and not dying on a client disconnect.
 
 from __future__ import annotations
 
+import os
 import socket
 import urllib.error
 import urllib.request
@@ -15,7 +16,7 @@ from typing import Any, Optional
 
 import pytest
 
-from claude_code_log.server import ArchiveServer
+from claude_code_log.server import REVISION_HEADER, ArchiveServer
 
 
 @pytest.fixture
@@ -182,6 +183,68 @@ def test_conditional_get_returns_304(server: ArchiveServer) -> None:
     )
     assert status == 304
     assert body == b""
+
+
+def test_a_same_size_rewrite_in_the_same_second_changes_the_revision(
+    server: ArchiveServer,
+    archive: Path,
+) -> None:
+    """The header the live page polls on must follow the *bytes*.
+
+    `Last-Modified` is second-granular and `Content-Length` cannot see an
+    edit that keeps the size, so a re-render where a counter or a status
+    word keeps its width is invisible to both — and watch mode rewrites a
+    few hundred ms apart.
+
+    The two mtimes are set explicitly, half a second apart inside one
+    whole second, so this is exactly a same-second rewrite and not a
+    timing gamble. Dating them in the past also means the first digest is
+    genuinely cached (the cache only keeps a settled file's), so the
+    second response is pinned against reusing it.
+    """
+    page = archive / "-Users-someone-project" / "session-abc123.html"
+    url = f"{server.url}/-Users-someone-project/session-abc123.html"
+
+    second_ns = 1_700_000_000_000_000_000
+    os.utime(page, ns=(second_ns, second_ns))
+    original = os.stat(page)
+
+    status, _, before = _get(url)
+    assert status == 200
+    first = before[REVISION_HEADER]
+
+    page.write_text("<html><body>SESSION</body></html>")
+    assert page.stat().st_size == original.st_size
+    os.utime(page, ns=(second_ns + 500_000_000, second_ns + 500_000_000))
+
+    status, body, after = _get(url)
+    assert status == 200
+    assert b"SESSION" in body
+    assert after["Last-Modified"] == before["Last-Modified"]
+    assert after["Content-Length"] == before["Content-Length"]
+    assert after[REVISION_HEADER] != first
+
+
+def test_the_revision_is_stable_while_the_file_is(server: ArchiveServer) -> None:
+    """An unchanged file must not look changed, or every poll re-fetches."""
+    url = f"{server.url}/index.html"
+    _, _, first = _get(url)
+    _, _, second = _get(url)
+    assert first[REVISION_HEADER] == second[REVISION_HEADER]
+
+
+def test_head_carries_the_revision(server: ArchiveServer) -> None:
+    """The live page polls with HEAD; the header has to be on that reply."""
+    request = urllib.request.Request(f"{server.url}/index.html", method="HEAD")
+    with urllib.request.urlopen(request) as response:
+        assert response.status == 200
+        assert response.headers[REVISION_HEADER]
+
+
+def test_the_api_carries_no_revision(server: ArchiveServer) -> None:
+    """It describes a file response; a JSON payload has none."""
+    _, _, headers = _get(f"{server.url}/api/ping")
+    assert REVISION_HEADER not in headers
 
 
 def test_client_disconnect_does_not_kill_the_server(

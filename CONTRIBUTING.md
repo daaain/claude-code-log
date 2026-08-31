@@ -333,6 +333,31 @@ full-load refresh. Set `CLAUDE_CODE_LOG_INCREMENTAL_CACHE=0` to force
 the full refresh when bisecting. See
 [dev-docs/application_model.md § 2.14](dev-docs/application_model.md).
 
+That refresh parses each modified file from source, and the loads that
+follow it — the closure load and the session-scoped render — used to
+rebuild those same entries from the rows it had just written, twice.
+A per-conversion parsed-entry store
+(`claude_code_log/entry_store.py`) serves the refresh's list to both
+instead, taking a watch tick on an 803MB archive from 1.03s to 0.72s.
+Only the incremental refresh fills it, and only with the files that
+changed, so a cold conversion and the streaming path (whose bounded
+residency depends on dropping each page) carry no extra memory.
+
+Held *across* ticks — which `watch` does, owning one for the life of the
+loop — the same store also resumes. It pins its entries to a byte offset
+plus a hash of the bytes below it, so a tick hashes that prefix (32ms
+over 39.7MB, against 143ms to re-parse it), reads only what was
+appended, and appends just the new cache rows rather than rewriting the
+file's. That takes the same tick to **0.26s**. It applies only where the
+rows are provably the file's own lines: a trunk's rows carry its
+subagents' spliced transcripts, so a running subagent grows a block
+mid-sequence and those files take the unchanged full rewrite.
+
+Set `CLAUDE_CODE_LOG_ENTRY_STORE=0` to disable all of it when bisecting;
+a per-file memory valve declines to hold a file when available memory is
+under ~6× its bytes, and an explicit `=1` overrides that valve. See
+[dev-docs/application_model.md § 2.16](dev-docs/application_model.md).
+
 To re-measure on your own hardware (core count changes the answer for
 the fan-out), point the benchmark at a real project:
 

@@ -66,6 +66,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+from .utils import atomic_write_text
+
 if TYPE_CHECKING:
     from .models import RenderingDepth, TranscriptEntry
 
@@ -567,9 +569,7 @@ def _render_unit_worker(
             )
 
         # errors="replace" for lone-surrogate safety — see issue #139.
-        (output_dir / unit.file_name).write_text(
-            content, encoding="utf-8", errors="replace"
-        )
+        atomic_write_text(output_dir / unit.file_name, content)
     except Exception:
         return unit.kind, unit.key, traceback.format_exc(), None
     delta = (

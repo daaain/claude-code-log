@@ -327,10 +327,20 @@ class TestTemplateRendering:
             assert "&lt;script&gt;" in html_content
             assert "&amp;" in html_content
             assert "&quot;" in html_content
-            # Should not contain unescaped HTML
-            assert (
-                "<script>" not in html_content or html_content.count("<script>") <= 2
-            )  # Allow for the markdown script and search script
+            # The user's payload must not survive as a live tag.
+            #
+            # This used to count `<script>` occurrences and allow up to
+            # two, which meant bumping the number every time the page grew
+            # a script block of its own — while saying nothing about
+            # whether the *content* was escaped. Assert the property
+            # itself: the payload's opening tag is escaped everywhere it
+            # appears, so it can never execute.
+            assert "<script>alert(" not in html_content
+            # Both renderings of the payload are escaped: the raw-text view
+            # keeps the apostrophe literal, the Markdown view entity-encodes
+            # it. Neither carries a live `<script>`.
+            assert "&lt;script&gt;alert('xss')&lt;/script&gt;" in html_content
+            assert "&lt;script&gt;alert(&#x27;xss&#x27;)&lt;/script&gt;" in html_content
 
 
 class TestNestedDomSkipsEmptyLeaves:
