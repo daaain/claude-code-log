@@ -256,6 +256,75 @@ class TestLiveUpdate:
             "the fold control stopped responding after the patch"
         )
 
+    def test_an_update_during_page_load_is_not_absorbed(
+        self, page, live_archive
+    ) -> None:
+        """The first poll cannot adopt whatever the server holds by then.
+
+        It only runs once the document has loaded, and that is exactly the
+        window this feature's pages are slow in — tens of MB. A conversion
+        finishing in it would become the baseline, so the page would sit
+        one update behind until something *else* changed, which for a
+        session that has just gone quiet is forever.
+        """
+        base, project, jsonl = live_archive
+        url = f"{base}/{project.name}/session-{SESSION_ID}.html"
+        page_file = project / f"session-{SESSION_ID}.html"
+        served_stale: list[bool] = []
+
+        def hold(route):
+            # Only the navigation: the page's own HEAD and GET share this
+            # URL and must reach the server as usual.
+            if route.request.resource_type != "document" or served_stale:
+                route.continue_()
+                return
+            # Take the document as it is now, then let the session move on
+            # and the watch reconvert *before* handing it to the browser.
+            response = route.fetch()
+            body = response.body()
+            served_stale.append(b"LOAD-RACE-MARKER" not in body)
+            with jsonl.open("a", encoding="utf-8") as f:
+                f.write(_entry("load-race", "LOAD-RACE-MARKER"))
+            deadline = time.time() + 20
+            while time.time() < deadline:
+                if "LOAD-RACE-MARKER" in page_file.read_text(encoding="utf-8"):
+                    break
+                time.sleep(0.05)
+            route.fulfill(status=response.status, headers=response.headers, body=body)
+
+        page.route(url, hold)
+        self._open(page, base, project)
+        assert served_stale == [True], "the browser was served the new page after all"
+
+        _wait_for(page, "() => document.body.innerText.includes('LOAD-RACE-MARKER')")
+
+    def test_an_open_timeline_picks_up_new_cards(self, page, live_archive) -> None:
+        """The timeline is the one rehydrate hook that reads the whole page.
+
+        It is therefore called once per changed element and coalesced to a
+        single rebuild per update — so this asserts the rebuild still
+        happens at all, which the coalescing is the only thing standing
+        between the timeline and.
+        """
+        base, project, jsonl = live_archive
+        self._open(page, base, project)
+        page.locator("#toggleTimeline").click()
+        # The library is fetched from a CDN on first open.
+        page.wait_for_selector(".vis-item", timeout=30000)
+        before = page.locator(".vis-item").count()
+
+        with jsonl.open("a", encoding="utf-8") as f:
+            f.write(_entry("timeline-1", "TIMELINE-MARKER"))
+        _wait_for(page, "() => document.body.innerText.includes('TIMELINE-MARKER')")
+
+        _wait_for(
+            page,
+            "() => [...document.querySelectorAll('.vis-item')]"
+            ".some(el => el.innerText.includes('TIMELINE-MARKER'))",
+            timeout=10000,
+        )
+        assert page.locator(".vis-item").count() > before
+
     def test_a_replaced_fold_bar_still_describes_its_own_subtree(
         self, page, live_archive
     ) -> None:

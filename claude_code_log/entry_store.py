@@ -193,13 +193,22 @@ class ParsedEntryStore:
         post-processing that mutates entries in place (see the module
         docstring) and a later tick must resume from the pre-mutation
         state.
+
+        Charged against the same budget as :meth:`put`, and for the same
+        reason twice over: a ``watch`` owns one store for the life of the
+        loop, so every trunk file touched over a long session would
+        otherwise pin its parsed entries forever — and the per-file
+        memory valve, which only ever sees one file, cannot notice the
+        total.
         """
         if prefix_len <= 0 or not entries:
             return
         if prefix_len > self._budget or not self._has_memory_for(prefix_len):
             self.declines += 1
-            self._prefixes.pop(str(path), None)
+            self.drop_prefix(path)
             return
+        self.drop_prefix(path)
+        self._bytes += prefix_len
         self._prefixes[str(path)] = HeldPrefix(
             prefix_len=prefix_len,
             digest=digest,
@@ -207,6 +216,7 @@ class ParsedEntryStore:
             agent_ids=set(agent_ids),
             line_count=line_count,
         )
+        self._evict_to_budget()
 
     def get_prefix(self, path: Path) -> Optional[HeldPrefix]:
         """The held prefix for ``path``, entries copied, or None.
@@ -229,7 +239,9 @@ class ParsedEntryStore:
 
     def drop_prefix(self, path: Path) -> None:
         """Forget the held prefix — its file no longer starts with those bytes."""
-        self._prefixes.pop(str(path), None)
+        dropped = self._prefixes.pop(str(path), None)
+        if dropped is not None:
+            self._bytes -= dropped.prefix_len
 
     # ---- writing ---------------------------------------------------------
 
@@ -272,11 +284,20 @@ class ParsedEntryStore:
         return available >= size * MIN_AVAILABLE_MEMORY_PER_FILE_BYTE
 
     def _evict_to_budget(self) -> None:
-        """Drop oldest entries until the held source bytes fit the budget."""
+        """Drop oldest entries until the held source bytes fit the budget.
+
+        Whole-file entries go first: they serve the conversion that is
+        running now and the cache can rebuild them, whereas a prefix is
+        the only thing standing between the next tick and re-parsing a
+        file's whole history. Both are pure performance either way.
+        """
         while self._bytes > self._budget and self._held:
             _key, (stamp, _entries) = next(iter(self._held.items()))
             self._held.pop(_key)
             self._bytes -= stamp[0]
+        while self._bytes > self._budget and self._prefixes:
+            key = next(iter(self._prefixes))
+            self._bytes -= self._prefixes.pop(key).prefix_len
 
     # ---- reading ---------------------------------------------------------
 

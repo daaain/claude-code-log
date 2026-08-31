@@ -485,17 +485,42 @@
     // instead leaves the page wrong until something else changes.)
     let polling = false;
 
+    // How many bytes this document actually was, as the browser received
+    // it. The first poll cannot happen until the document has loaded, and
+    // that takes as long as it takes — tens of MB on the pages this
+    // feature is for. A conversion completing in that window would be
+    // adopted as the baseline and never applied, leaving the page
+    // permanently one update behind if the session then went quiet.
+    //
+    // The navigation timing entry is the one thing that knows what we were
+    // served, so the first poll compares against it rather than trusting
+    // whatever the server holds by then. Responses are not
+    // content-encoded, so this is directly comparable to `Content-Length`;
+    // anything that makes it unavailable (or zero) falls back to adopting
+    // the baseline, which is where this started.
+    function loadedLength() {
+        try {
+            const nav = performance.getEntriesByType('navigation')[0];
+            return (nav && nav.encodedBodySize) || null;
+        } catch (err) {
+            return null;
+        }
+    }
+
     async function poll() {
         if (stopped || polling) return;
         polling = true;
         try {
             const head = await fetch(location.href, { method: 'HEAD', cache: 'no-store' });
+            const length = head.headers.get('Content-Length') || '';
             const stamp = [
                 head.headers.get('Last-Modified') || '',
-                head.headers.get('Content-Length') || '',
+                length,
                 head.headers.get('ETag') || '',
             ].join('|');
-            if (lastStamp === null) {
+            const served = lastStamp === null ? loadedLength() : null;
+            const missedOnLoad = !!served && !!length && Number(length) !== served;
+            if (lastStamp === null && !missedOnLoad) {
                 lastStamp = stamp;
             } else if (stamp !== lastStamp) {
                 const res = await fetch(location.href, { cache: 'no-store' });

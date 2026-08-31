@@ -318,6 +318,28 @@ class _ByteParse:
     start_line: int
     resumed: bool
     held_count: int
+    # What the parse had produced when it reached the first line past the
+    # prefix cut — i.e. the products of complete lines only. None until
+    # that line is reached, which for a newline-terminated tail is the
+    # empty string after the last ``\n``, so the common case still holds
+    # everything. See :meth:`mark_incomplete` and :meth:`commit`.
+    complete_count: Optional[int] = None
+    complete_agent_ids: Optional[set[str]] = None
+
+    @property
+    def mark_line(self) -> int:
+        """Line number of the first line whose bytes fall outside the cut."""
+        return (
+            self.start_line + self.tail[: self.tail.rfind(b"\n") + 1].count(b"\n") + 1
+        )
+
+    def mark_incomplete(
+        self, messages: list[TranscriptEntry], agent_ids: set[str]
+    ) -> None:
+        """Snapshot what complete lines produced, before the trailing fragment."""
+        if self.complete_count is None:
+            self.complete_count = len(messages)
+            self.complete_agent_ids = set(agent_ids)
 
     def lines(self) -> Generator[tuple[int, str], None, None]:
         """Yield ``(line_no, text)`` for the bytes past the held prefix."""
@@ -339,6 +361,13 @@ class _ByteParse:
         A torn final line (mid-append, C12) is parsed as before — it just
         fails and is skipped — but its bytes stay out of the prefix, so
         the next tick re-reads and parses it properly once it lands.
+
+        The cut is on **entries as well as bytes**, and it has to be:
+        a final line whose newline hasn't landed yet can be a whole,
+        valid record (a flush that split on the newline, or simply a file
+        stored without a trailing one). That parses into an entry whose
+        bytes are below the cut, so holding it would have the next tick
+        parse the same line again and hand back the entry twice.
         """
         complete = self.tail.rfind(b"\n") + 1
         if complete <= 0 and self.start_offset == 0:
@@ -346,6 +375,9 @@ class _ByteParse:
         self.hasher.update(self.tail[:complete])
         consumed = self.start_offset + complete
         line_count = self.start_line + self.tail[:complete].count(b"\n")
+        if self.complete_count is not None:
+            messages = messages[: self.complete_count]
+            agent_ids = self.complete_agent_ids or set()
         entry_store.put_prefix(
             self.path,
             consumed,
@@ -528,6 +560,9 @@ def load_transcript(
         messages = byte_parse.entries
         agent_ids = byte_parse.agent_ids
         line_source = byte_parse.lines()
+        # The first line whose bytes fall outside the prefix cut: reaching
+        # it is what tells `commit` where the holdable entries stop.
+        mark_line = byte_parse.mark_line
     else:
         try:
             f = open(jsonl_path, "r", encoding="utf-8", errors="replace")
@@ -538,11 +573,14 @@ def load_transcript(
                 print(f"Warning: File not found (may have been deleted): {jsonl_path}")
             return []
         line_source = _text_file_lines(f)
+        mark_line = -1
 
     with contextlib.closing(line_source):
         if not silent:
             print(f"Processing {jsonl_path}...")
         for line_no, line in line_source:
+            if line_no == mark_line and byte_parse is not None:
+                byte_parse.mark_incomplete(messages, agent_ids)
             line = line.strip()
             if line:
                 try:

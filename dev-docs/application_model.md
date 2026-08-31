@@ -1213,7 +1213,13 @@ made one doesn't). That turns the store from a within-tick cache into a
   identical text path, and the held entries are the *pre*-post-processing
   parse products, since the whole-file passes (sidecar linking,
   prompt-hash linking, agent splicing — 0.1 ms together) must re-run over
-  the concatenated list.
+  the concatenated list. The cut is on **entries as well as bytes**: a
+  final line whose newline hasn't landed — a torn append, or a file
+  simply stored without a trailing one — parses and is returned like any
+  other, but neither its bytes nor its entry is held, so the next tick
+  re-reads that line instead of handing its entry back a second time.
+  Prefixes are charged against the same budget as whole-file entries and
+  evicted alongside them, since a `watch` store never goes out of scope.
 - **The cache write appends.** `CacheManager.extend_cached_entries`
   inserts only the new rows instead of `save_cached_entries`' delete-and-
   rewrite, which re-runs `json.dumps` + `zlib.compress` over every entry

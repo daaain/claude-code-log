@@ -224,6 +224,31 @@ class TestErrors:
         assert len(seen) == 2
         assert engine.stats.errors == 2
 
+    def test_an_interrupt_is_not_a_failed_conversion(self, project: Path) -> None:
+        """Ctrl+C must stop the watch, not be reported and slept off.
+
+        `claude-code-log watch` runs the loop on the main thread, so an
+        interrupt lands wherever the thread happens to be — and on an
+        active project that is usually inside the conversion, not the
+        sleep. Handing it to `on_error` would print "conversion failed"
+        and carry on, leaving the operator pressing Ctrl+C until one
+        happened to land in `stop.wait`.
+        """
+        clock = FakeClock()
+        seen: list[BaseException] = []
+
+        def interrupted(_paths: set[Path]) -> None:
+            raise KeyboardInterrupt
+
+        engine = WatchEngine([project], interrupted, clock=clock, on_error=seen.append)
+        engine.prime()
+        append(project / "s1.jsonl")
+        engine.tick()
+        clock.settle()
+        with pytest.raises(KeyboardInterrupt):
+            engine.tick()
+        assert not seen, "the interrupt was reported as a conversion failure"
+
     def test_without_a_handler_the_error_propagates(self, project: Path) -> None:
         """Silently swallowing by default would hide real breakage."""
         clock = FakeClock()

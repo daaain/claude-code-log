@@ -221,6 +221,29 @@ class TestStoreContract:
         assert store.get(second) is not None
         assert store.held_bytes <= 150
 
+    def test_held_prefixes_are_charged_and_evicted_too(
+        self, tmp_path: Path, entries: list[Any]
+    ) -> None:
+        """`watch` owns one store for hours — prefixes cannot grow forever."""
+        first = tmp_path / "first.jsonl"
+        second = tmp_path / "second.jsonl"
+
+        store = ParsedEntryStore(budget_bytes=150)
+        store.put_prefix(first, 100, b"d1", entries, set(), 1)
+        assert store.held_bytes == 100
+
+        store.put_prefix(second, 100, b"d2", entries, set(), 1)
+        assert store.get_prefix(first) is None, "oldest should have been evicted"
+        assert store.get_prefix(second) is not None
+        assert store.held_bytes <= 150
+
+        # Re-holding the same file replaces its charge rather than adding
+        # one: a watched file is re-held on every tick that touches it.
+        store.put_prefix(second, 100, b"d3", entries, set(), 1)
+        assert store.held_bytes == 100
+        store.drop_prefix(second)
+        assert store.held_bytes == 0
+
     def test_a_file_larger_than_the_budget_is_declined(
         self, tmp_path: Path, entries: list[Any]
     ) -> None:
@@ -526,6 +549,45 @@ class TestByteParseEquivalence:
         assert _dump(load_transcript(work, silent=True)) == resumed
         assert len(resumed) == 2
 
+    def test_an_unterminated_final_line_is_not_parsed_twice(
+        self, tmp_path: Path
+    ) -> None:
+        """A final line whose newline hasn't landed yet parses, but isn't held.
+
+        The other half of C12: the torn tail above fails to parse, so
+        holding it would be harmless. A *complete* record whose trailing
+        newline hasn't been flushed yet parses fine — and its bytes are
+        still below the prefix cut, so holding its entry would make the
+        next tick parse the same line a second time. Two of this repo's
+        own fixtures end without a trailing newline, so this is not only
+        a mid-append shape.
+        """
+        work = tmp_path / "unterminated.jsonl"
+        entry = {
+            "type": "user",
+            "timestamp": "2025-07-03T18:00:00Z",
+            "parentUuid": None,
+            "isSidechain": False,
+            "userType": "human",
+            "cwd": "/tmp",
+            "sessionId": "unterminated",
+            "version": "1.0.0",
+            "uuid": "u-1",
+            "message": {"role": "user", "content": [{"type": "text", "text": "one"}]},
+        }
+        lines = [json.dumps({**entry, "uuid": f"u-{n}"}) for n in (1, 2, 3)]
+        fourth = json.dumps({**entry, "uuid": "u-4"})
+
+        # Ends mid-line: the third record is whole, its newline is not there.
+        work.write_text("\n".join(lines), encoding="utf-8")
+        store = ParsedEntryStore()
+        first = load_transcript(work, silent=True, entry_store=store)
+        assert [e.uuid for e in first] == ["u-1", "u-2", "u-3"]  # type: ignore[union-attr]
+
+        work.write_text("\n".join(lines + [fourth]) + "\n", encoding="utf-8")
+        resumed = _dump(load_transcript(work, silent=True, entry_store=store))
+        assert _dump(load_transcript(work, silent=True)) == resumed
+
 
 def _count_append_proposals(monkeypatch: pytest.MonkeyPatch) -> list[int]:
     """Record every time the *caller's* gate offered rows for appending.
@@ -607,6 +669,44 @@ class TestAppendOnlyWrites:
             "no append-only write happened — this equivalence test would "
             "have compared two full rewrites and proved nothing"
         )
+
+    def test_rows_match_when_a_tick_lands_on_an_unterminated_line(
+        self, tmp_path: Path
+    ) -> None:
+        """A tick that sees a whole record without its newline yet.
+
+        The parse-side twin of this is in
+        ``TestByteParseEquivalence``; this is the half that would show up
+        in the cache, where a re-parsed line becomes a duplicate *row*
+        rather than a transient duplicate entry.
+        """
+        appended = _synthetic_project(tmp_path / "appended")
+        rewritten = _synthetic_project(tmp_path / "rewritten")
+        store = ParsedEntryStore()
+
+        def both(mutate: Any) -> None:
+            for project, held in ((appended, store), (rewritten, None)):
+                mutate(sorted(project.glob("*.jsonl"))[0])
+                self._tick(project, held)
+
+        both(lambda _target: None)  # cold: nothing is held yet
+        both(lambda target: _append_entry(target, "grow", "a first append"))
+
+        def torn(target: Path) -> None:  # a whole record, newline not yet
+            _append_entry(target, "whole", "flushed without its newline")
+            target.write_bytes(target.read_bytes().rstrip(b"\n"))
+
+        both(torn)
+
+        def lands(target: Path) -> None:
+            with target.open("a", encoding="utf-8") as f:
+                f.write("\n")
+            _append_entry(target, "after", "the write that follows it")
+
+        both(lands)
+
+        assert store.prefix_hits > 0, "the resumable path never engaged"
+        assert _message_rows(appended) == _message_rows(rewritten)
 
     def test_a_growing_agent_file_inserts_rows_mid_sequence(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

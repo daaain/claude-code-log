@@ -189,6 +189,14 @@ class WatchEngine:
         self.stats.conversions += 1
         try:
             self.on_change(set(delivered))
+        except (KeyboardInterrupt, SystemExit):
+            # Asking the watch to stop is not a conversion failing. The
+            # `watch` command runs this loop on the main thread, so a
+            # Ctrl+C lands wherever the thread is — on an active project
+            # that is usually inside the conversion rather than the sleep
+            # below — and swallowing it here would leave the operator
+            # pressing Ctrl+C until one happened to hit `stop.wait`.
+            raise
         except BaseException as exc:  # noqa: BLE001 - reported, never fatal
             # One bad conversion must not end the watch. A transcript can
             # be mid-write, a disk can fill, a plugin can throw; the next

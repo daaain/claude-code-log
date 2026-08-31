@@ -537,10 +537,30 @@
             applySearchFilter();
         }
 
+        // The rehydrate contract passes a subtree, and calls the hooks once
+        // per changed element — which is what the other two hooks want,
+        // since they only touch what they are given. This one is the
+        // exception: it reads the whole document, so a patch touching a
+        // dozen cards would mean a dozen whole-page rebuilds, per poll, of
+        // exactly the work the patch path exists to avoid. Collapse a
+        // burst into one rebuild after the current task instead.
+        let rebuildScheduled = false;
+        function scheduleRebuild() {
+            if (!timeline || !itemsDataSet) return;  // never opened: nothing to do
+            if (rebuildScheduled) return;
+            rebuildScheduled = true;
+            const run = function () {
+                rebuildScheduled = false;
+                rebuildTimeline();
+            };
+            if (window.queueMicrotask) window.queueMicrotask(run);
+            else setTimeout(run, 0);
+        }
+
         // Export functions to global scope
         window.rebuildTimeline = rebuildTimeline;
         if (window.claudeLogOnRehydrate) {
-            window.claudeLogOnRehydrate(rebuildTimeline);
+            window.claudeLogOnRehydrate(scheduleRebuild);
         }
         window.toggleTimeline = toggleTimeline;
         window.applyTimelineFilters = applyFilters;

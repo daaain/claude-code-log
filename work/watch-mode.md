@@ -1511,3 +1511,64 @@ render) for a benefit that is invisible below ~10 MB pages. Nothing here
 needs doing. The next thing that would justify reopening the browser side
 is a *user-visible* complaint on a very large live page, not a number in
 this document.
+
+---
+
+## C29. What a review round turned up, after all of the above landed
+
+Five findings against the branch; four were real, and all four are
+mechanical rather than design-level — the shapes above held.
+
+1. **An unterminated final line was parsed twice** (`converter.py`).
+   `_ByteParse.commit` cut the held *bytes* at the last `\n` but handed
+   the store the whole entry list. C12 reasoned about the torn line that
+   *fails* to parse, where holding it is harmless; a final line whose
+   newline simply hasn't landed can be a whole valid record, and that
+   entry was held while its bytes were not — so the next tick re-read the
+   line and appended the entry again. Reproduced as
+   `['1','2','3'] → ['1','2','3','3','4']`, and it reached the cache: the
+   gates in `_appended_rows` both still agreed. Two of this repo's own
+   145 fixtures end without a trailing newline, so it is not only a
+   mid-append shape. The cut is now on entries as well as bytes; the row
+   count check in `extend_cached_entries` catches the tick after and
+   takes the full rewrite, which is the one thing that would have made
+   this visible in the DB.
+
+2. **Ctrl+C during a conversion didn't stop `watch`** (`watch.py`). The
+   `except BaseException` that keeps one bad conversion from ending the
+   loop also swallowed `KeyboardInterrupt`. `watch` runs `run()` on the
+   main thread, so an interrupt lands inside `convert()` — most of a tick
+   on an active project — and was reported as `conversion failed:
+   KeyboardInterrupt()` while the loop carried on. Now re-raised.
+
+3. **Held prefixes were never evicted** (`entry_store.py`). `put_prefix`
+   never charged `self._bytes` and nothing trimmed `_prefixes`, so in a
+   store owned for the life of a `watch` every trunk file touched pinned
+   a deep copy of its parsed entries forever — invisible to the per-file
+   valve, which only ever sees one file. Charged and evicted like `put`
+   now, whole-file entries first (the cache can rebuild those; a prefix
+   is the only thing standing between the next tick and a whole-history
+   re-parse).
+
+4. **The timeline rebuilt once per changed element** (`timeline.html`).
+   The rehydrate contract passes a subtree and the patch path calls it
+   per changed element, which is what the other two hooks want.
+   `rebuildTimeline` ignores its root and scans the whole document, so an
+   open timeline paid N whole-page rebuilds per poll — measured at 2 per
+   update on the test fixture (1 edit + 1 addition), and it scales with
+   the changed set, up to the patch path's cap of 40. Coalesced to one
+   rebuild per update.
+
+5. **The first poll adopted the server's current stamp**
+   (`live_update.js`). `if (lastStamp === null) lastStamp = stamp` runs
+   after the document has loaded — tens of MB, which is the whole reason
+   this feature exists — so a conversion completing in that window became
+   the baseline and was never applied, leaving the page one update behind
+   until something *else* changed. For a session that has just gone
+   quiet, that is forever. The navigation timing entry knows how many
+   bytes we were actually served, and responses are not content-encoded,
+   so the first poll compares that against `Content-Length` and fetches
+   on a disagreement; anything that makes it unavailable falls back to
+   adopting the baseline. Reproduced with a Playwright route that serves
+   the pre-append body and lets the watch reconvert before the browser
+   sees it: without the fix the marker never arrives.
