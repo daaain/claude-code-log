@@ -366,11 +366,12 @@ body.show-raw-user .user-content:not([data-user-view="md"]) .user-raw {
 
 /* Transient confirmation shown after the resume command is copied.
  * Opaque background (not the `…-dimmed` variant the buttons use) so
- * the transcript text underneath doesn't bleed through the message. */
+ * the transcript text underneath doesn't bleed through the message.
+ * Sits above the follow toggle (440px), which is the top of the stack. */
 .resume-toast {
     position: fixed;
     right: 20px;
-    bottom: 440px;
+    bottom: 500px;
     max-width: 320px;
     padding: 8px 12px;
     background-color: #e8f4fd;

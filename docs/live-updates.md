@@ -32,8 +32,12 @@ claude-code-log serve --watch
 
 Open a session page and it grows as messages arrive — roughly a second
 behind the CLI, without a reload. Your scroll position, folded sections
-and open disclosures all survive; new messages fade in, and a **follow**
-pill in the corner offers to keep the page pinned to the newest message.
+and open disclosures all survive, and new messages fade in.
+
+A **follow** button (⏬) joins the buttons down the right-hand edge once
+the page is being served. Click it to keep the page pinned to the newest
+message; while you are not following, it shows a count of how many have
+arrived since you last looked.
 
 This works only over the server. A page opened from `file://` cannot
 fetch anything at all — not even itself — so it stays static, exactly as

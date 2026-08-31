@@ -295,6 +295,15 @@
         title="Resume session: copy the command that resumes this session in Claude Code"
         aria-label="Resume session">▶️</button>
     {% endif %}
+    {#
+      Follow toggle for `serve --watch`. Rendered unconditionally but
+      hidden by CSS until live_update.js finds it can actually poll, so
+      the markup stays identical between a served page and the same file
+      opened from disk.
+    #}
+    <button class="follow-updates floating-btn" id="followUpdates" data-unseen="0"
+        title="Follow new messages as they arrive" aria-label="Follow new messages"
+        aria-pressed="false">⏬</button>
     <button class="timeline-toggle floating-btn" id="toggleTimeline" title="Show timeline">📆</button>
     <button class="filter-messages floating-btn" id="filterMessages" title="Search & Filter (/)">🔍</button>
     <button class="toggle-details floating-btn" id="toggleDetails" title="Toggle all details">📋</button>

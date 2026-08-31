@@ -142,7 +142,13 @@ class TestLiveUpdate:
             page, "() => document.querySelectorAll('.message.live-new').length > 0"
         )
 
-        assert page.locator("#live-update-pill").count() == 1
+        # The follow toggle belongs to the page's floating-button stack and
+        # is revealed once polling starts, so it carries the unseen count
+        # rather than being built from scratch on first arrival.
+        follow = page.locator("#followUpdates")
+        assert follow.count() == 1
+        assert "live-active" in (follow.get_attribute("class") or "")
+        assert follow.get_attribute("data-unseen") not in (None, "0")
 
     def test_timestamps_on_new_cards_are_localised(self, page, live_archive) -> None:
         """The rehydrate contract, end to end: timestamp localisation
@@ -193,6 +199,169 @@ class TestLiveUpdate:
         )
         assert still_folded == folded, "fold state was lost across the update"
 
+    # ---- patching ----------------------------------------------------
+    #
+    # The first update of a session always swaps: the hashes a patch
+    # compares against are taken from parsed markup, and the first update
+    # is where they are first taken. So every test below appends twice —
+    # once to seed, once to exercise the patch. Asserting only that the
+    # new message arrived would pass just as well with the patch disabled
+    # entirely, so these assert on *element identity*, which the swap
+    # necessarily destroys and the patch necessarily keeps.
+
+    _TAG_CARDS = (
+        "() => { let n = 0;"
+        " document.querySelectorAll('#transcript .message').forEach(el => {"
+        "   el.__probe = true; n++; });"
+        " return n; }"
+    )
+    _COUNT_TAGGED = (
+        "() => { const els = [...document.querySelectorAll('#transcript .message')];"
+        " return { total: els.length, kept: els.filter(e => e.__probe).length }; }"
+    )
+
+    def test_an_append_patches_rather_than_rebuilding_the_page(
+        self, page, live_archive
+    ) -> None:
+        """A swap replaces every node in the container, so no element on
+        screen survives it. A patch touches only what changed."""
+        base, project, jsonl = live_archive
+        self._open(page, base, project)
+
+        with jsonl.open("a", encoding="utf-8") as f:
+            f.write(_entry("patch-seed", "PATCH-SEED"))
+        _wait_for(page, "() => document.body.innerText.includes('PATCH-SEED')")
+
+        tagged = page.evaluate(self._TAG_CARDS)
+        assert tagged > 10, "fixture too small to distinguish patch from swap"
+
+        with jsonl.open("a", encoding="utf-8") as f:
+            f.write(_entry("patch-two", "PATCH-TWO"))
+        _wait_for(page, "() => document.body.innerText.includes('PATCH-TWO')")
+
+        after = page.evaluate(self._COUNT_TAGGED)
+        assert after["total"] == tagged + 1, "the appended card did not arrive"
+        # A swap scores exactly 0. A patch keeps everything but the few
+        # cards whose own markup really changed — in practice the ancestors
+        # whose fold bar counts their descendants.
+        assert after["kept"] > 0, "every card was rebuilt: the patch did not run"
+        assert after["kept"] >= tagged - 5, (
+            f"patch replaced more than expected: {tagged - after['kept']} cards"
+        )
+
+    def test_a_patch_leaves_existing_timestamps_localised(
+        self, page, live_archive
+    ) -> None:
+        """Timestamp localisation rewrites innerHTML, so a rebuilt card
+        comes back with a raw ISO string and has to be converted again.
+        Across a growing session that is the whole page, every update."""
+        base, project, jsonl = live_archive
+        self._open(page, base, project)
+
+        with jsonl.open("a", encoding="utf-8") as f:
+            f.write(_entry("ts-seed", "TS-SEED"))
+        _wait_for(page, "() => document.body.innerText.includes('TS-SEED')")
+        _wait_for(
+            page,
+            "() => { const t = document.querySelector('#transcript .timestamp"
+            "[data-timestamp]'); return t && t.childElementCount > 0; }",
+        )
+        page.evaluate(
+            "() => { document.querySelector('#transcript .timestamp[data-timestamp]')"
+            ".__probe = true; }"
+        )
+
+        with jsonl.open("a", encoding="utf-8") as f:
+            f.write(_entry("ts-two", "TS-TWO"))
+        _wait_for(page, "() => document.body.innerText.includes('TS-TWO')")
+
+        first = page.evaluate(
+            "() => { const t = document.querySelector('#transcript .timestamp"
+            "[data-timestamp]');"
+            " return t && { kept: !!t.__probe, localised: t.childElementCount > 0 }; }"
+        )
+        assert first["kept"], "the first timestamp's element was rebuilt"
+        assert first["localised"], "the first timestamp lost its localisation"
+
+    def test_the_swap_is_the_fallback_when_the_ids_move(
+        self, page, live_archive
+    ) -> None:
+        """The patch is only valid while the card ids still mean what they
+        meant. Out-of-order arrivals renumber the positional `msg-d-N`
+        ids — measured at 2 of 47 growth steps across three real sessions —
+        and the update must fall back rather than patch against stale
+        identities."""
+        base, project, jsonl = live_archive
+        self._open(page, base, project)
+
+        with jsonl.open("a", encoding="utf-8") as f:
+            f.write(_entry("fallback-seed", "FALLBACK-SEED"))
+        _wait_for(page, "() => document.body.innerText.includes('FALLBACK-SEED')")
+
+        # Control: with the ids intact, this same append patches. Without
+        # it, `kept == 0` below would prove only that *something* swapped —
+        # which is also what a permanently broken patch looks like.
+        page.evaluate(self._TAG_CARDS)
+        with jsonl.open("a", encoding="utf-8") as f:
+            f.write(_entry("fallback-ctl", "FALLBACK-CTL"))
+        _wait_for(page, "() => document.body.innerText.includes('FALLBACK-CTL')")
+        assert page.evaluate(self._COUNT_TAGGED)["kept"] > 0, (
+            "control failed: the patch did not run even with the ids intact"
+        )
+
+        # Renumbering, simulated at its effect: the live tree's id sequence
+        # no longer matches the one the next render will carry.
+        page.evaluate(self._TAG_CARDS)
+        page.evaluate(
+            "() => { const els = [...document.querySelectorAll('#transcript .message')];"
+            " els[Math.floor(els.length / 2)].id = 'msg-d-999999'; }"
+        )
+
+        with jsonl.open("a", encoding="utf-8") as f:
+            f.write(_entry("fallback-two", "FALLBACK-TWO"))
+        _wait_for(page, "() => document.body.innerText.includes('FALLBACK-TWO')")
+
+        after = page.evaluate(self._COUNT_TAGGED)
+        assert after["kept"] == 0, "the patch ran against a renumbered tree"
+        # And the fallback did the job properly, not just safely.
+        assert page.evaluate(
+            "() => !!document.querySelector('#transcript .message.live-new')"
+        ), "the swap did not tag the new card"
+
+    def test_following_leaves_the_newest_card_clear_of_the_viewport_edge(
+        self, page, live_archive
+    ) -> None:
+        """`scrollIntoView({block: 'end'})` aligns the card's bottom edge
+        with the viewport's, which measures as a 0px gap and reads as the
+        message being cut off. The padding under `body.live-following` is
+        what gives the scroll somewhere to go."""
+        base, project, jsonl = live_archive
+        self._open(page, base, project)
+
+        page.click("#followUpdates")
+        assert page.evaluate(
+            "() => document.body.classList.contains('live-following')"
+        ), "clicking the toggle did not engage follow mode"
+
+        with jsonl.open("a", encoding="utf-8") as f:
+            f.write(_entry("follow-1", "FOLLOW-ONE"))
+        _wait_for(page, "() => document.body.innerText.includes('FOLLOW-ONE')")
+        # The scroll is smooth, so let it land.
+        page.wait_for_timeout(1200)
+
+        gap = page.evaluate(
+            "() => { const c = document.getElementById('transcript');"
+            " const r = c.lastElementChild.getBoundingClientRect();"
+            " return Math.round(window.innerHeight - r.bottom); }"
+        )
+        assert gap > 20, f"newest card sits {gap}px from the viewport bottom"
+
+        # And turning it off puts the page back the way it was.
+        page.click("#followUpdates")
+        assert not page.evaluate(
+            "() => document.body.classList.contains('live-following')"
+        )
+
     def test_two_updates_inside_one_second_are_both_seen(
         self, page, live_archive
     ) -> None:
@@ -234,4 +403,11 @@ class TestLiveUpdate:
         time.sleep(2)  # several poll intervals, had it been active
 
         assert errors == []
-        assert page.locator("#live-update-pill").count() == 0
+        # The follow toggle is in the markup of every transcript page, so
+        # that a served page and the same file on disk render identically.
+        # It must stay hidden here: `file://` can never poll, and a visible
+        # control would promise something it cannot do.
+        follow = page.locator("#followUpdates")
+        assert follow.count() == 1
+        assert "live-active" not in (follow.get_attribute("class") or "")
+        assert not follow.is_visible()

@@ -10,8 +10,17 @@ than replacing it" at the end. **Fixes A, C and B have all landed**, plus
 a follow-up round on the refresh's own queries: a steady-state tick on
 the 803 MB archive went **1.03 s → 0.145 s, a 7x tick**, and Fix B needed
 no migration in the end — the proof lives in the resident watcher's
-memory. The HTML half found that patching does *not* need the
-per-message render seam C11 says is missing; that is the open work.
+memory.
+
+**The browser half has now landed too** (see "The browser half" at the
+end). Patching indeed did *not* need the per-message render seam C11 says
+is missing. A patched update on a 2.4 MB session page localises **2
+timestamps instead of 896** and blocks the main thread for 61 ms instead
+of 107 ms; separately, the timestamp localiser's scheduling turned out to
+be costing **766–3,348 ms of wall clock for 8–36 ms of work**, which was
+the actual source of the reported sluggishness. **C20's recommendation to
+take C2 is revised: the patch protocol arrived and did not need it** —
+see the measurements there.
 
 Decisions below are settled; the measurements that forced them are
 recorded so a later reader can tell which choices were reasoned and which
@@ -43,7 +52,7 @@ structural finding.
 | D2 | Add `source_size` to `cached_files` so the cache itself detects fast appends; the watcher then trusts `get_modified_files` rather than keeping parallel state. Detection is stat-polling. **Landed.** |
 | D3 | Default scope is one project; `--all-projects` is opt-in. **Landed.** |
 | D4 | Quiet-period debounce (~300 ms) with a max-latency cap (~2 s), both flags. **Landed.** |
-| D5 | Container swap (option B) with uuid-set diffing, not full reload and not fragment patching. |
+| D5 | Container swap (option B) with uuid-set diffing, not full reload. Fragment patching was rejected here and **later built anyway** — the reasons turned out not to hold; see C26. |
 | D6 | Polling. SSE only if measurement later justifies it. |
 | D7 | Route every output write through temp-file + `os.replace`. **Landed.** |
 | D8 | Measured: the write + FTS update is fast enough. No lock-avoidance machinery needed. |
@@ -344,6 +353,12 @@ document. Fragment patching was rejected on C11 (no isolation seam,
 (out-of-order arrivals) and C10 (positional ids, non-unique uuids). B gets
 most of the perceived benefit for a fraction of the risk.
 
+**That rejection was later overturned — see C26.** C11 does not apply,
+because a patch takes the delta between two whole renders rather than
+rendering one message in isolation; C3 and C10 turned out to be a 4%
+fallback rate (revised C20) rather than a correctness hazard. The swap
+remains, as that fallback.
+
 The inventory is favourable. **Survives a swap for free:** listeners
 delegated on `document` (`transcript.html:395, 538, 575`), everything
 bound to the toolbar and floating buttons (outside the container), and
@@ -636,21 +651,19 @@ Design points that survived contact:
 - The server still never renders; the page re-fetches its own URL, so the
   conditional GET is both the change signal and the content, and there is
   no endpoint to keep in sync with the renderer.
-- Container swap, not fragment patching (C3, C10, C11).
+- Container swap, not fragment patching (C3, C10, C11) — *superseded:
+  patching landed later, with this swap as its fallback (C26).*
 
 **Stage 3 — `file://` sidecar (optional).** A `session-<id>.live.js`
 sidecar carrying a revision counter; the page injects it on a timer and
 reloads on change (C4). Honest and cheap, but strictly worse than Stage 2,
 so build it only if the no-server case proves to matter.
 
-**Stage 4 — SSE and/or fragment patching (speculative).** Only after
-Stage 2 has been lived with, and only if the poll interval or swap cost
-demonstrably hurts. Fragment patching additionally needs the *architecture*
-half of `render-format-once.md` step 3 — a real format phase and a
-per-message render seam — which has not landed (C11). **See C19 below:
-a patch protocol does not actually need that seam, because the delta can
-be taken between two whole renders rather than produced by rendering one
-message in isolation.**
+**Stage 4 — patching. ✅ Landed** (see "The browser half"), and it needed
+neither the *architecture* half of `render-format-once.md` step 3 nor a
+per-message render seam: C19 was right that the delta can be taken
+between two whole renders. SSE remains unbuilt and unjustified — D6's
+argument still holds, and the poll is not what costs anything.
 
 ---
 
@@ -1088,6 +1101,61 @@ from that draft (resolver plumbing through ~8 formatters / 4 modules,
 9 coupled test files, full `.ambr` regeneration, and the vacuous-guard
 trap).
 
+#### ⚠️ Revised, after building the patch: **do not take C2**
+
+The above was written before the protocol existed. Building it (see "The
+browser half") contradicted both bullets, and the recommendation with
+them.
+
+**The addressing argument was wrong about where the O(page) work is.**
+The patch does not do "one `getElementById`" instead of a whole-tree
+pass, whatever the id scheme: it has to fetch the page, `DOMParser` it,
+and hash every card in it, because *the hash cannot come from the live
+DOM*. By update time the live tree has been rewritten by decoration —
+timestamp localisation replaces `innerHTML` — so a hash taken from it can
+never match one taken from server bytes. This was found by measurement,
+not by reasoning: the first prototype computed hashes client-side from
+the live tree and skipped **0 of 1,181 nodes**. So an O(page) pass over
+pristine bytes is structural, C2 removes none of it, and only a
+server-shipped delta would.
+
+**The insertion argument was right about the mechanism and wrong about
+the stakes.** Measured directly, keying the same reconcile both ways on
+a real 4 MB page:
+
+| fixture | id scheme | subtrees skipped | ins | del | re-localise |
+|---|---|---|---|---|---|
+| tail append | `msg-d-N` | 186 | 1 | 0 | 2 |
+| tail append | `m-{uuid}-{k}` | 186 | 1 | 0 | 2 |
+| mid-tree | `msg-d-N` | 29 | **104** | **103** | **593** |
+| mid-tree | `m-{uuid}-{k}` | 186 | **1** | **0** | **2** |
+
+Identical for tail appends; positional ids degenerate into a ~100-node
+teardown on an out-of-order arrival, exactly as predicted. But **how
+often that happens** was never measured, and it decides everything.
+Replaying three real sessions line by line through the renderer at stride
+7 (a debounced tick's worth), checking whether each render's card
+sequence extends the last:
+
+> **47 growth steps: 45 tail-only, 2 mid-tree — and the `msg-d-N` prefix
+> broke in exactly those 2.**
+
+So C2 buys the difference between a patch and a swap on **4% of ticks**.
+On those two the page pays today's swap, which is correct, already
+implemented, and the thing every other tick used to do.
+
+And the two mid-tree cases landed *near* the tail — new cards at index
+306 of 311, and 308/310/312 of 312. They are interleavings, not deep-tree
+insertions. If that 4% ever becomes annoying, letting the extension test
+tolerate a bounded reordering window near the tail is a change to one
+function, against a migration through ~8 formatters, 4 modules and 9
+coupled test files.
+
+**Recommendation: leave C2 deferred, and update
+`identifier-consolidation.md` to say the consumer arrived and did not
+need it.** Take it if a *different* consumer appears — archive-search
+annotations are still the plausible one — not for this.
+
 It does **not** help the cache. `msg-d-N` and `data-uuid` are
 render-only and never enter it; cache identity is the transcript uuid /
 `sessionId` / `parentUuid` / `requestId` family, plus the DAG *line* ids
@@ -1147,6 +1215,197 @@ Measured on the 46 MB archive, appending one line to a 626-row file:
 So the DB does not grow either way; today's cost is write amplification
 (~600x), not size.
 
+---
+
+## The browser half — ✅ LANDED
+
+Three items, prompted by living with Stage 2: the follow control was in
+the wrong place (and, it turned out, broken), following scrolled to a
+position that felt wrong, and timestamps visibly lagged the fade-in on
+large sessions. Only the third was expected to be interesting. All three
+turned out to have a measurable cause, and two of them were bugs rather
+than preferences.
+
+### C23. The sluggish fade-in was the *scheduler*, not the work
+
+The reported symptom — "timestamps are all reconverted on every change,
+which makes the fade-in look sluggish past 100–200 K tokens" — pointed
+at the reconversion. The reconversion is nearly free. The scheduling was
+not.
+
+`timezone_converter.js` processed **25 elements per
+`requestIdleCallback`**, so the cost was set by the *number of
+callbacks*, not by the work:
+
+| page | timestamps | CPU, one pass | wall clock, as scheduled |
+|---|---|---|---|
+| 4 MB | 1,180 | 8 ms | **766–1,500 ms** |
+| 12 MB | 2,471 | 15 ms | **1,624 ms** |
+| 27 MB | 5,010 | 36 ms | **3,348 ms** |
+
+And the queue is in *document order*, so cards appended by a live update
+are localised **last** — the fade-in plays over a raw ISO string and the
+timestamp flips in a second later. That is the whole reported feel.
+
+**Fixed** by draining against the idle deadline (`timeRemaining()`,
+checked every 32 elements, `{timeout: 200}`) instead of a fixed batch,
+with the first slice on the current task under a 24 ms budget so a live
+update's new cards are localised before the browser paints them:
+
+| page | before | after |
+|---|---|---|
+| 4 MB / 1,180 ts | 766 ms | **13 ms** |
+| 12 MB / 2,471 ts | 1,624 ms | **19 ms** |
+| 27 MB / 5,010 ts | 3,348 ms | **35 ms** |
+
+— within a few ms of a straight synchronous pass, while still yielding.
+Verified on regenerated pages by recording, in-page, when each
+`.timestamp` was rewritten: the span from first conversion to last went
+**778 ms → 0 ms**, i.e. a single burst. Instrumenting
+`requestIdleCallback` showed **0 idle slices** on a 2.4 MB page — the
+drain now finishes in the first one.
+
+*A probe artefact worth remembering:* the first measurement of this put
+the span at 165–219 ms even after the fix, which looked like the fix
+half-working. It was the probe. A `MutationObserver` watching
+`.timestamp` for `childList` also sees **HTML parsing** insert each
+element's original text node, spread across the page's parse. Filtering
+to mutations whose `addedNodes` contain an *element* separates
+conversions (which insert a `<span>`) from parsing (which never does).
+
+### C24. The follow pill was 1,360 px wide, and "following" rendered fainter than "not following"
+
+Both found by measuring the thing rather than reading the CSS, and both
+were bugs, not placement preferences:
+
+- `.floating-btn` sets `right: 20px`; `.live-update-pill` added
+  `left: 20px` with `width: auto`. A fixed-position box with both insets
+  and auto width **stretches**: measured at **1360 px across a 1400 px
+  viewport**.
+- `data-following="yes"` used `--highlight-light`, which computes to
+  `rgba(227,242,253,0.333)` against an idle `--session-bg-dimmed` of
+  `rgba(232,244,253,0.4)`. The engaged state was **fainter than the
+  disengaged one**; only the text label distinguished them.
+
+**Fixed** by making the toggle a real member of the floating stack —
+`#followUpdates`, in `transcript.html` with the others, at `bottom:
+440px` (`.resume-toast` moved 440 → 500 to stay above it). It keeps the
+stack's round 50 px footprint and carries the unseen count as a corner
+badge; "following" uses the opaque `#d4e8f7` that `.debug-toggle.active`
+already established.
+
+It is rendered on *every* transcript page and revealed by
+`live_update.js` adding `.live-active`, so a served page and the same
+file on disk carry identical markup, and a `file://` page — which can
+never poll (C4) — never shows a control that would promise something it
+cannot do.
+
+### C25. The follow scroll needed both halves, and neither alone works
+
+`scrollIntoView({block: 'end'})` aligns the last card's bottom edge with
+the viewport's: measured gap **0 px**, which reads as the message being
+cut off. The obvious fixes fail individually:
+
+| | resulting gap |
+|---|---|
+| today | 0 px |
+| `scroll-margin-bottom: 120px` alone | 25 px — the document has no room left to give |
+| `padding-bottom: 120px` alone | 0 px — `block: 'end'` aligns to the edge regardless |
+| **padding + scrolling to the document end** | **120 px** ✓ |
+
+So: `body.live-following { padding-bottom: 120px }` supplies the space,
+and `scrollToEnd` scrolls the *document* to its end rather than aligning
+the card. Scoping the padding to the following state keeps every ordinary
+page layout-identical. Measured on a real page: **134 px**.
+
+### C26. Patching, as built
+
+The shape C19 described, with one change forced by measurement and one
+simplification justified by it.
+
+**Forced: the hash cannot come from the live DOM.** Both sides of the
+comparison have to be pristine server bytes, because decoration rewrites
+the live tree (C23's localiser replaces `innerHTML`). A first prototype
+hashed the live tree and skipped **0 of 1,181 nodes**. So the client
+hashes each node's own markup out of the freshly parsed document and
+keeps the map for next time — which also means **no server change at
+all**: no `data-h` attribute, no renderer work, and no risk of a
+server-side hash silently missing a field and showing a stale card.
+
+**Simplified: patch the extension case, swap for everything else.** Per
+the revised C20, 45 of 47 real growth steps are pure extensions. So the
+update tests whether the new render's node-key sequence *extends* the
+one on screen; if it does, it replaces the few nodes whose own markup
+changed and inserts the new ones. Anything else — renumbering,
+reordering, deletions, a node with no key, more than 40 changed nodes —
+returns to the unchanged swap, which stays the definition of correct.
+
+Two structural details that are easy to get wrong:
+
+- **A node's "own markup" is not just its card.** A fork point renders
+  as a box *inside* `.children` so folding hides it with the subtree,
+  and on a fork-only slot that box is the node's only content and
+  carries its id. Both kinds hold positional `#msg-d-N` branch links, so
+  a model that only looked at `:scope > .message` would silently miss a
+  changed fork point. `ownParts` takes the card plus every non-
+  `.message-node` child of `.children`; the template always emits those
+  last, which is what lets a replacement be re-appended.
+- **Rehydrate what you placed, not the node you placed it in.** The
+  first working version pushed the whole `.message-node` to the
+  rehydrate list. The session header's fold bar counts its descendants,
+  so it is replaced on *every* append — and its node is the entire page.
+  Measured: an update that changed 3 cards re-localised **1,186**
+  timestamps. Fixed by having `applyOwn` return the elements it actually
+  inserted. This was invisible to every test that asserted on the
+  outcome; it took the end-to-end measurement to see it.
+
+**Reachability, checked rather than assumed.** The patch requires *every*
+`.message-node` to have a key, and bails to the swap if one does not — a
+decline that would be completely silent. Across **29 real session pages
+(11,140 nodes)**: **0 unkeyed**. So the fallback is not quietly the only
+path. Those pages also contained exactly **one** fork point between them,
+so the `ownParts` generalisation above is defensive rather than hot — but
+it is the difference between a rare stale fork point and a correct one.
+
+**Measured end to end**, driving the real pipeline (a real session file
+with its tail held back, re-rendered per append, the shipped
+`live_update.js` polling a real server) on a 2.4 MB / 896-card page:
+
+| | first update (swap) | second update (patch) |
+|---|---|---|
+| cards inserted or replaced | 897 | **3** |
+| timestamps localised | 896 | **2** |
+| main thread blocked | 107 ms | **61 ms** |
+
+The first update of a session always swaps — it is where the hashes are
+first taken — and the swap is a valid starting point for the next patch.
+What remains in the 61 ms is the floor a client-side diff cannot avoid:
+fetching the page and parsing it. Only a server-shipped delta removes
+that, and it is not worth building for this.
+
+Also gone, in the patched case: the `uuid → session-id → positional-id`
+capture-and-restore of fold and `<details>` state. Untouched nodes keep
+their state because they *are* the same nodes.
+
+### C27. Testing this needs identity assertions, not outcome assertions
+
+The obvious tests — "the new message appeared", "the timestamp is
+localised" — pass with the patch disabled entirely, because the swap
+does those things too. The same trap as Fix B's "did an append-only
+write happen?", which passed with the gate removed because the layer
+below rescued it.
+
+So the tests tag every card on screen with a JS property and assert on
+**element identity** afterwards: a swap necessarily scores 0, a patch
+necessarily keeps almost everything. Verified by sabotage — forcing
+`tryPatch` to return `null` fails exactly the two patch tests and no
+others. The fallback test carries its own within-test control (the same
+append patches with the ids intact, then does not once they move),
+because `kept == 0` alone would also be what a permanently broken patch
+looks like.
+
+Every test here appends **twice**: the first update seeds the hashes.
+
 ### Suggested order
 
 1. ✅ **Fix C and Fix A landed.** Tick **1.03 s → 0.717 s** on the 803 MB
@@ -1179,7 +1438,20 @@ So the DB does not grow either way; today's cost is write amplification
 3. ✅ **The refresh's own queries** (migration 012 + one query rewrite),
    taking the tick to **0.145 s** — cumulatively **1.03 s → 0.145 s, a
    7x tick**. See "What was left in the tick" above.
-3. **Option 1** for the browser, which is where the user-visible cost
-   actually is, and which no longer depends on `render-format-once.md`.
-   Land the tail-append case first; take C2 (C20) when the fallback
-   rate on out-of-order arrivals proves it is worth the migration.
+4. ✅ **Option 1 for the browser** — landed as described in "The browser
+   half", and it did not need `render-format-once.md` or C2. On a 2.4 MB
+   page an update went from 897 cards / 896 timestamps / 107 ms to
+   **3 / 2 / 61 ms**, and the timestamp localiser's own scheduling —
+   which was the actual reported symptom, and was never about the
+   update path at all — went from **766–3,348 ms to 13–35 ms**.
+
+   The fallback rate C20 said to wait for was then measured at **4%**,
+   which is what argues *against* the migration rather than for it.
+
+**What is left, if anything.** The 61 ms floor is fetch + `DOMParser` of
+the whole page, which only a server-shipped delta removes; that is a real
+project (an endpoint or sidecar, and the server holding the previous
+render) for a benefit that is invisible below ~10 MB pages. Nothing here
+needs doing. The next thing that would justify reopening the browser side
+is a *user-visible* complaint on a very large live page, not a number in
+this document.

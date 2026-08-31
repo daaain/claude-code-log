@@ -1088,26 +1088,66 @@ poller notices and does nothing. It polls a HEAD of its own URL and
 compares `Last-Modified` **and `Content-Length`**: HTTP dates have
 one-second granularity, so two updates inside the same second are
 otherwise invisible (the same trap as the cache's mtime tolerance, which
-§2.3 solves the same way). On a change it re-fetches the page and
-replaces `#transcript` wholesale rather than patching in messages —
-appends are not always in timestamp order, one entry can render as
-several cards, and `msg-d-N` anchors are positional, so inserting
-anywhere but the tail renumbers them.
+§2.3 solves the same way). On a change it re-fetches the page and either
+**patches** or **swaps**.
+
+**Patching** applies when the new render's node-key sequence *extends*
+the one on screen: the nodes whose own markup changed are replaced, new
+ones are inserted, and everything else is left alone — keeping its
+scroll, fold, `<details>` and localised timestamps because it is
+literally the same DOM. Change detection is a per-node hash of the
+node's own markup, taken from the **freshly parsed document, never from
+the live DOM**: decoration rewrites the live tree (timestamp
+localisation replaces `innerHTML`), so a hash taken from it never
+matches one taken from server bytes. Nothing is emitted server-side for
+this.
+
+A node's own markup is its `:scope > .message` *plus* every
+non-`.message-node` child of its `.children` — a fork point renders
+inside `.children` so folding hides it with the subtree, and on a
+fork-only slot it is the node's only content and carries its id.
+
+**Swapping** (replace `#transcript` wholesale) is the fallback for
+everything else: renumbered or reordered ids, deletions, a node with no
+key, more than 40 changed nodes, and the first update of a session,
+which is where the hashes are first taken. It is also what every update
+did before patching existed. Measured across three real sessions
+replayed through the renderer, 45 of 47 growth steps are pure
+extensions; the other 2 are out-of-order arrivals that renumber the
+positional `msg-d-N` ids and take the swap.
 
 A swap destroys anything that decorated the old markup, so components
 register with `window.claudeLogOnRehydrate(fn)` (defined at the top of
 `<body>`, before every component include) and the poller calls
-`window.claudeLogRehydrate(root)` after swapping. Currently registered:
-timestamp localisation (scoped to a subtree) and the timeline rebuild.
-Delegated listeners and everything bound to the toolbar or floating
-buttons survive untouched and must **not** register. Fold state and
-`<details>` are captured and restored by the poller itself, keyed
-`data-uuid` → `data-session-id` → positional `id` — session headers and
-fork points carry no uuid, and on a single-session page the header is
-the only foldable node.
+`window.claudeLogRehydrate(root)` — over the whole container after a
+swap, and over *only the elements it placed* after a patch. Passing the
+containing node instead is a live trap: the session header's fold bar
+counts its descendants, so it is replaced on every append, and its node
+is the entire page. Currently registered: timestamp localisation (scoped
+to a subtree) and the timeline rebuild. Delegated listeners and
+everything bound to the toolbar or floating buttons survive untouched
+and must **not** register. On the swap path only, fold state and
+`<details>` are captured and restored by the poller, keyed `data-uuid` →
+`data-session-id` → positional `id` — session headers and fork points
+carry no uuid, and on a single-session page the header is the only
+foldable node.
 
-Measured: ~1s from append to visible; a 7.0MB session page costs 202ms to
-swap (31 fetch / 63 parse / 17 swap / 91 layout) and ~1ms per idle poll.
+Measured: ~1s from append to visible. On a 2.4MB / 896-card page, a swap
+touches 897 cards, re-localises 896 timestamps and blocks the main
+thread 107ms; a patch of the same append touches **3 cards, 2
+timestamps, 61ms**. The remaining 61ms is fetch plus `DOMParser` of the
+whole page, which only a server-shipped delta would remove. Idle polls
+cost ~1ms.
+
+**Timestamp localisation drains against the idle deadline**, not in
+fixed batches. `timezone_converter.js` used 25 elements per
+`requestIdleCallback`, which made the *callback count* the cost: a 4MB
+page's 1,180 timestamps are 8ms of work but took 766ms of wall clock,
+and a 27MB page's 5,010 took 3.3s — in document order, so a live
+update's new cards were localised last and the fade-in played over a raw
+ISO string. Draining while `timeRemaining()` allows (checked per 32
+elements, `{timeout: 200}`, first slice on the current task under a 24ms
+budget) takes those to **13ms and 35ms**.
 
 
 ### 2.16 Parsed-entry store

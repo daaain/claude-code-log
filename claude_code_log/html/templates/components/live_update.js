@@ -12,16 +12,16 @@
 //     conversion and the files on disk stay canonical, so this page just
 //     re-fetches its own URL. A conditional GET makes the idle case free
 //     (304 in ~1ms) and needs no endpoint of its own.
-//   * We swap #transcript rather than reloading. A reload loses fold
-//     state and re-parses a document that can reach tens of MB; a swap
-//     keeps scroll position for free, because everything above the
-//     viewport is untouched.
-//   * We do not patch in individual messages. New entries do not always
-//     belong at the end (a transcript's appends are not in timestamp
-//     order), one entry can render as several cards, and the `msg-d-N`
-//     anchors are positional — inserting anywhere but the tail renumbers
-//     them and breaks the fork/tool-pair links already on the page.
-//     Replacing the whole container sidesteps all three.
+//   * We never reload. A reload loses fold state and re-parses a
+//     document that can reach tens of MB.
+//   * When the new render extends the one on screen, we patch the nodes
+//     that changed and leave the rest alone (see "patching" below). When
+//     it does not, we replace #transcript wholesale — which keeps scroll
+//     position for free, because everything above the viewport is
+//     untouched, and is the fallback for every shape the patch declines:
+//     entries that do not belong at the end (a transcript's appends are
+//     not in timestamp order) and the `msg-d-N` renumbering that follows,
+//     which would break the fork/tool-pair links already on the page.
 (function () {
     'use strict';
 
@@ -130,39 +130,316 @@
         return count;
     }
 
-    // ---- the update ------------------------------------------------------
+    // ---- patching, for the case that is almost always the real one -------
+    //
+    // Replacing #transcript wholesale costs work proportional to the *page*
+    // for a change proportional to the *append*: on a 4MB session page,
+    // ~97ms of DOM work plus re-localising all 1,180 timestamps, to show two
+    // new cards. It also reconstructs fold and disclosure state from a
+    // heuristic key rather than keeping the nodes that already hold it.
+    //
+    // So when the new render is a pure *extension* of the one on screen —
+    // the same cards, in the same order, followed by new ones — we patch
+    // instead: replace the handful of cards whose own markup actually
+    // changed, insert the new ones, and leave every other node untouched.
+    // Measured on the same page: 2 cards inserted, 2 timestamps localised.
+    //
+    // Anything else falls back to the swap, which is unchanged and stays the
+    // definition of correct. Replaying three real sessions through the
+    // renderer, 45 of 47 growth steps were pure extensions; the other 2 were
+    // out-of-order arrivals that renumbered the positional `msg-d-N` ids, so
+    // they take the swap. That ratio is why the fallback is acceptable and
+    // why patching the general case is not worth its complexity yet.
 
-    function announce(added) {
-        let pill = document.getElementById('live-update-pill');
-        if (!pill) {
-            pill = document.createElement('button');
-            pill.id = 'live-update-pill';
-            pill.className = 'floating-btn live-update-pill';
-            pill.addEventListener('click', () => {
-                following = !following;
-                if (following) scrollToEnd();
-                render();
-            });
-            document.body.appendChild(pill);
-        }
-        pill.dataset.following = following ? 'yes' : 'no';
-        pill.unseen = (pill.unseen || 0) + added;
-        render();
+    // The hashes the cards on screen were rendered from, keyed by card id.
+    // Taken from pristine parsed markup, never from the live DOM: by update
+    // time the live tree has been rewritten by decoration (timestamp
+    // localisation replaces innerHTML), so a hash taken from it would never
+    // match one taken from the server's bytes.
+    let cardHashes = null;
 
-        function render() {
-            if (following) pill.unseen = 0;
-            pill.textContent = following
-                ? '⏬ following'
-                : (pill.unseen ? `⏬ ${pill.unseen} new` : '⏬ follow');
-            pill.title = following
-                ? 'Following new messages — click to stop'
-                : 'Scroll to new messages as they arrive';
+    // FNV-1a. A collision would show one stale card, not break the page, and
+    // needs a *changed* card to land on its own previous value: 1 in 2^32.
+    function hashOf(s) {
+        let h = 0x811c9dc5;
+        for (let i = 0; i < s.length; i++) {
+            h ^= s.charCodeAt(i);
+            h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
         }
+        return h.toString(36);
     }
 
+    // What belongs to a node itself rather than to its descendants. That is
+    // the card — but not only the card: a fork point renders as a box inside
+    // `.children` so that folding hides it with the subtree, and on a
+    // fork-only slot that box is the node's *only* content and carries its
+    // id. Both kinds also hold positional `#msg-d-N` branch links, so
+    // treating them as part of the node is what keeps a changed fork point
+    // from being missed.
+    //
+    // The template always emits them after the child nodes, which is what
+    // lets `applyOwn` below put replacements back by appending.
+    function ownParts(node) {
+        const parts = [];
+        const card = node.querySelector(':scope > .message');
+        if (card) parts.push(card);
+        const kids = node.querySelector(':scope > .children');
+        if (kids) {
+            Array.from(kids.children).forEach(el => {
+                if (!el.classList.contains('message-node')) parts.push(el);
+            });
+        }
+        return parts;
+    }
+
+    // A node's identity: its card's id, or — for a fork-only slot, which has
+    // no card — the fork-point box's.
+    function nodeKey(node) {
+        const card = node.querySelector(':scope > .message');
+        if (card && card.id) return card.id;
+        const fork = node.querySelector(':scope > .children > .fork-point[id]');
+        return fork ? fork.id : null;
+    }
+
+    // Node keys in document order, plus a hash of each node's own markup.
+    // A node with no key at all makes the whole update unpatchable, because
+    // the extension test below is only meaningful over a complete sequence.
+    // `withHashes` is off for the live tree: only its key sequence is
+    // wanted there, and hashing it would serialise the whole page — the
+    // very cost this is here to avoid. Its hashes would be meaningless
+    // anyway, having been taken after decoration rewrote the markup.
+    function scanTree(root, withHashes) {
+        const ids = [];
+        const hashes = new Map();
+        let ok = true;
+        root.querySelectorAll('.message-node').forEach(node => {
+            const key = nodeKey(node);
+            if (!key) { ok = false; return; }
+            ids.push(key);
+            if (withHashes) {
+                hashes.set(key, hashOf(ownParts(node).map(el => el.outerHTML).join('')));
+            }
+        });
+        return { ids, hashes, ok };
+    }
+
+    // Swap a node's own markup for the new render's, leaving its children
+    // alone. The card is replaced in place; the trailing parts are dropped
+    // and re-appended, which is correct because the template emits them
+    // after the child nodes.
+    //
+    // Returns the elements it actually put on the page, or null if the node
+    // is not a shape it can handle. Returning *those* rather than the node
+    // matters: the caller rehydrates what comes back, and a node's subtree
+    // is not what changed. The session header is the case that makes this
+    // sharp — its fold bar counts descendants, so it is replaced on every
+    // single append, and its node is the whole page.
+    function applyOwn(liveNode, newNode) {
+        const liveCard = liveNode.querySelector(':scope > .message');
+        const newCard = newNode.querySelector(':scope > .message');
+        if (!!liveCard !== !!newCard) return null;
+
+        const placed = [];
+        if (liveCard && newCard) {
+            const imported = document.importNode(newCard, true);
+            liveCard.replaceWith(imported);
+            placed.push(imported);
+        }
+
+        const newTrailing = ownParts(newNode).filter(el => !el.classList.contains('message'));
+        const liveKids = liveNode.querySelector(':scope > .children');
+        if (!liveKids) return newTrailing.length === 0 ? placed : null;
+        Array.from(liveKids.children).forEach(el => {
+            if (!el.classList.contains('message-node')) el.remove();
+        });
+        newTrailing.forEach(el => {
+            const imported = document.importNode(el, true);
+            liveKids.appendChild(imported);
+            placed.push(imported);
+        });
+        return placed;
+    }
+
+    // Where a new node belongs in the live tree: inside its parent's
+    // `.children`, after the last card already there. Because the id
+    // sequence is an extension, every new card follows every existing one in
+    // document order, so appending after the last `.message-node` is the
+    // right place — and going through `.message-node` rather than the
+    // container's last child keeps any trailing junction-link markup last.
+    function liveNodeFor(key) {
+        const el = document.getElementById(key);
+        return el ? el.closest('.message-node') : null;
+    }
+
+    function insertNode(newNode, imported) {
+        const parentNode = newNode.parentElement
+            && newNode.parentElement.closest('.message-node');
+        let liveKids;
+        if (!parentNode) {
+            liveKids = container();
+        } else {
+            const key = nodeKey(parentNode);
+            const holder = key && liveNodeFor(key);
+            if (!holder) return false;
+            liveKids = holder.querySelector(':scope > .children');
+            if (!liveKids) {
+                // The parent had no children until now, so it has no
+                // container to put them in; take the new one wholesale.
+                const newKids = parentNode.querySelector(':scope > .children');
+                if (!newKids) return false;
+                holder.appendChild(document.importNode(newKids, true));
+                return true;
+            }
+        }
+        if (!liveKids) return false;
+        const existing = liveKids.querySelectorAll(':scope > .message-node');
+        if (existing.length) existing[existing.length - 1].after(imported);
+        else liveKids.prepend(imported);
+        return true;
+    }
+
+    // Returns the number of cards added, or null if this update is not a
+    // shape we patch — in which case the caller swaps.
+    function tryPatch(nextRoot, next) {
+        if (!cardHashes || !next.ok) return null;
+        const live = scanTree(container(), false);
+        if (!live.ok) return null;
+
+        // A pure extension: every node on screen is still there, with the
+        // same key, in the same order. This is what fails when an
+        // out-of-order arrival renumbers the positional ids, and it is
+        // deliberately an all-or-nothing test — a single mismatch means the
+        // ids no longer mean what they meant, so nothing keyed on them is
+        // trustworthy.
+        if (next.ids.length < live.ids.length) return null;
+        for (let i = 0; i < live.ids.length; i++) {
+            if (next.ids[i] !== live.ids[i]) return null;
+        }
+
+        const changed = [];
+        for (const key of live.ids) {
+            if (cardHashes.get(key) !== next.hashes.get(key)) changed.push(key);
+        }
+        // A broad edit is cheaper to apply wholesale than node by node. An
+        // append moves only the ancestors' descendant counts, so this stays
+        // in single digits in practice.
+        if (changed.length > 40) return null;
+
+        // Resolve everything before touching the live DOM, so a shape we
+        // cannot handle leaves the page untouched for the swap to redo.
+        const edits = [];
+        for (const key of changed) {
+            const liveNode = liveNodeFor(key);
+            const newAnchor = nextRoot.querySelector('[id="' + CSS.escape(key) + '"]');
+            const newNode = newAnchor && newAnchor.closest('.message-node');
+            if (!liveNode || !newNode) return null;
+            edits.push([liveNode, newNode]);
+        }
+
+        const known = new Set(live.ids);
+        const additions = [];
+        for (const key of next.ids) {
+            if (known.has(key)) continue;
+            const newAnchor = nextRoot.querySelector('[id="' + CSS.escape(key) + '"]');
+            const newNode = newAnchor && newAnchor.closest('.message-node');
+            if (!newNode) return null;
+            // A new node nested inside another new node arrives with it;
+            // `next.ids` is in document order, so the outer one comes first.
+            if (additions.some(([, outer]) => outer.contains(newNode))) continue;
+            additions.push([key, newNode]);
+        }
+
+        const fresh = [];
+        // Nodes already on screen whose own markup legitimately changed: an
+        // ancestor's descendant count, or a `pair_first` class arriving with
+        // the other half of a pair. The subtree underneath is kept, and with
+        // it every bit of state the card holds.
+        for (const [liveNode, newNode] of edits) {
+            const placed = applyOwn(liveNode, newNode);
+            if (!placed) return null;
+            placed.forEach(el => fresh.push(el));
+        }
+
+        // New nodes. These carry the fade-in; the ones replaced above
+        // deliberately do not, since they were already on screen.
+        let added = 0;
+        for (const [key, newNode] of additions) {
+            const imported = document.importNode(newNode, true);
+            if (!insertNode(newNode, imported)) return null;
+            added += imported.querySelectorAll('.message').length;
+            imported.querySelectorAll('.message').forEach(el => el.classList.add('live-new'));
+            fresh.push(imported);
+        }
+
+        // Rehydrate over what actually changed, not over the whole tree.
+        if (window.claudeLogRehydrate) {
+            fresh.forEach(el => window.claudeLogRehydrate(el));
+        }
+        return added;
+    }
+
+    // ---- the update ------------------------------------------------------
+
+    // The toggle is part of the page's floating-button stack rather than
+    // something this script builds, so it is styled with the rest of the
+    // toolbar and cannot drift from it. It is revealed only here, because
+    // reaching this point is the proof that polling is possible at all.
+    const followBtn = document.getElementById('followUpdates');
+    let unseen = 0;
+
+    function renderFollowBtn() {
+        if (!followBtn) return;
+        if (following) unseen = 0;
+        followBtn.classList.toggle('following', following);
+        followBtn.setAttribute('aria-pressed', following ? 'true' : 'false');
+        followBtn.dataset.unseen = String(unseen);
+        followBtn.title = following
+            ? 'Following new messages — click to stop'
+            : (unseen
+                ? `${unseen} new message${unseen === 1 ? '' : 's'} — click to follow`
+                : 'Follow new messages as they arrive');
+        document.body.classList.toggle('live-following', following);
+    }
+
+    function setFollowing(next) {
+        following = !!next;
+        renderFollowBtn();
+        if (following) scrollToEnd();
+    }
+
+    if (followBtn) {
+        followBtn.classList.add('live-active');
+        followBtn.addEventListener('click', () => setFollowing(!following));
+        renderFollowBtn();
+    }
+
+    function announce(added) {
+        unseen += added;
+        renderFollowBtn();
+    }
+
+    // Scroll the document to its end rather than aligning the last card,
+    // which is what `scrollIntoView({block: 'end'})` did: that puts the
+    // card's bottom edge *exactly* on the viewport's, measured at a 0px
+    // gap. `body.live-following`'s padding supplies the space this then
+    // scrolls into. Both halves are needed — measured on a real page, the
+    // padding alone still gives 0px (the alignment ignores it) and a
+    // scroll-margin alone gives 25px (there is no room left to give).
     function scrollToEnd() {
-        const c = container();
-        if (c) c.lastElementChild?.scrollIntoView({ block: 'end', behavior: 'smooth' });
+        window.scrollTo({
+            top: document.documentElement.scrollHeight,
+            behavior: 'smooth',
+        });
+    }
+
+    function swapIn(next, current) {
+        const before = captureState(current);
+        current.replaceWith(next);
+        restoreState(next, before);
+        const added = markNew(next, before.keys);
+        // Everything that decorated the old markup after load.
+        if (window.claudeLogRehydrate) window.claudeLogRehydrate(next);
+        return added;
     }
 
     async function applyUpdate(html) {
@@ -171,13 +448,13 @@
         const current = container();
         if (!next || !current) return;
 
-        const before = captureState(current);
-        current.replaceWith(next);
-        restoreState(next, before);
-        const added = markNew(next, before.keys);
-
-        // Everything that decorated the old markup after load.
-        if (window.claudeLogRehydrate) window.claudeLogRehydrate(next);
+        // Hashes come from the parsed bytes, before anything is put on the
+        // page, and are kept whichever route the update took — the swap is a
+        // valid starting point for the next patch.
+        const scan = scanTree(next, true);
+        let added = tryPatch(next, scan);
+        if (added === null) added = swapIn(next, current);
+        cardHashes = scan.hashes;
 
         // The title carries the message/token counts, and the session nav
         // its summaries; both go stale otherwise.
@@ -226,6 +503,6 @@
     window.claudeLogLiveUpdate = {
         poll,
         stop() { stopped = true; },
-        setFollowing(v) { following = !!v; },
+        setFollowing,
     };
 })();
