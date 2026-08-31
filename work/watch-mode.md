@@ -1632,3 +1632,64 @@ Two were declined:
 - *Drop the quotes around `'SFMono-Regular'`.* Valid CSS either way, and
   six of the seven declarations across the templates are quoted; changing
   one desynchronises them and rewrites ten snapshots for nothing.
+
+## C31. A third round: the stamp's remaining blind spot, and a search flake
+
+**The poll stamp could still miss an update.** C29/5 and the original
+`Content-Length` fix left one gap open: size is blind to a rewrite that
+*keeps* the size — a counter, a status word or a timestamp changing
+width-for-width — and inside one `Last-Modified` second such a rewrite
+moves neither header. Watch converts a few hundred ms apart, so the
+window is reachable rather than theoretical.
+
+The server now sends `X-Content-Revision`, a blake2b digest of the bytes
+it is about to serve, and the poll compares it alongside the other two.
+Three notes on the shape:
+
+- **Not an `ETag`.** `SimpleHTTPRequestHandler.send_head` skips its
+  `If-Modified-Since` check whenever the request carries an
+  `If-None-Match`, and it never evaluates one — so advertising an ETag
+  would make browsers stop getting 304s on exactly the multi-MB pages
+  that make 304s worth having. A custom header has no such side effect;
+  `ETag` stays in the JS comparison for any other server that sets one.
+- **Hashing is cached per `(path, mtime_ns, size)`, but only once the
+  mtime is a second old.** A later write can only land on a cached key if
+  the filesystem's timestamp resolution is coarse enough to give it the
+  same mtime — so a settled entry is safe whatever that resolution is,
+  and a file being written *right now* is re-read every poll. That is the
+  case the header exists for, and it costs one 27 MB read per second at
+  the very worst (~25 ms), only while a session is actively appending.
+- **The test doesn't gamble on timing.** Both regression tests set the
+  two mtimes explicitly, half a second apart inside one whole second, so
+  the rewrite *is* the same-second case rather than usually being it;
+  dating them in the past also means the first digest is genuinely
+  cached, so the second response is pinned against reusing it. The
+  browser test rewrites the rendered page directly (not through a
+  conversion) because the point is a specific pair of bytes on the wire,
+  and it fails — times out waiting for the new marker — with the header
+  removed from the JS comparison.
+
+**A Windows CI flake in the search suite, and why it isn't a search bug.**
+`test_search_unfolds_matches_in_folded_subtrees` failed on
+windows-latest/3.13 while 3.11 passed in the same matrix. The element it
+waited on carried *no* `search-*` class at all — not `search-match`, not
+`search-hidden` — which rules out "the search ran and got it wrong":
+`applyTranscriptSearchFilter` toggles all three on every indexed card, so
+an applied filter always leaves a mark. The search simply had not run
+inside the assertion's five seconds. Playwright's own log says why: it
+resolved the locator **three times in 5,000 ms**, ~1.6 s per poll, on a
+4-core runner hosting four Chromiums under `-n auto`. The page was
+starved, not wrong.
+
+Two test-side fixes, no product change:
+
+- `_search_for` now waits for the component's own "I have run" signal
+  (`#searchResultCount` leaves its idle "No results" for either
+  "N of M matches" or "No matches") instead of returning while the 300 ms
+  input debounce is still pending. Every later assertion in the test then
+  starts from a searched page rather than spending its own budget on the
+  debounce.
+- Web-first assertions get a 20 s ceiling for browser tests
+  (`_browser_expect_timeout` in `test/conftest.py`). Playwright's 5 s
+  default is a budget for the page, not for a machine running four
+  browsers at once, and raising it costs nothing on a passing run.

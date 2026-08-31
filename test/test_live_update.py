@@ -9,6 +9,7 @@ not a sibling, not even itself. The rest of the browser suite runs from
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from pathlib import Path
@@ -543,6 +544,51 @@ class TestLiveUpdate:
         with jsonl.open("a", encoding="utf-8") as f:
             f.write(_entry("rapid-2", "RAPID-TWO"))
         _wait_for(page, "() => document.body.innerText.includes('RAPID-TWO')")
+
+    def test_a_same_size_rewrite_inside_one_second_is_seen(
+        self, page, tmp_path: Path
+    ) -> None:
+        """`Last-Modified` + `Content-Length` are both blind to a rewrite
+        that changes content without changing size — a re-render where a
+        counter, a status word or a timestamp keeps its width — and
+        inside one second neither header moves at all. The page must
+        still notice, via the server's content digest.
+
+        The page is rewritten directly rather than through a conversion:
+        the point is a specific pair of bytes on the wire, and the two
+        mtimes are set half a second apart inside one whole second so
+        this *is* the same-second case rather than usually being it.
+        """
+        projects = tmp_path / "projects"
+        project = projects / "-tmp-samesize"
+        project.mkdir(parents=True)
+        (project / f"{SESSION_ID}.jsonl").write_text(
+            _entry("only", "MARKER-AAAA"), encoding="utf-8"
+        )
+        process_projects_hierarchy(projects, silent=True)
+        rendered = project / f"session-{SESSION_ID}.html"
+
+        second_ns = 1_700_000_000_000_000_000
+        os.utime(rendered, ns=(second_ns, second_ns))
+        size_before = rendered.stat().st_size
+
+        from claude_code_log.server import ArchiveServer
+
+        with ArchiveServer(projects, port=0) as server:
+            self._open(page, server.url, project)
+            _wait_for(page, "() => document.body.innerText.includes('MARKER-AAAA')")
+
+            html = rendered.read_text(encoding="utf-8")
+            assert "MARKER-AAAA" in html
+            rendered.write_text(
+                html.replace("MARKER-AAAA", "MARKER-BBBB"), encoding="utf-8"
+            )
+            assert rendered.stat().st_size == size_before, (
+                "the rewrite has to keep the size for this to test anything"
+            )
+            os.utime(rendered, ns=(second_ns + 500_000_000, second_ns + 500_000_000))
+
+            _wait_for(page, "() => document.body.innerText.includes('MARKER-BBBB')")
 
     def test_a_slow_response_cannot_overwrite_a_newer_one(
         self, page, live_archive

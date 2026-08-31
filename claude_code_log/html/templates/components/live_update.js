@@ -44,6 +44,14 @@
     // (This is the same trap as the cache's mtime tolerance, one layer up,
     // and it has the same fix: compare the size too. `Content-Length` is
     // exact, free, and already on the HEAD response.)
+    //
+    // Size closes most of that gap but not all of it: a re-render can
+    // change content without changing length — a counter, a status word
+    // or a timestamp keeping its width — and inside one `Last-Modified`
+    // second such a rewrite is invisible to both headers. So `serve` also
+    // sends `X-Content-Revision`, a digest of the bytes themselves
+    // (server.py), and it joins the comparison. `ETag` stays in the list
+    // for any other server that sets one; ours deliberately does not.
     let lastStamp = null;
     let stopped = false;
     let following = false;
@@ -517,6 +525,7 @@
                 head.headers.get('Last-Modified') || '',
                 length,
                 head.headers.get('ETag') || '',
+                head.headers.get('X-Content-Revision') || '',
             ].join('|');
             const served = lastStamp === null ? loadedLength() : null;
             const missedOnLoad = !!served && !!length && Number(length) !== served;

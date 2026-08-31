@@ -215,7 +215,32 @@ def _browser_user_data_dir(worker_id):
 
 
 @pytest.fixture(scope="session")
-def _persistent_context(playwright, browser_type_launch_args, _browser_user_data_dir):
+def _browser_expect_timeout():
+    """Give web-first assertions room for a starved CI machine.
+
+    Playwright's default is 5 s, which is a budget for *the page*, not for
+    the machine — and browser tests run under ``-n auto``, so a 4-core
+    Windows runner hosts four Chromiums at once. A confirmed failure there
+    (``test_search_unfolds_matches_in_folded_subtrees``, Windows/3.13,
+    green on 3.11 in the same matrix) had Playwright resolving its locator
+    only three times inside the five seconds — ~1.6 s per poll — so the
+    assertion expired while the page was still catching up rather than
+    because anything was wrong with it. Raising the ceiling costs nothing
+    on a passing run: an assertion that will pass still returns as soon as
+    it does.
+    """
+    from playwright.sync_api import expect
+
+    expect.set_options(timeout=20_000)
+
+
+@pytest.fixture(scope="session")
+def _persistent_context(
+    playwright,
+    browser_type_launch_args,
+    _browser_user_data_dir,
+    _browser_expect_timeout,
+):
     """Create a persistent browser context that shares HTTP cache across tests.
 
     This solves flaky CDN loading issues by caching resources like vis-timeline

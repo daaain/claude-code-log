@@ -1085,11 +1085,20 @@ error against it.
 `html/templates/components/live_update.js`, active only over `http(s)` —
 a `file://` page cannot fetch anything, not even its own URL, so the
 poller notices and does nothing. It polls a HEAD of its own URL and
-compares `Last-Modified` **and `Content-Length`**: HTTP dates have
-one-second granularity, so two updates inside the same second are
-otherwise invisible (the same trap as the cache's mtime tolerance, which
-§2.3 solves the same way). On a change it re-fetches the page and either
-**patches** or **swaps**.
+compares `Last-Modified`, `Content-Length` **and `X-Content-Revision`**.
+Each covers the one before it: HTTP dates have one-second granularity, so
+two updates inside the same second are otherwise invisible (the same trap
+as the cache's mtime tolerance, which §2.3 solves the same way), and size
+is blind to a rewrite that keeps it — a counter or a status word changing
+width-for-width. `X-Content-Revision` is a digest of the served bytes,
+added by `server.py` to every file response; it is deliberately not an
+`ETag`, because the stock `send_head` skips its `If-Modified-Since` check
+whenever a request carries an `If-None-Match` and never evaluates one, so
+advertising an ETag would cost the 304s on multi-MB pages. Hashing is
+cached per `(path, mtime_ns, size)` but only once the file's mtime is a
+second old — a file being written right now is re-read, which is exactly
+the case the header exists for. On a change the page re-fetches and
+either **patches** or **swaps**.
 
 **Patching** applies when the new render's node-key sequence *extends*
 the one on screen: the nodes whose own markup changed are replaced, new
