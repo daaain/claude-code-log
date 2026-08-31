@@ -422,6 +422,63 @@ def get_cache_db_path(projects_dir: Path) -> Path:
     return projects_dir / "claude-code-log-cache.db"
 
 
+# SQLite error text meaning "this file is damaged past the point of being
+# read at all". Matched on the message because Python funnels every one of
+# them into the same `sqlite3.DatabaseError` — there is no distinct class
+# to catch. Deliberately narrow: "database is locked" and "database or disk
+# is full" are also DatabaseErrors, and neither is a reason to delete a
+# perfectly good cache.
+_CORRUPTION_MARKERS = (
+    # SQLITE_CORRUPT. Observed shape: a cache truncated to 2833 pages while
+    # its header still claimed 14189, which fails every read including
+    # `PRAGMA page_count`. That one came from the virtiofs mount the file
+    # lived on, so it is the filesystem's kind of damage, not the writer's —
+    # expect it to recur wherever the cache sits on a shared/virtualised
+    # mount.
+    "database disk image is malformed",
+    # SQLITE_NOTADB — a garbage or encrypted header.
+    "file is not a database",
+    # A virtual-table declaration in sqlite_master that no longer parses,
+    # e.g. an FTS5 index carrying an option this SQLite build lacks.
+    "malformed database schema",
+)
+
+
+def is_corrupt_database_error(exc: BaseException) -> bool:
+    """Whether ``exc`` says the database file itself is unusable.
+
+    Note a zero-byte file is *not* corruption — SQLite happily adopts one as
+    a new database — so an interrupted create heals on its own.
+    """
+    if not isinstance(exc, sqlite3.DatabaseError):
+        return False
+    message = str(exc).lower()
+    return any(marker in message for marker in _CORRUPTION_MARKERS)
+
+
+def discard_database_files(db_path: Path) -> bool:
+    """Delete a cache database and its WAL sidecars. True if the .db is gone.
+
+    The sidecars have to go with it: a ``-wal`` left beside a recreated
+    database is a mismatched log, which is its own route back into
+    "malformed".
+    """
+    for path in (
+        db_path,
+        db_path.with_name(db_path.name + "-wal"),
+        db_path.with_name(db_path.name + "-shm"),
+    ):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            # Windows refuses to unlink a file another process still holds
+            # open (WinError 32). Report and let the caller decide.
+            print(f"  Warning: could not delete {path.name}: {e}")
+    return not db_path.exists()
+
+
 # ========== Cache Manager ==========
 
 
@@ -487,8 +544,13 @@ class CacheManager:
             self._lookup_project_id()
         else:
             # Initialise database and ensure project exists
-            self._init_database()
-            self._ensure_project_exists()
+            try:
+                self._init_database()
+                self._ensure_project_exists()
+            except sqlite3.DatabaseError as exc:
+                if not is_corrupt_database_error(exc):
+                    raise
+                self._rebuild_corrupt_database(exc)
 
     def _configure_connection(self, conn: sqlite3.Connection) -> None:
         """Apply the standard pragmas/row factory to a fresh connection."""
@@ -593,6 +655,40 @@ class CacheManager:
             return
         run_migrations(self.db_path)
         _migrated_db_paths.add(key)
+
+    def _rebuild_corrupt_database(self, exc: sqlite3.DatabaseError) -> None:
+        """Delete an unreadable cache database and build a fresh one.
+
+        The cache is derived data, regenerable in full from the JSONL
+        source, so discarding it costs only the next run's rebuild time —
+        whereas keeping it costs every run, forever. Corruption is sticky:
+        `apply_migration` only records a migration that completed, so a
+        `CREATE INDEX` that hits a damaged page is re-attempted and re-fails
+        on every subsequent invocation.
+
+        Nothing is salvaged first. In the case this was written for, the
+        file was truncated to a fifth of the size its own header claimed,
+        and *no* statement against it succeeded — not even `PRAGMA
+        page_count`. A partial-salvage path would be untested code guarding
+        against a case we have not seen.
+
+        Only reached from the writing constructor. A ``read_only``
+        instance — every spawned render worker — must never delete the
+        database out from under its siblings, and doesn't need to:
+        `_lookup_project_id` already degrades to "no cached data".
+        """
+        print(f"Cache database is corrupt ({exc}): {self.db_path}")
+        if not discard_database_files(self.db_path):
+            # Couldn't remove it, so a retry would just fail the same way.
+            # Re-raise and let the caller degrade to running cacheless.
+            print("  Could not delete it; continuing without a cache.")
+            raise exc
+        # The memo records "migrations already checked for this path", which
+        # the file we just deleted is no longer evidence of.
+        _migrated_db_paths.discard(str(self.db_path))
+        print("  Deleted it and rebuilding from scratch (this run will be slower).")
+        self._init_database()
+        self._ensure_project_exists()
 
     def _lookup_project_id(self) -> None:
         """Read-only counterpart of ``_ensure_project_exists``: find, never create.

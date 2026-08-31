@@ -39,6 +39,7 @@ from .cache import (
     get_all_cached_projects,
     get_cache_db_path,
     get_library_version,
+    is_corrupt_database_error,
 )
 from .models import RenderingDepth
 from .render_pool import resolve_render_jobs
@@ -2261,9 +2262,27 @@ def _build_search_index(
                 bar.__enter__()
             bar.update(1)
 
-        status = ensure_index(
-            conn, index_fields=index_fields, progress=report, rebuild=rebuild
-        )
+        try:
+            status = ensure_index(
+                conn, index_fields=index_fields, progress=report, rebuild=rebuild
+            )
+        except sqlite3.DatabaseError as e:
+            if not is_corrupt_database_error(e):
+                raise
+            # The ordinary conversion heals a corrupt cache when it builds a
+            # CacheManager, so the only way to arrive here is --no-convert,
+            # which skipped it. Don't delete the database behind the user's
+            # back on the one flag that asked us to touch nothing; serving
+            # the pages without search beats refusing to start.
+            if bar is not None:
+                bar.__exit__(None, None, None)
+            click.echo(f"Cache database is corrupt ({e}): {db_path}", err=True)
+            click.echo(
+                "  Search is unavailable. Re-run without --no-convert to "
+                "rebuild the cache.",
+                err=True,
+            )
+            return
         if bar is not None:
             bar.__exit__(None, None, None)
             click.echo(

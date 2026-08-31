@@ -163,6 +163,32 @@ cache row, the session is reparsed. The schema-version row also
 invalidates the entire HTML cache when migrations bump the version,
 since rendered output may have changed even when source data hasn't.
 
+**Corruption is recovered by discarding, not repairing.** A damaged
+cache file is unusable and, left alone, permanently so: `apply_migration`
+records only a migration that completed, so a `CREATE INDEX` that hits a
+damaged page re-fails on every subsequent run. The writing
+`CacheManager.__init__` therefore catches SQLite's corruption errors
+(`is_corrupt_database_error` — narrowly matched on message text, since
+Python funnels "malformed", "not a database", "locked" and "disk full"
+into the same exception classes), deletes the `.db` with its `-wal`/`-shm`
+sidecars, and rebuilds. Everything in the cache is regenerable from the
+JSONL source, so the cost is one slow run.
+
+Two boundaries matter. A `read_only` manager — every spawned render
+worker (§ 2.10) — never deletes: several run concurrently against one
+file, and `_lookup_project_id` already degrades to "no cached data".
+And a zero-byte file is *not* corruption; SQLite adopts one as a new
+database, so an interrupted create heals without intervention.
+
+Note the cause is usually outside this tool. The case this was built
+for was a cache truncated to 2833 pages while its own header still
+claimed 14189 — traced to the virtiofs mount it lived on, not to
+anything the writer did. It had also been corrupt for some time
+*before* it was noticed: migration 012's index build is the first
+operation that full-scans `messages`, so earlier versions read around
+the damage and reported success. Assume corruption can recur on such
+filesystems, and that recovery, not prevention, is the tool's job.
+
 Paginated output carries an extra invalidation axis. `--page-size`
 assigns sessions to pages chronologically, and that assignment is
 recomputed from scratch on every run, so a page's *membership* can
