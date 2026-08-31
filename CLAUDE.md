@@ -130,3 +130,5 @@ Typical lifecycle: a feature begins as a spec in `work/`, evolves
 into a WIP scratchpad as the code adapts to reality, then graduates
 into `dev-docs/` (new page or merged into an existing one) once the
 implementation has stabilized.
+
+Don't update CHANGELOG.md, it's auto-generated.

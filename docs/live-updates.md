@@ -24,6 +24,11 @@ claude-code-log watch -f md -o ~/vault/claude
 A tick regenerates only the session that changed, so a vault indexer sees
 one file move, not the whole projection.
 
+Obsidian auto-updates, but doesn't auto-scroll, so expect something like this:
+
+<video controls style="display: block; width: 100%; height: auto; max-width: 100%;" src="https://github.com/user-attachments/assets/36dd429a-03b3-4bc0-9449-adf55fff3b30"></video>
+
+
 ## The served page, updating itself
 
 ```bash
@@ -42,6 +47,10 @@ arrived since you last looked.
 This works only over the server. A page opened from `file://` cannot
 fetch anything at all — not even itself — so it stays static, exactly as
 before. Nothing about the generated HTML changes.
+
+This is how following a session looks like:
+
+<video controls style="display: block; width: 100%; height: auto; max-width: 100%;" src="https://github.com/user-attachments/assets/600696aa-dd2b-4979-8cc9-2f62acfc996f"></video>
 
 ## What "real-time" can and cannot mean here
 
