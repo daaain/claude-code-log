@@ -130,6 +130,59 @@ class TestWatchCommand:
         result = CliRunner().invoke(main, ["watch", "--projects-dir", str(projects)])
         assert result.exit_code == 1
 
+    def test_a_project_dir_with_all_projects_fails_with_a_diagnosis(
+        self, tmp_path: Path
+    ) -> None:
+        """`INPUT_PATH --all-projects` means "this is the archive root" --
+        the same as it does for `convert`. Point it at a single project,
+        whose JSONL files sit directly inside it rather than one level
+        down, and there is nothing to convert.
+
+        That is the user's mistake, but it used to surface as a raw
+        traceback out of the up-front conversion, because only the
+        *per-tick* failures had a handler. Watching on regardless would be
+        worse: every tick would fail the same way, forever.
+        """
+        projects = tmp_path / "projects"
+        proj = projects / "-tmp-demo"
+        proj.mkdir(parents=True)
+        sid = "66666666-7777-8888-9999-aaaaaaaaaaaa"
+        (proj / f"{sid}.jsonl").write_text(_entry("u0", "hello", sid), encoding="utf-8")
+
+        result = CliRunner().invoke(
+            main,
+            ["watch", str(proj), "--projects-dir", str(projects), "--all-projects"],
+        )
+
+        assert result.exit_code == 1
+        assert "No project directories with JSONL files found" in result.output
+        assert "Traceback" not in result.output
+
+    def test_the_archive_root_with_all_projects_still_converts(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """The other half of the pair: an explicit path *is* honoured under
+        `--all-projects` when it really is a hierarchy, so the guard above
+        must not have turned the combination into a blanket rejection."""
+        projects = tmp_path / "projects"
+        proj = projects / "-tmp-demo"
+        proj.mkdir(parents=True)
+        sid = "77777777-8888-9999-aaaa-bbbbbbbbbbbb"
+        (proj / f"{sid}.jsonl").write_text(_entry("u0", "hello", sid), encoding="utf-8")
+
+        import claude_code_log.watch as watch_mod
+
+        monkeypatch.setattr(
+            watch_mod.WatchEngine, "run", lambda engine, stop=None: None
+        )
+        result = CliRunner().invoke(
+            main,
+            ["watch", str(projects), "--projects-dir", str(projects), "--all-projects"],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert (proj / f"session-{sid}.html").exists(), result.output
+
 
 class TestServeWatch:
     """`serve --watch` runs the same engine beside the HTTP server.

@@ -2448,7 +2448,19 @@ def watch(
     # Convert once up front so the output is current before the first
     # change, then prime -- priming after means our own output writes are
     # already in the baseline and can't trigger a spurious first tick.
-    convert(set())
+    #
+    # A failure here is a misconfigured watch, not a transient one: the
+    # root doesn't exist, or `--all-projects` was pointed at a single
+    # project rather than an archive. `report` is for the per-tick case
+    # where the loop should carry on; this one is fatal, and gets the
+    # same one-line diagnosis `convert` gives rather than a traceback.
+    try:
+        convert(set())
+    except Exception as e:
+        if debug:
+            traceback.print_exc()
+        click.echo(f"Error: {e}", err=True)
+        raise SystemExit(1)
     engine.prime()
     try:
         engine.run()

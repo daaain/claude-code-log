@@ -199,6 +199,101 @@ class TestLiveUpdate:
         )
         assert still_folded == folded, "fold state was lost across the update"
 
+    # Toggle the first session header's fold bar, reporting the children
+    # container's `display` either side of the click. A working control
+    # changes it; a dead listener leaves it exactly as it was.
+    _CLICK_FOLD = (
+        "() => { const bar = document.querySelector('#transcript .message"
+        ".session-header > .fold-bar');"
+        " const section = bar && bar.querySelector('.fold-bar-section');"
+        " if (!section) return null;"
+        " const children = section.closest('.message-node')"
+        ".querySelector(':scope > .children');"
+        " const before = children.style.display;"
+        " section.click();"
+        " return { before, after: children.style.display,"
+        "   folded: section.classList.contains('folded') }; }"
+    )
+
+    def test_the_fold_control_still_works_after_an_update(
+        self, page, live_archive
+    ) -> None:
+        """The fold bars were bound per element at load, and a live update
+        replaces them: every append re-renders the bar of every ancestor
+        (it carries their descendant count), and the swap replaces all of
+        them at once. The listeners died with the elements, so one update
+        was enough to leave every fold control on the page inert — while
+        still *looking* exactly right, which is why nothing caught it.
+
+        Asserting that the state survives an update is not the same
+        assertion and passed throughout.
+        """
+        base, project, jsonl = live_archive
+        self._open(page, base, project)
+
+        first = page.evaluate(self._CLICK_FOLD)
+        assert first is not None, "fixture has nothing foldable"
+        assert first["before"] != first["after"], "the control was dead on load"
+        page.evaluate(self._CLICK_FOLD)  # back to unfolded
+
+        # Update one: the swap.
+        with jsonl.open("a", encoding="utf-8") as f:
+            f.write(_entry("fold-1", "FOLD-ONE"))
+        _wait_for(page, "() => !!document.querySelector('[data-uuid=\"fold-1\"]')")
+        after_swap = page.evaluate(self._CLICK_FOLD)
+        assert after_swap["before"] != after_swap["after"], (
+            "the fold control stopped responding after the container swap"
+        )
+        page.evaluate(self._CLICK_FOLD)
+
+        # Update two: the patch, which replaces the header card on its own
+        # rather than the whole container.
+        with jsonl.open("a", encoding="utf-8") as f:
+            f.write(_entry("fold-2", "FOLD-TWO"))
+        _wait_for(page, "() => !!document.querySelector('[data-uuid=\"fold-2\"]')")
+        after_patch = page.evaluate(self._CLICK_FOLD)
+        assert after_patch["before"] != after_patch["after"], (
+            "the fold control stopped responding after the patch"
+        )
+
+    def test_a_replaced_fold_bar_still_describes_its_own_subtree(
+        self, page, live_archive
+    ) -> None:
+        """The card carries the fold bar; the children container carries the
+        fold *state*. An update replaces the first and not the second, so
+        the bar comes back with the server's default "unfolded" icons over
+        a subtree that is still hidden. The next click then folds what is
+        already folded and appears to do nothing at all.
+        """
+        base, project, jsonl = live_archive
+        self._open(page, base, project)
+
+        folded = page.evaluate(self._CLICK_FOLD)
+        assert folded["after"] == "none", "the first click should fold"
+        assert folded["folded"], "the bar did not mark itself folded"
+
+        with jsonl.open("a", encoding="utf-8") as f:
+            f.write(_entry("desync-1", "DESYNC-ONE"))
+        _wait_for(page, "() => !!document.querySelector('[data-uuid=\"desync-1\"]')")
+
+        state = page.evaluate(
+            "() => { const bar = document.querySelector('#transcript .message"
+            ".session-header > .fold-bar');"
+            " const section = bar.querySelector('.fold-bar-section');"
+            " const children = section.closest('.message-node')"
+            ".querySelector(':scope > .children');"
+            " return { hidden: children.style.display === 'none',"
+            "   folded: section.classList.contains('folded'),"
+            "   icon: section.querySelector('.fold-icon').textContent }; }"
+        )
+        assert state["hidden"], "the subtree unfolded itself across the update"
+        assert state["folded"], "the replaced bar forgot it was folded"
+        assert state["icon"] == "⏵", f"the icon disagrees with the subtree: {state}"
+
+        # And it is still a working toggle, not merely a correct label.
+        again = page.evaluate(self._CLICK_FOLD)
+        assert again["after"] != "none", "the next click did not unfold"
+
     # ---- patching ----------------------------------------------------
     #
     # The first update of a session always swaps: the hashes a patch
@@ -334,7 +429,8 @@ class TestLiveUpdate:
         """`scrollIntoView({block: 'end'})` aligns the card's bottom edge
         with the viewport's, which measures as a 0px gap and reads as the
         message being cut off. The padding under `body.live-following` is
-        what gives the scroll somewhere to go."""
+        what gives the scroll somewhere to go — 20px of it, which lands the
+        card 36px clear once the container's own margin is counted."""
         base, project, jsonl = live_archive
         self._open(page, base, project)
 
@@ -378,6 +474,79 @@ class TestLiveUpdate:
         with jsonl.open("a", encoding="utf-8") as f:
             f.write(_entry("rapid-2", "RAPID-TWO"))
         _wait_for(page, "() => document.body.innerText.includes('RAPID-TWO')")
+
+    def test_a_slow_response_cannot_overwrite_a_newer_one(
+        self, page, live_archive
+    ) -> None:
+        """The interval keeps firing while a full GET is in flight, so on a
+        page slow enough to fetch — the large page all of this is for — two
+        updates can be in the air at once and the *last response* wins.
+
+        Asserting on the *end* state is not enough and was measured to be
+        not enough: unserialised, the newest message appeared at 2.0s,
+        vanished at 4.0s when the held body landed, and was restored at
+        5.0s by the following poll. So this watches for the regression
+        itself — a message that was on screen and then was not.
+
+        Simulated at the only thing that matters — an older response
+        landing after a newer one — by holding the first full GET the page
+        makes and appending again while it is held.
+        """
+        base, project, jsonl = live_archive
+        self._open(page, base, project)
+
+        with jsonl.open("a", encoding="utf-8") as f:
+            f.write(_entry("race-seed", "RACE-SEED"))
+        _wait_for(page, "() => document.body.innerText.includes('RACE-SEED')")
+
+        # Hold the *next* full GET's response for 3s (well past POLL_MS)
+        # while letting its HEADs through, so the page keeps noticing
+        # changes while the older body is still in the air. Sample the
+        # rendered text throughout, so a message that comes and goes is
+        # caught rather than averaged away by a final check.
+        page.evaluate(
+            "() => { const orig = window.fetch;"
+            " window.__held = false;"
+            " window.__lost = [];"
+            " window.fetch = function (input, init) {"
+            "   const p = orig.apply(this, arguments);"
+            "   if (init && init.method === 'HEAD') return p;"
+            "   if (window.__held) return p;"
+            "   window.__held = true;"
+            "   return p.then(res => new Promise(r => setTimeout(() => r(res), 3000)));"
+            " };"
+            " const seen = new Set();"
+            " setInterval(() => { const t = document.body.innerText;"
+            "   for (const m of ['RACE-ONE', 'RACE-TWO']) {"
+            "     if (t.includes(m)) seen.add(m);"
+            "     else if (seen.has(m)) window.__lost.push(m);"
+            "   } }, 100); }"
+        )
+
+        with jsonl.open("a", encoding="utf-8") as f:
+            f.write(_entry("race-one", "RACE-ONE"))
+        # The held GET has been issued: its body is the render carrying
+        # RACE-ONE but not RACE-TWO.
+        _wait_for(page, "() => window.__held === true")
+
+        with jsonl.open("a", encoding="utf-8") as f:
+            f.write(_entry("race-two", "RACE-TWO"))
+
+        _wait_for(
+            page,
+            "() => document.body.innerText.includes('RACE-ONE')"
+            " && document.body.innerText.includes('RACE-TWO')",
+        )
+        # Both are on screen. Wait past the held response, and past the
+        # poll after it that would paper over the damage.
+        page.wait_for_timeout(4000)
+
+        text = page.evaluate("() => document.body.innerText")
+        assert "RACE-ONE" in text, "the newer render dropped an earlier message"
+        assert "RACE-TWO" in text, "a stale response overwrote the newer page"
+        assert page.evaluate("() => window.__lost") == [], (
+            "a message left the page after arriving: a stale response was applied"
+        )
 
     def test_the_poller_is_inert_over_file_urls(self, page, tmp_path: Path) -> None:
         """The generated HTML must stay exactly as useful from `file://`.

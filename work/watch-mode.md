@@ -1313,10 +1313,16 @@ cut off. The obvious fixes fail individually:
 | `padding-bottom: 120px` alone | 0 px — `block: 'end'` aligns to the edge regardless |
 | **padding + scrolling to the document end** | **120 px** ✓ |
 
-So: `body.live-following { padding-bottom: 120px }` supplies the space,
-and `scrollToEnd` scrolls the *document* to its end rather than aligning
-the card. Scoping the padding to the following state keeps every ordinary
-page layout-identical. Measured on a real page: **134 px**.
+So: `body.live-following { padding-bottom: … }` supplies the space, and
+`scrollToEnd` scrolls the *document* to its end rather than aligning the
+card. Scoping the padding to the following state keeps every ordinary
+page layout-identical.
+
+**The 120 px above was then cut to 20 px on use** — it read as the newest
+message being stranded above a band of empty page, which is the opposite
+failure to the one it was fixing. The container's own bottom margin adds
+to it, so 20 px of padding measures as a **36 px** gap: clear of the edge,
+still in view. The mechanism is unchanged; only the constant moved.
 
 ### C26. Patching, as built
 
@@ -1405,6 +1411,56 @@ because `kept == 0` alone would also be what a permanently broken patch
 looks like.
 
 Every test here appends **twice**: the first update seeds the hashes.
+
+### C28. What replacing DOM breaks that no test was looking at
+
+Three defects, all found by *using* the thing rather than by any
+assertion, and all the same shape: a test that checks the outcome an
+update produces will not notice that the page stopped **working**.
+
+**The fold bars went inert after one update.** `transcript.html` bound a
+click listener to each `.fold-bar-section` at load. A live update
+replaces those elements — the swap replaces all of them, and a patch
+replaces the bar of every ancestor of an append, since the bar carries
+their descendant count — so the listeners died with the elements. One
+update was enough to leave every fold control on the page unresponsive,
+while still rendering exactly right. Fixed by delegating on `document`,
+as the rest of the page's post-load listeners already are; the rehydrate
+contract at the top of `transcript.html` says as much, and this was the
+one that had not followed it.
+
+`test_fold_state_survives_an_update` passed throughout — because "the
+state survived" and "the control still works" are different assertions,
+and only the first was ever made.
+
+**The bar and its subtree could disagree.** The card carries the fold
+bar; the `.children` container carries the fold *state*, as inline
+`display`. `applyOwn` replaces the first and deliberately keeps the
+second, so a replaced bar came back with the server's default "unfolded"
+icons over a subtree that was still hidden — and the next click folded
+what was already folded and appeared to do nothing. Fixed by a rehydrate
+hook that re-derives the bar from the container's own `display`, which
+the update never touches and is therefore the truth. It fixes the swap
+path too, where `restoreState` synced the `folded` class but not the
+icon.
+
+**Overlapping polls could apply an older render.** `setInterval` fired
+regardless of whether a full GET was still in flight, so on a page slow
+enough to fetch — the large page this is all for — two updates raced and
+the last *response* won. Measured by holding one response for 3 s: the
+newest message appeared at 2.0 s, vanished at 4.0 s when the stale body
+landed, and returned at 5.0 s. Fixed by serialising the poll. Two details
+worth keeping:
+
+- Advancing `lastStamp` only *after* an update is applied is what bounds
+  the damage to one second instead of forever — the stale apply rewinds
+  the stamp to its own older value, so the next HEAD finds a difference
+  again. Recorded before the GET, as it originally was, nothing would
+  ever refetch the newer render.
+- That self-healing is also why the first version of the regression test
+  passed against the broken code: it asserted on the *end* state, by
+  which time the page had recovered. It has to watch for the regression
+  itself — a message that was on screen and then was not.
 
 ### Suggested order
 

@@ -2322,9 +2322,11 @@
      Measured: with neither, the gap is 0px — the last card's bottom is
      exactly the viewport bottom. The padding is what supplies the
      scrollable space; `scrollToEnd` then scrolls the document to its end
-     rather than aligning the card, and the gap becomes this much. */
+     rather than aligning the card, and the gap becomes this much. Kept
+     small deliberately — enough to read as breathing room, not enough to
+     leave the newest message stranded above a band of empty page. */
   body.live-following {
-      padding-bottom: 120px;
+      padding-bottom: 20px;
   }
   /* Session navigation styles */
   .navigation {
@@ -5402,8 +5404,9 @@
   //
   //   * The server never renders. `serve --watch` re-runs the ordinary
   //     conversion and the files on disk stay canonical, so this page just
-  //     re-fetches its own URL. A conditional GET makes the idle case free
-  //     (304 in ~1ms) and needs no endpoint of its own.
+  //     re-fetches its own URL. A HEAD for the page's own metadata makes
+  //     the idle case free (~1ms, no body) and needs no endpoint of its
+  //     own; the full GET follows only when that metadata moved.
   //   * We never reload. A reload loses fold state and re-parses a
   //     document that can reach tens of MB.
   //   * When the new render extends the one on screen, we patch the nodes
@@ -5419,8 +5422,9 @@
   
       if (location.protocol !== 'http:' && location.protocol !== 'https:') return;
   
-      // A conditional GET costs ~1ms and 304s while nothing changes, so the
-      // interval is set by how fresh the page should feel, not by load.
+      // A metadata HEAD costs ~1ms and carries no body while nothing
+      // changes, so the interval is set by how fresh the page should feel,
+      // not by load.
       const POLL_MS = 1000;
       const container = () => document.getElementById('transcript');
       if (!container()) return;
@@ -5858,8 +5862,26 @@
           if (following) scrollToEnd();
       }
   
+      // One poll at a time. The interval keeps firing while a full GET is in
+      // flight, and a page slow enough to fetch — which is exactly the large
+      // page all of this is for — would then have two updates racing:
+      // whichever *response* lands last wins, so an older render overwrites a
+      // newer one and the page loses messages it had already shown. Measured
+      // by holding one response for 3s: the newest message appeared at 2.0s,
+      // vanished at 4.0s when the stale body landed, and came back at 5.0s.
+      //
+      // Serialising is what stops it, and skipping a tick costs nothing:
+      // `lastStamp` only advances once an update has actually been applied,
+      // so the next tick still sees the change. (That ordering is also what
+      // bounds the damage above to one second rather than forever — the
+      // stale apply rewinds `lastStamp` to its own older value, so the next
+      // HEAD finds a difference again. Recording the stamp before the GET
+      // instead leaves the page wrong until something else changes.)
+      let polling = false;
+  
       async function poll() {
-          if (stopped) return;
+          if (stopped || polling) return;
+          polling = true;
           try {
               const head = await fetch(location.href, { method: 'HEAD', cache: 'no-store' });
               const stamp = [
@@ -5870,14 +5892,18 @@
               if (lastStamp === null) {
                   lastStamp = stamp;
               } else if (stamp !== lastStamp) {
-                  lastStamp = stamp;
                   const res = await fetch(location.href, { cache: 'no-store' });
-                  if (res.ok) await applyUpdate(await res.text());
+                  if (res.ok) {
+                      await applyUpdate(await res.text());
+                      lastStamp = stamp;
+                  }
               }
           } catch (err) {
               // A dropped server is the normal end of a watch session, not an
               // error worth shouting about. Keep polling: `serve` may come back.
               console.debug('live update poll failed', err);
+          } finally {
+              polling = false;
           }
       }
   
@@ -6483,24 +6509,30 @@
               // Apply all filters on page load
               applyFilter();
   
-              // Fold/unfold functionality with horizontal fold bars
-              const foldBarSections = document.querySelectorAll('.fold-bar-section');
+              // Fold/unfold functionality with horizontal fold bars.
+              //
+              // Delegated on `document` rather than bound per section, because
+              // a live update (`serve --watch`) replaces fold bars: a card's
+              // bar carries its descendant count, so every append re-renders
+              // the ancestors' bars, and the container swap replaces all of
+              // them. Bound directly, those listeners died with the elements
+              // and the fold controls silently stopped responding — measured:
+              // one update was enough to leave every bar on the page inert.
+              document.addEventListener('click', function (event) {
+                  const section = event.target.closest('.fold-bar-section');
+                  if (!section) return;
+                  event.stopPropagation();
+                  const action = section.getAttribute('data-action');
+                  const targetId = section.getAttribute('data-target');
+                  const isFolded = section.classList.contains('folded');
   
-              foldBarSections.forEach(section => {
-                  section.addEventListener('click', function(e) {
-                      e.stopPropagation();
-                      const action = this.getAttribute('data-action');
-                      const targetId = this.getAttribute('data-target');
-                      const isFolded = this.classList.contains('folded');
-  
-                      if (action === 'fold-one') {
-                          // Fold/unfold immediate children only
-                          handleFoldOne(targetId, isFolded, this);
-                      } else if (action === 'fold-all') {
-                          // Fold/unfold all descendants recursively
-                          handleFoldAll(targetId, isFolded, this);
-                      }
-                  });
+                  if (action === 'fold-one') {
+                      // Fold/unfold immediate children only
+                      handleFoldOne(targetId, isFolded, section);
+                  } else if (action === 'fold-all') {
+                      // Fold/unfold all descendants recursively
+                      handleFoldAll(targetId, isFolded, section);
+                  }
               });
   
               // Update tooltip based on fold state
@@ -6625,6 +6657,42 @@
   
               // Apply initial fold state
               setInitialFoldState();
+  
+              // Re-sync a fold bar to what its children container is actually
+              // doing. A live update re-renders a card whenever its descendant
+              // count changes — which is every ancestor of every append — and
+              // the replacement arrives with the server's default icons, not
+              // the state the user left it in. The children container is never
+              // replaced, so its own `display` is the truth; without this the
+              // bar claims "unfolded" over a hidden subtree, and the next
+              // click folds what is already folded and appears to do nothing.
+              function syncFoldBar(card) {
+                  const foldBar = card.querySelector(':scope > .fold-bar');
+                  if (!foldBar) return;
+                  const cc = getChildrenContainer(card);
+                  const oneSection = foldBar.querySelector('.fold-one-level');
+                  const allSection = foldBar.querySelector('.fold-all-levels');
+                  if (!cc || cc.style.display === 'none') {
+                      setSectionState(oneSection, true, '⏵');
+                      setSectionState(allSection, true, '⏵⏵');
+                      return;
+                  }
+                  // Immediate children are visible; `fold-all` reads as open
+                  // only when their own subtrees are open too.
+                  const kids = getImmediateChildMessages(card);
+                  const allOpen = kids.every(child => {
+                      const childCc = getChildrenContainer(child);
+                      return !childCc || childCc.style.display !== 'none';
+                  });
+                  setSectionState(oneSection, false, '⏷');
+                  setSectionState(allSection, !allOpen, allOpen ? '⏷⏷' : '⏵⏵');
+              }
+              if (window.claudeLogOnRehydrate) {
+                  window.claudeLogOnRehydrate(function (root) {
+                      if (root.matches && root.matches('.message')) syncFoldBar(root);
+                      root.querySelectorAll('.message').forEach(syncFoldBar);
+                  });
+              }
   
               // Unfold any folded ancestors so an anchor target (e.g. a tool_use
               // jumped to from the session index) is actually visible. In the
@@ -10078,9 +10146,11 @@
      Measured: with neither, the gap is 0px — the last card's bottom is
      exactly the viewport bottom. The padding is what supplies the
      scrollable space; `scrollToEnd` then scrolls the document to its end
-     rather than aligning the card, and the gap becomes this much. */
+     rather than aligning the card, and the gap becomes this much. Kept
+     small deliberately — enough to read as breathing room, not enough to
+     leave the newest message stranded above a band of empty page. */
   body.live-following {
-      padding-bottom: 120px;
+      padding-bottom: 20px;
   }
   /* Session navigation styles */
   .navigation {
@@ -13053,8 +13123,9 @@
   //
   //   * The server never renders. `serve --watch` re-runs the ordinary
   //     conversion and the files on disk stay canonical, so this page just
-  //     re-fetches its own URL. A conditional GET makes the idle case free
-  //     (304 in ~1ms) and needs no endpoint of its own.
+  //     re-fetches its own URL. A HEAD for the page's own metadata makes
+  //     the idle case free (~1ms, no body) and needs no endpoint of its
+  //     own; the full GET follows only when that metadata moved.
   //   * We never reload. A reload loses fold state and re-parses a
   //     document that can reach tens of MB.
   //   * When the new render extends the one on screen, we patch the nodes
@@ -13070,8 +13141,9 @@
   
       if (location.protocol !== 'http:' && location.protocol !== 'https:') return;
   
-      // A conditional GET costs ~1ms and 304s while nothing changes, so the
-      // interval is set by how fresh the page should feel, not by load.
+      // A metadata HEAD costs ~1ms and carries no body while nothing
+      // changes, so the interval is set by how fresh the page should feel,
+      // not by load.
       const POLL_MS = 1000;
       const container = () => document.getElementById('transcript');
       if (!container()) return;
@@ -13509,8 +13581,26 @@
           if (following) scrollToEnd();
       }
   
+      // One poll at a time. The interval keeps firing while a full GET is in
+      // flight, and a page slow enough to fetch — which is exactly the large
+      // page all of this is for — would then have two updates racing:
+      // whichever *response* lands last wins, so an older render overwrites a
+      // newer one and the page loses messages it had already shown. Measured
+      // by holding one response for 3s: the newest message appeared at 2.0s,
+      // vanished at 4.0s when the stale body landed, and came back at 5.0s.
+      //
+      // Serialising is what stops it, and skipping a tick costs nothing:
+      // `lastStamp` only advances once an update has actually been applied,
+      // so the next tick still sees the change. (That ordering is also what
+      // bounds the damage above to one second rather than forever — the
+      // stale apply rewinds `lastStamp` to its own older value, so the next
+      // HEAD finds a difference again. Recording the stamp before the GET
+      // instead leaves the page wrong until something else changes.)
+      let polling = false;
+  
       async function poll() {
-          if (stopped) return;
+          if (stopped || polling) return;
+          polling = true;
           try {
               const head = await fetch(location.href, { method: 'HEAD', cache: 'no-store' });
               const stamp = [
@@ -13521,14 +13611,18 @@
               if (lastStamp === null) {
                   lastStamp = stamp;
               } else if (stamp !== lastStamp) {
-                  lastStamp = stamp;
                   const res = await fetch(location.href, { cache: 'no-store' });
-                  if (res.ok) await applyUpdate(await res.text());
+                  if (res.ok) {
+                      await applyUpdate(await res.text());
+                      lastStamp = stamp;
+                  }
               }
           } catch (err) {
               // A dropped server is the normal end of a watch session, not an
               // error worth shouting about. Keep polling: `serve` may come back.
               console.debug('live update poll failed', err);
+          } finally {
+              polling = false;
           }
       }
   
@@ -14134,24 +14228,30 @@
               // Apply all filters on page load
               applyFilter();
   
-              // Fold/unfold functionality with horizontal fold bars
-              const foldBarSections = document.querySelectorAll('.fold-bar-section');
+              // Fold/unfold functionality with horizontal fold bars.
+              //
+              // Delegated on `document` rather than bound per section, because
+              // a live update (`serve --watch`) replaces fold bars: a card's
+              // bar carries its descendant count, so every append re-renders
+              // the ancestors' bars, and the container swap replaces all of
+              // them. Bound directly, those listeners died with the elements
+              // and the fold controls silently stopped responding — measured:
+              // one update was enough to leave every bar on the page inert.
+              document.addEventListener('click', function (event) {
+                  const section = event.target.closest('.fold-bar-section');
+                  if (!section) return;
+                  event.stopPropagation();
+                  const action = section.getAttribute('data-action');
+                  const targetId = section.getAttribute('data-target');
+                  const isFolded = section.classList.contains('folded');
   
-              foldBarSections.forEach(section => {
-                  section.addEventListener('click', function(e) {
-                      e.stopPropagation();
-                      const action = this.getAttribute('data-action');
-                      const targetId = this.getAttribute('data-target');
-                      const isFolded = this.classList.contains('folded');
-  
-                      if (action === 'fold-one') {
-                          // Fold/unfold immediate children only
-                          handleFoldOne(targetId, isFolded, this);
-                      } else if (action === 'fold-all') {
-                          // Fold/unfold all descendants recursively
-                          handleFoldAll(targetId, isFolded, this);
-                      }
-                  });
+                  if (action === 'fold-one') {
+                      // Fold/unfold immediate children only
+                      handleFoldOne(targetId, isFolded, section);
+                  } else if (action === 'fold-all') {
+                      // Fold/unfold all descendants recursively
+                      handleFoldAll(targetId, isFolded, section);
+                  }
               });
   
               // Update tooltip based on fold state
@@ -14276,6 +14376,42 @@
   
               // Apply initial fold state
               setInitialFoldState();
+  
+              // Re-sync a fold bar to what its children container is actually
+              // doing. A live update re-renders a card whenever its descendant
+              // count changes — which is every ancestor of every append — and
+              // the replacement arrives with the server's default icons, not
+              // the state the user left it in. The children container is never
+              // replaced, so its own `display` is the truth; without this the
+              // bar claims "unfolded" over a hidden subtree, and the next
+              // click folds what is already folded and appears to do nothing.
+              function syncFoldBar(card) {
+                  const foldBar = card.querySelector(':scope > .fold-bar');
+                  if (!foldBar) return;
+                  const cc = getChildrenContainer(card);
+                  const oneSection = foldBar.querySelector('.fold-one-level');
+                  const allSection = foldBar.querySelector('.fold-all-levels');
+                  if (!cc || cc.style.display === 'none') {
+                      setSectionState(oneSection, true, '⏵');
+                      setSectionState(allSection, true, '⏵⏵');
+                      return;
+                  }
+                  // Immediate children are visible; `fold-all` reads as open
+                  // only when their own subtrees are open too.
+                  const kids = getImmediateChildMessages(card);
+                  const allOpen = kids.every(child => {
+                      const childCc = getChildrenContainer(child);
+                      return !childCc || childCc.style.display !== 'none';
+                  });
+                  setSectionState(oneSection, false, '⏷');
+                  setSectionState(allSection, !allOpen, allOpen ? '⏷⏷' : '⏵⏵');
+              }
+              if (window.claudeLogOnRehydrate) {
+                  window.claudeLogOnRehydrate(function (root) {
+                      if (root.matches && root.matches('.message')) syncFoldBar(root);
+                      root.querySelectorAll('.message').forEach(syncFoldBar);
+                  });
+              }
   
               // Unfold any folded ancestors so an anchor target (e.g. a tool_use
               // jumped to from the session index) is actually visible. In the
@@ -20364,9 +20500,11 @@
      Measured: with neither, the gap is 0px — the last card's bottom is
      exactly the viewport bottom. The padding is what supplies the
      scrollable space; `scrollToEnd` then scrolls the document to its end
-     rather than aligning the card, and the gap becomes this much. */
+     rather than aligning the card, and the gap becomes this much. Kept
+     small deliberately — enough to read as breathing room, not enough to
+     leave the newest message stranded above a band of empty page. */
   body.live-following {
-      padding-bottom: 120px;
+      padding-bottom: 20px;
   }
   /* Session navigation styles */
   .navigation {
@@ -23562,8 +23700,9 @@
   //
   //   * The server never renders. `serve --watch` re-runs the ordinary
   //     conversion and the files on disk stay canonical, so this page just
-  //     re-fetches its own URL. A conditional GET makes the idle case free
-  //     (304 in ~1ms) and needs no endpoint of its own.
+  //     re-fetches its own URL. A HEAD for the page's own metadata makes
+  //     the idle case free (~1ms, no body) and needs no endpoint of its
+  //     own; the full GET follows only when that metadata moved.
   //   * We never reload. A reload loses fold state and re-parses a
   //     document that can reach tens of MB.
   //   * When the new render extends the one on screen, we patch the nodes
@@ -23579,8 +23718,9 @@
   
       if (location.protocol !== 'http:' && location.protocol !== 'https:') return;
   
-      // A conditional GET costs ~1ms and 304s while nothing changes, so the
-      // interval is set by how fresh the page should feel, not by load.
+      // A metadata HEAD costs ~1ms and carries no body while nothing
+      // changes, so the interval is set by how fresh the page should feel,
+      // not by load.
       const POLL_MS = 1000;
       const container = () => document.getElementById('transcript');
       if (!container()) return;
@@ -24018,8 +24158,26 @@
           if (following) scrollToEnd();
       }
   
+      // One poll at a time. The interval keeps firing while a full GET is in
+      // flight, and a page slow enough to fetch — which is exactly the large
+      // page all of this is for — would then have two updates racing:
+      // whichever *response* lands last wins, so an older render overwrites a
+      // newer one and the page loses messages it had already shown. Measured
+      // by holding one response for 3s: the newest message appeared at 2.0s,
+      // vanished at 4.0s when the stale body landed, and came back at 5.0s.
+      //
+      // Serialising is what stops it, and skipping a tick costs nothing:
+      // `lastStamp` only advances once an update has actually been applied,
+      // so the next tick still sees the change. (That ordering is also what
+      // bounds the damage above to one second rather than forever — the
+      // stale apply rewinds `lastStamp` to its own older value, so the next
+      // HEAD finds a difference again. Recording the stamp before the GET
+      // instead leaves the page wrong until something else changes.)
+      let polling = false;
+  
       async function poll() {
-          if (stopped) return;
+          if (stopped || polling) return;
+          polling = true;
           try {
               const head = await fetch(location.href, { method: 'HEAD', cache: 'no-store' });
               const stamp = [
@@ -24030,14 +24188,18 @@
               if (lastStamp === null) {
                   lastStamp = stamp;
               } else if (stamp !== lastStamp) {
-                  lastStamp = stamp;
                   const res = await fetch(location.href, { cache: 'no-store' });
-                  if (res.ok) await applyUpdate(await res.text());
+                  if (res.ok) {
+                      await applyUpdate(await res.text());
+                      lastStamp = stamp;
+                  }
               }
           } catch (err) {
               // A dropped server is the normal end of a watch session, not an
               // error worth shouting about. Keep polling: `serve` may come back.
               console.debug('live update poll failed', err);
+          } finally {
+              polling = false;
           }
       }
   
@@ -24643,24 +24805,30 @@
               // Apply all filters on page load
               applyFilter();
   
-              // Fold/unfold functionality with horizontal fold bars
-              const foldBarSections = document.querySelectorAll('.fold-bar-section');
+              // Fold/unfold functionality with horizontal fold bars.
+              //
+              // Delegated on `document` rather than bound per section, because
+              // a live update (`serve --watch`) replaces fold bars: a card's
+              // bar carries its descendant count, so every append re-renders
+              // the ancestors' bars, and the container swap replaces all of
+              // them. Bound directly, those listeners died with the elements
+              // and the fold controls silently stopped responding — measured:
+              // one update was enough to leave every bar on the page inert.
+              document.addEventListener('click', function (event) {
+                  const section = event.target.closest('.fold-bar-section');
+                  if (!section) return;
+                  event.stopPropagation();
+                  const action = section.getAttribute('data-action');
+                  const targetId = section.getAttribute('data-target');
+                  const isFolded = section.classList.contains('folded');
   
-              foldBarSections.forEach(section => {
-                  section.addEventListener('click', function(e) {
-                      e.stopPropagation();
-                      const action = this.getAttribute('data-action');
-                      const targetId = this.getAttribute('data-target');
-                      const isFolded = this.classList.contains('folded');
-  
-                      if (action === 'fold-one') {
-                          // Fold/unfold immediate children only
-                          handleFoldOne(targetId, isFolded, this);
-                      } else if (action === 'fold-all') {
-                          // Fold/unfold all descendants recursively
-                          handleFoldAll(targetId, isFolded, this);
-                      }
-                  });
+                  if (action === 'fold-one') {
+                      // Fold/unfold immediate children only
+                      handleFoldOne(targetId, isFolded, section);
+                  } else if (action === 'fold-all') {
+                      // Fold/unfold all descendants recursively
+                      handleFoldAll(targetId, isFolded, section);
+                  }
               });
   
               // Update tooltip based on fold state
@@ -24785,6 +24953,42 @@
   
               // Apply initial fold state
               setInitialFoldState();
+  
+              // Re-sync a fold bar to what its children container is actually
+              // doing. A live update re-renders a card whenever its descendant
+              // count changes — which is every ancestor of every append — and
+              // the replacement arrives with the server's default icons, not
+              // the state the user left it in. The children container is never
+              // replaced, so its own `display` is the truth; without this the
+              // bar claims "unfolded" over a hidden subtree, and the next
+              // click folds what is already folded and appears to do nothing.
+              function syncFoldBar(card) {
+                  const foldBar = card.querySelector(':scope > .fold-bar');
+                  if (!foldBar) return;
+                  const cc = getChildrenContainer(card);
+                  const oneSection = foldBar.querySelector('.fold-one-level');
+                  const allSection = foldBar.querySelector('.fold-all-levels');
+                  if (!cc || cc.style.display === 'none') {
+                      setSectionState(oneSection, true, '⏵');
+                      setSectionState(allSection, true, '⏵⏵');
+                      return;
+                  }
+                  // Immediate children are visible; `fold-all` reads as open
+                  // only when their own subtrees are open too.
+                  const kids = getImmediateChildMessages(card);
+                  const allOpen = kids.every(child => {
+                      const childCc = getChildrenContainer(child);
+                      return !childCc || childCc.style.display !== 'none';
+                  });
+                  setSectionState(oneSection, false, '⏷');
+                  setSectionState(allSection, !allOpen, allOpen ? '⏷⏷' : '⏵⏵');
+              }
+              if (window.claudeLogOnRehydrate) {
+                  window.claudeLogOnRehydrate(function (root) {
+                      if (root.matches && root.matches('.message')) syncFoldBar(root);
+                      root.querySelectorAll('.message').forEach(syncFoldBar);
+                  });
+              }
   
               // Unfold any folded ancestors so an anchor target (e.g. a tool_use
               // jumped to from the session index) is actually visible. In the
@@ -28238,9 +28442,11 @@
      Measured: with neither, the gap is 0px — the last card's bottom is
      exactly the viewport bottom. The padding is what supplies the
      scrollable space; `scrollToEnd` then scrolls the document to its end
-     rather than aligning the card, and the gap becomes this much. */
+     rather than aligning the card, and the gap becomes this much. Kept
+     small deliberately — enough to read as breathing room, not enough to
+     leave the newest message stranded above a band of empty page. */
   body.live-following {
-      padding-bottom: 120px;
+      padding-bottom: 20px;
   }
   /* Session navigation styles */
   .navigation {
@@ -31716,8 +31922,9 @@
   //
   //   * The server never renders. `serve --watch` re-runs the ordinary
   //     conversion and the files on disk stay canonical, so this page just
-  //     re-fetches its own URL. A conditional GET makes the idle case free
-  //     (304 in ~1ms) and needs no endpoint of its own.
+  //     re-fetches its own URL. A HEAD for the page's own metadata makes
+  //     the idle case free (~1ms, no body) and needs no endpoint of its
+  //     own; the full GET follows only when that metadata moved.
   //   * We never reload. A reload loses fold state and re-parses a
   //     document that can reach tens of MB.
   //   * When the new render extends the one on screen, we patch the nodes
@@ -31733,8 +31940,9 @@
   
       if (location.protocol !== 'http:' && location.protocol !== 'https:') return;
   
-      // A conditional GET costs ~1ms and 304s while nothing changes, so the
-      // interval is set by how fresh the page should feel, not by load.
+      // A metadata HEAD costs ~1ms and carries no body while nothing
+      // changes, so the interval is set by how fresh the page should feel,
+      // not by load.
       const POLL_MS = 1000;
       const container = () => document.getElementById('transcript');
       if (!container()) return;
@@ -32172,8 +32380,26 @@
           if (following) scrollToEnd();
       }
   
+      // One poll at a time. The interval keeps firing while a full GET is in
+      // flight, and a page slow enough to fetch — which is exactly the large
+      // page all of this is for — would then have two updates racing:
+      // whichever *response* lands last wins, so an older render overwrites a
+      // newer one and the page loses messages it had already shown. Measured
+      // by holding one response for 3s: the newest message appeared at 2.0s,
+      // vanished at 4.0s when the stale body landed, and came back at 5.0s.
+      //
+      // Serialising is what stops it, and skipping a tick costs nothing:
+      // `lastStamp` only advances once an update has actually been applied,
+      // so the next tick still sees the change. (That ordering is also what
+      // bounds the damage above to one second rather than forever — the
+      // stale apply rewinds `lastStamp` to its own older value, so the next
+      // HEAD finds a difference again. Recording the stamp before the GET
+      // instead leaves the page wrong until something else changes.)
+      let polling = false;
+  
       async function poll() {
-          if (stopped) return;
+          if (stopped || polling) return;
+          polling = true;
           try {
               const head = await fetch(location.href, { method: 'HEAD', cache: 'no-store' });
               const stamp = [
@@ -32184,14 +32410,18 @@
               if (lastStamp === null) {
                   lastStamp = stamp;
               } else if (stamp !== lastStamp) {
-                  lastStamp = stamp;
                   const res = await fetch(location.href, { cache: 'no-store' });
-                  if (res.ok) await applyUpdate(await res.text());
+                  if (res.ok) {
+                      await applyUpdate(await res.text());
+                      lastStamp = stamp;
+                  }
               }
           } catch (err) {
               // A dropped server is the normal end of a watch session, not an
               // error worth shouting about. Keep polling: `serve` may come back.
               console.debug('live update poll failed', err);
+          } finally {
+              polling = false;
           }
       }
   
@@ -32797,24 +33027,30 @@
               // Apply all filters on page load
               applyFilter();
   
-              // Fold/unfold functionality with horizontal fold bars
-              const foldBarSections = document.querySelectorAll('.fold-bar-section');
+              // Fold/unfold functionality with horizontal fold bars.
+              //
+              // Delegated on `document` rather than bound per section, because
+              // a live update (`serve --watch`) replaces fold bars: a card's
+              // bar carries its descendant count, so every append re-renders
+              // the ancestors' bars, and the container swap replaces all of
+              // them. Bound directly, those listeners died with the elements
+              // and the fold controls silently stopped responding — measured:
+              // one update was enough to leave every bar on the page inert.
+              document.addEventListener('click', function (event) {
+                  const section = event.target.closest('.fold-bar-section');
+                  if (!section) return;
+                  event.stopPropagation();
+                  const action = section.getAttribute('data-action');
+                  const targetId = section.getAttribute('data-target');
+                  const isFolded = section.classList.contains('folded');
   
-              foldBarSections.forEach(section => {
-                  section.addEventListener('click', function(e) {
-                      e.stopPropagation();
-                      const action = this.getAttribute('data-action');
-                      const targetId = this.getAttribute('data-target');
-                      const isFolded = this.classList.contains('folded');
-  
-                      if (action === 'fold-one') {
-                          // Fold/unfold immediate children only
-                          handleFoldOne(targetId, isFolded, this);
-                      } else if (action === 'fold-all') {
-                          // Fold/unfold all descendants recursively
-                          handleFoldAll(targetId, isFolded, this);
-                      }
-                  });
+                  if (action === 'fold-one') {
+                      // Fold/unfold immediate children only
+                      handleFoldOne(targetId, isFolded, section);
+                  } else if (action === 'fold-all') {
+                      // Fold/unfold all descendants recursively
+                      handleFoldAll(targetId, isFolded, section);
+                  }
               });
   
               // Update tooltip based on fold state
@@ -32939,6 +33175,42 @@
   
               // Apply initial fold state
               setInitialFoldState();
+  
+              // Re-sync a fold bar to what its children container is actually
+              // doing. A live update re-renders a card whenever its descendant
+              // count changes — which is every ancestor of every append — and
+              // the replacement arrives with the server's default icons, not
+              // the state the user left it in. The children container is never
+              // replaced, so its own `display` is the truth; without this the
+              // bar claims "unfolded" over a hidden subtree, and the next
+              // click folds what is already folded and appears to do nothing.
+              function syncFoldBar(card) {
+                  const foldBar = card.querySelector(':scope > .fold-bar');
+                  if (!foldBar) return;
+                  const cc = getChildrenContainer(card);
+                  const oneSection = foldBar.querySelector('.fold-one-level');
+                  const allSection = foldBar.querySelector('.fold-all-levels');
+                  if (!cc || cc.style.display === 'none') {
+                      setSectionState(oneSection, true, '⏵');
+                      setSectionState(allSection, true, '⏵⏵');
+                      return;
+                  }
+                  // Immediate children are visible; `fold-all` reads as open
+                  // only when their own subtrees are open too.
+                  const kids = getImmediateChildMessages(card);
+                  const allOpen = kids.every(child => {
+                      const childCc = getChildrenContainer(child);
+                      return !childCc || childCc.style.display !== 'none';
+                  });
+                  setSectionState(oneSection, false, '⏷');
+                  setSectionState(allSection, !allOpen, allOpen ? '⏷⏷' : '⏵⏵');
+              }
+              if (window.claudeLogOnRehydrate) {
+                  window.claudeLogOnRehydrate(function (root) {
+                      if (root.matches && root.matches('.message')) syncFoldBar(root);
+                      root.querySelectorAll('.message').forEach(syncFoldBar);
+                  });
+              }
   
               // Unfold any folded ancestors so an anchor target (e.g. a tool_use
               // jumped to from the session index) is actually visible. In the
@@ -36392,9 +36664,11 @@
      Measured: with neither, the gap is 0px — the last card's bottom is
      exactly the viewport bottom. The padding is what supplies the
      scrollable space; `scrollToEnd` then scrolls the document to its end
-     rather than aligning the card, and the gap becomes this much. */
+     rather than aligning the card, and the gap becomes this much. Kept
+     small deliberately — enough to read as breathing room, not enough to
+     leave the newest message stranded above a band of empty page. */
   body.live-following {
-      padding-bottom: 120px;
+      padding-bottom: 20px;
   }
   /* Session navigation styles */
   .navigation {
@@ -39817,8 +40091,9 @@
   //
   //   * The server never renders. `serve --watch` re-runs the ordinary
   //     conversion and the files on disk stay canonical, so this page just
-  //     re-fetches its own URL. A conditional GET makes the idle case free
-  //     (304 in ~1ms) and needs no endpoint of its own.
+  //     re-fetches its own URL. A HEAD for the page's own metadata makes
+  //     the idle case free (~1ms, no body) and needs no endpoint of its
+  //     own; the full GET follows only when that metadata moved.
   //   * We never reload. A reload loses fold state and re-parses a
   //     document that can reach tens of MB.
   //   * When the new render extends the one on screen, we patch the nodes
@@ -39834,8 +40109,9 @@
   
       if (location.protocol !== 'http:' && location.protocol !== 'https:') return;
   
-      // A conditional GET costs ~1ms and 304s while nothing changes, so the
-      // interval is set by how fresh the page should feel, not by load.
+      // A metadata HEAD costs ~1ms and carries no body while nothing
+      // changes, so the interval is set by how fresh the page should feel,
+      // not by load.
       const POLL_MS = 1000;
       const container = () => document.getElementById('transcript');
       if (!container()) return;
@@ -40273,8 +40549,26 @@
           if (following) scrollToEnd();
       }
   
+      // One poll at a time. The interval keeps firing while a full GET is in
+      // flight, and a page slow enough to fetch — which is exactly the large
+      // page all of this is for — would then have two updates racing:
+      // whichever *response* lands last wins, so an older render overwrites a
+      // newer one and the page loses messages it had already shown. Measured
+      // by holding one response for 3s: the newest message appeared at 2.0s,
+      // vanished at 4.0s when the stale body landed, and came back at 5.0s.
+      //
+      // Serialising is what stops it, and skipping a tick costs nothing:
+      // `lastStamp` only advances once an update has actually been applied,
+      // so the next tick still sees the change. (That ordering is also what
+      // bounds the damage above to one second rather than forever — the
+      // stale apply rewinds `lastStamp` to its own older value, so the next
+      // HEAD finds a difference again. Recording the stamp before the GET
+      // instead leaves the page wrong until something else changes.)
+      let polling = false;
+  
       async function poll() {
-          if (stopped) return;
+          if (stopped || polling) return;
+          polling = true;
           try {
               const head = await fetch(location.href, { method: 'HEAD', cache: 'no-store' });
               const stamp = [
@@ -40285,14 +40579,18 @@
               if (lastStamp === null) {
                   lastStamp = stamp;
               } else if (stamp !== lastStamp) {
-                  lastStamp = stamp;
                   const res = await fetch(location.href, { cache: 'no-store' });
-                  if (res.ok) await applyUpdate(await res.text());
+                  if (res.ok) {
+                      await applyUpdate(await res.text());
+                      lastStamp = stamp;
+                  }
               }
           } catch (err) {
               // A dropped server is the normal end of a watch session, not an
               // error worth shouting about. Keep polling: `serve` may come back.
               console.debug('live update poll failed', err);
+          } finally {
+              polling = false;
           }
       }
   
@@ -40898,24 +41196,30 @@
               // Apply all filters on page load
               applyFilter();
   
-              // Fold/unfold functionality with horizontal fold bars
-              const foldBarSections = document.querySelectorAll('.fold-bar-section');
+              // Fold/unfold functionality with horizontal fold bars.
+              //
+              // Delegated on `document` rather than bound per section, because
+              // a live update (`serve --watch`) replaces fold bars: a card's
+              // bar carries its descendant count, so every append re-renders
+              // the ancestors' bars, and the container swap replaces all of
+              // them. Bound directly, those listeners died with the elements
+              // and the fold controls silently stopped responding — measured:
+              // one update was enough to leave every bar on the page inert.
+              document.addEventListener('click', function (event) {
+                  const section = event.target.closest('.fold-bar-section');
+                  if (!section) return;
+                  event.stopPropagation();
+                  const action = section.getAttribute('data-action');
+                  const targetId = section.getAttribute('data-target');
+                  const isFolded = section.classList.contains('folded');
   
-              foldBarSections.forEach(section => {
-                  section.addEventListener('click', function(e) {
-                      e.stopPropagation();
-                      const action = this.getAttribute('data-action');
-                      const targetId = this.getAttribute('data-target');
-                      const isFolded = this.classList.contains('folded');
-  
-                      if (action === 'fold-one') {
-                          // Fold/unfold immediate children only
-                          handleFoldOne(targetId, isFolded, this);
-                      } else if (action === 'fold-all') {
-                          // Fold/unfold all descendants recursively
-                          handleFoldAll(targetId, isFolded, this);
-                      }
-                  });
+                  if (action === 'fold-one') {
+                      // Fold/unfold immediate children only
+                      handleFoldOne(targetId, isFolded, section);
+                  } else if (action === 'fold-all') {
+                      // Fold/unfold all descendants recursively
+                      handleFoldAll(targetId, isFolded, section);
+                  }
               });
   
               // Update tooltip based on fold state
@@ -41040,6 +41344,42 @@
   
               // Apply initial fold state
               setInitialFoldState();
+  
+              // Re-sync a fold bar to what its children container is actually
+              // doing. A live update re-renders a card whenever its descendant
+              // count changes — which is every ancestor of every append — and
+              // the replacement arrives with the server's default icons, not
+              // the state the user left it in. The children container is never
+              // replaced, so its own `display` is the truth; without this the
+              // bar claims "unfolded" over a hidden subtree, and the next
+              // click folds what is already folded and appears to do nothing.
+              function syncFoldBar(card) {
+                  const foldBar = card.querySelector(':scope > .fold-bar');
+                  if (!foldBar) return;
+                  const cc = getChildrenContainer(card);
+                  const oneSection = foldBar.querySelector('.fold-one-level');
+                  const allSection = foldBar.querySelector('.fold-all-levels');
+                  if (!cc || cc.style.display === 'none') {
+                      setSectionState(oneSection, true, '⏵');
+                      setSectionState(allSection, true, '⏵⏵');
+                      return;
+                  }
+                  // Immediate children are visible; `fold-all` reads as open
+                  // only when their own subtrees are open too.
+                  const kids = getImmediateChildMessages(card);
+                  const allOpen = kids.every(child => {
+                      const childCc = getChildrenContainer(child);
+                      return !childCc || childCc.style.display !== 'none';
+                  });
+                  setSectionState(oneSection, false, '⏷');
+                  setSectionState(allSection, !allOpen, allOpen ? '⏷⏷' : '⏵⏵');
+              }
+              if (window.claudeLogOnRehydrate) {
+                  window.claudeLogOnRehydrate(function (root) {
+                      if (root.matches && root.matches('.message')) syncFoldBar(root);
+                      root.querySelectorAll('.message').forEach(syncFoldBar);
+                  });
+              }
   
               // Unfold any folded ancestors so an anchor target (e.g. a tool_use
               // jumped to from the session index) is actually visible. In the
@@ -44493,9 +44833,11 @@
      Measured: with neither, the gap is 0px — the last card's bottom is
      exactly the viewport bottom. The padding is what supplies the
      scrollable space; `scrollToEnd` then scrolls the document to its end
-     rather than aligning the card, and the gap becomes this much. */
+     rather than aligning the card, and the gap becomes this much. Kept
+     small deliberately — enough to read as breathing room, not enough to
+     leave the newest message stranded above a band of empty page. */
   body.live-following {
-      padding-bottom: 120px;
+      padding-bottom: 20px;
   }
   /* Session navigation styles */
   .navigation {
@@ -47863,8 +48205,9 @@
   //
   //   * The server never renders. `serve --watch` re-runs the ordinary
   //     conversion and the files on disk stay canonical, so this page just
-  //     re-fetches its own URL. A conditional GET makes the idle case free
-  //     (304 in ~1ms) and needs no endpoint of its own.
+  //     re-fetches its own URL. A HEAD for the page's own metadata makes
+  //     the idle case free (~1ms, no body) and needs no endpoint of its
+  //     own; the full GET follows only when that metadata moved.
   //   * We never reload. A reload loses fold state and re-parses a
   //     document that can reach tens of MB.
   //   * When the new render extends the one on screen, we patch the nodes
@@ -47880,8 +48223,9 @@
   
       if (location.protocol !== 'http:' && location.protocol !== 'https:') return;
   
-      // A conditional GET costs ~1ms and 304s while nothing changes, so the
-      // interval is set by how fresh the page should feel, not by load.
+      // A metadata HEAD costs ~1ms and carries no body while nothing
+      // changes, so the interval is set by how fresh the page should feel,
+      // not by load.
       const POLL_MS = 1000;
       const container = () => document.getElementById('transcript');
       if (!container()) return;
@@ -48319,8 +48663,26 @@
           if (following) scrollToEnd();
       }
   
+      // One poll at a time. The interval keeps firing while a full GET is in
+      // flight, and a page slow enough to fetch — which is exactly the large
+      // page all of this is for — would then have two updates racing:
+      // whichever *response* lands last wins, so an older render overwrites a
+      // newer one and the page loses messages it had already shown. Measured
+      // by holding one response for 3s: the newest message appeared at 2.0s,
+      // vanished at 4.0s when the stale body landed, and came back at 5.0s.
+      //
+      // Serialising is what stops it, and skipping a tick costs nothing:
+      // `lastStamp` only advances once an update has actually been applied,
+      // so the next tick still sees the change. (That ordering is also what
+      // bounds the damage above to one second rather than forever — the
+      // stale apply rewinds `lastStamp` to its own older value, so the next
+      // HEAD finds a difference again. Recording the stamp before the GET
+      // instead leaves the page wrong until something else changes.)
+      let polling = false;
+  
       async function poll() {
-          if (stopped) return;
+          if (stopped || polling) return;
+          polling = true;
           try {
               const head = await fetch(location.href, { method: 'HEAD', cache: 'no-store' });
               const stamp = [
@@ -48331,14 +48693,18 @@
               if (lastStamp === null) {
                   lastStamp = stamp;
               } else if (stamp !== lastStamp) {
-                  lastStamp = stamp;
                   const res = await fetch(location.href, { cache: 'no-store' });
-                  if (res.ok) await applyUpdate(await res.text());
+                  if (res.ok) {
+                      await applyUpdate(await res.text());
+                      lastStamp = stamp;
+                  }
               }
           } catch (err) {
               // A dropped server is the normal end of a watch session, not an
               // error worth shouting about. Keep polling: `serve` may come back.
               console.debug('live update poll failed', err);
+          } finally {
+              polling = false;
           }
       }
   
@@ -48944,24 +49310,30 @@
               // Apply all filters on page load
               applyFilter();
   
-              // Fold/unfold functionality with horizontal fold bars
-              const foldBarSections = document.querySelectorAll('.fold-bar-section');
+              // Fold/unfold functionality with horizontal fold bars.
+              //
+              // Delegated on `document` rather than bound per section, because
+              // a live update (`serve --watch`) replaces fold bars: a card's
+              // bar carries its descendant count, so every append re-renders
+              // the ancestors' bars, and the container swap replaces all of
+              // them. Bound directly, those listeners died with the elements
+              // and the fold controls silently stopped responding — measured:
+              // one update was enough to leave every bar on the page inert.
+              document.addEventListener('click', function (event) {
+                  const section = event.target.closest('.fold-bar-section');
+                  if (!section) return;
+                  event.stopPropagation();
+                  const action = section.getAttribute('data-action');
+                  const targetId = section.getAttribute('data-target');
+                  const isFolded = section.classList.contains('folded');
   
-              foldBarSections.forEach(section => {
-                  section.addEventListener('click', function(e) {
-                      e.stopPropagation();
-                      const action = this.getAttribute('data-action');
-                      const targetId = this.getAttribute('data-target');
-                      const isFolded = this.classList.contains('folded');
-  
-                      if (action === 'fold-one') {
-                          // Fold/unfold immediate children only
-                          handleFoldOne(targetId, isFolded, this);
-                      } else if (action === 'fold-all') {
-                          // Fold/unfold all descendants recursively
-                          handleFoldAll(targetId, isFolded, this);
-                      }
-                  });
+                  if (action === 'fold-one') {
+                      // Fold/unfold immediate children only
+                      handleFoldOne(targetId, isFolded, section);
+                  } else if (action === 'fold-all') {
+                      // Fold/unfold all descendants recursively
+                      handleFoldAll(targetId, isFolded, section);
+                  }
               });
   
               // Update tooltip based on fold state
@@ -49086,6 +49458,42 @@
   
               // Apply initial fold state
               setInitialFoldState();
+  
+              // Re-sync a fold bar to what its children container is actually
+              // doing. A live update re-renders a card whenever its descendant
+              // count changes — which is every ancestor of every append — and
+              // the replacement arrives with the server's default icons, not
+              // the state the user left it in. The children container is never
+              // replaced, so its own `display` is the truth; without this the
+              // bar claims "unfolded" over a hidden subtree, and the next
+              // click folds what is already folded and appears to do nothing.
+              function syncFoldBar(card) {
+                  const foldBar = card.querySelector(':scope > .fold-bar');
+                  if (!foldBar) return;
+                  const cc = getChildrenContainer(card);
+                  const oneSection = foldBar.querySelector('.fold-one-level');
+                  const allSection = foldBar.querySelector('.fold-all-levels');
+                  if (!cc || cc.style.display === 'none') {
+                      setSectionState(oneSection, true, '⏵');
+                      setSectionState(allSection, true, '⏵⏵');
+                      return;
+                  }
+                  // Immediate children are visible; `fold-all` reads as open
+                  // only when their own subtrees are open too.
+                  const kids = getImmediateChildMessages(card);
+                  const allOpen = kids.every(child => {
+                      const childCc = getChildrenContainer(child);
+                      return !childCc || childCc.style.display !== 'none';
+                  });
+                  setSectionState(oneSection, false, '⏷');
+                  setSectionState(allSection, !allOpen, allOpen ? '⏷⏷' : '⏵⏵');
+              }
+              if (window.claudeLogOnRehydrate) {
+                  window.claudeLogOnRehydrate(function (root) {
+                      if (root.matches && root.matches('.message')) syncFoldBar(root);
+                      root.querySelectorAll('.message').forEach(syncFoldBar);
+                  });
+              }
   
               // Unfold any folded ancestors so an anchor target (e.g. a tool_use
               // jumped to from the session index) is actually visible. In the
@@ -52539,9 +52947,11 @@
      Measured: with neither, the gap is 0px — the last card's bottom is
      exactly the viewport bottom. The padding is what supplies the
      scrollable space; `scrollToEnd` then scrolls the document to its end
-     rather than aligning the card, and the gap becomes this much. */
+     rather than aligning the card, and the gap becomes this much. Kept
+     small deliberately — enough to read as breathing room, not enough to
+     leave the newest message stranded above a band of empty page. */
   body.live-following {
-      padding-bottom: 120px;
+      padding-bottom: 20px;
   }
   /* Session navigation styles */
   .navigation {
@@ -55737,8 +56147,9 @@
   //
   //   * The server never renders. `serve --watch` re-runs the ordinary
   //     conversion and the files on disk stay canonical, so this page just
-  //     re-fetches its own URL. A conditional GET makes the idle case free
-  //     (304 in ~1ms) and needs no endpoint of its own.
+  //     re-fetches its own URL. A HEAD for the page's own metadata makes
+  //     the idle case free (~1ms, no body) and needs no endpoint of its
+  //     own; the full GET follows only when that metadata moved.
   //   * We never reload. A reload loses fold state and re-parses a
   //     document that can reach tens of MB.
   //   * When the new render extends the one on screen, we patch the nodes
@@ -55754,8 +56165,9 @@
   
       if (location.protocol !== 'http:' && location.protocol !== 'https:') return;
   
-      // A conditional GET costs ~1ms and 304s while nothing changes, so the
-      // interval is set by how fresh the page should feel, not by load.
+      // A metadata HEAD costs ~1ms and carries no body while nothing
+      // changes, so the interval is set by how fresh the page should feel,
+      // not by load.
       const POLL_MS = 1000;
       const container = () => document.getElementById('transcript');
       if (!container()) return;
@@ -56193,8 +56605,26 @@
           if (following) scrollToEnd();
       }
   
+      // One poll at a time. The interval keeps firing while a full GET is in
+      // flight, and a page slow enough to fetch — which is exactly the large
+      // page all of this is for — would then have two updates racing:
+      // whichever *response* lands last wins, so an older render overwrites a
+      // newer one and the page loses messages it had already shown. Measured
+      // by holding one response for 3s: the newest message appeared at 2.0s,
+      // vanished at 4.0s when the stale body landed, and came back at 5.0s.
+      //
+      // Serialising is what stops it, and skipping a tick costs nothing:
+      // `lastStamp` only advances once an update has actually been applied,
+      // so the next tick still sees the change. (That ordering is also what
+      // bounds the damage above to one second rather than forever — the
+      // stale apply rewinds `lastStamp` to its own older value, so the next
+      // HEAD finds a difference again. Recording the stamp before the GET
+      // instead leaves the page wrong until something else changes.)
+      let polling = false;
+  
       async function poll() {
-          if (stopped) return;
+          if (stopped || polling) return;
+          polling = true;
           try {
               const head = await fetch(location.href, { method: 'HEAD', cache: 'no-store' });
               const stamp = [
@@ -56205,14 +56635,18 @@
               if (lastStamp === null) {
                   lastStamp = stamp;
               } else if (stamp !== lastStamp) {
-                  lastStamp = stamp;
                   const res = await fetch(location.href, { cache: 'no-store' });
-                  if (res.ok) await applyUpdate(await res.text());
+                  if (res.ok) {
+                      await applyUpdate(await res.text());
+                      lastStamp = stamp;
+                  }
               }
           } catch (err) {
               // A dropped server is the normal end of a watch session, not an
               // error worth shouting about. Keep polling: `serve` may come back.
               console.debug('live update poll failed', err);
+          } finally {
+              polling = false;
           }
       }
   
@@ -56818,24 +57252,30 @@
               // Apply all filters on page load
               applyFilter();
   
-              // Fold/unfold functionality with horizontal fold bars
-              const foldBarSections = document.querySelectorAll('.fold-bar-section');
+              // Fold/unfold functionality with horizontal fold bars.
+              //
+              // Delegated on `document` rather than bound per section, because
+              // a live update (`serve --watch`) replaces fold bars: a card's
+              // bar carries its descendant count, so every append re-renders
+              // the ancestors' bars, and the container swap replaces all of
+              // them. Bound directly, those listeners died with the elements
+              // and the fold controls silently stopped responding — measured:
+              // one update was enough to leave every bar on the page inert.
+              document.addEventListener('click', function (event) {
+                  const section = event.target.closest('.fold-bar-section');
+                  if (!section) return;
+                  event.stopPropagation();
+                  const action = section.getAttribute('data-action');
+                  const targetId = section.getAttribute('data-target');
+                  const isFolded = section.classList.contains('folded');
   
-              foldBarSections.forEach(section => {
-                  section.addEventListener('click', function(e) {
-                      e.stopPropagation();
-                      const action = this.getAttribute('data-action');
-                      const targetId = this.getAttribute('data-target');
-                      const isFolded = this.classList.contains('folded');
-  
-                      if (action === 'fold-one') {
-                          // Fold/unfold immediate children only
-                          handleFoldOne(targetId, isFolded, this);
-                      } else if (action === 'fold-all') {
-                          // Fold/unfold all descendants recursively
-                          handleFoldAll(targetId, isFolded, this);
-                      }
-                  });
+                  if (action === 'fold-one') {
+                      // Fold/unfold immediate children only
+                      handleFoldOne(targetId, isFolded, section);
+                  } else if (action === 'fold-all') {
+                      // Fold/unfold all descendants recursively
+                      handleFoldAll(targetId, isFolded, section);
+                  }
               });
   
               // Update tooltip based on fold state
@@ -56960,6 +57400,42 @@
   
               // Apply initial fold state
               setInitialFoldState();
+  
+              // Re-sync a fold bar to what its children container is actually
+              // doing. A live update re-renders a card whenever its descendant
+              // count changes — which is every ancestor of every append — and
+              // the replacement arrives with the server's default icons, not
+              // the state the user left it in. The children container is never
+              // replaced, so its own `display` is the truth; without this the
+              // bar claims "unfolded" over a hidden subtree, and the next
+              // click folds what is already folded and appears to do nothing.
+              function syncFoldBar(card) {
+                  const foldBar = card.querySelector(':scope > .fold-bar');
+                  if (!foldBar) return;
+                  const cc = getChildrenContainer(card);
+                  const oneSection = foldBar.querySelector('.fold-one-level');
+                  const allSection = foldBar.querySelector('.fold-all-levels');
+                  if (!cc || cc.style.display === 'none') {
+                      setSectionState(oneSection, true, '⏵');
+                      setSectionState(allSection, true, '⏵⏵');
+                      return;
+                  }
+                  // Immediate children are visible; `fold-all` reads as open
+                  // only when their own subtrees are open too.
+                  const kids = getImmediateChildMessages(card);
+                  const allOpen = kids.every(child => {
+                      const childCc = getChildrenContainer(child);
+                      return !childCc || childCc.style.display !== 'none';
+                  });
+                  setSectionState(oneSection, false, '⏷');
+                  setSectionState(allSection, !allOpen, allOpen ? '⏷⏷' : '⏵⏵');
+              }
+              if (window.claudeLogOnRehydrate) {
+                  window.claudeLogOnRehydrate(function (root) {
+                      if (root.matches && root.matches('.message')) syncFoldBar(root);
+                      root.querySelectorAll('.message').forEach(syncFoldBar);
+                  });
+              }
   
               // Unfold any folded ancestors so an anchor target (e.g. a tool_use
               // jumped to from the session index) is actually visible. In the
@@ -60413,9 +60889,11 @@
      Measured: with neither, the gap is 0px — the last card's bottom is
      exactly the viewport bottom. The padding is what supplies the
      scrollable space; `scrollToEnd` then scrolls the document to its end
-     rather than aligning the card, and the gap becomes this much. */
+     rather than aligning the card, and the gap becomes this much. Kept
+     small deliberately — enough to read as breathing room, not enough to
+     leave the newest message stranded above a band of empty page. */
   body.live-following {
-      padding-bottom: 120px;
+      padding-bottom: 20px;
   }
   /* Session navigation styles */
   .navigation {
@@ -63416,8 +63894,9 @@
   //
   //   * The server never renders. `serve --watch` re-runs the ordinary
   //     conversion and the files on disk stay canonical, so this page just
-  //     re-fetches its own URL. A conditional GET makes the idle case free
-  //     (304 in ~1ms) and needs no endpoint of its own.
+  //     re-fetches its own URL. A HEAD for the page's own metadata makes
+  //     the idle case free (~1ms, no body) and needs no endpoint of its
+  //     own; the full GET follows only when that metadata moved.
   //   * We never reload. A reload loses fold state and re-parses a
   //     document that can reach tens of MB.
   //   * When the new render extends the one on screen, we patch the nodes
@@ -63433,8 +63912,9 @@
   
       if (location.protocol !== 'http:' && location.protocol !== 'https:') return;
   
-      // A conditional GET costs ~1ms and 304s while nothing changes, so the
-      // interval is set by how fresh the page should feel, not by load.
+      // A metadata HEAD costs ~1ms and carries no body while nothing
+      // changes, so the interval is set by how fresh the page should feel,
+      // not by load.
       const POLL_MS = 1000;
       const container = () => document.getElementById('transcript');
       if (!container()) return;
@@ -63872,8 +64352,26 @@
           if (following) scrollToEnd();
       }
   
+      // One poll at a time. The interval keeps firing while a full GET is in
+      // flight, and a page slow enough to fetch — which is exactly the large
+      // page all of this is for — would then have two updates racing:
+      // whichever *response* lands last wins, so an older render overwrites a
+      // newer one and the page loses messages it had already shown. Measured
+      // by holding one response for 3s: the newest message appeared at 2.0s,
+      // vanished at 4.0s when the stale body landed, and came back at 5.0s.
+      //
+      // Serialising is what stops it, and skipping a tick costs nothing:
+      // `lastStamp` only advances once an update has actually been applied,
+      // so the next tick still sees the change. (That ordering is also what
+      // bounds the damage above to one second rather than forever — the
+      // stale apply rewinds `lastStamp` to its own older value, so the next
+      // HEAD finds a difference again. Recording the stamp before the GET
+      // instead leaves the page wrong until something else changes.)
+      let polling = false;
+  
       async function poll() {
-          if (stopped) return;
+          if (stopped || polling) return;
+          polling = true;
           try {
               const head = await fetch(location.href, { method: 'HEAD', cache: 'no-store' });
               const stamp = [
@@ -63884,14 +64382,18 @@
               if (lastStamp === null) {
                   lastStamp = stamp;
               } else if (stamp !== lastStamp) {
-                  lastStamp = stamp;
                   const res = await fetch(location.href, { cache: 'no-store' });
-                  if (res.ok) await applyUpdate(await res.text());
+                  if (res.ok) {
+                      await applyUpdate(await res.text());
+                      lastStamp = stamp;
+                  }
               }
           } catch (err) {
               // A dropped server is the normal end of a watch session, not an
               // error worth shouting about. Keep polling: `serve` may come back.
               console.debug('live update poll failed', err);
+          } finally {
+              polling = false;
           }
       }
   
@@ -64497,24 +64999,30 @@
               // Apply all filters on page load
               applyFilter();
   
-              // Fold/unfold functionality with horizontal fold bars
-              const foldBarSections = document.querySelectorAll('.fold-bar-section');
+              // Fold/unfold functionality with horizontal fold bars.
+              //
+              // Delegated on `document` rather than bound per section, because
+              // a live update (`serve --watch`) replaces fold bars: a card's
+              // bar carries its descendant count, so every append re-renders
+              // the ancestors' bars, and the container swap replaces all of
+              // them. Bound directly, those listeners died with the elements
+              // and the fold controls silently stopped responding — measured:
+              // one update was enough to leave every bar on the page inert.
+              document.addEventListener('click', function (event) {
+                  const section = event.target.closest('.fold-bar-section');
+                  if (!section) return;
+                  event.stopPropagation();
+                  const action = section.getAttribute('data-action');
+                  const targetId = section.getAttribute('data-target');
+                  const isFolded = section.classList.contains('folded');
   
-              foldBarSections.forEach(section => {
-                  section.addEventListener('click', function(e) {
-                      e.stopPropagation();
-                      const action = this.getAttribute('data-action');
-                      const targetId = this.getAttribute('data-target');
-                      const isFolded = this.classList.contains('folded');
-  
-                      if (action === 'fold-one') {
-                          // Fold/unfold immediate children only
-                          handleFoldOne(targetId, isFolded, this);
-                      } else if (action === 'fold-all') {
-                          // Fold/unfold all descendants recursively
-                          handleFoldAll(targetId, isFolded, this);
-                      }
-                  });
+                  if (action === 'fold-one') {
+                      // Fold/unfold immediate children only
+                      handleFoldOne(targetId, isFolded, section);
+                  } else if (action === 'fold-all') {
+                      // Fold/unfold all descendants recursively
+                      handleFoldAll(targetId, isFolded, section);
+                  }
               });
   
               // Update tooltip based on fold state
@@ -64639,6 +65147,42 @@
   
               // Apply initial fold state
               setInitialFoldState();
+  
+              // Re-sync a fold bar to what its children container is actually
+              // doing. A live update re-renders a card whenever its descendant
+              // count changes — which is every ancestor of every append — and
+              // the replacement arrives with the server's default icons, not
+              // the state the user left it in. The children container is never
+              // replaced, so its own `display` is the truth; without this the
+              // bar claims "unfolded" over a hidden subtree, and the next
+              // click folds what is already folded and appears to do nothing.
+              function syncFoldBar(card) {
+                  const foldBar = card.querySelector(':scope > .fold-bar');
+                  if (!foldBar) return;
+                  const cc = getChildrenContainer(card);
+                  const oneSection = foldBar.querySelector('.fold-one-level');
+                  const allSection = foldBar.querySelector('.fold-all-levels');
+                  if (!cc || cc.style.display === 'none') {
+                      setSectionState(oneSection, true, '⏵');
+                      setSectionState(allSection, true, '⏵⏵');
+                      return;
+                  }
+                  // Immediate children are visible; `fold-all` reads as open
+                  // only when their own subtrees are open too.
+                  const kids = getImmediateChildMessages(card);
+                  const allOpen = kids.every(child => {
+                      const childCc = getChildrenContainer(child);
+                      return !childCc || childCc.style.display !== 'none';
+                  });
+                  setSectionState(oneSection, false, '⏷');
+                  setSectionState(allSection, !allOpen, allOpen ? '⏷⏷' : '⏵⏵');
+              }
+              if (window.claudeLogOnRehydrate) {
+                  window.claudeLogOnRehydrate(function (root) {
+                      if (root.matches && root.matches('.message')) syncFoldBar(root);
+                      root.querySelectorAll('.message').forEach(syncFoldBar);
+                  });
+              }
   
               // Unfold any folded ancestors so an anchor target (e.g. a tool_use
               // jumped to from the session index) is actually visible. In the
@@ -68092,9 +68636,11 @@
      Measured: with neither, the gap is 0px — the last card's bottom is
      exactly the viewport bottom. The padding is what supplies the
      scrollable space; `scrollToEnd` then scrolls the document to its end
-     rather than aligning the card, and the gap becomes this much. */
+     rather than aligning the card, and the gap becomes this much. Kept
+     small deliberately — enough to read as breathing room, not enough to
+     leave the newest message stranded above a band of empty page. */
   body.live-following {
-      padding-bottom: 120px;
+      padding-bottom: 20px;
   }
   /* Session navigation styles */
   .navigation {
@@ -71044,8 +71590,9 @@
   //
   //   * The server never renders. `serve --watch` re-runs the ordinary
   //     conversion and the files on disk stay canonical, so this page just
-  //     re-fetches its own URL. A conditional GET makes the idle case free
-  //     (304 in ~1ms) and needs no endpoint of its own.
+  //     re-fetches its own URL. A HEAD for the page's own metadata makes
+  //     the idle case free (~1ms, no body) and needs no endpoint of its
+  //     own; the full GET follows only when that metadata moved.
   //   * We never reload. A reload loses fold state and re-parses a
   //     document that can reach tens of MB.
   //   * When the new render extends the one on screen, we patch the nodes
@@ -71061,8 +71608,9 @@
   
       if (location.protocol !== 'http:' && location.protocol !== 'https:') return;
   
-      // A conditional GET costs ~1ms and 304s while nothing changes, so the
-      // interval is set by how fresh the page should feel, not by load.
+      // A metadata HEAD costs ~1ms and carries no body while nothing
+      // changes, so the interval is set by how fresh the page should feel,
+      // not by load.
       const POLL_MS = 1000;
       const container = () => document.getElementById('transcript');
       if (!container()) return;
@@ -71500,8 +72048,26 @@
           if (following) scrollToEnd();
       }
   
+      // One poll at a time. The interval keeps firing while a full GET is in
+      // flight, and a page slow enough to fetch — which is exactly the large
+      // page all of this is for — would then have two updates racing:
+      // whichever *response* lands last wins, so an older render overwrites a
+      // newer one and the page loses messages it had already shown. Measured
+      // by holding one response for 3s: the newest message appeared at 2.0s,
+      // vanished at 4.0s when the stale body landed, and came back at 5.0s.
+      //
+      // Serialising is what stops it, and skipping a tick costs nothing:
+      // `lastStamp` only advances once an update has actually been applied,
+      // so the next tick still sees the change. (That ordering is also what
+      // bounds the damage above to one second rather than forever — the
+      // stale apply rewinds `lastStamp` to its own older value, so the next
+      // HEAD finds a difference again. Recording the stamp before the GET
+      // instead leaves the page wrong until something else changes.)
+      let polling = false;
+  
       async function poll() {
-          if (stopped) return;
+          if (stopped || polling) return;
+          polling = true;
           try {
               const head = await fetch(location.href, { method: 'HEAD', cache: 'no-store' });
               const stamp = [
@@ -71512,14 +72078,18 @@
               if (lastStamp === null) {
                   lastStamp = stamp;
               } else if (stamp !== lastStamp) {
-                  lastStamp = stamp;
                   const res = await fetch(location.href, { cache: 'no-store' });
-                  if (res.ok) await applyUpdate(await res.text());
+                  if (res.ok) {
+                      await applyUpdate(await res.text());
+                      lastStamp = stamp;
+                  }
               }
           } catch (err) {
               // A dropped server is the normal end of a watch session, not an
               // error worth shouting about. Keep polling: `serve` may come back.
               console.debug('live update poll failed', err);
+          } finally {
+              polling = false;
           }
       }
   
@@ -72125,24 +72695,30 @@
               // Apply all filters on page load
               applyFilter();
   
-              // Fold/unfold functionality with horizontal fold bars
-              const foldBarSections = document.querySelectorAll('.fold-bar-section');
+              // Fold/unfold functionality with horizontal fold bars.
+              //
+              // Delegated on `document` rather than bound per section, because
+              // a live update (`serve --watch`) replaces fold bars: a card's
+              // bar carries its descendant count, so every append re-renders
+              // the ancestors' bars, and the container swap replaces all of
+              // them. Bound directly, those listeners died with the elements
+              // and the fold controls silently stopped responding — measured:
+              // one update was enough to leave every bar on the page inert.
+              document.addEventListener('click', function (event) {
+                  const section = event.target.closest('.fold-bar-section');
+                  if (!section) return;
+                  event.stopPropagation();
+                  const action = section.getAttribute('data-action');
+                  const targetId = section.getAttribute('data-target');
+                  const isFolded = section.classList.contains('folded');
   
-              foldBarSections.forEach(section => {
-                  section.addEventListener('click', function(e) {
-                      e.stopPropagation();
-                      const action = this.getAttribute('data-action');
-                      const targetId = this.getAttribute('data-target');
-                      const isFolded = this.classList.contains('folded');
-  
-                      if (action === 'fold-one') {
-                          // Fold/unfold immediate children only
-                          handleFoldOne(targetId, isFolded, this);
-                      } else if (action === 'fold-all') {
-                          // Fold/unfold all descendants recursively
-                          handleFoldAll(targetId, isFolded, this);
-                      }
-                  });
+                  if (action === 'fold-one') {
+                      // Fold/unfold immediate children only
+                      handleFoldOne(targetId, isFolded, section);
+                  } else if (action === 'fold-all') {
+                      // Fold/unfold all descendants recursively
+                      handleFoldAll(targetId, isFolded, section);
+                  }
               });
   
               // Update tooltip based on fold state
@@ -72267,6 +72843,42 @@
   
               // Apply initial fold state
               setInitialFoldState();
+  
+              // Re-sync a fold bar to what its children container is actually
+              // doing. A live update re-renders a card whenever its descendant
+              // count changes — which is every ancestor of every append — and
+              // the replacement arrives with the server's default icons, not
+              // the state the user left it in. The children container is never
+              // replaced, so its own `display` is the truth; without this the
+              // bar claims "unfolded" over a hidden subtree, and the next
+              // click folds what is already folded and appears to do nothing.
+              function syncFoldBar(card) {
+                  const foldBar = card.querySelector(':scope > .fold-bar');
+                  if (!foldBar) return;
+                  const cc = getChildrenContainer(card);
+                  const oneSection = foldBar.querySelector('.fold-one-level');
+                  const allSection = foldBar.querySelector('.fold-all-levels');
+                  if (!cc || cc.style.display === 'none') {
+                      setSectionState(oneSection, true, '⏵');
+                      setSectionState(allSection, true, '⏵⏵');
+                      return;
+                  }
+                  // Immediate children are visible; `fold-all` reads as open
+                  // only when their own subtrees are open too.
+                  const kids = getImmediateChildMessages(card);
+                  const allOpen = kids.every(child => {
+                      const childCc = getChildrenContainer(child);
+                      return !childCc || childCc.style.display !== 'none';
+                  });
+                  setSectionState(oneSection, false, '⏷');
+                  setSectionState(allSection, !allOpen, allOpen ? '⏷⏷' : '⏵⏵');
+              }
+              if (window.claudeLogOnRehydrate) {
+                  window.claudeLogOnRehydrate(function (root) {
+                      if (root.matches && root.matches('.message')) syncFoldBar(root);
+                      root.querySelectorAll('.message').forEach(syncFoldBar);
+                  });
+              }
   
               // Unfold any folded ancestors so an anchor target (e.g. a tool_use
               // jumped to from the session index) is actually visible. In the

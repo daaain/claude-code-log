@@ -1913,7 +1913,9 @@ img.artifact-favicon {
    Measured: with neither, the gap is 0px — the last card's bottom is
    exactly the viewport bottom. The padding is what supplies the
    scrollable space; `scrollToEnd` then scrolls the document to its end
-   rather than aligning the card, and the gap becomes this much. */
+   rather than aligning the card, and the gap becomes this much. Kept
+   small deliberately — enough to read as breathing room, not enough to
+   leave the newest message stranded above a band of empty page. */
 body.live-following {
-    padding-bottom: 120px;
+    padding-bottom: 20px;
 }

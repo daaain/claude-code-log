@@ -10,8 +10,9 @@
 //
 //   * The server never renders. `serve --watch` re-runs the ordinary
 //     conversion and the files on disk stay canonical, so this page just
-//     re-fetches its own URL. A conditional GET makes the idle case free
-//     (304 in ~1ms) and needs no endpoint of its own.
+//     re-fetches its own URL. A HEAD for the page's own metadata makes
+//     the idle case free (~1ms, no body) and needs no endpoint of its
+//     own; the full GET follows only when that metadata moved.
 //   * We never reload. A reload loses fold state and re-parses a
 //     document that can reach tens of MB.
 //   * When the new render extends the one on screen, we patch the nodes
@@ -27,8 +28,9 @@
 
     if (location.protocol !== 'http:' && location.protocol !== 'https:') return;
 
-    // A conditional GET costs ~1ms and 304s while nothing changes, so the
-    // interval is set by how fresh the page should feel, not by load.
+    // A metadata HEAD costs ~1ms and carries no body while nothing
+    // changes, so the interval is set by how fresh the page should feel,
+    // not by load.
     const POLL_MS = 1000;
     const container = () => document.getElementById('transcript');
     if (!container()) return;
@@ -466,8 +468,26 @@
         if (following) scrollToEnd();
     }
 
+    // One poll at a time. The interval keeps firing while a full GET is in
+    // flight, and a page slow enough to fetch — which is exactly the large
+    // page all of this is for — would then have two updates racing:
+    // whichever *response* lands last wins, so an older render overwrites a
+    // newer one and the page loses messages it had already shown. Measured
+    // by holding one response for 3s: the newest message appeared at 2.0s,
+    // vanished at 4.0s when the stale body landed, and came back at 5.0s.
+    //
+    // Serialising is what stops it, and skipping a tick costs nothing:
+    // `lastStamp` only advances once an update has actually been applied,
+    // so the next tick still sees the change. (That ordering is also what
+    // bounds the damage above to one second rather than forever — the
+    // stale apply rewinds `lastStamp` to its own older value, so the next
+    // HEAD finds a difference again. Recording the stamp before the GET
+    // instead leaves the page wrong until something else changes.)
+    let polling = false;
+
     async function poll() {
-        if (stopped) return;
+        if (stopped || polling) return;
+        polling = true;
         try {
             const head = await fetch(location.href, { method: 'HEAD', cache: 'no-store' });
             const stamp = [
@@ -478,14 +498,18 @@
             if (lastStamp === null) {
                 lastStamp = stamp;
             } else if (stamp !== lastStamp) {
-                lastStamp = stamp;
                 const res = await fetch(location.href, { cache: 'no-store' });
-                if (res.ok) await applyUpdate(await res.text());
+                if (res.ok) {
+                    await applyUpdate(await res.text());
+                    lastStamp = stamp;
+                }
             }
         } catch (err) {
             // A dropped server is the normal end of a watch session, not an
             // error worth shouting about. Keep polling: `serve` may come back.
             console.debug('live update poll failed', err);
+        } finally {
+            polling = false;
         }
     }
 

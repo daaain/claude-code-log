@@ -913,24 +913,30 @@
             // Apply all filters on page load
             applyFilter();
 
-            // Fold/unfold functionality with horizontal fold bars
-            const foldBarSections = document.querySelectorAll('.fold-bar-section');
+            // Fold/unfold functionality with horizontal fold bars.
+            //
+            // Delegated on `document` rather than bound per section, because
+            // a live update (`serve --watch`) replaces fold bars: a card's
+            // bar carries its descendant count, so every append re-renders
+            // the ancestors' bars, and the container swap replaces all of
+            // them. Bound directly, those listeners died with the elements
+            // and the fold controls silently stopped responding — measured:
+            // one update was enough to leave every bar on the page inert.
+            document.addEventListener('click', function (event) {
+                const section = event.target.closest('.fold-bar-section');
+                if (!section) return;
+                event.stopPropagation();
+                const action = section.getAttribute('data-action');
+                const targetId = section.getAttribute('data-target');
+                const isFolded = section.classList.contains('folded');
 
-            foldBarSections.forEach(section => {
-                section.addEventListener('click', function(e) {
-                    e.stopPropagation();
-                    const action = this.getAttribute('data-action');
-                    const targetId = this.getAttribute('data-target');
-                    const isFolded = this.classList.contains('folded');
-
-                    if (action === 'fold-one') {
-                        // Fold/unfold immediate children only
-                        handleFoldOne(targetId, isFolded, this);
-                    } else if (action === 'fold-all') {
-                        // Fold/unfold all descendants recursively
-                        handleFoldAll(targetId, isFolded, this);
-                    }
-                });
+                if (action === 'fold-one') {
+                    // Fold/unfold immediate children only
+                    handleFoldOne(targetId, isFolded, section);
+                } else if (action === 'fold-all') {
+                    // Fold/unfold all descendants recursively
+                    handleFoldAll(targetId, isFolded, section);
+                }
             });
 
             // Update tooltip based on fold state
@@ -1055,6 +1061,42 @@
 
             // Apply initial fold state
             setInitialFoldState();
+
+            // Re-sync a fold bar to what its children container is actually
+            // doing. A live update re-renders a card whenever its descendant
+            // count changes — which is every ancestor of every append — and
+            // the replacement arrives with the server's default icons, not
+            // the state the user left it in. The children container is never
+            // replaced, so its own `display` is the truth; without this the
+            // bar claims "unfolded" over a hidden subtree, and the next
+            // click folds what is already folded and appears to do nothing.
+            function syncFoldBar(card) {
+                const foldBar = card.querySelector(':scope > .fold-bar');
+                if (!foldBar) return;
+                const cc = getChildrenContainer(card);
+                const oneSection = foldBar.querySelector('.fold-one-level');
+                const allSection = foldBar.querySelector('.fold-all-levels');
+                if (!cc || cc.style.display === 'none') {
+                    setSectionState(oneSection, true, '⏵');
+                    setSectionState(allSection, true, '⏵⏵');
+                    return;
+                }
+                // Immediate children are visible; `fold-all` reads as open
+                // only when their own subtrees are open too.
+                const kids = getImmediateChildMessages(card);
+                const allOpen = kids.every(child => {
+                    const childCc = getChildrenContainer(child);
+                    return !childCc || childCc.style.display !== 'none';
+                });
+                setSectionState(oneSection, false, '⏷');
+                setSectionState(allSection, !allOpen, allOpen ? '⏷⏷' : '⏵⏵');
+            }
+            if (window.claudeLogOnRehydrate) {
+                window.claudeLogOnRehydrate(function (root) {
+                    if (root.matches && root.matches('.message')) syncFoldBar(root);
+                    root.querySelectorAll('.message').forEach(syncFoldBar);
+                });
+            }
 
             // Unfold any folded ancestors so an anchor target (e.g. a tool_use
             // jumped to from the session index) is actually visible. In the

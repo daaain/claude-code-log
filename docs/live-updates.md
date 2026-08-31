@@ -74,6 +74,7 @@ project; lower `--interval` if you want changes noticed sooner.
 
 A tick re-converts only what changed. On a 319 MB, 217-file archive a
 tick is about a second; on a small project it is hundredths of a second.
-While nothing is changing, the browser's poll is a conditional request
-costing about a millisecond, and the watcher is a `stat` of the project
-directory.
+While nothing is changing, the browser's poll is a `HEAD` for the page's
+own metadata — about a millisecond, and no body — and the watcher is a
+`stat` of the project directory. The page is re-fetched in full only
+once that metadata says it moved.
