@@ -3,6 +3,7 @@
 
 import os
 import re
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -955,6 +956,29 @@ def generate_unified_diff(old_string: str, new_string: str) -> str:
     return "".join(diff_lines).rstrip("\n")
 
 
+# Windows refuses to replace a file another process holds open unless
+# that process opened it with FILE_SHARE_DELETE, which Python's `open`
+# does not — so a reader (an editor, a vault indexer, the browser poll
+# this helper exists for) makes `os.replace` fail with PermissionError
+# until it closes, rather than the write being torn. A read of even a
+# 27 MB page is short, so a brief retry outlasts one; POSIX never takes
+# this path, where the replace succeeds with readers mid-read.
+_REPLACE_ATTEMPTS = 10
+_REPLACE_BACKOFF_S = 0.02
+
+
+def _replace_with_retry(tmp_path: Path, path: Path) -> None:
+    """`os.replace`, retried briefly past a concurrent reader on Windows."""
+    for attempt in range(_REPLACE_ATTEMPTS):
+        try:
+            os.replace(tmp_path, path)
+            return
+        except PermissionError:
+            if attempt == _REPLACE_ATTEMPTS - 1:
+                raise
+            time.sleep(_REPLACE_BACKOFF_S)
+
+
 def atomic_write_text(
     path: Path, content: str, *, encoding: str = "utf-8", errors: str = "replace"
 ) -> None:
@@ -984,6 +1008,9 @@ def atomic_write_text(
     write through it, and would clobber a fifo or device node outright —
     both worse surprises than a non-atomic write to something the user
     deliberately put there.
+
+    On Windows the replace is retried briefly, because a reader holding
+    the target open blocks it there — see `_replace_with_retry`.
     """
     if path.is_symlink() or (path.exists() and not path.is_file()):
         path.write_text(content, encoding=encoding, errors=errors)
@@ -992,7 +1019,7 @@ def atomic_write_text(
     tmp_path = path.parent / f".{path.name}.{os.getpid()}.tmp"
     try:
         tmp_path.write_text(content, encoding=encoding, errors=errors)
-        os.replace(tmp_path, path)
+        _replace_with_retry(tmp_path, path)
     except BaseException:
         # Includes KeyboardInterrupt: a half-written temp file left in an
         # output directory is litter that the next run would not clean up.

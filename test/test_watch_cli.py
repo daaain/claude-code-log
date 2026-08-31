@@ -11,6 +11,7 @@ from pathlib import Path
 from click.testing import CliRunner
 
 from claude_code_log.cli import _resolve_watch_root, main
+from claude_code_log.utils import real_path_to_project_dirname
 
 
 def _entry(uuid: str, text: str, session_id: str) -> str:
@@ -52,7 +53,10 @@ class TestResolveWatchRoot:
         work = tmp_path / "myproject"
         work.mkdir()
         projects = tmp_path / "projects"
-        encoded = projects / str(work).replace("/", "-")
+        # The same encoder the resolver uses — hand-rolling it here got the
+        # separator wrong on Windows, where the untouched `D:\...` joined
+        # back to an absolute path and the test tried to re-create `work`.
+        encoded = projects / real_path_to_project_dirname(work)
         encoded.mkdir(parents=True)
         monkeypatch.chdir(work)
 

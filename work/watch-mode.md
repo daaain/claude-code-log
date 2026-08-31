@@ -871,7 +871,9 @@ items were the refresh's own cache queries, and they turned out to be
 much cheaper to fix than "restructure the refresh". Every one of them was
 scanning the entire project, which `EXPLAIN QUERY PLAN` says plainly:
 
-    SEARCH m USING INDEX idx_messages_project_timestamp (project_id=?)
+```text
+SEARCH m USING INDEX idx_messages_project_timestamp (project_id=?)
+```
 
 Measured per call on a 38,706-row archive:
 
@@ -1200,6 +1202,11 @@ in-memory transcript at ~3x its bytes on disk, so a 39.7 MB session is
 ~100 MB resident while the tick runs, bounded by the sessions in play
 rather than by the archive. That is the argument for a valve like the
 fragment store's, and for evicting on session change.
+
+B — *as costed here, before it was built.* What shipped holds the
+prefix in memory instead, so none of the storage below applies to the
+code today; it stands as the costing of the persisted variant, which
+"Fix B as built" explains was not needed. Read on with that caveat.
 
 B adds two small columns to `cached_files` (`prefix_len`,
 `prefix_hash`) — tens of bytes per file row, ~8 KB across a 217-file
@@ -1572,3 +1579,56 @@ mechanical rather than design-level — the shapes above held.
    adopting the baseline. Reproduced with a Playwright route that serves
    the pre-append body and lets the watch reconvert before the browser
    sees it: without the fix the marker never arrives.
+
+## C30. A second round: Windows CI, and the review comments C29 didn't cover
+
+**Two Windows CI failures, both real, neither a Windows-only test bug.**
+
+- `atomic_write_text` is not atomic on Windows while a reader holds the
+  target open: Python's `open` doesn't grant `FILE_SHARE_DELETE`, so
+  `os.replace` fails with `PermissionError` (WinError 5) rather than the
+  write tearing. That is the *good* failure mode, but it fails the
+  conversion, and watch mode's whole premise is a page being re-read
+  while it is rewritten. The replace is now retried for ~180 ms, which
+  outlasts a read of even a 27 MB page. The concurrent-reader test can't
+  run there — its reader loop holds the file essentially continuously, so
+  it tests the writer's patience rather than the reader's safety — and is
+  skipped on win32 with the retry covered by its own test instead.
+- `test_the_cwd_project_is_the_default` hand-rolled the project-dir
+  encoding as `str(path).replace("/", "-")`. On Windows that leaves
+  `D:\...` untouched, so joining it produced an absolute path and the
+  test tried to re-create its own `tmp_path`. It now calls
+  `real_path_to_project_dirname`, which is what the resolver uses and
+  handles both separators.
+
+**Review comments, verified against the code.** Three were still live:
+
+- *The append's count and insert aren't atomic.* Correct, and the reason
+  is subtle: Python's sqlite3 begins a transaction on the first write,
+  not on a `SELECT`, so the row-count guard held no lock at all. Two
+  writers sharing a cache — a second `watch`, or a TUI beside one — could
+  both pass the count and both append. Now `BEGIN IMMEDIATE` before the
+  count, with the rollback scoped so it never unwinds a `batch()`
+  caller's transaction. Pinned by asserting a second connection *cannot*
+  write while the checked append runs.
+- *The cache stamp is taken after the parse.* Correct, and it was true of
+  `save_cached_entries` all along, not just the new append path — so both
+  now take the stamp `load_transcript` captured before parsing, beside
+  the sidecar fingerprint that already worked that way. A file appended
+  to mid-read used to be stamped at the size it reached while holding
+  only the rows we parsed; if the session then ended, that truncated view
+  stayed "fresh" forever.
+- *Held prefixes escape the byte budget.* Already fixed in C29.
+
+Two were declined:
+
+- *Bound the timestamp drain even when `didTimeout` is true.* That drain
+  is the fix for the reported symptom (C23): the callback count, not the
+  work, was the cost, and draining on the deadline took 766 ms → 13 ms
+  and 3.3 s → 35 ms. The unbounded slice is bounded in practice by the
+  page's own timestamp count — ~8 ms per 1,180 — and only runs when the
+  browser was too busy to offer idle time for 200 ms. Re-slicing there
+  reintroduces the storm to save tens of milliseconds.
+- *Drop the quotes around `'SFMono-Regular'`.* Valid CSS either way, and
+  six of the seven declarations across the templates are quoted; changing
+  one desynchronises them and rewrites ten snapshots for nothing.

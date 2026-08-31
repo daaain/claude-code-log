@@ -538,6 +538,15 @@ def load_transcript(
     from .cache import subagents_fingerprint
 
     subagents_fp = subagents_fingerprint(jsonl_path)
+    # The file's own identity, for the same reason and at the same moment:
+    # a session appended to *during* this read must leave the cache
+    # stamped with what we parsed, not with what the file reached, or the
+    # next run finds a fresh-looking cache missing those lines. Unreadable
+    # here means the writers stat it themselves, exactly as before.
+    try:
+        source_stat: Optional[os.stat_result] = jsonl_path.stat()
+    except OSError:
+        source_stat = None
     messages: list[TranscriptEntry] = []
     agent_ids: set[str] = set()  # Collect agentId references while parsing
     # Track unrecognized message types already warned about so we emit at
@@ -801,10 +810,14 @@ def load_transcript(
             spliced_agents,
         )
         if appended is None or not cache_manager.extend_cached_entries(
-            jsonl_path, messages, appended, subagents_fp=subagents_fp
+            jsonl_path,
+            messages,
+            appended,
+            subagents_fp=subagents_fp,
+            source_stat=source_stat,
         ):
             cache_manager.save_cached_entries(
-                jsonl_path, messages, subagents_fp=subagents_fp
+                jsonl_path, messages, subagents_fp=subagents_fp, source_stat=source_stat
             )
 
     return messages

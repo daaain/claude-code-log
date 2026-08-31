@@ -1242,7 +1242,18 @@ Beneath it, `extend_cached_entries` independently refuses when the table
 no longer holds the row count the caller thinks it wrote — the guard
 against another process having rewritten them. With the gates removed the
 caller offers a *wrong 96-entry slice* and that check catches it, so the
-tests assert on the offer rather than only on the write.
+tests assert on the offer rather than only on the write. That count and
+the insert run inside one `BEGIN IMMEDIATE`, because Python's sqlite3
+opens a transaction on the first write and not on a `SELECT`: without
+the explicit lock a second writer sharing the cache could append in
+between, and the check would let both appends land.
+
+Both cache writers are stamped with the source file's `(mtime, size)` as
+captured **before** the parse — the same discipline as the sidecar
+fingerprint beside it, and as the entry store's own stamp. A session
+appended to mid-read would otherwise be recorded at the size it reached
+while the rows are only what was parsed, marking an incomplete cache
+current; stamped with what was parsed, the growth invalidates instead.
 
 Steady-state tick on the 803MB reference archive: **0.717s → 0.257s**
 (cumulatively 1.03s → 0.26s). Equivalence is held at three levels — parse

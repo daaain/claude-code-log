@@ -777,6 +777,49 @@ class TestAppendOnlyWrites:
         # And the honest case still works.
         assert cache.extend_cached_entries(target, entries + entries[-1:], entries[-1:])
 
+    def test_the_count_and_the_insert_hold_one_write_lock(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Why that guard needs a transaction to be a guard at all.
+
+        Python's sqlite3 opens a transaction on the first write, not on a
+        SELECT, so between the row count and the insert another writer
+        sharing the cache — a second `watch`, a TUI beside one — could
+        append rows the count would have refused, and both appends would
+        land. Asserted by proving the lock is held *while* the append
+        runs: a second connection cannot write at that moment.
+        """
+        import sqlite3
+
+        from claude_code_log.cache import CacheManager, get_library_version
+
+        project = _synthetic_project(tmp_path)
+        cache = CacheManager(project, get_library_version())
+        target = sorted(project.glob("*.jsonl"))[0]
+        entries = load_transcript(target, cache, silent=True)
+
+        db = project.parent / "claude-code-log-cache.db"
+        outcome: list[str] = []
+        original = CacheManager._append_under_lock
+
+        def _spy(self: Any, *args: Any, **kwargs: Any) -> Any:
+            other = sqlite3.connect(db, timeout=0)
+            try:
+                other.execute("BEGIN IMMEDIATE")
+                outcome.append("wrote")
+                other.rollback()
+            except sqlite3.OperationalError as exc:
+                outcome.append(str(exc))
+            finally:
+                other.close()
+            return original(self, *args, **kwargs)
+
+        monkeypatch.setattr(CacheManager, "_append_under_lock", _spy)
+        assert cache.extend_cached_entries(target, entries + entries[-1:], entries[-1:])
+        assert outcome and "locked" in outcome[0], (
+            f"another writer got in during the checked append: {outcome}"
+        )
+
 
 class TestSessionLoadOrdering:
     """`load_session_entries` must not reorder when its index changes.

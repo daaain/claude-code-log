@@ -145,3 +145,38 @@ def test_pre_011_fallback_cannot_see_an_append_the_mtime_hides(
     assert cm.is_file_cached(jsonl), (
         "pre-011 rows fall back to mtime-only, which cannot see this"
     )
+
+
+def test_a_file_that_grows_mid_parse_does_not_look_cached(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The stamp has to describe the parse, not the moment after it.
+
+    Watch mode reads files that are being appended to, so "the file grew
+    while we were reading it" is routine rather than theoretical. Stamped
+    at save time, the cache would claim the size and mtime the file
+    reached while holding only the rows we parsed — and if the session
+    then ends, that truncated view is what every later run trusts.
+    """
+    from claude_code_log import converter
+    from claude_code_log.converter import load_transcript
+
+    jsonl = project / "s1.jsonl"
+    cm = CacheManager(project, "test-version")
+    grew: list[int] = []
+    original = converter.create_transcript_entry
+
+    def _grow_during_parse(entry_dict):
+        if not grew:
+            grew.append(1)
+            with jsonl.open("a", encoding="utf-8") as f:
+                f.write(_entry("u2", "landed while we were reading"))
+        return original(entry_dict)
+
+    monkeypatch.setattr(converter, "create_transcript_entry", _grow_during_parse)
+    load_transcript(jsonl, cm, silent=True)
+    assert grew, "the fixture never exercised the growth"
+
+    assert not cm.is_file_cached(jsonl), (
+        "the cache is stamped with a size it does not hold the rows for"
+    )

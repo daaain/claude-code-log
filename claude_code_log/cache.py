@@ -902,6 +902,7 @@ class CacheManager:
         jsonl_path: Path,
         entries: List[TranscriptEntry],
         subagents_fp: Optional[str] = None,
+        source_stat: Optional[os.stat_result] = None,
     ) -> None:
         """Save parsed transcript entries to cache.
 
@@ -911,11 +912,19 @@ class CacheManager:
         next read and forces a reparse (over-invalidation; computing it
         here at save time would instead validate a parse that never saw
         the late sidecar). Falls back to computing now when omitted.
+
+        ``source_stat`` is the file's identity as of the parse, and is
+        the same argument one level down: a session that grew *while*
+        being read would otherwise be stamped with the size and mtime it
+        reached, marking a cache that is missing those lines as current —
+        and if the file then never changes again, permanently so. Stamped
+        with what was actually parsed, the growth invalidates instead.
         """
         if self._project_id is None:
             return
 
-        source_stat = jsonl_path.stat()
+        if source_stat is None:
+            source_stat = jsonl_path.stat()
         source_mtime = source_stat.st_mtime
         source_size = source_stat.st_size
         cached_mtime = datetime.now().timestamp()
@@ -1005,6 +1014,7 @@ class CacheManager:
         all_entries: List[TranscriptEntry],
         appended: List[TranscriptEntry],
         subagents_fp: Optional[str] = None,
+        source_stat: Optional[os.stat_result] = None,
     ) -> bool:
         """Insert only ``appended``, leaving the file's existing rows in place.
 
@@ -1022,6 +1032,9 @@ class CacheManager:
         have rewritten them since. Returns False whenever the row count
         disagrees, and the caller falls back to the full rewrite; that
         check is why the two stores cannot silently drift apart.
+
+        ``source_stat`` is the file's identity AS OF THE PARSE, for the
+        same reason as ``subagents_fp`` — see ``save_cached_entries``.
         """
         if self._project_id is None or not appended:
             return False
@@ -1029,70 +1042,111 @@ class CacheManager:
         if expected_existing <= 0:
             return False
 
-        source_stat = jsonl_path.stat()
+        if source_stat is None:
+            source_stat = jsonl_path.stat()
         if subagents_fp is None:
             subagents_fp = subagents_fingerprint(jsonl_path)
 
         with self._get_connection() as conn:
-            row = conn.execute(
-                "SELECT id FROM cached_files WHERE project_id = ? AND file_name = ?",
-                (self._project_id, jsonl_path.name),
-            ).fetchone()
-            if row is None:
-                return False
-            file_id = row["id"]
-
-            count = conn.execute(
-                "SELECT COUNT(*) AS n FROM messages WHERE file_id = ?", (file_id,)
-            ).fetchone()["n"]
-            if count != expected_existing:
-                return False
-
-            conn.execute(
-                """UPDATE cached_files
-                   SET file_path = ?, source_mtime = ?, source_size = ?,
-                       cached_mtime = ?, message_count = ?, subagents_fingerprint = ?
-                   WHERE id = ?""",
-                (
-                    str(jsonl_path),
-                    source_stat.st_mtime,
-                    source_stat.st_size,
-                    datetime.now().timestamp(),
-                    len(all_entries),
+            # The count and the insert have to be one transaction. Python's
+            # sqlite3 opens one on the first *write*, not on a SELECT, so
+            # without this another writer sharing the cache (a second
+            # `watch`, or a TUI beside one) can append in the window
+            # between them, and both appends land — the row check would
+            # have refused had it seen them. `BEGIN IMMEDIATE` takes the
+            # write lock up front; inside a `batch()` scope the connection
+            # is in a transaction already and that one covers it.
+            own_transaction = not conn.in_transaction
+            if own_transaction:
+                conn.execute("BEGIN IMMEDIATE")
+            try:
+                return self._append_under_lock(
+                    conn,
+                    jsonl_path,
+                    all_entries,
+                    appended,
+                    expected_existing,
+                    source_stat,
                     subagents_fp,
-                    file_id,
-                ),
-            )
-            conn.executemany(
-                """
-                INSERT INTO messages (
-                    project_id, file_id, type, timestamp, session_id,
-                    _uuid, _parent_uuid, _is_sidechain, _user_type, _cwd, _version,
-                    _is_meta, _agent_id, _request_id,
-                    input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
-                    _leaf_uuid, _level, _operation, content
-                ) VALUES (
-                    :project_id, :file_id, :type, :timestamp, :session_id,
-                    :_uuid, :_parent_uuid, :_is_sidechain, :_user_type, :_cwd, :_version,
-                    :_is_meta, :_agent_id, :_request_id,
-                    :input_tokens, :output_tokens, :cache_creation_tokens, :cache_read_tokens,
-                    :_leaf_uuid, :_level, :_operation, :content
                 )
-                """,
-                [self._serialize_entry(entry, file_id) for entry in appended],
+            finally:
+                # A refusal wrote nothing, but it still holds the write
+                # lock this method took; an exception may have written.
+                # Either way, only ever unwind our own transaction — a
+                # rollback inside a `batch()` would discard the caller's.
+                if own_transaction and conn.in_transaction:
+                    conn.rollback()
+
+    def _append_under_lock(
+        self,
+        conn: sqlite3.Connection,
+        jsonl_path: Path,
+        all_entries: List[TranscriptEntry],
+        appended: List[TranscriptEntry],
+        expected_existing: int,
+        source_stat: os.stat_result,
+        subagents_fp: Optional[str],
+    ) -> bool:
+        """The checked append itself, run under the caller's write lock."""
+        row = conn.execute(
+            "SELECT id FROM cached_files WHERE project_id = ? AND file_name = ?",
+            (self._project_id, jsonl_path.name),
+        ).fetchone()
+        if row is None:
+            return False
+        file_id = row["id"]
+
+        count = conn.execute(
+            "SELECT COUNT(*) AS n FROM messages WHERE file_id = ?", (file_id,)
+        ).fetchone()["n"]
+        if count != expected_existing:
+            return False
+
+        conn.execute(
+            """UPDATE cached_files
+               SET file_path = ?, source_mtime = ?, source_size = ?,
+                   cached_mtime = ?, message_count = ?, subagents_fingerprint = ?
+               WHERE id = ?""",
+            (
+                str(jsonl_path),
+                source_stat.st_mtime,
+                source_stat.st_size,
+                datetime.now().timestamp(),
+                len(all_entries),
+                subagents_fp,
+                file_id,
+            ),
+        )
+        conn.executemany(
+            """
+            INSERT INTO messages (
+                project_id, file_id, type, timestamp, session_id,
+                _uuid, _parent_uuid, _is_sidechain, _user_type, _cwd, _version,
+                _is_meta, _agent_id, _request_id,
+                input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
+                _leaf_uuid, _level, _operation, content
+            ) VALUES (
+                :project_id, :file_id, :type, :timestamp, :session_id,
+                :_uuid, :_parent_uuid, :_is_sidechain, :_user_type, :_cwd, :_version,
+                :_is_meta, :_agent_id, :_request_id,
+                :input_tokens, :output_tokens, :cache_creation_tokens, :cache_read_tokens,
+                :_leaf_uuid, :_level, :_operation, :content
             )
+            """,
+            [self._serialize_entry(entry, file_id) for entry in appended],
+        )
 
-            # The index still refreshes the whole file: `reindex_files`
-            # deletes and re-adds its rows, and an append-only variant
-            # would need its own correctness argument. Only users who have
-            # built an index pay it, exactly as before.
-            from .search import auto_index_enabled, reindex_files
+        # The index still refreshes the whole file: `reindex_files`
+        # deletes and re-adds its rows, and an append-only variant
+        # would need its own correctness argument. Only users who have
+        # built an index pay it, exactly as before.
+        from .search import auto_index_enabled, reindex_files
 
-            if auto_index_enabled():
-                reindex_files(conn, [file_id], commit=False)
+        if auto_index_enabled():
+            reindex_files(conn, [file_id], commit=False)
 
-            self._update_last_updated(conn)
-            conn.commit()
+        self._update_last_updated(conn)
+        conn.commit()
         return True
 
     def update_session_cache(self, session_data: Dict[str, SessionCacheData]) -> None:
