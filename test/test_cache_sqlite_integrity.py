@@ -1262,12 +1262,14 @@ class TestCorruptDatabaseRecovery:
                 "SELECT pageno FROM dbstat WHERE name='messages' AND pagetype='leaf'"
             )
         ]
+        # `dbstat.pageno` counts pages of whatever size this database was
+        # built with, so read it rather than assuming SQLite's 4096 default.
+        page_size = conn.execute("PRAGMA page_size").fetchone()[0]
         conn.close()
         assert pages, "expected messages to occupy at least one leaf page"
         # Overwrite the whole page, not a slice of it. A page holding two small
         # rows is mostly free space, and cells are laid out from the *end*, so
         # scribbling near the start damages nothing SQLite reads.
-        page_size = 4096
         with open(isolated_db_path, "r+b") as f:
             for pageno in pages:
                 f.seek((pageno - 1) * page_size)

@@ -457,17 +457,20 @@ def is_corrupt_database_error(exc: BaseException) -> bool:
 
 
 def discard_database_files(db_path: Path) -> bool:
-    """Delete a cache database and its WAL sidecars. True if the .db is gone.
+    """Delete a cache database and its WAL sidecars. True if all are gone.
 
     The sidecars have to go with it: a ``-wal`` left beside a recreated
     database is a mismatched log, which is its own route back into
-    "malformed".
+    "malformed". So a surviving sidecar is a failure just as much as a
+    surviving ``.db`` — the caller should run cacheless rather than
+    recreate a database next to a stale log.
     """
-    for path in (
+    paths = (
         db_path,
         db_path.with_name(db_path.name + "-wal"),
         db_path.with_name(db_path.name + "-shm"),
-    ):
+    )
+    for path in paths:
         try:
             path.unlink()
         except FileNotFoundError:
@@ -476,7 +479,7 @@ def discard_database_files(db_path: Path) -> bool:
             # Windows refuses to unlink a file another process still holds
             # open (WinError 32). Report and let the caller decide.
             print(f"  Warning: could not delete {path.name}: {e}")
-    return not db_path.exists()
+    return not any(path.exists() for path in paths)
 
 
 # ========== Cache Manager ==========
