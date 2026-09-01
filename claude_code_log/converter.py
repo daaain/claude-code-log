@@ -2024,6 +2024,33 @@ def _get_page_html_path(page_number: int, variant_suffix: str = "") -> str:
     return f"{base}_{page_number}.html"
 
 
+def combined_link_available(
+    output_dir: Path, variant_suffix: str, ext: str, write_combined: bool
+) -> bool:
+    """Whether a session page should carry the combined-transcript back-link.
+
+    It should iff the file it points at will be there to receive the click:
+    this run's combined output when we're writing one, and otherwise
+    whatever a previous run left on disk.
+
+    Deliberately not just ``write_combined``. Keying the *rendered page* on
+    the run's mode made its content depend on something the freshness check
+    knows nothing about, so the state stuck: a page rendered by a
+    ``--combined no`` run (every watch tick) kept no link for good, and
+    later full runs saw a current file and skipped it. An archive ended up
+    with some session pages linking and some not, decided by which run
+    happened to render each. Under `serve --watch` the combined page is not
+    rewritten but is still on disk and still served, so the link stays good
+    and the divergence never arises.
+
+    Paginated projects name page 1 ``combined_transcripts{suffix}.{ext}``
+    too (see ``_get_page_html_path``), so one check covers both layouts.
+    """
+    if write_combined:
+        return True
+    return (output_dir / f"combined_transcripts{variant_suffix}.{ext}").exists()
+
+
 def _variant_label_from_suffix(suffix: str) -> str:
     """Human-readable label for a filename suffix (e.g. '.agent.compact')."""
     if not suffix:
@@ -3170,6 +3197,9 @@ def _stream_paginated_conversion(
                     variant=session_suffix,
                     ext="html",
                     output_dir=effective_output_dir,
+                    combined_linked=combined_link_available(
+                        effective_output_dir, session_suffix, "html", write_combined
+                    ),
                 )
             }
 
@@ -3441,7 +3471,12 @@ def _try_current_or_session_scoped(
 
     # Check if any session file of this variant is stale
     stale_sessions = cache_manager.get_stale_sessions(
-        variant=suffix, ext=ext, output_dir=effective_output_dir
+        variant=suffix,
+        ext=ext,
+        output_dir=effective_output_dir,
+        combined_linked=combined_link_available(
+            effective_output_dir, suffix, ext, write_combined
+        ),
     )
     if not stale_sessions or not generate_individual_sessions:
         # Nothing needs regeneration - skip loading
@@ -4923,6 +4958,9 @@ def _generate_individual_session_files(
 
     ext = get_file_extension(format)
     suffix = _variant_suffix(depth, compact, format, no_timestamps, no_recaps)
+    combined_available = combined_link_available(
+        output_dir, suffix, ext, write_combined
+    )
     # Find all unique session IDs, excluding warmup sessions and
     # coalescing agent sessionIds to their trunk — same rule as
     # compute_session_data() when it writes the sessions table.
@@ -5012,7 +5050,10 @@ def _generate_individual_session_files(
             # reads its own `version` field (see `_tracks_version_marker`).
             if cache_manager is not None and _tracks_version_marker(format):
                 is_stale, _reason = cache_manager.is_transcript_stale(
-                    session_file_name, session_id, output_dir=output_dir
+                    session_file_name,
+                    session_id,
+                    output_dir=output_dir,
+                    combined_linked=combined_available,
                 )
                 should_regenerate_session = (
                     is_stale
@@ -5043,9 +5084,11 @@ def _generate_individual_session_files(
                         key=session_id,
                         file_name=session_file_name,
                         title=session_title,
-                        # Under `--combined no` the combined file is never
-                        # written, so the per-session back-link would 404.
-                        suppress_combined_link=not write_combined,
+                        # No combined file to point at — the back-link
+                        # would 404, so leave it out. See
+                        # `combined_available` above for why this is not
+                        # simply `not write_combined`.
+                        suppress_combined_link=not combined_available,
                     )
                 )
             elif not silent:
@@ -5087,7 +5130,10 @@ def _generate_individual_session_files(
                     if hasattr(m, "sessionId") and getattr(m, "sessionId") == unit.key
                 )
             cache_manager.update_html_cache(
-                unit.file_name, unit.key, session_message_count
+                unit.file_name,
+                unit.key,
+                session_message_count,
+                combined_linked=not unit.suppress_combined_link,
             )
 
         # Feed each pooled session unit everything its worker renders from:
@@ -5695,6 +5741,10 @@ def render_provider_wholesale(
 
         # Phase 3 — build index cards and render per-session pages (skipping
         # unchanged ones).
+        #
+        combined_available = combined_link_available(
+            dest_dir, suffix, ext, write_combined
+        )
         session_dicts: list[dict[str, Any]] = []
         last_modified = 0.0
         for info, messages in loaded:
@@ -5720,13 +5770,14 @@ def render_provider_wholesale(
                         compact,
                         no_timestamps,
                         no_recaps,
-                        suppress_combined_link=not write_combined,
+                        suppress_combined_link=not combined_available,
                     )
                     if cache is not None:
                         cache.update_html_cache(
                             output_name,
                             session_key,
                             session_counts.get(session_key, len(messages)),
+                            combined_linked=combined_available,
                         )
 
             first_ts, last_ts = _entry_timestamp_range(messages)
@@ -6102,6 +6153,9 @@ def _plan_project(
             variant=variant,
             ext=combined_ext,
             output_dir=dest_dir,
+            combined_linked=combined_link_available(
+                dest_dir, variant, combined_ext, write_combined
+            ),
         )
         if cache_manager
         else []
