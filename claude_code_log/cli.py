@@ -2192,6 +2192,15 @@ def serve(
     watch_thread: Optional[threading.Thread] = None
     if watch_sources:
         from .watch import WatchEngine
+        from .entry_store import ParsedEntryStore, entry_store_enabled
+
+        # One store for the whole serve, not one per tick, for the same
+        # reason `watch` owns one: it lets a tick resume its parse from
+        # the bytes the previous tick already read. Only the *inline*
+        # conversion path takes it (see `_convert_plan_inline`), which is
+        # the steady state here -- one live project stale per tick means
+        # `resolved_jobs == 1` and no pool.
+        serve_store = ParsedEntryStore() if entry_store_enabled() else None
 
         def reconvert(_changed: set[Path]) -> None:
             # The server never renders. It re-runs the ordinary conversion
@@ -2208,7 +2217,12 @@ def serve(
             # startup conversion below stay on disk and keep serving --
             # they just stop tracking the live session until the next
             # restart, which is the trade `watch` already makes.
-            process_projects_hierarchy(projects_path, silent=True, write_combined=False)
+            process_projects_hierarchy(
+                projects_path,
+                silent=True,
+                write_combined=False,
+                entry_store=serve_store,
+            )
 
         def report(exc: BaseException) -> None:
             click.echo(f"  watch: conversion failed: {exc!r}", err=True)

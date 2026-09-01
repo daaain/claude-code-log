@@ -6226,6 +6226,7 @@ def process_projects_hierarchy(
     no_timestamps: bool = False,
     no_recaps: bool = False,
     jobs: Optional[int] = None,
+    entry_store: "Optional[ParsedEntryStore]" = None,
 ) -> Path:
     """Process the entire ~/.claude/projects/ hierarchy and create linked output files.
 
@@ -6550,8 +6551,16 @@ def process_projects_hierarchy(
         project_start_time = time.monotonic()
         try:
             # Generate output for this project (handles cache updates internally)
+            #
+            # A caller-owned store is handed only to the *inline* path. It
+            # holds parsed entries, so it is neither picklable at sensible
+            # cost nor useful across a `spawn`: shipping one to a pool
+            # worker would cost more than the re-parse it saves, and the
+            # worker's copy would die with the task. Deliberately absent
+            # from `_conversion_kwargs` for that reason.
             convert_jsonl_to(
-                **_conversion_kwargs(plan, silent=silent, render_jobs=render_jobs)
+                **_conversion_kwargs(plan, silent=silent, render_jobs=render_jobs),
+                entry_store=entry_store,
             )
         except Exception:
             _print_project_failed(plan, traceback.format_exc())
