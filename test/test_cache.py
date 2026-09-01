@@ -679,10 +679,10 @@ class TestCacheVersionCompatibility:
 
         The cache version has to sit *above* every declared breaking
         boundary, otherwise this exercises a breaking rule rather than
-        the default path (1.5.0 became such a boundary in 1.6.0).
+        the default path (1.6.0 became such a boundary in 1.6.1).
         """
         cache_manager = CacheManager(temp_project_dir, "2.0.0")
-        assert cache_manager._is_cache_version_compatible("1.5.1") is True
+        assert cache_manager._is_cache_version_compatible("1.6.1") is True
 
     def test_version_downgrade_is_compatible(self, temp_project_dir):
         """Test that version downgrades are compatible by default."""
