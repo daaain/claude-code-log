@@ -2080,6 +2080,21 @@ _NEXT_LINK_PATTERN = re.compile(
     re.DOTALL,
 )
 
+# Closing delimiter of the block above, as a plain string. Finding it in a
+# prefix of the file proves the whole nav block is in that prefix, which is
+# what lets `_enable_next_link_on_previous_page` answer from a bounded read.
+_NEXT_LINK_END_MARKER = "<!-- PAGINATION_NEXT_LINK_END -->"
+
+# How much of a page to read before deciding whether it needs the edit.
+#
+# `transcript.html` emits the nav block exactly once, in the page header
+# directly after the inlined stylesheet, so its offset is bounded by the
+# template's own preamble rather than by the transcript: across a 22-page
+# 253MB archive it never ended past 110KB. 512KB is a wide margin on that,
+# and being wrong is not a correctness problem — a page whose block falls
+# outside the prefix takes the full read below, exactly as before.
+_NAV_BLOCK_PREFIX_CHARS = 512 * 1024
+
 
 def _enable_next_link_on_previous_page(
     output_dir: Path, page_number: int, variant_suffix: str = ""
@@ -2105,16 +2120,31 @@ def _enable_next_link_on_previous_page(
     if not page_path.exists():
         return False
 
+    # Decide from a bounded prefix whether this page needs the edit at all.
+    #
+    # The obvious guard -- `if "last-page" not in content` -- cannot ever
+    # fire: every page inlines the rule that hides the link,
+    # `.page-nav-link.next.last-page { display: none }`, so the bare
+    # substring is always present. The result was that each call read the
+    # whole page back and ran a DOTALL backtracking `subn` over it, on
+    # every page, on every conversion. On a watched project that is the
+    # dominant per-tick cost -- 253MB re-read and ~5.2s of regex per tick
+    # over a 22-page archive, to change nothing on 21 of the 22.
+    #
+    # The delimiters are what distinguish the real nav block both from
+    # that CSS rule and from transcript content quoting the class name, so
+    # a prefix containing the closing delimiter can answer for the file.
     # ``errors="replace"`` guards against lone surrogates that may have
     # been written here previously (issue #139): pre-fix runs encoded
     # JSON-decoded surrogates straight into the HTML, and a strict
     # read-back would crash on revisit. Replacing them here lets older
     # corrupt pages still rewrite cleanly.
-    content = page_path.read_text(encoding="utf-8", errors="replace")
-
-    # Check if there's a last-page class to remove
-    if "last-page" not in content:
+    with page_path.open(encoding="utf-8", errors="replace") as handle:
+        prefix = handle.read(_NAV_BLOCK_PREFIX_CHARS)
+    if _NEXT_LINK_END_MARKER in prefix and not _NEXT_LINK_PATTERN.search(prefix):
         return False
+
+    content = page_path.read_text(encoding="utf-8", errors="replace")
 
     # Replace the pattern to remove last-page class
     new_content, count = _NEXT_LINK_PATTERN.subn(r"\1\2", content)

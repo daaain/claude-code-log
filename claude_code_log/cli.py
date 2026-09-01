@@ -2198,7 +2198,17 @@ def serve(
             # and lets the pages on disk stay canonical, so a page served
             # over http and the same file opened from file:// can never
             # disagree.
-            process_projects_hierarchy(projects_path, silent=True)
+            #
+            # `write_combined=False` for the same reason the `watch`
+            # command defaults to it: regenerating the combined pages is
+            # what forces a tick to reload the project rather than just
+            # the session that grew. Measured on a 302-session/373MB
+            # archive, one appended line cost 7.6s with the combined
+            # pages and 0.7s without. The combined pages written by the
+            # startup conversion below stay on disk and keep serving --
+            # they just stop tracking the live session until the next
+            # restart, which is the trade `watch` already makes.
+            process_projects_hierarchy(projects_path, silent=True, write_combined=False)
 
         def report(exc: BaseException) -> None:
             click.echo(f"  watch: conversion failed: {exc!r}", err=True)
@@ -2209,7 +2219,10 @@ def serve(
         engine.prime()
         watch_stop = threading.Event()
         watch_thread = engine.run_in_thread(watch_stop)
-        click.echo("  watching for changes (reload a page to see new messages)")
+        click.echo(
+            "  watching for changes (reload a session page to see new messages;"
+            " combined pages refresh on restart)"
+        )
 
     try:
         server.serve_forever()

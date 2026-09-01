@@ -964,6 +964,65 @@ class TestNextLinkInPlaceUpdate:
         result = _enable_next_link_on_previous_page(temp_project_dir, -1)
         assert result is False
 
+    def test_enable_next_link_does_not_read_whole_page_for_css_match(
+        self, temp_project_dir, monkeypatch
+    ):
+        """The inlined CSS rule must not drag the whole page into memory.
+
+        Every page inlines `.page-nav-link.next.last-page { display: none }`,
+        so a guard on the bare substring can never fire. That made each call
+        read the entire page back and run a DOTALL regex over it -- the
+        dominant per-tick cost under `watch`, for pages needing no edit.
+        """
+        from claude_code_log.converter import (
+            _enable_next_link_on_previous_page,
+            _get_page_html_path,
+        )
+
+        page_path = temp_project_dir / _get_page_html_path(1)
+        page_path.write_text(
+            "<style>.page-nav-link.next.last-page { display: none; }</style>\n"
+            "<!-- PAGINATION_NEXT_LINK_START -->\n"
+            '<a href="combined_transcripts_2.html" class="page-nav-link next">Next</a>\n'
+            "<!-- PAGINATION_NEXT_LINK_END -->\n" + "<div>body</div>\n" * 20000,
+            encoding="utf-8",
+        )
+
+        def fail_read_text(*args, **kwargs):
+            raise AssertionError("read the whole page for a CSS-only match")
+
+        monkeypatch.setattr(Path, "read_text", fail_read_text)
+
+        assert _enable_next_link_on_previous_page(temp_project_dir, 1) is False
+
+    def test_enable_next_link_falls_back_when_block_past_prefix(
+        self, temp_project_dir, monkeypatch
+    ):
+        """A nav block beyond the bounded prefix still gets updated.
+
+        The prefix is a fast path, not a new precondition: if the block
+        isn't wholly inside it, the full read still has to happen.
+        """
+        from claude_code_log import converter
+        from claude_code_log.converter import (
+            _enable_next_link_on_previous_page,
+            _get_page_html_path,
+        )
+
+        monkeypatch.setattr(converter, "_NAV_BLOCK_PREFIX_CHARS", 64)
+
+        page_path = temp_project_dir / _get_page_html_path(1)
+        page_path.write_text(
+            "<div>padding</div>\n" * 50 + "<!-- PAGINATION_NEXT_LINK_START -->\n"
+            '<a href="combined_transcripts_2.html"'
+            ' class="page-nav-link next last-page">Next</a>\n'
+            "<!-- PAGINATION_NEXT_LINK_END -->\n",
+            encoding="utf-8",
+        )
+
+        assert _enable_next_link_on_previous_page(temp_project_dir, 1) is True
+        assert "last-page" not in page_path.read_text(encoding="utf-8")
+
 
 class TestPaginationNextLinkVisibility:
     """Integration tests for next link visibility across pages."""
