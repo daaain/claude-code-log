@@ -16,9 +16,17 @@ test:
 test-benchmark:
     CLAUDE_CODE_LOG_DEBUG_TIMING=1 uv run pytest -n0 -m benchmark -q
 
-# Update snapshot tests (runs serially for deterministic file ordering)
+# Update snapshot tests. Encodes the whole procedure from CONTRIBUTING
+# ("Snapshot Testing"), because doing only part of it has twice produced a
+# damaged .ambr: purge stale bytecode, regenerate SERIALLY (-n0; a parallel
+# --snapshot-update once silently truncated ~6000 lines), then re-run
+# read-only to prove the committed file matches what the code renders.
+# A healthy result is purely additive -- "+N/-0".
 update-snapshot:
+    find . -name __pycache__ -type d -prune -exec rm -rf {} +
     uv run pytest -n0 -m snapshot --snapshot-update -q
+    @echo "--- verifying the regenerated snapshots read back clean ---"
+    uv run pytest -n0 -m snapshot -q
 
 # Run TUI tests (requires isolated event loop)
 test-tui:
