@@ -2011,6 +2011,14 @@ class CacheManager:
             # earlier have the caveat text baked into first_user_message
             # for affected sessions.
             "1.4.0": "1.5.0",
+            # 1.6.1 fixed the teammate prompt-hash fallback, which only
+            # looked at ``Task`` tool_uses and so never fired for the
+            # ``Agent`` spawn tool current Claude Code uses. Every cache
+            # built up to and including 1.6.0 has the *unlinked* entry
+            # list baked in — the subagent transcripts are simply absent
+            # from them, and nothing about the source files changes to
+            # trigger a reparse.
+            "1.6.0": "1.6.1",
         }
 
         cache_ver = version.parse(cache_version)
