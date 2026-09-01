@@ -195,3 +195,41 @@ class TestBothFreshnessEntryPointsSeeTheColumn:
         stored = con.execute("SELECT content_version FROM cached_files").fetchone()[0]
         con.close()
         assert stored == content_schema_version()
+
+
+class TestDuplicateMigrationNumbersAreRejected:
+    """A migration number claimed twice must fail loudly, not silently.
+
+    ``_schema_version`` keys on the number alone, so a database that
+    applied one of a colliding pair records the number and skips the other
+    forever -- no error, no warning, and only on the caches that upgraded
+    through the first. This was met, not imagined: two branches in flight
+    both numbered a migration 013, and on a database carrying the other
+    one the ``content_version`` column was never added while the runner
+    reported the migration applied.
+
+    The collision is invisible from either branch alone and appears in one
+    tree only when both merge, so the check belongs where the files are
+    enumerated.
+    """
+
+    def test_a_repeated_number_raises(self, tmp_path: Path, monkeypatch):
+        from claude_code_log.migrations import runner
+
+        d = tmp_path / "migrations"
+        d.mkdir()
+        (d / "001_initial.sql").write_text("SELECT 1;", encoding="utf-8")
+        (d / "013_one_branch.sql").write_text("SELECT 1;", encoding="utf-8")
+        (d / "013_other_branch.sql").write_text("SELECT 1;", encoding="utf-8")
+        monkeypatch.setattr(runner, "_get_migrations_dir", lambda: d)
+
+        with pytest.raises(ValueError, match="Duplicate migration number 013"):
+            runner.get_available_migrations()
+
+    def test_the_shipped_migrations_have_no_duplicates(self):
+        """Guards the real directory, so a collision fails a test run rather
+        than reaching a user's cache."""
+        from claude_code_log.migrations import runner
+
+        versions = [v for v, _ in runner.get_available_migrations()]
+        assert len(versions) == len(set(versions))
