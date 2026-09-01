@@ -44,6 +44,13 @@ the page is being served. Click it to keep the page pinned to the newest
 message; while you are not following, it shows a count of how many have
 arrived since you last looked.
 
+It is the *session* pages that track a live session. Watch ticks leave
+the combined pages alone, for the same reason `watch` defaults to
+`--combined no`: regenerating them is what forces a tick to reload the
+whole project rather than just the session that grew. The combined pages
+written at startup stay on disk and keep serving — they simply stop
+tracking the live session until you restart.
+
 This works only over the server. A page opened from `file://` cannot
 fetch anything at all — not even itself — so it stays static, exactly as
 before. Nothing about the generated HTML changes.
