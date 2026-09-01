@@ -119,6 +119,10 @@ class HtmlCacheEntry(BaseModel):
     )
     message_count: int = 0  # for sanity checking
     library_version: str  # which version generated it
+    # Whether the page carries the combined-transcript back-link, so a run
+    # that changes the answer can mark it stale (migration 013). None for
+    # rows written before that migration, and for outputs with no link.
+    combined_linked: Optional[int] = None
 
 
 class PageCacheData(BaseModel):
@@ -262,6 +266,26 @@ CONTENT_COMPRESSION_LEVEL = 3
 
 
 @functools.lru_cache(maxsize=1)
+def _combined_link_stale(cached: Optional[int], desired: Optional[bool]) -> bool:
+    """Whether a page's combined back-link state no longer matches reality.
+
+    ``cached`` is the ``html_cache.combined_linked`` column: 1/0 for pages
+    written since migration 013, NULL for anything older. NULL is treated
+    as matching — the page's link state is simply unknown, and marking
+    every pre-013 page stale would re-render every session in every
+    project on upgrade for a cosmetic affordance (the 007/011 precedent).
+
+    ``desired`` is None for callers that aren't rendering session pages.
+
+    Shared by ``is_transcript_stale`` and ``get_stale_sessions``, which
+    are otherwise parallel implementations of the same checks — this is
+    the one place the rule lives, so they cannot drift apart on it.
+    """
+    if cached is None or desired is None:
+        return False
+    return bool(cached) != desired
+
+
 def get_library_version() -> str:
     """Get the current library version from package metadata or pyproject.toml.
 
@@ -2073,7 +2097,8 @@ class CacheManager:
 
         with self._get_connection() as conn:
             row = conn.execute(
-                """SELECT html_path, generated_at, source_session_id, message_count, library_version
+                """SELECT html_path, generated_at, source_session_id, message_count,
+                          library_version, combined_linked
                    FROM html_cache
                    WHERE project_id = ? AND html_path = ?""",
                 (self._project_id, html_path),
@@ -2088,6 +2113,7 @@ class CacheManager:
             source_session_id=row["source_session_id"],
             message_count=row["message_count"] or 0,
             library_version=row["library_version"],
+            combined_linked=row["combined_linked"],
         )
 
     def update_html_cache(
@@ -2095,22 +2121,31 @@ class CacheManager:
         html_path: str,
         session_id: Optional[str],
         message_count: int,
+        combined_linked: Optional[bool] = None,
     ) -> None:
-        """Update or insert HTML cache entry."""
+        """Update or insert HTML cache entry.
+
+        ``combined_linked`` records whether the page was rendered with the
+        combined-transcript back-link, so that a later run which changes
+        that answer can mark the page stale (migration 013). None leaves
+        the column NULL — the pre-013 state, read back as "already
+        matching" — and is right for outputs that have no such link.
+        """
         if self._project_id is None:
             return
 
         with self._get_connection() as conn:
             conn.execute(
                 """INSERT INTO html_cache
-                   (project_id, html_path, generated_at, source_session_id, message_count, library_version)
-                   VALUES (?, ?, ?, ?, ?, ?)
+                   (project_id, html_path, generated_at, source_session_id, message_count, library_version, combined_linked)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(project_id, html_path)
                    DO UPDATE SET
                        generated_at = excluded.generated_at,
                        source_session_id = excluded.source_session_id,
                        message_count = excluded.message_count,
-                       library_version = excluded.library_version""",
+                       library_version = excluded.library_version,
+                       combined_linked = excluded.combined_linked""",
                 (
                     self._project_id,
                     html_path,
@@ -2118,6 +2153,7 @@ class CacheManager:
                     session_id,
                     message_count,
                     self.library_version,
+                    None if combined_linked is None else int(combined_linked),
                 ),
             )
             conn.commit()
@@ -2127,6 +2163,7 @@ class CacheManager:
         html_path: str,
         session_id: Optional[str] = None,
         output_dir: Optional[Path] = None,
+        combined_linked: Optional[bool] = None,
     ) -> tuple[bool, str]:
         """Check if a rendered output file needs regeneration.
 
@@ -2143,6 +2180,10 @@ class CacheManager:
                 the source project directory (legacy in-place layout);
                 ``--output`` runs must pass their destination or the file
                 check reports ``file_missing`` forever.
+            combined_linked: Whether a session page rendered now would
+                carry the combined back-link (see
+                ``converter.combined_link_available``). A page rendered
+                with the other answer is stale. None skips the check.
 
         Returns:
             Tuple of (is_stale: bool, reason: str)
@@ -2160,6 +2201,9 @@ class CacheManager:
         # Check library version in cache
         if html_cache.library_version != self.library_version:
             return True, "version_mismatch"
+
+        if _combined_link_stale(html_cache.combined_linked, combined_linked):
+            return True, "combined_link_changed"
 
         # Check if file exists and has correct version
         actual_file = (output_dir or self.project_path) / html_path
@@ -2204,6 +2248,7 @@ class CacheManager:
         variant: str = "",
         ext: str = "html",
         output_dir: Optional[Path] = None,
+        combined_linked: Optional[bool] = None,
     ) -> List[tuple[str, str]]:
         """Get list of sessions whose rendered file needs regeneration.
 
@@ -2218,6 +2263,11 @@ class CacheManager:
                 every run and the project re-renders forever.
             output_dir: Where the rendered files live (``--output`` runs);
                 defaults to the source project directory.
+            combined_linked: Whether a session page rendered now would
+                carry the combined back-link (see
+                ``converter.combined_link_available``). A page rendered
+                with the other answer is stale. None skips the check, for
+                callers that don't render session pages.
 
         Returns:
             List of (session_id, reason) tuples for sessions needing regeneration
@@ -2244,12 +2294,16 @@ class CacheManager:
                 (self._project_id,),
             ).fetchall()
             html_rows = conn.execute(
-                """SELECT html_path, message_count, library_version
+                """SELECT html_path, message_count, library_version, combined_linked
                    FROM html_cache WHERE project_id = ?""",
                 (self._project_id,),
             ).fetchall()
             html_cache = {
-                r["html_path"]: (r["message_count"] or 0, r["library_version"])
+                r["html_path"]: (
+                    r["message_count"] or 0,
+                    r["library_version"],
+                    r["combined_linked"],
+                )
                 for r in html_rows
             }
 
@@ -2268,9 +2322,12 @@ class CacheManager:
                 if cached is None:
                     stale_sessions.append((session_id, "not_cached"))
                     continue
-                cached_count, cached_version = cached
+                cached_count, cached_version, cached_linked = cached
                 if cached_version != self.library_version:
                     stale_sessions.append((session_id, "version_mismatch"))
+                    continue
+                if _combined_link_stale(cached_linked, combined_linked):
+                    stale_sessions.append((session_id, "combined_link_changed"))
                     continue
                 actual_file = base_dir / html_path
                 if not actual_file.exists():
