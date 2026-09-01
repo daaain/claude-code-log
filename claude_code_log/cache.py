@@ -12,7 +12,7 @@ import zlib
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, Generator, List, Optional, Tuple
+from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, get_args
 
 from packaging import version
 from pydantic import BaseModel
@@ -361,6 +361,43 @@ def subagents_fingerprint(jsonl_path: Path) -> str:
     return f"{len(metas)}:{newest}"
 
 
+# Manual salt for content-shape changes the field names cannot see: a
+# field whose *meaning* or serialized representation changed while keeping
+# its name. Bump it and every cached blob is re-parsed once. Leave it alone
+# for field additions/removals/renames — those move the digest by
+# themselves, which is the point.
+_CONTENT_SCHEMA_SALT = "1"
+
+
+@functools.lru_cache(maxsize=1)
+def content_schema_version() -> str:
+    """Digest of the shape of what we store in ``messages.content``.
+
+    Cached entries are ``zlib(json(entry.model_dump()))``, so a blob is only
+    as complete as the model that produced it. File freshness keys on mtime,
+    size and the sidecar fingerprint — all properties of the *source* — so
+    before this existed, adding a field to a transcript model left every
+    unchanged file serving a blob written without it. The field then read as
+    absent for data that plainly had it (issue #320: ``imagePasteIds``
+    rehydrated as ``None`` on transcripts untouched since before it shipped).
+
+    Deriving the version from the declared field names rather than asking a
+    developer to bump a constant is deliberate: the failure it replaces was
+    exactly a remembered step nobody remembered. Add a field and the digest
+    moves on its own.
+
+    Field *names* only — not types or ordering — so the digest is stable
+    across Python and Pydantic versions and cannot mass-invalidate a 3 GB
+    cache on a dependency upgrade. Semantic changes that keep every name are
+    invisible here and are what ``_CONTENT_SCHEMA_SALT`` is for.
+    """
+    parts = [_CONTENT_SCHEMA_SALT]
+    for model in get_args(TranscriptEntry):
+        parts.append(model.__name__ + ":" + ",".join(sorted(model.model_fields)))
+    digest = hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
+    return digest[:12]
+
+
 def _cache_row_is_fresh(
     row: sqlite3.Row,
     source_mtime: float,
@@ -393,6 +430,13 @@ def _cache_row_is_fresh(
     files stale, never fewer. Pre-011 rows carry NULL and fall back to
     the mtime-only check so a populated cache doesn't mass-invalidate.
     """
+    # Unlike the size and fingerprint columns above, a NULL here is NOT
+    # accepted. Those describe inputs we might have missed; this describes
+    # the completeness of what we wrote, and a NULL means the row was
+    # written before we tracked it -- the issue #320 state exactly. Treat
+    # unknown as stale so it re-parses once.
+    if row["content_version"] != content_schema_version():
+        return False
     if source_size is not None:
         cached_size = row["source_size"]
         if cached_size is not None and cached_size != source_size:
@@ -900,7 +944,8 @@ class CacheManager:
 
         with self._get_connection() as conn:
             row = conn.execute(
-                "SELECT source_mtime, source_size, subagents_fingerprint"
+                "SELECT source_mtime, source_size, subagents_fingerprint,"
+                " content_version"
                 " FROM cached_files"
                 " WHERE project_id = ? AND file_name = ?",
                 (self._project_id, jsonl_path.name),
@@ -1037,15 +1082,17 @@ class CacheManager:
                 """
                 INSERT INTO cached_files
                 (project_id, file_name, file_path, source_mtime, source_size,
-                 cached_mtime, message_count, subagents_fingerprint)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                 cached_mtime, message_count, subagents_fingerprint,
+                 content_version)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(project_id, file_name) DO UPDATE SET
                     file_path = excluded.file_path,
                     source_mtime = excluded.source_mtime,
                     source_size = excluded.source_size,
                     cached_mtime = excluded.cached_mtime,
                     message_count = excluded.message_count,
-                    subagents_fingerprint = excluded.subagents_fingerprint
+                    subagents_fingerprint = excluded.subagents_fingerprint,
+                    content_version = excluded.content_version
                 """,
                 (
                     self._project_id,
@@ -1056,6 +1103,7 @@ class CacheManager:
                     cached_mtime,
                     len(entries),
                     subagents_fp,
+                    content_schema_version(),
                 ),
             )
 
@@ -1204,7 +1252,8 @@ class CacheManager:
         conn.execute(
             """UPDATE cached_files
                SET file_path = ?, source_mtime = ?, source_size = ?,
-                   cached_mtime = ?, message_count = ?, subagents_fingerprint = ?
+                   cached_mtime = ?, message_count = ?, subagents_fingerprint = ?,
+                   content_version = ?
                WHERE id = ?""",
             (
                 str(jsonl_path),
@@ -1213,6 +1262,7 @@ class CacheManager:
                 datetime.now().timestamp(),
                 len(all_entries),
                 subagents_fp,
+                content_schema_version(),
                 file_id,
             ),
         )
@@ -1855,7 +1905,7 @@ class CacheManager:
         with self._get_connection() as conn:
             rows = conn.execute(
                 "SELECT file_name, source_mtime, source_size,"
-                " subagents_fingerprint"
+                " subagents_fingerprint, content_version"
                 " FROM cached_files WHERE project_id = ?",
                 (self._project_id,),
             ).fetchall()
