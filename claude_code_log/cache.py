@@ -265,7 +265,6 @@ def scrub_surrogates(s: Optional[str]) -> Optional[str]:
 CONTENT_COMPRESSION_LEVEL = 3
 
 
-@functools.lru_cache(maxsize=1)
 def _combined_link_stale(cached: Optional[int], desired: Optional[bool]) -> bool:
     """Whether a page's combined back-link state no longer matches reality.
 
@@ -287,6 +286,7 @@ def _combined_link_stale(cached: Optional[int], desired: Optional[bool]) -> bool
 
 
 def get_library_version() -> str:
+@functools.lru_cache(maxsize=1)
     """Get the current library version from package metadata or pyproject.toml.
 
     Memoised because it is called *per rendered file* on the staleness
@@ -298,6 +298,11 @@ def get_library_version() -> str:
     a process, so a one-slot cache is exact; tests that need a different
     value patch this name on the module, which is unaffected.
     """
+
+    The decorator has to sit directly above this ``def``: a helper once
+    got inserted between the two, which silently moved the memo onto the
+    helper and put the 675-call, 3.3 s re-parse back into every archive
+    pass. ``test_cache.py`` pins the wrapper to this function.
     # First try to get version from installed package metadata
     try:
         from importlib.metadata import version as get_version
