@@ -68,8 +68,13 @@ _WATCHED_NAMES = tuple(pattern.rsplit("/", 1)[-1] for pattern in WATCHED_GLOBS)
 
 
 def _is_watched_name(name: str) -> bool:
+    # `fnmatch.fnmatch`, not `fnmatchcase`: it normalises case the way the
+    # platform does (insensitive on Windows, sensitive on POSIX), which is
+    # also `Path.glob`'s rule -- and the converter discovers sessions with
+    # `Path.glob("*.jsonl")`, so a session it renders must also wake the
+    # watcher. Verified: `UP.JSONL` was rendered and never watched.
     return not name.startswith(IGNORED_PREFIXES) and any(
-        fnmatch.fnmatchcase(name, pattern) for pattern in _WATCHED_NAMES
+        fnmatch.fnmatch(name, pattern) for pattern in _WATCHED_NAMES
     )
 
 
@@ -103,7 +108,11 @@ def scan(roots: Iterable[Path]) -> dict[Path, FileStamp]:
                             continue
                         if not _is_watched_name(entry.name):
                             continue
-                        st = entry.stat(follow_symlinks=False)
+                        # Follow a symlinked file, as `Path.stat` did: the
+                        # stamp has to be the target's, or appends to it go
+                        # unnoticed. Still free on Windows for anything
+                        # that is not a reparse point.
+                        st = entry.stat()
                     except OSError:
                         continue
                     stamps[Path(entry.path)] = (st.st_size, st.st_mtime_ns)

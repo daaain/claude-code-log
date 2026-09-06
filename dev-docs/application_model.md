@@ -1072,7 +1072,9 @@ ordinary conversion. The poll is one `os.scandir` walk taking size and
 mtime from the directory entries, not a `glob` per pattern plus a `stat`
 per hit: over a whole archive (1,896 files) the glob form cost 0.4–0.9 s
 per poll, more than the poll interval, and the walk returns the same
-dict 4–7× faster. The scan is a *trigger*, not a source of truth — a
+dict 4–7× faster. Name matching follows the platform's case rule, as
+`Path.glob` does (insensitive on Windows), so a session the converter
+discovers is also one the watcher wakes for. The scan is a *trigger*, not a source of truth — a
 false positive costs one no-op conversion, while the conversion already
 knows precisely what is stale. Two file classes are excluded because both
 land in the watched tree and would make the loop feed itself: dot-prefixed

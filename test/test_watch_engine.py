@@ -6,6 +6,7 @@ these are the tests that have to stay trustworthy when the conversion
 behind them gets slower.
 """
 
+import fnmatch
 from pathlib import Path
 
 import pytest
@@ -340,10 +341,14 @@ class TestScanParity:
         (root / "top.jsonl").write_text("{}\n", encoding="utf-8")
         (root / ".hidden").mkdir()
         (root / ".hidden" / "h.jsonl").write_text("{}\n", encoding="utf-8")
+        # Case follows the platform, as it does for `Path.glob` and for the
+        # converter's own `*.jsonl` discovery: watched on Windows, not on
+        # POSIX. The parity assertion below is what checks it either way.
+        (p2 / "UP.JSONL").write_text("{}\n", encoding="utf-8")
 
         got = scan([root])
         assert got == self._glob_scan([root])
-        assert {p.name for p in got} == {
+        expected = {
             "s1.jsonl",
             "s2.jsonl",
             "agent-abc.jsonl",
@@ -352,6 +357,9 @@ class TestScanParity:
             "top.jsonl",
             "h.jsonl",
         }
+        if fnmatch.fnmatch("UP.JSONL", "*.jsonl"):
+            expected.add("UP.JSONL")
+        assert {p.name for p in got} == expected
 
     def test_scan_over_several_roots(self, tmp_path: Path) -> None:
         a = tmp_path / "a"
