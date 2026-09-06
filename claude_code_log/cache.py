@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import sqlite3
+import threading
 import zlib
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -285,8 +286,8 @@ def _combined_link_stale(cached: Optional[int], desired: Optional[bool]) -> bool
     return bool(cached) != desired
 
 
-def get_library_version() -> str:
 @functools.lru_cache(maxsize=1)
+def get_library_version() -> str:
     """Get the current library version from package metadata or pyproject.toml.
 
     Memoised because it is called *per rendered file* on the staleness
@@ -297,12 +298,12 @@ def get_library_version() -> str:
     with anything that changed. An installed version cannot change inside
     a process, so a one-slot cache is exact; tests that need a different
     value patch this name on the module, which is unaffected.
-    """
 
     The decorator has to sit directly above this ``def``: a helper once
     got inserted between the two, which silently moved the memo onto the
     helper and put the 675-call, 3.3 s re-parse back into every archive
     pass. ``test_cache.py`` pins the wrapper to this function.
+    """
     # First try to get version from installed package metadata
     try:
         from importlib.metadata import version as get_version
@@ -524,6 +525,143 @@ def discard_database_files(db_path: Path) -> bool:
 _migrated_db_paths: set[str] = set()
 
 
+# ========== Connection lifecycle ==========
+#
+# By default every `CacheManager._get_connection()` opens a connection and
+# closes it on exit, so no handle lingers on the .db/.db-wal/.db-shm files
+# (Windows refuses to delete an open file, and tests tear temp dirs down).
+# That is the right default for a single call and the wrong one for a
+# loop: in WAL mode, closing the *last* connection checkpoints the database
+# and deletes the -wal/-shm files, and the next `connect` + `PRAGMA
+# journal_mode=WAL` creates them again. A hierarchy pass on a 332-project
+# archive did that 3,658 times — 11 opens per project, each the only
+# connection alive — and on Windows against an 890 MB cache the churn was
+# ~90 s of a 96 s pass (41 s in `close` alone). Measured per cycle on that
+# file: 29 ms with nothing else open, 6.7 ms with one idle connection held.
+#
+# `batch()` already fixes this *within* a project build by sharing one
+# connection per instance. A lease is the same idea one level up: one
+# connection for the scope, shared by every instance addressing that
+# database on this thread, closed on scope exit. Same steady pass: 96 s →
+# 5.3 s. Per thread because sqlite3 connections are thread-bound, and the
+# server thread answers requests while the watch thread converts.
+
+
+def _configure_connection(conn: sqlite3.Connection, *, read_only: bool) -> None:
+    """Apply the standard pragmas/row factory to a fresh connection."""
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    if read_only:
+        # A mode=ro connection cannot switch journal modes, and a
+        # reader needs neither pragma: the writing parent already
+        # keeps the database in WAL.
+        return
+    conn.execute("PRAGMA journal_mode = WAL")
+    # synchronous=NORMAL is the recommended pairing for WAL: it keeps
+    # durability across application crashes (only a power/OS crash can lose
+    # the last committed transaction) while skipping an fsync on every
+    # commit. The cache is fully regenerable from the JSONL source, so that
+    # residual risk is acceptable.
+    conn.execute("PRAGMA synchronous = NORMAL")
+
+
+def _open_connection(
+    db_path: Path,
+    *,
+    read_only: bool,
+    configure: Callable[[sqlite3.Connection], None],
+) -> sqlite3.Connection:
+    """Open a connection and run ``configure`` on it, closing it if that fails.
+
+    If a PRAGMA in ``configure`` raises, the just-opened handle is closed
+    before re-raising so it can't leak and lock the .db/.db-wal/.db-shm
+    files — the exact failure mode the connection lifecycle elsewhere is
+    careful to avoid (Windows WinError 32). ``configure`` is a parameter
+    rather than a fixed call so an instance can route through its own
+    (patchable) ``_configure_connection`` hook.
+    """
+    if read_only:
+        # as_uri() percent-encodes the (absolute) path, so URI mode is
+        # safe for paths with spaces or query-ish characters.
+        conn = sqlite3.connect(
+            db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=30.0
+        )
+    else:
+        conn = sqlite3.connect(db_path, timeout=30.0)
+    try:
+        configure(conn)
+    except BaseException:
+        conn.close()
+        raise
+    return conn
+
+
+_LeaseKey = Tuple[str, bool]
+_leases = threading.local()
+
+
+def _thread_leases() -> Dict[_LeaseKey, sqlite3.Connection]:
+    """This thread's active leases, keyed by (database path, read_only)."""
+    conns: Optional[Dict[_LeaseKey, sqlite3.Connection]] = getattr(
+        _leases, "conns", None
+    )
+    if conns is None:
+        conns = {}
+        _leases.conns = conns
+    return conns
+
+
+def _drop_leases(db_path: Path) -> None:
+    """Close and forget any lease this thread holds on ``db_path``.
+
+    For the corruption-rebuild path, which must delete the file: the
+    enclosing ``connection_lease`` scope then simply has nothing to close.
+    """
+    leases = _thread_leases()
+    for key in [k for k in leases if k[0] == str(db_path)]:
+        leases.pop(key).close()
+
+
+@contextmanager
+def connection_lease(
+    db_path: Path, *, read_only: bool = False
+) -> Generator[None, None, None]:
+    """Hold one connection to ``db_path`` open for the scope, on this thread.
+
+    Every ``CacheManager`` addressing that database from this thread
+    reuses it — ``_get_connection`` and ``batch()`` both yield it and leave
+    the closing to the lease — so a loop over many projects opens one
+    connection instead of one per query. Nesting reuses the outer lease.
+
+    The connection is closed on scope exit, including on exception, so the
+    Windows file-lock guarantee holds at the scope boundary rather than
+    per call. A database that cannot be opened here (typically corrupt)
+    is not the lease's problem: the scope runs without one, and the first
+    ``CacheManager`` inside it reports and rebuilds the file as before.
+    """
+    key: _LeaseKey = (str(db_path), read_only)
+    leases = _thread_leases()
+    if key in leases:
+        yield
+        return
+    try:
+        conn = _open_connection(
+            db_path,
+            read_only=read_only,
+            configure=functools.partial(_configure_connection, read_only=read_only),
+        )
+    except sqlite3.DatabaseError:
+        yield
+        return
+    leases[key] = conn
+    try:
+        yield
+    finally:
+        # `_drop_leases` may already have removed and closed it.
+        if leases.pop(key, None) is not None:
+            conn.close()
+
+
 class CacheManager:
     """SQLite-based cache manager for Claude Code Log."""
 
@@ -586,55 +724,39 @@ class CacheManager:
 
     def _configure_connection(self, conn: sqlite3.Connection) -> None:
         """Apply the standard pragmas/row factory to a fresh connection."""
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
-        if self._read_only:
-            # A mode=ro connection cannot switch journal modes, and a
-            # reader needs neither pragma: the writing parent already
-            # keeps the database in WAL.
-            return
-        conn.execute("PRAGMA journal_mode = WAL")
-        # synchronous=NORMAL is the recommended pairing for WAL: it keeps
-        # durability across application crashes (only a power/OS crash can lose
-        # the last committed transaction) while skipping an fsync on every
-        # commit. The cache is fully regenerable from the JSONL source, so that
-        # residual risk is acceptable.
-        conn.execute("PRAGMA synchronous = NORMAL")
+        _configure_connection(conn, read_only=self._read_only)
 
     def _open_configured_connection(self) -> sqlite3.Connection:
-        """Open a connection and apply pragmas, closing it if setup fails.
+        """Open a connection and apply pragmas, closing it if setup fails."""
+        return _open_connection(
+            self.db_path,
+            read_only=self._read_only,
+            configure=self._configure_connection,
+        )
 
-        If a PRAGMA in ``_configure_connection`` raises, the just-opened
-        handle is closed before re-raising so it can't leak and lock the
-        .db/.db-wal/.db-shm files — the exact failure mode the connection
-        lifecycle elsewhere is careful to avoid (Windows WinError 32).
-        """
-        if self._read_only:
-            # as_uri() percent-encodes the (absolute) path, so URI mode is
-            # safe for paths with spaces or query-ish characters.
-            conn = sqlite3.connect(
-                self.db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=30.0
-            )
-        else:
-            conn = sqlite3.connect(self.db_path, timeout=30.0)
-        try:
-            self._configure_connection(conn)
-        except BaseException:
-            conn.close()
-            raise
-        return conn
+    def _leased_connection(self) -> Optional[sqlite3.Connection]:
+        """The connection a `connection_lease` holds for this database on
+        this thread, if any."""
+        return _thread_leases().get((str(self.db_path), self._read_only))
 
     @contextmanager
     def _get_connection(self) -> Generator[sqlite3.Connection, None, None]:
         """Get a database connection with proper settings.
 
         Inside a ``batch()`` scope this yields the shared connection without
-        closing it (the batch owns its lifecycle). Otherwise it opens a fresh
-        connection and closes it on exit — the default, Windows-safe behaviour
-        (no lingering file handle on the .db/.db-wal/.db-shm files).
+        closing it (the batch owns its lifecycle). Under a
+        ``connection_lease`` for this database it yields the leased one,
+        likewise without closing it. Otherwise it opens a fresh connection
+        and closes it on exit — the default, Windows-safe behaviour (no
+        lingering file handle on the .db/.db-wal/.db-shm files).
         """
         if self._shared_conn is not None:
             yield self._shared_conn
+            return
+
+        leased = self._leased_connection()
+        if leased is not None:
+            yield leased
             return
 
         conn = self._open_configured_connection()
@@ -667,6 +789,17 @@ class CacheManager:
             # Already batching — reuse the existing shared connection and leave
             # its lifecycle to the outermost batch().
             yield
+            return
+
+        leased = self._leased_connection()
+        if leased is not None:
+            # A lease is an outermost batch that spans instances: reuse
+            # its connection and leave the closing to the lease.
+            self._shared_conn = leased
+            try:
+                yield
+            finally:
+                self._shared_conn = None
             return
 
         # Open+configure first; only publish to _shared_conn once setup has
@@ -710,6 +843,11 @@ class CacheManager:
         `_lookup_project_id` already degrades to "no cached data".
         """
         print(f"Cache database is corrupt ({exc}): {self.db_path}")
+        # A lease on this thread holds the file open, and Windows refuses
+        # to delete an open file. Drop it first; the rest of the enclosing
+        # scope falls back to a connection per call, which is correct and
+        # merely slower.
+        _drop_leases(self.db_path)
         if not discard_database_files(self.db_path):
             # Couldn't remove it, so a retry would just fail the same way.
             # Re-raise and let the caller degrade to running cacheless.

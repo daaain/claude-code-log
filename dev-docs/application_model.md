@@ -212,6 +212,25 @@ per-file load loop, per-session generation) in `CacheManager.batch()`:
 one shared connection reused for the scope and closed on exit (including
 on exception). `batch()` nesting is a no-op reuse, so the wraps compose.
 
+`batch()` is per instance, and an instance is per project, so a loop over
+projects still closes the last connection between every two of them. In
+WAL mode that is the expensive close: the last connection out checkpoints
+and deletes the `-wal`/`-shm` files, and the next `connect` +
+`PRAGMA journal_mode=WAL` recreates them. `process_projects_hierarchy`
+plans every project (11 short queries each) before converting any, which
+on a 332-project archive was 3,658 open/close cycles — ~90 s of a 96 s
+no-change pass on Windows against an 890 MB cache (29 ms per cycle with
+nothing else open, 6.7 ms with one idle connection held). So the pass
+holds a `connection_lease(db_path)` for its whole run: one connection
+per thread and database, which `_get_connection()` and `batch()` both
+yield instead of opening (a lease is an outermost batch that spans
+instances). Closed on scope exit like a batch, so the Windows guarantee
+holds at the pass boundary; per thread because `sqlite3` connections
+are thread-bound and `serve` answers requests on other threads while
+the watch thread converts. A corrupt database drops the lease before
+the rebuild deletes the file, and the rest of that pass runs
+connection-per-call. Same pass with the lease: 5.3 s.
+
 Freshness checks are batched too (issue #12): `get_modified_files()`
 fetches every cached row for the project in one query (one connection
 open, or zero extra inside a `batch()` scope) and rules out

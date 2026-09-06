@@ -1380,3 +1380,181 @@ class TestCorruptDatabaseRecovery:
     )
     def test_only_corruption_triggers_a_rebuild(self, exc, expected):
         assert is_corrupt_database_error(exc) is expected
+
+
+class TestConnectionLease:
+    """`connection_lease`: one connection for a scope, shared across instances.
+
+    The lifecycle guarantees matter more than the speed-up: the leased
+    connection must be closed at scope exit (Windows refuses to delete an
+    open .db/-wal/-shm file, and callers tear temp dirs down right after),
+    must not escape to other threads (sqlite3 connections are thread-bound),
+    and must get out of the way of the corruption rebuild, which deletes
+    the file.
+    """
+
+    @pytest.fixture
+    def two_managers(self, tmp_path):
+        db = tmp_path / "cache.db"
+        dirs = []
+        for name in ("p1", "p2"):
+            d = tmp_path / name
+            d.mkdir()
+            dirs.append(d)
+        return db, [CacheManager(d, "1.0.0", db_path=db) for d in dirs]
+
+    def test_calls_under_a_lease_share_one_connection_across_instances(
+        self, two_managers
+    ):
+        from claude_code_log.cache import connection_lease
+
+        db, (a, b) = two_managers
+        with connection_lease(db):
+            with a._get_connection() as c1, a._get_connection() as c2:
+                assert c1 is c2
+            with b._get_connection() as c3:
+                assert c3 is c1
+            # batch() under a lease reuses it and must not close it on exit.
+            with b.batch():
+                with b._get_connection() as c4:
+                    assert c4 is c1
+            assert c1.execute("SELECT 1").fetchone()[0] == 1
+
+    def test_the_lease_is_closed_on_exit_and_the_files_can_go(self, two_managers):
+        from claude_code_log.cache import connection_lease
+
+        db, (a, _b) = two_managers
+        with connection_lease(db):
+            with a._get_connection() as leased:
+                pass
+        with pytest.raises(sqlite3.ProgrammingError):
+            leased.execute("SELECT 1")
+        # Outside the lease we are back to a connection per call, and it is
+        # a different one.
+        with a._get_connection() as fresh:
+            assert fresh is not leased
+        # The Windows guarantee: nothing holds the files after the scope.
+        shutil.rmtree(db.parent)
+
+    def test_the_lease_is_closed_when_the_scope_raises(self, two_managers):
+        from claude_code_log.cache import connection_lease
+
+        db, (a, _b) = two_managers
+        with pytest.raises(RuntimeError):
+            with connection_lease(db):
+                with a._get_connection() as leased:
+                    pass
+                raise RuntimeError("body failed")
+        with pytest.raises(sqlite3.ProgrammingError):
+            leased.execute("SELECT 1")
+
+    def test_nested_leases_reuse_the_outer_one(self, two_managers):
+        from claude_code_log.cache import connection_lease
+
+        db, (a, _b) = two_managers
+        with connection_lease(db):
+            with a._get_connection() as outer:
+                pass
+            with connection_lease(db):
+                with a._get_connection() as inner:
+                    assert inner is outer
+            # The inner scope must not have closed the outer connection.
+            assert outer.execute("SELECT 1").fetchone()[0] == 1
+
+    def test_a_lease_is_per_thread(self, two_managers):
+        from claude_code_log.cache import connection_lease
+
+        db, (a, _b) = two_managers
+        seen: list = []
+        with connection_lease(db):
+            with a._get_connection() as leased:
+                pass
+
+            def other_thread():
+                with a._get_connection() as conn:
+                    seen.append(conn is leased)
+                    conn.execute("SELECT 1")
+
+            t = threading.Thread(target=other_thread)
+            t.start()
+            t.join()
+        assert seen == [False]
+
+    def test_a_corrupt_database_is_still_rebuilt_under_a_lease(
+        self, tmp_path, sample_user_entry, capsys
+    ):
+        """The lease opens nothing on a corrupt file and the first manager
+        inside the scope deletes and rebuilds it as it always did."""
+        from claude_code_log.cache import connection_lease
+
+        db = tmp_path / "cache.db"
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        # A real database first, so the corruption is a truncation rather
+        # than a file that never was one.
+        cm = CacheManager(proj, "1.0.0", db_path=db)
+        jsonl = proj / "s.jsonl"
+        jsonl.write_text(json.dumps(sample_user_entry.model_dump()), encoding="utf-8")
+        cm.save_cached_entries(jsonl, [sample_user_entry])
+        _migrated_db_paths.discard(str(db))
+        size = db.stat().st_size
+        with open(db, "r+b") as f:
+            f.truncate(size // 4)
+
+        with connection_lease(db):
+            rebuilt = CacheManager(proj, "1.0.0", db_path=db)
+            assert "corrupt" in capsys.readouterr().out.lower()
+            with rebuilt._get_connection() as conn:
+                assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+            assert rebuilt._project_id is not None
+        shutil.rmtree(tmp_path / "proj")
+
+    def test_a_lease_survives_a_rebuild_of_another_database(self, two_managers):
+        """`_drop_leases` is keyed by path: dropping one database's lease
+        leaves a lease on a different file untouched."""
+        from claude_code_log.cache import _drop_leases, connection_lease
+
+        db, (a, _b) = two_managers
+        with connection_lease(db):
+            with a._get_connection() as leased:
+                pass
+            _drop_leases(db.parent / "other.db")
+            assert leased.execute("SELECT 1").fetchone()[0] == 1
+
+
+class TestHierarchyPassHoldsOneLease:
+    def test_a_hierarchy_pass_opens_no_per_call_connections(
+        self, tmp_path, monkeypatch, sample_user_entry
+    ):
+        """`process_projects_hierarchy` plans every project under one lease.
+
+        Counting per-instance opens rather than timing: on a 332-project
+        archive the connection-per-call pattern was 3,658 open/close
+        cycles and ~90 s of a 96 s no-change pass on Windows.
+        """
+        from claude_code_log.converter import process_projects_hierarchy
+
+        projects = tmp_path / "projects"
+        for name in ("p1", "p2"):
+            d = projects / name
+            d.mkdir(parents=True)
+            (d / "session-1.jsonl").write_text(
+                json.dumps(sample_user_entry.model_dump()) + "\n", encoding="utf-8"
+            )
+        monkeypatch.setenv("CLAUDE_CODE_LOG_CACHE_PATH", str(tmp_path / "cache.db"))
+
+        opens: list[int] = []
+        real_open = CacheManager._open_configured_connection
+
+        def counting_open(self):
+            opens.append(1)
+            return real_open(self)
+
+        monkeypatch.setattr(CacheManager, "_open_configured_connection", counting_open)
+
+        process_projects_hierarchy(projects, use_cache=True)  # populates
+        opens.clear()
+        process_projects_hierarchy(projects, use_cache=True)  # the steady pass
+        assert opens == [], f"{len(opens)} per-call connections in a leased pass"
+        # And the lease let go: the tree can be deleted (Windows-meaningful).
+        shutil.rmtree(tmp_path / "projects")

@@ -52,6 +52,7 @@ from .render_dispatch import build_render_pool, dispatch_render_units
 from .cache import (
     CacheManager,
     SessionCacheData,
+    connection_lease,
     get_all_cached_projects,
     get_cache_db_path,
     get_library_version,
@@ -6262,6 +6263,66 @@ def _convert_project_worker(
 
 
 def process_projects_hierarchy(
+    projects_path: Path,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    use_cache: bool = True,
+    generate_individual_sessions: bool = True,
+    output_format: str = "html",
+    image_export_mode: Optional[str] = None,
+    silent: bool = True,
+    page_size: int = 2000,
+    depth: RenderingDepth = DEFAULT_DEPTH,
+    compact: bool = False,
+    output_dir: Optional[Path] = None,
+    expand_paths: bool = False,
+    filter_path: Optional[str] = None,
+    write_combined: bool = True,
+    no_timestamps: bool = False,
+    no_recaps: bool = False,
+    jobs: Optional[int] = None,
+    entry_store: "Optional[ParsedEntryStore]" = None,
+) -> Path:
+    """Process the entire ~/.claude/projects/ hierarchy and create linked output files.
+
+    Holds one cache connection for the whole pass (``connection_lease``):
+    the pass plans every project before converting any, and each plan is
+    ~11 short queries — on a 332-project archive that used to be 3,658
+    connection open/close cycles, ~90 s of a 96 s no-change pass on
+    Windows. See the lease's module comment in ``cache.py`` for the
+    mechanism. The lease is released when this returns, so no handle
+    outlives the pass. Everything else is documented on the body.
+    """
+    lease = (
+        connection_lease(get_cache_db_path(projects_path))
+        if use_cache
+        else contextlib.nullcontext()
+    )
+    with lease:
+        return _process_projects_hierarchy(
+            projects_path=projects_path,
+            from_date=from_date,
+            to_date=to_date,
+            use_cache=use_cache,
+            generate_individual_sessions=generate_individual_sessions,
+            output_format=output_format,
+            image_export_mode=image_export_mode,
+            silent=silent,
+            page_size=page_size,
+            depth=depth,
+            compact=compact,
+            output_dir=output_dir,
+            expand_paths=expand_paths,
+            filter_path=filter_path,
+            write_combined=write_combined,
+            no_timestamps=no_timestamps,
+            no_recaps=no_recaps,
+            jobs=jobs,
+            entry_store=entry_store,
+        )
+
+
+def _process_projects_hierarchy(
     projects_path: Path,
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
