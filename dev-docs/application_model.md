@@ -1068,7 +1068,11 @@ measurements behind it.
 **The engine never renders.** `claude_code_log/watch.py` polls
 `(size, mtime_ns)` over `**/*.jsonl` and `**/agent-*.meta.json` under
 the watched roots, debounces, and calls a callback; the callback runs the
-ordinary conversion. The scan is a *trigger*, not a source of truth — a
+ordinary conversion. The poll is one `os.scandir` walk taking size and
+mtime from the directory entries, not a `glob` per pattern plus a `stat`
+per hit: over a whole archive (1,896 files) the glob form cost 0.4–0.9 s
+per poll, more than the poll interval, and the walk returns the same
+dict 4–7× faster. The scan is a *trigger*, not a source of truth — a
 false positive costs one no-op conversion, while the conversion already
 knows precisely what is stale. Two file classes are excluded because both
 land in the watched tree and would make the loop feed itself: dot-prefixed
