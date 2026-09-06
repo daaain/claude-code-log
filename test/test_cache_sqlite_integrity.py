@@ -1509,6 +1509,56 @@ class TestConnectionLease:
             assert rebuilt._project_id is not None
         shutil.rmtree(tmp_path / "proj")
 
+    def test_a_corrupt_table_page_drops_a_held_lease_before_the_rebuild(
+        self, tmp_path, sample_user_entry, capsys
+    ):
+        """The path `_drop_leases` exists for.
+
+        A truncated file fails at the lease's own open, so that case never
+        holds a lease. Garbling only the `projects` table's root page keeps
+        the header intact: the lease opens fine, then the first manager's
+        `_ensure_project_exists` raises on the leased connection, and the
+        rebuild has to close that handle before Windows will let it delete
+        the file. Afterwards the scope's exit must not close it twice.
+        """
+        from claude_code_log.cache import _thread_leases, connection_lease
+
+        db = tmp_path / "cache.db"
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        cm = CacheManager(proj, "1.0.0", db_path=db)
+        jsonl = proj / "s.jsonl"
+        jsonl.write_text(json.dumps(sample_user_entry.model_dump()), encoding="utf-8")
+        cm.save_cached_entries(jsonl, [sample_user_entry])
+        _migrated_db_paths.discard(str(db))
+
+        raw = sqlite3.connect(db)
+        raw.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        page_size = raw.execute("PRAGMA page_size").fetchone()[0]
+        rootpage = raw.execute(
+            "SELECT rootpage FROM sqlite_master WHERE name = 'projects'"
+        ).fetchone()[0]
+        raw.close()
+        with open(db, "r+b") as f:
+            f.seek((rootpage - 1) * page_size)
+            f.write(b"\xff" * page_size)
+
+        with connection_lease(db):
+            assert _thread_leases(), "the lease should open on an intact header"
+            leased = _thread_leases()[(str(db), False)]
+            rebuilt = CacheManager(proj, "1.0.0", db_path=db)
+            assert "corrupt" in capsys.readouterr().out.lower()
+            # The rebuild dropped the lease; the old handle is closed.
+            assert not _thread_leases()
+            with pytest.raises(sqlite3.ProgrammingError):
+                leased.execute("SELECT 1")
+            with rebuilt._get_connection() as conn:
+                assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+            assert rebuilt._project_id is not None
+        # Scope exit found nothing to close, and nothing holds the files.
+        shutil.rmtree(tmp_path / "proj")
+        db.unlink()
+
     def test_a_lease_survives_a_rebuild_of_another_database(self, two_managers):
         """`_drop_leases` is keyed by path: dropping one database's lease
         leaves a lease on a different file untouched."""

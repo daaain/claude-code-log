@@ -597,6 +597,10 @@ def _open_connection(
 
 
 _LeaseKey = Tuple[str, bool]
+# Thread-local, and safe across the render pools only because both use
+# `multiprocessing.get_context("spawn")`: a forked child would inherit
+# this dict and its sqlite3 handles, which is undefined behaviour. Keep
+# the pools on spawn.
 _leases = threading.local()
 
 
