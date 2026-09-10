@@ -652,19 +652,29 @@ class TestConnectionCensus:
     which is the moment to ask whether it writes.
     """
 
-    # (module, enclosing function) -> why it does not need the pragmas, or
-    # how it gets them.
-    EXPECTED: ClassVar[dict[tuple[str, str], str]] = {
-        (
-            "cache.py",
-            "_open_connection",
-        ): "applies `configure`, i.e. _configure_connection",
-        ("cache.py", "get_all_cached_projects"): "read-only: one SELECT, then close",
-        ("cache.py", "find_session_in_cache"): "read-only: one SELECT, then close",
-        ("migrations/runner.py", "run_migrations"): "applies apply_write_pragmas",
-        ("cli.py", "_build_search_index"): "applies apply_write_pragmas",
-        ("cli.py", "serve"): "in-memory FTS5 capability probe, not the cache",
-        ("api.py", "connection"): "mode=ro reader; cannot switch journal modes",
+    # (module, enclosing function) -> (how many connects there, and why each
+    # is safe). The count is part of the claim: a function that already
+    # connects is exactly where a second, unconfigured connection is most
+    # likely to be added, and `_open_connection`'s legitimate two would
+    # otherwise license any number.
+    EXPECTED: ClassVar[dict[tuple[str, str], tuple[int, str]]] = {
+        ("cache.py", "_open_connection"): (
+            2,
+            "read-only and read-write arms; both run `configure`, "
+            "i.e. _configure_connection",
+        ),
+        ("cache.py", "get_all_cached_projects"): (
+            1,
+            "read-only: one SELECT, then close",
+        ),
+        ("cache.py", "find_session_in_cache"): (1, "read-only: one SELECT, then close"),
+        ("migrations/runner.py", "run_migrations"): (
+            1,
+            "applies apply_write_pragmas",
+        ),
+        ("cli.py", "_build_search_index"): (1, "applies apply_write_pragmas"),
+        ("cli.py", "serve"): (1, "in-memory FTS5 capability probe, not the cache"),
+        ("api.py", "connection"): (1, "mode=ro reader; cannot switch journal modes"),
     }
 
     def _connect_sites(self) -> dict[tuple[str, str], int]:
@@ -694,7 +704,9 @@ class TestConnectionCensus:
         # The census must find something, or it is passing on an empty set.
         assert len(found) >= 5, f"census found too few sites to be working: {found}"
 
-        unclassified = sorted(set(found) - set(self.EXPECTED))
+        expected_counts = {key: count for key, (count, _) in self.EXPECTED.items()}
+
+        unclassified = sorted(set(found) - set(expected_counts))
         assert not unclassified, (
             "new sqlite3.connect site(s) not classified in "
             f"TestConnectionCensus.EXPECTED: {unclassified}. If the connection "
@@ -703,10 +715,26 @@ class TestConnectionCensus:
             "docstring. If it does not write, say so there."
         )
 
-        vanished = sorted(set(self.EXPECTED) - set(found))
+        vanished = sorted(set(expected_counts) - set(found))
         assert not vanished, (
             f"classified connect site(s) no longer exist: {vanished}. Remove "
             "them from EXPECTED so the census keeps meaning something."
+        )
+
+        # Compare counts, not just which functions connect. Without this a
+        # second, unconfigured connection added *inside* an already-classified
+        # function passes — and a function that already connects is the most
+        # likely place for one to appear.
+        grew = sorted(
+            (key, expected_counts[key], found[key])
+            for key in expected_counts
+            if found[key] != expected_counts[key]
+        )
+        assert not grew, (
+            "sqlite3.connect count changed in classified function(s) "
+            f"(site, classified, found): {grew}. A new connection in a "
+            "function that already had one is still a new connection: "
+            "classify it by updating the count and the reason."
         )
 
 
