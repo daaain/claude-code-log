@@ -226,9 +226,9 @@ migrations:
 
 | migrations | pre-fix | shipped |
 |-----------:|--------:|--------:|
-| 12 | 228 | 8 |
-| 13 | 236 | 8 |
-| 14 | 244 | 8 |
+| 12 | 228 | 7 |
+| 13 | 236 | 7 |
+| 14 | 244 | 7 |
 
 **Every migration added to the chain costs 8 more fsyncs at the
 defaults, and none with the pragmas** — the runner's cost grows with the

@@ -25,11 +25,15 @@ def apply_write_pragmas(conn: sqlite3.Connection) -> None:
     acceptable.
 
     Lives here rather than in ``cache.py`` because ``cache.py`` imports
-    this module; both writers share this one definition so the pragma
+    this module; every writer shares this one definition so the pragma
     pair cannot drift between them.
+
+    ``synchronous`` is set first because the switch into WAL is itself a
+    write: at the default FULL it fsyncs for its own transition, which
+    costs one of the eight fsyncs a fresh database otherwise pays.
     """
-    conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA synchronous = NORMAL")
+    conn.execute("PRAGMA journal_mode = WAL")
 
 
 def _get_migrations_dir() -> Path:
