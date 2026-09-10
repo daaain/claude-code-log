@@ -222,9 +222,26 @@ migration added to the chain costs a further fsync** at the defaults:
 adding one (013) moved the default arm 111 → 128 ms/db while that
 control moved 9.7 → 10.1, so the cost is the extra commit, not the
 extra SQL. A single-threaded run like
-that one therefore *understates* what the pairing is worth during a
-parallel test suite. A
-`mode=ro` reader applies neither — it cannot switch journal modes and
+that one therefore badly *understates* what the pairing is worth during
+a parallel test suite: the unit leg creates ~402 databases, and with the
+runner's pragmas removed it takes **~130 s against ~51 s**, three
+interleaved pairs with no overlap between the arms. That is ~195 ms
+saved per database — well above the ~110 ms an idle bench predicts,
+because fsync does not parallelise. Sixteen `-n auto` workers do not get
+sixteen devices; they queue at one, and at `synchronous=FULL` each
+worker's commits lengthen every other worker's, so the contention the
+pragmas remove is largely self-inflicted.
+
+That measurement also carries a diagnostic worth more than the ratio.
+The slow arm was the *stable* one (±1.6%) while the fast arm swung
+±16%, which inverts the usual expectation — because the slow arm is
+fsync-bound and therefore pinned by the device, indifferent to whatever
+else is on the box, while the fast arm is CPU-bound and exposed to it.
+**Stability is not evidence of a quiet box; it can be evidence of a
+saturated resource.** It is also why box load could not swamp the
+comparison: the noise lived entirely in the arm that got faster.
+
+A `mode=ro` reader applies neither — it cannot switch journal modes and
 needs neither pragma. The runner's connection is outside the lifecycle
 described below and adds nothing to it: `_migrated_db_paths` memoises
 the migration check, so it opens once per process and database rather
