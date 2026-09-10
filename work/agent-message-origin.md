@@ -169,9 +169,9 @@ Watch specifically:
 ## Reference data
 
 Issue #309 carries the screenshot. The reference session is
-`b149fbff-f9ed-4c50-a5d0-d25ccee5f37f` under a local
-`~/.claude/projects/<project>/` tree; the entry in the screenshot is uuid
-`39fc5996-f5d4-…`. That session has **8** `peer` attachments in its trunk,
+a local session with 8 `peer` attachments in its trunk under a local
+`~/.claude/projects/<project>/` tree; the entry is the entry shown in the
+issue's screenshot. That session has **8** `peer` attachments in its trunk,
 rendering today as 8 "User (steering)" cards, and its
 `subagents/` directory holds the ten `dep-scan-*` transcripts the messages
 come from — which makes it the natural end-to-end check for the
