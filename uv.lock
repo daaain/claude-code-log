@@ -193,7 +193,7 @@ requires-dist = [
     { name = "quickjs-ng", specifier = ">=0.15.1.1,<0.16" },
     { name = "textual", specifier = ">=6.5.0" },
     { name = "toml", specifier = ">=0.10.2" },
-    { name = "wenmode", specifier = ">=0.15.0" },
+    { name = "wenmode", specifier = ">=0.15.0,<0.16" },
 ]
 
 [package.metadata.requires-dev]

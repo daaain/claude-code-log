@@ -337,6 +337,8 @@ def transcript_rules(
     # table whose header row starts with a list marker (``- a | b``
     # over ``---|---``) becomes a list item containing a table with
     # header ``a`` instead of a table with header ``- a``.
+    if table is None:
+        raise RuntimeError("wenmode's github() preset no longer has a 'table' rule")
     rules.append(table)
     rules.append(BlockHtmlMarker())
     if resolve is not None:

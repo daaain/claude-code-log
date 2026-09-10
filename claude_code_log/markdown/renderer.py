@@ -1043,8 +1043,8 @@ class MarkdownRenderer(Renderer):
         # SHA-linkify before quoting so the substitution sees a clean
         # word boundary (a leading ``> `` would confuse the regex
         # anchor) and parity with the HTML side — assistant thinking
-        # there flows through the wenmode pipeline which already
-        # has the SHA plugin registered.
+        # there flows through the wenmode pipeline, whose SHA-link
+        # transform does the same job.
         quoted = self._quote(self._linkify_shas(content.thinking))
         return self._collapsible("Thinking...", quoted)
 

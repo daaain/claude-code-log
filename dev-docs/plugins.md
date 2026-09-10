@@ -694,7 +694,7 @@ a future plugin author copy-pasting your code with the wrong
 **`format_html` returning `None`.** Most plugins should return `None`
 to fall back to wenmode-rendered Markdown. Write a custom
 `format_html` only when the Markdown formulation can't capture what
-you want (e.g. embedded SVG, complex tables that wenmode mangles).
+you want (e.g. embedded SVG, or a table layout Markdown cannot express).
 
 **Don't escape Markdown manually for code spans.** Backslashes do not
 escape backticks inside inline code spans (CommonMark explicit). If
