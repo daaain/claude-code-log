@@ -8,6 +8,30 @@ from pathlib import Path
 from typing import List, Tuple
 
 
+def apply_write_pragmas(conn: sqlite3.Connection) -> None:
+    """Apply the durability pragmas every *writing* cache connection uses.
+
+    The two go together and must not be set separately:
+
+    - ``journal_mode = WAL`` persists in the database file, so it only has
+      to be set once — but it is not the whole fix on its own, because
+    - ``synchronous`` is per-connection and defaults to FULL, i.e. an fsync
+      on every commit. WAL at FULL still pays that (measured ~4x slower
+      than the pair over a full migration chain).
+
+    NORMAL keeps durability across application crashes — only a power or
+    OS crash can lose the last committed transaction — and the cache is
+    fully regenerable from the JSONL source, so that residual risk is
+    acceptable.
+
+    Lives here rather than in ``cache.py`` because ``cache.py`` imports
+    this module; both writers share this one definition so the pragma
+    pair cannot drift between them.
+    """
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL")
+
+
 def _get_migrations_dir() -> Path:
     """Get the migrations directory path."""
     return Path(__file__).parent
@@ -159,6 +183,11 @@ def run_migrations(db_path: Path) -> int:
     """
     conn = sqlite3.connect(db_path, timeout=30.0)
     conn.execute("PRAGMA foreign_keys = ON")
+    # This connection writes the whole migration chain, and on a brand-new
+    # database that is the first thing to touch the file — so without these
+    # the entire chain runs at SQLite's defaults (delete journal, fsync per
+    # commit) and only later connections get WAL.
+    apply_write_pragmas(conn)
 
     try:
         _ensure_schema_version_table(conn)

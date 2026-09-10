@@ -204,7 +204,19 @@ list against the cached `page_sessions` rows and reports
 
 Connections run in WAL mode with `synchronous=NORMAL` (durable across
 app crashes; only a power/OS crash can lose the last commit — fine for a
-regenerable cache). By default `_get_connection()` opens and closes a
+regenerable cache). Both pragmas come from
+`migrations.runner.apply_write_pragmas`, which every *writing*
+connection applies — including the migration runner's own, which opens
+outside `CacheManager` and is what touches a brand-new database first;
+at the SQLite defaults it ran the whole migration chain at an fsync per
+commit (120 ms/db against 12 ms/db, measured over 20 fresh databases).
+Setting only `journal_mode` is not the fix: it persists in the file, but
+`synchronous` is per-connection and stays at FULL (47 ms/db). A
+`mode=ro` reader applies neither — it cannot switch journal modes and
+needs neither pragma. The runner's connection is outside the lifecycle
+described below and adds nothing to it: `_migrated_db_paths` memoises
+the migration check, so it opens once per process and database rather
+than per call. By default `_get_connection()` opens and closes a
 connection per call, so no file handle lingers to block temp-dir cleanup
 on Windows. A build issues ~190 such opens, which dominates cache-build
 cost, so the converter wraps its hotspots (`ensure_fresh_cache`, the

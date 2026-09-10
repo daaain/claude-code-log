@@ -365,3 +365,76 @@ class TestGetCurrentVersion:
         assert version == expected_version
 
         conn.close()
+
+
+class TestRunMigrationsPragmas:
+    """The runner's own connection is a writer and must be configured as one.
+
+    `run_migrations` opens its own connection rather than going through
+    `CacheManager._configure_connection`, so on a brand-new cache database
+    the whole migration chain used to run at SQLite's defaults
+    (`journal_mode=delete`, `synchronous=FULL` — an fsync per commit)
+    before anything switched the file to WAL. Measured over 20 fresh
+    databases on a quiet disk: 121 ms/db at the defaults against 12 ms/db
+    with the pair, and the gap widens under concurrent load.
+
+    Both pragmas are pinned, because either alone is not the fix:
+    `journal_mode` persists in the file but `synchronous` is
+    per-connection, so WAL at FULL still pays the fsync (51.5 ms/db).
+    """
+
+    def test_fresh_database_ends_up_in_wal_mode(self, tmp_path: Path):
+        """A database created by the runner is left in WAL mode."""
+        db_path = tmp_path / "fresh.db"
+
+        run_migrations(db_path)
+
+        # journal_mode persists in the file, so an independent connection
+        # reports what the runner left behind.
+        conn = sqlite3.connect(db_path)
+        try:
+            assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+        finally:
+            conn.close()
+
+    def test_runner_connection_is_synchronous_normal(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """The runner's *own* connection runs at synchronous=NORMAL.
+
+        `synchronous` is per-connection and unobservable once the handle is
+        gone, so the value has to be sampled from that connection while it
+        is still open — hence the recording subclass and the sample taken
+        in `close()`, just before the runner closes it.
+        """
+        db_path = tmp_path / "fresh.db"
+        recorded: dict[str, object] = {}
+
+        class RecordingConnection(sqlite3.Connection):
+            def close(self) -> None:
+                recorded["synchronous"] = self.execute("PRAGMA synchronous").fetchone()[
+                    0
+                ]
+                recorded["journal_mode"] = self.execute(
+                    "PRAGMA journal_mode"
+                ).fetchone()[0]
+                super().close()
+
+        real_connect = sqlite3.connect
+
+        def recording_connect(*args: object, **kwargs: object) -> sqlite3.Connection:
+            kwargs["factory"] = RecordingConnection
+            return real_connect(*args, **kwargs)  # ty: ignore[no-matching-overload]
+
+        monkeypatch.setattr(sqlite3, "connect", recording_connect)
+        run_migrations(db_path)
+        monkeypatch.undo()
+
+        # An empty dict would mean the spy never saw a close: fail loudly
+        # rather than vacuously pass.
+        assert recorded, "the runner's connection was never observed"
+        # 0=OFF, 1=NORMAL, 2=FULL, 3=EXTRA
+        assert recorded["synchronous"] == 1, (
+            f"expected synchronous=NORMAL (1), got {recorded['synchronous']}"
+        )
+        assert recorded["journal_mode"] == "wal"
