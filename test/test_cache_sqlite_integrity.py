@@ -638,8 +638,35 @@ class TestMessageFileRelationship:
 class TestWALMode:
     """Tests for WAL journal mode."""
 
-    def test_wal_journal_mode_enabled(self, cache_manager):
-        """Verify WAL mode is active."""
+    def test_wal_journal_mode_enabled(self, cache_manager, isolated_db_path: Path):
+        """A cache connection is what puts the database into WAL.
+
+        `journal_mode` persists in the file, and the migration runner now
+        leaves a brand-new database in WAL already
+        (`migrations.runner.apply_write_pragmas`), so reading `wal` back off
+        a fresh cache connection proves only that *someone* set it — this
+        assertion stayed green with `_configure_connection`'s pragmas
+        removed. Forcing the file out of WAL first restores the
+        discrimination: only a connection that applies the pragma itself
+        can bring it back.
+
+        `synchronous` needs no such treatment: it is per-connection, so
+        `test_synchronous_normal` below cannot be satisfied by what another
+        connection did.
+        """
+        with cache_manager._get_connection() as conn:
+            conn.execute("PRAGMA journal_mode = DELETE")
+
+        # Positive control. Leaving WAL requires no other connection to be
+        # open and silently does nothing if one is, which would leave the
+        # file in WAL and make the assertion below pass vacuously again.
+        # Confirm from outside that the file really left WAL.
+        raw = sqlite3.connect(isolated_db_path)
+        try:
+            assert raw.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+        finally:
+            raw.close()
+
         with cache_manager._get_connection() as conn:
             row = conn.execute("PRAGMA journal_mode").fetchone()
             assert row[0] == "wal"
