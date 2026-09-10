@@ -43,7 +43,6 @@ from ..models import (
 # and the matching quote — anything else is in the value. The original
 # naïve ``[^>]*`` truncated openings at the first literal ``>``.
 ATTR_RUN = r'(?:\s+[\w][\w-]*(?:\s*=\s*(?:"[^"<]*"|\'[^\'<]*\'))?)*\s*'
-_ATTR_RUN = ATTR_RUN
 
 # One full <teammate-message ...>...</teammate-message> block. Attribute
 # parsing happens on the opening tag's attribute run (captured group 1).
@@ -58,7 +57,6 @@ _ATTR_RE = re.compile(r'(\w[\w-]*)\s*=\s*"([^"]*)"|(\w[\w-]*)\s*=\s*\'([^\']*)\'
 
 # System teammate_id marks terminate/status notifications.
 SYSTEM_ID = "system"
-_SYSTEM_ID = SYSTEM_ID
 
 
 def has_teammate_message(text: str) -> bool:
@@ -77,7 +75,7 @@ def iter_teammate_blocks(text: str) -> Iterable[TeammateMessageBlock]:
             body=body,
             color=attrs.get("color"),
             summary=attrs.get("summary"),
-            is_system=(teammate_id == _SYSTEM_ID),
+            is_system=(teammate_id == SYSTEM_ID),
         )
 
 

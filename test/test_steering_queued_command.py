@@ -841,8 +841,7 @@ class TestPeerQueuedCommand:
             ]
         )
         assert "System notification." in html
-        assert "system" in html
-        assert "teammate-system" in html
+        assert 'class="teammate-message teammate-system"' in html
 
     def test_human_and_absent_origin_keep_user_steering_card(self):
         """Human origins (or absent origin keys) continue to render as
