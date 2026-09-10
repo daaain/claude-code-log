@@ -694,6 +694,7 @@ class TestConnectionCensus:
 
     @staticmethod
     def _is_sqlite_connect(node: ast.AST) -> bool:
+        """Is this node a literal `sqlite3.connect(...)` call?"""
         return (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
@@ -717,6 +718,9 @@ class TestConnectionCensus:
         found: dict[tuple[str, str], int] = {}
 
         def visit(node: ast.AST, rel: str, scope: tuple[str, ...]) -> None:
+            """Count this node if it connects, then recurse, deepening
+            `scope` at each class or function so a call is attributed to
+            the innermost one enclosing it."""
             if self._is_sqlite_connect(node):
                 key = (rel, ".".join(scope) if scope else "<module>")
                 found[key] = found.get(key, 0) + 1

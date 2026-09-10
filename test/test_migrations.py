@@ -412,6 +412,7 @@ class TestRunMigrationsPragmas:
 
         class RecordingConnection(sqlite3.Connection):
             def close(self) -> None:
+                """Sample both pragmas off this handle before it goes."""
                 # `run_migrations` closes in a `finally`, so this runs on its
                 # error path too — where the handle may be unusable. Let the
                 # original exception through rather than masking it with a
@@ -431,6 +432,7 @@ class TestRunMigrationsPragmas:
         real_connect = sqlite3.connect
 
         def recording_connect(*args: object, **kwargs: object) -> sqlite3.Connection:
+            """Open through the recording subclass instead of the default."""
             kwargs["factory"] = RecordingConnection
             return real_connect(*args, **kwargs)  # ty: ignore[no-matching-overload]
 
@@ -471,6 +473,7 @@ class TestRunMigrationsConnectionLifecycle:
         real_connect = sqlite3.connect
 
         def tracking_connect(*args: object, **kwargs: object) -> sqlite3.Connection:
+            """Open normally, but keep every handle so it can be inspected."""
             conn = real_connect(*args, **kwargs)  # ty: ignore[no-matching-overload]
             opened.append(conn)
             return conn

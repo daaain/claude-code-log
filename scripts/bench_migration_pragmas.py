@@ -81,10 +81,12 @@ def _no_pragmas(conn: sqlite3.Connection) -> None:
 
 
 def _wal_only(conn: sqlite3.Connection) -> None:
+    """The trap arm: WAL without the pairing that makes it pay off."""
     conn.execute("PRAGMA journal_mode = WAL")
 
 
 def _synchronous_off(conn: sqlite3.Connection) -> None:
+    """The floor arm: no fsync at all. For scale, not as a proposal."""
     conn.execute("PRAGMA synchronous = OFF")
 
 
@@ -147,6 +149,7 @@ def _time_arm(
 
 
 def main() -> None:
+    """Parse arguments, time every arm per repeat, report medians."""
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )

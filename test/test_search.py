@@ -1045,6 +1045,7 @@ class TestBuildSearchIndexConnection:
 
         class RecordingConnection(sqlite3.Connection):
             def close(self) -> None:
+                """Sample both pragmas off this handle before it goes."""
                 try:
                     recorded["synchronous"] = self.execute(
                         "PRAGMA synchronous"
@@ -1057,6 +1058,7 @@ class TestBuildSearchIndexConnection:
                 super().close()
 
         def recording_connect(*args: object, **kwargs: object) -> sqlite3.Connection:
+            """Open through the recording subclass instead of the default."""
             kwargs["factory"] = RecordingConnection
             return real_connect(*args, **kwargs)  # ty: ignore[no-matching-overload]
 
