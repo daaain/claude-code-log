@@ -1593,3 +1593,48 @@ def test_colliding_prompts_are_disambiguated_by_teammate_name(tmp_path: Path) ->
 
     assert seen.get("tu_spawn_worker-A") == by_name["worker-A"]
     assert seen.get("tu_spawn_worker-B") == by_name["worker-B"]
+
+
+def test_conflicting_names_are_left_unresolved_not_matched_on_prompt(
+    tmp_path: Path,
+) -> None:
+    """Two names that disagree are evidence the pair is wrong.
+
+    The prompt-only fallback exists for spawns or sidecars that carry no
+    name. When *both* sides are named and pass 1 did not pair them, the
+    names positively disagree — falling through to prompt-only would hand
+    the sidecar to a differently-named spawn on filename order, which is
+    the mis-attribution the name pass exists to prevent. Leaving it
+    unlinked is the better failure: an absent transcript invites a
+    re-run, a confidently mislabelled one invites a wrong conclusion.
+    """
+    trunk, by_name = _colliding_prompt_fixture(tmp_path)
+
+    # Rename the sidecar that would have paired with worker-B so that no
+    # spawn carries its name, leaving one named orphan and one free
+    # named spawn that share a prompt.
+    subagents = trunk.parent / trunk.stem / "subagents"
+    orphan_id = by_name["worker-B"]
+    meta = subagents / f"agent-{orphan_id}.meta.json"
+    import json as _json
+
+    payload = _json.loads(meta.read_text(encoding="utf-8"))
+    payload["name"] = "worker-RENAMED"
+    meta.write_text(_json.dumps(payload), encoding="utf-8")
+
+    messages = load_transcript(trunk, cache_manager=None, silent=True)
+
+    seen: dict[str, str] = {}
+    for m in messages:
+        if not isinstance(m, UserTranscriptEntry) or not m.agentId:
+            continue
+        for c in m.message.content:
+            if isinstance(c, ToolResultContent):
+                seen[c.tool_use_id] = m.agentId
+
+    # worker-A still pairs by name.
+    assert seen.get("tu_spawn_worker-A") == by_name["worker-A"]
+    # worker-B's spawn must NOT be claimed by the renamed orphan.
+    assert "tu_spawn_worker-B" not in seen, (
+        "a named sidecar claimed a differently-named spawn via the prompt-only fallback"
+    )

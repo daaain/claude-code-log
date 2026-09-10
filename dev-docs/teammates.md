@@ -349,8 +349,15 @@ whose stem isn't in the agent-id set, and for each:
    block (the canonical teammate-spawn shape), extract the body via
    `find_team_lead_body`. Otherwise use the raw text.
 3. Normalize via `_normalize_prompt`: collapse whitespace, lowercase.
-4. Compare against each unresolved spawn tool_use's `prompt` input
-   (similarly normalized). Exact match wins.
+4. Match in **two passes**. Pass 1 pairs a candidate with an unresolved
+   spawn only when the normalized prompts match **and** the sidecar's
+   `name` equals the spawn's `input.name`; it runs to completion over
+   every candidate before pass 2 starts, so a named candidate cannot be
+   claimed by a nameless one. Pass 2 then takes whatever is left on an
+   exact normalized-prompt match alone — **but only when at least one
+   side has no name.** Two names that disagree are a positive signal
+   that the pair is wrong, so it is left unresolved rather than matched
+   on filename order.
 5. Back-patch the spawn tool_result's `agentId` field, add to the agent-id
    set, and **remove the matched entry from the unresolved pool** so a
    second candidate file with the same prompt can't claim it (this last

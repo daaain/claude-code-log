@@ -1028,13 +1028,23 @@ def _link_subagents_by_prompt_hash(
         else:
             unmatched.append((candidate_agent_id, candidate_norm, candidate_name))
 
-    # Pass 2 — prompt only, unchanged behaviour. Covers every spawn that
-    # carries no name (plain ``Task`` sub-agents, older transcripts) and
-    # any teammate whose name didn't pair, so a missing or renamed
-    # sidecar degrades to the previous result rather than to no link.
-    for candidate_agent_id, candidate_norm, _candidate_name in unmatched:
-        for i, (norm_prompt, _spawn_name, _entry) in enumerate(remaining):
-            if norm_prompt == candidate_norm:
+    # Pass 2 — prompt only, for the cases where a name cannot decide.
+    # Covers every spawn that carries no name (plain ``Task`` sub-agents,
+    # older transcripts) and every sidecar without one, so those degrade
+    # to the previous prompt-only result rather than to no link.
+    #
+    # **But only when at least one side is nameless.** When both carry a
+    # name and pass 1 did not pair them, the names positively DISAGREE —
+    # matching anyway would hand a named sidecar to a differently-named
+    # spawn on filename order, which is exactly the mis-attribution pass 1
+    # exists to prevent. An unlinked transcript invites a re-run; a
+    # confidently mislabelled one invites a wrong conclusion, so the
+    # ambiguous pair is left unresolved on purpose.
+    for candidate_agent_id, candidate_norm, candidate_name in unmatched:
+        for i, (norm_prompt, spawn_name, _entry) in enumerate(remaining):
+            if norm_prompt == candidate_norm and (
+                candidate_name is None or spawn_name is None
+            ):
                 _claim(candidate_agent_id, i)
                 break
 
