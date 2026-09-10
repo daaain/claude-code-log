@@ -1290,13 +1290,20 @@ class TestTeammatesFactoryIntegration:
 # ---------------------------------------------------------------------------
 
 
-def _spawn_fixture(tmp_path: Path, spawn_tool_name: str) -> Path:
+def _spawn_fixture(tmp_path: Path, spawn_tool_name: str, named: bool = True) -> Path:
     """A trunk session that spawns one teammate, plus its subagent file.
 
     The sidecar deliberately carries no ``toolUseId`` (current Claude Code
     omits it for in-process teammates) and the spawn's ``toolUseResult``
     carries no ``agentId``, so the prompt-hash fallback is the *only*
     path that can link the two.
+
+    ``named`` selects which of the fallback's two passes does the work:
+    with a ``name`` on both the spawn and the sidecar, the name-aware
+    pass 1 claims it; without one it falls through to prompt-only
+    matching in pass 2. The tool-name gate under test sits upstream of
+    both, so parametrising over this proves the gate holds whichever
+    pass happens to run.
     """
     import json
 
@@ -1343,7 +1350,11 @@ def _spawn_fixture(tmp_path: Path, spawn_tool_name: str) -> Path:
                                 "type": "tool_use",
                                 "id": "tu_spawn_001",
                                 "name": spawn_tool_name,
-                                "input": {"name": "worker", "prompt": prompt},
+                                "input": (
+                                    {"name": "worker", "prompt": prompt}
+                                    if named
+                                    else {"prompt": prompt}
+                                ),
                             }
                         ],
                         "stop_reason": None,
@@ -1378,7 +1389,8 @@ def _spawn_fixture(tmp_path: Path, spawn_tool_name: str) -> Path:
     # No ``toolUseId`` here — that is what makes the sidecar path unusable.
     (subagents / f"agent-{agent_id}.meta.json").write_text(
         json.dumps(
-            {"agentType": "worker", "name": "worker", "taskKind": "in_process_teammate"}
+            {"agentType": "worker", "taskKind": "in_process_teammate"}
+            | ({"name": "worker"} if named else {})
         ),
         encoding="utf-8",
     )
@@ -1424,9 +1436,10 @@ def _spawn_fixture(tmp_path: Path, spawn_tool_name: str) -> Path:
     return trunk
 
 
+@pytest.mark.parametrize("named", [True, False], ids=["named", "nameless"])
 @pytest.mark.parametrize("spawn_tool_name", ["Task", "Agent"])
 def test_prompt_hash_fallback_covers_both_spawn_tool_names(
-    tmp_path: Path, spawn_tool_name: str
+    tmp_path: Path, spawn_tool_name: str, named: bool
 ) -> None:
     """The teammate spawn tool is named ``Agent``, not ``Task``.
 
@@ -1434,7 +1447,7 @@ def test_prompt_hash_fallback_covers_both_spawn_tool_names(
     dropped every teammate transcript of a modern session — the subagent
     JSONLs were never even opened.
     """
-    trunk = _spawn_fixture(tmp_path, spawn_tool_name)
+    trunk = _spawn_fixture(tmp_path, spawn_tool_name, named=named)
     messages = load_transcript(trunk, cache_manager=None, silent=True)
 
     agent_id = "aworker-0123456789abcdef"
