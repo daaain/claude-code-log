@@ -399,6 +399,45 @@ def subagents_fingerprint(jsonl_path: Path) -> str:
 _CONTENT_SCHEMA_SALT = "1"
 
 
+def _nested_models(annotation: object) -> Generator[type[BaseModel], None, None]:
+    """Every Pydantic model reachable through a type annotation.
+
+    Unwraps whatever containers the annotation is wrapped in -- ``Optional``,
+    unions, ``List``, ``Dict`` -- because what matters is which models can end
+    up serialized, not how they are addressed.
+    """
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        yield annotation
+        return
+    for arg in get_args(annotation):
+        yield from _nested_models(arg)
+
+
+def _content_models() -> List[type[BaseModel]]:
+    """Every model whose fields can land in a stored content blob.
+
+    ``model_dump()`` serializes the whole tree, not just the entry's own
+    fields, so a digest over the top-level union members alone leaves the
+    #320 hazard live one level down -- and the content-item models are
+    exactly where new fields actually appear. Measured before this walk
+    existed: adding a field to ``TextContent`` left the digest unmoved.
+
+    Sorted by name so the digest does not depend on traversal order.
+    """
+    seen: Dict[str, type[BaseModel]] = {}
+    queue: List[type[BaseModel]] = list(get_args(TranscriptEntry))
+    while queue:
+        model = queue.pop()
+        key = model.__module__ + "." + model.__qualname__
+        if key in seen:
+            continue
+        seen[key] = model
+        for field in model.model_fields.values():
+            for nested in _nested_models(field.annotation):
+                queue.append(nested)
+    return sorted(seen.values(), key=lambda m: m.__module__ + "." + m.__qualname__)
+
+
 @functools.lru_cache(maxsize=1)
 def content_schema_version() -> str:
     """Digest of the shape of what we store in ``messages.content``.
@@ -416,13 +455,20 @@ def content_schema_version() -> str:
     exactly a remembered step nobody remembered. Add a field and the digest
     moves on its own.
 
+    It covers the whole serialized *tree* (``_content_models``), not just the
+    entry types: ``model_dump()`` writes nested models too, so a digest over
+    the top-level union alone would leave the same hazard live one level
+    down — in the content-item models, which is where fields actually get
+    added. Measured while this was still top-level-only: a new field on
+    ``TextContent`` left the digest unmoved.
+
     Field *names* only — not types or ordering — so the digest is stable
     across Python and Pydantic versions and cannot mass-invalidate a 3 GB
     cache on a dependency upgrade. Semantic changes that keep every name are
     invisible here and are what ``_CONTENT_SCHEMA_SALT`` is for.
     """
     parts = [_CONTENT_SCHEMA_SALT]
-    for model in get_args(TranscriptEntry):
+    for model in _content_models():
         parts.append(model.__name__ + ":" + ",".join(sorted(model.model_fields)))
     digest = hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
     return digest[:12]

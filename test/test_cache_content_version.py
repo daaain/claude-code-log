@@ -22,9 +22,10 @@ import pytest
 from claude_code_log.cache import (
     CacheManager,
     _cache_row_is_fresh,
+    _content_models,
     content_schema_version,
 )
-from claude_code_log.models import UserTranscriptEntry
+from claude_code_log.models import TextContent, UserTranscriptEntry
 
 
 def _entry(uuid: str, text: str) -> str:
@@ -121,6 +122,39 @@ class TestVersionTracksTheModels:
             "unchanged, so existing cached blobs would keep being served "
             "without it (issue #320)"
         )
+
+    def test_a_nested_field_moves_the_version(self, monkeypatch: pytest.MonkeyPatch):
+        """The same pin one level down, and the level that actually moves.
+
+        ``model_dump()`` serializes the whole tree, so a field added to a
+        *content-item* model is every bit as absent from an old blob as a
+        field added to the entry — and content items are where new fields
+        really appear. A digest over the top-level union alone did not move
+        for this case (measured), which is why the walk exists.
+        """
+        before = content_schema_version()
+        content_schema_version.cache_clear()
+        monkeypatch.setitem(
+            TextContent.model_fields,
+            "someNewNestedField",
+            TextContent.model_fields["text"],
+        )
+        after = content_schema_version()
+        content_schema_version.cache_clear()
+        assert after != before, (
+            "a field added to a nested content model left the content version "
+            "unchanged, so blobs written without it would keep being served "
+            "(issue #320, one level down)"
+        )
+
+    def test_the_walk_reaches_the_content_item_models(self):
+        """Canary on the traversal itself, independent of any digest value:
+        if the content items stop being reachable, the test above would keep
+        passing for the wrong reason only if some other model happened to
+        move — this names the requirement directly."""
+        reached = {m.__name__ for m in _content_models()}
+        assert "TextContent" in reached
+        assert "UserTranscriptEntry" in reached, "sanity: top level still covered"
 
     def test_version_is_stable_across_calls(self):
         """It must not drift on its own: a digest that moved per process
