@@ -168,14 +168,12 @@ Watch specifically:
 
 ## Reference data
 
-Issue #309 carries the screenshot. The reference session is
-a local session with 8 `peer` attachments in its trunk under a local
-`~/.claude/projects/<project>/` tree; the entry is the entry shown in the
-issue's screenshot. That session has **8** `peer` attachments in its trunk,
-rendering today as 8 "User (steering)" cards, and its
-`subagents/` directory holds the ten `dep-scan-*` transcripts the messages
-come from — which makes it the natural end-to-end check for the
-cross-link once #316 has merged.
+Issue #309 carries the screenshot, and the entry shown in it is the one the
+fixture covers. The reference session lives under a local
+`~/.claude/projects/<project>/` tree and has **8** `peer` attachments in its
+trunk, rendering today as 8 "User (steering)" cards; its `subagents/`
+directory holds the ten `dep-scan-*` transcripts the messages come from —
+which makes it the natural end-to-end check for the cross-link.
 
 Verify a candidate fix against real data as well as fixtures: re-render
 that session and confirm zero literal `<agent-message` occurrences remain
