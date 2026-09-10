@@ -888,8 +888,14 @@ class TestRemoteCommitResolution:
         would accept: uppercase hex and abbreviations under 7 chars."""
         repo = _Repo(tmp_path)
         pushed = repo.pushed[0]
-        assert resolve_sha(repo.cwd, pushed[:7]) == _url(pushed)
-        for token in (pushed[:7].upper(), pushed[:6], pushed[:7] + " "):
+        # Uppercasing only changes a prefix with a letter in it; an
+        # all-digit 7-char prefix (~4% of SHAs) is a valid token as is.
+        with_letter = next(
+            (pushed[:n] for n in range(7, 41) if not pushed[:n].isdigit()), pushed
+        )
+        assert with_letter.upper() != with_letter, "all-digit SHA"
+        assert resolve_sha(repo.cwd, with_letter) == _url(pushed)
+        for token in (with_letter.upper(), pushed[:6], pushed[:7] + " "):
             assert resolve_sha(repo.cwd, token) is None
 
     def test_commit_fetched_later_is_found_once_the_list_is_stale(
