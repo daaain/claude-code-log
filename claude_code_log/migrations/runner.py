@@ -186,14 +186,22 @@ def run_migrations(db_path: Path) -> int:
         Number of migrations applied
     """
     conn = sqlite3.connect(db_path, timeout=30.0)
-    conn.execute("PRAGMA foreign_keys = ON")
-    # This connection writes the whole migration chain, and on a brand-new
-    # database that is the first thing to touch the file — so without these
-    # the entire chain runs at SQLite's defaults (delete journal, fsync per
-    # commit) and only later connections get WAL.
-    apply_write_pragmas(conn)
-
+    # Everything after the connect goes inside the try, so no failure can
+    # leave the handle open. That matters most for the pragmas: they are the
+    # first statements here that touch the file, so they are what raises on a
+    # corrupt database — and a leaked handle there is not merely untidy.
+    # Windows refuses to delete an open file, so it would defeat
+    # `CacheManager._rebuild_corrupt_database`, whose whole job is to discard
+    # an unreadable cache and rebuild it. The same care is taken for the same
+    # reason in `cache.py::_open_connection`.
     try:
+        conn.execute("PRAGMA foreign_keys = ON")
+        # This connection writes the whole migration chain, and on a brand-new
+        # database that is the first thing to touch the file — so without these
+        # the entire chain runs at SQLite's defaults (delete journal, fsync per
+        # commit) and only later connections get WAL.
+        apply_write_pragmas(conn)
+
         _ensure_schema_version_table(conn)
         pending = get_pending_migrations(conn)
 

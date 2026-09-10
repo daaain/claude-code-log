@@ -446,3 +446,45 @@ class TestRunMigrationsPragmas:
             f"expected synchronous=NORMAL (1), got {recorded['synchronous']}"
         )
         assert recorded["journal_mode"] == "wal"
+
+
+class TestRunMigrationsConnectionLifecycle:
+    """`run_migrations` must not leak its handle when a statement raises.
+
+    The pragmas are the first statements in `run_migrations` that touch the
+    file, so on a corrupt database they are what raises. Leaving the
+    connection open there is not merely untidy: Windows refuses to delete an
+    open file, so it defeats `CacheManager._rebuild_corrupt_database`, whose
+    entire job is to discard an unreadable cache and rebuild it. Linux
+    deletes open files happily, so no Linux run can reproduce the symptom —
+    which is why the *invariant* is pinned here rather than the symptom.
+    """
+
+    def test_a_raising_pragma_still_closes_the_connection(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A corrupt database raises, and leaves no open handle behind."""
+        db_path = tmp_path / "corrupt.db"
+        db_path.write_bytes(b"this is definitely not a database" * 500)
+
+        opened: list[sqlite3.Connection] = []
+        real_connect = sqlite3.connect
+
+        def tracking_connect(*args: object, **kwargs: object) -> sqlite3.Connection:
+            conn = real_connect(*args, **kwargs)  # ty: ignore[no-matching-overload]
+            opened.append(conn)
+            return conn
+
+        monkeypatch.setattr(sqlite3, "connect", tracking_connect)
+        with pytest.raises(sqlite3.DatabaseError):
+            run_migrations(db_path)
+        monkeypatch.undo()
+
+        # An empty list would mean the spy never saw a connect, so the
+        # assertion below would be vacuously true.
+        assert opened, "run_migrations never opened a connection"
+        for conn in opened:
+            # Asks the connection's actual state rather than trusting a
+            # recorded close() call: a closed handle refuses to operate.
+            with pytest.raises(sqlite3.ProgrammingError):
+                conn.execute("SELECT 1")
