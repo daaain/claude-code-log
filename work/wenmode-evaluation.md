@@ -1,8 +1,16 @@
-# wenmode as a mistune replacement — evaluation (#323)
+# wenmode as a mistune replacement — evaluation and migration (#323)
 
-**Verdict: not a 100% backward-compatible replacement, and not a
-meaningful speed-up on our workload.** Measured 2026-09-10 against
-wenmode 0.15.0 and mistune 3.3.0.
+**Verdict, first pass (2026-09-10): not a byte-identical replacement,
+and not a meaningful speed-up on our workload.** Measured against
+wenmode 0.15.0 and mistune 3.3.0; sections *Question* through
+*Integration surface* below are that evaluation, kept as the record.
+
+**Then the bar changed.** Byte-identity was the right question for
+"is this a drop-in", and the wrong one for "should we move": mistune's
+own bugs are not worth reproducing, and the integration surface
+measured ~85% smaller on wenmode. The migration was done; the section
+*Migration: every rendering difference, classified* at the end is the
+deliverable for its review.
 
 ## Question
 
@@ -442,3 +450,112 @@ Compare against `mistune.create_markdown(plugins=["strikethrough",
 "footnotes", "table", "url", "task_lists", "def_list"], escape=True,
 hard_wrap=True)` over the bodies extracted from a corpus (every
 `message.content` string and every `{"type": "text"}` item).
+
+## Migration: every rendering difference, classified
+
+The bar for the migration: reproduce what is *desirable*, not what is
+merely current; every remaining difference in rendered output is
+labelled improvement, neutral or regression, with the reason. Same
+corpora and method as above, old pipeline reconstructed from `75b7fc9`
+(mistune 3.3.0 with our plugins, `escape=True`, `hard_wrap=True`),
+new pipeline `render_markdown` as shipped, both with the repository
+bound so SHA links fire.
+
+What the migration keeps on purpose (each a handler or rule in
+`markdown_plugins.py` / `html/utils.py`): every soft break renders as
+`<br />`; strikethrough needs `~~`; block-level raw HTML is escaped
+*and* wrapped in `<p>`; bare URLs drop a trailing `"`/`'`; e-mail
+shaped tokens are not autolinked; link targets use mistune's scheme
+denylist, not wenmode's allowlist; the table rule runs after the
+other block openers; the footnotes heading is visually hidden.
+
+### Bodies that differ
+
+| corpus | differ | after the four markup-only normalisations | unexplained |
+|---|---:|---:|---:|
+| real (5936 bodies) | 143 (2.4%) | 29 | 0 |
+| fixtures (957 bodies) | 65 (6.8%) | 21 | 0 |
+
+### Causes
+
+| verdict | cause | real | fixtures |
+|---|---|---:|---:|
+| neutral | table cells: no 2-space indent, `align=` instead of `style="text-align:…"` | 77 | 11 |
+| neutral | loose list item: newline between `<li>` and `<p>` | 59 | 31 |
+| neutral | tight item: newline before a nested `<ul>`/`<pre>`/… | 29 | 17 |
+| neutral | indented code block keeps its final newline (spec output) | 2 | 6 |
+| neutral | task list: GFM checkbox markup (no `task-list-item` classes; nothing styled them) | 2 | 1 |
+| improvement | backslash-newline is a hard break, not a stray literal `\` (Claude Code's shift-enter writes these) | 0 | 11 |
+| improvement | bare URL no longer swallows a trailing `**` or `"` into the href | 7 | 2 |
+| improvement | character references decoded: `&amp;amp;` shows `&`, `&copy;` shows © | 6 | 1 |
+| improvement | list tightness per CommonMark where mistune rendered loose (reference: markdown-it-py and commonmark.py agree) | 5 | 1 |
+| improvement | table rows with ragged cell counts no longer dropped | 2 | 0 |
+| improvement | pipes in plain output no longer mis-parsed as a table (mistune dropped a line each time) | 0 | 2 |
+| improvement | `\|` inside a code span in a table cell unescaped (GFM) | 1 | 0 |
+| neutral | raw-HTML block boundary inside lists/paragraphs — pasted `<bash-stdout>`/`<analysis>` blobs where the two parsers split differently; both are garbage-in | 15 | 5 |
+| neutral | backtick-escape edge case inside a code span | 3 | 0 |
+| neutral | pasted diff text: an empty `+` line ends the list (spec) | 2 | 0 |
+| neutral | code span inside a list item: continuation indent stripped (spec) | 1 | 0 |
+| **regression** | wenmode: a list followed by a blank line and a *different* list marker renders loose | 2 | 0 |
+| **regression** | wenmode: `N.` (N ≠ 1) after a dedented bullet item joins the item instead of starting a list (hits Claude Code's own compaction prompt) | 1 | 0 |
+| **regression** | wenmode: a line after an indented code block inside a list item is lazily continued (pasted diffs) | 1 | 0 |
+
+The three regressions are spacing or grouping, not content loss, and
+each is a wenmode parser bug with a reproduction below. The two
+regressions found and *fixed* during the migration — quotes swallowed
+into bare-URL hrefs, and `cci:`/`file:line` link targets dropped by
+the allowlist — no longer appear in the table.
+
+### Markdown output
+
+The Markdown path does not re-render at all any more:
+`_protect_html_tags` splices entity-escaped copies over raw-HTML node
+ranges (and over a `<` in text that a lax viewer could read as a tag
+start), and `linkify_shas_in_text` splices links; everything else is
+byte-identical to the source. The seven Markdown snapshots are
+unchanged. Compared with the mistune round-trip on the 531 real bodies
+containing `<`, 210 now differ — all of them the *old* renderer's
+normalisations disappearing: leading whitespace it stripped, `\``
+escapes it dropped, an autolink it rewrote.
+
+### The escape contract, proved
+
+38 XSS payloads (script tags, event handlers, `javascript:`/`data:`/
+`vbscript:` in every link and image form, entity- and comment-wrapped
+scripts, payloads inside every block construct) through all three HTML
+renderers: no live tag, no `on*` attribute, no unsafe scheme survives.
+`test/test_xss_browser.py` (browser) and `test/test_markdown_rendering.py`
+pass unchanged.
+
+### wenmode 0.15 bugs found, with reproductions
+
+Each verified against the CommonMark reference implementation
+(`commonmark.py` 0.9.1) and markdown-it-py 4.2 (`commonmark` preset),
+which agree with each other and disagree with wenmode.
+
+1. **Table rule blocks list interruption.** `Wenmode([Table, *commonmark()]).render("a\n- b | c")`
+   gives one paragraph; the reference gives paragraph + list. Cause:
+   `_parser/interrupts.py` asks only the *first* matching block opener
+   whether it may interrupt a paragraph, and `table` is first in the
+   preset. Worked around here by ordering the table rule last.
+2. **Trailing blank lines make a list loose.** `"- a\n- b\n\n1. c\n"`
+   and `"- a\n- b\n\n\ntext\n"` both render the bullet list loose.
+   Cause: `rules/blocks/list.py::consume_blank_list_line` sets
+   `item_spread` when the line after the blank is *any* list marker, or
+   another blank followed by content the item would not own.
+3. **A non-1 ordered marker after a dedented bullet item.**
+   `"  - a\n2. b\n"` renders `2. b` as a continuation line of item `a`;
+   the reference closes the bullet list and starts `<ol start="2">`.
+   The "must start at 1 to interrupt a paragraph" rule is being applied
+   against a container the line has already fallen out of.
+4. **Lazy continuation after an indented code block in a list item.**
+   `"+ x\n\n      code\n@@ y\n"`-shaped input (a pasted diff) keeps the
+   `@@ y` line inside the item; the reference closes the item since a
+   code block cannot be lazily continued.
+5. **Extended autolink keeps trailing quotes.** `'x "https://a/b"'`
+   links to `https://a/b%22`; cmark-gfm strips `"` and `'` as trailing
+   punctuation. Worked around here (`TranscriptAutolink`).
+
+Feature requests that would remove local code here: an option on
+`Strikethrough` for the two-tilde-only form; a disallowed-tags
+override that escapes fully rather than half.

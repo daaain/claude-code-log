@@ -48,7 +48,7 @@ uvx claude-code-log@latest --open-browser
 - **Date Range Filtering**: Filter messages by date range using natural language (e.g., "today", "yesterday", "last week")
 - **Rich Message Types**: Support for user/assistant messages, tool use/results, thinking content, images
 - **System Command Visibility**: Show system commands (like `init`) in expandable details with structured parsing
-- **Markdown Rendering**: Server-side markdown rendering with syntax highlighting using mistune
+- **Markdown Rendering**: Server-side markdown rendering with syntax highlighting using wenmode
 - **Detail Levels & Compact Mode**: `--detail full|high|low|minimal|user-only` filters by verbosity and `--compact` merges repeated section headings — pairs well with `--format md` to feed past conversations back to an LLM for analysis or experience building
 - **Floating Navigation**: Always-available back-to-top button and filter controls
 - **CLI Interface**: Simple command-line tool using Click
@@ -231,7 +231,7 @@ When processing all projects, the tool generates:
 - **Session Navigation**: Interactive table of contents with session summaries and timestamp ranges
 - **Token Usage Display**: Individual message and session-level token consumption tracking
 - **Syntax Highlighting**: Code blocks properly formatted with markdown rendering
-- **Markdown Support**: Server-side rendering with mistune including:
+- **Markdown Support**: Server-side rendering with wenmode including:
   - Headers, lists, emphasis, strikethrough
   - Code blocks and inline code
   - Links, images, and tables

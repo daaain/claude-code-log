@@ -35,6 +35,7 @@ for user-facing operations docs see [`docs/`](../docs/).
 | Depth filter | renderer.py § Depth filtering, `models.RenderingDepth` | inlined below (§ 2.6) |
 | Image export | [`image_export.py`](../claude_code_log/image_export.py) | inlined below (§ 2.7) |
 | Performance profiling | [`renderer_timings.py`](../claude_code_log/renderer_timings.py) | inlined below (§ 2.8) |
+| Markdown engine (wenmode) | [`markdown_plugins.py`](../claude_code_log/markdown_plugins.py), `html/utils.py`, `markdown/renderer.py` | inlined below (§ 2.17) |
 | Intra-project render fan-out | [`render_pool.py`](../claude_code_log/render_pool.py) (mechanism) + [`render_dispatch.py`](../claude_code_log/render_dispatch.py) (policy) | inlined below (§ 2.10) |
 | Diagnosing hangs (SIGUSR1) | [`cli.py`](../claude_code_log/cli.py) `_install_stack_dump_signal` | inlined below (§ 2.11) |
 | Watch mode / live page updates | [`watch.py`](../claude_code_log/watch.py), `html/templates/components/live_update.js` | inlined below (§ 2.15); design in [`work/watch-mode.md`](../work/watch-mode.md); user-facing in [`docs/live-updates.md`](../docs/live-updates.md) |
@@ -533,7 +534,7 @@ wholesale. On a 118-file, 12k-message project that is 22,420
 
 [`render_cache.py`](../claude_code_log/render_cache.py) memoizes the two
 dominant leaves of that work — Pygments highlighting
-(`html/renderer_code.py::highlight_code_with_pygments`) and mistune
+(`html/renderer_code.py::highlight_code_with_pygments`) and wenmode
 Markdown (`html/utils.py::_render_markdown_memoized`, behind
 `render_markdown` / `render_user_markdown` / `render_markdown_inline`).
 Measured effect on that project: 12.4s → 8.7s wall, with all 88 output
@@ -1402,6 +1403,65 @@ Resumption only helps a resident loop — a one-shot run, the TUI, and
 every tick-one still parse whole. Persisting `(prefix_len, prefix_hash)`
 in `cached_files` would extend it across processes; that migration was
 considered and not needed for the case that motivated it.
+
+### 2.17 Markdown engine
+
+Markdown is rendered by [wenmode](https://github.com/lepture/wenmode)
+(mistune's successor by the same author; the switch is #323). Three
+pipelines share one rule set, built by
+[`markdown_plugins.transcript_rules()`](../claude_code_log/markdown_plugins.py):
+wenmode's `github` preset with strikethrough restricted to `~~two~~`
+(prose says "~2, ~6 min" all the time), bare-URL autolinks that drop a
+trailing quote and never link e-mail-shaped tokens (`ruff@0.6.0`,
+`git@github.com:`), wenmode's GFM tag filter off (every raw-HTML node
+is escaped by the renderer, so a half-escaped `&lt;script>` would be
+worse than none), the table rule ordered after the other block openers
+(a wenmode 0.15 quirk: with it first, `- b | c` right after a paragraph
+line could not start a list), and the definition-list plugin.
+
+| pipeline | where | what is added |
+|---|---|---|
+| HTML, assistant/tool/web content | `html/utils.py::_get_markdown_renderer` | `_TranscriptHTMLRenderer(escape=True)`; handlers: Pygments on fenced code with a language, every soft break as `<br />` (mistune's `hard_wrap`), escaped block-level raw HTML wrapped in `<p>`; the SHA-link transform |
+| HTML, user content | `html/utils.py::_get_user_markdown_renderer` | the same pipeline as a distinct singleton (the render memo keys on which one rendered) |
+| Markdown output | `markdown/renderer.py::_protect_html_tags`, `markdown_plugins.linkify_shas_in_text` | no renderer at all — see below |
+
+**The escape contract is not a preference.** Transcript content is
+untrusted from every source (#245): the assistant echoes arbitrary
+user, file and web input verbatim. Both HTML singletons render raw
+HTML as entity-escaped text, and the renderer's URL policy is
+mistune's denylist (`javascript:`, `vbscript:`, `data:` except images,
+`file:`, …) rather than wenmode's allowlist — transcripts link to
+`cci:` editor targets and `vercel.json:20` file references that no
+allowlist would anticipate, and none of those can execute script.
+`test/test_xss_browser.py` and `test/test_markdown_rendering.py` pin
+it.
+
+**Extensions are transforms, not inline rules.** SHA linkification
+(#156) runs after parsing, as a `RootTransform` walking `Text` and
+`InlineCode` nodes and skipping anything under a `Link`. Nothing about
+rule ordering, combined-regex group numbering or an `in_link` state
+flag survives from the mistune version; the transform links exactly
+the SHA multiset the two mistune rules did on a 5936-body corpus.
+
+**The Markdown output splices; it does not re-render.** Both
+`linkify_shas_in_text` and `_protect_html_tags` parse with
+`positions=True` and rewrite only the byte ranges of the nodes they
+care about (a resolvable SHA; a raw-HTML node, or a `<` in plain text
+that a lax viewer could take as a tag start). Everything else in the
+text — escapes, fence characters, autolinks, `snake_case` — survives
+byte for byte, which the mistune `MarkdownRenderer` round-trip did not
+guarantee and which wenmode's own Markdown renderer would not either
+(it backslash-escapes `_`, `[`, `|`, `*` in text: measured at 217 of
+531 real bodies touched).
+
+**Known wenmode 0.15 parser divergences**, all minor, each with a
+minimal reproduction in `work/wenmode-evaluation.md` for the upstream
+report: a list
+followed by a blank line and a different list marker renders loose;
+`N.` (N ≠ 1) after a dedented bullet item joins the item instead of
+starting a list; a line after an indented code block inside a list
+item is lazily continued. On the corpus each touches a handful of
+bodies and the visible effect is spacing.
 
 ---
 

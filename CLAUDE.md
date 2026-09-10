@@ -16,7 +16,7 @@ This tool processes Claude Code transcript files (stored as JSONL) and generates
 - **Runtime Message Filtering**: JavaScript-powered filtering to show/hide message types
 - **Interactive Timeline**: vis-timeline visualization with click-to-scroll navigation
 - **Date Range Filtering**: Filter messages using natural language (e.g., "today", "yesterday")
-- **Markdown Rendering**: Server-side markdown with syntax highlighting using mistune
+- **Markdown Rendering**: Server-side markdown with syntax highlighting using wenmode
 
 ## Usage
 
