@@ -209,9 +209,17 @@ regenerable cache). Both pragmas come from
 connection applies — including the migration runner's own, which opens
 outside `CacheManager` and is what touches a brand-new database first;
 at the SQLite defaults it ran the whole migration chain at an fsync per
-commit (120 ms/db against 12 ms/db, measured over 20 fresh databases).
-Setting only `journal_mode` is not the fix: it persists in the file, but
-`synchronous` is per-connection and stays at FULL (47 ms/db). A
+commit: 120 ms/db against 12 ms/db. Setting only `journal_mode` is not
+the fix: it persists in the file, but `synchronous` is per-connection
+and stays at FULL (47 ms/db). Those are 20 fresh databases per arm on
+an idle disk; re-derive with `scripts/bench_migration_pragmas.py`
+rather than trusting them, because the ratio is not a constant. Fsync
+cost scales with device contention, so on a loaded box the same arms
+measured 1382 ms against 46 ms — while a `synchronous=OFF` control
+stayed at 10-12 ms/db across every load, which is what identifies the
+cost as fsync rather than migration work. A single-threaded run like
+that one therefore *understates* what the pairing is worth during a
+parallel test suite. A
 `mode=ro` reader applies neither — it cannot switch journal modes and
 needs neither pragma. The runner's connection is outside the lifecycle
 described below and adds nothing to it: `_migrated_db_paths` memoises
