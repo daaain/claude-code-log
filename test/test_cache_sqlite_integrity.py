@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Comprehensive SQL-level integrity tests for SQLite cache."""
 
+import ast
 import json
 import shutil
 import sqlite3
 import threading
 import time
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -635,11 +637,217 @@ class TestMessageFileRelationship:
         assert file_row["message_count"] == len(entries)
 
 
+class TestConnectionCensus:
+    """Every connection to the cache database is classified, on purpose.
+
+    `apply_write_pragmas` documents itself as what *every writing* cache
+    connection applies. That is an unconditional claim about the whole
+    package, and prose cannot keep it true: the migration runner was
+    missed when the pragmas were first written, and the FTS index builder
+    was missed again when the runner was fixed — twice, by people looking
+    straight at the problem.
+
+    So the claim is pinned rather than asserted. Adding a `sqlite3.connect`
+    anywhere in the package fails this test until it is classified here,
+    which is the moment to ask whether it writes.
+
+    That sentence is itself unconditional, so the three ways it could
+    quietly become false are closed rather than hoped about — all of which
+    fail *open*, the dangerous direction for a guard whose job is catching
+    an omission. **Count:** a second connection inside an
+    already-classified function is caught because `EXPECTED` pins how many
+    each has, not merely that it has some. **Import shape:** the forms the
+    AST walk cannot see are forbidden outright by
+    `test_no_import_shape_the_census_cannot_see`. **Attribution:** a call
+    at module scope, in a class body, or in a nested function once went
+    uncounted or double-counted — see `_connect_sites`, which now
+    attributes each call exactly once, to its innermost scope.
+    """
+
+    # (module, enclosing function) -> (how many connects there, and why each
+    # is safe). The count is part of the claim: a function that already
+    # connects is exactly where a second, unconfigured connection is most
+    # likely to be added, and `_open_connection`'s legitimate two would
+    # otherwise license any number.
+    EXPECTED: ClassVar[dict[tuple[str, str], tuple[int, str]]] = {
+        ("cache.py", "_open_connection"): (
+            2,
+            "read-only and read-write arms; both run `configure`, "
+            "i.e. _configure_connection",
+        ),
+        ("cache.py", "get_all_cached_projects"): (
+            1,
+            "read-only: one SELECT, then close",
+        ),
+        ("cache.py", "find_session_in_cache"): (1, "read-only: one SELECT, then close"),
+        ("migrations/runner.py", "run_migrations"): (
+            1,
+            "applies apply_write_pragmas",
+        ),
+        ("cli.py", "_build_search_index"): (1, "applies apply_write_pragmas"),
+        ("cli.py", "serve"): (1, "in-memory FTS5 capability probe, not the cache"),
+        ("api.py", "SearchApi.connection"): (
+            1,
+            "mode=ro reader; cannot switch journal modes",
+        ),
+    }
+
+    @staticmethod
+    def _is_sqlite_connect(node: ast.AST) -> bool:
+        """Is this node a literal `sqlite3.connect(...)` call?"""
+        return (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "connect"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "sqlite3"
+        )
+
+    def _connect_sites(self) -> dict[tuple[str, str], int]:
+        """Every `sqlite3.connect` in the package, by module and scope.
+
+        Each call is attributed **once**, to its innermost enclosing
+        class/function, or to `<module>` when it sits at module level.
+        Both matter now that the count is part of the claim: walking every
+        function and re-walking its body counted a call in a nested
+        function twice (once for the inner scope, once for the outer), and
+        a module-level connection was not seen at all — which failed open,
+        the direction that lets an unclassified writer ship.
+        """
+        package = Path(__file__).parents[1] / "claude_code_log"
+        found: dict[tuple[str, str], int] = {}
+
+        def visit(node: ast.AST, rel: str, scope: tuple[str, ...]) -> None:
+            """Count this node if it connects, then recurse, deepening
+            `scope` at each class or function so a call is attributed to
+            the innermost one enclosing it."""
+            if self._is_sqlite_connect(node):
+                key = (rel, ".".join(scope) if scope else "<module>")
+                found[key] = found.get(key, 0) + 1
+            for child in ast.iter_child_nodes(node):
+                child_scope = scope
+                if isinstance(
+                    child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+                ):
+                    child_scope = scope + (child.name,)
+                visit(child, rel, child_scope)
+
+        for path in sorted(package.rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            visit(tree, path.relative_to(package).as_posix(), ())
+        return found
+
+    def test_no_import_shape_the_census_cannot_see(self):
+        """Keep the census's own claim true by construction.
+
+        The walk matches `sqlite3.connect(...)` — an attribute call on the
+        name `sqlite3`. `from sqlite3 import connect` and
+        `import sqlite3 as sq` both open connections it cannot see, and both
+        fail *open*: the census stays green while an unclassified writer
+        ships. Widening the matcher to bare `connect(...)` would catch other
+        libraries' connects instead, so forbid the shapes rather than chase
+        them. There are none today, so this costs nothing until someone
+        writes one — at which point the census's docstring would have
+        started lying.
+        """
+        package = Path(__file__).parents[1] / "claude_code_log"
+        offenders: list[str] = []
+        modules = 0
+        for path in sorted(package.rglob("*.py")):
+            modules += 1
+            rel = path.relative_to(package).as_posix()
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if isinstance(node, ast.ImportFrom) and node.module == "sqlite3":
+                    names = ", ".join(a.name for a in node.names)
+                    offenders.append(f"{rel}: from sqlite3 import {names}")
+                elif isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if alias.name == "sqlite3" and alias.asname:
+                            offenders.append(f"{rel}: import sqlite3 as {alias.asname}")
+
+        # The sweep must have looked at something.
+        assert modules >= 10, f"only walked {modules} modules; the sweep is broken"
+
+        assert not offenders, (
+            "sqlite3 imported in a shape TestConnectionCensus cannot see: "
+            f"{offenders}. The census matches `sqlite3.connect(...)` only, so "
+            "these would let an unclassified connection ship unnoticed. Use "
+            "`import sqlite3` and call `sqlite3.connect(...)`."
+        )
+
+    def test_every_connect_site_is_classified(self):
+        """A new `sqlite3.connect` must be classified before it can ship."""
+        found = self._connect_sites()
+
+        # The census must find something, or it is passing on an empty set.
+        assert len(found) >= 5, f"census found too few sites to be working: {found}"
+
+        expected_counts = {key: count for key, (count, _) in self.EXPECTED.items()}
+
+        unclassified = sorted(set(found) - set(expected_counts))
+        assert not unclassified, (
+            "new sqlite3.connect site(s) not classified in "
+            f"TestConnectionCensus.EXPECTED: {unclassified}. If the connection "
+            "writes to the cache database it must apply "
+            "`migrations.runner.apply_write_pragmas` — see that function's "
+            "docstring. If it does not write, say so there."
+        )
+
+        vanished = sorted(set(expected_counts) - set(found))
+        assert not vanished, (
+            f"classified connect site(s) no longer exist: {vanished}. Remove "
+            "them from EXPECTED so the census keeps meaning something."
+        )
+
+        # Compare counts, not just which functions connect. Without this a
+        # second, unconfigured connection added *inside* an already-classified
+        # function passes — and a function that already connects is the most
+        # likely place for one to appear.
+        grew = sorted(
+            (key, expected_counts[key], found[key])
+            for key in expected_counts
+            if found[key] != expected_counts[key]
+        )
+        assert not grew, (
+            "sqlite3.connect count changed in classified function(s) "
+            f"(site, classified, found): {grew}. A new connection in a "
+            "function that already had one is still a new connection: "
+            "classify it by updating the count and the reason."
+        )
+
+
 class TestWALMode:
     """Tests for WAL journal mode."""
 
-    def test_wal_journal_mode_enabled(self, cache_manager):
-        """Verify WAL mode is active."""
+    def test_wal_journal_mode_enabled(self, cache_manager, isolated_db_path: Path):
+        """A cache connection is what puts the database into WAL.
+
+        `journal_mode` persists in the file, and the migration runner now
+        leaves a brand-new database in WAL already
+        (`migrations.runner.apply_write_pragmas`), so reading `wal` back off
+        a fresh cache connection proves only that *someone* set it — this
+        assertion stayed green with `_configure_connection`'s pragmas
+        removed. Forcing the file out of WAL first restores the
+        discrimination: only a connection that applies the pragma itself
+        can bring it back.
+
+        `synchronous` needs no such treatment: it is per-connection, so
+        `test_synchronous_normal` below cannot be satisfied by what another
+        connection did.
+        """
+        with cache_manager._get_connection() as conn:
+            conn.execute("PRAGMA journal_mode = DELETE")
+
+        # Positive control. Leaving WAL requires no other connection to be
+        # open and silently does nothing if one is, which would leave the
+        # file in WAL and make the assertion below pass vacuously again.
+        # Confirm from outside that the file really left WAL.
+        raw = sqlite3.connect(isolated_db_path)
+        try:
+            assert raw.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+        finally:
+            raw.close()
+
         with cache_manager._get_connection() as conn:
             row = conn.execute("PRAGMA journal_mode").fetchone()
             assert row[0] == "wal"

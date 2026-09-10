@@ -204,7 +204,82 @@ list against the cached `page_sessions` rows and reports
 
 Connections run in WAL mode with `synchronous=NORMAL` (durable across
 app crashes; only a power/OS crash can lose the last commit — fine for a
-regenerable cache). By default `_get_connection()` opens and closes a
+regenerable cache). Both pragmas come from
+`migrations.runner.apply_write_pragmas`, which every *writing*
+connection applies — the two that open outside `CacheManager` included:
+the migration runner's own, which is what touches a brand-new database
+first, and the FTS index builder's. As to the runner,
+at the SQLite defaults it ran the whole migration chain at an fsync per
+commit: 128 ms/db against 13 ms/db. Setting only `journal_mode` is not
+the fix: it persists in the file, but `synchronous` is per-connection
+and stays at FULL (50 ms/db). Those are 20 fresh databases per arm on
+an idle disk; re-derive with `scripts/bench_migration_pragmas.py`
+rather than trusting them, because the ratio is not a constant. Fsync
+cost scales with device contention, so on a loaded box the same arms
+measured 1382 ms against 46 ms — while a `synchronous=OFF` control
+stayed at 10-12 ms/db across every load, which is what identifies the
+cost as fsync rather than migration work.
+
+Count the syscalls instead of timing them and the shape is exact, with
+no dependence on what the disk was doing — `strace -c -e trace=fsync`
+over one `run_migrations`, with the chain truncated to its lowest N
+migrations:
+
+| migrations | pre-fix | shipped |
+|-----------:|--------:|--------:|
+| 12 | 228 | 7 |
+| 13 | 236 | 7 |
+| 14 | 244 | 7 |
+
+**Every migration added to the chain costs 8 more fsyncs at the
+defaults, and none with the pragmas** — the runner's cost grows with the
+chain while the shipped one stays flat, so this bounds a cost that
+would otherwise rise with every schema change, rather than paying for
+itself once. Don't infer that slope from timings: what an fsync *costs*
+swings by more than 10x with contention, so per-migration wall-clock
+deltas measured on different days are incoherent (one such pair read
++16 ms and the next −0.7 ms), while the counts above are stable.
+
+The FTS index builder (`cli.py::_build_search_index`) is the same shape
+one file over. It commits once per transcript file so an interrupted
+backfill resumes, which at the defaults is an fsync per file — 33 / 43 /
+63 / 103 fsyncs over 10 / 20 / 40 / 80 files, against a flat 16 once it
+applies the pragmas. Small in absolute terms (~0.65 ms/file, roughly 1%
+of a real build, where decompress and tokenise dominate), and included
+because the *slope* is what the pragmas remove.
+
+Which writer applies them is pinned rather than asserted:
+`TestConnectionCensus` enumerates every `sqlite3.connect` in the package
+by AST and fails until each is classified as a configured writer or a
+reader. Prose could not hold that claim — the migration runner was
+missed when these pragmas were first written, and the FTS builder was
+missed again while fixing the runner.
+
+A single-threaded run like
+that one therefore badly *understates* what the pairing is worth during
+a parallel test suite: the unit leg creates ~402 databases, and with the
+runner's pragmas removed it takes **~130 s against ~51 s**, three
+interleaved pairs with no overlap between the arms. That is ~195 ms
+saved per database — well above the ~110 ms an idle bench predicts,
+because fsync does not parallelise. Sixteen `-n auto` workers do not get
+sixteen devices; they queue at one, and at `synchronous=FULL` each
+worker's commits lengthen every other worker's, so the contention the
+pragmas remove is largely self-inflicted.
+
+That measurement also carries a diagnostic worth more than the ratio.
+The slow arm was the *stable* one (±1.6%) while the fast arm swung
+±16%, which inverts the usual expectation — because the slow arm is
+fsync-bound and therefore pinned by the device, indifferent to whatever
+else is on the box, while the fast arm is CPU-bound and exposed to it.
+**Stability is not evidence of a quiet box; it can be evidence of a
+saturated resource.** It is also why box load could not swamp the
+comparison: the noise lived entirely in the arm that got faster.
+
+A `mode=ro` reader applies neither — it cannot switch journal modes and
+needs neither pragma. The runner's connection is outside the lifecycle
+described below and adds nothing to it: `_migrated_db_paths` memoises
+the migration check, so it opens once per process and database rather
+than per call. By default `_get_connection()` opens and closes a
 connection per call, so no file handle lingers to block temp-dir cleanup
 on Windows. A build issues ~190 such opens, which dominates cache-build
 cost, so the converter wraps its hotspots (`ensure_fresh_cache`, the

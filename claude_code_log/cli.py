@@ -41,6 +41,7 @@ from .cache import (
     get_library_version,
     is_corrupt_database_error,
 )
+from .migrations.runner import apply_write_pragmas
 from .models import RenderingDepth
 from .render_pool import resolve_render_jobs
 from .search import (
@@ -2276,6 +2277,21 @@ def _build_search_index(
                 err=True,
             )
             return
+        # A writer to the cache database, like the migration runner and every
+        # CacheManager connection — and one that commits once per transcript
+        # file, so at SQLite's default synchronous=FULL the build pays an
+        # fsync per file. The index is rebuildable from the same JSONL as the
+        # cache, so NORMAL's residual risk (a power/OS crash losing the last
+        # commits, which only costs the resumed backfill some ground) is the
+        # same trade made everywhere else.
+        #
+        # After the FTS5 probe, not before: `journal_mode = WAL` writes to the
+        # database header and raises on a corrupt cache, where the probe
+        # swallows the error and returns False. Setting the pragmas first
+        # turned this function's graceful degradation into an unhandled
+        # DatabaseError — the corrupt-cache handler is the inner try below —
+        # and so made `--no-convert` on a corrupt cache refuse to start.
+        apply_write_pragmas(conn)
         bar: Optional[Any] = None
 
         def report(done: int, total: int) -> None:

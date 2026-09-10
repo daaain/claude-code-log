@@ -8,6 +8,34 @@ from pathlib import Path
 from typing import List, Tuple
 
 
+def apply_write_pragmas(conn: sqlite3.Connection) -> None:
+    """Apply the durability pragmas every *writing* cache connection uses.
+
+    The two go together and must not be set separately:
+
+    - ``journal_mode = WAL`` persists in the database file, so it only has
+      to be set once — but it is not the whole fix on its own, because
+    - ``synchronous`` is per-connection and defaults to FULL, i.e. an fsync
+      on every commit. WAL at FULL still pays that (measured ~4x slower
+      than the pair over a full migration chain).
+
+    NORMAL keeps durability across application crashes — only a power or
+    OS crash can lose the last committed transaction — and the cache is
+    fully regenerable from the JSONL source, so that residual risk is
+    acceptable.
+
+    Lives here rather than in ``cache.py`` because ``cache.py`` imports
+    this module; every writer shares this one definition so the pragma
+    pair cannot drift between them.
+
+    ``synchronous`` is set first because the switch into WAL is itself a
+    write: at the default FULL it fsyncs for its own transition, which
+    costs one of the eight fsyncs a fresh database otherwise pays.
+    """
+    conn.execute("PRAGMA synchronous = NORMAL")
+    conn.execute("PRAGMA journal_mode = WAL")
+
+
 def _get_migrations_dir() -> Path:
     """Get the migrations directory path."""
     return Path(__file__).parent
@@ -158,9 +186,22 @@ def run_migrations(db_path: Path) -> int:
         Number of migrations applied
     """
     conn = sqlite3.connect(db_path, timeout=30.0)
-    conn.execute("PRAGMA foreign_keys = ON")
-
+    # Everything after the connect goes inside the try, so no failure can
+    # leave the handle open. That matters most for the pragmas: they are the
+    # first statements here that touch the file, so they are what raises on a
+    # corrupt database — and a leaked handle there is not merely untidy.
+    # Windows refuses to delete an open file, so it would defeat
+    # `CacheManager._rebuild_corrupt_database`, whose whole job is to discard
+    # an unreadable cache and rebuild it. The same care is taken for the same
+    # reason in `cache.py::_open_connection`.
     try:
+        conn.execute("PRAGMA foreign_keys = ON")
+        # This connection writes the whole migration chain, and on a brand-new
+        # database that is the first thing to touch the file — so without these
+        # the entire chain runs at SQLite's defaults (delete journal, fsync per
+        # commit) and only later connections get WAL.
+        apply_write_pragmas(conn)
+
         _ensure_schema_version_table(conn)
         pending = get_pending_migrations(conn)
 

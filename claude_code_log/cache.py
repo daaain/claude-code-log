@@ -19,7 +19,7 @@ from packaging import version
 from pydantic import BaseModel
 
 from .factories import create_transcript_entry
-from .migrations.runner import run_migrations
+from .migrations.runner import apply_write_pragmas, run_migrations
 from .models import (
     AssistantTranscriptEntry,
     QueueOperationTranscriptEntry,
@@ -646,13 +646,9 @@ def _configure_connection(conn: sqlite3.Connection, *, read_only: bool) -> None:
         # reader needs neither pragma: the writing parent already
         # keeps the database in WAL.
         return
-    conn.execute("PRAGMA journal_mode = WAL")
-    # synchronous=NORMAL is the recommended pairing for WAL: it keeps
-    # durability across application crashes (only a power/OS crash can lose
-    # the last committed transaction) while skipping an fsync on every
-    # commit. The cache is fully regenerable from the JSONL source, so that
-    # residual risk is acceptable.
-    conn.execute("PRAGMA synchronous = NORMAL")
+    # Shared with the migration runner's own connection — see
+    # apply_write_pragmas for why WAL and synchronous=NORMAL are a pair.
+    apply_write_pragmas(conn)
 
 
 def _open_connection(

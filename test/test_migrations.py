@@ -365,3 +365,129 @@ class TestGetCurrentVersion:
         assert version == expected_version
 
         conn.close()
+
+
+class TestRunMigrationsPragmas:
+    """The runner's own connection is a writer and must be configured as one.
+
+    `run_migrations` opens its own connection rather than going through
+    `CacheManager._configure_connection`, so on a brand-new cache database
+    the whole migration chain used to run at SQLite's defaults
+    (`journal_mode=delete`, `synchronous=FULL` — an fsync per commit)
+    before anything switched the file to WAL. Measured over 20 fresh
+    databases on a quiet disk: 121 ms/db at the defaults against 12 ms/db
+    with the pair, and the gap widens under concurrent load.
+
+    Both pragmas are pinned, because either alone is not the fix:
+    `journal_mode` persists in the file but `synchronous` is
+    per-connection, so WAL at FULL still pays the fsync (51.5 ms/db).
+    """
+
+    def test_fresh_database_ends_up_in_wal_mode(self, tmp_path: Path):
+        """A database created by the runner is left in WAL mode."""
+        db_path = tmp_path / "fresh.db"
+
+        run_migrations(db_path)
+
+        # journal_mode persists in the file, so an independent connection
+        # reports what the runner left behind.
+        conn = sqlite3.connect(db_path)
+        try:
+            assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+        finally:
+            conn.close()
+
+    def test_runner_connection_is_synchronous_normal(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """The runner's *own* connection runs at synchronous=NORMAL.
+
+        `synchronous` is per-connection and unobservable once the handle is
+        gone, so the value has to be sampled from that connection while it
+        is still open — hence the recording subclass and the sample taken
+        in `close()`, just before the runner closes it.
+        """
+        db_path = tmp_path / "fresh.db"
+        recorded: dict[str, object] = {}
+
+        class RecordingConnection(sqlite3.Connection):
+            def close(self) -> None:
+                """Sample both pragmas off this handle before it goes."""
+                # `run_migrations` closes in a `finally`, so this runs on its
+                # error path too — where the handle may be unusable. Let the
+                # original exception through rather than masking it with a
+                # failure to sample: `recorded` then stays empty, and the
+                # assertion below says so plainly.
+                try:
+                    recorded["synchronous"] = self.execute(
+                        "PRAGMA synchronous"
+                    ).fetchone()[0]
+                    recorded["journal_mode"] = self.execute(
+                        "PRAGMA journal_mode"
+                    ).fetchone()[0]
+                except sqlite3.Error:
+                    pass
+                super().close()
+
+        real_connect = sqlite3.connect
+
+        def recording_connect(*args: object, **kwargs: object) -> sqlite3.Connection:
+            """Open through the recording subclass instead of the default."""
+            kwargs["factory"] = RecordingConnection
+            return real_connect(*args, **kwargs)  # ty: ignore[no-matching-overload]
+
+        monkeypatch.setattr(sqlite3, "connect", recording_connect)
+        run_migrations(db_path)
+        monkeypatch.undo()
+
+        # An empty dict would mean the spy never saw a close: fail loudly
+        # rather than vacuously pass.
+        assert recorded, "the runner's connection was never observed"
+        # 0=OFF, 1=NORMAL, 2=FULL, 3=EXTRA
+        assert recorded["synchronous"] == 1, (
+            f"expected synchronous=NORMAL (1), got {recorded['synchronous']}"
+        )
+        assert recorded["journal_mode"] == "wal"
+
+
+class TestRunMigrationsConnectionLifecycle:
+    """`run_migrations` must not leak its handle when a statement raises.
+
+    The pragmas are the first statements in `run_migrations` that touch the
+    file, so on a corrupt database they are what raises. Leaving the
+    connection open there is not merely untidy: Windows refuses to delete an
+    open file, so it defeats `CacheManager._rebuild_corrupt_database`, whose
+    entire job is to discard an unreadable cache and rebuild it. Linux
+    deletes open files happily, so no Linux run can reproduce the symptom —
+    which is why the *invariant* is pinned here rather than the symptom.
+    """
+
+    def test_a_raising_pragma_still_closes_the_connection(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A corrupt database raises, and leaves no open handle behind."""
+        db_path = tmp_path / "corrupt.db"
+        db_path.write_bytes(b"this is definitely not a database" * 500)
+
+        opened: list[sqlite3.Connection] = []
+        real_connect = sqlite3.connect
+
+        def tracking_connect(*args: object, **kwargs: object) -> sqlite3.Connection:
+            """Open normally, but keep every handle so it can be inspected."""
+            conn = real_connect(*args, **kwargs)  # ty: ignore[no-matching-overload]
+            opened.append(conn)
+            return conn
+
+        monkeypatch.setattr(sqlite3, "connect", tracking_connect)
+        with pytest.raises(sqlite3.DatabaseError):
+            run_migrations(db_path)
+        monkeypatch.undo()
+
+        # An empty list would mean the spy never saw a connect, so the
+        # assertion below would be vacuously true.
+        assert opened, "run_migrations never opened a connection"
+        for conn in opened:
+            # Asks the connection's actual state rather than trusting a
+            # recorded close() call: a closed handle refuses to operate.
+            with pytest.raises(sqlite3.ProgrammingError):
+                conn.execute("SELECT 1")
