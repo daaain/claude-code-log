@@ -158,3 +158,151 @@ def test_pool_failure_falls_back_to_sequential(
     out = capsys.readouterr().out
     assert "falling back to sequential processing" in out
     _assert_all_outputs_exist(projects_dir)
+
+
+def _plan(project_dir: Path, **overrides) -> converter._ProjectPlan:
+    kwargs = dict(
+        use_cache=True,
+        library_version="0.0.0",
+        variant="",
+        combined_ext="html",
+        combined_name="combined_transcripts.html",
+        output_dir=None,
+        expand_paths=False,
+        filter_path=None,
+        write_combined=True,
+        page_size=0,
+    )
+    kwargs.update(overrides)
+    plan = converter._plan_project(project_dir, **kwargs)
+    assert plan is not None
+    return plan
+
+
+def test_plan_needs_work_without_cache_for_individual_sessions(
+    tmp_path: Path,
+) -> None:
+    """Individual-session-only run with no cache must still be planned as work.
+
+    With `use_cache=False` there is no cache manager, so `modified_files`
+    and `stale_sessions` are always empty; treating that as "nothing to
+    do" skipped every per-session file while the index still linked to
+    them (issue #274).
+    """
+    project_dir = _build_projects_dir(tmp_path, "no-cache") / "-proj-alpha"
+
+    plan = _plan(
+        project_dir,
+        use_cache=False,
+        write_combined=False,
+        generate_individual_sessions=True,
+    )
+
+    assert plan.needs_work is True
+
+
+def test_plan_stats_without_cache_report_all_files_and_sessions(tmp_path: Path) -> None:
+    """No-cache plan stats must not report cache hits or zero regenerated sessions.
+
+    With `use_cache=False` every source file is (re)processed and every
+    requested session output is (re)generated, so the summary must count all
+    requested source files as processed and the corresponding sessions as
+    regenerated (CodeRabbit review on #297).
+    """
+    project_dir = _build_projects_dir(tmp_path, "no-cache-stats") / "-proj-alpha"
+
+    plan = _plan(
+        project_dir,
+        use_cache=False,
+        write_combined=False,
+        generate_individual_sessions=True,
+    )
+
+    assert plan.needs_work is True
+    assert plan.stats.files_updated == 1
+    assert plan.stats.files_loaded_from_cache == 0
+    assert plan.stats.sessions_regenerated == 1
+
+
+def test_no_cache_run_generates_individual_session_files(tmp_path: Path) -> None:
+    """End-to-end: a no-cache individual-sessions-only run writes session files.
+
+    Regression test for issue #274: `_generate_individual_session_files`
+    intersected the trunk session IDs with the cache-derived session data,
+    which is empty without a cache, so zero session files were ever written
+    while the index still linked to them (404 links).
+    """
+    project_dir = _build_projects_dir(tmp_path, "no-cache-run") / "-proj-alpha"
+
+    report = converter.RegenerationReport()
+    converter.convert_jsonl_to(
+        "html",
+        project_dir,
+        None,
+        generate_individual_sessions=True,
+        write_combined=False,
+        use_cache=False,
+        silent=True,
+        report=report,
+    )
+
+    session_files = sorted(project_dir.glob("session-*.html"))
+    assert len(session_files) > 0
+    assert report.sessions_regenerated == len(session_files)
+
+
+def test_plan_combined_only_run_reports_no_sessions_regenerated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Combined-only plan must not query or count stale sessions.
+
+    On a combined-only run (`generate_individual_sessions=False`) no
+    per-session files are generated, so the plan must skip the
+    per-session staleness query entirely and report zero regenerated
+    sessions even when the cache holds stale session rows (CodeRabbit
+    review on #297). Counting them would also leak into the progress
+    line via `stats.sessions_regenerated`.
+    """
+    project_dir = _build_projects_dir(tmp_path, "combined-only") / "-proj-alpha"
+    monkeypatch.setenv("CLAUDE_CODE_LOG_CACHE_PATH", str(tmp_path / "cache.db"))
+
+    # Seed the cache with a full run.
+    report = converter.RegenerationReport()
+    converter.convert_jsonl_to(
+        "html",
+        project_dir,
+        None,
+        use_cache=True,
+        silent=True,
+        report=report,
+    )
+
+    # Make one session stale (rendered file deleted -> "file_missing")
+    # and the combined output missing so the combined-only plan has
+    # work to do.
+    stale_session_file = next(project_dir.glob("session-*.html"))
+    stale_session_file.unlink()
+    (project_dir / "combined_transcripts.html").unlink()
+
+    stale_queries: list[int] = []
+    real_get_stale_sessions = converter.CacheManager.get_stale_sessions
+
+    def spy_get_stale_sessions(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        stale_queries.append(1)
+        return real_get_stale_sessions(self, *args, **kwargs)
+
+    monkeypatch.setattr(
+        converter.CacheManager, "get_stale_sessions", spy_get_stale_sessions
+    )
+
+    plan = _plan(
+        project_dir,
+        use_cache=True,
+        library_version=converter.get_library_version(),
+        write_combined=True,
+        generate_individual_sessions=False,
+    )
+
+    assert plan.needs_work is True
+    assert stale_queries == []
+    assert plan.stats.sessions_regenerated == 0
