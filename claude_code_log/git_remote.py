@@ -349,7 +349,10 @@ def _commit_for(cwd: str, sha: str) -> Optional[str]:
 
     A miss against a list older than its trust window re-reads the list
     once, so commits fetched since it was read are found; a hit needs no
-    re-read.
+    re-read. The asymmetry is deliberate: a commit that *leaves* the
+    remote (force-push, deleted branch) keeps linking until the process
+    restarts, because re-reading on hits would bring back a ``git`` call
+    per token.
     """
     if not _SHA_SHAPE_RE.fullmatch(sha):
         return None
