@@ -682,27 +682,51 @@ class TestConnectionCensus:
         ),
         ("cli.py", "_build_search_index"): (1, "applies apply_write_pragmas"),
         ("cli.py", "serve"): (1, "in-memory FTS5 capability probe, not the cache"),
-        ("api.py", "connection"): (1, "mode=ro reader; cannot switch journal modes"),
+        ("api.py", "SearchApi.connection"): (
+            1,
+            "mode=ro reader; cannot switch journal modes",
+        ),
     }
 
+    @staticmethod
+    def _is_sqlite_connect(node: ast.AST) -> bool:
+        return (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "connect"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "sqlite3"
+        )
+
     def _connect_sites(self) -> dict[tuple[str, str], int]:
+        """Every `sqlite3.connect` in the package, by module and scope.
+
+        Each call is attributed **once**, to its innermost enclosing
+        class/function, or to `<module>` when it sits at module level.
+        Both matter now that the count is part of the claim: walking every
+        function and re-walking its body counted a call in a nested
+        function twice (once for the inner scope, once for the outer), and
+        a module-level connection was not seen at all — which failed open,
+        the direction that lets an unclassified writer ship.
+        """
         package = Path(__file__).parents[1] / "claude_code_log"
         found: dict[tuple[str, str], int] = {}
+
+        def visit(node: ast.AST, rel: str, scope: tuple[str, ...]) -> None:
+            if self._is_sqlite_connect(node):
+                key = (rel, ".".join(scope) if scope else "<module>")
+                found[key] = found.get(key, 0) + 1
+            for child in ast.iter_child_nodes(node):
+                child_scope = scope
+                if isinstance(
+                    child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+                ):
+                    child_scope = scope + (child.name,)
+                visit(child, rel, child_scope)
+
         for path in sorted(package.rglob("*.py")):
             tree = ast.parse(path.read_text(encoding="utf-8"))
-            for node in ast.walk(tree):
-                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    continue
-                for inner in ast.walk(node):
-                    if (
-                        isinstance(inner, ast.Call)
-                        and isinstance(inner.func, ast.Attribute)
-                        and inner.func.attr == "connect"
-                        and isinstance(inner.func.value, ast.Name)
-                        and inner.func.value.id == "sqlite3"
-                    ):
-                        key = (path.relative_to(package).as_posix(), node.name)
-                        found[key] = found.get(key, 0) + 1
+            visit(tree, path.relative_to(package).as_posix(), ())
         return found
 
     def test_no_import_shape_the_census_cannot_see(self):
