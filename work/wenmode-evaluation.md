@@ -110,12 +110,17 @@ messages, 30 s wall), the parser is not where the time goes:
 | Content formatting total | 26.2 s |
 
 The resolver figure: our renderer over the real corpus takes 2.3 s
-with no repo context and 13.9 s cold with one — 1098 unique SHA
-candidates, 549 `git branch -r --contains` calls, ≈ 20 ms each
-(`claude_code_log/git_remote.py`). Warm it is 2.3 s again. That cost
-recurs per process (the `lru_cache` is in-process, so every render
-worker pays it), and it scales with the number of distinct SHAs a
-project mentions.
+with no repo context and 13.5 s cold with one — 549 unique SHA
+candidates, each costing one `git branch -r --contains` (≈ 22 ms),
+and one `git rev-parse --verify` (≈ 3 ms) for the 259 that are
+reachable (`claude_code_log/git_remote.py`). Warm it is 2.3 s again.
+That cost recurs per process (the `lru_cache` is in-process, so every
+render worker pays it), and it scales with the number of distinct
+SHAs a project mentions. The two instruments are the CLI timing run
+over the project (22 files, 48 740 messages) and the extracted-bodies
+corpus (5936 bodies) fed to the renderer singleton; the ≈ 11 s is the
+difference between the corpus pair and matches the CLI bucket's
+remainder.
 
 A 1.55x parser would save ≈ 0.7 s of 30 s here (2%), less once the
 61% markdown memo hit rate is counted. Replacing the two-subprocess-
