@@ -793,12 +793,13 @@ class _GitCalls:
         import claude_code_log.git_remote as gr
 
         self.subcommands: list[str] = []
+        self.fail = fail
         real_run = subprocess.run
 
         def run(argv, *args, **kwargs):
             # argv is ["git", "-C", cwd, <subcommand>, ...]
             self.subcommands.append(argv[3])
-            if argv[3] == fail:
+            if argv[3] == self.fail:
                 raise subprocess.TimeoutExpired(argv, 30)
             return real_run(argv, *args, **kwargs)
 
@@ -853,31 +854,42 @@ class TestRemoteCommitResolution:
         assert calls.subcommands == ["config", "rev-list"]
 
     def test_repository_with_no_remote_refs_links_nothing(self, tmp_path):
-        """An empty list is a readable list: nothing is pushed, so
-        nothing links — not the unvalidated fallback."""
+        """Nothing fetched, so nothing is pushed, so nothing links."""
         _git(tmp_path, "init", "-q")
         _git(tmp_path, "remote", "add", "origin", "https://github.com/owner/repo")
         commit = _commit(tmp_path, "never fetched")
         assert resolve_sha(str(tmp_path), commit[:7]) is None
         assert resolve_sha(str(tmp_path), "deadbee") is None
 
-    def test_unreadable_list_links_sha_shaped_tokens_as_written(
+    def test_unreadable_list_links_nothing_until_a_read_succeeds(
         self, tmp_path, monkeypatch
     ):
-        repo = _Repo(tmp_path)
-        _GitCalls(monkeypatch, fail="rev-list")
-        # Nothing can be validated: a pushed commit, a local one and a
-        # token that is no commit at all all link, as written.
-        for token in (repo.pushed[0][:7], repo.local[:7], "deadbee"):
-            assert resolve_sha(repo.cwd, token) == _url(token)
+        """A failed ``rev-list`` leaves every token plain text — not
+        linked unvalidated, which would make each non-commit token a
+        dead link — and a later stale miss retries the read."""
+        import claude_code_log.git_remote as gr
 
-    def test_unvalidated_fallback_still_requires_the_sha_shape(
-        self, tmp_path, monkeypatch
-    ):
-        """Both behaviours share one definition of a linkable token."""
         repo = _Repo(tmp_path)
-        _GitCalls(monkeypatch, fail="rev-list")
-        for token in ("DEADBEE", "abc123", "g123456", "a" * 41, "abc1234 "):
+        calls = _GitCalls(monkeypatch, fail="rev-list")
+        for token in (repo.pushed[0][:7], repo.pushed[1], "deadbee"):
+            assert resolve_sha(repo.cwd, token) is None
+        assert calls.count("rev-list") == 1
+
+        calls.fail = None
+        start = gr._now()
+        monkeypatch.setattr(
+            gr, "_now", lambda: start + gr._REMOTE_COMMITS_MAX_AGE_SECONDS + 1
+        )
+        assert resolve_sha(repo.cwd, repo.pushed[0][:7]) == _url(repo.pushed[0])
+        assert calls.count("rev-list") == 2
+
+    def test_only_sha_shaped_tokens_link(self, tmp_path):
+        """The shape contract holds even for tokens the prefix search
+        would accept: uppercase hex and abbreviations under 7 chars."""
+        repo = _Repo(tmp_path)
+        pushed = repo.pushed[0]
+        assert resolve_sha(repo.cwd, pushed[:7]) == _url(pushed)
+        for token in (pushed[:7].upper(), pushed[:6], pushed[:7] + " "):
             assert resolve_sha(repo.cwd, token) is None
 
     def test_commit_fetched_later_is_found_once_the_list_is_stale(

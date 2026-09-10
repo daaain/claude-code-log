@@ -24,11 +24,12 @@ transcript doesn't sprout broken links for work-in-progress branches.
   cost a ``git branch -r --contains`` walk just to learn so (issue
   #327: 549 of those, ~22 ms each, against ~20 ms for the whole list).
 
-- When the list cannot be read at all (``git`` errors or times out)
-  but the remote is known, every SHA-shaped token links unvalidated,
-  as written — forges resolve short SHAs themselves. Both behaviours
-  go through ``_commit_for``, so what counts as a linkable token is
-  decided in one place.
+- When the list cannot be read (``git`` errors or times out), nothing
+  links: an unverifiable token stays plain text, as it did when the
+  per-candidate check failed. Linking unvalidated instead would make
+  every non-commit token a dead link — over a third of them — with
+  nothing on the page saying a check was skipped. ``_commit_for`` is
+  the one place that decides what links.
 
 - The list is held per process and re-read when a lookup misses and
   the list is older than ``_REMOTE_COMMITS_MAX_AGE_SECONDS``, so a
@@ -94,9 +95,8 @@ _HOST_URL_PATTERNS: dict[str, str] = {
 # map misses. Lets users wire up self-hosted GitLab / Gitea / Forgejo
 # / SourceHut etc. with a single template. Placeholders: ``{host}``
 # (parsed from the remote URL), ``{path}`` (owner/repo or
-# group/subgroup/repo), ``{sha}`` (the full SHA; the SHA as written when
-# the commit list is unreadable). The CLI ``--git-link`` flag is a UX
-# convenience that sets this env var.
+# group/subgroup/repo), ``{sha}`` (full SHA). The CLI ``--git-link``
+# flag is a UX convenience that sets this env var.
 _FALLBACK_TEMPLATE_ENV = "CLAUDE_CODE_LOG_GIT_LINK"
 
 # Wall-clock cap on the ``git config`` remote lookup. It is a safety
@@ -114,10 +114,9 @@ _GIT_TIMEOUT_SECONDS = 5
 
 # Wall-clock cap on ``git rev-list --remotes``. Longer than the lookup
 # cap because the walk scales with history (~20 ms at 1.6k commits,
-# ~0.1 s at 13k) and runs once per cwd rather than once per SHA — and
-# because a timeout here is not a silent "no link" but the unvalidated
-# fallback, which links every SHA-shaped token. Slow contention should
-# not flip a render into that mode.
+# ~0.1 s at 13k) and runs once per cwd rather than once per SHA, so a
+# generous cap costs nothing on a normal repo — while a timeout costs
+# every commit link on the page, which stay plain text.
 _GIT_LIST_TIMEOUT_SECONDS = 30
 
 # Floor on how long a commit list is trusted before a lookup miss
@@ -135,10 +134,10 @@ _REMOTE_COMMITS_REREAD_FACTOR = 20.0
 # visits one cwd per project.
 _REMOTE_COMMITS_MAX_CWDS = 32
 
-# What a token must look like to be linked at all — by either behaviour
-# of ``_commit_for``. Mirrors the plugins' ``SHA_PATTERN`` (git's 7-char
-# default abbreviation up to a full SHA-1), so the unvalidated fallback
-# cannot link anything the validated path would not have been asked about.
+# What a token must look like to be linked at all. Mirrors the plugins'
+# ``SHA_PATTERN`` (git's 7-char default abbreviation up to a full SHA-1),
+# so ``resolve_sha`` holds that contract whoever calls it: the prefix
+# search alone would accept uppercase hex and shorter abbreviations.
 _SHA_SHAPE_RE = re.compile(r"[0-9a-f]{7,40}")
 
 # Monotonic clock for list ages; a module attribute so tests can move time.
@@ -232,7 +231,7 @@ class _RemoteCommits:
     fixed ``width`` (20 bytes for SHA-1, 32 for SHA-256): one bytes
     object at the id's own size, rather than a list of ~90-byte hex
     strings — every render worker holds its own copy. ``ids is None``
-    means the list could not be read (see ``_commit_for``).
+    means the list could not be read, and finds nothing, like an empty one.
     """
 
     ids: Optional[bytes]
@@ -342,32 +341,22 @@ def _remote_commits(cwd: str, *, reread: bool = False) -> _RemoteCommits:
 def _commit_for(cwd: str, sha: str) -> Optional[str]:
     """The commit id to link ``sha`` to, or ``None`` to leave it as text.
 
-    The single definition of what gets linked, in both behaviours:
+    The single definition of what gets linked: a SHA-shaped token that
+    abbreviates exactly one commit reachable from a remote-tracking ref,
+    linked by that commit's full id. Everything else — local-only
+    commits, other repositories' SHAs, task ids, UUID fragments, and
+    every token when the list could not be read — stays plain text.
 
-    - **The commit list is readable** (the normal case): ``sha`` must
-      abbreviate exactly one commit reachable from a remote-tracking
-      ref, and the link carries that commit's full id. Everything else —
-      local-only commits, other repositories' SHAs, task ids, UUID
-      fragments — stays plain text.
-    - **It is not** (``git`` failed or timed out, though the remote is
-      known): nothing can be validated, so every SHA-shaped token links
-      as written. Forges resolve abbreviated SHAs themselves; tokens
-      that are not commits there become dead links, which is the price
-      of not having the list.
-
-    Either way the token must have the SHA shape first. A miss against
-    a list older than its trust window re-reads the list once, so
-    commits fetched since it was read are found; a hit needs no re-read.
+    A miss against a list older than its trust window re-reads the list
+    once, so commits fetched since it was read are found; a hit needs no
+    re-read.
     """
     if not _SHA_SHAPE_RE.fullmatch(sha):
         return None
     commits = _remote_commits(cwd)
     full = commits.find(sha)
     if full is None and commits.is_stale():
-        commits = _remote_commits(cwd, reread=True)
-        full = commits.find(sha)
-    if commits.ids is None:
-        return sha
+        full = _remote_commits(cwd, reread=True).find(sha)
     return full
 
 

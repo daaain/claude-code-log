@@ -184,7 +184,7 @@ export CLAUDE_CODE_LOG_GIT_LINK='https://{host}/{path}/-/commit/{sha}'
 claude-code-log --tui
 ```
 
-Placeholders: `{host}`, `{path}`, `{sha}`. The template fires only when the static map doesn't already know the host, so a mix of GitHub repos + self-hosted GitLab gets correct links from both. SHAs not reachable from any local remote-tracking ref render as plain text — local-only work-in-progress commits never produce broken links. The one exception: if `git` cannot list the repository's commits at all (it fails or times out) while the remote is still known, SHA-shaped tokens are linked as written without that check.
+Placeholders: `{host}`, `{path}`, `{sha}`. The template fires only when the static map doesn't already know the host, so a mix of GitHub repos + self-hosted GitLab gets correct links from both. SHAs not reachable from any local remote-tracking ref render as plain text — local-only work-in-progress commits never produce broken links.
 
 ## Project Hierarchy Output
 
