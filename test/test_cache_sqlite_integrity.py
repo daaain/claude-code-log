@@ -651,13 +651,17 @@ class TestConnectionCensus:
     anywhere in the package fails this test until it is classified here,
     which is the moment to ask whether it writes.
 
-    That sentence is itself unconditional, so the two ways it could quietly
-    become false are closed rather than hoped about — both of which fail
-    *open*, the dangerous direction for a guard whose job is catching an
-    omission. A second connection inside an already-classified function is
-    caught because `EXPECTED` pins the count, not just the function; an
-    import shape the AST walk cannot see is forbidden outright by
-    `test_no_import_shape_the_census_cannot_see`.
+    That sentence is itself unconditional, so the three ways it could
+    quietly become false are closed rather than hoped about — all of which
+    fail *open*, the dangerous direction for a guard whose job is catching
+    an omission. **Count:** a second connection inside an
+    already-classified function is caught because `EXPECTED` pins how many
+    each has, not merely that it has some. **Import shape:** the forms the
+    AST walk cannot see are forbidden outright by
+    `test_no_import_shape_the_census_cannot_see`. **Attribution:** a call
+    at module scope, in a class body, or in a nested function once went
+    uncounted or double-counted — see `_connect_sites`, which now
+    attributes each call exactly once, to its innermost scope.
     """
 
     # (module, enclosing function) -> (how many connects there, and why each
