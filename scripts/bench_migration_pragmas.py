@@ -179,6 +179,14 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    # Both are divisors: `--databases 0` divides by zero in _time_arm, and
+    # `--repeats 0` leaves statistics.median() no samples. Fail through the
+    # parser rather than deep in a benchmark that has already run.
+    if args.databases < 1:
+        parser.error("--databases must be at least 1")
+    if args.repeats < 1:
+        parser.error("--repeats must be at least 1")
+
     arms = _arms()
     if args.reverse_arms:
         arms = list(reversed(arms))

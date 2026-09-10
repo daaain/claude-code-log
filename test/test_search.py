@@ -1010,15 +1010,35 @@ class TestBuildSearchIndexConnection:
     def test_healthy_cache_still_gets_the_write_pragmas(self, tmp_path: Path):
         """Moving the call after the FTS5 probe must not strand it.
 
-        `synchronous` is per-connection, so it is sampled from the function's
-        own handle as it closes rather than read back from a fresh one, which
-        would report FULL whatever happened here.
+        Both pragmas are sampled from the function's own handle as it closes.
+        `synchronous` has to be: it is per-connection, so a fresh handle would
+        report FULL whatever happened here. `journal_mode` needs the opposite
+        care — it *persists in the file*, and `run_migrations` already leaves
+        the database in WAL, so asserting it without first forcing the file
+        back to `delete` passes even if the builder stops setting it. (It did:
+        with `apply_write_pragmas` swapped for a bare `synchronous` pragma,
+        this test still passed before the file was forced.)
         """
         from claude_code_log.cli import _build_search_index
         from claude_code_log.migrations.runner import run_migrations
 
         db_path = tmp_path / "cache.db"
         run_migrations(db_path)
+
+        # Take the file out of WAL first, so only a builder that applies the
+        # pragma itself can put it back.
+        forced = sqlite3.connect(db_path)
+        try:
+            forced.execute("PRAGMA journal_mode = DELETE")
+        finally:
+            forced.close()
+        # Positive control: leaving WAL silently does nothing while another
+        # connection is open, which would restore the vacuous pass.
+        check = sqlite3.connect(db_path)
+        try:
+            assert check.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+        finally:
+            check.close()
 
         recorded: dict[str, object] = {}
         real_connect = sqlite3.connect
@@ -1028,6 +1048,9 @@ class TestBuildSearchIndexConnection:
                 try:
                     recorded["synchronous"] = self.execute(
                         "PRAGMA synchronous"
+                    ).fetchone()[0]
+                    recorded["journal_mode"] = self.execute(
+                        "PRAGMA journal_mode"
                     ).fetchone()[0]
                 except sqlite3.Error:
                     pass
@@ -1045,4 +1068,7 @@ class TestBuildSearchIndexConnection:
         # 0=OFF, 1=NORMAL, 2=FULL, 3=EXTRA
         assert recorded["synchronous"] == 1, (
             f"expected synchronous=NORMAL (1), got {recorded['synchronous']}"
+        )
+        assert recorded["journal_mode"] == "wal", (
+            f"expected the builder to restore WAL, got {recorded['journal_mode']}"
         )
