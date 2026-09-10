@@ -441,11 +441,13 @@ def _render_html_escaped(renderer: Any, node: Any, context: Any) -> str:
     return str(renderer.escape_html(node.value))
 
 
-# Schemes a link or image in a transcript must never carry (mistune's
-# list, kept). Anything else — ``cci:`` editor links, ``vercel.json:20``
-# file references, relative paths — stays a working link: transcripts
-# are full of targets no allowlist would anticipate, and none of those
-# can execute script.
+# Schemes a link or image in a transcript must never carry: mistune's
+# list, plus OS protocol handlers that a click would hand to the desktop
+# (``search-ms:`` and ``ms-appinstaller:`` have real abuse history) and
+# the browser-internal ones. Anything else — ``cci:`` editor links,
+# ``vercel.json:20`` file references, relative paths — stays a working
+# link: transcripts are full of targets no allowlist would anticipate,
+# and none of those can execute script.
 _HARMFUL_URL_SCHEMES = frozenset(
     {
         "javascript",
@@ -460,6 +462,14 @@ _HARMFUL_URL_SCHEMES = frozenset(
         "mk",
         "res",
         "view-source",
+        # beyond mistune's list
+        "search-ms",
+        "ms-appinstaller",
+        "ms-msdt",
+        "intent",
+        "blob",
+        "filesystem",
+        "about",
     }
 )
 _GOOD_DATA_PREFIXES = (

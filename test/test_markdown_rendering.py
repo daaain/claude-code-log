@@ -254,6 +254,36 @@ def test_markdown_neutralises_dangerous_url_schemes() -> None:
             assert 'src="data:' not in out, (render.__name__, src, out)
 
 
+def test_markdown_url_policy_is_a_denylist() -> None:
+    """Link targets follow a scheme denylist, not wenmode's allowlist.
+
+    Transcripts link to editor targets (``cci:``), ``file:line`` references
+    and relative paths that no allowlist would anticipate; those keep their
+    ``href``. OS protocol handlers a click would hand to the desktop lose
+    theirs, as do the schemes mistune already refused.
+    """
+    from claude_code_log.html.utils import render_markdown
+
+    for target in (
+        "cci:1://file:///x/y:0:0-0:0",
+        "vercel.json:20:8-23:9",
+        "./src/main.py",
+        "https://example.com/x",
+    ):
+        assert f'href="{target}"' in render_markdown(f"[t]({target})"), target
+    for target in (
+        "search-ms:query=x",
+        "ms-appinstaller:?source=x",
+        "intent://x",
+        "blob:https://x/y",
+        "filesystem:https://x",
+        "about:blank",
+        "file:///etc/passwd",
+        "vbscript:msgbox(1)",
+    ):
+        assert "href=" not in render_markdown(f"[t]({target})"), target
+
+
 def test_assistant_text_does_not_inject_live_html() -> None:
     """End-to-end: assistant text with HTML must not emit live tags."""
     from claude_code_log.html.assistant_formatters import (

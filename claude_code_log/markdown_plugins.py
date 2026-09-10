@@ -333,7 +333,10 @@ def transcript_rules(
     # list item containing a pipe (``- b | c``) right after a paragraph
     # line stayed part of the paragraph. The reorder makes the
     # list/heading/blockquote openers answer first; reproduction in
-    # work/wenmode-evaluation.md for the upstream report.
+    # work/wenmode-evaluation.md for the upstream report. The cost: a
+    # table whose header row starts with a list marker (``- a | b``
+    # over ``---|---``) becomes a list item containing a table with
+    # header ``a`` instead of a table with header ``- a``.
     rules.append(table)
     rules.append(BlockHtmlMarker())
     if resolve is not None:

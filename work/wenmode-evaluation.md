@@ -537,7 +537,11 @@ which agree with each other and disagree with wenmode.
    gives one paragraph; the reference gives paragraph + list. Cause:
    `_parser/interrupts.py` asks only the *first* matching block opener
    whether it may interrupt a paragraph, and `table` is first in the
-   preset. Worked around here by ordering the table rule last.
+   preset. Worked around here by ordering the table rule last, which
+   costs one shape: a table whose header row starts with a list marker
+   (`- a | b` over `---|---`) becomes a list item containing a table
+   with header `a`, where the stock preset gives a table with header
+   `- a`. Nothing in either corpus has that shape.
 2. **Trailing blank lines make a list loose.** `"- a\n- b\n\n1. c\n"`
    and `"- a\n- b\n\n\ntext\n"` both render the bullet list loose.
    Cause: `rules/blocks/list.py::consume_blank_list_line` sets
