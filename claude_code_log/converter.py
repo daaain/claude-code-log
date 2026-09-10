@@ -2928,26 +2928,31 @@ def _plan_project(
     # Check combined_stale using the appropriate cache:
     # - Paginated projects store data in html_pages table (via save_page_cache)
     # - Non-paginated projects store data in html_cache table (via update_html_cache)
-    if cache_manager is not None:
-        existing_page_count = cache_manager.get_page_count(variant)
-        if existing_page_count > 0:
-            # Paginated project: check page 1 staleness for the
-            # current --format/--detail/--compact variant, resolving
-            # the page file against dest_dir (--output) like the
-            # non-paginated branch below.
-            combined_stale = cache_manager.is_page_stale(
-                1, page_size, variant, output_dir=dest_dir
-            )[0]
+    # Skip the combined-cache queries entirely when the combined output isn't
+    # requested: individual-only runs shouldn't do combined I/O or fail on
+    # unrelated combined-cache state.
+    combined_stale = False
+    if write_combined:
+        if cache_manager is not None:
+            existing_page_count = cache_manager.get_page_count(variant)
+            if existing_page_count > 0:
+                # Paginated project: check page 1 staleness for the
+                # current --format/--detail/--compact variant, resolving
+                # the page file against dest_dir (--output) like the
+                # non-paginated branch below.
+                combined_stale = cache_manager.is_page_stale(
+                    1, page_size, variant, output_dir=dest_dir
+                )[0]
+            else:
+                # Non-paginated project: check html_cache for the
+                # variant-specific filename (e.g.
+                # `combined_transcripts.low.compact.md`), not the
+                # default `combined_transcripts.html`.
+                combined_stale = cache_manager.is_transcript_stale(
+                    output_path.name, None, output_dir=dest_dir
+                )[0]
         else:
-            # Non-paginated project: check html_cache for the
-            # variant-specific filename (e.g.
-            # `combined_transcripts.low.compact.md`), not the
-            # default `combined_transcripts.html`.
-            combined_stale = cache_manager.is_transcript_stale(
-                output_path.name, None, output_dir=dest_dir
-            )[0]
-    else:
-        combined_stale = True
+            combined_stale = True
 
     # Determine if we need to do any work, gated on the artifacts that
     # were actually requested. With `write_combined=False` the combined
@@ -2966,8 +2971,14 @@ def _plan_project(
         needs_work = needs_work or combined_stale or not output_path.exists()
 
     if needs_work:
-        stats.files_updated = len(modified_files) if modified_files else 0
-        stats.files_loaded_from_cache = len(jsonl_files) - stats.files_updated
+        if cache_manager is None:
+            # No cache: nothing could have been loaded from it, so report
+            # every source file as (re)processed rather than as a cache hit.
+            stats.files_updated = len(jsonl_files)
+            stats.files_loaded_from_cache = 0
+        else:
+            stats.files_updated = len(modified_files) if modified_files else 0
+            stats.files_loaded_from_cache = len(jsonl_files) - stats.files_updated
         stats.sessions_regenerated = len(stale_sessions)
     else:
         # Fast path: nothing to do, just collect stats for index
