@@ -974,3 +974,75 @@ def _entry_line(text: str) -> str:
         )
         + "\n"
     )
+
+
+class TestBuildSearchIndexConnection:
+    """`cli._build_search_index` opens its own connection, outside CacheManager.
+
+    Neither of these paths had coverage, which is how applying the write
+    pragmas to that connection silently broke the corrupt-cache one: the
+    pragmas were set before the FTS5 probe, `journal_mode = WAL` writes to
+    the database header, and an unreadable file turned a graceful
+    degradation into an unhandled `DatabaseError`.
+    """
+
+    def test_corrupt_cache_degrades_instead_of_raising(self, tmp_path: Path):
+        """A corrupt cache leaves search unavailable, not the command dead.
+
+        The function deliberately does not delete the database here — see its
+        inner handler — because the only route to this path is
+        `--no-convert`, the one flag that asked us to touch nothing. Serving
+        the pages without search beats refusing to start, so this must not
+        raise.
+        """
+        from claude_code_log.cli import _build_search_index
+
+        db_path = tmp_path / "cache.db"
+        db_path.write_bytes(b"not a sqlite database, not even close" * 64)
+
+        # Positive control: the file really is unreadable as a database, so a
+        # pass here cannot come from having written something valid.
+        with pytest.raises(sqlite3.DatabaseError):
+            sqlite3.connect(db_path).execute("SELECT * FROM sqlite_master").fetchone()
+
+        _build_search_index(db_path, ("text",), rebuild=False)
+
+    def test_healthy_cache_still_gets_the_write_pragmas(self, tmp_path: Path):
+        """Moving the call after the FTS5 probe must not strand it.
+
+        `synchronous` is per-connection, so it is sampled from the function's
+        own handle as it closes rather than read back from a fresh one, which
+        would report FULL whatever happened here.
+        """
+        from claude_code_log.cli import _build_search_index
+        from claude_code_log.migrations.runner import run_migrations
+
+        db_path = tmp_path / "cache.db"
+        run_migrations(db_path)
+
+        recorded: dict[str, object] = {}
+        real_connect = sqlite3.connect
+
+        class RecordingConnection(sqlite3.Connection):
+            def close(self) -> None:
+                try:
+                    recorded["synchronous"] = self.execute(
+                        "PRAGMA synchronous"
+                    ).fetchone()[0]
+                except sqlite3.Error:
+                    pass
+                super().close()
+
+        def recording_connect(*args: object, **kwargs: object) -> sqlite3.Connection:
+            kwargs["factory"] = RecordingConnection
+            return real_connect(*args, **kwargs)  # ty: ignore[no-matching-overload]
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(sqlite3, "connect", recording_connect)
+            _build_search_index(db_path, ("text",), rebuild=False)
+
+        assert recorded, "the builder's connection was never observed"
+        # 0=OFF, 1=NORMAL, 2=FULL, 3=EXTRA
+        assert recorded["synchronous"] == 1, (
+            f"expected synchronous=NORMAL (1), got {recorded['synchronous']}"
+        )

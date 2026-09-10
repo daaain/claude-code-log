@@ -2271,6 +2271,12 @@ def _build_search_index(
 
     conn = sqlite3.connect(db_path)
     try:
+        if not fts5_available(conn):
+            click.echo(
+                "This SQLite build has no FTS5; archive search is unavailable.",
+                err=True,
+            )
+            return
         # A writer to the cache database, like the migration runner and every
         # CacheManager connection — and one that commits once per transcript
         # file, so at SQLite's default synchronous=FULL the build pays an
@@ -2278,13 +2284,14 @@ def _build_search_index(
         # cache, so NORMAL's residual risk (a power/OS crash losing the last
         # commits, which only costs the resumed backfill some ground) is the
         # same trade made everywhere else.
+        #
+        # After the FTS5 probe, not before: `journal_mode = WAL` writes to the
+        # database header and raises on a corrupt cache, where the probe
+        # swallows the error and returns False. Setting the pragmas first
+        # turned this function's graceful degradation into an unhandled
+        # DatabaseError — the corrupt-cache handler is the inner try below —
+        # and so made `--no-convert` on a corrupt cache refuse to start.
         apply_write_pragmas(conn)
-        if not fts5_available(conn):
-            click.echo(
-                "This SQLite build has no FTS5; archive search is unavailable.",
-                err=True,
-            )
-            return
         bar: Optional[Any] = None
 
         def report(done: int, total: int) -> None:

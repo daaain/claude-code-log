@@ -650,6 +650,14 @@ class TestConnectionCensus:
     So the claim is pinned rather than asserted. Adding a `sqlite3.connect`
     anywhere in the package fails this test until it is classified here,
     which is the moment to ask whether it writes.
+
+    That sentence is itself unconditional, so the two ways it could quietly
+    become false are closed rather than hoped about — both of which fail
+    *open*, the dangerous direction for a guard whose job is catching an
+    omission. A second connection inside an already-classified function is
+    caught because `EXPECTED` pins the count, not just the function; an
+    import shape the AST walk cannot see is forbidden outright by
+    `test_no_import_shape_the_census_cannot_see`.
     """
 
     # (module, enclosing function) -> (how many connects there, and why each
@@ -696,6 +704,44 @@ class TestConnectionCensus:
                         key = (path.relative_to(package).as_posix(), node.name)
                         found[key] = found.get(key, 0) + 1
         return found
+
+    def test_no_import_shape_the_census_cannot_see(self):
+        """Keep the census's own claim true by construction.
+
+        The walk matches `sqlite3.connect(...)` — an attribute call on the
+        name `sqlite3`. `from sqlite3 import connect` and
+        `import sqlite3 as sq` both open connections it cannot see, and both
+        fail *open*: the census stays green while an unclassified writer
+        ships. Widening the matcher to bare `connect(...)` would catch other
+        libraries' connects instead, so forbid the shapes rather than chase
+        them. There are none today, so this costs nothing until someone
+        writes one — at which point the census's docstring would have
+        started lying.
+        """
+        package = Path(__file__).parents[1] / "claude_code_log"
+        offenders: list[str] = []
+        modules = 0
+        for path in sorted(package.rglob("*.py")):
+            modules += 1
+            rel = path.relative_to(package).as_posix()
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if isinstance(node, ast.ImportFrom) and node.module == "sqlite3":
+                    names = ", ".join(a.name for a in node.names)
+                    offenders.append(f"{rel}: from sqlite3 import {names}")
+                elif isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if alias.name == "sqlite3" and alias.asname:
+                            offenders.append(f"{rel}: import sqlite3 as {alias.asname}")
+
+        # The sweep must have looked at something.
+        assert modules >= 10, f"only walked {modules} modules; the sweep is broken"
+
+        assert not offenders, (
+            "sqlite3 imported in a shape TestConnectionCensus cannot see: "
+            f"{offenders}. The census matches `sqlite3.connect(...)` only, so "
+            "these would let an unclassified connection ship unnoticed. Use "
+            "`import sqlite3` and call `sqlite3.connect(...)`."
+        )
 
     def test_every_connect_site_is_classified(self):
         """A new `sqlite3.connect` must be classified before it can ship."""
