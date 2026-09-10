@@ -10,7 +10,7 @@ need but the other two reference transformers don't exercise:
   :func:`claude_code_log.plugins.render_markdown_collapsible` helper.
   The plugin returns rich HTML from ``format_html`` (collapsible
   ``<details>`` block with a preview) without writing its own
-  ``<details>`` template, mistune call, or pygments wiring.
+  ``<details>`` template, wenmode call, or pygments wiring.
 
 The tool name is the same fixture id used by ``tool_communicate.py``
 so an integration test can cover the input + result pair end-to-end.
@@ -83,7 +83,7 @@ class TestClmailCommunicateResultMessage(ToolResultMessage):
 
     def format_html(self, _renderer, _message) -> str:
         # Explicit ``format_html`` because we need richer HTML than
-        # mistune-of-format_markdown produces: a collapsible
+        # wenmode-of-format_markdown produces: a collapsible
         # ``<details>`` block with a preview for long bodies. Per v1
         # contract this MUST return a real string (no None sentinel).
         body = _body_text(self.output)

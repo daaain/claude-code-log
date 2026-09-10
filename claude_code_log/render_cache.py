@@ -11,7 +11,7 @@ duplicate all of the per-message formatting work. Measured on a 118-file,
 12k-message project: 22,420 ``format_content`` calls covering 11,113
 distinct messages.
 
-The two dominant leaves of that work are Pygments highlighting and mistune
+The two dominant leaves of that work are Pygments highlighting and wenmode
 Markdown rendering, and both are pure functions of their string inputs
 (with one caveat, below). Memoizing just those two removes the duplication
 without touching the render pipeline's structure — and also collapses the

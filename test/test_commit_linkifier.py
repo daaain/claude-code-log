@@ -3,8 +3,8 @@
 Covers two modules and their integration:
 
 - ``markdown_plugins.make_sha_plugin`` and ``linkify_shas_in_text``:
-  unit-level checks of the inline-parser plugin and the
-  Markdown-side text substitution helper. Resolver is mocked.
+  unit-level checks of the post-parse SHA-link transform and the
+  Markdown-side source splice. Resolver is mocked.
 
 - ``git_remote.resolve_sha`` + ``render_with_repo_context``: end-to-
   end against the project's own git repo (cheap, deterministic, no
@@ -33,7 +33,6 @@ from claude_code_log.html.utils import render_markdown, render_user_markdown
 from claude_code_log.markdown_plugins import (
     SHA_PATTERN,
     linkify_shas_in_text,
-    make_codespan_sha_plugin,
     make_sha_plugin,
 )
 
@@ -81,15 +80,16 @@ class TestShaPattern:
 
 
 # ---------------------------------------------------------------------------
-# make_sha_plugin: HTML mistune integration
+# make_sha_plugin: HTML wenmode integration
 
 
 def _render_with_plugin(text: str, resolve=_mock_resolve) -> str:
-    """Build a fresh mistune renderer with our plugin and render *text*."""
-    import mistune
+    """Build a fresh wenmode renderer with our plugin and render *text*."""
+    from wenmode import Wenmode
+    from wenmode.presets import github
 
-    md = mistune.create_markdown(plugins=[make_sha_plugin(resolve)])
-    return str(md(text)).strip()
+    wen = Wenmode(github(), plugins=[make_sha_plugin(resolve)])
+    return wen.render(text).strip()
 
 
 class TestShaPluginInline:
@@ -103,16 +103,17 @@ class TestShaPluginInline:
         assert "<a" not in out
 
     def test_fires_inside_emphasis(self):
-        # Confirms main's research finding: the inline plugin recurses
-        # through `parse_emphasis` so registered rules fire inside
-        # *…* and **…**.
+        # The transform walks every inline container, so it fires
+        # inside *…* and **…**.
         out = _render_with_plugin("**before abc1234 after**")
         assert "<strong>" in out
         assert '<a href="https://example.com/abc1234">' in out
 
     def test_does_not_fire_inside_codespan(self):
-        out = _render_with_plugin("`abc1234` stays code")
-        assert "<code>abc1234</code>" in out
+        # A SHA embedded in a wider code span is code, not a reference
+        # (the exact-SHA span form is linked; see TestCodespanShaPlugin).
+        out = _render_with_plugin("`git show abc1234` stays code")
+        assert "<code>git show abc1234</code>" in out
         assert "<a" not in out
 
     def test_does_not_fire_inside_fenced_block(self):
@@ -121,8 +122,8 @@ class TestShaPluginInline:
         assert "<a" not in out
 
     def test_does_not_double_wrap_existing_link(self):
-        # The existing-link guard (state.in_link) keeps us from emitting
-        # a nested <a> when the SHA appears inside a Markdown link.
+        # Nothing under an existing Link node is touched, so no nested
+        # <a> when the SHA appears inside a Markdown link.
         out = _render_with_plugin("[abc1234](http://manual.example/x)")
         assert out.count("<a ") == 1
         assert "manual.example" in out
@@ -135,20 +136,13 @@ class TestShaPluginInline:
 
 
 # ---------------------------------------------------------------------------
-# make_codespan_sha_plugin: HTML mistune integration for `sha` codespans
+# The same plugin, for `sha` codespans
 
 
 def _render_with_both_plugins(text: str, resolve=_mock_resolve) -> str:
-    """Build a fresh mistune renderer with *both* SHA plugins."""
-    import mistune
-
-    md = mistune.create_markdown(
-        plugins=[
-            make_sha_plugin(resolve),
-            make_codespan_sha_plugin(resolve),
-        ]
-    )
-    return str(md(text)).strip()
+    """One plugin covers both forms; kept as a separate helper so the
+    codespan cases read on their own."""
+    return _render_with_plugin(text, resolve)
 
 
 class TestCodespanShaPlugin:
@@ -181,8 +175,8 @@ class TestCodespanShaPlugin:
         assert '<a href="https://example.com/abc1234"><code>abc1234</code></a>' in out
 
     def test_codespan_sha_inside_existing_link_preserves_code(self):
-        # `[\`abc1234\`](url)`: don't double-wrap, but the in_link
-        # branch still emits a codespan token, so the link content
+        # `[\`abc1234\`](url)`: don't double-wrap; the code span
+        # node under the link is left as it is, so the link content
         # is monospaced (not raw backtick text).
         out = _render_with_both_plugins("[`abc1234`](http://manual.example/x)")
         assert out.count("<a ") == 1
@@ -216,12 +210,10 @@ class TestLinkifyShasInText:
     def test_empty_text_returns_unchanged(self):
         assert linkify_shas_in_text("", _mock_resolve) == ""
 
-    # -- Negative-context tests (regression for monk's review on PR #156) --
+    # -- Negative-context tests (regressions surfaced in review) --
     #
-    # The HTML side's plugin gets these skips for free from mistune's
-    # inline parser; the Markdown side has to enforce them manually
-    # via the tokenizer in ``_linkify_inline`` / ``_linkify_block_tokens``.
-    # Mirrors the parity contract checked by
+    # Both sides now use the same parser, so these skips come from the
+    # node tree; the tests pin the parity contract checked by
     # ``TestShaPluginInline.test_does_not_fire_inside_codespan`` etc.
 
     def test_skips_inside_inline_codespan(self):
@@ -246,22 +238,17 @@ class TestLinkifyShasInText:
         out = linkify_shas_in_text("    abc1234 indented", _mock_resolve)
         assert out == "    abc1234 indented"
 
-    def test_documents_tab_indent_gap(self):
+    def test_skips_inside_tab_indented_code_block(self):
         # CommonMark treats a leading tab as 4-space-equivalent → an
-        # indented code block. Our block tokenizer gates strictly on
-        # space-only indent (``line.lstrip(" ")``), so a tab-prefixed
-        # SHA does get linkified — in violation of CommonMark. This
-        # test pins the current (incorrect-but-documented) behaviour
-        # so any future fix flags it explicitly. Revisit if real-world
-        # transcripts show tab-indented prose; until then, the cost of
-        # widening the indent detector isn't worth it.
+        # indented code block. The hand-rolled tokenizer this replaced
+        # gated on space-only indent and linkified here; the parser
+        # sees a code block.
         out = linkify_shas_in_text("\tabc1234 tab-indented", _mock_resolve)
-        assert out == "\t[abc1234](https://example.com/abc1234) tab-indented"
+        assert out == "\tabc1234 tab-indented"
 
     def test_skips_existing_markdown_link(self):
-        # The HTML plugin's ``state.in_link`` guard's text-helper
-        # equivalent: a SHA already inside a ``[text](url)`` must not
-        # be double-wrapped.
+        # A SHA already inside a ``[text](url)`` must not be
+        # double-wrapped.
         out = linkify_shas_in_text("[abc1234](manual.example/x)", _mock_resolve)
         assert out == "[abc1234](manual.example/x)"
 
@@ -296,18 +283,16 @@ class TestLinkifyShasInText:
 
     def test_lone_open_bracket_terminates(self):
         # Regression: a ``[`` that doesn't open a valid ``[text](url)``
-        # link must be emitted as a literal char. Earlier tokenizer
-        # stalled here because the prose-accumulator stopped on the
-        # same ``[`` it was meant to consume → infinite loop.
+        # link must be emitted as a literal char. The hand-rolled
+        # tokenizer this replaced once looped forever here.
         out = linkify_shas_in_text("Label [INFO] abc1234", _mock_resolve)
         assert out == "Label [INFO] [abc1234](https://example.com/abc1234)"
 
     def test_bracket_without_closing_paren_still_substitutes(self):
         # ``[text]`` with no following ``(url)`` is not a Markdown link
-        # — neither does mistune treat it as one on the HTML side
-        # (no matching reference definition) so the SHA plugin fires
-        # on the prose inside. The Markdown helper mirrors that: the
-        # brackets become literal characters around a substituted SHA.
+        # — the parser does not treat it as one (no matching reference
+        # definition) so the SHA transform fires on the prose inside.
+        # The brackets stay literal around a substituted SHA.
         out = linkify_shas_in_text("see [abc1234] note", _mock_resolve)
         assert out == "see [[abc1234](https://example.com/abc1234)] note"
 

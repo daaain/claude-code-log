@@ -293,7 +293,22 @@ pre {
     display: block;
 }
 
-/* Blockquotes in any rendered Markdown (mistune otherwise emits an
+/* Footnotes: wenmode emits a GitHub-style "Footnotes" heading for
+ * screen readers; keep it out of the visual flow like GitHub does. */
+.markdown .sr-only,
+.user-md .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+/* Blockquotes in any rendered Markdown (wenmode otherwise emits an
  * unstyled <blockquote> indistinguishable from surrounding text).
  * `.markdown` covers every rendered-Markdown surface — assistant text,
  * thinking, tool results, teammate messages, system output; `.user-md`

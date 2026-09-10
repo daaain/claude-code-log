@@ -19,9 +19,16 @@ import json
 import re
 from pathlib import Path
 from typing import Any, Callable, Optional, TYPE_CHECKING
+from urllib.parse import urlsplit
 
-import mistune
 from jinja2 import Environment, FileSystemLoader, select_autoescape
+
+from wenmode import HTMLRenderer, Wenmode
+from wenmode.renderers.html import (
+    normalize_url_for_scheme_check as _normalize_url_for_scheme_check,
+)
+from wenmode.renderers.html import render_code as _default_render_code
+from wenmode.renderers.html import render_text as _default_render_text
 
 from .renderer_code import highlight_code_with_pygments, truncate_highlighted_preview
 from ..models import (
@@ -381,8 +388,14 @@ def escape_html(text: str) -> str:
     return html.escape(normalized)
 
 
-def _create_pygments_plugin() -> Any:
-    """Create a mistune plugin that uses Pygments for code block syntax highlighting."""
+def _render_code_with_pygments(renderer: Any, node: Any, context: Any) -> str:
+    """wenmode ``code`` handler: Pygments when the fence names a language.
+
+    Falls back to wenmode's own ``<pre><code>`` rendering when there is
+    no language hint, so plain fences stay as they were.
+    """
+    if not node.lang:
+        return str(_default_render_code(renderer, node, context))
     from pygments import highlight
     from pygments.lexer import Lexer
     from pygments.lexers import get_lexer_by_name, TextLexer
@@ -390,88 +403,154 @@ def _create_pygments_plugin() -> Any:
     from pygments.formatters import HtmlFormatter
     from pygments.util import ClassNotFound
 
-    def plugin_pygments(md: Any) -> None:
-        """Plugin to add Pygments syntax highlighting to code blocks."""
-        original_render = md.renderer.block_code
-
-        def block_code(code: str, info: Optional[str] = None) -> str:
-            """Render code block with Pygments syntax highlighting if language is specified."""
-            if info:
-                # Language hint provided, use Pygments
-                lang = info.split()[0] if info else ""
-                # Default to plain text lexer
-                lexer: Lexer = TextLexer()
-                try:
-                    lexer = get_lexer_by_name(lang, stripall=False)
-                except ClassNotFound:
-                    pass  # Already have default
-
-                formatter: Formatter = HtmlFormatter(
-                    linenos=False,  # No line numbers in markdown code blocks
-                    cssclass="highlight",
-                    wrapcode=True,
-                )
-                # Track Pygments timing if enabled
-                with timing_stat("_pygments_timings"):
-                    return str(highlight(code, lexer, formatter))
-            else:
-                # No language hint, use default rendering
-                return original_render(code, info)
-
-        md.renderer.block_code = block_code
-
-    return plugin_pygments
+    lang = node.lang.split()[0]
+    lexer: Lexer = TextLexer()
+    try:
+        lexer = get_lexer_by_name(lang, stripall=False)
+    except ClassNotFound:
+        pass  # Already have default
+    formatter: Formatter = HtmlFormatter(
+        linenos=False,  # No line numbers in markdown code blocks
+        cssclass="highlight",
+        wrapcode=True,
+    )
+    with timing_stat("_pygments_timings"):
+        return str(highlight(node.value, lexer, formatter))
 
 
-@functools.lru_cache(maxsize=1)
-def _get_markdown_renderer() -> mistune.Markdown:
-    """Get cached Mistune markdown renderer with Pygments syntax highlighting.
+def _render_text_hard_wrapped(renderer: Any, node: Any, context: Any) -> str:
+    """wenmode ``text`` handler: a newline in prose is a line break.
 
-    Uses ``escape=True`` so raw HTML embedded in the source text
-    (``<script>``, ``<img onerror=…>``, bare ``<b>``, …) is rendered as
-    literal entity-escaped text rather than injected as live DOM.
-
-    This renderer handles assistant/tool/web-authored content (assistant
-    prose, Task/WebSearch/WebFetch results, plans, system messages,
-    teammate bodies). That content is **not** trusted: the assistant
-    routinely echoes arbitrary user/file/web input verbatim — e.g. "write
-    an E2E test that types ``<script>alert(1)</script>`` into the field" —
-    so rendering it unescaped lets that payload execute when the transcript
-    HTML is opened. The Markdown output path already neutralises raw HTML
-    from every source (see ``markdown/renderer.py::_protect_html_tags``);
-    the HTML path must match. ``escape=True`` does not affect Markdown
-    formatting, plugin output (Pygments, SHA links), or code fences — only
-    raw HTML tags in the body.
+    Assistant messages carry checklists and other line-oriented text
+    without Markdown's two-trailing-spaces convention, so every soft
+    break renders as ``<br />`` (what mistune called ``hard_wrap``).
     """
-    from ..markdown_plugins import make_codespan_sha_plugin, make_sha_plugin
+    return str(_default_render_text(renderer, node, context)).replace("\n", "<br />\n")
+
+
+def _render_html_escaped(renderer: Any, node: Any, context: Any) -> str:
+    """wenmode ``html`` handler: raw HTML is shown as text, never live.
+
+    Transcript content is untrusted from every source (#245 XSS), so
+    every raw-HTML node is entity-escaped. A block-level one (marked by
+    ``markdown_plugins.BlockHtmlMarker``) is wrapped in a paragraph so
+    it lays out like the text it now is.
+    """
+    if node.data and node.data.get("block"):
+        return "<p>" + str(renderer.escape_html(node.value.strip())) + "</p>\n"
+    return str(renderer.escape_html(node.value))
+
+
+# Schemes a link or image in a transcript must never carry (mistune's
+# list, kept). Anything else — ``cci:`` editor links, ``vercel.json:20``
+# file references, relative paths — stays a working link: transcripts
+# are full of targets no allowlist would anticipate, and none of those
+# can execute script.
+_HARMFUL_URL_SCHEMES = frozenset(
+    {
+        "javascript",
+        "vbscript",
+        "file",
+        "data",
+        "feed",
+        "jar",
+        "livescript",
+        "mocha",
+        "ms-its",
+        "mk",
+        "res",
+        "view-source",
+    }
+)
+_GOOD_DATA_PREFIXES = (
+    "data:image/gif;",
+    "data:image/png;",
+    "data:image/jpeg;",
+    "data:image/webp;",
+)
+
+
+class _TranscriptHTMLRenderer(HTMLRenderer):
+    """wenmode's HTML renderer with a denylist URL policy.
+
+    wenmode's default allows only ``http``, ``https``, ``irc``, ``ircs``,
+    ``mailto`` and ``tel``; every other scheme loses its ``href``. The
+    XSS contract (#245) only needs the dangerous schemes gone, so this
+    keeps mistune's denylist (``file:`` included) and lets the rest
+    through unchanged. Attribute sanitising and raw-HTML escaping are
+    wenmode's defaults, untouched.
+    """
+
+    def sanitize_url(self, value: str) -> Optional[str]:
+        try:
+            normalized = _normalize_url_for_scheme_check(value)
+            scheme = urlsplit(normalized).scheme.lower()
+        except ValueError:
+            return None
+        if scheme in _HARMFUL_URL_SCHEMES and not normalized.lower().startswith(
+            _GOOD_DATA_PREFIXES
+        ):
+            return None
+        return value
+
+
+class _TranscriptHtmlHandlers:
+    """wenmode plugin installing the transcript HTML handlers above."""
+
+    def setup(self, wen: Wenmode, /) -> None:
+        wen.register_renderer_handlers(
+            {
+                "html": {
+                    "code": _render_code_with_pygments,
+                    "text": _render_text_hard_wrapped,
+                    "html": _render_html_escaped,
+                }
+            }
+        )
+
+
+def _build_transcript_markdown() -> Wenmode:
+    """The wenmode pipeline both content renderers use.
+
+    ``escape=True`` renders raw HTML embedded in the source text
+    (``<script>``, ``<img onerror=…>``, bare ``<b>``, …) as literal
+    entity-escaped text rather than injected as live DOM, and the
+    renderer's URL policy drops ``javascript:``/``data:`` link targets. Transcript content is **not** trusted from any source: the
+    assistant routinely echoes arbitrary user/file/web input verbatim —
+    e.g. "write an E2E test that types ``<script>alert(1)</script>`` into
+    the field" — so rendering it unescaped lets that payload execute when
+    the transcript HTML is opened. The Markdown output path neutralises
+    raw HTML the same way (see ``markdown/renderer.py::_protect_html_tags``).
+    Escaping does not affect Markdown formatting, Pygments output, SHA
+    links or code fences — only raw HTML in the body.
+
+    The SHA → commit-URL linkifier (issue #156) reads the per-render cwd
+    from a ContextVar, so the cached singleton keeps working unchanged
+    across transcripts from different repos.
+    """
+    from ..markdown_plugins import transcript_plugins, transcript_rules
     from ..git_remote import resolve_sha_for_current_render
 
-    return mistune.create_markdown(
-        plugins=[
-            "strikethrough",
-            "footnotes",
-            "table",
-            "url",
-            "task_lists",
-            "def_list",
-            _create_pygments_plugin(),
-            # SHA → commit-URL linkifier (issue #156). Resolver reads
-            # the per-render cwd from a ContextVar, so the cached
-            # singleton renderer keeps working unchanged across
-            # transcripts from different repos.
-            make_sha_plugin(resolve_sha_for_current_render),
-            # Codespan-wrapped variant: `5baac35` → <a><code>…</code></a>.
-            # Registers with before="codespan" so it fires before
-            # mistune's built-in rule consumes the backticks.
-            make_codespan_sha_plugin(resolve_sha_for_current_render),
-        ],
-        escape=True,  # Escape raw HTML: transcript content is untrusted (XSS)
-        hard_wrap=True,  # Line break for newlines (checklists in Assistant messages)
+    return Wenmode(
+        transcript_rules(resolve_sha_for_current_render),
+        renderer=_TranscriptHTMLRenderer(escape=True),  # untrusted content (XSS, #245)
+        plugins=[*transcript_plugins(), _TranscriptHtmlHandlers()],
     )
 
 
+@functools.lru_cache(maxsize=1)
+def _get_markdown_renderer() -> Wenmode:
+    """Cached renderer for assistant/tool/web-authored content.
+
+    Assistant prose, Task/WebSearch/WebFetch results, plans, system
+    messages, teammate bodies. See ``_build_transcript_markdown`` for
+    the escaping contract.
+    """
+    return _build_transcript_markdown()
+
+
 def _render_markdown_memoized(text: str, escaping_user_renderer: bool) -> str:
-    """Render ``text`` through one of the two mistune singletons, memoized.
+    """Render ``text`` through one of the two wenmode singletons, memoized.
 
     Markdown output is a pure function of the text *and* the active render
     repo cwd: the SHA-linkifier plugin resolves commit hashes against
@@ -498,13 +577,13 @@ def _render_markdown_memoized(text: str, escaping_user_renderer: bool) -> str:
             if escaping_user_renderer
             else _get_markdown_renderer()
         )
-        rendered = str(renderer(text))
+        rendered = renderer.render(text)
     markdown_cache.put(memo_key, rendered)
     return rendered
 
 
 def render_markdown(text: str) -> str:
-    """Convert markdown text to HTML using mistune with Pygments syntax highlighting."""
+    """Convert markdown text to HTML using wenmode with Pygments syntax highlighting."""
     return _render_markdown_memoized(text, escaping_user_renderer=False)
 
 
@@ -533,38 +612,17 @@ def render_markdown_inline(text: str) -> str:
 
 
 @functools.lru_cache(maxsize=1)
-def _get_user_markdown_renderer() -> mistune.Markdown:
-    """Markdown renderer for user-authored text.
+def _get_user_markdown_renderer() -> Wenmode:
+    """Cached renderer for user-authored text.
 
-    Uses ``escape=True`` so raw ``<script>`` or other HTML in the source is
-    rendered as literal escaped text, not injected into the DOM. The shared
-    renderer (``_get_markdown_renderer``) was historically ``escape=False``
-    for assistant/tool output that emitted pre-formed HTML; it now also
-    escapes — transcript content is untrusted from every source (#245 XSS),
-    so both pipelines neutralise raw HTML. This one is retained for the
-    user-content call sites (``render_user_markdown``).
+    Same pipeline as ``_get_markdown_renderer`` — the shared renderer was
+    historically ``escape=False`` for assistant/tool output that emitted
+    pre-formed HTML; both now escape (#245 XSS) because transcript
+    content is untrusted from every source. This one is retained as a
+    distinct object for the user-content call sites
+    (``render_user_markdown``); the memo keys on which singleton rendered.
     """
-    from ..markdown_plugins import make_codespan_sha_plugin, make_sha_plugin
-    from ..git_remote import resolve_sha_for_current_render
-
-    return mistune.create_markdown(
-        plugins=[
-            "strikethrough",
-            "footnotes",
-            "table",
-            "url",
-            "task_lists",
-            "def_list",
-            _create_pygments_plugin(),
-            # See _get_markdown_renderer for the SHA-link plugins'
-            # contract; identical here — escape=True only affects
-            # HTML in user text bodies, not link emission.
-            make_sha_plugin(resolve_sha_for_current_render),
-            make_codespan_sha_plugin(resolve_sha_for_current_render),
-        ],
-        escape=True,
-        hard_wrap=True,
-    )
+    return _build_transcript_markdown()
 
 
 def render_user_markdown(text: str) -> str:
@@ -606,7 +664,7 @@ def is_well_formed_html(fragment: str) -> bool:
 
     Void elements (``<br>``, ``<img>``, …) don't push to the stack, and
     XHTML-style self-closing syntax (``<br />``, ``<hr />``) is treated
-    as equivalent — mistune emits XHTML self-closing for voids so the
+    as equivalent — wenmode emits XHTML self-closing for voids so the
     check must accept both.
     """
     from html.parser import HTMLParser

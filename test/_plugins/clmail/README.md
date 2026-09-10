@@ -46,7 +46,7 @@ Plugin-defined `MessageContent` subclasses carry their own
 `_dispatch_format` walks the MRO and consults these methods after
 exhausting the renderer-side `format_<ClassName>` chain (Strategy 2
 in the RFC). Returning `None` from `format_html` falls back to
-`mistune(format_markdown)` — consistent with the rest of the codebase.
+`wenmode(format_markdown)` — consistent with the rest of the codebase.
 
 ## `depth_visibility`
 
