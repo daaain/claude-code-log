@@ -10,16 +10,30 @@ transcript doesn't sprout broken links for work-in-progress branches.
 
 - ``resolve_sha(cwd, sha)`` is the all-in-one resolver: from a working
   directory, look up ``origin``'s remote URL, classify the host
-  (currently GitHub only), check the SHA is reachable from a
-  remote-tracking branch (``git branch -r --contains``), expand short
-  SHA → full SHA via ``git rev-parse``, and return the canonical
-  commit URL. Returns ``None`` for any failure (no repo, no remote,
-  unknown host, unresolved SHA, etc.).
+  (static map, then the fallback template), find the commit the SHA
+  names, and return the canonical commit URL. Returns ``None`` for any
+  failure (no repo, no remote, unknown host, unresolved SHA, etc.).
 
-- All ``git`` invocations are wrapped in ``functools.lru_cache`` —
-  including the negative cases (``None``/``False`` results) — so a
-  large transcript with hundreds of repeated SHAs only pays the
-  subprocess cost once per (cwd, sha) tuple.
+- Commits are found in **one** ``git rev-list --remotes`` per working
+  directory (``_RemoteCommits``), not one subprocess per candidate: a
+  short SHA resolves by prefix lookup in that sorted list, and an
+  ambiguous prefix stays unresolved, as ``git rev-parse`` would leave
+  it. Set membership answers the negatives for free — and in real
+  transcripts over a third of the SHA-shaped tokens are not commits at
+  all (task ids, UUID fragments, digit runs), each of which used to
+  cost a ``git branch -r --contains`` walk just to learn so (issue
+  #327: 549 of those, ~22 ms each, against ~20 ms for the whole list).
+
+- When the list cannot be read at all (``git`` errors or times out)
+  but the remote is known, every SHA-shaped token links unvalidated,
+  as written — forges resolve short SHAs themselves. Both behaviours
+  go through ``_commit_for``, so what counts as a linkable token is
+  decided in one place.
+
+- The list is held per process and re-read when a lookup misses and
+  the list is older than ``_REMOTE_COMMITS_MAX_AGE_SECONDS``, so a
+  long-lived process (``watch``, the TUI) picks up commits fetched
+  after it started without re-reading on every miss.
 
 - A ``contextvars.ContextVar`` carries the per-render canonical cwd so
   the cached singleton mistune renderers don't have to be rebuilt per
@@ -59,6 +73,10 @@ import functools
 import os
 import re
 import subprocess
+import threading
+import time
+from collections import OrderedDict
+from dataclasses import dataclass
 from typing import Any, Iterator, Optional
 
 
@@ -76,13 +94,14 @@ _HOST_URL_PATTERNS: dict[str, str] = {
 # map misses. Lets users wire up self-hosted GitLab / Gitea / Forgejo
 # / SourceHut etc. with a single template. Placeholders: ``{host}``
 # (parsed from the remote URL), ``{path}`` (owner/repo or
-# group/subgroup/repo), ``{sha}`` (full 40-char SHA). The CLI
-# ``--git-link`` flag is a UX convenience that sets this env var.
+# group/subgroup/repo), ``{sha}`` (the full SHA; the SHA as written when
+# the commit list is unreadable). The CLI ``--git-link`` flag is a UX
+# convenience that sets this env var.
 _FALLBACK_TEMPLATE_ENV = "CLAUDE_CODE_LOG_GIT_LINK"
 
-# Wall-clock cap on each ``git`` invocation. It is a safety valve, not a
-# budget: the calls are sub-100ms on a normal repo and every one of them
-# is memoized per (cwd, sha), so the cap only ever bites when the
+# Wall-clock cap on the ``git config`` remote lookup. It is a safety
+# valve, not a budget: the call is sub-100ms on a normal repo and
+# memoized per cwd, so the cap only ever bites when the
 # environment — not the repo — is pathologically slow. It was 2s, which
 # the Windows CI runner exceeded under parallel test workers (git process
 # spawn there is slow enough on its own that ~2s of contention is
@@ -92,6 +111,38 @@ _FALLBACK_TEMPLATE_ENV = "CLAUDE_CODE_LOG_GIT_LINK"
 # codebase and buys ~2.5x headroom without making a genuinely broken git
 # stall a render for long.
 _GIT_TIMEOUT_SECONDS = 5
+
+# Wall-clock cap on ``git rev-list --remotes``. Longer than the lookup
+# cap because the walk scales with history (~20 ms at 1.6k commits,
+# ~0.1 s at 13k) and runs once per cwd rather than once per SHA — and
+# because a timeout here is not a silent "no link" but the unvalidated
+# fallback, which links every SHA-shaped token. Slow contention should
+# not flip a render into that mode.
+_GIT_LIST_TIMEOUT_SECONDS = 30
+
+# Floor on how long a commit list is trusted before a lookup miss
+# re-reads it. Staleness only matters to a long-lived process (``watch``,
+# the TUI) whose transcripts cite commits fetched after it started; the
+# floor bounds the re-reads that the non-commit tokens — a third of the
+# candidates — would otherwise trigger. A list that was slow to read is
+# trusted proportionally longer (``_REMOTE_COMMITS_REREAD_FACTOR`` times
+# its read time), so re-reading costs at most ~5% of wall time.
+_REMOTE_COMMITS_MAX_AGE_SECONDS = 60.0
+_REMOTE_COMMITS_REREAD_FACTOR = 20.0
+
+# Distinct working directories whose commit lists a process holds at
+# once. Each costs 20 bytes per commit; an all-projects run in one process
+# visits one cwd per project.
+_REMOTE_COMMITS_MAX_CWDS = 32
+
+# What a token must look like to be linked at all — by either behaviour
+# of ``_commit_for``. Mirrors the plugins' ``SHA_PATTERN`` (git's 7-char
+# default abbreviation up to a full SHA-1), so the unvalidated fallback
+# cannot link anything the validated path would not have been asked about.
+_SHA_SHAPE_RE = re.compile(r"[0-9a-f]{7,40}")
+
+# Monotonic clock for list ages; a module attribute so tests can move time.
+_now = time.monotonic
 
 
 # SSH form ``git@host:path`` or HTTPS ``https://host/path``. The trailing
@@ -169,50 +220,155 @@ def _git_remote_for(cwd: str) -> Optional[tuple[str, str]]:
     return _parse_git_url(result.stdout.strip())
 
 
-@functools.lru_cache(maxsize=4096)
-def _commit_reachable_from_remote(cwd: str, sha: str) -> bool:
-    """Whether ``sha`` is reachable from any remote-tracking branch.
+@dataclass(frozen=True)
+class _RemoteCommits:
+    """Every commit reachable from a remote-tracking ref of one cwd.
 
     Uses local refs only — no network round-trip. Trades freshness for
-    speed: if the user pushed a commit and hasn't fetched since,
-    ``--contains`` won't see it on a remote-tracking branch and we'll
-    render it as plain text. Documented elsewhere; the fallback is
-    correct (no broken links).
+    speed: a commit pushed but not yet fetched isn't on a remote-tracking
+    ref, so it renders as plain text (no broken link).
+
+    ``ids`` holds the binary object ids, sorted and concatenated at a
+    fixed ``width`` (20 bytes for SHA-1, 32 for SHA-256): one bytes
+    object at the id's own size, rather than a list of ~90-byte hex
+    strings — every render worker holds its own copy. ``ids is None``
+    means the list could not be read (see ``_commit_for``).
     """
+
+    ids: Optional[bytes]
+    width: int
+    read_at: float
+    trusted_for: float
+
+    def is_stale(self) -> bool:
+        return _now() - self.read_at >= self.trusted_for
+
+    def find(self, sha: str) -> Optional[str]:
+        """The full id of the one commit ``sha`` abbreviates, else ``None``.
+
+        ``None`` both when no commit starts with ``sha`` and when several
+        do: an ambiguous abbreviation stays unresolved, as ``git
+        rev-parse`` leaves it. Ambiguity is judged among the listed
+        commits only, where git also counts local-only commits and other
+        objects — so a prefix shared with an unpushed commit now links to
+        the pushed one instead of to nothing.
+        """
+        ids, width = self.ids, self.width
+        if not ids or len(sha) > 2 * width:
+            return None
+        # Every id starting with ``sha`` lies in [low, high].
+        low = bytes.fromhex(sha.ljust(2 * width, "0"))
+        high = bytes.fromhex(sha.ljust(2 * width, "f"))
+        count = len(ids) // width
+        lo, hi = 0, count
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if ids[mid * width : (mid + 1) * width] < low:
+                lo = mid + 1
+            else:
+                hi = mid
+        first = ids[lo * width : (lo + 1) * width]
+        if lo == count or first > high:
+            return None
+        if lo + 1 < count and ids[(lo + 1) * width : (lo + 2) * width] <= high:
+            return None
+        return first.hex()
+
+
+def _read_remote_commits(cwd: str) -> _RemoteCommits:
+    """One ``git rev-list --remotes`` for ``cwd``, as a ``_RemoteCommits``."""
+    started = _now()
+    ids: Optional[bytes] = None
+    width = 20
     try:
         result = subprocess.run(
-            ["git", "-C", cwd, "branch", "-r", "--contains", sha],
+            ["git", "-C", cwd, "rev-list", "--remotes"],
             capture_output=True,
             text=True,
-            timeout=_GIT_TIMEOUT_SECONDS,
+            timeout=_GIT_LIST_TIMEOUT_SECONDS,
             check=False,
         )
     except (OSError, subprocess.SubprocessError):
-        return False
-    return result.returncode == 0 and bool(result.stdout.strip())
+        result = None
+    if result is not None and result.returncode == 0:
+        lines = result.stdout.split()
+        if lines:
+            width = len(lines[0]) // 2
+        try:
+            decoded = sorted(bytes.fromhex(line) for line in lines)
+        except ValueError:
+            decoded = None
+        if decoded is not None and all(len(i) == width for i in decoded):
+            ids = b"".join(decoded)
+    finished = _now()
+    return _RemoteCommits(
+        ids=ids,
+        width=width,
+        read_at=finished,
+        trusted_for=max(
+            _REMOTE_COMMITS_MAX_AGE_SECONDS,
+            _REMOTE_COMMITS_REREAD_FACTOR * (finished - started),
+        ),
+    )
 
 
-@functools.lru_cache(maxsize=4096)
-def _expand_to_full_sha(cwd: str, sha: str) -> Optional[str]:
-    """Resolve a (possibly short) SHA to its full 40-char form.
+_remote_commits_by_cwd: OrderedDict[str, _RemoteCommits] = OrderedDict()
+_remote_commits_lock = threading.Lock()
 
-    The ``^{commit}`` peeling makes this fail cleanly when ``sha`` is
-    actually a tag or other ref name we shouldn't link to as a commit.
+
+def _remote_commits(cwd: str, *, reread: bool = False) -> _RemoteCommits:
+    """The held commit list for ``cwd``, reading it on first use.
+
+    ``reread`` forces a fresh read (the caller has decided the held list
+    is stale). Bounded to ``_REMOTE_COMMITS_MAX_CWDS`` lists, least
+    recently used evicted first.
     """
-    try:
-        result = subprocess.run(
-            ["git", "-C", cwd, "rev-parse", "--verify", f"{sha}^{{commit}}"],
-            capture_output=True,
-            text=True,
-            timeout=_GIT_TIMEOUT_SECONDS,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
+    with _remote_commits_lock:
+        held = None if reread else _remote_commits_by_cwd.get(cwd)
+        if held is not None:
+            _remote_commits_by_cwd.move_to_end(cwd)
+            return held
+    # Read outside the lock: a slow ``git`` must not serialize other
+    # cwds. Two threads racing on one cwd both read; the last one wins.
+    held = _read_remote_commits(cwd)
+    with _remote_commits_lock:
+        _remote_commits_by_cwd[cwd] = held
+        _remote_commits_by_cwd.move_to_end(cwd)
+        while len(_remote_commits_by_cwd) > _REMOTE_COMMITS_MAX_CWDS:
+            _remote_commits_by_cwd.popitem(last=False)
+    return held
+
+
+def _commit_for(cwd: str, sha: str) -> Optional[str]:
+    """The commit id to link ``sha`` to, or ``None`` to leave it as text.
+
+    The single definition of what gets linked, in both behaviours:
+
+    - **The commit list is readable** (the normal case): ``sha`` must
+      abbreviate exactly one commit reachable from a remote-tracking
+      ref, and the link carries that commit's full id. Everything else —
+      local-only commits, other repositories' SHAs, task ids, UUID
+      fragments — stays plain text.
+    - **It is not** (``git`` failed or timed out, though the remote is
+      known): nothing can be validated, so every SHA-shaped token links
+      as written. Forges resolve abbreviated SHAs themselves; tokens
+      that are not commits there become dead links, which is the price
+      of not having the list.
+
+    Either way the token must have the SHA shape first. A miss against
+    a list older than its trust window re-reads the list once, so
+    commits fetched since it was read are found; a hit needs no re-read.
+    """
+    if not _SHA_SHAPE_RE.fullmatch(sha):
         return None
-    if result.returncode != 0:
-        return None
-    full = result.stdout.strip()
-    return full if len(full) == 40 else None
+    commits = _remote_commits(cwd)
+    full = commits.find(sha)
+    if full is None and commits.is_stale():
+        commits = _remote_commits(cwd, reread=True)
+        full = commits.find(sha)
+    if commits.ids is None:
+        return sha
+    return full
 
 
 def _fallback_template() -> Optional[str]:
@@ -226,10 +382,10 @@ def _fallback_template() -> Optional[str]:
     eagerly with a loud error; this function is the defence-in-depth
     for the env-var-only path.
 
-    Note: ``resolve_sha`` is ``@lru_cache``-d, so flipping
-    ``CLAUDE_CODE_LOG_GIT_LINK`` mid-process won't re-resolve
-    already-cached SHAs. Call ``clear_resolver_caches()`` after
-    mutating the env var (the test fixtures already do).
+    Read on every resolve for a host the static map misses, so flipping
+    ``CLAUDE_CODE_LOG_GIT_LINK`` mid-process takes effect for SHAs
+    rendered afterwards — though the Markdown memo (``render_cache``)
+    still serves text it already rendered.
     """
     template = os.environ.get(_FALLBACK_TEMPLATE_ENV, "").strip()
     if not template:
@@ -239,7 +395,6 @@ def _fallback_template() -> Optional[str]:
     return template
 
 
-@functools.lru_cache(maxsize=4096)
 def resolve_sha(cwd: Optional[str], sha: str) -> Optional[str]:
     """Resolve a candidate SHA to a commit URL on a known remote.
 
@@ -249,14 +404,14 @@ def resolve_sha(cwd: Optional[str], sha: str) -> Optional[str]:
     - cwd isn't inside a git repo, or has no ``origin`` remote.
     - Remote URL doesn't match any host in ``_HOST_URL_PATTERNS``
       *and* no usable fallback template is set in the environment.
-    - SHA isn't reachable from any local remote-tracking branch.
-    - SHA can't be expanded to a full commit (e.g. it was actually a
-      tag, or shadows a non-commit ref).
+    - ``_commit_for`` declines it: not SHA-shaped, or — when the commit
+      list is readable — not an unambiguous abbreviation of a commit
+      reachable from a remote-tracking ref.
 
     The static host map is consulted first; the fallback template
-    fills in for self-hosted forges (in-house GitLab etc.). All
-    steps are cached, so repeated SHAs in one transcript pay cost
-    only on first encounter.
+    fills in for self-hosted forges (in-house GitLab etc.). Not
+    memoized itself: its ``git`` costs are (the remote per cwd, the
+    commit list per cwd), and what remains is a prefix search.
     """
     if not cwd:
         return None
@@ -273,13 +428,11 @@ def resolve_sha(cwd: Optional[str], sha: str) -> Optional[str]:
         if fallback is None:
             return None
         template = fallback
-    if not _commit_reachable_from_remote(cwd, sha):
-        return None
-    full = _expand_to_full_sha(cwd, sha)
-    if full is None:
+    commit = _commit_for(cwd, sha)
+    if commit is None:
         return None
     try:
-        return template.format(host=host, path=path, sha=full)
+        return template.format(host=host, path=path, sha=commit)
     except (KeyError, IndexError, ValueError):
         # Template has an unknown placeholder (``{foo}``), a positional
         # ``{0}``, or unbalanced braces. The CLI handler whitelists
@@ -355,13 +508,13 @@ def canonical_cwd_from_messages(messages: list[Any]) -> Optional[str]:
 
 
 def clear_resolver_caches() -> None:
-    """Drop all LRU caches in this module.
+    """Drop the remote lookups and commit lists this module holds.
 
     Useful for tests that mock subprocess and need each test to start
     from a clean cache state, and for long-running processes (e.g. the
-    TUI) where the user may swap branches and want stale URLs flushed.
+    TUI) that want a changed remote or freshly fetched commits seen
+    before the lists' own re-read window.
     """
     _git_remote_for.cache_clear()
-    _commit_reachable_from_remote.cache_clear()
-    _expand_to_full_sha.cache_clear()
-    resolve_sha.cache_clear()
+    with _remote_commits_lock:
+        _remote_commits_by_cwd.clear()
