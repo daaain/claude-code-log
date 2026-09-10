@@ -2913,6 +2913,9 @@ def _plan_project(
     # _generate_individual_session_files writes, or every
     # session reads as "not_cached" and the project takes the
     # slow path on every run.
+    # Combined-only runs generate no per-session files, so skip their
+    # staleness query entirely (CodeRabbit review on #297): the I/O is
+    # wasted, and the rows would otherwise inflate stats below.
     stale_sessions = (
         cache_manager.get_stale_sessions(
             valid_session_ids,
@@ -2920,7 +2923,7 @@ def _plan_project(
             ext=combined_ext,
             output_dir=dest_dir,
         )
-        if cache_manager
+        if cache_manager and generate_individual_sessions
         else []
     )
     # Count archived sessions (cached but JSONL deleted)

@@ -249,3 +249,60 @@ def test_no_cache_run_generates_individual_session_files(tmp_path: Path) -> None
     session_files = sorted(project_dir.glob("session-*.html"))
     assert len(session_files) > 0
     assert report.sessions_regenerated == len(session_files)
+
+
+def test_plan_combined_only_run_reports_no_sessions_regenerated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Combined-only plan must not query or count stale sessions.
+
+    On a combined-only run (`generate_individual_sessions=False`) no
+    per-session files are generated, so the plan must skip the
+    per-session staleness query entirely and report zero regenerated
+    sessions even when the cache holds stale session rows (CodeRabbit
+    review on #297). Counting them would also leak into the progress
+    line via `stats.sessions_regenerated`.
+    """
+    project_dir = _build_projects_dir(tmp_path, "combined-only") / "-proj-alpha"
+    monkeypatch.setenv("CLAUDE_CODE_LOG_CACHE_PATH", str(tmp_path / "cache.db"))
+
+    # Seed the cache with a full run.
+    report = converter.RegenerationReport()
+    converter.convert_jsonl_to(
+        "html",
+        project_dir,
+        None,
+        use_cache=True,
+        silent=True,
+        report=report,
+    )
+
+    # Make one session stale (rendered file deleted -> "file_missing")
+    # and the combined output missing so the combined-only plan has
+    # work to do.
+    stale_session_file = next(project_dir.glob("session-*.html"))
+    stale_session_file.unlink()
+    (project_dir / "combined_transcripts.html").unlink()
+
+    stale_queries: list[int] = []
+    real_get_stale_sessions = converter.CacheManager.get_stale_sessions
+
+    def spy_get_stale_sessions(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        stale_queries.append(1)
+        return real_get_stale_sessions(self, *args, **kwargs)
+
+    monkeypatch.setattr(
+        converter.CacheManager, "get_stale_sessions", spy_get_stale_sessions
+    )
+
+    plan = _plan(
+        project_dir,
+        use_cache=True,
+        library_version=converter.get_library_version(),
+        write_combined=True,
+        generate_individual_sessions=False,
+    )
+
+    assert plan.needs_work is True
+    assert stale_queries == []
+    assert plan.stats.sessions_regenerated == 0
