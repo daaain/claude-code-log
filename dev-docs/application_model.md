@@ -217,11 +217,29 @@ rather than trusting them, because the ratio is not a constant. Fsync
 cost scales with device contention, so on a loaded box the same arms
 measured 1382 ms against 46 ms — while a `synchronous=OFF` control
 stayed at 10-12 ms/db across every load, which is what identifies the
-cost as fsync rather than migration work. It also means **each
-migration added to the chain costs a further fsync** at the defaults:
-adding one (013) moved the default arm 111 → 128 ms/db while that
-control moved 9.7 → 10.1, so the cost is the extra commit, not the
-extra SQL. A single-threaded run like
+cost as fsync rather than migration work.
+
+Count the syscalls instead of timing them and the shape is exact, with
+no dependence on what the disk was doing — `strace -c -e trace=fsync`
+over one `run_migrations`, with the chain truncated to its lowest N
+migrations:
+
+| migrations | pre-fix | shipped |
+|-----------:|--------:|--------:|
+| 12 | 228 | 8 |
+| 13 | 236 | 8 |
+| 14 | 244 | 8 |
+
+**Every migration added to the chain costs 8 more fsyncs at the
+defaults, and none with the pragmas** — the runner's cost grows with the
+chain while the shipped one stays flat, so this bounds a cost that
+would otherwise rise with every schema change, rather than paying for
+itself once. Don't infer that slope from timings: what an fsync *costs*
+swings by more than 10x with contention, so per-migration wall-clock
+deltas measured on different days are incoherent (one such pair read
++16 ms and the next −0.7 ms), while the counts above are stable.
+
+A single-threaded run like
 that one therefore badly *understates* what the pairing is worth during
 a parallel test suite: the unit leg creates ~402 databases, and with the
 runner's pragmas removed it takes **~130 s against ~51 s**, three
