@@ -71,13 +71,29 @@ def get_available_migrations() -> List[Tuple[int, Path]]:
     sql_files = sorted(migrations_dir.glob("*.sql"))
 
     migrations: List[Tuple[int, Path]] = []
+    seen: dict[int, str] = {}
     for sql_file in sql_files:
         try:
             version = _parse_migration_number(sql_file.name)
-            migrations.append((version, sql_file))
         except ValueError:
             # Skip files that don't match the naming convention
             continue
+        # Two files sharing a number is not a style problem: `_schema_version`
+        # keys on the number alone, so on any database that already applied
+        # one of them the other is considered applied and its DDL never
+        # runs -- silently, permanently, and only on the caches that came
+        # through the first one. The pair cannot be seen from either branch
+        # while they are developed in parallel; they become visible in the
+        # same tree the moment both merge, which is where this fires.
+        if version in seen:
+            raise ValueError(
+                f"Duplicate migration number {version:03d}: "
+                f"{seen[version]} and {sql_file.name}. Two branches claimed "
+                f"the same number; renumber the later one, since a database "
+                f"that applied either will silently skip the other."
+            )
+        seen[version] = sql_file.name
+        migrations.append((version, sql_file))
 
     return migrations
 
