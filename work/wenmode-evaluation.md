@@ -144,6 +144,219 @@ membership would save ≈ 11 s of the same 30 s.
 - The snapshot suite was not the instrument here: the corpus diff is
   a superset of what it would show, and no swap was committed.
 
+## Integration surface: our extensions, rewritten for wenmode
+
+A follow-up question: would the code where we integrate deeply be
+simpler and more robust on wenmode? Measured by writing the four
+integrations against wenmode 0.15.0 and running the project's own
+linkifier test cases (`test/test_commit_linkifier.py`) plus new ones
+against them — 45 pass — and by comparing behaviour on the real corpus.
+
+| integration | today (mistune) | wenmode equivalent |
+|---|---|---|
+| bare-SHA links + codespan-SHA links | two inline rules, 129 lines | one post-parse AST transform, ~65 lines |
+| Pygments on fenced code | renderer monkey-patch, 40 lines | one `code` handler, 13 lines |
+| `_protect_html_tags` (md→md) | `MarkdownRenderer` subclass, 34 lines | one `html` handler, 4 lines |
+| `linkify_shas_in_text` (Markdown output) | hand-rolled tokenizer, 238 lines | parse with `positions=True` + splice, 35 lines |
+
+What disappears with the transform approach, each a documented
+fragility in `markdown_plugins.py` today:
+
+- **Combined-regex group renumbering** — mistune concatenates rule
+  patterns, so `m.group(1)` and backreferences are unusable; the
+  transform matches on parsed `Text` / `InlineCode` node values.
+- **`before="codespan"` ordering** — load-bearing today; the transform
+  runs after parsing, when code spans and links already exist.
+- **`state.in_link` guard** (a `getattr` with a default) — replaced by
+  ancestry: the walk knows it is under a `Link`.
+- **Renderer monkey-patching** for Pygments — a handler registration.
+- **The hand-rolled tokenizer's documented gaps** (tab-indented code,
+  reference links, images with titles) — the real parser handles them;
+  the splice edits only the byte ranges the parser reported, so the
+  source stays byte-identical outside the links.
+
+Equivalence on the real corpus (all-resolving resolver):
+
+- HTML side: the transform links **exactly the same SHA multiset as the
+  two mistune plugins in 5936 / 5936 bodies**.
+- Markdown side: 5857 / 5936 bodies identical to `linkify_shas_in_text`.
+  The 79 differ only inside raw HTML blocks (`<task-notification>`
+  bodies), where the hand-rolled tokenizer links UUID fragments in file
+  paths and the parser-based version, like the HTML output, does not.
+
+One behavioural difference worth choosing deliberately: the AST sees
+``` ``abc1234`` ``` as the same `InlineCode` node as `` `abc1234` ``, so
+double-backtick SHAs get linked too (the mistune plugin is
+single-backtick only). The splice version keeps the single-backtick
+restriction because it checks the source bytes.
+
+The transform is attached as a `RootTransform` on a trigger-only rule,
+which uses `wenmode._parser.transforms` — a private module today.
+`RootTransform` is referenced by the public custom-plugins docs, so
+asking upstream to export it is the one API request this needs. Root
+transforms also block wenmode's streaming mode, which we do not use.
+
+### The code
+
+```python
+"""wenmode equivalents of our mistune integrations, for the #323 follow-up.
+
+1. SHA linkification (bare + codespan) as ONE post-parse AST transform.
+2. Pygments as a `code` renderer handler.
+3. `_protect_html_tags` as MarkdownRenderer + one `html` handler.
+4. `linkify_shas_in_text` as parse-with-positions + splice.
+"""
+from __future__ import annotations
+
+import html as _html
+import re
+from typing import Callable, Optional
+
+from wenmode import HTMLRenderer, Wenmode
+from wenmode.nodes import Html, InlineCode, Link, Node, Parent, Position, Text
+from wenmode.presets import github
+from wenmode.renderers import MarkdownRenderer
+from wenmode.renderers.html import render_code as default_render_code
+from wenmode.rules import InlineRule
+from wenmode._parser.transforms import RootTransform  # noqa: private for the probe
+
+SHA_RE = re.compile(r"\b[0-9a-f]{7,40}\b")
+Resolver = Callable[[str], Optional[str]]
+
+
+# ---------------------------------------------------------------- 1. transform
+def _link(url: str, child: Node, position: Position | None) -> Link:
+    return Link(url=url, children=[child], position=position)
+
+
+def linkify_tree(node: Parent, resolve: Resolver, in_link: bool = False) -> None:
+    """Rewrite ``node.children`` in place: SHA-shaped text runs and
+    SHA-only inline code become links, except under an existing link."""
+    out: list[Node] = []
+    for child in node.children:
+        if isinstance(child, Link):
+            linkify_tree(child, resolve, in_link=True)
+            out.append(child)
+        elif in_link:
+            out.append(child)
+        elif isinstance(child, InlineCode):
+            url = resolve(child.value) if SHA_RE.fullmatch(child.value) else None
+            out.append(_link(url, child, child.position) if url else child)
+        elif isinstance(child, Text):
+            out.extend(_split_text(child, resolve))
+        else:
+            if isinstance(child, Parent):
+                linkify_tree(child, resolve, in_link)
+            out.append(child)
+    node.children = out
+
+
+def _split_text(node: Text, resolve: Resolver) -> list[Node]:
+    text, pos, parts, last = node.value, node.position, [], 0
+    for m in SHA_RE.finditer(text):
+        url = resolve(m.group(0))
+        if url is None:
+            continue
+        if m.start() > last:
+            parts.append(_text(text[last : m.start()], pos, last, m.start()))
+        sub = _text(m.group(0), pos, m.start(), m.end())
+        parts.append(_link(url, sub, sub.position))
+        last = m.end()
+    if not parts:
+        return [node]
+    if last < len(text):
+        parts.append(_text(text[last:], pos, last, len(text)))
+    return parts
+
+
+def _text(value: str, base: Position | None, start: int, end: int) -> Text:
+    position = Position(base.start + start, base.start + end) if base else None
+    return Text(value=value, position=position)
+
+
+class ShaLinks(InlineRule):
+    """Trigger-only rule (no pattern, no opener) that carries the transform."""
+
+    name = "sha_links"
+
+    def __init__(self, resolve: Resolver) -> None:
+        super().__init__()
+        resolver = resolve
+
+        class _T(RootTransform):
+            name = "sha_links"
+
+            def transform(self, parser, root, state):
+                linkify_tree(root, resolver)
+
+        self.root_transforms = [_T()]
+
+
+# ---------------------------------------------------------------- 2. pygments
+def pygments_code(renderer, node, ctx):
+    if not node.lang:
+        return default_render_code(renderer, node, ctx)
+    from pygments import highlight
+    from pygments.formatters import HtmlFormatter
+    from pygments.lexers import TextLexer, get_lexer_by_name
+    from pygments.util import ClassNotFound
+
+    try:
+        lexer = get_lexer_by_name(node.lang.split()[0], stripall=False)
+    except ClassNotFound:
+        lexer = TextLexer()
+    return str(highlight(node.value, lexer, HtmlFormatter(linenos=False, cssclass="highlight", wrapcode=True)))
+
+
+# ---------------------------------------------------------------- 3. md→md
+def protect_html_tags(text: str) -> str:
+    wen = Wenmode(github(), renderer=MarkdownRenderer())
+    wen.register_renderer_handlers({"markdown": {"html": lambda r, n, c: _html.escape(n.value)}})
+    return wen.render(text).rstrip("\n")
+
+
+# ---------------------------------------------------------------- 4. positions
+def linkify_shas_in_text(text: str, resolve: Resolver) -> str:
+    if not text:
+        return text
+    wen = Wenmode(github(), positions=True)
+    root = wen.parse(text)
+    edits: list[tuple[int, int, str]] = []
+
+    def walk(node: Parent, in_link: bool) -> None:
+        for child in node.children:
+            if isinstance(child, Link):
+                walk(child, True)
+            elif in_link:
+                continue
+            elif isinstance(child, InlineCode) and child.position:
+                if SHA_RE.fullmatch(child.value) and (url := resolve(child.value)):
+                    s, e = child.position.start, child.position.end
+                    if text[s:e] == f"`{child.value}`":  # single-backtick only
+                        edits.append((s, e, f"[{text[s:e]}]({url})"))
+            elif isinstance(child, Text) and child.position:
+                base = child.position.start
+                if text[base : child.position.end] != child.value:
+                    continue  # value was normalised (entities, escapes): leave alone
+                for m in SHA_RE.finditer(child.value):
+                    if url := resolve(m.group(0)):
+                        edits.append((base + m.start(), base + m.end(), f"[{m.group(0)}]({url})"))
+            elif isinstance(child, Parent):
+                walk(child, in_link)
+
+    walk(root, False)
+    out, last = [], 0
+    for s, e, rep in sorted(edits):
+        out.append(text[last:s]); out.append(rep); last = e
+    out.append(text[last:])
+    return "".join(out)
+
+
+def build_html(resolve: Resolver) -> Wenmode:
+    wen = Wenmode([*github(), ShaLinks(resolve)], renderer=HTMLRenderer(escape=True))
+    return wen
+```
+
 ## Emulation layer (for reproduction)
 
 ```python
