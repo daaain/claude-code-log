@@ -412,12 +412,20 @@ class TestRunMigrationsPragmas:
 
         class RecordingConnection(sqlite3.Connection):
             def close(self) -> None:
-                recorded["synchronous"] = self.execute("PRAGMA synchronous").fetchone()[
-                    0
-                ]
-                recorded["journal_mode"] = self.execute(
-                    "PRAGMA journal_mode"
-                ).fetchone()[0]
+                # `run_migrations` closes in a `finally`, so this runs on its
+                # error path too — where the handle may be unusable. Let the
+                # original exception through rather than masking it with a
+                # failure to sample: `recorded` then stays empty, and the
+                # assertion below says so plainly.
+                try:
+                    recorded["synchronous"] = self.execute(
+                        "PRAGMA synchronous"
+                    ).fetchone()[0]
+                    recorded["journal_mode"] = self.execute(
+                        "PRAGMA journal_mode"
+                    ).fetchone()[0]
+                except sqlite3.Error:
+                    pass
                 super().close()
 
         real_connect = sqlite3.connect

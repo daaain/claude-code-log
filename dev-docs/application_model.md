@@ -206,8 +206,9 @@ Connections run in WAL mode with `synchronous=NORMAL` (durable across
 app crashes; only a power/OS crash can lose the last commit — fine for a
 regenerable cache). Both pragmas come from
 `migrations.runner.apply_write_pragmas`, which every *writing*
-connection applies — including the migration runner's own, which opens
-outside `CacheManager` and is what touches a brand-new database first;
+connection applies — the two that open outside `CacheManager` included:
+the migration runner's own, which is what touches a brand-new database
+first, and the FTS index builder's. As to the runner,
 at the SQLite defaults it ran the whole migration chain at an fsync per
 commit: 128 ms/db against 13 ms/db. Setting only `journal_mode` is not
 the fix: it persists in the file, but `synchronous` is per-connection
@@ -238,6 +239,21 @@ itself once. Don't infer that slope from timings: what an fsync *costs*
 swings by more than 10x with contention, so per-migration wall-clock
 deltas measured on different days are incoherent (one such pair read
 +16 ms and the next −0.7 ms), while the counts above are stable.
+
+The FTS index builder (`cli.py::_build_search_index`) is the same shape
+one file over. It commits once per transcript file so an interrupted
+backfill resumes, which at the defaults is an fsync per file — 33 / 43 /
+63 / 103 fsyncs over 10 / 20 / 40 / 80 files, against a flat 16 once it
+applies the pragmas. Small in absolute terms (~0.65 ms/file, roughly 1%
+of a real build, where decompress and tokenise dominate), and included
+because the *slope* is what the pragmas remove.
+
+Which writer applies them is pinned rather than asserted:
+`TestConnectionCensus` enumerates every `sqlite3.connect` in the package
+by AST and fails until each is classified as a configured writer or a
+reader. Prose could not hold that claim — the migration runner was
+missed when these pragmas were first written, and the FTS builder was
+missed again while fixing the runner.
 
 A single-threaded run like
 that one therefore badly *understates* what the pairing is worth during

@@ -41,6 +41,7 @@ from .cache import (
     get_library_version,
     is_corrupt_database_error,
 )
+from .migrations.runner import apply_write_pragmas
 from .models import RenderingDepth
 from .render_pool import resolve_render_jobs
 from .search import (
@@ -2270,6 +2271,14 @@ def _build_search_index(
 
     conn = sqlite3.connect(db_path)
     try:
+        # A writer to the cache database, like the migration runner and every
+        # CacheManager connection — and one that commits once per transcript
+        # file, so at SQLite's default synchronous=FULL the build pays an
+        # fsync per file. The index is rebuildable from the same JSONL as the
+        # cache, so NORMAL's residual risk (a power/OS crash losing the last
+        # commits, which only costs the resumed backfill some ground) is the
+        # same trade made everywhere else.
+        apply_write_pragmas(conn)
         if not fts5_available(conn):
             click.echo(
                 "This SQLite build has no FTS5; archive search is unavailable.",

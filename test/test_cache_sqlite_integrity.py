@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Comprehensive SQL-level integrity tests for SQLite cache."""
 
+import ast
 import json
 import shutil
 import sqlite3
 import threading
 import time
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -633,6 +635,79 @@ class TestMessageFileRelationship:
 
         assert file_row["message_count"] == actual_count
         assert file_row["message_count"] == len(entries)
+
+
+class TestConnectionCensus:
+    """Every connection to the cache database is classified, on purpose.
+
+    `apply_write_pragmas` documents itself as what *every writing* cache
+    connection applies. That is an unconditional claim about the whole
+    package, and prose cannot keep it true: the migration runner was
+    missed when the pragmas were first written, and the FTS index builder
+    was missed again when the runner was fixed — twice, by people looking
+    straight at the problem.
+
+    So the claim is pinned rather than asserted. Adding a `sqlite3.connect`
+    anywhere in the package fails this test until it is classified here,
+    which is the moment to ask whether it writes.
+    """
+
+    # (module, enclosing function) -> why it does not need the pragmas, or
+    # how it gets them.
+    EXPECTED: ClassVar[dict[tuple[str, str], str]] = {
+        (
+            "cache.py",
+            "_open_connection",
+        ): "applies `configure`, i.e. _configure_connection",
+        ("cache.py", "get_all_cached_projects"): "read-only: one SELECT, then close",
+        ("cache.py", "find_session_in_cache"): "read-only: one SELECT, then close",
+        ("migrations/runner.py", "run_migrations"): "applies apply_write_pragmas",
+        ("cli.py", "_build_search_index"): "applies apply_write_pragmas",
+        ("cli.py", "serve"): "in-memory FTS5 capability probe, not the cache",
+        ("api.py", "connection"): "mode=ro reader; cannot switch journal modes",
+    }
+
+    def _connect_sites(self) -> dict[tuple[str, str], int]:
+        package = Path(__file__).parents[1] / "claude_code_log"
+        found: dict[tuple[str, str], int] = {}
+        for path in sorted(package.rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                for inner in ast.walk(node):
+                    if (
+                        isinstance(inner, ast.Call)
+                        and isinstance(inner.func, ast.Attribute)
+                        and inner.func.attr == "connect"
+                        and isinstance(inner.func.value, ast.Name)
+                        and inner.func.value.id == "sqlite3"
+                    ):
+                        key = (path.relative_to(package).as_posix(), node.name)
+                        found[key] = found.get(key, 0) + 1
+        return found
+
+    def test_every_connect_site_is_classified(self):
+        """A new `sqlite3.connect` must be classified before it can ship."""
+        found = self._connect_sites()
+
+        # The census must find something, or it is passing on an empty set.
+        assert len(found) >= 5, f"census found too few sites to be working: {found}"
+
+        unclassified = sorted(set(found) - set(self.EXPECTED))
+        assert not unclassified, (
+            "new sqlite3.connect site(s) not classified in "
+            f"TestConnectionCensus.EXPECTED: {unclassified}. If the connection "
+            "writes to the cache database it must apply "
+            "`migrations.runner.apply_write_pragmas` — see that function's "
+            "docstring. If it does not write, say so there."
+        )
+
+        vanished = sorted(set(self.EXPECTED) - set(found))
+        assert not vanished, (
+            f"classified connect site(s) no longer exist: {vanished}. Remove "
+            "them from EXPECTED so the census keeps meaning something."
+        )
 
 
 class TestWALMode:
