@@ -6,6 +6,7 @@ these are the tests that have to stay trustworthy when the conversion
 behind them gets slower.
 """
 
+import fnmatch
 from pathlib import Path
 
 import pytest
@@ -297,3 +298,75 @@ class TestLoop:
             stop.set()
             thread.join(timeout=10)
         assert not thread.is_alive(), "the loop did not stop when asked"
+
+
+class TestScanParity:
+    """The scandir walk must return exactly what the glob form returned.
+
+    The glob form is kept here as the reference so a divergence names the
+    path that differs, rather than showing up later as a session that
+    stopped updating.
+    """
+
+    @staticmethod
+    def _glob_scan(roots: list[Path]) -> dict[Path, tuple[int, int]]:
+        from claude_code_log.watch import IGNORED_PREFIXES, WATCHED_GLOBS
+
+        stamps: dict[Path, tuple[int, int]] = {}
+        for root in roots:
+            for pattern in WATCHED_GLOBS:
+                for path in root.glob(pattern):
+                    if path.name.startswith(IGNORED_PREFIXES):
+                        continue
+                    st = path.stat()
+                    stamps[path] = (st.st_size, st.st_mtime_ns)
+        return stamps
+
+    def test_scandir_scan_matches_the_glob_scan(self, tmp_path: Path) -> None:
+        root = tmp_path / "projects"
+        p1 = root / "p1"
+        p2 = root / "p2"
+        deep = p1 / "s1" / "subagents"
+        deep.mkdir(parents=True)
+        p2.mkdir()
+        (p1 / "s1.jsonl").write_text("{}\n", encoding="utf-8")
+        (p1 / "s2.jsonl").write_text("{}{}\n", encoding="utf-8")
+        (deep / "agent-abc.jsonl").write_text("{}\n", encoding="utf-8")
+        (deep / "agent-abc.meta.json").write_text("{}", encoding="utf-8")
+        (deep / "agent-abc.other.json").write_text("{}", encoding="utf-8")
+        (deep / "notes.meta.json").write_text("{}", encoding="utf-8")
+        (p1 / ".s1.html.123.tmp").write_text("x", encoding="utf-8")
+        (p1 / "session-s1.html").write_text("<html>", encoding="utf-8")
+        (p2 / "solo.jsonl").write_text("{}\n", encoding="utf-8")
+        (root / "top.jsonl").write_text("{}\n", encoding="utf-8")
+        (root / ".hidden").mkdir()
+        (root / ".hidden" / "h.jsonl").write_text("{}\n", encoding="utf-8")
+        # Case follows the platform, as it does for `Path.glob` and for the
+        # converter's own `*.jsonl` discovery: watched on Windows, not on
+        # POSIX. The parity assertion below is what checks it either way.
+        (p2 / "UP.JSONL").write_text("{}\n", encoding="utf-8")
+
+        got = scan([root])
+        assert got == self._glob_scan([root])
+        expected = {
+            "s1.jsonl",
+            "s2.jsonl",
+            "agent-abc.jsonl",
+            "agent-abc.meta.json",
+            "solo.jsonl",
+            "top.jsonl",
+            "h.jsonl",
+        }
+        if fnmatch.fnmatch("UP.JSONL", "*.jsonl"):
+            expected.add("UP.JSONL")
+        assert {p.name for p in got} == expected
+
+    def test_scan_over_several_roots(self, tmp_path: Path) -> None:
+        a = tmp_path / "a"
+        b = tmp_path / "b"
+        a.mkdir()
+        b.mkdir()
+        (a / "x.jsonl").write_text("{}\n", encoding="utf-8")
+        (b / "y.jsonl").write_text("{}\n", encoding="utf-8")
+        assert set(scan([a, b])) == {a / "x.jsonl", b / "y.jsonl"}
+        assert scan([a, b]) == self._glob_scan([a, b])

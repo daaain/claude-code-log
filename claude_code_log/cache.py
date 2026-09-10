@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import sqlite3
+import threading
 import zlib
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -119,6 +120,10 @@ class HtmlCacheEntry(BaseModel):
     )
     message_count: int = 0  # for sanity checking
     library_version: str  # which version generated it
+    # Whether the page carries the combined-transcript back-link, so a run
+    # that changes the answer can mark it stale (migration 013). None for
+    # rows written before that migration, and for outputs with no link.
+    combined_linked: Optional[int] = None
 
 
 class PageCacheData(BaseModel):
@@ -261,6 +266,26 @@ def scrub_surrogates(s: Optional[str]) -> Optional[str]:
 CONTENT_COMPRESSION_LEVEL = 3
 
 
+def _combined_link_stale(cached: Optional[int], desired: Optional[bool]) -> bool:
+    """Whether a page's combined back-link state no longer matches reality.
+
+    ``cached`` is the ``html_cache.combined_linked`` column: 1/0 for pages
+    written since migration 013, NULL for anything older. NULL is treated
+    as matching — the page's link state is simply unknown, and marking
+    every pre-013 page stale would re-render every session in every
+    project on upgrade for a cosmetic affordance (the 007/011 precedent).
+
+    ``desired`` is None for callers that aren't rendering session pages.
+
+    Shared by ``is_transcript_stale`` and ``get_stale_sessions``, which
+    are otherwise parallel implementations of the same checks — this is
+    the one place the rule lives, so they cannot drift apart on it.
+    """
+    if cached is None or desired is None:
+        return False
+    return bool(cached) != desired
+
+
 @functools.lru_cache(maxsize=1)
 def get_library_version() -> str:
     """Get the current library version from package metadata or pyproject.toml.
@@ -273,6 +298,11 @@ def get_library_version() -> str:
     with anything that changed. An installed version cannot change inside
     a process, so a one-slot cache is exact; tests that need a different
     value patch this name on the module, which is unaffected.
+
+    The decorator has to sit directly above this ``def``: a helper once
+    got inserted between the two, which silently moved the memo onto the
+    helper and put the 675-call, 3.3 s re-parse back into every archive
+    pass. ``test_cache.py`` pins the wrapper to this function.
     """
     # First try to get version from installed package metadata
     try:
@@ -495,6 +525,147 @@ def discard_database_files(db_path: Path) -> bool:
 _migrated_db_paths: set[str] = set()
 
 
+# ========== Connection lifecycle ==========
+#
+# By default every `CacheManager._get_connection()` opens a connection and
+# closes it on exit, so no handle lingers on the .db/.db-wal/.db-shm files
+# (Windows refuses to delete an open file, and tests tear temp dirs down).
+# That is the right default for a single call and the wrong one for a
+# loop: in WAL mode, closing the *last* connection checkpoints the database
+# and deletes the -wal/-shm files, and the next `connect` + `PRAGMA
+# journal_mode=WAL` creates them again. A hierarchy pass on a 332-project
+# archive did that 3,658 times — 11 opens per project, each the only
+# connection alive — and on Windows against an 890 MB cache the churn was
+# ~90 s of a 96 s pass (41 s in `close` alone). Measured per cycle on that
+# file: 29 ms with nothing else open, 6.7 ms with one idle connection held.
+#
+# `batch()` already fixes this *within* a project build by sharing one
+# connection per instance. A lease is the same idea one level up: one
+# connection for the scope, shared by every instance addressing that
+# database on this thread, closed on scope exit. Same steady pass: 96 s →
+# 5.3 s. Per thread because sqlite3 connections are thread-bound, and the
+# server thread answers requests while the watch thread converts.
+
+
+def _configure_connection(conn: sqlite3.Connection, *, read_only: bool) -> None:
+    """Apply the standard pragmas/row factory to a fresh connection."""
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    if read_only:
+        # A mode=ro connection cannot switch journal modes, and a
+        # reader needs neither pragma: the writing parent already
+        # keeps the database in WAL.
+        return
+    conn.execute("PRAGMA journal_mode = WAL")
+    # synchronous=NORMAL is the recommended pairing for WAL: it keeps
+    # durability across application crashes (only a power/OS crash can lose
+    # the last committed transaction) while skipping an fsync on every
+    # commit. The cache is fully regenerable from the JSONL source, so that
+    # residual risk is acceptable.
+    conn.execute("PRAGMA synchronous = NORMAL")
+
+
+def _open_connection(
+    db_path: Path,
+    *,
+    read_only: bool,
+    configure: Callable[[sqlite3.Connection], None],
+) -> sqlite3.Connection:
+    """Open a connection and run ``configure`` on it, closing it if that fails.
+
+    If a PRAGMA in ``configure`` raises, the just-opened handle is closed
+    before re-raising so it can't leak and lock the .db/.db-wal/.db-shm
+    files — the exact failure mode the connection lifecycle elsewhere is
+    careful to avoid (Windows WinError 32). ``configure`` is a parameter
+    rather than a fixed call so an instance can route through its own
+    (patchable) ``_configure_connection`` hook.
+    """
+    if read_only:
+        # as_uri() percent-encodes the (absolute) path, so URI mode is
+        # safe for paths with spaces or query-ish characters.
+        conn = sqlite3.connect(
+            db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=30.0
+        )
+    else:
+        conn = sqlite3.connect(db_path, timeout=30.0)
+    try:
+        configure(conn)
+    except BaseException:
+        conn.close()
+        raise
+    return conn
+
+
+_LeaseKey = Tuple[str, bool]
+# Thread-local, and safe across the render pools only because both use
+# `multiprocessing.get_context("spawn")`: a forked child would inherit
+# this dict and its sqlite3 handles, which is undefined behaviour. Keep
+# the pools on spawn.
+_leases = threading.local()
+
+
+def _thread_leases() -> Dict[_LeaseKey, sqlite3.Connection]:
+    """This thread's active leases, keyed by (database path, read_only)."""
+    conns: Optional[Dict[_LeaseKey, sqlite3.Connection]] = getattr(
+        _leases, "conns", None
+    )
+    if conns is None:
+        conns = {}
+        _leases.conns = conns
+    return conns
+
+
+def _drop_leases(db_path: Path) -> None:
+    """Close and forget any lease this thread holds on ``db_path``.
+
+    For the corruption-rebuild path, which must delete the file: the
+    enclosing ``connection_lease`` scope then simply has nothing to close.
+    """
+    leases = _thread_leases()
+    for key in [k for k in leases if k[0] == str(db_path)]:
+        leases.pop(key).close()
+
+
+@contextmanager
+def connection_lease(
+    db_path: Path, *, read_only: bool = False
+) -> Generator[None, None, None]:
+    """Hold one connection to ``db_path`` open for the scope, on this thread.
+
+    Every ``CacheManager`` addressing that database from this thread
+    reuses it — ``_get_connection`` and ``batch()`` both yield it and leave
+    the closing to the lease — so a loop over many projects opens one
+    connection instead of one per query. Nesting reuses the outer lease.
+
+    The connection is closed on scope exit, including on exception, so the
+    Windows file-lock guarantee holds at the scope boundary rather than
+    per call. A database that cannot be opened here (typically corrupt)
+    is not the lease's problem: the scope runs without one, and the first
+    ``CacheManager`` inside it reports and rebuilds the file as before.
+    """
+    key: _LeaseKey = (str(db_path), read_only)
+    leases = _thread_leases()
+    if key in leases:
+        yield
+        return
+    try:
+        conn = _open_connection(
+            db_path,
+            read_only=read_only,
+            configure=functools.partial(_configure_connection, read_only=read_only),
+        )
+    except sqlite3.DatabaseError:
+        yield
+        return
+    leases[key] = conn
+    try:
+        yield
+    finally:
+        # `_drop_leases` may already have removed and closed it.
+        if leases.pop(key, None) is not None:
+            conn.close()
+
+
 class CacheManager:
     """SQLite-based cache manager for Claude Code Log."""
 
@@ -557,55 +728,39 @@ class CacheManager:
 
     def _configure_connection(self, conn: sqlite3.Connection) -> None:
         """Apply the standard pragmas/row factory to a fresh connection."""
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
-        if self._read_only:
-            # A mode=ro connection cannot switch journal modes, and a
-            # reader needs neither pragma: the writing parent already
-            # keeps the database in WAL.
-            return
-        conn.execute("PRAGMA journal_mode = WAL")
-        # synchronous=NORMAL is the recommended pairing for WAL: it keeps
-        # durability across application crashes (only a power/OS crash can lose
-        # the last committed transaction) while skipping an fsync on every
-        # commit. The cache is fully regenerable from the JSONL source, so that
-        # residual risk is acceptable.
-        conn.execute("PRAGMA synchronous = NORMAL")
+        _configure_connection(conn, read_only=self._read_only)
 
     def _open_configured_connection(self) -> sqlite3.Connection:
-        """Open a connection and apply pragmas, closing it if setup fails.
+        """Open a connection and apply pragmas, closing it if setup fails."""
+        return _open_connection(
+            self.db_path,
+            read_only=self._read_only,
+            configure=self._configure_connection,
+        )
 
-        If a PRAGMA in ``_configure_connection`` raises, the just-opened
-        handle is closed before re-raising so it can't leak and lock the
-        .db/.db-wal/.db-shm files — the exact failure mode the connection
-        lifecycle elsewhere is careful to avoid (Windows WinError 32).
-        """
-        if self._read_only:
-            # as_uri() percent-encodes the (absolute) path, so URI mode is
-            # safe for paths with spaces or query-ish characters.
-            conn = sqlite3.connect(
-                self.db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=30.0
-            )
-        else:
-            conn = sqlite3.connect(self.db_path, timeout=30.0)
-        try:
-            self._configure_connection(conn)
-        except BaseException:
-            conn.close()
-            raise
-        return conn
+    def _leased_connection(self) -> Optional[sqlite3.Connection]:
+        """The connection a `connection_lease` holds for this database on
+        this thread, if any."""
+        return _thread_leases().get((str(self.db_path), self._read_only))
 
     @contextmanager
     def _get_connection(self) -> Generator[sqlite3.Connection, None, None]:
         """Get a database connection with proper settings.
 
         Inside a ``batch()`` scope this yields the shared connection without
-        closing it (the batch owns its lifecycle). Otherwise it opens a fresh
-        connection and closes it on exit — the default, Windows-safe behaviour
-        (no lingering file handle on the .db/.db-wal/.db-shm files).
+        closing it (the batch owns its lifecycle). Under a
+        ``connection_lease`` for this database it yields the leased one,
+        likewise without closing it. Otherwise it opens a fresh connection
+        and closes it on exit — the default, Windows-safe behaviour (no
+        lingering file handle on the .db/.db-wal/.db-shm files).
         """
         if self._shared_conn is not None:
             yield self._shared_conn
+            return
+
+        leased = self._leased_connection()
+        if leased is not None:
+            yield leased
             return
 
         conn = self._open_configured_connection()
@@ -638,6 +793,17 @@ class CacheManager:
             # Already batching — reuse the existing shared connection and leave
             # its lifecycle to the outermost batch().
             yield
+            return
+
+        leased = self._leased_connection()
+        if leased is not None:
+            # A lease is an outermost batch that spans instances: reuse
+            # its connection and leave the closing to the lease.
+            self._shared_conn = leased
+            try:
+                yield
+            finally:
+                self._shared_conn = None
             return
 
         # Open+configure first; only publish to _shared_conn once setup has
@@ -681,6 +847,11 @@ class CacheManager:
         `_lookup_project_id` already degrades to "no cached data".
         """
         print(f"Cache database is corrupt ({exc}): {self.db_path}")
+        # A lease on this thread holds the file open, and Windows refuses
+        # to delete an open file. Drop it first; the rest of the enclosing
+        # scope falls back to a connection per call, which is correct and
+        # merely slower.
+        _drop_leases(self.db_path)
         if not discard_database_files(self.db_path):
             # Couldn't remove it, so a retry would just fail the same way.
             # Re-raise and let the caller degrade to running cacheless.
@@ -2073,7 +2244,8 @@ class CacheManager:
 
         with self._get_connection() as conn:
             row = conn.execute(
-                """SELECT html_path, generated_at, source_session_id, message_count, library_version
+                """SELECT html_path, generated_at, source_session_id, message_count,
+                          library_version, combined_linked
                    FROM html_cache
                    WHERE project_id = ? AND html_path = ?""",
                 (self._project_id, html_path),
@@ -2088,6 +2260,7 @@ class CacheManager:
             source_session_id=row["source_session_id"],
             message_count=row["message_count"] or 0,
             library_version=row["library_version"],
+            combined_linked=row["combined_linked"],
         )
 
     def update_html_cache(
@@ -2095,22 +2268,31 @@ class CacheManager:
         html_path: str,
         session_id: Optional[str],
         message_count: int,
+        combined_linked: Optional[bool] = None,
     ) -> None:
-        """Update or insert HTML cache entry."""
+        """Update or insert HTML cache entry.
+
+        ``combined_linked`` records whether the page was rendered with the
+        combined-transcript back-link, so that a later run which changes
+        that answer can mark the page stale (migration 013). None leaves
+        the column NULL — the pre-013 state, read back as "already
+        matching" — and is right for outputs that have no such link.
+        """
         if self._project_id is None:
             return
 
         with self._get_connection() as conn:
             conn.execute(
                 """INSERT INTO html_cache
-                   (project_id, html_path, generated_at, source_session_id, message_count, library_version)
-                   VALUES (?, ?, ?, ?, ?, ?)
+                   (project_id, html_path, generated_at, source_session_id, message_count, library_version, combined_linked)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(project_id, html_path)
                    DO UPDATE SET
                        generated_at = excluded.generated_at,
                        source_session_id = excluded.source_session_id,
                        message_count = excluded.message_count,
-                       library_version = excluded.library_version""",
+                       library_version = excluded.library_version,
+                       combined_linked = excluded.combined_linked""",
                 (
                     self._project_id,
                     html_path,
@@ -2118,6 +2300,7 @@ class CacheManager:
                     session_id,
                     message_count,
                     self.library_version,
+                    None if combined_linked is None else int(combined_linked),
                 ),
             )
             conn.commit()
@@ -2127,6 +2310,7 @@ class CacheManager:
         html_path: str,
         session_id: Optional[str] = None,
         output_dir: Optional[Path] = None,
+        combined_linked: Optional[bool] = None,
     ) -> tuple[bool, str]:
         """Check if a rendered output file needs regeneration.
 
@@ -2143,6 +2327,10 @@ class CacheManager:
                 the source project directory (legacy in-place layout);
                 ``--output`` runs must pass their destination or the file
                 check reports ``file_missing`` forever.
+            combined_linked: Whether a session page rendered now would
+                carry the combined back-link (see
+                ``converter.combined_link_available``). A page rendered
+                with the other answer is stale. None skips the check.
 
         Returns:
             Tuple of (is_stale: bool, reason: str)
@@ -2160,6 +2348,9 @@ class CacheManager:
         # Check library version in cache
         if html_cache.library_version != self.library_version:
             return True, "version_mismatch"
+
+        if _combined_link_stale(html_cache.combined_linked, combined_linked):
+            return True, "combined_link_changed"
 
         # Check if file exists and has correct version
         actual_file = (output_dir or self.project_path) / html_path
@@ -2204,6 +2395,7 @@ class CacheManager:
         variant: str = "",
         ext: str = "html",
         output_dir: Optional[Path] = None,
+        combined_linked: Optional[bool] = None,
     ) -> List[tuple[str, str]]:
         """Get list of sessions whose rendered file needs regeneration.
 
@@ -2218,6 +2410,11 @@ class CacheManager:
                 every run and the project re-renders forever.
             output_dir: Where the rendered files live (``--output`` runs);
                 defaults to the source project directory.
+            combined_linked: Whether a session page rendered now would
+                carry the combined back-link (see
+                ``converter.combined_link_available``). A page rendered
+                with the other answer is stale. None skips the check, for
+                callers that don't render session pages.
 
         Returns:
             List of (session_id, reason) tuples for sessions needing regeneration
@@ -2244,12 +2441,16 @@ class CacheManager:
                 (self._project_id,),
             ).fetchall()
             html_rows = conn.execute(
-                """SELECT html_path, message_count, library_version
+                """SELECT html_path, message_count, library_version, combined_linked
                    FROM html_cache WHERE project_id = ?""",
                 (self._project_id,),
             ).fetchall()
             html_cache = {
-                r["html_path"]: (r["message_count"] or 0, r["library_version"])
+                r["html_path"]: (
+                    r["message_count"] or 0,
+                    r["library_version"],
+                    r["combined_linked"],
+                )
                 for r in html_rows
             }
 
@@ -2268,9 +2469,12 @@ class CacheManager:
                 if cached is None:
                     stale_sessions.append((session_id, "not_cached"))
                     continue
-                cached_count, cached_version = cached
+                cached_count, cached_version, cached_linked = cached
                 if cached_version != self.library_version:
                     stale_sessions.append((session_id, "version_mismatch"))
+                    continue
+                if _combined_link_stale(cached_linked, combined_linked):
+                    stale_sessions.append((session_id, "combined_link_changed"))
                     continue
                 actual_file = base_dir / html_path
                 if not actual_file.exists():

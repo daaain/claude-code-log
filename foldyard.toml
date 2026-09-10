@@ -95,6 +95,7 @@ recommend = [
 # below it. Same progressive opt-in as the rest of this file.
 [claude]
 keyless = "oauth"      # Bearer on api.anthropic.com ← `claude setup-token` on the host
+transcript_sync_seconds = 10
 system_prompt = """
 You are root in this project's foldyard dev box, started by `fy claude` with permission
 prompts skipped. Orientation, so you don't have to re-derive it:
@@ -126,6 +127,7 @@ showThinkingSummaries = true
 # Needs node in the box. Keyless like Claude — the proxy injects host-side.
 [codex]
 keyless = "chatgpt"  # your ChatGPT subscription: the minter refreshes ~/.codex/auth.json
+transcript_sync_seconds = 10
 system_prompt = """
 You are root in this project's foldyard dev box, started by `fy codex` with permission
 prompts skipped. Orientation, so you don't have to re-derive it:

@@ -124,3 +124,100 @@ class TestCombinedTranscriptLink:
             # Verify link is present and title is used
             assert "← View All Sessions (Combined Transcript)" in html
             assert f"<title>{custom_title}</title>" in html
+
+
+class TestCombinedLinkFollowsTheFileNotTheFlag:
+    """The back-link tracks whether the combined page exists on disk.
+
+    It used to track ``--combined`` instead, which made a rendered page
+    depend on the *run's* mode -- something the freshness check knows
+    nothing about. So the state stuck: a page rendered by a
+    ``--combined no`` run (every watch tick) kept no link for good, and a
+    later full conversion saw a current file and skipped it. An archive
+    ended up with some session pages linking and some not, decided only
+    by which run happened to render each.
+
+    Migration 013 records the state per page so a genuine transition
+    regenerates; these tests pin both halves.
+    """
+
+    FIXTURE = (
+        Path(__file__).parent / "test_data" / "real_projects" / "-experiments-ideas"
+    )
+    LINK = "← View All Sessions (Combined Transcript)"
+
+    def _project(self, tmp_path: Path) -> Path:
+        import shutil
+
+        work = tmp_path / self.FIXTURE.name
+        shutil.copytree(self.FIXTURE, work)
+        return work
+
+    def _pages(self, work: Path) -> list[Path]:
+        pages = sorted(work.glob("session-*.html"))
+        assert pages, "conversion produced no session files"
+        return pages
+
+    def _linked(self, work: Path) -> bool:
+        return all(
+            self.LINK in p.read_text(encoding="utf-8") for p in self._pages(work)
+        )
+
+    def _convert(self, work: Path, write_combined: bool) -> None:
+        from claude_code_log.converter import convert_jsonl_to
+
+        convert_jsonl_to("html", work, silent=True, write_combined=write_combined)
+
+    def test_no_link_when_no_combined_page_has_ever_been_written(
+        self, tmp_path: Path
+    ) -> None:
+        work = self._project(tmp_path)
+        self._convert(work, write_combined=False)
+
+        assert not (work / "combined_transcripts.html").exists()
+        assert not self._linked(work)
+
+    def test_link_appears_once_a_combined_page_exists(self, tmp_path: Path) -> None:
+        """The regression: a full run after a `--combined no` run must fix it."""
+        work = self._project(tmp_path)
+        self._convert(work, write_combined=False)
+        assert not self._linked(work)
+
+        self._convert(work, write_combined=True)
+
+        assert (work / "combined_transcripts.html").exists()
+        assert self._linked(work), (
+            "session pages kept their link-less state after a full conversion "
+            "wrote the combined page they should link to"
+        )
+
+    def test_link_survives_a_watch_style_run_without_rewriting(
+        self, tmp_path: Path
+    ) -> None:
+        """`--combined no` over an existing combined page changes nothing.
+
+        The page it points at is still there and still served, so the link
+        stays valid -- and the pages must not be rewritten for it.
+        """
+        work = self._project(tmp_path)
+        self._convert(work, write_combined=True)
+        before = {p: p.stat().st_mtime_ns for p in self._pages(work)}
+
+        self._convert(work, write_combined=False)
+
+        assert self._linked(work)
+        assert {p: p.stat().st_mtime_ns for p in self._pages(work)} == before
+
+    def test_link_is_dropped_when_the_combined_page_goes_away(
+        self, tmp_path: Path
+    ) -> None:
+        work = self._project(tmp_path)
+        self._convert(work, write_combined=True)
+        assert self._linked(work)
+
+        (work / "combined_transcripts.html").unlink()
+        self._convert(work, write_combined=False)
+
+        assert not self._linked(work), (
+            "session pages still link to a combined page that no longer exists"
+        )

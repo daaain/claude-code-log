@@ -171,13 +171,19 @@ uv run pytest test/test_snapshot_html.py -n0
 # all pass → the committed .ambr matches the render (not a raced file)
 ```
 
-When you do intend to regenerate, run `--snapshot-update` serially; a purely
-additive result (`+N/-0`, e.g. "8 snapshots passed. 1 snapshot generated.")
-is the healthy signature:
+When you do intend to regenerate, use the recipe — it purges stale
+bytecode, regenerates serially, and then re-runs read-only to prove the
+file it just wrote is what the code renders:
 
 ```bash
-uv run pytest test/test_snapshot_html.py -n0 --snapshot-update
+just update-snapshot
 ```
+
+A purely additive result (`+N/-0`, e.g. "8 snapshots passed. 1 snapshot
+generated.") is the healthy signature. The recipe exists because doing
+only part of this by hand is what produced both incidents above; reach
+for a bare `pytest --snapshot-update` only if you have a reason to, and
+keep the `-n0`.
 
 When snapshot tests fail:
 1. Review the diff to verify changes are intentional

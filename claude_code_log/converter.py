@@ -52,6 +52,7 @@ from .render_dispatch import build_render_pool, dispatch_render_units
 from .cache import (
     CacheManager,
     SessionCacheData,
+    connection_lease,
     get_all_cached_projects,
     get_cache_db_path,
     get_library_version,
@@ -2024,6 +2025,33 @@ def _get_page_html_path(page_number: int, variant_suffix: str = "") -> str:
     return f"{base}_{page_number}.html"
 
 
+def combined_link_available(
+    output_dir: Path, variant_suffix: str, ext: str, write_combined: bool
+) -> bool:
+    """Whether a session page should carry the combined-transcript back-link.
+
+    It should iff the file it points at will be there to receive the click:
+    this run's combined output when we're writing one, and otherwise
+    whatever a previous run left on disk.
+
+    Deliberately not just ``write_combined``. Keying the *rendered page* on
+    the run's mode made its content depend on something the freshness check
+    knows nothing about, so the state stuck: a page rendered by a
+    ``--combined no`` run (every watch tick) kept no link for good, and
+    later full runs saw a current file and skipped it. An archive ended up
+    with some session pages linking and some not, decided by which run
+    happened to render each. Under `serve --watch` the combined page is not
+    rewritten but is still on disk and still served, so the link stays good
+    and the divergence never arises.
+
+    Paginated projects name page 1 ``combined_transcripts{suffix}.{ext}``
+    too (see ``_get_page_html_path``), so one check covers both layouts.
+    """
+    if write_combined:
+        return True
+    return (output_dir / f"combined_transcripts{variant_suffix}.{ext}").exists()
+
+
 def _variant_label_from_suffix(suffix: str) -> str:
     """Human-readable label for a filename suffix (e.g. '.agent.compact')."""
     if not suffix:
@@ -2080,6 +2108,21 @@ _NEXT_LINK_PATTERN = re.compile(
     re.DOTALL,
 )
 
+# Closing delimiter of the block above, as a plain string. Finding it in a
+# prefix of the file proves the whole nav block is in that prefix, which is
+# what lets `_enable_next_link_on_previous_page` answer from a bounded read.
+_NEXT_LINK_END_MARKER = "<!-- PAGINATION_NEXT_LINK_END -->"
+
+# How much of a page to read before deciding whether it needs the edit.
+#
+# `transcript.html` emits the nav block exactly once, in the page header
+# directly after the inlined stylesheet, so its offset is bounded by the
+# template's own preamble rather than by the transcript: across a 22-page
+# 253MB archive it never ended past 110KB. 512KB is a wide margin on that,
+# and being wrong is not a correctness problem — a page whose block falls
+# outside the prefix takes the full read below, exactly as before.
+_NAV_BLOCK_PREFIX_CHARS = 512 * 1024
+
 
 def _enable_next_link_on_previous_page(
     output_dir: Path, page_number: int, variant_suffix: str = ""
@@ -2105,16 +2148,31 @@ def _enable_next_link_on_previous_page(
     if not page_path.exists():
         return False
 
+    # Decide from a bounded prefix whether this page needs the edit at all.
+    #
+    # The obvious guard -- `if "last-page" not in content` -- cannot ever
+    # fire: every page inlines the rule that hides the link,
+    # `.page-nav-link.next.last-page { display: none }`, so the bare
+    # substring is always present. The result was that each call read the
+    # whole page back and ran a DOTALL backtracking `subn` over it, on
+    # every page, on every conversion. On a watched project that is the
+    # dominant per-tick cost -- 253MB re-read and ~5.2s of regex per tick
+    # over a 22-page archive, to change nothing on 21 of the 22.
+    #
+    # The delimiters are what distinguish the real nav block both from
+    # that CSS rule and from transcript content quoting the class name, so
+    # a prefix containing the closing delimiter can answer for the file.
     # ``errors="replace"`` guards against lone surrogates that may have
     # been written here previously (issue #139): pre-fix runs encoded
     # JSON-decoded surrogates straight into the HTML, and a strict
     # read-back would crash on revisit. Replacing them here lets older
     # corrupt pages still rewrite cleanly.
-    content = page_path.read_text(encoding="utf-8", errors="replace")
-
-    # Check if there's a last-page class to remove
-    if "last-page" not in content:
+    with page_path.open(encoding="utf-8", errors="replace") as handle:
+        prefix = handle.read(_NAV_BLOCK_PREFIX_CHARS)
+    if _NEXT_LINK_END_MARKER in prefix and not _NEXT_LINK_PATTERN.search(prefix):
         return False
+
+    content = page_path.read_text(encoding="utf-8", errors="replace")
 
     # Replace the pattern to remove last-page class
     new_content, count = _NEXT_LINK_PATTERN.subn(r"\1\2", content)
@@ -3140,6 +3198,9 @@ def _stream_paginated_conversion(
                     variant=session_suffix,
                     ext="html",
                     output_dir=effective_output_dir,
+                    combined_linked=combined_link_available(
+                        effective_output_dir, session_suffix, "html", write_combined
+                    ),
                 )
             }
 
@@ -3411,7 +3472,12 @@ def _try_current_or_session_scoped(
 
     # Check if any session file of this variant is stale
     stale_sessions = cache_manager.get_stale_sessions(
-        variant=suffix, ext=ext, output_dir=effective_output_dir
+        variant=suffix,
+        ext=ext,
+        output_dir=effective_output_dir,
+        combined_linked=combined_link_available(
+            effective_output_dir, suffix, ext, write_combined
+        ),
     )
     if not stale_sessions or not generate_individual_sessions:
         # Nothing needs regeneration - skip loading
@@ -4893,6 +4959,9 @@ def _generate_individual_session_files(
 
     ext = get_file_extension(format)
     suffix = _variant_suffix(depth, compact, format, no_timestamps, no_recaps)
+    combined_available = combined_link_available(
+        output_dir, suffix, ext, write_combined
+    )
     # Find all unique session IDs, excluding warmup sessions and
     # coalescing agent sessionIds to their trunk — same rule as
     # compute_session_data() when it writes the sessions table.
@@ -4982,7 +5051,10 @@ def _generate_individual_session_files(
             # reads its own `version` field (see `_tracks_version_marker`).
             if cache_manager is not None and _tracks_version_marker(format):
                 is_stale, _reason = cache_manager.is_transcript_stale(
-                    session_file_name, session_id, output_dir=output_dir
+                    session_file_name,
+                    session_id,
+                    output_dir=output_dir,
+                    combined_linked=combined_available,
                 )
                 should_regenerate_session = (
                     is_stale
@@ -5013,9 +5085,11 @@ def _generate_individual_session_files(
                         key=session_id,
                         file_name=session_file_name,
                         title=session_title,
-                        # Under `--combined no` the combined file is never
-                        # written, so the per-session back-link would 404.
-                        suppress_combined_link=not write_combined,
+                        # No combined file to point at — the back-link
+                        # would 404, so leave it out. See
+                        # `combined_available` above for why this is not
+                        # simply `not write_combined`.
+                        suppress_combined_link=not combined_available,
                     )
                 )
             elif not silent:
@@ -5057,7 +5131,10 @@ def _generate_individual_session_files(
                     if hasattr(m, "sessionId") and getattr(m, "sessionId") == unit.key
                 )
             cache_manager.update_html_cache(
-                unit.file_name, unit.key, session_message_count
+                unit.file_name,
+                unit.key,
+                session_message_count,
+                combined_linked=not unit.suppress_combined_link,
             )
 
         # Feed each pooled session unit everything its worker renders from:
@@ -5665,6 +5742,10 @@ def render_provider_wholesale(
 
         # Phase 3 — build index cards and render per-session pages (skipping
         # unchanged ones).
+        #
+        combined_available = combined_link_available(
+            dest_dir, suffix, ext, write_combined
+        )
         session_dicts: list[dict[str, Any]] = []
         last_modified = 0.0
         for info, messages in loaded:
@@ -5690,13 +5771,14 @@ def render_provider_wholesale(
                         compact,
                         no_timestamps,
                         no_recaps,
-                        suppress_combined_link=not write_combined,
+                        suppress_combined_link=not combined_available,
                     )
                     if cache is not None:
                         cache.update_html_cache(
                             output_name,
                             session_key,
                             session_counts.get(session_key, len(messages)),
+                            combined_linked=combined_available,
                         )
 
             first_ts, last_ts = _entry_timestamp_range(messages)
@@ -6072,6 +6154,9 @@ def _plan_project(
             variant=variant,
             ext=combined_ext,
             output_dir=dest_dir,
+            combined_linked=combined_link_available(
+                dest_dir, variant, combined_ext, write_combined
+            ),
         )
         if cache_manager
         else []
@@ -6196,6 +6281,67 @@ def process_projects_hierarchy(
     no_timestamps: bool = False,
     no_recaps: bool = False,
     jobs: Optional[int] = None,
+    entry_store: "Optional[ParsedEntryStore]" = None,
+) -> Path:
+    """Process the entire ~/.claude/projects/ hierarchy and create linked output files.
+
+    Holds one cache connection for the whole pass (``connection_lease``):
+    the pass plans every project before converting any, and each plan is
+    ~11 short queries — on a 332-project archive that used to be 3,658
+    connection open/close cycles, ~90 s of a 96 s no-change pass on
+    Windows. See the lease's module comment in ``cache.py`` for the
+    mechanism. The lease is released when this returns, so no handle
+    outlives the pass. Everything else is documented on the body.
+    """
+    lease = (
+        connection_lease(get_cache_db_path(projects_path))
+        if use_cache
+        else contextlib.nullcontext()
+    )
+    with lease:
+        return _process_projects_hierarchy(
+            projects_path=projects_path,
+            from_date=from_date,
+            to_date=to_date,
+            use_cache=use_cache,
+            generate_individual_sessions=generate_individual_sessions,
+            output_format=output_format,
+            image_export_mode=image_export_mode,
+            silent=silent,
+            page_size=page_size,
+            depth=depth,
+            compact=compact,
+            output_dir=output_dir,
+            expand_paths=expand_paths,
+            filter_path=filter_path,
+            write_combined=write_combined,
+            no_timestamps=no_timestamps,
+            no_recaps=no_recaps,
+            jobs=jobs,
+            entry_store=entry_store,
+        )
+
+
+def _process_projects_hierarchy(
+    projects_path: Path,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    use_cache: bool = True,
+    generate_individual_sessions: bool = True,
+    output_format: str = "html",
+    image_export_mode: Optional[str] = None,
+    silent: bool = True,
+    page_size: int = 2000,
+    depth: RenderingDepth = DEFAULT_DEPTH,
+    compact: bool = False,
+    output_dir: Optional[Path] = None,
+    expand_paths: bool = False,
+    filter_path: Optional[str] = None,
+    write_combined: bool = True,
+    no_timestamps: bool = False,
+    no_recaps: bool = False,
+    jobs: Optional[int] = None,
+    entry_store: "Optional[ParsedEntryStore]" = None,
 ) -> Path:
     """Process the entire ~/.claude/projects/ hierarchy and create linked output files.
 
@@ -6520,8 +6666,16 @@ def process_projects_hierarchy(
         project_start_time = time.monotonic()
         try:
             # Generate output for this project (handles cache updates internally)
+            #
+            # A caller-owned store is handed only to the *inline* path. It
+            # holds parsed entries, so it is neither picklable at sensible
+            # cost nor useful across a `spawn`: shipping one to a pool
+            # worker would cost more than the re-parse it saves, and the
+            # worker's copy would die with the task. Deliberately absent
+            # from `_conversion_kwargs` for that reason.
             convert_jsonl_to(
-                **_conversion_kwargs(plan, silent=silent, render_jobs=render_jobs)
+                **_conversion_kwargs(plan, silent=silent, render_jobs=render_jobs),
+                entry_store=entry_store,
             )
         except Exception:
             _print_project_failed(plan, traceback.format_exc())

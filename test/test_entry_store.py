@@ -906,3 +906,84 @@ class TestSessionLoadOrdering:
         assert not any("TEMP B-TREE" in p.upper() for p in plan), (
             f"the index no longer satisfies the ORDER BY — plan was {plan}"
         )
+
+
+class TestHierarchyCallerOwnedStore:
+    """A caller may own the store across `process_projects_hierarchy` calls.
+
+    `watch` already does this for the single-project path, which is what
+    lets a tick resume its parse from the bytes the previous tick read.
+    `serve --watch` converts the *hierarchy* instead, so without a
+    caller-owned store every tick built a fresh one and re-parsed each
+    changed file whole.
+
+    The hierarchy fans stale projects out over a process pool, and a
+    store holding parsed entries is no use across a `spawn` — so it
+    reaches only the inline conversion. That is the watch steady state:
+    one live project stale per tick means `resolved_jobs == 1` and no
+    pool.
+    """
+
+    def _archive(self, tmp_path: Path) -> tuple[Path, Path]:
+        projects = tmp_path / "projects"
+        projects.mkdir(parents=True)
+        work_dir = _copy_project(projects)
+        return projects, _busiest_trunk(work_dir)
+
+    def _tick(self, projects: Path, store: Any = None) -> None:
+        converter.process_projects_hierarchy(
+            projects, silent=True, write_combined=False, entry_store=store
+        )
+
+    def test_a_caller_owned_store_resumes_across_ticks(self, tmp_path: Path) -> None:
+        """Three ticks: cold, one that holds a prefix, one that resumes it."""
+        projects, jsonl = self._archive(tmp_path)
+        store = ParsedEntryStore()
+
+        self._tick(projects, store)
+        _append_entry(jsonl, "hierarchy-store-1", "a new message arrives")
+        self._tick(projects, store)
+        _append_entry(jsonl, "hierarchy-store-2", "and another")
+        self._tick(projects, store)
+
+        assert store.prefix_hits > 0, (
+            "the third tick re-read the whole file instead of resuming from "
+            "the prefix the second tick held"
+        )
+
+    def test_per_conversion_stores_cannot_resume(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The contrast that gives the test above its meaning.
+
+        Without a caller-owned store each tick builds its own, which dies
+        with the call — so no tick can ever resume from another's prefix.
+        """
+        projects, jsonl = self._archive(tmp_path)
+        stores = _spy_stores(monkeypatch)
+
+        self._tick(projects)
+        _append_entry(jsonl, "hierarchy-store-1", "a new message arrives")
+        self._tick(projects)
+        _append_entry(jsonl, "hierarchy-store-2", "and another")
+        self._tick(projects)
+
+        assert stores, "no store was created"
+        assert all(s.prefix_hits == 0 for s in stores)
+
+    def test_output_is_byte_identical_with_a_caller_owned_store(
+        self, tmp_path: Path
+    ) -> None:
+        """The bar any store change has to clear: the bytes must not move."""
+        on_projects, on_jsonl = self._archive(tmp_path / "on")
+        off_projects, off_jsonl = self._archive(tmp_path / "off")
+        store = ParsedEntryStore()
+
+        self._tick(on_projects, store)
+        self._tick(off_projects)
+        for jsonl in (on_jsonl, off_jsonl):
+            _append_entry(jsonl, "hierarchy-store-1", "a new message arrives")
+        self._tick(on_projects, store)
+        self._tick(off_projects)
+
+        assert _session_files(on_jsonl.parent) == _session_files(off_jsonl.parent)

@@ -26,6 +26,8 @@ flaky-test generator.
 
 from __future__ import annotations
 
+import fnmatch
+import os
 import threading
 import time
 from dataclasses import dataclass, field
@@ -62,24 +64,60 @@ FileStamp = tuple[int, int]
 """(size, mtime_ns) — the pair a change has to preserve to go unnoticed."""
 
 
+_WATCHED_NAMES = tuple(pattern.rsplit("/", 1)[-1] for pattern in WATCHED_GLOBS)
+
+
+def _is_watched_name(name: str) -> bool:
+    # `fnmatch.fnmatch`, not `fnmatchcase`: it normalises case the way the
+    # platform does (insensitive on Windows, sensitive on POSIX), which is
+    # also `Path.glob`'s rule -- and the converter discovers sessions with
+    # `Path.glob("*.jsonl")`, so a session it renders must also wake the
+    # watcher. Verified: `UP.JSONL` was rendered and never watched.
+    return not name.startswith(IGNORED_PREFIXES) and any(
+        fnmatch.fnmatch(name, pattern) for pattern in _WATCHED_NAMES
+    )
+
+
 def scan(roots: Iterable[Path]) -> dict[Path, FileStamp]:
     """Stamp every watched file under `roots`.
 
     Missing files are simply absent from the result, which makes deletion
     a change like any other. A file that vanishes mid-scan is skipped
     rather than raising: the next tick will see the settled state.
+
+    One ``os.scandir`` walk rather than a ``glob`` per pattern plus a
+    ``stat`` per hit: the directory listing already carries size and
+    mtime on Windows, so ``DirEntry.stat`` costs nothing there, whereas
+    ``Path.stat`` is a syscall per file. On a 332-project / 1,896-file
+    archive the glob form took 0.4–0.9 s per poll — polled four times a
+    second, the watch thread never slept — and this form returned the
+    identical dict 4–7× faster. Symlinked directories are not followed,
+    which is the one place this differs from ``glob("**")``; nothing in
+    a transcript tree is a symlink, and not following rules out a loop.
     """
     stamps: dict[Path, FileStamp] = {}
-    for root in roots:
-        for pattern in WATCHED_GLOBS:
-            for path in root.glob(pattern):
-                if path.name.startswith(IGNORED_PREFIXES):
-                    continue
-                try:
-                    st = path.stat()
-                except OSError:
-                    continue
-                stamps[path] = (st.st_size, st.st_mtime_ns)
+    pending = [os.fspath(root) for root in roots]
+    while pending:
+        directory = pending.pop()
+        try:
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            pending.append(entry.path)
+                            continue
+                        if not _is_watched_name(entry.name):
+                            continue
+                        # Follow a symlinked file, as `Path.stat` did: the
+                        # stamp has to be the target's, or appends to it go
+                        # unnoticed. Still free on Windows for anything
+                        # that is not a reparse point.
+                        st = entry.stat()
+                    except OSError:
+                        continue
+                    stamps[Path(entry.path)] = (st.st_size, st.st_mtime_ns)
+        except OSError:
+            continue
     return stamps
 
 

@@ -976,3 +976,30 @@ class TestCachePathEnvVar:
         # get_all_cached_projects without explicit path uses env var (empty db)
         projects_env = get_all_cached_projects(projects_dir)
         assert len(projects_env) == 0  # env_db doesn't have any projects
+
+
+class TestLibraryVersionMemo:
+    """`get_library_version` must stay memoised, and on the right function.
+
+    The `@functools.lru_cache` sits directly above the `def`; a helper once
+    got inserted between the two, which silently moved the memo onto the
+    helper and put a per-session package-metadata re-parse back into every
+    archive pass (675 calls, 3.3 s on a 332-project archive).
+    """
+
+    def test_get_library_version_is_memoised(self):
+        from claude_code_log import cache as cachemod
+
+        assert hasattr(cachemod.get_library_version, "cache_info"), (
+            "get_library_version lost its lru_cache: check the decorator is "
+            "directly above its def"
+        )
+        cachemod.get_library_version.cache_clear()
+        cachemod.get_library_version()
+        cachemod.get_library_version()
+        assert cachemod.get_library_version.cache_info().hits == 1
+
+    def test_the_memo_did_not_land_on_a_neighbour(self):
+        from claude_code_log import cache as cachemod
+
+        assert not hasattr(cachemod._combined_link_stale, "cache_info")
