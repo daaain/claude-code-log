@@ -199,3 +199,53 @@ def test_plan_needs_work_without_cache_for_individual_sessions(
     )
 
     assert plan.needs_work is True
+
+
+def test_plan_stats_without_cache_report_all_files_and_sessions(tmp_path: Path) -> None:
+    """No-cache plan stats must not report cache hits or zero regenerated sessions.
+
+    With `use_cache=False` every source file is (re)processed and every
+    requested session output is (re)generated, so the summary must count all
+    requested source files as processed and the corresponding sessions as
+    regenerated (CodeRabbit review on #297).
+    """
+    project_dir = _build_projects_dir(tmp_path, "no-cache-stats") / "-proj-alpha"
+
+    plan = _plan(
+        project_dir,
+        use_cache=False,
+        write_combined=False,
+        generate_individual_sessions=True,
+    )
+
+    assert plan.needs_work is True
+    assert plan.stats.files_updated == 1
+    assert plan.stats.files_loaded_from_cache == 0
+    assert plan.stats.sessions_regenerated == 1
+
+
+def test_no_cache_run_generates_individual_session_files(tmp_path: Path) -> None:
+    """End-to-end: a no-cache individual-sessions-only run writes session files.
+
+    Regression test for issue #274: `_generate_individual_session_files`
+    intersected the trunk session IDs with the cache-derived session data,
+    which is empty without a cache, so zero session files were ever written
+    while the index still linked to them (404 links).
+    """
+    project_dir = _build_projects_dir(tmp_path, "no-cache-run") / "-proj-alpha"
+
+    report = converter.RegenerationReport()
+    converter.convert_jsonl_to(
+        "html",
+        project_dir,
+        None,
+        generate_individual_sessions=True,
+        write_combined=False,
+        use_cache=False,
+        silent=True,
+        report=report,
+    )
+
+    session_files = sorted(project_dir.glob("session-*.html"))
+    assert len(session_files) > 0
+    assert report.sessions_regenerated == len(session_files)

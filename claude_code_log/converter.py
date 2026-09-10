@@ -2468,6 +2468,11 @@ def _generate_individual_session_files(
             session_data = {s.session_id: s for s in project_cache.sessions.values()}
         # Get working directories for project title
         working_directories = cache_manager.get_working_directories()
+    else:
+        # No cache: derive session data from the messages themselves, so the
+        # no-cache path actually generates the requested session files
+        # instead of intersecting down to the empty set (issue #274).
+        session_data = _build_session_data_from_messages(messages)
 
     # Only generate HTML for sessions that are tracked in the sessions table
     # (filters out warmup-only and sessions without user messages)
@@ -2976,10 +2981,17 @@ def _plan_project(
             # every source file as (re)processed rather than as a cache hit.
             stats.files_updated = len(jsonl_files)
             stats.files_loaded_from_cache = 0
+            # Without a cache every requested session output is (re)generated
+            # (stale_sessions is always empty when there is no cache), so
+            # report the corresponding sessions as regenerated rather than
+            # zero. valid_session_ids is the plan-time estimate: in real
+            # usage the JSONL file stems are the session IDs.
+            if generate_individual_sessions:
+                stats.sessions_regenerated = len(valid_session_ids)
         else:
             stats.files_updated = len(modified_files) if modified_files else 0
             stats.files_loaded_from_cache = len(jsonl_files) - stats.files_updated
-        stats.sessions_regenerated = len(stale_sessions)
+            stats.sessions_regenerated = len(stale_sessions)
     else:
         # Fast path: nothing to do, just collect stats for index
         stats.files_loaded_from_cache = len(jsonl_files)
