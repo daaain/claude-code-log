@@ -42,10 +42,10 @@ class TestClmailCommunicateInputMessage(ToolUseMessage):
     depth_visibility: ClassVar[RenderingDepth] = RenderingDepth.AGENT
 
     # No ``format_html`` defined: HtmlRenderer dispatch synthesizes
-    # HTML from this ``format_markdown`` output via mistune and wraps
+    # HTML from this ``format_markdown`` output via wenmode and wraps
     # in ``<div class="markdown">``. See dev-docs/plugins.md §4 for
     # when to add ``format_html`` (custom HTML construction) vs
-    # leaving it absent (mistune-of-format_markdown is enough).
+    # leaving it absent (wenmode-of-format_markdown is enough).
     def format_markdown(self, _renderer, _message) -> str:
         # Pull the action out of the parsed input (or the raw input dict).
         raw_input = getattr(self.input, "input", None)

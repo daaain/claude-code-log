@@ -1,440 +1,367 @@
-"""mistune inline-parser plugins shared between the HTML and Markdown
-output paths.
+"""wenmode rules, transforms and renderer handlers shared between the
+HTML and Markdown output paths.
 
-Houses two related plugins (issue #156):
+The Markdown engine is `wenmode <https://github.com/lepture/wenmode>`_
+(mistune's successor by the same author; the switch is #323). Everything
+this project adds on top of wenmode's ``github`` preset lives here:
 
-- ``make_sha_plugin`` — turns plain ``7c2e6f6``-shaped tokens into
-  commit links when a caller-supplied resolver returns a URL.
-- ``make_codespan_sha_plugin`` — wraps ``​`5baac35`​`` codespans
-  in commit links, emitting ``<a href="…"><code>5baac35</code></a>``
-  so explicit codespan-quoted SHAs become links too.
+- ``sha_links`` — a post-parse transform that turns commit SHAs into
+  links (issue #156): bare ``7c2e6f6`` tokens in prose and
+  ``​`5baac35`​``-style code spans alike, when a caller-supplied
+  resolver returns a URL. No-op for SHAs the resolver can't map
+  (typical of in-flight local-only commits), so the rendered
+  transcript doesn't sprout broken links.
+- ``transcript_rules`` — wenmode's ``github`` preset with the few
+  adjustments transcript content needs (``~~two~~``-only strikethrough,
+  no e-mail autolinks, every raw-HTML node escaped).
+- ``BlockHtmlMarker`` — tags block-level raw-HTML nodes so the HTML
+  renderer can wrap the escaped text in a paragraph.
+- ``linkify_shas_in_text`` — the Markdown output's equivalent of
+  ``sha_links``: same predicate, but splices ``[sha](url)`` into the
+  *source* text, using wenmode's source positions, so everything
+  outside the links stays byte-identical.
 
-Both plugins are no-ops for SHAs the resolver can't map to a URL
-(typical of in-flight local-only commits), so the rendered transcript
-doesn't sprout broken links.
+## Why a transform rather than inline rules
 
-## Why a separate module
-
-Both ``html/utils.py`` (the HTML mistune pipelines) and
-``markdown/renderer.py`` (the Markdown output's tag-protecting
-mistune pipeline) need to register the same plugin. Keeping the
-factory here avoids the cross-import that would otherwise be needed.
-
-## Why an inline-parser plugin (not a renderer monkey-patch)
-
-The in-project ``_create_pygments_plugin`` precedent in
-``html/utils.py`` monkey-patches ``md.renderer.block_code`` — that's
-the right shape for *block*-level transformations. SHA detection is
-*inline* (it has to fire mid-paragraph, inside ``*…*`` and ``**…**``,
-but not inside ``` `…` ``` or fenced code), and mistune's inline
-parser already provides exactly that surface via
-``md.inline.register``. See
-https://mistune.lepture.com/en/latest/advanced.html#create-plugins.
+mistune needed two inline-parser rules whose registration order was
+load-bearing (the codespan variant had to fire before the built-in
+``codespan`` rule), an ``in_link`` state guard, and could only match on
+``m.group(0)`` because it concatenates rule patterns and renumbers
+groups. A transform runs after parsing, when code spans, links and
+emphasis already exist as nodes: SHA detection becomes a walk over
+``Text`` and ``InlineCode`` nodes that skips anything under a ``Link``.
 
 ## Word-boundary heuristic
 
-The default regex ``r"\\b[0-9a-f]{7,40}\\b"`` matches 7-to-40-char
-lowercase hex runs at word boundaries. False-positive shapes worth
-noting:
-
-- ``0xdeadbeef`` style hex literals — the leading ``0x`` is consumed
-  by ``\\b`` so the ``deadbeef`` portion does match. The resolver
-  rejects unreachable SHAs, so these render as plain text in
-  practice.
-- 7+ char bash variable names that happen to be all hex would match
-  syntactically but again, the resolver gate prevents bogus links.
-
-The conservative pattern is fine for now; tighten if real-world
-false-positive volume becomes an issue.
+``SHA_PATTERN`` matches 7-to-40-char lowercase hex runs at word
+boundaries. False-positive shapes worth noting: ``0xdeadbeef`` (the
+``deadbeef`` part matches), 7+ char all-hex identifiers, digit runs.
+The resolver gate filters those; see ``git_remote.py``.
 """
 
 from __future__ import annotations
 
+import functools
 import re
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Iterator, Optional
 
+from wenmode import Wenmode
+from wenmode.nodes import Html, InlineCode, Link, Node, Parent, Position, Text
+from wenmode.presets import github
+from wenmode.rules import ExtendedAutolink, InlineRule, RootTransform, Strikethrough
+
+Resolver = Callable[[str], Optional[str]]
 
 # Word-bounded run of 7-40 lowercase hex chars. Mirrors the standard
 # git short-SHA shape (``git config --global core.abbrev`` defaults to
-# 7); 40 is the full SHA-1 length. The resolver gate filters
-# false-positives that this loose pattern lets through.
+# 7); 40 is the full SHA-1 length.
 SHA_PATTERN = r"\b[0-9a-f]{7,40}\b"
+_SHA_RE = re.compile(SHA_PATTERN)
 
 
-# Tight ``\`sha\``` shape for the codespan-wrapped variant. Single
-# backticks only: the realistic transcript form. Multi-backtick
-# codespans wrapping a bare SHA (``\`\`sha\`\``` etc.) and the
-# CommonMark strip-one-space form (``\` sha \``) are not handled —
-# extend with explicit alternation if real-world data warrants it.
-# We deliberately avoid backreferences here: mistune concatenates
-# rule patterns and renumbers groups, so ``\1`` would refer to a
-# different (and surprising) group at parse time.
-CODESPAN_SHA_PATTERN = r"`[0-9a-f]{7,40}`"
+# ---------------------------------------------------------------------
+# SHA links: one transform for prose SHAs and codespan SHAs
+# ---------------------------------------------------------------------
 
 
-def make_sha_plugin(resolve: Callable[[str], Optional[str]]) -> Any:
-    """Build a mistune plugin that links resolvable git commit SHAs.
+def _link(url: str, child: Node, position: Optional[Position]) -> Link:
+    return Link(url=url, children=[child], position=position)
 
-    The plugin emits a stock ``"link"`` token, so it works with both
-    ``mistune.HTMLRenderer`` and the project's ``MarkdownRenderer``
-    without per-renderer registration. ``resolve`` is the only
-    customisation point — it returns the URL to link to, or ``None``
-    to leave the SHA unchanged. Wrap it in ``functools.lru_cache``
-    upstream; ``parse_sha_link`` calls it once per match.
 
-    Args:
-        resolve: callable mapping a candidate SHA to a target URL or
-            ``None`` for "leave as plain text".
+def _text(value: str, base: Optional[Position], start: int, end: int) -> Text:
+    position = Position(base.start + start, base.start + end) if base else None
+    return Text(value=value, position=position)
 
-    Returns:
-        A function suitable for the ``plugins=[...]`` list passed to
-        ``mistune.create_markdown``.
+
+def _split_text(node: Text, resolve: Resolver) -> list[Node]:
+    """Split a text node around every resolvable SHA it contains."""
+    text, pos = node.value, node.position
+    parts: list[Node] = []
+    last = 0
+    for m in _SHA_RE.finditer(text):
+        url = resolve(m.group(0))
+        if url is None:
+            continue
+        if m.start() > last:
+            parts.append(_text(text[last : m.start()], pos, last, m.start()))
+        sha = _text(m.group(0), pos, m.start(), m.end())
+        parts.append(_link(url, sha, sha.position))
+        last = m.end()
+    if not parts:
+        return [node]
+    if last < len(text):
+        parts.append(_text(text[last:], pos, last, len(text)))
+    return parts
+
+
+def linkify_tree(node: Parent, resolve: Resolver, in_link: bool = False) -> None:
+    """Rewrite ``node``'s subtree in place, linking resolvable SHAs.
+
+    - A ``Text`` node is split around each resolvable SHA, which becomes
+      a ``Link`` wrapping a ``Text``.
+    - An ``InlineCode`` node whose whole value is a resolvable SHA is
+      wrapped in a ``Link`` (``<a href="…"><code>sha</code></a>``).
+    - Nothing under an existing ``Link`` is touched: a SHA the author
+      already linked (``[abc1234](url)``) is not double-wrapped.
+    - Fenced and indented code are ``Code`` nodes, never ``Text``, so
+      they are skipped by construction.
+    """
+    out: list[Node] = []
+    for child in node.children:
+        if isinstance(child, Link):
+            linkify_tree(child, resolve, in_link=True)
+            out.append(child)
+        elif in_link:
+            out.append(child)
+        elif isinstance(child, InlineCode):
+            url = resolve(child.value) if _SHA_RE.fullmatch(child.value) else None
+            out.append(_link(url, child, child.position) if url else child)
+        elif isinstance(child, Text):
+            out.extend(_split_text(child, resolve))
+        else:
+            if isinstance(child, Parent):
+                linkify_tree(child, resolve, in_link)
+            out.append(child)
+    node.children = out
+
+
+class ShaLinks(InlineRule):
+    """Trigger-only rule (no pattern, no opener) carrying the transform.
+
+    wenmode attaches document-wide transforms to rules, so the
+    transform rides on a rule that never matches anything itself.
+    ``resolve`` returns the URL to link to, or ``None`` to leave the
+    SHA unchanged; wrap it in ``functools.lru_cache`` upstream.
     """
 
-    def parse_sha_link(inline: Any, m: re.Match[str], state: Any) -> int:
-        sha = m.group(0)
-        pos = m.end()
-        # Don't nest links: if we're already inside a [text](url)
-        # token, drop straight through to plain-text emission. Mirrors
-        # the guard in mistune's bundled ``url`` plugin.
-        if getattr(state, "in_link", False):
-            inline.process_text(sha, state)
-            return pos
-        url = resolve(sha)
-        if url is None:
-            # Resolver said "no" (no remote, not reachable, etc.) —
-            # render as plain text exactly as it appeared.
-            inline.process_text(sha, state)
-            return pos
-        state.append_token(
-            {
-                "type": "link",
-                "children": [{"type": "text", "raw": sha}],
-                "attrs": {"url": url},
-            }
-        )
-        return pos
+    name = "sha_links"
 
-    def plugin(md: Any) -> None:
-        # The outer ``Any`` return type on ``make_sha_plugin`` is a
-        # deliberate hand-off to mistune's ``PluginRef`` interface,
-        # which expects a positional-or-keyword ``md`` parameter.
-        # Typing this closure more tightly produces a parameter-kind
-        # mismatch with strict checkers (pyright/ty) at the
-        # ``create_markdown(plugins=[…])`` call site.
-        #
-        # ``register`` appends to ``DEFAULT_RULES``, so built-in
-        # inline rules (``link``, ``auto_link``, ``codespan``, …) win
-        # on overlap. That's what we want: an explicit
-        # ``[abc1234](url)`` stays a single link, and a SHA inside
-        # ``` `…` ``` stays code (handled by the *separate*
-        # ``make_codespan_sha_plugin`` below, which fires *before*
-        # the built-in ``codespan`` rule).
-        md.inline.register("sha_link", SHA_PATTERN, parse_sha_link)
-
-    return plugin
+    def __init__(self, resolve: Resolver) -> None:
+        super().__init__()
+        self.root_transforms = [_ShaLinksTransform(resolve)]
 
 
-def make_codespan_sha_plugin(resolve: Callable[[str], Optional[str]]) -> Any:
-    """Build a mistune plugin that links codespan-wrapped SHAs.
+class _ShaLinksTransform(RootTransform):
+    name = "sha_links"
 
-    Where ``make_sha_plugin`` handles bare prose tokens (``abc1234``),
-    this plugin handles the explicit codespan form (``​`abc1234`​``)
-    that authors often use to typographically distinguish commit
-    references. The emitted token is a stock ``link`` wrapping a
-    stock ``codespan`` child, so the rendered HTML is
-    ``<a href="…"><code>abc1234</code></a>`` — the SHA stays
-    monospaced and gains the link.
+    def __init__(self, resolve: Resolver) -> None:
+        self.resolve = resolve
 
-    Must fire *before* mistune's built-in ``codespan`` rule
-    (``register(…, before="codespan")``); otherwise the default
-    codespan consumes the input first and our plugin never sees it.
+    def transform(self, parser: Any, root: Any, state: Any) -> None:
+        linkify_tree(root, self.resolve)
 
-    Args:
-        resolve: same contract as ``make_sha_plugin``.
+
+def make_sha_plugin(resolve: Resolver) -> Any:
+    """Build a wenmode plugin that links resolvable git commit SHAs.
+
+    Suitable for ``Wenmode(..., plugins=[make_sha_plugin(resolve)])``.
+    Handles both the bare-prose and the code-span forms.
     """
 
-    def parse_codespan_sha(inline: Any, m: re.Match[str], state: Any) -> int:
-        # mistune concatenates rule patterns into one combined regex
-        # and renumbers capturing groups, so ``m.group(N)`` for N>0
-        # is unreliable. ``m.group(0)`` always holds the full literal
-        # match (here: ``​`abc1234`​``).
-        raw = m.group(0)
-        sha = raw.strip("`")
-        pos = m.end()
-        if getattr(state, "in_link", False):
-            # Already inside ``[…](url)``: don't double-wrap, but
-            # preserve the codespan formatting so
-            # ``​[`abc1234`](url)​`` still renders as
-            # ``<a><code>abc1234</code></a>``. Falling through with
-            # ``return None`` would skip 1 char and lose the codespan
-            # tagging that mistune's default would have emitted.
-            state.append_token({"type": "codespan", "raw": sha})
-            return pos
-        url = resolve(sha)
-        if url is None:
-            # Resolver said "no": emit the unchanged codespan, exactly
-            # as mistune's default would.
-            state.append_token({"type": "codespan", "raw": sha})
-            return pos
-        state.append_token(
-            {
-                "type": "link",
-                "attrs": {"url": url},
-                "children": [{"type": "codespan", "raw": sha}],
-            }
-        )
-        return pos
+    class _Plugin:
+        def setup(self, wen: Wenmode, /) -> None:
+            wen.register_rule(ShaLinks(resolve))
 
-    def plugin(md: Any) -> None:
-        # ``before="codespan"`` is load-bearing: mistune's built-in
-        # codespan rule is greedy on ``​`…`​`` shapes and
-        # would consume our input first if we registered after it.
-        md.inline.register(
-            "codespan_sha",
-            CODESPAN_SHA_PATTERN,
-            parse_codespan_sha,
-            before="codespan",
-        )
-
-    return plugin
+    return _Plugin()
 
 
-def linkify_shas_in_text(text: str, resolve: Callable[[str], Optional[str]]) -> str:
+# ---------------------------------------------------------------------
+# Autolinks: URLs only
+# ---------------------------------------------------------------------
+
+
+class UrlOnlyAutolink(ExtendedAutolink):
+    """GFM extended autolink for bare URLs, not bare e-mail addresses.
+
+    ``ruff@0.6.0``, ``git@github.com:owner/repo`` and ``user@host`` in
+    shell output all match the GFM e-mail grammar, and none of them is
+    mail. Angle-bracket autolinks (``<a@b.com>``) are a different rule
+    and still link.
+    """
+
+    def search_email(self, text: str, pos: int) -> Any:
+        return None
+
+
+# ---------------------------------------------------------------------
+# Block-level raw HTML: mark it so the HTML renderer can wrap it
+# ---------------------------------------------------------------------
+
+# Parents whose children are inline content. An ``Html`` node under any
+# other parent is an HTML *block*.
+_INLINE_PARENTS = frozenset(
+    {
+        "paragraph",
+        "heading",
+        "tableCell",
+        "emphasis",
+        "strong",
+        "delete",
+        "link",
+        "linkReference",
+    }
+)
+
+
+def mark_block_html(node: Parent) -> None:
+    for child in node.children:
+        if isinstance(child, Html):
+            if node.type not in _INLINE_PARENTS:
+                child.data = {**(child.data or {}), "block": True}
+        elif isinstance(child, Parent):
+            mark_block_html(child)
+
+
+class _MarkBlockHtml(RootTransform):
+    name = "block_html_marker"
+
+    def transform(self, parser: Any, root: Any, state: Any) -> None:
+        mark_block_html(root)
+
+
+class BlockHtmlMarker(InlineRule):
+    """Trigger-only rule carrying the block-HTML marking transform."""
+
+    name = "block_html_marker"
+    root_transforms = [_MarkBlockHtml()]
+
+
+# ---------------------------------------------------------------------
+# The shared rule set
+# ---------------------------------------------------------------------
+
+
+def transcript_rules(
+    resolve: Optional[Resolver] = None, *, autolink: bool = True
+) -> list[Any]:
+    """wenmode's ``github`` preset adjusted for transcript content.
+
+    - strikethrough requires ``~~`` — transcript prose uses ``~`` for
+      "approximately" constantly ("~2, ~6 min"), and GFM's single-tilde
+      form would strike through everything between two of them;
+    - bare URLs autolink, bare e-mail-shaped tokens do not
+      (``autolink=False`` leaves bare URLs as text too — the Markdown
+      output's splice wants no rewriting it does not need);
+    - raw HTML is parsed without wenmode's GFM tag filter — the HTML
+      renderer escapes *every* raw-HTML node (``escape=True``), and the
+      filter would otherwise leave ``<script>`` half-escaped as
+      ``&lt;script>``;
+    - block-level raw HTML is marked for the renderer;
+    - SHA links, when a resolver is given.
+
+    Pair with ``transcript_plugins()`` when constructing a ``Wenmode``.
+    """
+    from wenmode.rules import HtmlBlock, RawHtml
+
+    rules: list[Any] = []
+    for rule in github():
+        if rule.name == "strikethrough":
+            rules.append(Strikethrough(allow_single_tilde=False))
+        elif rule.name == "html_block":
+            rules.append(HtmlBlock(disallowed_tags=()))
+        elif rule.name == "raw_html":
+            rules.append(RawHtml(disallowed_tags=()))
+        elif rule.name == "extended_autolink":
+            if autolink:
+                rules.append(UrlOnlyAutolink())
+        else:
+            rules.append(rule)
+    rules.append(BlockHtmlMarker())
+    if resolve is not None:
+        rules.append(ShaLinks(resolve))
+    return rules
+
+
+def transcript_plugins() -> list[Any]:
+    """wenmode plugins every transcript pipeline installs."""
+    from wenmode.plugins import definition_list
+
+    return [definition_list]
+
+
+# ---------------------------------------------------------------------
+# Markdown output: splice links into the source text
+# ---------------------------------------------------------------------
+
+
+@functools.lru_cache(maxsize=1)
+def position_parser() -> Wenmode:
+    """The transcript parser with source positions, for splicing edits
+    into Markdown text (``linkify_shas_in_text``, ``_protect_html_tags``)."""
+    return Wenmode(
+        transcript_rules(autolink=False), plugins=transcript_plugins(), positions=True
+    )
+
+
+def walk_nodes(node: Node) -> Iterator[Node]:
+    """Yield ``node`` and every descendant, depth first."""
+    yield node
+    if isinstance(node, Parent):
+        for child in node.children:
+            yield from walk_nodes(child)
+
+
+def linkify_shas_in_text(text: str, resolve: Resolver) -> str:
     """Substitute resolvable SHAs in ``text`` with Markdown links.
 
     Used by the Markdown output path where text bodies are emitted
-    directly (no mistune render) — e.g.
-    ``MarkdownRenderer.format_AssistantTextMessage``. Mirrors the
-    HTML side's plugin behaviour:
-
-    - SHAs inside fenced code blocks (``` ``` ``` / ``~~~``) are skipped.
-    - SHAs inside indented code blocks (4-space / tab leading) are skipped.
-    - SHAs *embedded* inside inline code spans alongside other text
-      (e.g. ``` `git show abc1234` ```) are skipped — we won't rewrite
-      arbitrary code fragments. *Single-backtick* codespans whose body
-      is exactly a SHA (e.g. ``` `abc1234` ```) get the codespan
-      preserved and wrapped in a link: ``[`abc1234`](url)``. Mirrors
-      ``make_codespan_sha_plugin`` on the HTML side.
-    - SHAs inside an existing Markdown link's ``[text]`` or ``(url)``
-      span are skipped — so an already-linked SHA isn't double-wrapped.
-    - Everything else: resolver-confirmed SHAs become ``[sha](url)``;
-      unresolved SHAs pass through verbatim.
-
-    Implementation is a hand-rolled tokenizer rather than a mistune
-    pass: it has to *preserve* unmatched delimiters and rebuild the
-    text exactly, which mistune's HTML-emitting renderer won't do.
-    The same predicate set the HTML plugin gets for free
-    (``parse_emphasis`` recursing into nested rules, ``codespan``
-    being raw) we have to enforce explicitly here.
+    directly, e.g. ``MarkdownRenderer.format_AssistantTextMessage``.
+    Same predicate as the HTML side's ``sha_links`` transform — prose
+    SHAs become ``[sha](url)``, single-backtick code spans holding
+    exactly a SHA become ``[`sha`](url)``, anything inside code blocks,
+    mixed code spans or existing links is left alone — but applied by
+    splicing into the *source*: the text is parsed with source
+    positions, and only the byte ranges of the matched nodes are
+    rewritten, so everything else survives verbatim.
     """
     if not text:
         return text
-    return "".join(_linkify_block_tokens(text, resolve))
+    root = position_parser().parse(text)
+    edits: list[tuple[int, int, str]] = []
 
+    def walk(node: Parent, in_link: bool) -> None:
+        for child in node.children:
+            if isinstance(child, Link):
+                walk(child, True)
+            elif in_link:
+                continue
+            elif isinstance(child, InlineCode):
+                if child.position is None or not _SHA_RE.fullmatch(child.value):
+                    continue
+                start, end = child.position.start, child.position.end
+                # Single-backtick form only: the source must be exactly
+                # `` `sha` ``, not ``` ``sha`` ``` or `` ` sha ` ``.
+                if text[start:end] != f"`{child.value}`":
+                    continue
+                url = resolve(child.value)
+                if url is not None:
+                    edits.append((start, end, f"[{text[start:end]}]({url})"))
+            elif isinstance(child, Text):
+                if child.position is None:
+                    continue
+                base = child.position.start
+                if text[base : child.position.end] != child.value:
+                    # The node's value was normalised away from the
+                    # source (entities, escapes): offsets inside it are
+                    # not source offsets, so leave it alone.
+                    continue
+                for m in _SHA_RE.finditer(child.value):
+                    url = resolve(m.group(0))
+                    if url is not None:
+                        edits.append(
+                            (base + m.start(), base + m.end(), f"[{m.group(0)}]({url})")
+                        )
+            elif isinstance(child, Parent):
+                walk(child, in_link)
 
-def _replace_shas(text: str, resolve: Callable[[str], Optional[str]]) -> str:
-    """Apply ``SHA_PATTERN`` substitution to a prose span."""
-
-    def _sub(m: re.Match[str]) -> str:
-        sha = m.group(0)
-        url = resolve(sha)
-        if url is None:
-            return sha
-        return f"[{sha}]({url})"
-
-    return re.sub(SHA_PATTERN, _sub, text)
-
-
-def _linkify_block_tokens(
-    text: str, resolve: Callable[[str], Optional[str]]
-) -> list[str]:
-    """Walk *text* line-by-line, yielding prose-substituted / code-skipped pieces.
-
-    Handles block-level skips (fenced + indented code); per-prose-line
-    inline tokenization is delegated to ``_linkify_inline``.
-    """
+    walk(root, False)
+    if not edits:
+        return text
     out: list[str] = []
-    lines = text.split("\n")
-    in_fence = False
-    fence_marker: str = ""  # ``` or ~~~ run that opened the current fence
-    for idx, line in enumerate(lines):
-        # Newline rejoin: every line except the last gets its trailing
-        # ``\n`` re-emitted as a separate token.
-        suffix = "\n" if idx < len(lines) - 1 else ""
-
-        stripped_left = line.lstrip(" ")
-        indent = len(line) - len(stripped_left)
-
-        # CommonMark allows up to 3 leading spaces before a fence; ≥4
-        # leading spaces is an indented-code line, not a fence.
-        if in_fence:
-            # Close on matching fence (run of same char, ≥ opener length).
-            if (
-                indent <= 3
-                and stripped_left.startswith(fence_marker)
-                and stripped_left.rstrip().rstrip(fence_marker[0]) == ""
-            ):
-                in_fence = False
-                fence_marker = ""
-            out.append(line + suffix)
-            continue
-
-        if indent <= 3 and (
-            stripped_left.startswith("```") or stripped_left.startswith("~~~")
-        ):
-            ch = stripped_left[0]
-            run = 0
-            while run < len(stripped_left) and stripped_left[run] == ch:
-                run += 1
-            in_fence = True
-            fence_marker = ch * run
-            out.append(line + suffix)
-            continue
-
-        if indent >= 4:
-            # Indented code block: skip substitution for this line.
-            out.append(line + suffix)
-            continue
-
-        out.append(_linkify_inline(line, resolve) + suffix)
-    return out
-
-
-def _linkify_inline(line: str, resolve: Callable[[str], Optional[str]]) -> str:
-    """Apply SHA substitution within a single prose line.
-
-    Spans owned by an existing Markdown link (``[text](url)``) are
-    opaque. Matched backtick runs are opaque *unless* their body is
-    exactly a resolvable SHA and the opener is a single backtick, in
-    which case the span ``​`abc1234`​`` is rewritten to
-    ``[​`abc1234`​](url)`` — mirroring the
-    ``make_codespan_sha_plugin`` behaviour on the HTML side. Anything
-    else is treated as prose and passed through ``_replace_shas``.
-    """
-    parts: list[str] = []
-    i = 0
-    n = len(line)
-    while i < n:
-        ch = line[i]
-        if ch == "`":
-            # Match opening run length.
-            j = i
-            while j < n and line[j] == "`":
-                j += 1
-            open_len = j - i
-            close = _find_matching_backticks(line, j, open_len)
-            if close is not None:
-                span = line[i : close + open_len]
-                # Special-case: single-backtick codespan whose body
-                # is exactly a resolvable SHA → wrap the codespan in
-                # a link so [`abc1234`](url) renders as a monospaced
-                # commit link. Multi-backtick spans, spans with
-                # surrounding whitespace, and any non-SHA body fall
-                # through to the opaque emit.
-                if open_len == 1:
-                    body = line[j:close]
-                    if re.fullmatch(SHA_PATTERN, body) is not None:
-                        url = resolve(body)
-                        if url is not None:
-                            parts.append(f"[{span}]({url})")
-                            i = close + open_len
-                            continue
-                # Whole span (including the closing run) is opaque.
-                parts.append(span)
-                i = close + open_len
-                continue
-            # Unmatched run: treat as plain prose chars.
-            parts.append(_replace_shas(line[i:j], resolve))
-            i = j
-            continue
-        if ch == "[":
-            link_end = _try_match_md_link(line, i)
-            if link_end is not None:
-                # Whole [text](url) span is opaque — both halves are
-                # already either user text we mustn't double-tag or a
-                # link target the resolver shouldn't rewrite.
-                parts.append(line[i:link_end])
-                i = link_end
-                continue
-            # ``[`` that doesn't open a link is a literal prose char;
-            # emit it directly and advance, otherwise the prose
-            # accumulator below would stop on the same ``[`` and spin.
-            parts.append("[")
-            i += 1
-            continue
-        # Accumulate prose until the next significant delimiter.
-        k = i
-        while k < n and line[k] != "`" and line[k] != "[":
-            k += 1
-        parts.append(_replace_shas(line[i:k], resolve))
-        i = k
-    return "".join(parts)
-
-
-def _find_matching_backticks(text: str, start: int, count: int) -> Optional[int]:
-    """Find a run of exactly ``count`` backticks at or after ``start``.
-
-    Returns the start index of the closing run, or ``None`` if no
-    matching run exists in the rest of the line.
-    """
-    i = start
-    n = len(text)
-    while i < n:
-        if text[i] != "`":
-            i += 1
-            continue
-        j = i
-        while j < n and text[j] == "`":
-            j += 1
-        if j - i == count:
-            return i
-        i = j
-    return None
-
-
-def _try_match_md_link(text: str, start: int) -> Optional[int]:
-    """Try to match a Markdown ``[text](url)`` link starting at ``start``.
-
-    Returns the index just past the closing ``)``, or ``None`` if the
-    span doesn't form a valid link. Doesn't try to handle reference
-    links / footnotes / images-with-titles — those are uncommon in the
-    prose this helper sees (assistant / user message bodies). The
-    inline image shape ``![alt](url)`` is matched as a link starting
-    at the ``[`` (the leading ``!`` is in the surrounding prose
-    chunk), which is the same opaque outcome we want.
-    """
-    if start >= len(text) or text[start] != "[":
-        return None
-    n = len(text)
-    i = start + 1
-    depth = 1
-    while i < n:
-        c = text[i]
-        if c == "\\" and i + 1 < n:
-            i += 2
-            continue
-        if c == "[":
-            depth += 1
-        elif c == "]":
-            depth -= 1
-            if depth == 0:
-                break
-        i += 1
-    if depth != 0 or i + 1 >= n or text[i + 1] != "(":
-        return None
-    j = i + 2
-    paren = 1
-    while j < n:
-        c = text[j]
-        if c == "\\" and j + 1 < n:
-            j += 2
-            continue
-        if c == "(":
-            paren += 1
-        elif c == ")":
-            paren -= 1
-            if paren == 0:
-                return j + 1
-        j += 1
-    return None
+    last = 0
+    for start, end, replacement in sorted(edits):
+        out.append(text[last:start])
+        out.append(replacement)
+        last = end
+    out.append(text[last:])
+    return "".join(out)

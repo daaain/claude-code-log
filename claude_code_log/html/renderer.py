@@ -309,7 +309,7 @@ class HtmlRenderer(Renderer):
     # v1 contract: ``format_html`` MUST return a real string. The
     # absence of the method on a plugin class drives the fallback —
     # ``_dispatch_format`` (overridden below) synthesizes HTML from
-    # the class-side ``format_markdown`` via mistune when only the
+    # the class-side ``format_markdown`` via wenmode when only the
     # Markdown side is implemented. There is no None-as-sentinel.
     _class_dispatch_format: str = "html"
 
@@ -322,7 +322,7 @@ class HtmlRenderer(Renderer):
            verbatim. The return MUST be a real string (no None sentinel).
         2. Class defines ``format_markdown`` (but not ``format_html``)
            in its ``__dict__`` → synthesize HTML by rendering the
-           Markdown via mistune, wrapped in ``<div class="markdown">``
+           Markdown via wenmode, wrapped in ``<div class="markdown">``
            so theme rules scoped under ``.markdown`` fire. By
            definition the synthesized output is Markdown-derived, so
            the wrap is automatic — plugin authors don't need
@@ -1692,7 +1692,7 @@ class HtmlRenderer(Renderer):
         from ..git_remote import canonical_cwd_from_messages, render_with_repo_context
 
         # Bind the per-render canonical repo cwd for the SHA-link
-        # plugin (issue #156). The mistune renderers themselves are
+        # plugin (issue #156). The wenmode renderers themselves are
         # cached singletons; the resolver reads the cwd from a
         # ContextVar so different transcripts can scope to different
         # repos without cache invalidation.

@@ -302,10 +302,22 @@ class TestExcerpt:
         assert result.endswith("…")
 
 
+def _permissive_downstream():
+    """A stand-in for a permissive downstream Markdown viewer: raw HTML
+    passes through live, so anything ``_protect_html_tags`` left as a
+    tag would show up as one."""
+    from wenmode import HTMLRenderer, Wenmode
+    from wenmode.presets import github
+
+    return Wenmode(
+        github(), renderer=HTMLRenderer(escape=False, sanitize_urls=False)
+    ).render
+
+
 class TestProtectHtmlTags:
     """Tests for the _protect_html_tags() module-level helper.
 
-    The helper parses with mistune and re-emits through a tag-protecting
+    The helper parses with wenmode and splices entities over raw-HTML nodes
     renderer. Inline and block HTML tokens get HTML-entity-escaped, so
     the tag text survives but no downstream Markdown renderer can
     interpret it as live markup. All non-HTML Markdown is preserved —
@@ -366,38 +378,24 @@ class TestProtectHtmlTags:
         """A lone ``\\``` adjacent to a tag can't merge with a wrapper
         delimiter — there isn't one to merge with.
         """
-        import mistune
-
-        permissive = mistune.create_markdown(
-            renderer=mistune.HTMLRenderer(escape=False)
-        )
-        rendered = str(permissive(_protect_html_tags("x `<br> y"))).strip()
+        permissive = _permissive_downstream()
+        rendered = permissive(_protect_html_tags("x `<br> y")).strip()
         assert "&lt;br&gt;" in rendered
         # No live <br>.
         assert rendered.replace("&lt;br&gt;", "").count("<br") == 0
 
     def test_backtick_in_attribute_does_not_leak(self):
         """Tags with backticks in attributes don't break either."""
-        import mistune
-
-        permissive = mistune.create_markdown(
-            renderer=mistune.HTMLRenderer(escape=False)
-        )
-        rendered = str(
-            permissive(_protect_html_tags('<span title="`">x</span>'))
-        ).strip()
+        permissive = _permissive_downstream()
+        rendered = permissive(_protect_html_tags('<span title="`">x</span>')).strip()
         assert "&lt;span" in rendered
         # No live <span>.
         assert "<span" not in rendered.replace("&lt;span", "")
 
     def test_block_html_with_inner_fence_does_not_leak(self):
         """Block HTML containing a ``` fence doesn't break."""
-        import mistune
-
-        permissive = mistune.create_markdown(
-            renderer=mistune.HTMLRenderer(escape=False)
-        )
-        rendered = str(permissive(_protect_html_tags("<div>\n```\n</div>"))).strip()
+        permissive = _permissive_downstream()
+        rendered = permissive(_protect_html_tags("<div>\n```\n</div>")).strip()
         assert "&lt;div&gt;" in rendered
         assert "<div" not in rendered.replace("&lt;div", "")
 

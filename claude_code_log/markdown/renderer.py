@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-import functools
 import html as _html
 import json
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
-import mistune
-from mistune.renderers.markdown import MarkdownRenderer as _MistuneMarkdownRenderer
+from wenmode.nodes import Html, Text
 
 from ..cache import get_library_version
 from ..html.utils import (
@@ -225,15 +223,27 @@ def _session_anchor(session_or_id: "SessionHeaderMessage | str") -> str:
     return f"session-{sid[:8]}"
 
 
-class _TagProtectingMarkdownRenderer(_MistuneMarkdownRenderer):
-    """Mistune re-emitter that neutralises raw HTML tokens.
+def _protect_html_tags(text: str) -> str:
+    """Neutralise raw HTML in Markdown text, leaving every other byte as is.
 
-    Mistune's stock ``MarkdownRenderer`` round-trips a parsed Markdown
-    document back to Markdown text. We inherit it and override the two
-    HTML hooks — ``inline_html`` (tags like ``<br>``, ``<script>``) and
-    ``block_html`` (block-level HTML chunks) — to emit the token's raw
-    content HTML-escaped to entities instead of passing the tag through
-    verbatim.
+    Mirrors the HTML renderer's ``escape=True`` policy for user content:
+    tags that a user typed (``<script>``, ``<details>``, bare ``<br>``,
+    …) are rendered as literal text in any downstream Markdown viewer
+    rather than interpreted as HTML. Without this, a permissive viewer
+    could execute ``<script>`` or interpret ``<iframe>`` — the HTML
+    output escapes them via wenmode's ``escape=True``; the Markdown
+    output delegates to the viewer, so we need to neutralise tags at
+    emission time.
+
+    Parses the text with wenmode (source positions on) and splices an
+    entity-escaped copy over the byte range of every raw-HTML node,
+    inline or block. Because the parser already distinguishes raw HTML
+    from inline code spans (``` `x <br> y` ```), fenced blocks and
+    indented code blocks, all of those — and everything else: emphasis,
+    escapes, autolinks, fence characters — survive byte for byte. A
+    ``<`` in plain text that could open a tag for a lax viewer
+    (``<svg/onload=…>`` is not an HTML tag to the parser; ``&lt;script&gt;``
+    decodes to plain text) gets the same entity treatment.
 
     Escaping to entities sidesteps the class of edge cases that any
     backtick-wrapping strategy has to contend with (stray backticks in
@@ -244,47 +254,37 @@ class _TagProtectingMarkdownRenderer(_MistuneMarkdownRenderer):
     like GitHub correctly display the tag text. Either way the tag
     itself never reaches the HTML output as live markup.
     """
-
-    def inline_html(self, token: dict[str, Any], state: Any) -> str:
-        return _html.escape(token.get("raw", ""))
-
-    def block_html(self, token: dict[str, Any], state: Any) -> str:
-        return _html.escape(token.get("raw", ""))
-
-
-@functools.lru_cache(maxsize=1)
-def _get_tag_protecting_markdown() -> mistune.Markdown:
-    """Cache the mistune pipeline used by :func:`_protect_html_tags`."""
-    return mistune.create_markdown(renderer=_TagProtectingMarkdownRenderer())
-
-
-def _protect_html_tags(text: str) -> str:
-    """Wrap raw HTML/XML tags in inline code backticks.
-
-    Mirrors the HTML renderer's ``escape=True`` policy for user content:
-    tags that a user typed (``<script>``, ``<details>``, bare ``<br>``,
-    …) are rendered as literal text in any downstream Markdown viewer
-    rather than interpreted as HTML. Without this, a permissive viewer
-    could execute ``<script>`` or interpret ``<iframe>`` — the HTML
-    output escapes them via mistune's ``escape=True``; the Markdown
-    output delegates to the viewer, so we need to neutralise tags at
-    emission time.
-
-    Parses the text with mistune and re-emits it through a
-    tag-protecting renderer. Because the parser already distinguishes
-    raw HTML from inline code spans (``` `x <br> y` ```), fenced blocks,
-    and indented code blocks, all of those are preserved unchanged and
-    only the actual HTML tokens are wrapped. The round-trip may apply
-    minor cosmetic normalisation (e.g. indented HTML becomes a fenced
-    block), which is acceptable since the goal is tag-neutralisation,
-    not byte-for-byte source preservation.
-    """
     if not text:
         return text
-    # `mistune.Markdown.__call__` is typed as returning a union of `str`
-    # and a token list; with a renderer set it always returns a string.
-    rendered = _get_tag_protecting_markdown()(text)
-    return str(rendered).rstrip("\n")
+    from ..markdown_plugins import walk_nodes, position_parser
+
+    edits: list[tuple[int, int, str]] = []
+    for node in walk_nodes(position_parser().parse(text)):
+        if node.position is None:
+            continue
+        start, end = node.position.start, node.position.end
+        if isinstance(node, Html):
+            edits.append((start, end, _html.escape(text[start:end])))
+        elif isinstance(node, Text):
+            for m in _TAG_LIKE_LT_RE.finditer(text, start, end):
+                edits.append((m.start(), m.end(), "&lt;"))
+    if not edits:
+        return text.rstrip("\n")
+    out: list[str] = []
+    last = 0
+    for start, end, replacement in sorted(edits):
+        if start < last:
+            continue  # nested inside an already-replaced range
+        out.append(text[last:start])
+        out.append(replacement)
+        last = end
+    out.append(text[last:])
+    return "".join(out).rstrip("\n")
+
+
+# A ``<`` that a lax HTML parser could take as a tag start: letter, ``/``,
+# ``!`` or ``?`` next. ``x < 3`` and ``<=`` are left alone.
+_TAG_LIKE_LT_RE = re.compile(r"<(?=[A-Za-z/!?])")
 
 
 def safe_markdown_inline(text: str) -> str:
@@ -308,7 +308,7 @@ def safe_markdown_inline(text: str) -> str:
     Pass only the text FRAGMENT (the label/title/heading text), not a composed
     ``[label](url)`` — the destination is preserved by the caller.
 
-    Gated on a literal ``<`` (the only char that can open a tag): the mistune
+    Gated on a literal ``<`` (the only char that can open a tag): the wenmode
     round-trip in ``_protect_html_tags`` re-normalises markdown escaping
     (``\\*\\*`` → ``\\**``), so a fragment with no tag must pass through
     byte-identical (no churn, no collateral mangling). Markdown-appropriate
@@ -503,7 +503,7 @@ class MarkdownRenderer(Renderer):
     def _linkify_shas(self, text: str) -> str:
         """Substitute resolvable git SHAs with Markdown links (issue #156).
 
-        The Markdown output emits text bodies directly (no mistune
+        The Markdown output emits text bodies directly (no wenmode
         round-trip), so it can't lean on the inline-parser plugin used
         by the HTML side. Mirrors the plugin's behaviour by scanning
         raw text and emitting ``[sha](url)`` only when the resolver
@@ -831,7 +831,7 @@ class MarkdownRenderer(Renderer):
         """Format → user text as Markdown when clean, else fenced code.
 
         Mirrors the HTML renderer's dual-view gate: try rendering the
-        text as Markdown; if mistune produces well-formed HTML the
+        text as Markdown; if wenmode produces well-formed HTML the
         source was recognisable Markdown (or plain text that happens not
         to conflict with Markdown syntax), so emit the raw text inline
         (headings/bold/lists render naturally downstream). Otherwise
@@ -864,7 +864,7 @@ class MarkdownRenderer(Renderer):
                         # fenced fallback below stays untouched (it's
                         # literally a code block — SHAs in there should
                         # not become links, mirroring the HTML side
-                        # where the mistune plugin doesn't fire inside
+                        # where the SHA-link transform doesn't fire inside
                         # codespans / fenced code).
                         parts.append(_protect_html_tags(self._linkify_shas(item.text)))
                     else:
@@ -1043,8 +1043,8 @@ class MarkdownRenderer(Renderer):
         # SHA-linkify before quoting so the substitution sees a clean
         # word boundary (a leading ``> `` would confuse the regex
         # anchor) and parity with the HTML side — assistant thinking
-        # there flows through the mistune pipeline which already
-        # has the SHA plugin registered.
+        # there flows through the wenmode pipeline, whose SHA-link
+        # transform does the same job.
         quoted = self._quote(self._linkify_shas(content.thinking))
         return self._collapsible("Thinking...", quoted)
 

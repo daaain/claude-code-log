@@ -55,10 +55,10 @@ class TestHookNotificationMessage(UserTextMessage):
     # renderer-side method shadows them.
     #
     # No ``format_html`` defined: the HtmlRenderer dispatch synthesizes
-    # HTML by running this ``format_markdown`` output through mistune
+    # HTML by running this ``format_markdown`` output through wenmode
     # and wrapping in ``<div class="markdown">``. Plugin authors only
     # implement ``format_html`` when they need HTML that differs from
-    # mistune-of-format_markdown. See dev-docs/plugins.md §4.
+    # wenmode-of-format_markdown. See dev-docs/plugins.md §4.
     def format_markdown(self, _renderer, _message) -> str:
         return f"*[{self.source}] {self.text}*"
 

@@ -64,7 +64,7 @@ The project uses:
 - Textual for Terminal User Interface
 - Pydantic for data modeling and validation
 - Jinja2 for HTML template rendering
-- mistune for Markdown rendering
+- wenmode for Markdown rendering
 - dateparser for natural language date parsing
 
 ### Dependency Management

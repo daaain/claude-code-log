@@ -233,7 +233,7 @@ class MyToolMessage(ToolUseMessage):
         return f"_(my plugin) action={safe_markdown_inline(action)}_"
 
     def format_html(self, _renderer, _message) -> Optional[str]:
-        return None  # fall back to mistune(format_markdown)
+        return None  # fall back to wenmode(format_markdown)
 
     def title(self, _renderer, _message) -> Optional[str]:
         # A title() return goes to ``{{ message_title | safe }}`` with NO core
@@ -251,13 +251,13 @@ Signature contract for each method:
 
 | Method | Signature | Return | Notes |
 |---|---|---|---|
-| `format_markdown` | `(self, renderer, message) -> str` | Markdown source string. | Define this whenever your class produces meaningful Markdown. Drives both Markdown output AND HTML output (via mistune) unless `format_html` is also defined. **Escape transcript-derived interpolation** ([§4.2](#42-security-conscious-rendering)): the Markdown-output path emits this verbatim. |
-| `format_html` | `(self, renderer, message) -> str` | Raw HTML string (real string — no None sentinel). | Define this ONLY when you need HTML different from mistune-of-`format_markdown`. The dispatcher synthesizes that fallback automatically when `format_html` is absent. **You own escaping** — the return is injected as live DOM; `escape_html` every transcript-derived interpolation ([§4.2](#42-security-conscious-rendering)). |
+| `format_markdown` | `(self, renderer, message) -> str` | Markdown source string. | Define this whenever your class produces meaningful Markdown. Drives both Markdown output AND HTML output (via wenmode) unless `format_html` is also defined. **Escape transcript-derived interpolation** ([§4.2](#42-security-conscious-rendering)): the Markdown-output path emits this verbatim. |
+| `format_html` | `(self, renderer, message) -> str` | Raw HTML string (real string — no None sentinel). | Define this ONLY when you need HTML different from wenmode-of-`format_markdown`. The dispatcher synthesizes that fallback automatically when `format_html` is absent. **You own escaping** — the return is injected as live DOM; `escape_html` every transcript-derived interpolation ([§4.2](#42-security-conscious-rendering)). |
 | `title` | `(self, renderer, message) -> Optional[str]` | Heading text or `None`. | Return `None` for "headless" (inline) messages. Return `""` (empty string, not None) to suppress the heading explicitly — the dispatcher distinguishes the two. **`escape_html` transcript-derived interpolation** — the title is emitted via `\| safe` with no core escaping ([§4.2](#42-security-conscious-rendering)). |
 
 **`format_html` is opt-in.** If your plugin class defines only
 `format_markdown`, the HtmlRenderer dispatcher automatically
-synthesizes HTML by running the Markdown through mistune and
+synthesizes HTML by running the Markdown through wenmode and
 wrapping the result in `<div class="markdown">…</div>`. You do NOT
 need to write a `render_markdown(self.format_markdown(...))` shim
 — that's the dispatcher's job.
@@ -424,7 +424,7 @@ the standard MRO walk runs:
    subclass owns the HTML rendering.
 2. **`format_markdown` on the actual class triggers synthesis.** If
    `format_html` is absent but `format_markdown` is defined on the
-   actual class, the dispatcher renders the Markdown through mistune
+   actual class, the dispatcher renders the Markdown through wenmode
    and wraps the result in `<div class="markdown">…</div>`. Skip the
    MRO walk — the synthesized output is the answer.
 3. **Otherwise, defer to the base walk.** This finds renderer-side
@@ -692,9 +692,9 @@ a future plugin author copy-pasting your code with the wrong
 `applies_to`.
 
 **`format_html` returning `None`.** Most plugins should return `None`
-to fall back to mistune-rendered Markdown. Write a custom
+to fall back to wenmode-rendered Markdown. Write a custom
 `format_html` only when the Markdown formulation can't capture what
-you want (e.g. embedded SVG, complex tables that mistune mangles).
+you want (e.g. embedded SVG, or a table layout Markdown cannot express).
 
 **Don't escape Markdown manually for code spans.** Backslashes do not
 escape backticks inside inline code spans (CommonMark explicit). If
@@ -767,7 +767,7 @@ the bare `render_markdown` path needs one of the two recipes above.
 **Note on the synthesis path.** When you DON'T define `format_html`
 and the HtmlRenderer dispatch synthesizes HTML from your
 `format_markdown` (see [§5.1](#51-htmlrenderer-extension-actual-class-precedence--markdown-synthesis)),
-the synthesizer always wraps the mistune output in
+the synthesizer always wraps the wenmode output in
 `<div class="markdown">`. You don't need to set `has_markdown = True`
 for that path — it's implicit in the synthesis. `has_markdown` only
 matters when you implement `format_html` yourself and want the host
