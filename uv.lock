@@ -193,7 +193,7 @@ requires-dist = [
     { name = "quickjs-ng", specifier = ">=0.15.1.1,<0.16" },
     { name = "textual", specifier = ">=6.5.0" },
     { name = "toml", specifier = ">=0.10.2" },
-    { name = "wenmode", specifier = ">=0.15.0,<0.16" },
+    { name = "wenmode", specifier = ">=0.15.1,<0.16" },
 ]
 
 [package.metadata.requires-dev]
@@ -1708,9 +1708,9 @@ wheels = [
 
 [[package]]
 name = "wenmode"
-version = "0.15.0"
+version = "0.15.1"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/66/63/dd35416d5db67a9d229e0b9b0e9d341d98c8004fea25ae363abcc8e7ee72/wenmode-0.15.0.tar.gz", hash = "sha256:06a68774b81d5fffac7b71ee5c3f01ad967eedd11b1ed886a300f8eb46b0b4c0", size = 91742, upload-time = "2026-08-31T03:29:01.243Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c4/36/6d1cbb77bdb255ae5c29cff5aa6ed1a87e406d821c1f5247bb4de949574b/wenmode-0.15.1.tar.gz", hash = "sha256:c541c32aa0294d2e0984af5ac2ec796ba9ad9a1a93fbd2334b760106c4e15488", size = 92189, upload-time = "2026-09-11T06:18:50.706Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ba/aa/0a31ed58cff1ff4c081794b13db0e803796061f4ee743e4919ea608476f5/wenmode-0.15.0-py3-none-any.whl", hash = "sha256:1adecc91d56ffd504943932256f9c82c92c6a8434af725b4b601b9ff88ecffe8", size = 138406, upload-time = "2026-08-31T03:28:59.609Z" },
+    { url = "https://files.pythonhosted.org/packages/05/69/e56107a3b99f72b0eef6e5acbab4f1fe86aed29feeb6bbe0bf4538b8455f/wenmode-0.15.1-py3-none-any.whl", hash = "sha256:d25b2adc75ff897640c1e28178f647631da0e03084e498a765f007844a3c340d", size = 139257, upload-time = "2026-09-11T06:18:48.903Z" },
 ]

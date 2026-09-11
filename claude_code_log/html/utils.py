@@ -28,7 +28,6 @@ from wenmode.renderers.html import (
     normalize_url_for_scheme_check as _normalize_url_for_scheme_check,
 )
 from wenmode.renderers.html import render_code as _default_render_code
-from wenmode.renderers.html import render_text as _default_render_text
 
 from .renderer_code import highlight_code_with_pygments, truncate_highlighted_preview
 from ..models import (
@@ -418,16 +417,6 @@ def _render_code_with_pygments(renderer: Any, node: Any, context: Any) -> str:
         return str(highlight(node.value, lexer, formatter))
 
 
-def _render_text_hard_wrapped(renderer: Any, node: Any, context: Any) -> str:
-    """wenmode ``text`` handler: a newline in prose is a line break.
-
-    Assistant messages carry checklists and other line-oriented text
-    without Markdown's two-trailing-spaces convention, so every soft
-    break renders as ``<br />`` (what mistune called ``hard_wrap``).
-    """
-    return str(_default_render_text(renderer, node, context)).replace("\n", "<br />\n")
-
-
 def _render_html_escaped(renderer: Any, node: Any, context: Any) -> str:
     """wenmode ``html`` handler: raw HTML is shown as text, never live.
 
@@ -512,7 +501,6 @@ class _TranscriptHtmlHandlers:
             {
                 "html": {
                     "code": _render_code_with_pygments,
-                    "text": _render_text_hard_wrapped,
                     "html": _render_html_escaped,
                 }
             }
@@ -543,7 +531,10 @@ def _build_transcript_markdown() -> Wenmode:
 
     return Wenmode(
         transcript_rules(resolve_sha_for_current_render),
-        renderer=_TranscriptHTMLRenderer(escape=True),  # untrusted content (XSS, #245)
+        # escape: untrusted content (XSS, #245). soft_break: a newline in
+        # prose is a line break (checklists in assistant messages carry no
+        # two-trailing-spaces markup) — mistune's hard_wrap.
+        renderer=_TranscriptHTMLRenderer(escape=True, soft_break="br"),
         plugins=[*transcript_plugins(), _TranscriptHtmlHandlers()],
     )
 

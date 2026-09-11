@@ -12,6 +12,12 @@ measured ~85% smaller on wenmode. The migration was done; the section
 *Migration: every rendering difference, classified* at the end is the
 deliverable for its review.
 
+**Then upstream fixed its side (2026-09-11).** The five wenmode bugs
+below were reported on #323 and fixed in wenmode 0.15.1, which also
+added two options that replaced local workarounds. With 0.15.1 no
+rendering difference from mistune is a regression; see *wenmode 0.15.1*
+at the end.
+
 ## Question
 
 Can wenmode (mistune's author's reimplementation) replace mistune as a
@@ -198,11 +204,11 @@ double-backtick SHAs get linked too (the mistune plugin is
 single-backtick only). The splice version keeps the single-backtick
 restriction because it checks the source bytes.
 
-The transform is attached as a `RootTransform` on a trigger-only rule,
-which uses `wenmode._parser.transforms` — a private module today.
-`RootTransform` is referenced by the public custom-plugins docs, so
-asking upstream to export it is the one API request this needs. Root
-transforms also block wenmode's streaming mode, which we do not use.
+The transform is attached as a `RootTransform` on a trigger-only rule.
+`RootTransform` is public API, exported from `wenmode.rules`; the probe
+below first imported it from the private `wenmode._parser.transforms`,
+which was a mistake of this evaluation, not a gap in wenmode. Root
+transforms block wenmode's streaming mode, which we do not use.
 
 ### The code
 
@@ -225,8 +231,7 @@ from wenmode.nodes import Html, InlineCode, Link, Node, Parent, Position, Text
 from wenmode.presets import github
 from wenmode.renderers import MarkdownRenderer
 from wenmode.renderers.html import render_code as default_render_code
-from wenmode.rules import InlineRule
-from wenmode._parser.transforms import RootTransform  # noqa: private for the probe
+from wenmode.rules import InlineRule, RootTransform
 
 SHA_RE = re.compile(r"\b[0-9a-f]{7,40}\b")
 Resolver = Callable[[str], Optional[str]]
@@ -461,13 +466,18 @@ corpora and method as above, old pipeline reconstructed from `75b7fc9`
 new pipeline `render_markdown` as shipped, both with the repository
 bound so SHA links fire.
 
-What the migration keeps on purpose (each a handler or rule in
-`markdown_plugins.py` / `html/utils.py`): every soft break renders as
+What the migration keeps on purpose: every soft break renders as
 `<br />`; strikethrough needs `~~`; block-level raw HTML is escaped
-*and* wrapped in `<p>`; bare URLs drop a trailing `"`/`'`; e-mail
-shaped tokens are not autolinked; link targets use mistune's scheme
-denylist, not wenmode's allowlist; the table rule runs after the
-other block openers; the footnotes heading is visually hidden.
+*and* wrapped in `<p>`; e-mail shaped tokens are not autolinked; link
+targets use mistune's scheme denylist, not wenmode's allowlist; the
+footnotes heading is visually hidden. On wenmode 0.15.0 three more
+workarounds were needed (trailing quotes in bare URLs, the table
+rule's ordering, and the first two above as local code); 0.15.1
+covers all of them with fixes or options.
+
+The tables below were measured on 0.15.0. Re-measured on 0.15.1 the
+counts are identical except that the three regression rows are gone:
+see *wenmode 0.15.1*.
 
 ### Bodies that differ
 
@@ -501,7 +511,8 @@ other block openers; the footnotes heading is visually hidden.
 | **regression** | wenmode: a line after an indented code block inside a list item is lazily continued (pasted diffs) | 1 | 0 |
 
 The three regressions are spacing or grouping, not content loss, and
-each is a wenmode parser bug with a reproduction below. The two
+each is a wenmode parser bug with a reproduction below; all three are
+fixed in 0.15.1. The two
 regressions found and *fixed* during the migration — quotes swallowed
 into bare-URL hrefs, and `cci:`/`file:line` link targets dropped by
 the allowlist — no longer appear in the table.
@@ -527,7 +538,7 @@ renderers: no live tag, no `on*` attribute, no unsafe scheme survives.
 `test/test_xss_browser.py` (browser) and `test/test_markdown_rendering.py`
 pass unchanged.
 
-### wenmode 0.15 bugs found, with reproductions
+### wenmode 0.15.0 bugs found, with reproductions — all fixed in 0.15.1
 
 Each verified against the CommonMark reference implementation
 (`commonmark.py` 0.9.1) and markdown-it-py 4.2 (`commonmark` preset),
@@ -537,11 +548,10 @@ which agree with each other and disagree with wenmode.
    gives one paragraph; the reference gives paragraph + list. Cause:
    `_parser/interrupts.py` asks only the *first* matching block opener
    whether it may interrupt a paragraph, and `table` is first in the
-   preset. Worked around here by ordering the table rule last, which
-   costs one shape: a table whose header row starts with a list marker
-   (`- a | b` over `---|---`) becomes a list item containing a table
-   with header `a`, where the stock preset gives a table with header
-   `- a`. Nothing in either corpus has that shape.
+   preset. Was worked around here by ordering the table rule last, at
+   the cost of one shape (a table whose header row starts with a list
+   marker became a list item holding a table); the workaround and its
+   cost are gone with 0.15.1.
 2. **Trailing blank lines make a list loose.** `"- a\n- b\n\n1. c\n"`
    and `"- a\n- b\n\n\ntext\n"` both render the bullet list loose.
    Cause: `rules/blocks/list.py::consume_blank_list_line` sets
@@ -558,8 +568,80 @@ which agree with each other and disagree with wenmode.
    code block cannot be lazily continued.
 5. **Extended autolink keeps trailing quotes.** `'x "https://a/b"'`
    links to `https://a/b%22`; cmark-gfm strips `"` and `'` as trailing
-   punctuation. Worked around here (`TranscriptAutolink`).
+   punctuation. Was worked around here; gone with 0.15.1.
 
 Feature requests that would remove local code here: an option on
-`Strikethrough` for the two-tilde-only form; a disallowed-tags
-override that escapes fully rather than half.
+`Strikethrough` for the two-tilde-only form (added in 0.15.1 as
+`allow_single_tilde=False`); a disallowed-tags override that escapes
+fully rather than half (not needed: disabling the filter and letting
+`escape=True` escape everything is the intended combination).
+
+### wenmode 0.15.1
+
+Released 2026-09-11 in response to the reproductions above. Upstream's
+reading: the five bugs are fixed, and the other differences listed in
+this document are GFM spec behaviour, which wenmode follows strictly.
+
+**The five reproductions on 0.15.1**, stock presets, same references:
+
+| # | bug | 0.15.1 |
+|---|---|---|
+| 1 | table rule blocks list interruption | fixed |
+| 2 | trailing blank lines make a list loose | fixed |
+| 3 | non-1 ordered marker after a dedented bullet item | fixed |
+| 4 | lazy continuation after an indented code block in an item | fixed |
+| 5 | extended autolink keeps trailing quotes | fixed |
+
+**Local code removed**, each replaced by upstream and pinned by a test
+in `test/test_markdown_rendering.py` that fails on 0.15.0 behaviour:
+
+| was | now |
+|---|---|
+| `DoubleTildeStrikethrough` subclass | `Strikethrough(allow_single_tilde=False)` |
+| hard-wrap `text` handler | `HTMLRenderer(soft_break="br")` |
+| table rule reordered last, plus a guard for its absence | stock preset order |
+| quote-trimming `parse` override on the autolink rule | upstream trimming; the subclass keeps only the e-mail opt-out |
+
+Removing them changed no rendered body on either corpus: the options
+are exact replacements. The mutation check ran the new tests on 0.15.0
+with the two new constructor options accepted and ignored, so each
+test failed on the old *behaviour*, not on an unknown argument.
+
+**Corpus diff against mistune, before and after the bump:**
+
+| corpus | differ on 0.15.0 | differ on 0.15.1 | regressions 0.15.0 → 0.15.1 |
+|---|---:|---:|---:|
+| real (5936) | 143 | 143 | 4 bodies → 0 |
+| fixtures (957) | 65 | 65 | 0 → 0 |
+
+The bump changed exactly four real bodies, the four listed as
+regressions above; each now matches markdown-it-py's structure. The
+143 that still differ from mistune do so for the improvement and
+neutral causes in the table. No HTML or Markdown snapshot changed.
+
+**Spec differences accepted as GFM.** Upstream's remark covers the
+remaining non-bug differences: footnote and task-list markup, table
+`align=`, list whitespace, entity decoding, the GFM tag filter and
+bare e-mail autolinks. We accept strict GFM for all of them except two
+local choices already listed above, both kept because on real
+transcripts they would strike or link text its author never marked up:
+single-tilde strikethrough (now through wenmode's own option) and bare
+e-mail autolinks (`ruff@0.6.0`, `git@github.com:`).
+
+**Visible text, measured separately** (tags stripped, entities decoded,
+whitespace-insensitive), final pipeline on 0.15.1 against mistune:
+
+| corpus | bodies whose visible text differs | of which: bare URL no longer swallows `**` | entity decoding (`&amp;amp;` now reads `&`) | stray `\` before a line break gone | other |
+|---|---:|---:|---:|---:|---:|
+| real (5936) | 18 | 7 | 8 | 0 | 3 |
+| fixtures (957) | 16 | 2 | 1 | 11 | 2 |
+
+No body falls in two columns (the columns sum to the total). The
+"other" bodies are a table row or an escaped pipe that mistune dropped
+or left escaped, lines mistune folded into a phantom table (fixtures),
+and malformed backtick escaping inside a code span that each engine
+garbles differently.
+
+The rest of the differing bodies change markup only. Every
+visible-text change is an improvement except the garbled code spans,
+which are malformed input either way.

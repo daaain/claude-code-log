@@ -284,6 +284,71 @@ def test_markdown_url_policy_is_a_denylist() -> None:
         assert "href=" not in render_markdown(f"[t]({target})"), target
 
 
+def test_list_with_pipe_interrupts_a_paragraph() -> None:
+    """A list line containing ``|`` right after a paragraph line starts a
+    list. wenmode 0.15.0 kept it in the paragraph because the table rule
+    answered the interruption check first; fixed upstream in 0.15.1."""
+    from claude_code_log.html.utils import render_markdown
+
+    out = render_markdown("Recon complete:\n- **model**: `a | b`\n- next")
+    assert "<ul>" in out
+    assert "<li><strong>model</strong>: <code>a | b</code></li>" in out
+
+
+def test_table_header_starting_with_list_marker_stays_a_table() -> None:
+    """``- a | b`` over a delimiter row is a table whose first header cell
+    is ``- a`` (GFM), not a list item holding a table."""
+    from claude_code_log.html.utils import render_markdown
+
+    out = render_markdown("- a | b\n---|---\n1 | 2")
+    assert out.startswith("<table>")
+    assert "<th>- a</th>" in out
+
+
+def test_single_tilde_is_not_strikethrough() -> None:
+    """Transcript prose uses ``~`` for "approximately"; only ``~~`` strikes."""
+    from claude_code_log.html.utils import render_markdown
+
+    out = render_markdown("took ~2, ~6 and ~14 min; ~~dropped~~")
+    assert out.count("<del>") == 1
+    assert "<del>dropped</del>" in out
+    assert "~2, ~6 and ~14 min" in out
+
+
+def test_bare_url_excludes_trailing_quote() -> None:
+    """A URL quoted in JSON or TOML links without the closing quote."""
+    from claude_code_log.html.utils import render_markdown
+
+    for src in ('"url": "https://example.com/a",', "x = 'https://example.com/a'"):
+        out = render_markdown(src)
+        assert 'href="https://example.com/a"' in out, out
+        assert "%22" not in out and "%27" not in out and "a'\"" not in out
+
+
+def test_bare_email_shaped_tokens_are_not_linked() -> None:
+    """``ruff@0.6.0`` and ``git@github.com:`` are not mail."""
+    from claude_code_log.html.utils import render_markdown
+
+    out = render_markdown("uvx ruff@0.6.0 and git@github.com:o/r.git")
+    assert "mailto:" not in out
+    assert "<a" not in out
+
+
+def test_list_tightness_follows_commonmark() -> None:
+    """Shapes where wenmode 0.15.0 rendered a list loose, or kept a line
+    inside an item, that CommonMark renders tight or outside it; fixed
+    upstream in 0.15.1."""
+    from claude_code_log.html.utils import render_markdown
+
+    # List, blank line, then a list with a different marker: first stays tight.
+    assert "<li>a</li>" in render_markdown("- a\n- b\n\n1. c")
+    # ``2.`` after a dedented bullet item starts an ordered list.
+    assert '<ol start="2">' in render_markdown("  - a\n2. b")
+    # A line after an indented code block in an item is not lazily continued.
+    out = render_markdown("+ x\n\n      code\n@@ y")
+    assert "</ul>\n<p>@@ y</p>" in out
+
+
 def test_assistant_text_does_not_inject_live_html() -> None:
     """End-to-end: assistant text with HTML must not emit live tags."""
     from claude_code_log.html.assistant_formatters import (

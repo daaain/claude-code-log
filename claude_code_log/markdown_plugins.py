@@ -11,9 +11,9 @@ this project adds on top of wenmode's ``github`` preset lives here:
   resolver returns a URL. No-op for SHAs the resolver can't map
   (typical of in-flight local-only commits), so the rendered
   transcript doesn't sprout broken links.
-- ``DoubleTildeStrikethrough`` — GFM proper accepts ``~one~``;
-  transcript prose says "~2, ~6 min" all the time, so we require
-  ``~~two~~``.
+- ``transcript_rules`` — wenmode's ``github`` preset with the few
+  adjustments transcript content needs (``~~two~~``-only strikethrough,
+  no e-mail autolinks, every raw-HTML node escaped).
 - ``BlockHtmlMarker`` — tags block-level raw-HTML nodes so the HTML
   renderer can wrap the escaped text in a paragraph.
 - ``linkify_shas_in_text`` — the Markdown output's equivalent of
@@ -48,14 +48,7 @@ from typing import Any, Callable, Iterator, Optional
 from wenmode import Wenmode
 from wenmode.nodes import Html, InlineCode, Link, Node, Parent, Position, Text
 from wenmode.presets import github
-from wenmode.rules import (
-    ExtendedAutolink,
-    InlineCandidate,
-    InlineRule,
-    RootTransform,
-    Strikethrough,
-)
-from wenmode.rules.delimiters import find_delimited_span
+from wenmode.rules import ExtendedAutolink, InlineRule, RootTransform, Strikethrough
 
 Resolver = Callable[[str], Optional[str]]
 
@@ -173,73 +166,21 @@ def make_sha_plugin(resolve: Resolver) -> Any:
 
 
 # ---------------------------------------------------------------------
-# Strikethrough: ``~~two~~`` only
+# Autolinks: URLs only
 # ---------------------------------------------------------------------
 
 
-class DoubleTildeStrikethrough(Strikethrough):
-    """GFM strikethrough restricted to the two-tilde form.
+class UrlOnlyAutolink(ExtendedAutolink):
+    """GFM extended autolink for bare URLs, not bare e-mail addresses.
 
-    wenmode's ``Strikethrough`` follows the GFM spec, which also
-    accepts a single tilde. Transcript prose uses ``~`` for
-    "approximately" constantly ("~2, ~6 min"), and two of those in one
-    paragraph would otherwise strike through everything between them.
-    """
-
-    def parse(
-        self, parser: Any, text: str, candidate: Any, state: Any
-    ) -> tuple[Optional[Node], int]:
-        start = candidate.start
-        if not text.startswith("~~", start):
-            return None, start
-        parsed = find_delimited_span(text, start, "~", max_run=2, reject_adjacent=True)
-        if parsed is None or parsed.value_start - start != 2:
-            return None, start
-        return super().parse(parser, text, candidate, state)
-
-
-# ---------------------------------------------------------------------
-# Autolinks: a quote after a URL is not part of it
-# ---------------------------------------------------------------------
-
-
-class TranscriptAutolink(ExtendedAutolink):
-    """GFM extended autolink for URLs only, dropping trailing quotes.
-
-    wenmode 0.15 strips ``?!.,:*_~`` from the end of a bare URL but not
-    ``"`` or ``'``, so ``url = "https://x/y"`` — every JSON or TOML
-    dump in a transcript — linked to ``https://x/y%22``. cmark-gfm
-    treats both quotes as trailing punctuation; so do we.
-
-    Bare e-mail addresses are not linked: ``ruff@0.6.0``,
-    ``git@github.com:owner/repo`` and ``user@host`` in shell output all
-    match the GFM e-mail grammar and none of them is mail.
+    ``ruff@0.6.0``, ``git@github.com:owner/repo`` and ``user@host`` in
+    shell output all match the GFM e-mail grammar, and none of them is
+    mail. Angle-bracket autolinks (``<a@b.com>``) are a different rule
+    and still link.
     """
 
     def search_email(self, text: str, pos: int) -> Any:
         return None
-
-    def parse(
-        self, parser: Any, text: str, candidate: Any, state: Any
-    ) -> tuple[Optional[Node], int]:
-        match = candidate.match
-        assert match is not None
-        value = match.group(0)
-        # Quotes and GFM's own trailing punctuation, in any order
-        # (``…tokenizer",`` ends in a comma *after* the quote).
-        trimmed = value.rstrip("\"'?!.,:*_~")
-        if trimmed == value:
-            return super().parse(parser, text, candidate, state)
-        # Re-match on the shortened text so the base class sees a
-        # candidate whose match ends where the URL does.
-        shorter = self.compiled.match(
-            text[: candidate.start + len(trimmed)], candidate.start
-        )
-        if shorter is None:
-            return None, candidate.start
-        return super().parse(
-            parser, text, InlineCandidate(candidate.start, shorter), state
-        )
 
 
 # ---------------------------------------------------------------------
@@ -295,16 +236,17 @@ def transcript_rules(
 ) -> list[Any]:
     """wenmode's ``github`` preset adjusted for transcript content.
 
-    - strikethrough requires ``~~``;
-    - bare URLs drop a trailing quote (``autolink=False`` leaves bare
-      URLs as text — the Markdown output's round-trip wants no
-      rewriting it does not need);
+    - strikethrough requires ``~~`` — transcript prose uses ``~`` for
+      "approximately" constantly ("~2, ~6 min"), and GFM's single-tilde
+      form would strike through everything between two of them;
+    - bare URLs autolink, bare e-mail-shaped tokens do not
+      (``autolink=False`` leaves bare URLs as text too — the Markdown
+      output's splice wants no rewriting it does not need);
     - raw HTML is parsed without wenmode's GFM tag filter — the HTML
       renderer escapes *every* raw-HTML node (``escape=True``), and the
       filter would otherwise leave ``<script>`` half-escaped as
       ``&lt;script>``;
     - block-level raw HTML is marked for the renderer;
-    - the table rule is ordered after the other block openers;
     - SHA links, when a resolver is given.
 
     Pair with ``transcript_plugins()`` when constructing a ``Wenmode``.
@@ -312,34 +254,18 @@ def transcript_rules(
     from wenmode.rules import HtmlBlock, RawHtml
 
     rules: list[Any] = []
-    table: Any = None
     for rule in github():
         if rule.name == "strikethrough":
-            rules.append(DoubleTildeStrikethrough())
+            rules.append(Strikethrough(allow_single_tilde=False))
         elif rule.name == "html_block":
             rules.append(HtmlBlock(disallowed_tags=()))
         elif rule.name == "raw_html":
             rules.append(RawHtml(disallowed_tags=()))
-        elif rule.name == "table":
-            table = rule
         elif rule.name == "extended_autolink":
             if autolink:
-                rules.append(TranscriptAutolink())
+                rules.append(UrlOnlyAutolink())
         else:
             rules.append(rule)
-    # The table rule goes last. wenmode (0.15) matches block openers with
-    # one alternation and asks only the first matching rule whether it
-    # may interrupt a paragraph; ``table`` says no, so with it first a
-    # list item containing a pipe (``- b | c``) right after a paragraph
-    # line stayed part of the paragraph. The reorder makes the
-    # list/heading/blockquote openers answer first; reproduction in
-    # work/wenmode-evaluation.md for the upstream report. The cost: a
-    # table whose header row starts with a list marker (``- a | b``
-    # over ``---|---``) becomes a list item containing a table with
-    # header ``a`` instead of a table with header ``- a``.
-    if table is None:
-        raise RuntimeError("wenmode's github() preset no longer has a 'table' rule")
-    rules.append(table)
     rules.append(BlockHtmlMarker())
     if resolve is not None:
         rules.append(ShaLinks(resolve))

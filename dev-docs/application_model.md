@@ -1410,18 +1410,18 @@ Markdown is rendered by [wenmode](https://github.com/lepture/wenmode)
 (mistune's successor by the same author; the switch is #323). Three
 pipelines share one rule set, built by
 [`markdown_plugins.transcript_rules()`](../claude_code_log/markdown_plugins.py):
-wenmode's `github` preset with strikethrough restricted to `~~two~~`
-(prose says "~2, ~6 min" all the time), bare-URL autolinks that drop a
-trailing quote and never link e-mail-shaped tokens (`ruff@0.6.0`,
-`git@github.com:`), wenmode's GFM tag filter off (every raw-HTML node
-is escaped by the renderer, so a half-escaped `&lt;script>` would be
-worse than none), the table rule ordered after the other block openers
-(a wenmode 0.15 quirk: with it first, `- b | c` right after a paragraph
-line could not start a list), and the definition-list plugin.
+wenmode's `github` preset (wenmode ≥ 0.15.1) with strikethrough
+restricted to `~~two~~` through `Strikethrough(allow_single_tilde=False)`
+(prose says "~2, ~6 min" all the time), bare-URL autolinks that never
+link e-mail-shaped tokens (`ruff@0.6.0`, `git@github.com:`), wenmode's
+GFM tag filter off (every raw-HTML node is escaped by the renderer, so
+a half-escaped `&lt;script>` would be worse than none), and the
+definition-list plugin. Everything else is strict GFM as wenmode
+implements it.
 
 | pipeline | where | what is added |
 |---|---|---|
-| HTML, assistant/tool/web content | `html/utils.py::_get_markdown_renderer` | `_TranscriptHTMLRenderer(escape=True)`; handlers: Pygments on fenced code with a language, every soft break as `<br />` (mistune's `hard_wrap`), escaped block-level raw HTML wrapped in `<p>`; the SHA-link transform |
+| HTML, assistant/tool/web content | `html/utils.py::_get_markdown_renderer` | `_TranscriptHTMLRenderer(escape=True, soft_break="br")` — every soft break as `<br />`, mistune's `hard_wrap`; handlers: Pygments on fenced code with a language, escaped block-level raw HTML wrapped in `<p>`; the SHA-link transform |
 | HTML, user content | `html/utils.py::_get_user_markdown_renderer` | the same pipeline as a distinct singleton (the render memo keys on which one rendered) |
 | Markdown output | `markdown/renderer.py::_protect_html_tags`, `markdown_plugins.linkify_shas_in_text` | no renderer at all — see below |
 
@@ -1454,14 +1454,14 @@ guarantee and which wenmode's own Markdown renderer would not either
 (it backslash-escapes `_`, `[`, `|`, `*` in text: measured at 217 of
 531 real bodies touched).
 
-**Known wenmode 0.15 parser divergences**, all minor, each with a
-minimal reproduction in `work/wenmode-evaluation.md` for the upstream
-report: a list
-followed by a blank line and a different list marker renders loose;
-`N.` (N ≠ 1) after a dedented bullet item joins the item instead of
-starting a list; a line after an indented code block inside a list
-item is lazily continued. On the corpus each touches a handful of
-bodies and the visible effect is spacing.
+**The wenmode pin is deliberate.** `wenmode>=0.15.1,<0.16`: the
+extensions subclass wenmode rules and renderers, so a minor bump is a
+re-tested step, not a lockfile refresh. 0.15.1 fixed the five parser
+bugs found during the migration and added the `soft_break` and
+`allow_single_tilde` options, which replaced three local workarounds;
+`test/test_markdown_rendering.py` pins each of those behaviours, and
+`work/wenmode-evaluation.md` records the method for re-measuring a
+bump against real transcripts.
 
 ---
 
