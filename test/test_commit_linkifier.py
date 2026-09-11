@@ -484,22 +484,21 @@ class TestRenderRepoContext:
 # Forge templates: static map + env-var fallback
 #
 # The resolver's URL-shape logic is unit-tested here by stubbing the
-# three subprocess-backed helpers (``_git_remote_for``,
-# ``_commit_reachable_from_remote``, ``_expand_to_full_sha``). This
+# two git-backed helpers (``_git_remote_for``, ``_commit_for``). This
 # isolates the host-classification + template-substitution logic
-# from the actual git plumbing — the integration class below covers
-# end-to-end resolution against this repo's real origin/main.
+# from the actual git plumbing — ``TestRemoteCommitResolution`` covers
+# commit lookup against throwaway repositories, and the integration
+# class below end-to-end resolution against this repo's real origin/main.
 
 
 class _StubResolverEnv:
-    """Monkeypatch fixture: pin the subprocess-backed helpers to known
+    """Monkeypatch fixture: pin the git-backed helpers to known
     answers so resolve_sha tests just exercise the URL-shape logic.
 
-    The three patched functions correspond to the three subprocess
-    boundaries inside resolve_sha:
+    The two patched functions correspond to the two git boundaries
+    inside resolve_sha:
     - ``_git_remote_for`` → (host, path) parsing
-    - ``_commit_reachable_from_remote`` → reachability check
-    - ``_expand_to_full_sha`` → short → full SHA peel
+    - ``_commit_for`` → which commit id the link carries
     """
 
     def __init__(self, monkeypatch, host: str, path: str, full_sha: str):
@@ -507,10 +506,7 @@ class _StubResolverEnv:
 
         clear_resolver_caches()
         monkeypatch.setattr(gr, "_git_remote_for", lambda _cwd: (host, path))
-        monkeypatch.setattr(
-            gr, "_commit_reachable_from_remote", lambda _cwd, _sha: True
-        )
-        monkeypatch.setattr(gr, "_expand_to_full_sha", lambda _cwd, _sha: full_sha)
+        monkeypatch.setattr(gr, "_commit_for", lambda _cwd, _sha: full_sha)
 
 
 class TestStaticForgeMap:
@@ -727,6 +723,281 @@ class TestGitLinkCliOption:
         # Click usage errors exit with 2.
         assert result.exit_code == 2
         assert "must contain a {sha} placeholder" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Commit lookup: one ``git rev-list --remotes`` per cwd (issue #327)
+#
+# Throwaway repositories rather than this one, so the pushed / local-only
+# split is known exactly: ``origin/main`` is set with ``update-ref``, no
+# network and no real remote involved.
+
+
+def _git(cwd: Path, *args: str) -> str:
+    return subprocess.run(
+        [
+            "git",
+            "-C",
+            str(cwd),
+            "-c",
+            "user.name=test",
+            "-c",
+            "user.email=test@example.test",
+            "-c",
+            "commit.gpgsign=false",
+            *args,
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+
+def _commit(repo: Path, message: str) -> str:
+    _git(repo, "commit", "-q", "--allow-empty", "-m", message)
+    return _git(repo, "rev-parse", "HEAD")
+
+
+class _Repo:
+    """A repository whose ``origin`` is github.com/owner/repo, with two
+    commits on ``origin/main`` and one local-only commit on top."""
+
+    def __init__(self, path: Path, *init_args: str):
+        self.path = path
+        _git(path, "init", "-q", *init_args)
+        _git(path, "remote", "add", "origin", "https://github.com/owner/repo.git")
+        self.pushed = [_commit(path, "one"), _commit(path, "two")]
+        _git(path, "update-ref", "refs/remotes/origin/main", self.pushed[-1])
+        self.local = _commit(path, "local only")
+
+    @property
+    def cwd(self) -> str:
+        return str(self.path)
+
+    def absent_prefix(self, candidate: str) -> str:
+        """``candidate``, after checking no commit here starts with it."""
+        assert not any(c.startswith(candidate) for c in [*self.pushed, self.local]), (
+            f"{candidate} happens to prefix a commit in the test repo"
+        )
+        return candidate
+
+
+def _url(sha: str) -> str:
+    return "https://github.com/owner/repo/commit/" + sha
+
+
+class _GitCalls:
+    """Count ``git`` subcommands the resolver runs, passing them through."""
+
+    def __init__(self, monkeypatch, fail: Optional[str] = None):
+        import claude_code_log.git_remote as gr
+
+        self.subcommands: list[str] = []
+        self.fail = fail
+        real_run = subprocess.run
+
+        def run(argv, *args, **kwargs):
+            # argv is ["git", "-C", cwd, <subcommand>, ...]
+            self.subcommands.append(argv[3])
+            if argv[3] == self.fail:
+                raise subprocess.TimeoutExpired(argv, 30)
+            return real_run(argv, *args, **kwargs)
+
+        monkeypatch.setattr(gr.subprocess, "run", run)
+
+    def count(self, subcommand: str) -> int:
+        return self.subcommands.count(subcommand)
+
+
+class TestRemoteCommitResolution:
+    def setup_method(self):
+        clear_resolver_caches()
+
+    def teardown_method(self):
+        clear_resolver_caches()
+
+    def test_pushed_commit_resolves_from_short_or_full_sha(self, tmp_path):
+        repo = _Repo(tmp_path)
+        for commit in repo.pushed:
+            assert resolve_sha(repo.cwd, commit[:7]) == _url(commit)
+            assert resolve_sha(repo.cwd, commit) == _url(commit)
+
+    def test_local_only_commit_stays_plain(self, tmp_path):
+        repo = _Repo(tmp_path)
+        assert resolve_sha(repo.cwd, repo.local[:7]) is None
+        assert resolve_sha(repo.cwd, repo.local) is None
+
+    def test_tokens_that_are_not_commits_stay_plain(self, tmp_path):
+        repo = _Repo(tmp_path)
+        for token in ("deadbee", "1234567", "a2be84b6ebd150622"):
+            assert resolve_sha(repo.cwd, repo.absent_prefix(token)) is None
+
+    def test_one_rev_list_answers_every_candidate(self, tmp_path, monkeypatch):
+        """The #327 cost: candidates, found or not, spawn no ``git``.
+
+        Before, each distinct candidate ran ``git branch -r --contains``
+        (plus ``rev-parse`` when found) — and over a third of real
+        candidates are not commits, so most of that proved a negative.
+        """
+        repo = _Repo(tmp_path)
+        calls = _GitCalls(monkeypatch)
+        candidates = [
+            repo.pushed[0][:7],
+            repo.pushed[1],
+            repo.local[:9],
+            *(repo.absent_prefix(f"{n:07d}") for n in range(10)),
+            repo.absent_prefix("deadbee"),
+        ]
+        for candidate in candidates:
+            resolve_sha(repo.cwd, candidate)
+        assert calls.count("rev-list") == 1
+        assert calls.subcommands == ["config", "rev-list"]
+
+    def test_repository_with_no_remote_refs_links_nothing(self, tmp_path):
+        """Nothing fetched, so nothing is pushed, so nothing links."""
+        _git(tmp_path, "init", "-q")
+        _git(tmp_path, "remote", "add", "origin", "https://github.com/owner/repo")
+        commit = _commit(tmp_path, "never fetched")
+        assert resolve_sha(str(tmp_path), commit[:7]) is None
+        assert resolve_sha(str(tmp_path), "deadbee") is None
+
+    def test_unreadable_list_links_nothing_until_a_read_succeeds(
+        self, tmp_path, monkeypatch
+    ):
+        """A failed ``rev-list`` leaves every token plain text — not
+        linked unvalidated, which would make each non-commit token a
+        dead link — and a later stale miss retries the read."""
+        import claude_code_log.git_remote as gr
+
+        repo = _Repo(tmp_path)
+        calls = _GitCalls(monkeypatch, fail="rev-list")
+        for token in (repo.pushed[0][:7], repo.pushed[1], "deadbee"):
+            assert resolve_sha(repo.cwd, token) is None
+        assert calls.count("rev-list") == 1
+
+        calls.fail = None
+        start = gr._now()
+        monkeypatch.setattr(
+            gr, "_now", lambda: start + gr._REMOTE_COMMITS_MAX_AGE_SECONDS + 1
+        )
+        assert resolve_sha(repo.cwd, repo.pushed[0][:7]) == _url(repo.pushed[0])
+        assert calls.count("rev-list") == 2
+
+    def test_only_sha_shaped_tokens_link(self, tmp_path):
+        """The shape contract holds even for tokens the prefix search
+        would accept: uppercase hex and abbreviations under 7 chars."""
+        repo = _Repo(tmp_path)
+        pushed = repo.pushed[0]
+        # Uppercasing only changes a prefix with a letter in it; an
+        # all-digit 7-char prefix (~4% of SHAs) is a valid token as is.
+        with_letter = next(
+            (pushed[:n] for n in range(7, 41) if not pushed[:n].isdigit()), pushed
+        )
+        assert with_letter.upper() != with_letter, "all-digit SHA"
+        assert resolve_sha(repo.cwd, with_letter) == _url(pushed)
+        for token in (with_letter.upper(), pushed[:6], pushed[:7] + " "):
+            assert resolve_sha(repo.cwd, token) is None
+
+    def test_commit_fetched_later_is_found_once_the_list_is_stale(
+        self, tmp_path, monkeypatch
+    ):
+        import claude_code_log.git_remote as gr
+
+        repo = _Repo(tmp_path)
+        assert resolve_sha(repo.cwd, repo.pushed[0][:7]) is not None
+        # "Fetch" a new commit after the list was read.
+        fetched = _commit(tmp_path, "fetched later")
+        _git(tmp_path, "update-ref", "refs/remotes/origin/main", fetched)
+        calls = _GitCalls(monkeypatch)
+
+        # Within the trust window a miss does not re-read: that is what
+        # keeps non-commit tokens from spawning a walk each.
+        assert resolve_sha(repo.cwd, fetched[:7]) is None
+        assert calls.count("rev-list") == 0
+
+        start = gr._now()
+        monkeypatch.setattr(
+            gr, "_now", lambda: start + gr._REMOTE_COMMITS_MAX_AGE_SECONDS + 1
+        )
+        # A hit never re-reads, stale or not ...
+        assert resolve_sha(repo.cwd, repo.pushed[0][:7]) is not None
+        assert calls.count("rev-list") == 0
+        # ... a miss on a stale list re-reads once, and finds the commit.
+        assert resolve_sha(repo.cwd, fetched[:7]) == _url(fetched)
+        assert calls.count("rev-list") == 1
+
+    def test_sha256_repository(self, tmp_path):
+        try:
+            repo = _Repo(tmp_path, "--object-format=sha256")
+        except subprocess.CalledProcessError:
+            pytest.skip("git without SHA-256 repository support")
+        assert len(repo.pushed[0]) == 64
+        assert resolve_sha(repo.cwd, repo.pushed[0][:7]) == _url(repo.pushed[0])
+        assert resolve_sha(repo.cwd, repo.local[:7]) is None
+
+    def test_held_lists_are_bounded_per_cwd(self, monkeypatch):
+        import claude_code_log.git_remote as gr
+
+        reads: list[str] = []
+
+        def read(cwd: str) -> gr._RemoteCommits:
+            reads.append(cwd)
+            return gr._RemoteCommits(
+                ids=b"", width=20, read_at=gr._now(), trusted_for=60.0
+            )
+
+        monkeypatch.setattr(gr, "_read_remote_commits", read)
+        monkeypatch.setattr(gr, "_REMOTE_COMMITS_MAX_CWDS", 2)
+        for cwd in ("a", "b", "a", "c", "a", "b"):
+            gr._remote_commits(cwd)
+        # "a" is refreshed by use, so "c" evicts "b", which is re-read.
+        assert reads == ["a", "b", "c", "b"]
+
+
+class TestRemoteCommitsFind:
+    """Prefix lookup in the sorted id list, on synthetic ids."""
+
+    @staticmethod
+    def _commits(*hexes: str):
+        from claude_code_log.git_remote import _RemoteCommits
+
+        return _RemoteCommits(
+            ids=b"".join(sorted(bytes.fromhex(h) for h in hexes)),
+            width=20,
+            read_at=0.0,
+            trusted_for=float("inf"),
+        )
+
+    def test_ambiguous_prefix_is_unresolved(self):
+        a = "abcdef0" + "1" * 33
+        b = "abcdef0" + "2" * 33
+        commits = self._commits("0" * 40, a, b, "f" * 40)
+        assert commits.find("abcdef0") is None
+        assert commits.find("abcdef01") == a
+        assert commits.find("abcdef02") == b
+
+    def test_first_last_and_absent(self):
+        low, mid, high = "0" * 40, "5" * 40, "f" * 40
+        commits = self._commits(high, mid, low)
+        assert commits.find("0000000") == low
+        assert commits.find("5555555") == mid
+        assert commits.find("fffffff") == high
+        assert commits.find("1111111") is None
+        assert commits.find("5555556") is None
+
+    def test_odd_length_prefix_matches_on_the_nibble(self):
+        commits = self._commits("abcdef7" + "0" * 33, "abcdef8" + "0" * 33)
+        assert commits.find("abcdef7") == "abcdef7" + "0" * 33
+        assert commits.find("abcdef8") == "abcdef8" + "0" * 33
+
+    def test_empty_and_unreadable_lists_find_nothing(self):
+        from claude_code_log.git_remote import _RemoteCommits
+
+        assert self._commits().find("abcdef0") is None
+        unreadable = _RemoteCommits(
+            ids=None, width=20, read_at=0.0, trusted_for=float("inf")
+        )
+        assert unreadable.find("abcdef0") is None
 
 
 # ---------------------------------------------------------------------------
