@@ -930,10 +930,14 @@ class UserSteeringMessage(UserTextMessage):
 
 @dataclass
 class TeammateMessageBlock:
-    """A single <teammate-message> block extracted from a User entry.
+    """A single <teammate-message> block extracted from a User entry
+    or from a peer agent queued_command attachment (#309).
 
     `is_system=True` corresponds to blocks with teammate_id="system"
     (e.g. teammate_terminated notifications).
+    `sender_task_id` is recorded for a future subagent transcript linker
+    (resolves to <session>/subagents/agent-<id>.jsonl when present; absent
+    on roughly a quarter of peer messages; unused by renderers today).
 
     This is a plain data container — the renderer-facing MessageContent
     wrapper is TeammateMessage (which holds one or more of these blocks).
@@ -944,6 +948,7 @@ class TeammateMessageBlock:
     color: Optional[str] = None
     summary: Optional[str] = None
     is_system: bool = False
+    sender_task_id: Optional[str] = None
 
 
 @dataclass

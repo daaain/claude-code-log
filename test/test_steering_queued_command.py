@@ -113,20 +113,36 @@ def _remove(text, *, sid=_SID):
     }
 
 
-def _queued_command(uuid, parent, prompt, *, version=_MODERN, sid=_SID, paste_ids=None):
+_DEFAULT_ORIGIN = {"kind": "human"}
+_NO_ORIGIN = object()
+
+
+def _queued_command(
+    uuid,
+    parent,
+    prompt,
+    *,
+    version=_MODERN,
+    sid=_SID,
+    paste_ids=None,
+    origin=_DEFAULT_ORIGIN,
+):
     """Modern in-DAG queued_command attachment paired with a 'remove'.
 
     ``prompt=None`` omits the prompt key entirely (a promptless, non-
     renderable attachment). ``paste_ids`` sets ``imagePasteIds`` *inside the
     attachment payload* — this record is its own carrier, unlike a user entry
     where the field sits at top level beside ``message``.
+    ``origin`` controls the ``origin`` payload dict (pass ``origin=_NO_ORIGIN``
+    to omit the key entirely for older transcript tests).
     """
     attachment = {
         "type": "queued_command",
         "commandMode": "prompt",
-        "origin": {"kind": "human"},
         "timestamp": "2026-07-11T07:00:00.000Z",
     }
+    if origin is not _NO_ORIGIN:
+        attachment["origin"] = origin
     if prompt is not None:
         attachment["prompt"] = prompt
     if paste_ids is not None:
@@ -153,6 +169,20 @@ def _render(entries, title="Steering Test"):
     try:
         messages = load_transcript(path)
         return generate_html(messages, title)
+    finally:
+        path.unlink()
+
+
+def _render_markdown(entries, title="Steering Test"):
+    from claude_code_log.markdown.renderer import MarkdownRenderer
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
+        for entry in entries:
+            f.write(json.dumps(entry) + "\n")
+        path = Path(f.name)
+    try:
+        messages = load_transcript(path)
+        return MarkdownRenderer().generate(messages, title)
     finally:
         path.unlink()
 
@@ -681,3 +711,164 @@ class TestSteeringPasteIds:
         assert html.index("ZZBLOCKBETAZZ") < html.index("ZZBLOCKALPHAZZ"), (
             "placeholders resolved positionally, not from the recorded ids"
         )
+
+
+# --------------------------------------------------------------------------
+# (e) Peer agent messages (origin.kind == "peer", issue #309)
+# --------------------------------------------------------------------------
+class TestPeerQueuedCommand:
+    """Peer agent messages arrive as queued_command attachments carrying
+    origin.kind == 'peer'. They must render as TeammateMessage cards attributed
+    to the sender agent without leaked markup.
+    """
+
+    def test_peer_queued_command_renders_as_teammate_message_in_html(self):
+        """A peer queued_command attachment renders as a TeammateMessage card:
+        attributed to the sending agent with no leaked <agent-message> tags, and
+        is not labeled 'User (steering)'.
+        """
+        origin = {
+            "kind": "peer",
+            "from": "dep-scan-03",
+            "senderTaskId": "adep-scan-03-fbd685bdcccfa4ce",
+            "name": "dep-scan-03",
+            "body": "DEBUG_HTML — 11 matches. All paths relative to root.",
+        }
+        prompt = (
+            '<agent-message from="dep-scan-03">\n'
+            "DEBUG_HTML — 11 matches. All paths relative to root.\n"
+            "</agent-message>"
+        )
+        html = _render(
+            [
+                _user("u1", None, "start scan"),
+                _assistant("a1", "u1", "scanning"),
+                _queued_command("qc1", "a1", prompt, origin=origin),
+                _assistant("a2", "qc1", "processing peer result"),
+            ]
+        )
+
+        # Misattribution fixed: not attributed to human steering.
+        assert "User (steering)" not in html
+
+        # Sender identity attributed in the badge.
+        assert "dep-scan-03" in html
+
+        # Clean body text rendered.
+        assert "DEBUG_HTML — 11 matches. All paths relative to root." in html
+
+        # No markup leaked.
+        assert "<agent-message" not in html
+        assert "&lt;agent-message" not in html
+        assert "</agent-message>" not in html
+        assert "&lt;/agent-message&gt;" not in html
+
+        # Teammate card structure is present.
+        assert "teammate-message" in html
+        assert "teammate-badge" in html
+
+    def test_peer_queued_command_renders_in_markdown(self):
+        """Markdown output renders the peer message with sender attribution
+        and blockquoted body, without leaked tags.
+        """
+        origin = {
+            "kind": "peer",
+            "from": "dep-scan-03",
+            "senderTaskId": "adep-scan-03-fbd685bdcccfa4ce",
+            "name": "dep-scan-03",
+            "body": "DEBUG_HTML — 11 matches. All paths relative to root.",
+        }
+        prompt = (
+            '<agent-message from="dep-scan-03">\n'
+            "DEBUG_HTML — 11 matches. All paths relative to root.\n"
+            "</agent-message>"
+        )
+        md = _render_markdown(
+            [
+                _user("u1", None, "start scan"),
+                _assistant("a1", "u1", "scanning"),
+                _queued_command("qc1", "a1", prompt, origin=origin),
+                _assistant("a2", "qc1", "processing peer result"),
+            ]
+        )
+
+        assert "<agent-message" not in md
+        assert "dep-scan-03" in md
+        assert "DEBUG_HTML — 11 matches" in md
+
+    def test_peer_fallback_when_body_missing_in_origin(self):
+        """When origin.body is absent, the fallback strips <agent-message>
+        wrapper from prompt text, including when attributes contain '>'
+        (e.g. arrows in summary values).
+        """
+        origin = {
+            "kind": "peer",
+            "from": "dep-scan-03",
+            "senderTaskId": "adep-scan-03-fbd685bdcccfa4ce",
+        }
+        prompt = (
+            '<agent-message from="dep-scan-03" summary="15% -> 96% coverage">\n'
+            "Fallback clean body.\n"
+            "</agent-message>"
+        )
+        html = _render(
+            [
+                _user("u1", None, "start"),
+                _assistant("a1", "u1", "working"),
+                _queued_command("qc1", "a1", prompt, origin=origin),
+                _assistant("a2", "qc1", "ok"),
+            ]
+        )
+
+        assert "Fallback clean body." in html
+        assert "<agent-message" not in html
+        assert "&lt;agent-message" not in html
+        assert "96% coverage" not in html
+
+    def test_peer_system_origin_sets_is_system(self):
+        """A peer message with sender 'system' produces is_system=True on the block."""
+        origin = {
+            "kind": "peer",
+            "from": "system",
+            "body": "System notification.",
+        }
+        html = _render(
+            [
+                _user("u1", None, "start"),
+                _assistant("a1", "u1", "working"),
+                _queued_command("qc1", "a1", "System notification.", origin=origin),
+                _assistant("a2", "qc1", "ok"),
+            ]
+        )
+        assert "System notification." in html
+        assert 'class="teammate-message teammate-system"' in html
+
+    def test_human_and_absent_origin_keep_user_steering_card(self):
+        """Human origins (or absent origin keys) continue to render as
+        'User (steering)' cards.
+        """
+        # (1) Explicit origin.kind == "human"
+        html_human = _render(
+            [
+                _user("u1", None, "start"),
+                _assistant("a1", "u1", "working"),
+                _queued_command(
+                    "qc1", "a1", "stop immediately", origin={"kind": "human"}
+                ),
+                _assistant("a2", "qc1", "stopping"),
+            ]
+        )
+        assert html_human.count("User (steering)") == 1
+        assert "stop immediately" in html_human
+
+        # (2) Absent origin key (older transcripts)
+        html_no_origin = _render(
+            [
+                _user("u1", None, "start"),
+                _assistant("a1", "u1", "working"),
+                _queued_command("qc1", "a1", "stop immediately", origin=_NO_ORIGIN),
+                _assistant("a2", "qc1", "stopping"),
+            ]
+        )
+        assert html_no_origin.count("User (steering)") == 1
+        assert "stop immediately" in html_no_origin

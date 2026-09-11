@@ -17,6 +17,7 @@ grow their own factory branch here as needed.
 """
 
 import logging
+import re
 from typing import Any, NamedTuple, Optional, cast
 
 from ..models import (
@@ -25,12 +26,15 @@ from ..models import (
     HookAttachmentMessage,
     ImageContent,
     MessageContent,
+    TeammateMessage,
+    TeammateMessageBlock,
     TextContent,
     UserSteeringMessage,
     UserTextMessage,
 )
 from ..parser import extract_text_content
 from .meta_factory import create_meta
+from .teammate_factory import ATTR_RUN, SYSTEM_ID
 from .transcript_factory import USER_CONTENT_TYPES, create_message_content
 from .user_factory import create_user_message
 
@@ -174,6 +178,20 @@ def queued_command_prompt_items(
     )
 
 
+_AGENT_MESSAGE_WRAPPER_RE = re.compile(
+    rf"^\s*<agent-message\b{ATTR_RUN}>\s*(.*?)(?:\s*</agent-message>)?\s*$",
+    re.DOTALL,
+)
+
+
+def _strip_agent_message_wrapper(text: str) -> str:
+    """Strip outer ``<agent-message ...>`` wrapper tags if present."""
+    match = _AGENT_MESSAGE_WRAPPER_RE.match(text)
+    if match:
+        return match.group(1)
+    return text.strip()
+
+
 def _create_queued_command_message(
     transcript: AttachmentTranscriptEntry,
     payload: dict[str, Any],
@@ -187,8 +205,13 @@ def _create_queued_command_message(
     ``queued_command`` is seen). The steering text lives in
     ``payload["prompt"]``.
 
-    The text is routed through :func:`create_user_message` so it gets
-    the same classification + plugin-transformer pass as an
+    If the delivery carries ``origin.kind == "peer"`` (issue #309), it is
+    promoted to a ``TeammateMessage`` attributing the card to the sending
+    agent, using ``origin.body`` (or stripped ``prompt`` as fallback) and
+    recording ``origin.senderTaskId``.
+
+    Otherwise, the text is routed through :func:`create_user_message` so
+    it gets the same classification + plugin-transformer pass as an
     idle-delivered user prompt: a ``[monitor] …`` steering injection
     renders as the same demoted marker as its non-steering siblings. If
     no transformer rewrites it (the result is a *plain*
@@ -216,6 +239,32 @@ def _create_queued_command_message(
         )
 
     meta = create_meta(transcript)
+
+    origin_payload = payload.get("origin")
+    if isinstance(origin_payload, dict):
+        origin = cast(dict[str, Any], origin_payload)
+        if origin.get("kind") == "peer":
+            sender_val = origin.get("from") or origin.get("name")
+            sender = str(sender_val) if sender_val is not None else ""
+            sender_task_id_val = origin.get("senderTaskId")
+            sender_task_id = (
+                str(sender_task_id_val) if isinstance(sender_task_id_val, str) else None
+            )
+            body_val = origin.get("body")
+            body: str
+            if isinstance(body_val, str):
+                body = body_val
+            else:
+                text = extract_text_content(prompt.items)
+                body = _strip_agent_message_wrapper(text)
+            block = TeammateMessageBlock(
+                teammate_id=sender,
+                body=body,
+                sender_task_id=sender_task_id,
+                is_system=(sender == SYSTEM_ID),
+            )
+            return TeammateMessage(meta=meta, blocks=[block])
+
     result = create_user_message(
         meta,
         prompt.items,
