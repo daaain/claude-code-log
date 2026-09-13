@@ -86,7 +86,8 @@ typecheck:
 ty:
     uv run ty check
 
-ci: format test-all lint typecheck ty
+# Fail-fast order: format and lint take seconds, ty is faster than pyright, the full test suite runs last
+ci: format lint ty typecheck test-all
 
 # Regenerate the auto-generated TUI docs assets (screenshots) into docs/assets/tui
 docs-gen:
