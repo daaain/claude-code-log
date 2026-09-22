@@ -3655,6 +3655,13 @@ def _reorder_session_template_messages(
     fixes that by grouping all messages by session_id and inserting them after their
     corresponding session header.
 
+    Exception: intra-session fork families (a trunk with branch ``{trunk}@{uuid}``
+    or subagent ``{trunk}#agent-{id}`` sub-lines) are left in their input order.
+    The DAG traversal already interleaves such a trunk's runs with its sub-line
+    blocks chronologically; gathering them would hoist the trunk's later
+    continuation ahead of an earlier sub-line block and strand that block at the
+    end. See ``_in_fork_family`` below.
+
     This must be called BEFORE _identify_message_pairs and _reorder_paired_messages,
     since those functions expect messages to be in session-grouped order.
 
@@ -3668,45 +3675,71 @@ def _reorder_session_template_messages(
     Returns:
         Reordered messages with all messages grouped under their session headers
     """
-    # First pass: extract session headers and group non-header messages by session_id
+    visible = list(_visible(messages))
+
+    # Intra-session forks and subagents are exempt from re-gathering.
+    #
+    # When a trunk session forks (a within-session rewind → branch sid
+    # ``{trunk}@{uuid}``) or spawns a subagent (``{trunk}#agent-{id}``), the
+    # DAG traversal has ALREADY interleaved the trunk's runs and the sub-line
+    # blocks into their correct chronological order. Re-gathering every
+    # message that shares the trunk sid under the trunk's (first) header would
+    # merge the trunk's later continuation ahead of a sub-line block, leaving
+    # that earlier-timestamped block stranded at the very end. Leave the whole
+    # fork family in its DAG (input) order instead. Sessions with no such
+    # sub-lines still get gathered (the resume/copied-message case this
+    # function exists for).
+    def _trunk_of(sid: str) -> str:
+        return sid.split("@", 1)[0].split("#agent-", 1)[0]
+
+    all_sids = {m.render_session_id for m in visible if m.render_session_id}
+    forked_trunks = {
+        _trunk_of(sid) for sid in all_sids if "@" in sid or "#agent-" in sid
+    }
+
+    def _in_fork_family(sid: Optional[str]) -> bool:
+        return sid is not None and _trunk_of(sid) in forked_trunks
+
+    # First pass: extract session headers and group non-header messages by
+    # session_id (skipping fork-family messages, which stay in input order).
     session_headers: list[TemplateMessage] = []
     session_messages_map: dict[str, list[TemplateMessage]] = {}
 
-    for message in messages:
-        if message is None:
-            continue
+    for message in visible:
+        sid = message.render_session_id
         if message.is_session_header:
             session_headers.append(message)
             # Initialize the list for this session (preserves session order)
-            sid = message.render_session_id
-            if sid and sid not in session_messages_map:
+            if sid and not _in_fork_family(sid) and sid not in session_messages_map:
                 session_messages_map[sid] = []
         else:
-            sid = message.render_session_id
-            if sid:
+            if sid and not _in_fork_family(sid):
                 if sid not in session_messages_map:
                     session_messages_map[sid] = []
                 session_messages_map[sid].append(message)
 
-    # If no session headers, return original order — but materialise
-    # the non-ghost subset so the caller sees ``list[TemplateMessage]``
-    # (callers downstream of this function are typed against the
-    # non-Optional shape and shouldn't have to ghost-skip).
+    # If no session headers, return original order.
     if not session_headers:
-        return list(_visible(messages))
+        return visible
 
-    # Second pass: for each session header, insert all messages with that session_id
+    # Second pass: walk in input order. Fork-family messages (and any message
+    # whose header we don't gather) are emitted in place; for each gathered
+    # session header, insert all messages carrying that session_id.
     result: list[TemplateMessage] = []
     used_sessions: set[str] = set()
 
-    for header in session_headers:
-        result.append(header)
-        sid = header.render_session_id
-
-        if sid and sid in session_messages_map:
-            # Messages are already in timestamp order from original processing
-            result.extend(session_messages_map[sid])
-            used_sessions.add(sid)
+    for message in visible:
+        sid = message.render_session_id
+        if _in_fork_family(sid):
+            result.append(message)
+            continue
+        if message.is_session_header:
+            result.append(message)
+            if sid and sid in session_messages_map and sid not in used_sessions:
+                # Messages are already in timestamp order from original processing
+                result.extend(session_messages_map[sid])
+                used_sessions.add(sid)
+        # Non-header, non-family messages are emitted via their header above.
 
     # Append any messages that weren't matched to a session header (shouldn't happen normally)
     for sid, msgs in session_messages_map.items():
