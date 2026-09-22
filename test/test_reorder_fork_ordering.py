@@ -22,6 +22,7 @@ from claude_code_log.models import (
 )
 from claude_code_log.renderer import (
     TemplateMessage,
+    _build_message_hierarchy,
     _reorder_session_template_messages,
 )
 
@@ -90,3 +91,97 @@ def test_fork_ordering_preserves_all_messages() -> None:
     result = _reorder_session_template_messages(_build_dag_ordered_input())
     body_uuids = {m.meta.uuid for m in result if not m.is_session_header}
     assert body_uuids == {"t0", "t1", "b0", "b1", "t2", "t3"}
+
+
+def _hierarchy(messages: list[TemplateMessage]) -> dict[str, set[str]]:
+    """Reorder, index, build ancestry; return each message's ancestor uuids."""
+    result = _reorder_session_template_messages(messages)
+    for i, m in enumerate(result):
+        m.message_index = i
+    _build_message_hierarchy(result)
+    by_index = {m.message_index: m.meta.uuid for m in result}
+    return {
+        m.meta.uuid: {by_index[i] for i in m.ancestry if i in by_index}
+        for m in result
+    }
+
+
+def test_branch_scope_closes_when_trunk_resumes() -> None:
+    """The trunk's continuation must not nest under the abandoned branch header.
+
+    Branch headers live at fractional level 0.5, below the level-1+ trunk
+    continuation, so a level-only stack keeps the branch header in ``t2``/``t3``'s
+    ancestry — folding the abandoned branch would then hide the session's real
+    ending. The trunk continuation must sit under the trunk header only.
+    """
+    ancestry = _hierarchy(_build_dag_ordered_input())
+    branch_header = f"hdr-{BRANCH}"
+    trunk_header = f"hdr-{TRUNK}"
+
+    # Branch messages still nest under the branch header.
+    assert branch_header in ancestry["b0"]
+    assert branch_header in ancestry["b1"]
+
+    # Trunk continuation nests under the trunk header, not the abandoned branch.
+    for uuid in ("t2", "t3"):
+        assert branch_header not in ancestry[uuid], (
+            f"{uuid} (trunk continuation) must not nest under the abandoned "
+            f"branch header; ancestry={ancestry[uuid]}"
+        )
+        assert trunk_header in ancestry[uuid]
+
+
+def _sess_msg(uuid: str, session_id: str) -> TemplateMessage:
+    m = TemplateMessage(
+        AssistantTextMessage(
+            meta=MessageMeta(
+                session_id=session_id, timestamp="2026-01-01T00:00:00.000Z", uuid=uuid
+            ),
+            items=[TextContent(type="text", text=uuid)],
+        )
+    )
+    m.render_session_id = session_id
+    return m
+
+
+def _sess_header(session_id: str, *, is_branch: bool) -> TemplateMessage:
+    h = TemplateMessage(
+        SessionHeaderMessage(
+            meta=MessageMeta(
+                session_id=session_id.split("@")[0], timestamp="", uuid=f"hdr-{session_id}"
+            ),
+            title=session_id,
+            session_id=session_id,
+            is_branch=is_branch,
+        )
+    )
+    h.render_session_id = session_id
+    return h
+
+
+def test_neighbouring_session_does_not_adopt_fork_family() -> None:
+    """A second session's header must not become an ancestor of a fork family.
+
+    When session A is a forked trunk (so its family stays in DAG order) and
+    session B's header is interleaved between A's runs, A's later continuation
+    must not nest under B's header.
+    """
+    a_trunk = "sA"
+    a_branch = "sA@x"
+    messages = [
+        _sess_header(a_trunk, is_branch=False),
+        _sess_msg("a0", a_trunk),
+        _sess_header(a_branch, is_branch=True),
+        _sess_msg("x0", a_branch),
+        _sess_header("sB", is_branch=False),
+        _sess_msg("b0", "sB"),
+        _sess_msg("a1", a_trunk),  # A's continuation, after B's header
+    ]
+    ancestry = _hierarchy(messages)
+
+    assert "hdr-sB" not in ancestry["a1"], (
+        f"A's continuation must not nest under session B's header; "
+        f"ancestry={ancestry['a1']}"
+    )
+    # B's own message still nests under B's header.
+    assert "hdr-sB" in ancestry["b0"]

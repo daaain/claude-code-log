@@ -2394,6 +2394,34 @@ def _get_message_hierarchy_level(msg: TemplateMessage) -> int:
     return 1
 
 
+def _line_trunk(sid: str) -> str:
+    """The trunk session id of a within-session fork/subagent line.
+
+    Branch lines are ``{trunk}@{uuid}`` and subagent lines
+    ``{trunk}#agent-{id}``; a plain session id is its own trunk.
+    """
+    return sid.split("@", 1)[0].split("#agent-", 1)[0]
+
+
+def _line_encloses(header_sid: str, msg_sid: Optional[str]) -> bool:
+    """Whether a header's session line is an ancestor scope of a message.
+
+    A trunk/plain session header encloses every line in its fork family
+    (the trunk itself plus its ``@`` branches and ``#agent-`` sub-lines).
+    A branch or subagent header encloses only its own exact line, so the
+    trunk's later continuation does not nest under an earlier branch, and a
+    neighbouring session's header does not adopt a fork family's messages.
+    """
+    if not msg_sid:
+        return True
+    if header_sid == msg_sid:
+        return True
+    # A trunk/plain header (no fork marker) covers its whole family.
+    if "@" not in header_sid and "#agent-" not in header_sid:
+        return _line_trunk(msg_sid) == header_sid
+    return False
+
+
 def _build_message_hierarchy(messages: list[TemplateMessage]) -> None:
     """Build ancestry for all messages based on their current order.
 
@@ -2452,18 +2480,23 @@ def _build_message_hierarchy(messages: list[TemplateMessage]) -> None:
         depth_cache[sid] = depth
         return depth
 
-    # Stack of (level, message_index) tuples. Levels may be fractional for
-    # within-session branch-headers; see class-level note.
-    hierarchy_stack: list[tuple[float, int]] = []
+    # Stack of (level, message_index, scope_sid) tuples. Levels may be
+    # fractional for within-session branch-headers; see class-level note.
+    # scope_sid is the session line a header opens (its render_session_id) and
+    # is None for non-header messages, which never close a scope by identity.
+    hierarchy_stack: list[tuple[float, int, Optional[str]]] = []
 
     for message in messages:
         # Branch-headers sit between session (0) and user (1) so they stay
         # within their parent session's ancestry chain.
         current_level: float
+        scope_sid: Optional[str] = None
         if message.is_branch_header:
             current_level = 0.5
+            scope_sid = message.render_session_id or None
         elif message.is_session_header:
             current_level = 0
+            scope_sid = message.render_session_id or None
         else:
             # Determine level from message type and modifiers, shifted by
             # the agent-nesting depth of the message's session line.
@@ -2472,16 +2505,29 @@ def _build_message_hierarchy(messages: list[TemplateMessage]) -> None:
             if message.agent_depth > 1:
                 current_level += 2 * (message.agent_depth - 1)
 
-        # Pop stack until we find the appropriate parent level
-        while hierarchy_stack and hierarchy_stack[-1][0] >= current_level:
-            hierarchy_stack.pop()
+        # Pop stack until we find the appropriate parent. A frame is closed
+        # when it sits at or above the current level (the base rule) OR when it
+        # is a header whose session line does not enclose this message's line.
+        # The identity check ends a within-session branch scope once the trunk
+        # resumes (so the trunk's continuation is not folded away under the
+        # earlier branch header) and stops a neighbouring session header from
+        # adopting an interleaved fork family's later messages.
+        msg_sid = message.render_session_id
+        while hierarchy_stack:
+            top_level, _, top_scope = hierarchy_stack[-1]
+            if top_level >= current_level or (
+                top_scope is not None and not _line_encloses(top_scope, msg_sid)
+            ):
+                hierarchy_stack.pop()
+            else:
+                break
 
         # Build ancestry from remaining stack (list of message_index integers)
-        ancestry = [msg_index for _, msg_index in hierarchy_stack]
+        ancestry = [msg_index for _, msg_index, _ in hierarchy_stack]
 
         # Push current message onto stack
         if message.message_index is not None:
-            hierarchy_stack.append((current_level, message.message_index))
+            hierarchy_stack.append((current_level, message.message_index, scope_sid))
 
         # Update the message ancestry
         message.ancestry = ancestry
@@ -3689,16 +3735,13 @@ def _reorder_session_template_messages(
     # fork family in its DAG (input) order instead. Sessions with no such
     # sub-lines still get gathered (the resume/copied-message case this
     # function exists for).
-    def _trunk_of(sid: str) -> str:
-        return sid.split("@", 1)[0].split("#agent-", 1)[0]
-
     all_sids = {m.render_session_id for m in visible if m.render_session_id}
     forked_trunks = {
-        _trunk_of(sid) for sid in all_sids if "@" in sid or "#agent-" in sid
+        _line_trunk(sid) for sid in all_sids if "@" in sid or "#agent-" in sid
     }
 
     def _in_fork_family(sid: Optional[str]) -> bool:
-        return sid is not None and _trunk_of(sid) in forked_trunks
+        return sid is not None and _line_trunk(sid) in forked_trunks
 
     # First pass: extract session headers and group non-header messages by
     # session_id (skipping fork-family messages, which stay in input order).
