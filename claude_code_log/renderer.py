@@ -2505,22 +2505,28 @@ def _build_message_hierarchy(messages: list[TemplateMessage]) -> None:
             if message.agent_depth > 1:
                 current_level += 2 * (message.agent_depth - 1)
 
-        # Pop stack until we find the appropriate parent. A frame is closed
-        # when it sits at or above the current level (the base rule) OR when it
-        # is a header whose session line does not enclose this message's line.
-        # The identity check ends a within-session branch scope once the trunk
-        # resumes (so the trunk's continuation is not folded away under the
-        # earlier branch header) and stops a neighbouring session header from
-        # adopting an interleaved fork family's later messages.
+        # Close every frame from the lowest one that no longer holds this
+        # message, upward. A frame stops holding the message when it sits at or
+        # above the current level (the base rule) OR when it is a header whose
+        # session line does not enclose this message's line. The identity check
+        # ends a within-session branch scope once the trunk resumes (so the
+        # trunk's continuation is not folded away under the earlier branch
+        # header) and stops a neighbouring session header from adopting an
+        # interleaved fork family's later messages. The whole stack is scanned,
+        # not just the top: a body frame (no scope, e.g. the branch's final
+        # user turn) can sit above an incompatible header, and a top-only check
+        # would stop at it and leave that header in the ancestry. Stack levels
+        # increase from bottom to top, so the first frame that must close marks
+        # a contiguous suffix to drop.
         msg_sid = message.render_session_id
-        while hierarchy_stack:
-            top_level, _, top_scope = hierarchy_stack[-1]
-            if top_level >= current_level or (
-                top_scope is not None and not _line_encloses(top_scope, msg_sid)
+        cut = len(hierarchy_stack)
+        for i, (frame_level, _, frame_scope) in enumerate(hierarchy_stack):
+            if frame_level >= current_level or (
+                frame_scope is not None and not _line_encloses(frame_scope, msg_sid)
             ):
-                hierarchy_stack.pop()
-            else:
+                cut = i
                 break
+        del hierarchy_stack[cut:]
 
         # Build ancestry from remaining stack (list of message_index integers)
         ancestry = [msg_index for _, msg_index, _ in hierarchy_stack]

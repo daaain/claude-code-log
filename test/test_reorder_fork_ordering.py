@@ -19,6 +19,7 @@ from claude_code_log.models import (
     MessageMeta,
     SessionHeaderMessage,
     TextContent,
+    UserTextMessage,
 )
 from claude_code_log.renderer import (
     TemplateMessage,
@@ -185,3 +186,51 @@ def test_neighbouring_session_does_not_adopt_fork_family() -> None:
     )
     # B's own message still nests under B's header.
     assert "hdr-sB" in ancestry["b0"]
+
+
+def _user(uuid: str, session_id: str) -> TemplateMessage:
+    m = TemplateMessage(
+        UserTextMessage(
+            meta=MessageMeta(
+                session_id=session_id.split("@")[0],
+                timestamp="2026-01-01T00:00:00.000Z",
+                uuid=uuid,
+            ),
+            items=[TextContent(type="text", text=uuid)],
+        )
+    )
+    m.render_session_id = session_id
+    return m
+
+
+def test_branch_scope_closes_across_a_body_frame() -> None:
+    """A body frame must not shield an incompatible header from scope closing.
+
+    When the abandoned branch ends on a level-1 user turn and the trunk resumes
+    with a level-2 assistant message, the branch's user frame sits on top of the
+    branch header. A top-of-stack-only check stops at that lower-level body frame
+    and leaves the branch header in the trunk message's ancestry; the scope check
+    must scan the whole stack, not just the top.
+    """
+    trunk = "s1"
+    branch = "s1@abandoned"
+    messages = [
+        _sess_header(trunk, is_branch=False),
+        _sess_msg("t0", trunk),  # assistant, level 2
+        _sess_header(branch, is_branch=True),
+        _user("b_user", branch),  # branch ends on a level-1 user turn
+        _sess_msg("t1", trunk),  # trunk resumes, assistant level 2
+    ]
+    ancestry = _hierarchy(messages)
+
+    assert f"hdr-{branch}" not in ancestry["t1"], (
+        f"trunk continuation must not nest under the abandoned branch header "
+        f"through the branch's user turn; ancestry={ancestry['t1']}"
+    )
+    assert "b_user" not in ancestry["t1"], (
+        f"trunk continuation must not nest under the branch's user turn; "
+        f"ancestry={ancestry['t1']}"
+    )
+    assert f"hdr-{trunk}" in ancestry["t1"]
+    # The branch's own user turn still nests under the branch header.
+    assert f"hdr-{branch}" in ancestry["b_user"]
