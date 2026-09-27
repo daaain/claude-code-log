@@ -16,7 +16,8 @@ either measured from Docent's source or quoted from a vendor's page.
 |---|---|
 | **Fact table** | A flat table pulled out of the transcripts by code, e.g. one row per tool call with its name, whether it errored, and the error text. Cheap to rebuild. |
 | **Query** | Plain SQL over the fact tables, e.g. "tool errors per week, grouped by likely cause". |
-| **Excerpt** | A few consecutive messages picked out by code as evidence, e.g. the six messages around a failed tool call. The only thing a model ever reads. |
+| **Excerpt** | A few consecutive messages picked out by code as evidence, e.g. the six messages around a failed tool call. What a model is given to start from. |
+| **Signature** | An error's text with the variable parts (paths, line numbers, IDs, timestamps) stripped out, so the same failure in different places groups together. |
 | **Standing question** | A question we keep asking over time ("is the test output too verbose?"), plus what we know about it: when we last looked, what we concluded, and how much evidence there was then. |
 | **Proposal** | A suggested change (a new skill, a retired instruction, a doc fix) waiting for a human to accept or reject it. |
 | **Ledger** | The record of proposals, decisions, and changes actually made. |
@@ -101,9 +102,15 @@ trend line straight away, which no model-based pipeline gives you.
 
 Stage 1 also **picks out excerpts**, such as "the six messages around each
 failed tool call" or "each edit to a file read earlier in the same turn".
-The later stages only ever see these excerpts. This is the part that really
+The later stages start from these excerpts. This is the part that really
 needs CCL: it understands session forks, splices subagent transcripts in,
 and pairs each tool call with its result.
+
+And it **clusters**, still without a model. For errors, that means grouping
+by tool plus error **signature**, so "`uv: command not found` in 40 sessions"
+becomes one cluster with 40 members instead of 40 rows to read. The later
+stages then work per cluster, looking at a few representative excerpts,
+not per error.
 
 ### Stage 2: cheap yes/no checks on excerpts (Jev)
 
@@ -137,10 +144,25 @@ Caveats:
 - It is a hosted API, so excerpts leave the machine. That's acceptable for
   this use; see [decision 7](#decisions-so-far).
 
-### Stage 3: a frontier model for the uncertain cases
+### Stage 3: a frontier model investigates the uncertain cases
 
-Only excerpts where Jev's confidence is in the uncertain middle get sent to
-a frontier model, and only the excerpt, never the whole session.
+Only clusters where Jev's confidence is in the uncertain middle reach a
+frontier model. It **starts from the excerpt, but may go back to the full
+transcript** to investigate: read further back, check what the agent had
+been told, look at the repo's git history at that point. The rule is
+*pull, don't push*. The model is never handed a whole session up front; it
+fetches only what it decides it needs, through tools.
+
+Every investigation is **recorded as evidence**: what it looked at (session
+and message ids, files, commits), what it concluded, and why. A human
+reviewer or a later agent can then retrace it without redoing it. These
+records cost real money to produce, so they belong with the irreplaceable
+data (see the data model).
+
+Because an investigation's size isn't fixed by the excerpt any more, each
+one needs a **budget** (tokens or tool calls), a setting like any other.
+CCL's archive search (`search.py`, served by `api.py`) is a natural
+starting point for the investigator's tools.
 
 ### Rough costs
 
@@ -298,7 +320,10 @@ Two groups of tables in the ledger database.
 **Rebuildable from transcripts** (a rebuild may drop and recreate these):
 
 - `tool_calls`: session_id, message uuid, timestamp, tool name, input
-  summary, is_error, error text, likely cause (filled in later).
+  summary, is_error, error text, error signature. One row per call; each
+  error counts once (see [decision 11](#decisions-so-far)).
+- `clusters`: signature, tool, member count, first/last seen, likely cause
+  (filled in by stages 2–3).
 - `sessions`: session_id, project, model, effort, Claude Code version,
   start/end, turns, compactions, git branch/commit if known.
 - `excerpts`: question_id, session_id, message uuid range, why it matched,
@@ -314,6 +339,9 @@ Two groups of tables in the ledger database.
   state (pending | accepted | rejected | expired), note, decided_at.
 - `changes`: proposal_id, what changed, where, the query it should move,
   the value before, applied_at. This is the ledger proper.
+- `investigations`: cluster or excerpt id, stage (Jev | frontier), what it
+  looked at (session/message ids, files, commits), conclusion, reasoning,
+  cost, created_at. Expensive to reproduce, so kept.
 - `labels`: excerpt_id, human verdict, source (rejection note or labelled by
   hand). This is the test set.
 
@@ -343,18 +371,19 @@ real use, not guessed in advance.
 Deliberately small:
 
 1. A separate CLI command that parses incrementally (only files changed
-   since the last run) and fills the `tool_calls` and `sessions` tables.
-   Run it by hand or from cron.
-2. A handful of SQL queries, starting with **tool-call errors grouped by
-   likely cause**:
+   since the last run) and fills the `tool_calls`, `sessions` and
+   `clusters` tables. Run it by hand or from cron.
+2. A handful of SQL queries, starting with **tool-call errors clustered by
+   signature**, largest clusters first. The causes we expect to find:
    - environment or sandbox (missing command, permission denied, network
      blocked);
    - harness (tool or hook misbehaving);
    - stale docs or skills (the agent followed instructions that no longer
      match reality).
 
-   Sort causes with simple rules on the error text first, and label the
-   leftovers by hand.
+   In v0 a human reads the top clusters and assigns causes. Stages 2 and 3
+   automate exactly this step later, so the hand-assigned causes double as
+   their first test set.
 3. A hand-kept ledger and a weekly look at the results.
 4. Hand-label ~50 excerpts to start the test set.
 
@@ -401,6 +430,14 @@ Recorded 2026-09-27.
    and errors sit in the cache's compressed `content` blob, so SQL can't
    reach them directly. Once they're in flat tables, every "counter" is
    just a query.
+10. **Causes come from the stages, not from rules alone.** Code extracts
+    and clusters errors by signature; Jev classifies each cluster; a
+    frontier model reads what's left, and may go back to the full
+    transcript to investigate. Every investigation's evidence is recorded
+    for a human reviewer or a later agent.
+11. **An error is an error.** Each failed call is one row and counts once.
+    The session is just one dimension to group by or drill into, like
+    model or project, not a unit of counting.
 
 ## To investigate
 
