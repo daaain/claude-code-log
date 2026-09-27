@@ -106,11 +106,27 @@ The later stages start from these excerpts. This is the part that really
 needs CCL: it understands session forks, splices subagent transcripts in,
 and pairs each tool call with its result.
 
-And it **clusters**, still without a model. For errors, that means grouping
-by tool plus error **signature**, so "`uv: command not found` in 40 sessions"
-becomes one cluster with 40 members instead of 40 rows to read. The later
-stages then work per cluster, looking at a few representative excerpts,
-not per error.
+And it **clusters**, still without a model. For errors, the starting point
+is grouping by tool plus error **signature**, so "`uv: command not found`
+in 40 sessions" becomes one cluster with 40 members instead of 40 rows to
+read. The later stages then work per cluster, looking at a few
+representative excerpts, not per error.
+
+The error text alone is weak evidence, though: `No such file or directory`
+can mean a stale doc or a guessed path. So clustering also uses the failed
+call's **neighbours in the message graph**, which is still cheap string
+work:
+
+- **Where the failing argument came from.** Search the call's ancestors for
+  the path or command it used. If it appears verbatim in an earlier read of
+  a doc, skill, CLAUDE.md or memory file, that's a *stale instructions*
+  candidate. If it appears nowhere, the agent guessed it. If it came from
+  an earlier tool's output, the environment misled it.
+- **What fixed it.** Find the next successful call to the same tool and
+  compare the inputs (`pytest` → `uv run pytest`). That difference is often
+  the most useful thing in the whole cluster, and a strong clustering key.
+- **What happened next** if nothing fixed it: retried, went to read docs,
+  asked the user, or gave up.
 
 ### Stage 2: cheap yes/no checks on excerpts (Jev)
 
@@ -322,8 +338,11 @@ Two groups of tables in the ledger database.
 - `tool_calls`: session_id, message uuid, timestamp, tool name, input
   summary, is_error, error text, error signature. One row per call; each
   error counts once (see [decision 11](#decisions-so-far)).
-- `clusters`: signature, tool, member count, first/last seen, likely cause
-  (filled in by stages 2–3).
+- `tool_calls` also gets the neighbour facts: where the failing argument
+  came from (instructions | guess | tool output), the fixing call's uuid and
+  input difference if any, and what happened next.
+- `clusters`: signature, tool, argument source, fix pattern, member count,
+  first/last seen, likely cause (filled in by stages 2–3).
 - `sessions`: session_id, project, model, effort, Claude Code version,
   start/end, turns, compactions, git branch/commit if known.
 - `excerpts`: question_id, session_id, message uuid range, why it matched,
@@ -340,8 +359,23 @@ Two groups of tables in the ledger database.
 - `changes`: proposal_id, what changed, where, the query it should move,
   the value before, applied_at. This is the ledger proper.
 - `investigations`: cluster or excerpt id, stage (Jev | frontier), what it
-  looked at (session/message ids, files, commits), conclusion, reasoning,
-  cost, created_at. Expensive to reproduce, so kept.
+  looked at, conclusion, reasoning, cost, created_at. Expensive to
+  reproduce, so kept.
+- `snapshots`: content hash, original path, first seen, content. A copy of
+  each mutable file (memory, CLAUDE.md outside git) the first time evidence
+  points at a given version of it. Stored once per distinct content.
+
+**How evidence points at things.** Transcripts are kept, so evidence stores
+pointers, not copies, in three layers:
+
+1. **Messages: `(session_id, message uuid)`**, resolved through CCL's
+   parse. Never a cache row id, since the cache is rebuilt and row ids
+   change. UUIDs also survive the occasional rewritten transcript.
+2. **Repo files: `(repo, commit, path)`**, resolved through git.
+3. **Files in `~/.claude` that nothing extracts yet** (memory and the
+   like): a **content hash** into `snapshots`. A plain path isn't enough,
+   because these files are edited in place (see *To investigate*): by the
+   time someone follows the pointer, the file may say something else.
 - `labels`: excerpt_id, human verdict, source (rejection note or labelled by
   hand). This is the test set.
 
@@ -438,6 +472,13 @@ Recorded 2026-09-27.
 11. **An error is an error.** Each failed call is one row and counts once.
     The session is just one dimension to group by or drill into, like
     model or project, not a unit of counting.
+12. **Cluster using DAG neighbours, not just error text**: where the
+    failing argument came from, what fixed it, what happened next. This
+    is cheap, and it separates *stale instructions* from *guessed* from
+    *misled by the environment* before any model is involved.
+13. **Evidence is pointers, not copies**: message UUIDs, git
+    `(commit, path)`, and content hashes of snapshots for mutable files
+    outside git. Transcripts are all kept, so pointers stay valid.
 
 ## To investigate
 
@@ -451,6 +492,10 @@ Recorded 2026-09-27.
   looking the file up (from git, or on disk by timestamp) and attaching it.
   **This would help base CCL too:** showing which memory and instructions a
   session had is useful when reading any transcript.
+- **Are memory files append-only?** Probably not: as far as I know Claude
+  Code edits memory files in place (an index file plus topic files the
+  agent rewrites). Confirm on a real `~/.claude`; the `snapshots` table
+  exists because of this.
 - **Is CLAUDE.md content in the transcript at all?** If not, the git
   history lookup in decision 3 is the only source.
 
