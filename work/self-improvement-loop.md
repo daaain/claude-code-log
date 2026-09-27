@@ -128,6 +128,16 @@ work:
 - **What happened next** if nothing fixed it: retried, went to read docs,
   asked the user, or gave up.
 
+The "where it came from" check only works once injected context
+(CLAUDE.md, memory) is attached to the session; see the prerequisite
+section near the end.
+
+A fix that **recurs** across many sessions is the natural first source of
+proposals: forty sessions of `pytest` → `uv run pytest` is practically a
+proposal already. Detection only says "this keeps happening, and this is
+what fixes it". Whether the answer is an instruction, a skill, or changing
+the environment so no instruction is needed is decided downstream.
+
 ### Stage 2: cheap yes/no checks on excerpts (Jev)
 
 [TypeSafe Jev](https://typesafe.ai/blog/introducing-system-one-models-and-jev)
@@ -404,6 +414,9 @@ real use, not guessed in advance.
 
 Deliberately small:
 
+0. The inventory step of the harness-context prerequisite (see below):
+   find out what's logged and what isn't. Attaching the missing pieces can
+   follow; until then, "guessed" means "not found in anything we can see".
 1. A separate CLI command that parses incrementally (only files changed
    since the last run) and fills the `tool_calls`, `sessions` and
    `clusters` tables. Run it by hand or from cron.
@@ -479,25 +492,64 @@ Recorded 2026-09-27.
 13. **Evidence is pointers, not copies**: message UUIDs, git
     `(commit, path)`, and content hashes of snapshots for mutable files
     outside git. Transcripts are all kept, so pointers stay valid.
+14. **Recurring fixes generate proposals.** When the same "what fixed it"
+    pattern recurs across sessions, that's a proposal. *What kind* of
+    change it becomes (a CLAUDE.md note, a skill, an environment fix
+    such as putting a tool on PATH) is decided downstream, when the
+    proposal is written, not at detection time.
+15. **Logging what the harness injects is a prerequisite**, not an
+    investigation for later. See the section above *Open questions*.
 
-## To investigate
+## Prerequisite: what the harness shows the agent but doesn't log
 
-- **Where is effort level recorded?** Not seen in the test fixtures. Check
-  real transcripts and the Claude Code settings/changelog.
-- **Is Claude Code's memory system logged?** When memory is loaded or read,
-  does the transcript show it? Claude Code already logs some harness context
-  as `attachment` entries (`skill_listing`, `deferred_tools_delta`, hook
-  results), so a memory type there is plausible. Check real archives for
-  every `attachment.type` value. If memory isn't logged, fall back to
-  looking the file up (from git, or on disk by timestamp) and attaching it.
-  **This would help base CCL too:** showing which memory and instructions a
-  session had is useful when reading any transcript.
-- **Are memory files append-only?** Probably not: as far as I know Claude
+The "where did the failing argument come from" check only sees text the
+agent *read with a tool*. Anything the harness injects directly is
+invisible to it, so an argument taken from CLAUDE.md or memory would be
+wrongly labelled "guessed". That makes this a **prerequisite for stage 1**,
+not a side investigation. It is also **useful to base CCL on its own**:
+anyone reading a transcript benefits from seeing what the agent had been
+told.
+
+**Step 1: inventory.** List everything the harness loads into context and
+check, for each, whether the transcript records it and in what form.
+Candidates:
+
+- CLAUDE.md at every level: user (`~/.claude/CLAUDE.md`), project,
+  `CLAUDE.local.md`, nested directories loaded on demand, and `@imports`
+  inside them.
+- Memory: the index loaded at start, and topic files read later.
+- The skills listing (already logged as a `skill_listing` attachment),
+  deferred tools (`deferred_tools_delta`), and MCP server instructions.
+- Hook output (logged as `hook_*` attachments), output styles, settings
+  that change behaviour (permissions, sandbox, effort level).
+
+Scan a real archive for every `attachment.type` value and every
+`system`/meta entry to see what is already there.
+
+**Step 2: attach what's missing.** For each unlogged source, reconstruct it
+from the session's timestamp and `cwd`:
+
+- repo files → git: `(commit, path)` at the session's start;
+- files under `~/.claude` → a `snapshots` row, by content hash.
+
+Reconstruction from timestamps is a *best guess*: a file edited during the
+session, or uncommitted changes, can make it wrong. So every attached item
+records how it was obtained (logged | git | snapshot-by-time) and how sure
+we are.
+
+**Step 3 (optional, going forward): record it exactly.** A `SessionStart`
+hook could write the paths and content hashes of everything loaded into a
+side file keyed by session id. It costs almost nothing and turns future
+guesses into facts, though it can't help the existing archive.
+
+**Smaller open items:**
+
+- **Where is the effort level recorded?** It isn't in the test fixtures.
+  Check real transcripts and Claude Code's settings and changelog.
+- **Are memory files append-only?** Probably not: as far as I know, Claude
   Code edits memory files in place (an index file plus topic files the
   agent rewrites). Confirm on a real `~/.claude`; the `snapshots` table
   exists because of this.
-- **Is CLAUDE.md content in the transcript at all?** If not, the git
-  history lookup in decision 3 is the only source.
 
 ## Open questions
 
