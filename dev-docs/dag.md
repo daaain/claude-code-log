@@ -604,8 +604,10 @@ graph TB
 
 1. Walk every root via `_walk_session_with_forks` (not just the earliest)
    so orphan-promoted subtrees are covered.
-2. Merge non-branch DAG-lines from all roots into a single trunk, ordered
-   by `first_timestamp`.
+2. Merge the DAG-line segments from all roots by line id, ordered by
+   `first_timestamp` — non-branch segments into a single trunk, and a
+   `compact_boundary` root that continues a rewind branch into that
+   branch (see [Compaction after a rewind](#compaction-after-a-rewind)).
 3. Classify roots to decide log level (`_classify_unexpected_roots`):
    - `_EXPECTED_ROOT_SYSTEM_SUBTYPES = {"compact_boundary", "local_command"}`
      covers system entries; `_EXPECTED_ROOT_PASSTHROUGH_TYPES = {"progress"}`
@@ -618,6 +620,50 @@ graph TB
 This keeps the signal useful: orphan user/assistant entries still surface
 as warnings; routine `/compact` multi-root sessions and async-hook
 remnants stay quiet.
+
+### Compaction after a rewind
+
+The boundary's `parentUuid` is `null`, but it records the message it
+continues in `logicalParentUuid`. After a rewind that message sits on a
+branch line (`{trunk}@{uuid}`), not the trunk. Walking the boundary as a
+trunk root put the post-compaction conversation on the trunk line, so the
+trunk "resumed" after its own branches. Those branch blocks, which have
+earlier timestamps, then rendered at the bottom of the session, after its
+real tail.
+
+`_compaction_continuation_line` resolves the line the boundary continues,
+and `_walk_session_with_forks(..., line_id=...)` starts the walk on that
+line. Its segment merges into the branch by timestamp, so the branch header
+encloses the post-compaction messages. Roots are walked in timestamp
+order, so a later compaction finds an earlier one's line already assigned,
+and chains of compactions follow the branch.
+
+Compactions that keep a preserved segment re-parent its tail (often the
+`logicalParentUuid` itself) under the boundary's own summary anchor. That
+uuid is then not on any walked line yet, so the other members of
+`compactMetadata.preservedSegment` / `preservedMessages`, which stay on the
+pre-compaction line, stand in for it. When no reference resolves to an
+already-walked line, the boundary is walked as the trunk, as before.
+
+Pinned by `test_compact_after_rewind.py` (fixtures
+`dag_compact_after_rewind.jsonl` and
+`dag_compact_after_rewind_preserved.jsonl`).
+
+### Queue-ops inside a branch
+
+Queue-operation entries (`<task-notification>` / `<agent-message>`
+enqueues, steering `remove`s) have no uuid, so they never get a DAG
+line. `_splice_queue_ops_chronologically` (converter) inserts each one
+right after its same-session anchor entry. The anchor may sit on a
+branch, but the queue-op itself carries only the raw trunk `sessionId`.
+So `_queue_op_render_sids` (renderer) gives it its anchor's DAG line:
+the line of the last uuid-bearing entry before it in its session. Without
+that, the session regrouping moves the queue-op under the trunk header,
+ahead of every branch, however late it arrived. The lookup runs on the
+*unfiltered* entries, before `_filter_messages`, because the anchor itself
+may be filtered out (an image-only prompt, a passthrough hook). Tracking it
+in the render loop would hand the queue-op the line of the last entry
+that survived filtering instead.
 
 ### Expected Root Types
 

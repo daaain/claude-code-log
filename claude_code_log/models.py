@@ -320,6 +320,9 @@ class SystemTranscriptEntry(BaseTranscriptEntry):
     # `preTokens`, `trigger`, `postTokens`, `durationMs`. Read at factory
     # time into SystemMessage.compact_pre_tokens / compact_trigger.
     compactMetadata: Optional[dict[str, Any]] = None
+    # A compact_boundary starts a fresh chain (parentUuid is null); this names
+    # the message it logically continues, which may sit on a rewind branch.
+    logicalParentUuid: Optional[str] = None
 
 
 class QueueOperationTranscriptEntry(BaseModel):

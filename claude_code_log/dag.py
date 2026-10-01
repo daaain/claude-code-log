@@ -8,7 +8,7 @@ See dev-docs/dag.md for the full architecture spec.
 
 import logging
 from dataclasses import dataclass, field
-from typing import NoReturn, Optional, TYPE_CHECKING
+from typing import Any, NoReturn, Optional, TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from .workflow import WorkflowRun
@@ -666,11 +666,69 @@ def _is_continuation_fork(
     return has_assistant_continuation and has_tool_result
 
 
+def _compaction_continuation_line(
+    root: MessageNode,
+    session_uuids: set[str],
+    walked_uuids: set[str],
+    nodes: dict[str, MessageNode],
+) -> Optional[str]:
+    """The DAG-line a ``/compact`` root continues, if it isn't the trunk.
+
+    A ``compact_boundary`` has ``parentUuid: null`` — it starts a fresh
+    chain — but records the message it continues in ``logicalParentUuid``.
+    After a rewind that message sits on a branch line (``{trunk}@{uuid}``),
+    and walking the boundary as a plain trunk root would resume the trunk
+    *after* its own branches: the trunk's line would then hold the
+    post-compaction conversation while the branch the user was actually on
+    ends at the compaction.
+
+    Newer compactions that keep a preserved segment re-parent its tail
+    (often the ``logicalParentUuid`` itself) under the boundary's own
+    chain, so that uuid is not on any walked line yet; the segment's other
+    members (``compactMetadata.preservedSegment`` / ``preservedMessages``)
+    stay on the pre-compaction line and stand in for it.
+
+    Returns the line of the first such reference that was already walked,
+    when it is not the session's own id; ``None`` otherwise (the caller
+    then walks the root as the trunk, as before).
+    """
+    entry = root.entry
+    if not (
+        isinstance(entry, SystemTranscriptEntry) and entry.subtype == "compact_boundary"
+    ):
+        return None
+
+    # compactMetadata is free-form: tolerate missing or malformed members.
+    def as_dict(value: Any) -> dict[str, Any]:
+        return cast(dict[str, Any], value) if isinstance(value, dict) else {}
+
+    def as_list(value: Any) -> list[Any]:
+        return cast(list[Any], value) if isinstance(value, list) else []
+
+    meta = as_dict(entry.compactMetadata)
+    segment = as_dict(meta.get("preservedSegment"))
+    preserved_uuids = as_list(as_dict(meta.get("preservedMessages")).get("uuids"))
+    candidates: list[Any] = [
+        entry.logicalParentUuid,
+        segment.get("tailUuid"),
+        segment.get("headUuid"),
+        *reversed(preserved_uuids),
+    ]
+    for uuid in candidates:
+        if not isinstance(uuid, str):
+            continue
+        if uuid in session_uuids and uuid in walked_uuids:
+            line_id = nodes[uuid].session_id
+            return line_id if line_id != root.session_id else None
+    return None
+
+
 def _walk_session_with_forks(
     root: MessageNode,
     session_id: str,
     session_uuids: set[str],
     nodes: dict[str, MessageNode],
+    line_id: Optional[str] = None,
 ) -> tuple[list[SessionDAGLine], set[str]]:
     """Walk a session's DAG from root, splitting into separate DAG-lines at fork points.
 
@@ -681,12 +739,19 @@ def _walk_session_with_forks(
        push each child as a new branch
     4. Update MessageNode.session_id for branch nodes
 
+    ``line_id`` starts the walk on an existing DAG-line instead of the
+    trunk — used when a ``/compact`` root continues a rewind branch (see
+    ``_compaction_continuation_line``). Its segment merges into that line
+    by timestamp, so it carries no attachment metadata of its own.
+
     Returns:
         Tuple of (DAG-line list, set of UUIDs intentionally skipped as
         compaction replays).
     """
     # Queue entries: (start_uuid, dag_line_id, parent_dag_line_id)
-    queue: list[tuple[str, str, Optional[str]]] = [(root.uuid, session_id, None)]
+    queue: list[tuple[str, str, Optional[str]]] = [
+        (root.uuid, line_id or session_id, None)
+    ]
     result: list[SessionDAGLine] = []
     skipped: set[str] = set()  # Compaction replay UUIDs
     # Defence-in-depth: even though build_dag breaks parent cycles before
@@ -948,7 +1013,13 @@ def extract_session_dag_lines(
             if root.uuid in walked_uuids:
                 continue
             root_lines, root_skipped = _walk_session_with_forks(
-                root, session_id, session_uuids, nodes
+                root,
+                session_id,
+                session_uuids,
+                nodes,
+                line_id=_compaction_continuation_line(
+                    root, session_uuids, walked_uuids, nodes
+                ),
             )
             for dl in root_lines:
                 walked_uuids.update(dl.uuids)
@@ -976,7 +1047,8 @@ def extract_session_dag_lines(
             # first_timestamp. Multiple segments arise for the trunk when a
             # session has several roots (orphan promotion, /compact) and for
             # any line — trunk or *branch* — when continuation-fork
-            # linearization re-enqueues children as same-line segments.
+            # linearization re-enqueues children as same-line segments, or
+            # when a /compact root continues a rewind branch.
             # Branch segments must be merged too: inserting them by key
             # would keep only the last segment and silently drop the rest.
             lines_by_id: dict[str, list[SessionDAGLine]] = {}
