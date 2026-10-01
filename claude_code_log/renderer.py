@@ -2394,34 +2394,6 @@ def _get_message_hierarchy_level(msg: TemplateMessage) -> int:
     return 1
 
 
-def _line_trunk(sid: str) -> str:
-    """The trunk session id of a within-session fork/subagent line.
-
-    Branch lines are ``{trunk}@{uuid}`` and subagent lines
-    ``{trunk}#agent-{id}``; a plain session id is its own trunk.
-    """
-    return sid.split("@", 1)[0].split("#agent-", 1)[0]
-
-
-def _line_encloses(header_sid: str, msg_sid: Optional[str]) -> bool:
-    """Whether a header's session line is an ancestor scope of a message.
-
-    A trunk/plain session header encloses every line in its fork family
-    (the trunk itself plus its ``@`` branches and ``#agent-`` sub-lines).
-    A branch or subagent header encloses only its own exact line, so the
-    trunk's later continuation does not nest under an earlier branch, and a
-    neighbouring session's header does not adopt a fork family's messages.
-    """
-    if not msg_sid:
-        return True
-    if header_sid == msg_sid:
-        return True
-    # A trunk/plain header (no fork marker) covers its whole family.
-    if "@" not in header_sid and "#agent-" not in header_sid:
-        return _line_trunk(msg_sid) == header_sid
-    return False
-
-
 def _build_message_hierarchy(messages: list[TemplateMessage]) -> None:
     """Build ancestry for all messages based on their current order.
 
@@ -2480,23 +2452,18 @@ def _build_message_hierarchy(messages: list[TemplateMessage]) -> None:
         depth_cache[sid] = depth
         return depth
 
-    # Stack of (level, message_index, scope_sid) tuples. Levels may be
-    # fractional for within-session branch-headers; see class-level note.
-    # scope_sid is the session line a header opens (its render_session_id) and
-    # is None for non-header messages, which never close a scope by identity.
-    hierarchy_stack: list[tuple[float, int, Optional[str]]] = []
+    # Stack of (level, message_index) tuples. Levels may be fractional for
+    # within-session branch-headers; see class-level note.
+    hierarchy_stack: list[tuple[float, int]] = []
 
     for message in messages:
         # Branch-headers sit between session (0) and user (1) so they stay
         # within their parent session's ancestry chain.
         current_level: float
-        scope_sid: Optional[str] = None
         if message.is_branch_header:
             current_level = 0.5
-            scope_sid = message.render_session_id or None
         elif message.is_session_header:
             current_level = 0
-            scope_sid = message.render_session_id or None
         else:
             # Determine level from message type and modifiers, shifted by
             # the agent-nesting depth of the message's session line.
@@ -2505,35 +2472,16 @@ def _build_message_hierarchy(messages: list[TemplateMessage]) -> None:
             if message.agent_depth > 1:
                 current_level += 2 * (message.agent_depth - 1)
 
-        # Close every frame from the lowest one that no longer holds this
-        # message, upward. A frame stops holding the message when it sits at or
-        # above the current level (the base rule) OR when it is a header whose
-        # session line does not enclose this message's line. The identity check
-        # ends a within-session branch scope once the trunk resumes (so the
-        # trunk's continuation is not folded away under the earlier branch
-        # header) and stops a neighbouring session header from adopting an
-        # interleaved fork family's later messages. The whole stack is scanned,
-        # not just the top: a body frame (no scope, e.g. the branch's final
-        # user turn) can sit above an incompatible header, and a top-only check
-        # would stop at it and leave that header in the ancestry. Stack levels
-        # increase from bottom to top, so the first frame that must close marks
-        # a contiguous suffix to drop.
-        msg_sid = message.render_session_id
-        cut = len(hierarchy_stack)
-        for i, (frame_level, _, frame_scope) in enumerate(hierarchy_stack):
-            if frame_level >= current_level or (
-                frame_scope is not None and not _line_encloses(frame_scope, msg_sid)
-            ):
-                cut = i
-                break
-        del hierarchy_stack[cut:]
+        # Pop stack until we find the appropriate parent level
+        while hierarchy_stack and hierarchy_stack[-1][0] >= current_level:
+            hierarchy_stack.pop()
 
         # Build ancestry from remaining stack (list of message_index integers)
-        ancestry = [msg_index for _, msg_index, _ in hierarchy_stack]
+        ancestry = [msg_index for _, msg_index in hierarchy_stack]
 
         # Push current message onto stack
         if message.message_index is not None:
-            hierarchy_stack.append((current_level, message.message_index, scope_sid))
+            hierarchy_stack.append((current_level, message.message_index))
 
         # Update the message ancestry
         message.ancestry = ancestry
@@ -3707,13 +3655,6 @@ def _reorder_session_template_messages(
     fixes that by grouping all messages by session_id and inserting them after their
     corresponding session header.
 
-    Exception: intra-session fork families (a trunk with branch ``{trunk}@{uuid}``
-    or subagent ``{trunk}#agent-{id}`` sub-lines) are left in their input order.
-    The DAG traversal already interleaves such a trunk's runs with its sub-line
-    blocks chronologically; gathering them would hoist the trunk's later
-    continuation ahead of an earlier sub-line block and strand that block at the
-    end. See ``_in_fork_family`` below.
-
     This must be called BEFORE _identify_message_pairs and _reorder_paired_messages,
     since those functions expect messages to be in session-grouped order.
 
@@ -3727,68 +3668,45 @@ def _reorder_session_template_messages(
     Returns:
         Reordered messages with all messages grouped under their session headers
     """
-    visible = list(_visible(messages))
-
-    # Intra-session forks and subagents are exempt from re-gathering.
-    #
-    # When a trunk session forks (a within-session rewind → branch sid
-    # ``{trunk}@{uuid}``) or spawns a subagent (``{trunk}#agent-{id}``), the
-    # DAG traversal has ALREADY interleaved the trunk's runs and the sub-line
-    # blocks into their correct chronological order. Re-gathering every
-    # message that shares the trunk sid under the trunk's (first) header would
-    # merge the trunk's later continuation ahead of a sub-line block, leaving
-    # that earlier-timestamped block stranded at the very end. Leave the whole
-    # fork family in its DAG (input) order instead. Sessions with no such
-    # sub-lines still get gathered (the resume/copied-message case this
-    # function exists for).
-    all_sids = {m.render_session_id for m in visible if m.render_session_id}
-    forked_trunks = {
-        _line_trunk(sid) for sid in all_sids if "@" in sid or "#agent-" in sid
-    }
-
-    def _in_fork_family(sid: Optional[str]) -> bool:
-        return sid is not None and _line_trunk(sid) in forked_trunks
-
-    # First pass: extract session headers and group non-header messages by
-    # session_id (skipping fork-family messages, which stay in input order).
+    # First pass: extract session headers and group non-header messages by session_id
     session_headers: list[TemplateMessage] = []
     session_messages_map: dict[str, list[TemplateMessage]] = {}
 
-    for message in visible:
-        sid = message.render_session_id
+    for message in messages:
+        if message is None:
+            continue
         if message.is_session_header:
             session_headers.append(message)
             # Initialize the list for this session (preserves session order)
-            if sid and not _in_fork_family(sid) and sid not in session_messages_map:
+            sid = message.render_session_id
+            if sid and sid not in session_messages_map:
                 session_messages_map[sid] = []
         else:
-            if sid and not _in_fork_family(sid):
+            sid = message.render_session_id
+            if sid:
                 if sid not in session_messages_map:
                     session_messages_map[sid] = []
                 session_messages_map[sid].append(message)
 
-    # If no session headers, return original order.
+    # If no session headers, return original order — but materialise
+    # the non-ghost subset so the caller sees ``list[TemplateMessage]``
+    # (callers downstream of this function are typed against the
+    # non-Optional shape and shouldn't have to ghost-skip).
     if not session_headers:
-        return visible
+        return list(_visible(messages))
 
-    # Second pass: walk in input order. Fork-family messages (and any message
-    # whose header we don't gather) are emitted in place; for each gathered
-    # session header, insert all messages carrying that session_id.
+    # Second pass: for each session header, insert all messages with that session_id
     result: list[TemplateMessage] = []
     used_sessions: set[str] = set()
 
-    for message in visible:
-        sid = message.render_session_id
-        if _in_fork_family(sid):
-            result.append(message)
-            continue
-        if message.is_session_header:
-            result.append(message)
-            if sid and sid in session_messages_map and sid not in used_sessions:
-                # Messages are already in timestamp order from original processing
-                result.extend(session_messages_map[sid])
-                used_sessions.add(sid)
-        # Non-header, non-family messages are emitted via their header above.
+    for header in session_headers:
+        result.append(header)
+        sid = header.render_session_id
+
+        if sid and sid in session_messages_map:
+            # Messages are already in timestamp order from original processing
+            result.extend(session_messages_map[sid])
+            used_sessions.add(sid)
 
     # Append any messages that weren't matched to a session header (shouldn't happen normally)
     for sid, msgs in session_messages_map.items():
