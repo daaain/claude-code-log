@@ -41,6 +41,7 @@ from .cache import (
     get_cache_db_path,
     get_library_version,
     is_corrupt_database_error,
+    trim_oversized_wal,
 )
 from .migrations.runner import apply_write_pragmas, cache_busy_timeout
 from .models import RenderingDepth
@@ -2173,6 +2174,11 @@ def serve(
         resolved_index_fields = parse_field_spec(index_fields, DEFAULT_INDEX_FIELDS)
     except ValueError as exc:
         raise click.UsageError(str(exc)) from exc
+
+    # Before the refresh and the index build, so neither has to work
+    # through a log a previous interrupted serve left behind (#332). The
+    # refresh would do this itself; --no-convert has nothing else that will.
+    trim_oversized_wal(get_cache_db_path(projects_path), announce=click.echo)
 
     if not no_convert:
         # Same conversion the default command runs, so the pages being served

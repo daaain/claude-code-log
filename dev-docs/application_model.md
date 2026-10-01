@@ -108,16 +108,43 @@ cross-project `index.html` is written last). Workers
 run silent; the parent prints one progress line per project as results
 arrive. All workers share the WAL-mode SQLite cache DB — each writes
 only its own project's rows, and WAL serialises the short write
-transactions. Serialised is not the same as fair: a worker that cannot
-get the write lock within the busy timeout (30 s,
-`$CLAUDE_CODE_LOG_CACHE_TIMEOUT`) fails with `database is locked`, and
-issue #332 lost 23 of 57 projects that way on a slow, antivirus-scanned
-disk. Such a project is *deferred*, not failed: it prints `cache busy,
-will retry` and is converted again inline after the pool and the
-held-back projects have finished, when nothing else in the pass is
-writing. Only a second lock-out (another process still writing) is
-reported as a failure. `serve` takes the same `--jobs` as the main
-command. A pool-level failure (e.g. a library caller without the
+transactions. Serialised is not the same as fair, though. SQLite does
+not queue writers: one that finds the lock taken polls with a growing
+back-off, and whoever is awake when it frees takes it, so a worker that
+has just committed tends to win again. Measured with eight processes doing
+back-to-back short write transactions for 20 s, the worst-off waited the
+full 20 s for a single turn — no long transaction required — and issue
+#332 lost 23 of 57 projects to `database is locked` this way. (A plain
+cross-process mutex is no better: the releaser re-acquires before a woken
+waiter runs.) So the pool shares one **fair write queue**
+([`write_queue.py`](../claude_code_log/write_queue.py)): a ticket lock
+the parent creates and each project worker installs as the pool's
+initializer. Every cache write goes through `cache.write_transaction`,
+which takes a turn, opens `BEGIN IMMEDIATE`, writes and commits. The same
+measurement under it gave every worker 90-91 transactions and a worst
+wait of 0.41 s. Inside a pass, then, no worker gives up on a sibling; the
+busy timeout (30 s, `$CLAUDE_CODE_LOG_CACHE_TIMEOUT`) only bites while a
+turn holder waits on a writer in *another* process (a TUI, a second
+`serve`). For that case a locked-out project is *deferred*, not failed:
+it prints `cache busy, will retry` and is converted again inline after the
+pool and the held-back projects have finished. Only a second lock-out is
+reported as a failure. Outside a pool no queue is installed and the turn
+is free. A worker that dies holding its turn (an OOM kill) leaves its
+siblings queued behind it, and `ProcessPoolExecutor` can miss that death
+under `spawn` — it starts workers on demand, and its manager thread may be
+waiting on a sentinel list that predates the dead one (reproduced on
+CPython 3.11: dead worker, exit code set, pool reporting healthy), so it
+only notices when another result arrives, which here is never. The pool is
+therefore drained through `write_queue.as_completed_watching_workers`,
+which checks the workers itself between results and, on any abrupt exit,
+terminates the rest and raises `BrokenProcessPool` into the inline
+fallback. The parent never installs a queue, so that fallback cannot meet
+the stuck one. `test_write_queue.py` pins it.
+Uncontended, the queue plus `BEGIN IMMEDIATE` add ~10 µs to the smallest
+write (`update_html_cache`, 46 → 56 µs) and nothing measurable to a
+session save; whole passes are unchanged at `--jobs 1` and within ~4%
+on a pooled incremental pass, the price of strict turn-taking.
+`serve` takes the same `--jobs` as the main command. A pool-level failure (e.g. a library caller without the
 `if __name__ == "__main__"` guard `spawn` needs) degrades to inline
 sequential processing with a warning rather than aborting.
 
@@ -331,7 +358,14 @@ had to scan in full before anything could use it. So
 (`PRAGMA wal_checkpoint(TRUNCATE)` on its lease), as do `serve`'s index
 build and shutdown. It waits at most 2 s for readers — a TRUNCATE holds
 writers off while it waits — and a checkpoint that cannot finish is left
-for the next pass. Separately, `save_cached_entries` and
+for the next pass. A log that is *already* oversized (over
+`WAL_SIZE_LIMIT_BYTES`) when a pass or `serve` starts is compacted first,
+with a message and the ordinary busy timeout (`cache.trim_oversized_wal`):
+the first connection has to read the whole log to recover it anyway, and
+the checkpoint costs about as much again (2 GB: 1.1 s + 1.1 s on a warm
+Linux page cache; the reporter's disk ran ~30 MB/s), so paying it up front
+spares every read and write of the pass. Otherwise it costs one `stat`.
+Separately, `save_cached_entries` and
 `extend_cached_entries` serialise their entries (json + zlib, the part
 that scales with the session) *before* their first write, because
 Python's `sqlite3` takes the write lock at that write and every other

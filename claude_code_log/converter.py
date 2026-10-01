@@ -12,7 +12,7 @@ import re
 import time
 from collections import defaultdict
 from collections.abc import Generator, Iterator
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -48,6 +48,11 @@ from .utils import (
     trunk_jsonl_files,
 )
 from .render_pool import RenderUnit, memory_capped_workers, resolve_render_jobs
+from .write_queue import (
+    WriteTurns,
+    as_completed_watching_workers,
+    install_write_turns,
+)
 from .render_dispatch import build_render_pool, dispatch_render_units
 from .cache import (
     CacheManager,
@@ -58,6 +63,7 @@ from .cache import (
     get_cache_db_path,
     get_library_version,
     is_busy_database_error,
+    trim_oversized_wal,
 )
 from .parser import parse_timestamp
 from .factories import create_transcript_entry
@@ -6397,6 +6403,10 @@ def process_projects_hierarchy(
         else contextlib.nullcontext()
     )
     with lease:
+        if use_cache:
+            # Inside the lease, so the connection that recovers the log
+            # is the one the pass then keeps.
+            trim_oversized_wal(get_cache_db_path(projects_path))
         result = _process_projects_hierarchy(
             projects_path=projects_path,
             from_date=from_date,
@@ -6825,7 +6835,17 @@ def _process_projects_hierarchy(
             # each and are reused across projects, so the overhead is a
             # one-off ~1s per worker.
             ctx = multiprocessing.get_context("spawn")
-            with ProcessPoolExecutor(max_workers=resolved_jobs, mp_context=ctx) as pool:
+            # One fair queue for the database's write lock, shared by every
+            # project worker — see `write_queue`. Installed only in the
+            # workers: the parent writes nothing while the pool runs, and
+            # must not inherit a queue a crashed worker may have left stuck
+            # when it falls back to converting inline below.
+            with ProcessPoolExecutor(
+                max_workers=resolved_jobs,
+                mp_context=ctx,
+                initializer=install_write_turns,
+                initargs=(WriteTurns(ctx),),
+            ) as pool:
                 future_to_plan = {
                     pool.submit(
                         _convert_project_worker,
@@ -6841,7 +6861,10 @@ def _process_projects_hierarchy(
                     ): plan
                     for plan in by_size
                 }
-                for future in as_completed(future_to_plan):
+                # Not plain `as_completed`: a worker that dies holding its
+                # write turn would leave the rest queued behind it, and the
+                # executor can miss the death — see `write_queue`.
+                for future in as_completed_watching_workers(pool, future_to_plan):
                     plan = future_to_plan[future]
                     _dir, elapsed, error, busy = future.result()
                     settled.add(id(plan))
