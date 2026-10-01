@@ -656,10 +656,14 @@ enqueues, steering `remove`s) have no uuid, so they never get a DAG
 line. `_splice_queue_ops_chronologically` (converter) inserts each one
 right after its same-session anchor entry. The anchor may sit on a
 branch, but the queue-op itself carries only the raw trunk `sessionId`.
-So `_render_messages` (renderer) gives it the DAG line of the last uuid-bearing
-entry seen in its session, which is its anchor. Without that, the
-session regrouping moves the queue-op under the trunk header, ahead of
-every branch, however late it arrived.
+So `_queue_op_render_sids` (renderer) gives it its anchor's DAG line:
+the line of the last uuid-bearing entry before it in its session. Without
+that, the session regrouping moves the queue-op under the trunk header,
+ahead of every branch, however late it arrived. The lookup runs on the
+*unfiltered* entries, before `_filter_messages`, because the anchor itself
+may be filtered out (an image-only prompt, a passthrough hook). Tracking it
+in the render loop would hand the queue-op the line of the last entry
+that survived filtering instead.
 
 ### Expected Root Types
 

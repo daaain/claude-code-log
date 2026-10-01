@@ -776,6 +776,11 @@ def generate_template_messages(
             messages, session_tree=session_tree
         )
 
+    # Resolve render lines before filtering: a queue-op's anchor entry may
+    # itself be filtered out (see ``_queue_op_render_sids``).
+    uuid_to_render_sid = _build_uuid_to_render_sid(session_hierarchy)
+    queue_op_render_sids = _queue_op_render_sids(messages, uuid_to_render_sid)
+
     # Filter messages (removes summaries, warmup, empty, etc.)
     with log_timing("Filter messages", t_start):
         filtered_messages = _filter_messages(messages)
@@ -804,6 +809,8 @@ def generate_template_messages(
             session_summaries,
             session_team_names,
             junction_targets,
+            uuid_to_render_sid,
+            queue_op_render_sids,
         )
 
     # Fold Skill-tool bodies (isMeta slash-command entries) into their
@@ -1073,6 +1080,39 @@ def _build_uuid_to_render_sid(
             for uuid in line_uuids:
                 result[uuid] = sid
         # Trunk sessions are deliberately omitted — see docstring.
+    return result
+
+
+def _queue_op_render_sids(
+    messages: list[TranscriptEntry],
+    uuid_to_render_sid: dict[str, str],
+) -> dict[int, Optional[str]]:
+    """Resolve each queue-op's DAG-line from the *unfiltered* entry stream.
+
+    Queue-ops are uuid-less (no DAG line of their own) and carry only the
+    raw trunk ``sessionId``. ``_splice_queue_ops_chronologically`` inserts
+    each one right after a same-session anchor entry, so it belongs to that
+    anchor's line: one anchored inside a rewind branch must stay in the
+    branch rather than be regrouped under the trunk header.
+
+    Resolved here, before ``_filter_messages``, because the anchor itself
+    may not survive filtering (an image-only prompt, a passthrough hook, a
+    warmup message); tracking it inside the render loop would hand the
+    queue-op the line of whatever surviving entry came before — the same
+    latent bug ``_build_uuid_to_render_sid`` closes for branch entries.
+
+    Keyed by ``id(entry)``; ``None`` means the trunk.
+    """
+    result: dict[int, Optional[str]] = {}
+    last_by_session: dict[str, Optional[str]] = {}
+    for message in messages:
+        session_id = getattr(message, "sessionId", None) or ""
+        if isinstance(message, QueueOperationTranscriptEntry):
+            result[id(message)] = last_by_session.get(session_id)
+            continue
+        uuid = getattr(message, "uuid", None)
+        if uuid:
+            last_by_session[session_id] = uuid_to_render_sid.get(uuid)
     return result
 
 
@@ -4528,6 +4568,8 @@ def _render_messages(
     session_summaries: dict[str, str] | None = None,
     session_team_names: dict[str, str] | None = None,
     junction_targets: dict[str, list[str]] | None = None,
+    uuid_to_render_sid: dict[str, str] | None = None,
+    queue_op_render_sids: dict[int, Optional[str]] | None = None,
 ) -> RenderingContext:
     """Pass 2: Render pre-filtered messages to TemplateMessage objects.
 
@@ -4569,7 +4611,10 @@ def _render_messages(
     # Replaces the pre-D11 ``current_render_session`` loop variable.
     # See ``_build_uuid_to_render_sid`` for the latent-bug fix this
     # closes at non-HOOK depth.
-    uuid_to_render_sid = _build_uuid_to_render_sid(session_hierarchy)
+    if uuid_to_render_sid is None:
+        uuid_to_render_sid = _build_uuid_to_render_sid(session_hierarchy)
+    if queue_op_render_sids is None:
+        queue_op_render_sids = _queue_op_render_sids(messages, uuid_to_render_sid)
 
     # uuid → entry map for branch-preview scanning. ``_build_branch_header``
     # walks each branch's DAG-line uuids (from ``session_hierarchy[sid]
@@ -4624,12 +4669,6 @@ def _render_messages(
     # ``version``; a ``remove`` happens mid-turn and a turn cannot span a
     # harness restart, so the most recent version in its session is its version.
     last_version_by_session: dict[str, str] = {}
-    # The DAG-line of the last uuid-bearing entry seen per session. Queue-ops
-    # are uuid-less (no DAG line of their own) and are spliced in right after
-    # a same-session anchor entry (``_splice_queue_ops_chronologically``), so
-    # they inherit its line: one anchored inside a rewind branch stays in that
-    # branch instead of being regrouped under the trunk header.
-    last_render_sid_by_session: dict[str, Optional[str]] = {}
     # Decrementing budget of renderable ``queued_command`` cards per ``(session,
     # version, prompt-text)``, seeded from the pass-1 count. Each suppressed
     # ``remove`` spends one unit under ITS OWN text key; once a text's budget is
@@ -4723,9 +4762,8 @@ def _render_messages(
         # ``meta.session_id`` at read time.
         effective_session: Optional[str] = uuid_to_render_sid.get(message_uuid)
         if isinstance(message, QueueOperationTranscriptEntry):
-            effective_session = last_render_sid_by_session.get(msg_session_id)
-        elif message_uuid:
-            last_render_sid_by_session[msg_session_id] = effective_session
+            # Uuid-less: inherits its anchor's line, resolved pre-filter.
+            effective_session = queue_op_render_sids.get(id(message))
 
         # Branch header: fires off the SAME map-driven trigger that
         # assigns ``render_session_id``. A branch sid contains ``@``;

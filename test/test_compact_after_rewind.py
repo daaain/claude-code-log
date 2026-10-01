@@ -185,3 +185,48 @@ def test_queue_op_inside_branch_stays_in_branch(tmp_path: Path) -> None:
     steer = next(m for m in flat if not m.is_session_header and not _uuid(m))
     assert steer.render_session_id == "s1@b2u"
     assert _header_sids(steer, by_index) == ["s1", "s1@b2u"]
+
+
+def test_queue_op_after_filtered_anchor_stays_in_branch(tmp_path: Path) -> None:
+    """The queue-op's anchor may itself be dropped by ``_filter_messages``.
+
+    Here the live branch opens with an image-only prompt (no text, no tool
+    items — filtered before rendering) and the queue-op lands right after
+    it. Its line must come from that anchor, not from the last *surviving*
+    entry, which is on the abandoned branch ``s1@b1u``.
+    """
+    fixture = tmp_path / "dag_compact_after_rewind.jsonl"
+    rows = [
+        json.loads(line)
+        for line in (TEST_DATA / "dag_compact_after_rewind.jsonl")
+        .read_text()
+        .splitlines()
+    ]
+    for row in rows:
+        if row["uuid"] == "b2u":
+            row["message"]["content"] = [
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": "iVBORw0KGgo=",
+                    },
+                }
+            ]
+    rows.append(
+        {
+            "type": "queue-operation",
+            "operation": "remove",
+            "timestamp": "2025-07-01T10:10:30.000Z",
+            "content": "steer the second attempt",
+            "sessionId": "s1",
+        }
+    )
+    fixture.write_text("".join(json.dumps(r) + "\n" for r in rows))
+
+    flat, by_index = _render(tmp_path)
+    assert "b2u" not in {_uuid(m) for m in flat}  # the anchor was filtered
+    steer = next(m for m in flat if not m.is_session_header and not _uuid(m))
+    assert steer.render_session_id == "s1@b2u"
+    assert _header_sids(steer, by_index) == ["s1", "s1@b2u"]
