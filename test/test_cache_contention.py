@@ -35,6 +35,7 @@ from typing import Any, Dict, List
 import pytest
 from click.testing import CliRunner
 
+from claude_code_log import cache as cache_module
 from claude_code_log import converter
 from claude_code_log.cache import CacheManager, get_library_version
 from claude_code_log.converter import load_transcript, process_projects_hierarchy
@@ -306,3 +307,57 @@ def test_cache_busy_timeout_env(
     else:
         monkeypatch.setenv("CLAUDE_CODE_LOG_CACHE_TIMEOUT", raw)
     assert cache_busy_timeout() == expected
+
+
+def test_an_oversized_wal_is_trimmed_before_the_pass_starts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A log left by an interrupted run is compacted up front, so the pass
+    never works through it — not merely at the end, where the
+    end-of-pass checkpoint would also have caught it."""
+    projects_dir = _build_projects_dir(tmp_path)
+    db_path = tmp_path / "cache.db"
+    wal = db_path.with_name(db_path.name + "-wal")
+    monkeypatch.setenv("CLAUDE_CODE_LOG_CACHE_PATH", str(db_path))
+    process_projects_hierarchy(projects_dir, jobs=1)
+
+    # Leave a non-empty WAL behind, with a connection kept open so that
+    # nothing's close checkpoints it away — an interrupted run's shape.
+    observer = sqlite3.connect(db_path)
+    try:
+        observer.execute("UPDATE projects SET last_updated = 'x'")
+        observer.commit()
+        assert wal.stat().st_size > 0
+        monkeypatch.setattr(cache_module, "WAL_SIZE_LIMIT_BYTES", 0)
+
+        wal_at_start: List[int] = []
+        real_pass = converter._process_projects_hierarchy
+
+        def recording_pass(**kwargs: Any) -> Path:
+            wal_at_start.append(wal.stat().st_size if wal.exists() else 0)
+            return real_pass(**kwargs)
+
+        monkeypatch.setattr(converter, "_process_projects_hierarchy", recording_pass)
+        capsys.readouterr()
+        process_projects_hierarchy(projects_dir, jobs=1)
+    finally:
+        observer.close()
+
+    assert wal_at_start == [0]
+    assert "Compacting the cache's" in capsys.readouterr().out
+
+
+def test_a_wal_within_the_limit_is_left_alone(tmp_path: Path) -> None:
+    db_path = tmp_path / "cache.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("CREATE TABLE t (x)")
+    conn.commit()
+    try:
+        said: List[str] = []
+        assert cache_module.trim_oversized_wal(db_path, announce=said.append) is None
+        assert said == []
+    finally:
+        conn.close()
