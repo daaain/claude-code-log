@@ -108,7 +108,16 @@ cross-project `index.html` is written last). Workers
 run silent; the parent prints one progress line per project as results
 arrive. All workers share the WAL-mode SQLite cache DB — each writes
 only its own project's rows, and WAL serialises the short write
-transactions. A pool-level failure (e.g. a library caller without the
+transactions. Serialised is not the same as fair: a worker that cannot
+get the write lock within the busy timeout (30 s,
+`$CLAUDE_CODE_LOG_CACHE_TIMEOUT`) fails with `database is locked`, and
+issue #332 lost 23 of 57 projects that way on a slow, antivirus-scanned
+disk. Such a project is *deferred*, not failed: it prints `cache busy,
+will retry` and is converted again inline after the pool and the
+held-back projects have finished, when nothing else in the pass is
+writing. Only a second lock-out (another process still writing) is
+reported as a failure. `serve` takes the same `--jobs` as the main
+command. A pool-level failure (e.g. a library caller without the
 `if __name__ == "__main__"` guard `spawn` needs) degrades to inline
 sequential processing with a warning rather than aborting.
 
@@ -205,7 +214,9 @@ list against the cached `page_sessions` rows and reports
 
 Connections run in WAL mode with `synchronous=NORMAL` (durable across
 app crashes; only a power/OS crash can lose the last commit — fine for a
-regenerable cache). Both pragmas come from
+regenerable cache), plus `journal_size_limit` (64 MiB) so a WAL that
+grew under load is truncated back when it next resets instead of keeping
+its high-water mark on disk. The pragmas come from
 `migrations.runner.apply_write_pragmas`, which every *writing*
 connection applies — the two that open outside `CacheManager` included:
 the migration runner's own, which is what touches a brand-new database
@@ -306,6 +317,25 @@ are thread-bound and `serve` answers requests on other threads while
 the watch thread converts. A corrupt database drops the lease before
 the rebuild deletes the file, and the rest of that pass runs
 connection-per-call. Same pass with the lease: 5.3 s.
+
+**Keeping the WAL bounded.** SQLite only checkpoints passively on its
+own, and only *restarts* the log when no reader is using it; the other
+time it truncates is when the last connection closes. A pooled pass has
+readers and writers overlapping throughout (measured on test data: peak
+WAL ~3x the serial pass's, 26 MB against 8 MB for a 59 MB cache), and an
+interrupted pass, or another process holding the database open (the
+`serve` search API, a TUI), means the last close never happens — issue
+#332 found a 17.8 GB WAL beside a 6.35 GB cache, which the next start
+had to scan in full before anything could use it. So
+`process_projects_hierarchy` ends by calling `cache.checkpoint_wal`
+(`PRAGMA wal_checkpoint(TRUNCATE)` on its lease), as do `serve`'s index
+build and shutdown. It waits at most 2 s for readers — a TRUNCATE holds
+writers off while it waits — and a checkpoint that cannot finish is left
+for the next pass. Separately, `save_cached_entries` and
+`extend_cached_entries` serialise their entries (json + zlib, the part
+that scales with the session) *before* their first write, because
+Python's `sqlite3` takes the write lock at that write and every other
+process's writes wait for as long as it is held.
 
 Freshness checks are batched too (issue #12): `get_modified_files()`
 fetches every cached row for the project in one query (one connection

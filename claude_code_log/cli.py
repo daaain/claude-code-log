@@ -35,13 +35,14 @@ from .converter import (
 )
 from .cache import (
     CacheManager,
+    checkpoint_wal,
     find_session_in_cache,
     get_all_cached_projects,
     get_cache_db_path,
     get_library_version,
     is_corrupt_database_error,
 )
-from .migrations.runner import apply_write_pragmas
+from .migrations.runner import apply_write_pragmas, cache_busy_timeout
 from .models import RenderingDepth
 from .render_pool import resolve_render_jobs
 from .search import (
@@ -2124,6 +2125,17 @@ def convert(
         "changes, in the background. Reload a page to see new messages."
     ),
 )
+@click.option(
+    "--jobs",
+    "-j",
+    type=click.IntRange(min=1),
+    default=None,
+    help=(
+        "Worker processes for the startup refresh and --watch re-conversions "
+        "(default: CPU count; 1 disables parallelism). Same as the main "
+        "command's --jobs."
+    ),
+)
 def serve(
     port: int,
     projects_dir: Optional[Path],
@@ -2134,6 +2146,7 @@ def serve(
     reindex: bool,
     no_index: bool,
     watch_sources: bool,
+    jobs: Optional[int],
 ) -> None:
     """Serve the projects directory over loopback, with full-archive search.
 
@@ -2165,7 +2178,7 @@ def serve(
         # Same conversion the default command runs, so the pages being served
         # are current. --no-convert skips it for a fast start.
         click.echo(f"Refreshing {projects_path}...")
-        process_projects_hierarchy(projects_path, silent=True)
+        process_projects_hierarchy(projects_path, silent=True, jobs=jobs)
 
     db_path = get_cache_db_path(projects_path)
     if not no_index:
@@ -2223,6 +2236,7 @@ def serve(
                 silent=True,
                 write_combined=False,
                 entry_store=serve_store,
+                jobs=jobs,
             )
 
         def report(exc: BaseException) -> None:
@@ -2249,6 +2263,10 @@ def serve(
         if watch_thread is not None:
             watch_thread.join(timeout=5)
         server.stop()
+        # Leave the WAL empty for the next start, which otherwise has to
+        # scan all of it before anything can use the cache (issue #332).
+        # A --watch conversion interrupted mid-pass skipped its own.
+        checkpoint_wal(db_path)
 
 
 def _build_search_index(
@@ -2269,7 +2287,10 @@ def _build_search_index(
         click.echo("No cache database found; search will be unavailable.", err=True)
         return
 
-    conn = sqlite3.connect(db_path)
+    # The same busy timeout as every other cache connection: this one
+    # writes, and at SQLite's default 5 s it gave up on a lock the
+    # converter's connections would have waited out (issue #332).
+    conn = sqlite3.connect(db_path, timeout=cache_busy_timeout())
     try:
         if not fts5_available(conn):
             click.echo(
@@ -2334,6 +2355,9 @@ def _build_search_index(
             )
     finally:
         conn.close()
+    # A full build commits once per transcript file; don't leave its log
+    # for the server's readers to grow.
+    checkpoint_wal(db_path)
 
 
 @main.command(name="watch")

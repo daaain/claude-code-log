@@ -19,7 +19,11 @@ from packaging import version
 from pydantic import BaseModel
 
 from .factories import create_transcript_entry
-from .migrations.runner import apply_write_pragmas, run_migrations
+from .migrations.runner import (
+    apply_write_pragmas,
+    cache_busy_timeout,
+    run_migrations,
+)
 from .models import (
     AssistantTranscriptEntry,
     QueueOperationTranscriptEntry,
@@ -576,6 +580,24 @@ def is_corrupt_database_error(exc: BaseException) -> bool:
     return any(marker in message for marker in _CORRUPTION_MARKERS)
 
 
+def is_busy_database_error(exc: BaseException) -> bool:
+    """Whether ``exc`` is SQLite giving up on a lock another connection held.
+
+    That is contention, not a fault in the data: the same work succeeds
+    once the other writer has finished, which is what lets the hierarchy
+    pass defer a locked-out project and retry it rather than fail it.
+    """
+    if not isinstance(exc, sqlite3.OperationalError):
+        return False
+    # sqlite_errorcode is 3.11+; SQLITE_BUSY = 5, SQLITE_LOCKED = 6 (the
+    # extended codes keep the primary one in their low byte).
+    code = getattr(exc, "sqlite_errorcode", None)
+    if code is not None:
+        return (code & 0xFF) in (5, 6)
+    message = str(exc).lower()
+    return "database is locked" in message or "database is busy" in message
+
+
 def discard_database_files(db_path: Path) -> bool:
     """Delete a cache database and its WAL sidecars. True if all are gone.
 
@@ -670,10 +692,12 @@ def _open_connection(
         # as_uri() percent-encodes the (absolute) path, so URI mode is
         # safe for paths with spaces or query-ish characters.
         conn = sqlite3.connect(
-            db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=30.0
+            db_path.resolve().as_uri() + "?mode=ro",
+            uri=True,
+            timeout=cache_busy_timeout(),
         )
     else:
-        conn = sqlite3.connect(db_path, timeout=30.0)
+        conn = sqlite3.connect(db_path, timeout=cache_busy_timeout())
     try:
         configure(conn)
     except BaseException:
@@ -749,6 +773,59 @@ def connection_lease(
     finally:
         # `_drop_leases` may already have removed and closed it.
         if leases.pop(key, None) is not None:
+            conn.close()
+
+
+# How long a WAL checkpoint waits for readers to move off old snapshots. A
+# TRUNCATE checkpoint holds writers off while it waits, so it is kept short:
+# it is housekeeping, and one that cannot finish now leaves the log for the
+# next pass rather than stalling this one.
+_CHECKPOINT_BUSY_TIMEOUT_MS = 2000
+
+
+def checkpoint_wal(db_path: Path) -> Optional[Tuple[int, int, int]]:
+    """Copy the WAL back into ``db_path`` and truncate it to zero bytes.
+
+    SQLite checkpoints on its own, but only passively, and it only
+    *restarts* the log when no reader is using it — so while many
+    processes are reading and writing at once the WAL can only grow, and
+    closing the last connection (the other time SQLite truncates it) never
+    happens when a pass is interrupted or another process keeps the
+    database open. Issue #332 met both: a 17.8 GB WAL that took the next
+    start 98 minutes to get through. Calling this at the end of a pass,
+    when its workers have exited, bounds the WAL to what one pass writes.
+
+    Best effort: returns SQLite's ``(busy, log_frames, checkpointed)``
+    row, or None when the database is missing or unreadable. A reader
+    still on an old snapshot makes it return busy rather than wait long.
+    Uses this thread's lease on the database when there is one.
+    """
+    if not db_path.exists():
+        return None
+    leased = _thread_leases().get((str(db_path), False))
+    try:
+        conn = leased or _open_connection(
+            db_path,
+            read_only=False,
+            configure=functools.partial(_configure_connection, read_only=False),
+        )
+    except sqlite3.Error:
+        return None
+    try:
+        if conn.in_transaction:
+            # Not ours to end, and a checkpoint cannot run inside it.
+            return None
+        previous = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+        conn.execute(f"PRAGMA busy_timeout = {_CHECKPOINT_BUSY_TIMEOUT_MS}")
+        try:
+            row = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        finally:
+            conn.execute(f"PRAGMA busy_timeout = {int(previous)}")
+        return (int(row[0]), int(row[1]), int(row[2]))
+    except sqlite3.Error:
+        return None
+    finally:
+        if leased is None:
             conn.close()
 
 
@@ -1288,6 +1365,14 @@ class CacheManager:
         if subagents_fp is None:
             subagents_fp = subagents_fingerprint(jsonl_path)
 
+        # Serialise (json.dumps + zlib per entry — the costly part, and it
+        # scales with the session) *before* the first write. Python's sqlite3
+        # opens the transaction, and so takes the database's one write lock,
+        # at that write; doing this inside it held every other process's
+        # writes off for its whole duration (issue #332). The file id is
+        # only known inside the transaction, so it is filled in there.
+        serialized_entries = [self._serialize_entry(entry, 0) for entry in entries]
+
         with self._get_connection() as conn:
             # Insert or update file record
             # Use ON CONFLICT to preserve file ID and avoid cascade deletes on messages
@@ -1331,9 +1416,8 @@ class CacheManager:
             conn.execute("DELETE FROM messages WHERE file_id = ?", (file_id,))
 
             # Insert all entries in a batch
-            serialized_entries = [
-                self._serialize_entry(entry, file_id) for entry in entries
-            ]
+            for serialized in serialized_entries:
+                serialized["file_id"] = file_id
             conn.executemany(
                 """
                 INSERT INTO messages (
@@ -1407,6 +1491,10 @@ class CacheManager:
         if subagents_fp is None:
             subagents_fp = subagents_fingerprint(jsonl_path)
 
+        # Serialised before the lock for the same reason as in
+        # `save_cached_entries`; the file id is filled in under it.
+        appended_rows = [self._serialize_entry(entry, 0) for entry in appended]
+
         with self._get_connection() as conn:
             # The count and the insert have to be one transaction. Python's
             # sqlite3 opens one on the first *write*, not on a SELECT, so
@@ -1424,7 +1512,7 @@ class CacheManager:
                     conn,
                     jsonl_path,
                     all_entries,
-                    appended,
+                    appended_rows,
                     expected_existing,
                     source_stat,
                     subagents_fp,
@@ -1442,12 +1530,16 @@ class CacheManager:
         conn: sqlite3.Connection,
         jsonl_path: Path,
         all_entries: List[TranscriptEntry],
-        appended: List[TranscriptEntry],
+        appended_rows: List[Dict[str, Any]],
         expected_existing: int,
         source_stat: os.stat_result,
         subagents_fp: Optional[str],
     ) -> bool:
-        """The checked append itself, run under the caller's write lock."""
+        """The checked append itself, run under the caller's write lock.
+
+        ``appended_rows`` are the new entries already serialised, with a
+        placeholder file id this fills in once it has looked the file up.
+        """
         row = conn.execute(
             "SELECT id FROM cached_files WHERE project_id = ? AND file_name = ?",
             (self._project_id, jsonl_path.name),
@@ -1495,7 +1587,7 @@ class CacheManager:
                 :_leaf_uuid, :_level, :_operation, :content
             )
             """,
-            [self._serialize_entry(entry, file_id) for entry in appended],
+            [{**row, "file_id": file_id} for row in appended_rows],
         )
 
         # The index still refreshes the whole file: `reindex_files`
@@ -3179,7 +3271,7 @@ def get_all_cached_projects(
     result: List[tuple[str, bool]] = []
 
     try:
-        conn = sqlite3.connect(actual_db_path, timeout=30.0)
+        conn = sqlite3.connect(actual_db_path, timeout=cache_busy_timeout())
         conn.row_factory = sqlite3.Row
         try:
             rows = conn.execute(
@@ -3227,7 +3319,7 @@ def find_session_in_cache(
         return []
 
     try:
-        conn = sqlite3.connect(actual_db_path, timeout=30.0)
+        conn = sqlite3.connect(actual_db_path, timeout=cache_busy_timeout())
         conn.row_factory = sqlite3.Row
         try:
             rows = conn.execute(
