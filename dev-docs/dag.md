@@ -649,6 +649,18 @@ Pinned by `test_compact_after_rewind.py` (fixtures
 `dag_compact_after_rewind.jsonl` and
 `dag_compact_after_rewind_preserved.jsonl`).
 
+### Queue-ops inside a branch
+
+Queue-operation entries (`<task-notification>` / `<agent-message>`
+enqueues, steering `remove`s) have no uuid, so they never get a DAG
+line. `_splice_queue_ops_chronologically` (converter) inserts each one
+right after its same-session anchor entry. The anchor may sit on a
+branch, but the queue-op itself carries only the raw trunk `sessionId`.
+So `_render_messages` (renderer) gives it the DAG line of the last uuid-bearing
+entry seen in its session, which is its anchor. Without that, the
+session regrouping moves the queue-op under the trunk header, ahead of
+every branch, however late it arrived.
+
 ### Expected Root Types
 
 Six known shapes legitimately appear as parentless (or orphan-promoted)

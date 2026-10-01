@@ -4624,6 +4624,12 @@ def _render_messages(
     # ``version``; a ``remove`` happens mid-turn and a turn cannot span a
     # harness restart, so the most recent version in its session is its version.
     last_version_by_session: dict[str, str] = {}
+    # The DAG-line of the last uuid-bearing entry seen per session. Queue-ops
+    # are uuid-less (no DAG line of their own) and are spliced in right after
+    # a same-session anchor entry (``_splice_queue_ops_chronologically``), so
+    # they inherit its line: one anchored inside a rewind branch stays in that
+    # branch instead of being regrouped under the trunk header.
+    last_render_sid_by_session: dict[str, Optional[str]] = {}
     # Decrementing budget of renderable ``queued_command`` cards per ``(session,
     # version, prompt-text)``, seeded from the pass-1 count. Each suppressed
     # ``remove`` spends one unit under ITS OWN text key; once a text's budget is
@@ -4716,6 +4722,10 @@ def _render_messages(
         # ``_render_session_id`` stays unset and falls back to
         # ``meta.session_id`` at read time.
         effective_session: Optional[str] = uuid_to_render_sid.get(message_uuid)
+        if isinstance(message, QueueOperationTranscriptEntry):
+            effective_session = last_render_sid_by_session.get(msg_session_id)
+        elif message_uuid:
+            last_render_sid_by_session[msg_session_id] = effective_session
 
         # Branch header: fires off the SAME map-driven trigger that
         # assigns ``render_session_id``. A branch sid contains ``@``;

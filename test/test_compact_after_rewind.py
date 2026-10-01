@@ -154,3 +154,34 @@ def test_nested_agents_inside_rewind_branch(tmp_path: Path) -> None:
         return {_uuid(m) for m in messages if not m.is_session_header} - {"alt-a1"}
 
     assert rendered(flat) == rendered(plain)
+
+
+def test_queue_op_inside_branch_stays_in_branch(tmp_path: Path) -> None:
+    """A uuid-less queue-op anchored inside a branch renders in that branch.
+
+    Queue-ops carry only the raw ``sessionId`` (the trunk). They are spliced
+    after their same-session anchor entry, but without the anchor's DAG line
+    the session regrouping hoisted them under the trunk header — ahead of
+    every branch, however late they arrived.
+    """
+    shutil.copy(TEST_DATA / "dag_compact_after_rewind.jsonl", tmp_path)
+    steering = {
+        "type": "queue-operation",
+        "operation": "remove",
+        "timestamp": "2025-07-01T10:15:00.000Z",
+        "content": "steer the second attempt",
+        "sessionId": "s1",
+    }
+    with (tmp_path / "dag_compact_after_rewind.jsonl").open("a") as f:
+        f.write(json.dumps(steering) + "\n")
+
+    flat, by_index = _render(tmp_path)
+    order = [
+        _uuid(m) or "STEER"
+        for m in flat
+        if not m.is_session_header and m.type in ("user", "assistant", "system")
+    ]
+    assert order.index("STEER") == order.index("b2a") + 1
+    steer = next(m for m in flat if not m.is_session_header and not _uuid(m))
+    assert steer.render_session_id == "s1@b2u"
+    assert _header_sids(steer, by_index) == ["s1", "s1@b2u"]
