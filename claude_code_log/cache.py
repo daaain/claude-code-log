@@ -19,7 +19,13 @@ from packaging import version
 from pydantic import BaseModel
 
 from .factories import create_transcript_entry
-from .migrations.runner import apply_write_pragmas, run_migrations
+from .migrations.runner import (
+    WAL_SIZE_LIMIT_BYTES,
+    apply_write_pragmas,
+    cache_busy_timeout,
+    run_migrations,
+)
+from .write_queue import write_turn
 from .models import (
     AssistantTranscriptEntry,
     QueueOperationTranscriptEntry,
@@ -576,6 +582,24 @@ def is_corrupt_database_error(exc: BaseException) -> bool:
     return any(marker in message for marker in _CORRUPTION_MARKERS)
 
 
+def is_busy_database_error(exc: BaseException) -> bool:
+    """Whether ``exc`` is SQLite giving up on a lock another connection held.
+
+    That is contention, not a fault in the data: the same work succeeds
+    once the other writer has finished, which is what lets the hierarchy
+    pass defer a locked-out project and retry it rather than fail it.
+    """
+    if not isinstance(exc, sqlite3.OperationalError):
+        return False
+    # sqlite_errorcode is 3.11+; SQLITE_BUSY = 5, SQLITE_LOCKED = 6 (the
+    # extended codes keep the primary one in their low byte).
+    code = getattr(exc, "sqlite_errorcode", None)
+    if code is not None:
+        return (code & 0xFF) in (5, 6)
+    message = str(exc).lower()
+    return "database is locked" in message or "database is busy" in message
+
+
 def discard_database_files(db_path: Path) -> bool:
     """Delete a cache database and its WAL sidecars. True if all are gone.
 
@@ -637,6 +661,56 @@ _migrated_db_paths: set[str] = set()
 # server thread answers requests while the watch thread converts.
 
 
+# Connections currently inside a `write_transaction`, by id (sqlite3
+# connections take no attributes). Thread-bound like the connections.
+_open_write_transactions = threading.local()
+
+
+@contextmanager
+def write_transaction(conn: sqlite3.Connection) -> Generator[None, None, None]:
+    """One write transaction on ``conn``: take a turn, write, commit.
+
+    Every write to the cache goes through here, so it is the one place
+    the database's single write lock is taken. It waits for this
+    process's turn in the pass-wide queue when one is installed (see
+    `write_queue` — without it, siblings in a project pool starve each
+    other into ``database is locked``), then opens the transaction with
+    ``BEGIN IMMEDIATE``, taking SQLite's lock up front rather than at
+    whichever statement happens to write first. Commits on a clean exit,
+    rolls back on an exception.
+
+    Nesting on the same connection joins the outer transaction, so a
+    writer may call another without committing half of its work. A
+    connection already in a transaction opened some other way joins it
+    too and commits at the end, as the per-method ``commit()`` it
+    replaces did; it takes no turn, since a connection that has written
+    already holds SQLite's lock, and waiting for a turn while holding it
+    would hold up whoever has the turn.
+    """
+    open_ids: set[int] = getattr(_open_write_transactions, "ids", None) or set()
+    _open_write_transactions.ids = open_ids
+    if id(conn) in open_ids:
+        yield
+        return
+    if conn.in_transaction:
+        yield
+        conn.commit()
+        return
+    with write_turn():
+        conn.execute("BEGIN IMMEDIATE")
+        open_ids.add(id(conn))
+        try:
+            yield
+        except BaseException:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
+        else:
+            conn.commit()
+        finally:
+            open_ids.discard(id(conn))
+
+
 def _configure_connection(conn: sqlite3.Connection, *, read_only: bool) -> None:
     """Apply the standard pragmas/row factory to a fresh connection."""
     conn.row_factory = sqlite3.Row
@@ -670,10 +744,12 @@ def _open_connection(
         # as_uri() percent-encodes the (absolute) path, so URI mode is
         # safe for paths with spaces or query-ish characters.
         conn = sqlite3.connect(
-            db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=30.0
+            db_path.resolve().as_uri() + "?mode=ro",
+            uri=True,
+            timeout=cache_busy_timeout(),
         )
     else:
-        conn = sqlite3.connect(db_path, timeout=30.0)
+        conn = sqlite3.connect(db_path, timeout=cache_busy_timeout())
     try:
         configure(conn)
     except BaseException:
@@ -750,6 +826,100 @@ def connection_lease(
         # `_drop_leases` may already have removed and closed it.
         if leases.pop(key, None) is not None:
             conn.close()
+
+
+# How long a WAL checkpoint waits for readers to move off old snapshots. A
+# TRUNCATE checkpoint holds writers off while it waits, so it is kept short:
+# it is housekeeping, and one that cannot finish now leaves the log for the
+# next pass rather than stalling this one.
+_CHECKPOINT_BUSY_TIMEOUT_MS = 2000
+
+
+def checkpoint_wal(
+    db_path: Path, *, busy_timeout_ms: int = _CHECKPOINT_BUSY_TIMEOUT_MS
+) -> Optional[Tuple[int, int, int]]:
+    """Copy the WAL back into ``db_path`` and truncate it to zero bytes.
+
+    SQLite checkpoints on its own, but only passively, and it only
+    *restarts* the log when no reader is using it — so while many
+    processes are reading and writing at once the WAL can only grow, and
+    closing the last connection (the other time SQLite truncates it) never
+    happens when a pass is interrupted or another process keeps the
+    database open. Issue #332 met both: a 17.8 GB WAL that took the next
+    start 98 minutes to get through. Calling this at the end of a pass,
+    when its workers have exited, bounds the WAL to what one pass writes.
+
+    Best effort: returns SQLite's ``(busy, log_frames, checkpointed)``
+    row, or None when the database is missing or unreadable. A reader
+    still on an old snapshot makes it return busy rather than wait long.
+    Uses this thread's lease on the database when there is one.
+    """
+    if not db_path.exists():
+        return None
+    leased = _thread_leases().get((str(db_path), False))
+    try:
+        conn = leased or _open_connection(
+            db_path,
+            read_only=False,
+            configure=functools.partial(_configure_connection, read_only=False),
+        )
+    except sqlite3.Error:
+        return None
+    try:
+        if conn.in_transaction:
+            # Not ours to end, and a checkpoint cannot run inside it.
+            return None
+        previous = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+        conn.execute(f"PRAGMA busy_timeout = {int(busy_timeout_ms)}")
+        try:
+            row = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        finally:
+            conn.execute(f"PRAGMA busy_timeout = {int(previous)}")
+        return (int(row[0]), int(row[1]), int(row[2]))
+    except sqlite3.Error:
+        return None
+    finally:
+        if leased is None:
+            conn.close()
+
+
+def trim_oversized_wal(
+    db_path: Path, *, announce: Callable[[str], None] = print
+) -> Optional[int]:
+    """Truncate a WAL left oversized by an earlier run, before this one starts.
+
+    The end-of-pass `checkpoint_wal` keeps the WAL small after a pass
+    that finishes, but one that was interrupted (Ctrl+C, a closed
+    terminal), or that ran while another process kept a reader open,
+    leaves its log behind — 17.8 GB in issue #332. The next run's first
+    connection must read all of it to rebuild the WAL index whatever we
+    do, and the checkpoint costs about as much again (measured: 2 GB took
+    1.1 s to recover and 1.1 s to checkpoint on a warm Linux page cache;
+    the reporter's Windows disk managed ~30 MB/s). So it is cheap to pay
+    up front, in one process, with the ordinary busy timeout and a
+    message saying why the start is slow — rather than leave every read
+    and write of the pass to wade through the log, and the end-of-pass
+    checkpoint to copy it with a 2 s budget. A log within
+    ``WAL_SIZE_LIMIT_BYTES`` is left alone: costs one ``stat``.
+
+    Returns the size it found when it acted, else None. A checkpoint that
+    cannot finish (another process mid-read) is left for the end of the
+    pass, as before.
+    """
+    wal = db_path.with_name(db_path.name + "-wal")
+    try:
+        size = wal.stat().st_size
+    except OSError:
+        return None
+    if size <= WAL_SIZE_LIMIT_BYTES:
+        return None
+    shown = f"{size / 1e9:.1f} GB" if size >= 1e9 else f"{size / 1e6:.0f} MB"
+    announce(
+        f"Compacting the cache's {shown} write-ahead log left by an earlier "
+        f"run (this can take a while on a slow disk)..."
+    )
+    checkpoint_wal(db_path, busy_timeout_ms=int(cache_busy_timeout() * 1000))
+    return size
 
 
 class CacheManager:
@@ -977,27 +1147,36 @@ class CacheManager:
         """Ensure project record exists and get its ID."""
         project_path_str = str(self.project_path)
 
-        with self._get_connection() as conn:
-            row = conn.execute(
+        def lookup(conn: sqlite3.Connection) -> Optional[sqlite3.Row]:
+            return conn.execute(
                 "SELECT id, version FROM projects WHERE project_path = ?",
                 (project_path_str,),
             ).fetchone()
 
-            if row:
+        with self._get_connection() as conn:
+            # Every CacheManager runs this, and almost always the row is
+            # there and current: read first, so that common case takes
+            # no write lock (and no turn in a pool's write queue).
+            row = lookup(conn)
+            if row and self._is_cache_version_compatible(row["version"]):
                 self._project_id = row["id"]
-                cached_version = row["version"]
+                return
 
-                # Check version compatibility
-                if not self._is_cache_version_compatible(cached_version):
+            with write_transaction(conn):
+                # Re-read under the lock: a sibling may have created or
+                # upgraded the row since.
+                row = lookup(conn)
+                if row is None:
+                    self._project_id = self._create_project(conn)
+                elif self._is_cache_version_compatible(row["version"]):
+                    self._project_id = row["id"]
+                else:
                     print(
-                        f"Cache version incompatible: {cached_version} -> {self.library_version}, invalidating cache"
+                        f"Cache version incompatible: {row['version']} -> {self.library_version}, invalidating cache"
                     )
+                    self._project_id = row["id"]
                     self._clear_project_data(conn)
                     self._project_id = self._create_project(conn)
-            else:
-                self._project_id = self._create_project(conn)
-
-            conn.commit()
 
     def _create_project(self, conn: sqlite3.Connection) -> int:
         """Create a new project record."""
@@ -1288,7 +1467,15 @@ class CacheManager:
         if subagents_fp is None:
             subagents_fp = subagents_fingerprint(jsonl_path)
 
-        with self._get_connection() as conn:
+        # Serialise (json.dumps + zlib per entry — the costly part, and it
+        # scales with the session) *before* the first write. Python's sqlite3
+        # opens the transaction, and so takes the database's one write lock,
+        # at that write; doing this inside it held every other process's
+        # writes off for its whole duration (issue #332). The file id is
+        # only known inside the transaction, so it is filled in there.
+        serialized_entries = [self._serialize_entry(entry, 0) for entry in entries]
+
+        with self._get_connection() as conn, write_transaction(conn):
             # Insert or update file record
             # Use ON CONFLICT to preserve file ID and avoid cascade deletes on messages
             conn.execute(
@@ -1331,9 +1518,8 @@ class CacheManager:
             conn.execute("DELETE FROM messages WHERE file_id = ?", (file_id,))
 
             # Insert all entries in a batch
-            serialized_entries = [
-                self._serialize_entry(entry, file_id) for entry in entries
-            ]
+            for serialized in serialized_entries:
+                serialized["file_id"] = file_id
             conn.executemany(
                 """
                 INSERT INTO messages (
@@ -1366,7 +1552,6 @@ class CacheManager:
                 reindex_files(conn, [file_id], commit=False)
 
             self._update_last_updated(conn)
-            conn.commit()
 
     def extend_cached_entries(
         self,
@@ -1407,47 +1592,45 @@ class CacheManager:
         if subagents_fp is None:
             subagents_fp = subagents_fingerprint(jsonl_path)
 
-        with self._get_connection() as conn:
-            # The count and the insert have to be one transaction. Python's
-            # sqlite3 opens one on the first *write*, not on a SELECT, so
-            # without this another writer sharing the cache (a second
-            # `watch`, or a TUI beside one) can append in the window
-            # between them, and both appends land — the row check would
-            # have refused had it seen them. `BEGIN IMMEDIATE` takes the
-            # write lock up front; inside a `batch()` scope the connection
-            # is in a transaction already and that one covers it.
-            own_transaction = not conn.in_transaction
-            if own_transaction:
-                conn.execute("BEGIN IMMEDIATE")
-            try:
-                return self._append_under_lock(
-                    conn,
-                    jsonl_path,
-                    all_entries,
-                    appended,
-                    expected_existing,
-                    source_stat,
-                    subagents_fp,
-                )
-            finally:
-                # A refusal wrote nothing, but it still holds the write
-                # lock this method took; an exception may have written.
-                # Either way, only ever unwind our own transaction — a
-                # rollback inside a `batch()` would discard the caller's.
-                if own_transaction and conn.in_transaction:
-                    conn.rollback()
+        # Serialised before the lock for the same reason as in
+        # `save_cached_entries`; the file id is filled in under it.
+        appended_rows = [self._serialize_entry(entry, 0) for entry in appended]
+
+        with self._get_connection() as conn, write_transaction(conn):
+            # The count and the insert have to be one transaction, and
+            # `write_transaction` opens it with `BEGIN IMMEDIATE`: Python's
+            # sqlite3 would otherwise open one on the first *write*, not on
+            # the count's SELECT, so another writer sharing the cache (a
+            # second `watch`, or a TUI beside one) could append in the window
+            # between them and both appends land — the row check would have
+            # refused had it seen them. A refusal writes nothing, so the
+            # commit it ends with is empty. Inside a `batch()` scope already
+            # in a transaction, that one covers it.
+            return self._append_under_lock(
+                conn,
+                jsonl_path,
+                all_entries,
+                appended_rows,
+                expected_existing,
+                source_stat,
+                subagents_fp,
+            )
 
     def _append_under_lock(
         self,
         conn: sqlite3.Connection,
         jsonl_path: Path,
         all_entries: List[TranscriptEntry],
-        appended: List[TranscriptEntry],
+        appended_rows: List[Dict[str, Any]],
         expected_existing: int,
         source_stat: os.stat_result,
         subagents_fp: Optional[str],
     ) -> bool:
-        """The checked append itself, run under the caller's write lock."""
+        """The checked append itself, run under the caller's write lock.
+
+        ``appended_rows`` are the new entries already serialised, with a
+        placeholder file id this fills in once it has looked the file up.
+        """
         row = conn.execute(
             "SELECT id FROM cached_files WHERE project_id = ? AND file_name = ?",
             (self._project_id, jsonl_path.name),
@@ -1495,7 +1678,7 @@ class CacheManager:
                 :_leaf_uuid, :_level, :_operation, :content
             )
             """,
-            [self._serialize_entry(entry, file_id) for entry in appended],
+            [{**row, "file_id": file_id} for row in appended_rows],
         )
 
         # The index still refreshes the whole file: `reindex_files`
@@ -1508,7 +1691,6 @@ class CacheManager:
             reindex_files(conn, [file_id], commit=False)
 
         self._update_last_updated(conn)
-        conn.commit()
         return True
 
     def update_session_cache(self, session_data: Dict[str, SessionCacheData]) -> None:
@@ -1516,7 +1698,7 @@ class CacheManager:
         if self._project_id is None:
             return
 
-        with self._get_connection() as conn:
+        with self._get_connection() as conn, write_transaction(conn):
             for session_id, data in session_data.items():
                 conn.execute(
                     """
@@ -1568,7 +1750,6 @@ class CacheManager:
                 )
 
             self._update_last_updated(conn)
-            conn.commit()
 
     def update_project_aggregates(
         self,
@@ -1584,7 +1765,7 @@ class CacheManager:
         if self._project_id is None:
             return
 
-        with self._get_connection() as conn:
+        with self._get_connection() as conn, write_transaction(conn):
             conn.execute(
                 """
                 UPDATE projects SET
@@ -1610,7 +1791,6 @@ class CacheManager:
                     self._project_id,
                 ),
             )
-            conn.commit()
 
     def save_session_sidecar(self, sidecar: SessionSidecar) -> None:
         """Persist the cross-session sidecar (migration 008), wholesale.
@@ -1627,7 +1807,7 @@ class CacheManager:
         if self._project_id is None or self._read_only:
             return
 
-        with self._get_connection() as conn:
+        with self._get_connection() as conn, write_transaction(conn):
             pid = self._project_id
             conn.execute("DELETE FROM session_parents WHERE project_id = ?", (pid,))
             conn.execute("DELETE FROM junction_uuids WHERE project_id = ?", (pid,))
@@ -1663,7 +1843,6 @@ class CacheManager:
                        populated_at = excluded.populated_at""",
                 (pid, datetime.now().isoformat()),
             )
-            conn.commit()
 
     def load_session_sidecar(self) -> Optional[SessionSidecar]:
         """Load the cross-session sidecar, or None when never populated.
@@ -2035,7 +2214,7 @@ class CacheManager:
         """
         if self._project_id is None or self._read_only:
             return
-        with self._get_connection() as conn:
+        with self._get_connection() as conn, write_transaction(conn):
             pid = self._project_id
             for sid, value in parent_updates.items():
                 conn.execute(
@@ -2078,7 +2257,6 @@ class CacheManager:
                        populated_at = excluded.populated_at""",
                 (pid, datetime.now().isoformat()),
             )
-            conn.commit()
 
     def get_working_directories(self) -> List[str]:
         """Get list of working directories associated with this project.
@@ -2249,10 +2427,9 @@ class CacheManager:
         if self._project_id is None:
             return
 
-        with self._get_connection() as conn:
+        with self._get_connection() as conn, write_transaction(conn):
             self._clear_project_data(conn)
             self._project_id = self._create_project(conn)
-            conn.commit()
 
     def _is_cache_version_compatible(self, cache_version: str) -> bool:
         """Check if a cache version is compatible with the current library version."""
@@ -2381,7 +2558,7 @@ class CacheManager:
         if self._project_id is None:
             return
 
-        with self._get_connection() as conn:
+        with self._get_connection() as conn, write_transaction(conn):
             conn.execute(
                 """INSERT INTO html_cache
                    (project_id, html_path, generated_at, source_session_id, message_count, library_version, combined_linked)
@@ -2403,7 +2580,6 @@ class CacheManager:
                     None if combined_linked is None else int(combined_linked),
                 ),
             )
-            conn.commit()
 
     def is_transcript_stale(
         self,
@@ -2858,7 +3034,7 @@ class CacheManager:
         if self._project_id is None or not session_ids:
             return
 
-        with self._get_connection() as conn:
+        with self._get_connection() as conn, write_transaction(conn):
             # Insert or update page
             conn.execute(
                 """INSERT INTO html_pages
@@ -2923,8 +3099,6 @@ class CacheManager:
                        VALUES (?, ?, ?)""",
                     (page_id, session_id, order),
                 )
-
-            conn.commit()
 
     def is_page_stale(
         self,
@@ -3036,7 +3210,7 @@ class CacheManager:
 
         html_paths: List[str] = []
 
-        with self._get_connection() as conn:
+        with self._get_connection() as conn, write_transaction(conn):
             # Get all page paths before deleting
             rows = conn.execute(
                 """SELECT html_path FROM html_pages WHERE project_id = ?""",
@@ -3048,7 +3222,6 @@ class CacheManager:
             conn.execute(
                 "DELETE FROM html_pages WHERE project_id = ?", (self._project_id,)
             )
-            conn.commit()
 
         return html_paths
 
@@ -3083,7 +3256,7 @@ class CacheManager:
         if self._project_id is None:
             return False
 
-        with self._get_connection() as conn:
+        with self._get_connection() as conn, write_transaction(conn):
             # Check if session exists
             row = conn.execute(
                 "SELECT id FROM sessions WHERE project_id = ? AND session_id = ?",
@@ -3126,7 +3299,6 @@ class CacheManager:
             )
 
             self._update_last_updated(conn)
-            conn.commit()
 
         return True
 
@@ -3139,10 +3311,9 @@ class CacheManager:
         if self._project_id is None:
             return False
 
-        with self._get_connection() as conn:
+        with self._get_connection() as conn, write_transaction(conn):
             # Cascade delete handles messages, sessions, cached_files, html_cache, html_pages
             conn.execute("DELETE FROM projects WHERE id = ?", (self._project_id,))
-            conn.commit()
 
         self._project_id = None
         return True
@@ -3179,7 +3350,7 @@ def get_all_cached_projects(
     result: List[tuple[str, bool]] = []
 
     try:
-        conn = sqlite3.connect(actual_db_path, timeout=30.0)
+        conn = sqlite3.connect(actual_db_path, timeout=cache_busy_timeout())
         conn.row_factory = sqlite3.Row
         try:
             rows = conn.execute(
@@ -3227,7 +3398,7 @@ def find_session_in_cache(
         return []
 
     try:
-        conn = sqlite3.connect(actual_db_path, timeout=30.0)
+        conn = sqlite3.connect(actual_db_path, timeout=cache_busy_timeout())
         conn.row_factory = sqlite3.Row
         try:
             rows = conn.execute(
