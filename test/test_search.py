@@ -490,7 +490,7 @@ def cache(tmp_path: Path) -> sqlite3.Connection:
 
 
 def test_fts5_is_available() -> None:
-    assert fts5_available(sqlite3.connect(":memory:"))
+    assert fts5_available()
 
 
 def test_ensure_index_builds_and_reports_status(cache: sqlite3.Connection) -> None:
@@ -1074,3 +1074,94 @@ class TestBuildSearchIndexConnection:
         assert recorded["journal_mode"] == "wal", (
             f"expected the builder to restore WAL, got {recorded['journal_mode']}"
         )
+
+
+class TestCorruptCacheDiagnosis:
+    """Issue #324: a corrupt cache must not be reported as a missing FTS5.
+
+    `fts5_available` and a cache file that cannot be read both used to raise
+    `sqlite3.Error`, and the probe swallowed both — so the user was told to
+    inspect their SQLite build when the cache file was the problem. The
+    capability question is now asked of a throwaway in-memory database, which
+    separates the two.
+    """
+
+    def test_fts5_availability_probes_in_memory_and_caches(self):
+        """The capability question is about the SQLite build, probed in-memory.
+
+        Cached per process because the answer is fixed for the lifetime of
+        the Python process.
+        """
+        if not fts5_available():
+            pytest.skip("this SQLite build has no FTS5")
+
+        assert fts5_available() is True
+
+    def test_corrupt_cache_is_reported_as_unreadable_not_as_missing_fts5(
+        self, tmp_path: Path
+    ):
+        """`index_status` names the file, and still reports `available=True`.
+
+        `available` answers "can this build do FTS5 searches at all", which is
+        still yes; `ready=False` carries the actual problem, so callers that
+        only gate on `available` keep the behaviour they had.
+
+        Gated on the build, not on the file: without FTS5 the correct status is
+        `available=False` with the build message, which is a different claim.
+        """
+        if not fts5_available():
+            pytest.skip("this SQLite build has no FTS5")
+
+        db_path = tmp_path / "cache.db"
+        db_path.write_bytes(b"not a sqlite database, not even close" * 64)
+
+        status = index_status(sqlite3.connect(db_path))
+
+        assert status.available is True
+        assert status.ready is False
+        assert status.reason is not None
+        assert "unreadable" in status.reason
+        assert "FTS5" not in status.reason
+
+    def test_a_healthy_database_still_reports_a_missing_fts5(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """The other half of the distinction survives the change.
+
+        Forcing the probe to fail is the only way to get this branch on a
+        build that does have FTS5, and it must still produce the build advice.
+        """
+        import claude_code_log.search as search_module
+
+        db_path = tmp_path / "cache.db"
+        db_path.write_bytes(b"")  # SQLite adopts an empty file as a new database
+        monkeypatch.setattr(search_module, "fts5_available", lambda: False)
+
+        status = index_status(sqlite3.connect(db_path))
+
+        assert status.available is False
+        assert status.ready is False
+        assert status.reason == "SQLite was built without FTS5"
+
+    def test_corrupt_cache_still_degrades_at_the_cli_boundary(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ):
+        """`_build_search_index` must not raise, and must name the file.
+
+        It writes the write pragmas and then builds, so an unreadable cache
+        has to be turned away up front — reading it is what replaces the old
+        accidental signal (`fts5_available` returning False), and the message
+        is what the issue was actually about.
+        """
+        from claude_code_log.cli import _build_search_index
+
+        db_path = tmp_path / "cache.db"
+        db_path.write_bytes(b"not a sqlite database, not even close" * 64)
+
+        # No exception, and the diagnosis points at the cache — not the build.
+        _build_search_index(db_path, ("text",), rebuild=False)
+
+        captured = capsys.readouterr()
+        assert "corrupt" in captured.err.lower()
+        assert str(db_path) in captured.err
+        assert "FTS5" not in captured.err

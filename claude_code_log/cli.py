@@ -2180,7 +2180,7 @@ def serve(
     click.echo(f"Serving {projects_path}")
     click.echo(f"  {server.url}/index.html")
     click.echo(f"  {server.url}/search.html")
-    if not no_index and not fts5_available(sqlite3.connect(":memory:")):
+    if not no_index and not fts5_available():
         click.echo(
             "  (this SQLite has no FTS5, so archive search is unavailable)", err=True
         )
@@ -2251,6 +2251,15 @@ def serve(
         server.stop()
 
 
+def _report_corrupt_cache(exc: BaseException, db_path: Path) -> None:
+    """Report a damaged cache database to stderr with recovery advice."""
+    click.echo(f"Cache database is corrupt ({exc}): {db_path}", err=True)
+    click.echo(
+        "  Search is unavailable. Re-run without --no-convert to rebuild the cache.",
+        err=True,
+    )
+
+
 def _build_search_index(
     db_path: Path, index_fields: tuple[str, ...], *, rebuild: bool
 ) -> None:
@@ -2271,7 +2280,20 @@ def _build_search_index(
 
     conn = sqlite3.connect(db_path)
     try:
-        if not fts5_available(conn):
+        # Readability first, capability second. `fts5_available` now probes an
+        # in-memory database, so it answers the build question even when this
+        # file is unreadable — which is the point of #324, and also why the
+        # file has to be asked about separately here: the pragmas below and
+        # `ensure_index` both write, so an unreadable cache must be turned
+        # away before them rather than by their errors.
+        try:
+            conn.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchone()
+        except sqlite3.DatabaseError as e:
+            if not is_corrupt_database_error(e):
+                raise
+            _report_corrupt_cache(e, db_path)
+            return
+        if not fts5_available():
             click.echo(
                 "This SQLite build has no FTS5; archive search is unavailable.",
                 err=True,
@@ -2285,12 +2307,12 @@ def _build_search_index(
         # commits, which only costs the resumed backfill some ground) is the
         # same trade made everywhere else.
         #
-        # After the FTS5 probe, not before: `journal_mode = WAL` writes to the
-        # database header and raises on a corrupt cache, where the probe
-        # swallows the error and returns False. Setting the pragmas first
-        # turned this function's graceful degradation into an unhandled
-        # DatabaseError — the corrupt-cache handler is the inner try below —
-        # and so made `--no-convert` on a corrupt cache refuse to start.
+        # After the readability check above, not before: `journal_mode = WAL`
+        # writes to the database header and raises on a corrupt cache. The
+        # `SELECT 1 FROM sqlite_master` probe above catches corruption early
+        # and degrades gracefully; setting the pragmas first turned this into
+        # an unhandled DatabaseError and prevented `--no-convert` on a corrupt
+        # cache from starting.
         apply_write_pragmas(conn)
         bar: Optional[Any] = None
 
@@ -2319,12 +2341,7 @@ def _build_search_index(
             # the pages without search beats refusing to start.
             if bar is not None:
                 bar.__exit__(None, None, None)
-            click.echo(f"Cache database is corrupt ({e}): {db_path}", err=True)
-            click.echo(
-                "  Search is unavailable. Re-run without --no-convert to "
-                "rebuild the cache.",
-                err=True,
-            )
+            _report_corrupt_cache(e, db_path)
             return
         if bar is not None:
             bar.__exit__(None, None, None)
