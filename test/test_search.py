@@ -490,7 +490,7 @@ def cache(tmp_path: Path) -> sqlite3.Connection:
 
 
 def test_fts5_is_available() -> None:
-    assert fts5_available(sqlite3.connect(":memory:"))
+    assert fts5_available()
 
 
 def test_ensure_index_builds_and_reports_status(cache: sqlite3.Connection) -> None:
@@ -1086,29 +1086,16 @@ class TestCorruptCacheDiagnosis:
     separates the two.
     """
 
-    def test_fts5_availability_does_not_depend_on_the_database(self, tmp_path: Path):
-        """The build's FTS5 support is the same answer for every database.
+    def test_fts5_availability_probes_in_memory_and_caches(self):
+        """The capability question is about the SQLite build, probed in-memory.
 
-        A corrupt file must not be able to make the probe report a missing
-        feature: the capability belongs to the SQLite build, not the file.
-
-        The healthy in-memory probe is the control. A build without FTS5
-        answers False for *both* databases, which is correct behaviour — the
-        claim under test is only that the file changes nothing, so it is
-        skipped rather than asserted around.
+        Cached per process because the answer is fixed for the lifetime of
+        the Python process.
         """
-        if not fts5_available(sqlite3.connect(":memory:")):
+        if not fts5_available():
             pytest.skip("this SQLite build has no FTS5")
 
-        db_path = tmp_path / "cache.db"
-        db_path.write_bytes(b"not a sqlite database, not even close" * 64)
-
-        # Positive control: the file really is unreadable as a database, so a
-        # pass here cannot come from having written something valid.
-        with pytest.raises(sqlite3.DatabaseError):
-            sqlite3.connect(db_path).execute("SELECT * FROM sqlite_master").fetchone()
-
-        assert fts5_available(sqlite3.connect(db_path)) is True
+        assert fts5_available() is True
 
     def test_corrupt_cache_is_reported_as_unreadable_not_as_missing_fts5(
         self, tmp_path: Path
@@ -1122,7 +1109,7 @@ class TestCorruptCacheDiagnosis:
         Gated on the build, not on the file: without FTS5 the correct status is
         `available=False` with the build message, which is a different claim.
         """
-        if not fts5_available(sqlite3.connect(":memory:")):
+        if not fts5_available():
             pytest.skip("this SQLite build has no FTS5")
 
         db_path = tmp_path / "cache.db"
@@ -1148,7 +1135,7 @@ class TestCorruptCacheDiagnosis:
 
         db_path = tmp_path / "cache.db"
         db_path.write_bytes(b"")  # SQLite adopts an empty file as a new database
-        monkeypatch.setattr(search_module, "fts5_available", lambda _conn: False)
+        monkeypatch.setattr(search_module, "fts5_available", lambda: False)
 
         status = index_status(sqlite3.connect(db_path))
 
@@ -1156,7 +1143,9 @@ class TestCorruptCacheDiagnosis:
         assert status.ready is False
         assert status.reason == "SQLite was built without FTS5"
 
-    def test_corrupt_cache_still_degrades_at_the_cli_boundary(self, tmp_path: Path):
+    def test_corrupt_cache_still_degrades_at_the_cli_boundary(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ):
         """`_build_search_index` must not raise, and must name the file.
 
         It writes the write pragmas and then builds, so an unreadable cache
@@ -1171,3 +1160,8 @@ class TestCorruptCacheDiagnosis:
 
         # No exception, and the diagnosis points at the cache — not the build.
         _build_search_index(db_path, ("text",), rebuild=False)
+
+        captured = capsys.readouterr()
+        assert "corrupt" in captured.err.lower()
+        assert str(db_path) in captured.err
+        assert "FTS5" not in captured.err

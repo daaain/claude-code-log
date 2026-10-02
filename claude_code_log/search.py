@@ -33,6 +33,7 @@ Python from the BLOB for the handful of rows in a result page. That costs
 
 from __future__ import annotations
 
+import functools
 import json
 import re
 import sqlite3
@@ -334,17 +335,18 @@ def decode_entry(blob: bytes) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def fts5_available(conn: sqlite3.Connection) -> bool:
+@functools.cache
+def fts5_available() -> bool:
     """Runtime feature check — FTS5 is standard but not guaranteed.
 
-    Probed on a throwaway in-memory database, never on ``conn`` itself. The
-    capability question is about the SQLite *build*, and it is the same answer
-    for every database that build opens — but probing on ``conn`` mixes in a
-    second, unrelated question, because a database that cannot be read raises
-    the same ``sqlite3.Error`` a missing FTS5 does (see #324: a corrupt cache
-    was reported as "no FTS5", sending the user to inspect their SQLite build
-    when the cache file was the problem). Asking in-memory isolates the
-    capability from the file, and costs ~0.1 ms.
+    Probed on a throwaway in-memory database. The capability question is about
+    the SQLite *build*, and it is the same answer for every database that build
+    opens — but probing on the cache connection mixes in a second, unrelated
+    question, because a database that cannot be read raises the same
+    ``sqlite3.Error`` a missing FTS5 does (see #324: a corrupt cache was
+    reported as "no FTS5", sending the user to inspect their SQLite build when
+    the cache file was the problem). Asking in-memory isolates the capability
+    from the file, and costs ~0.1 ms (cached per process).
     """
     probe = sqlite3.connect(":memory:")
     try:
@@ -533,7 +535,7 @@ def index_status(conn: sqlite3.Connection) -> IndexStatus:
     `count(*)` on the FTS table is 57 ms. Neither is acceptable on a request
     path, so the indexed total is recorded at build time instead.
     """
-    if not fts5_available(conn):
+    if not fts5_available():
         return IndexStatus(
             available=False, ready=False, reason="SQLite was built without FTS5"
         )
@@ -649,7 +651,7 @@ def ensure_index(
 
     `progress` is called as `(files_done, files_total)`.
     """
-    if not fts5_available(conn):
+    if not fts5_available():
         return IndexStatus(
             available=False, ready=False, reason="SQLite was built without FTS5"
         )
