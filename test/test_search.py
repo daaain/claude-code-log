@@ -1091,7 +1091,15 @@ class TestCorruptCacheDiagnosis:
 
         A corrupt file must not be able to make the probe report a missing
         feature: the capability belongs to the SQLite build, not the file.
+
+        The healthy in-memory probe is the control. A build without FTS5
+        answers False for *both* databases, which is correct behaviour — the
+        claim under test is only that the file changes nothing, so it is
+        skipped rather than asserted around.
         """
+        if not fts5_available(sqlite3.connect(":memory:")):
+            pytest.skip("this SQLite build has no FTS5")
+
         db_path = tmp_path / "cache.db"
         db_path.write_bytes(b"not a sqlite database, not even close" * 64)
 
@@ -1110,7 +1118,13 @@ class TestCorruptCacheDiagnosis:
         `available` answers "can this build do FTS5 searches at all", which is
         still yes; `ready=False` carries the actual problem, so callers that
         only gate on `available` keep the behaviour they had.
+
+        Gated on the build, not on the file: without FTS5 the correct status is
+        `available=False` with the build message, which is a different claim.
         """
+        if not fts5_available(sqlite3.connect(":memory:")):
+            pytest.skip("this SQLite build has no FTS5")
+
         db_path = tmp_path / "cache.db"
         db_path.write_bytes(b"not a sqlite database, not even close" * 64)
 
