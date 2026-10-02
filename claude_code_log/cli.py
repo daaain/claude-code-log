@@ -2271,6 +2271,24 @@ def _build_search_index(
 
     conn = sqlite3.connect(db_path)
     try:
+        # Readability first, capability second. `fts5_available` now probes an
+        # in-memory database, so it answers the build question even when this
+        # file is unreadable — which is the point of #324, and also why the
+        # file has to be asked about separately here: the pragmas below and
+        # `ensure_index` both write, so an unreadable cache must be turned
+        # away before them rather than by their errors.
+        try:
+            conn.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchone()
+        except sqlite3.DatabaseError as e:
+            if not is_corrupt_database_error(e):
+                raise
+            click.echo(f"Cache database is corrupt ({e}): {db_path}", err=True)
+            click.echo(
+                "  Search is unavailable. Re-run without --no-convert to "
+                "rebuild the cache.",
+                err=True,
+            )
+            return
         if not fts5_available(conn):
             click.echo(
                 "This SQLite build has no FTS5; archive search is unavailable.",

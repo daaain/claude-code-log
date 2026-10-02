@@ -686,6 +686,12 @@ class TestConnectionCensus:
         ),
         ("cli.py", "_build_search_index"): (1, "applies apply_write_pragmas"),
         ("cli.py", "serve"): (1, "in-memory FTS5 capability probe, not the cache"),
+        ("search.py", "fts5_available"): (
+            1,
+            "in-memory FTS5 capability probe, not the cache; connects to "
+            ":memory: so it answers the build question even when the cache "
+            "file is unreadable (issue #324)",
+        ),
         ("api.py", "SearchApi.connection"): (
             1,
             "mode=ro reader; cannot switch journal modes",

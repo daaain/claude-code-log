@@ -1074,3 +1074,86 @@ class TestBuildSearchIndexConnection:
         assert recorded["journal_mode"] == "wal", (
             f"expected the builder to restore WAL, got {recorded['journal_mode']}"
         )
+
+
+class TestCorruptCacheDiagnosis:
+    """Issue #324: a corrupt cache must not be reported as a missing FTS5.
+
+    `fts5_available` and a cache file that cannot be read both used to raise
+    `sqlite3.Error`, and the probe swallowed both — so the user was told to
+    inspect their SQLite build when the cache file was the problem. The
+    capability question is now asked of a throwaway in-memory database, which
+    separates the two.
+    """
+
+    def test_fts5_availability_does_not_depend_on_the_database(self, tmp_path: Path):
+        """The build's FTS5 support is the same answer for every database.
+
+        A corrupt file must not be able to make the probe report a missing
+        feature: the capability belongs to the SQLite build, not the file.
+        """
+        db_path = tmp_path / "cache.db"
+        db_path.write_bytes(b"not a sqlite database, not even close" * 64)
+
+        # Positive control: the file really is unreadable as a database, so a
+        # pass here cannot come from having written something valid.
+        with pytest.raises(sqlite3.DatabaseError):
+            sqlite3.connect(db_path).execute("SELECT * FROM sqlite_master").fetchone()
+
+        assert fts5_available(sqlite3.connect(db_path)) is True
+
+    def test_corrupt_cache_is_reported_as_unreadable_not_as_missing_fts5(
+        self, tmp_path: Path
+    ):
+        """`index_status` names the file, and still reports `available=True`.
+
+        `available` answers "can this build do FTS5 searches at all", which is
+        still yes; `ready=False` carries the actual problem, so callers that
+        only gate on `available` keep the behaviour they had.
+        """
+        db_path = tmp_path / "cache.db"
+        db_path.write_bytes(b"not a sqlite database, not even close" * 64)
+
+        status = index_status(sqlite3.connect(db_path))
+
+        assert status.available is True
+        assert status.ready is False
+        assert status.reason is not None
+        assert "unreadable" in status.reason
+        assert "FTS5" not in status.reason
+
+    def test_a_healthy_database_still_reports_a_missing_fts5(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """The other half of the distinction survives the change.
+
+        Forcing the probe to fail is the only way to get this branch on a
+        build that does have FTS5, and it must still produce the build advice.
+        """
+        import claude_code_log.search as search_module
+
+        db_path = tmp_path / "cache.db"
+        db_path.write_bytes(b"")  # SQLite adopts an empty file as a new database
+        monkeypatch.setattr(search_module, "fts5_available", lambda _conn: False)
+
+        status = index_status(sqlite3.connect(db_path))
+
+        assert status.available is False
+        assert status.ready is False
+        assert status.reason == "SQLite was built without FTS5"
+
+    def test_corrupt_cache_still_degrades_at_the_cli_boundary(self, tmp_path: Path):
+        """`_build_search_index` must not raise, and must name the file.
+
+        It writes the write pragmas and then builds, so an unreadable cache
+        has to be turned away up front — reading it is what replaces the old
+        accidental signal (`fts5_available` returning False), and the message
+        is what the issue was actually about.
+        """
+        from claude_code_log.cli import _build_search_index
+
+        db_path = tmp_path / "cache.db"
+        db_path.write_bytes(b"not a sqlite database, not even close" * 64)
+
+        # No exception, and the diagnosis points at the cache — not the build.
+        _build_search_index(db_path, ("text",), rebuild=False)

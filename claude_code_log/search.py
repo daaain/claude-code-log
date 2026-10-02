@@ -41,6 +41,11 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterable, Iterator, Optional, Sequence, cast
 
+# Imported at module scope: `cache` does not import `search`, so there is no
+# cycle. The name is prefixed to keep it visually separate from the index
+# internals defined below — it answers a cache-file question, not an FTS one.
+from .cache import is_corrupt_database_error as _is_corrupt_database_error
+
 # ---------------------------------------------------------------------------
 # Field groups
 # ---------------------------------------------------------------------------
@@ -330,13 +335,26 @@ def decode_entry(blob: bytes) -> dict[str, Any]:
 
 
 def fts5_available(conn: sqlite3.Connection) -> bool:
-    """Runtime feature check — FTS5 is standard but not guaranteed."""
+    """Runtime feature check — FTS5 is standard but not guaranteed.
+
+    Probed on a throwaway in-memory database, never on ``conn`` itself. The
+    capability question is about the SQLite *build*, and it is the same answer
+    for every database that build opens — but probing on ``conn`` mixes in a
+    second, unrelated question, because a database that cannot be read raises
+    the same ``sqlite3.Error`` a missing FTS5 does (see #324: a corrupt cache
+    was reported as "no FTS5", sending the user to inspect their SQLite build
+    when the cache file was the problem). Asking in-memory isolates the
+    capability from the file, and costs ~0.1 ms.
+    """
+    probe = sqlite3.connect(":memory:")
     try:
-        conn.execute("CREATE VIRTUAL TABLE temp._fts5_probe USING fts5(x, content='')")
-        conn.execute("DROP TABLE temp._fts5_probe")
+        probe.execute("CREATE VIRTUAL TABLE temp._fts5_probe USING fts5(x, content='')")
+        probe.execute("DROP TABLE temp._fts5_probe")
         return True
     except sqlite3.Error:
         return False
+    finally:
+        probe.close()
 
 
 def _contentless_delete_supported() -> bool:
@@ -519,6 +537,27 @@ def index_status(conn: sqlite3.Connection) -> IndexStatus:
         return IndexStatus(
             available=False, ready=False, reason="SQLite was built without FTS5"
         )
+    try:
+        return _index_status(conn)
+    except sqlite3.DatabaseError as exc:
+        # The database, not the build, is what failed — reads below touch the
+        # file, and a damaged file is the one thing the FTS5 probe above
+        # cannot see (it runs in-memory now, see `fts5_available`). Report
+        # "unreadable" instead of letting the raw DatabaseError escape: the
+        # caller renders `reason`, and a crash here loses the fact that the
+        # fix is to rebuild the cache, not to inspect the SQLite build (#324).
+        if _is_corrupt_database_error(exc):
+            return IndexStatus(
+                available=True,
+                ready=False,
+                reason=f"cache database is unreadable ({exc})",
+            )
+        raise
+
+
+def _index_status(conn: sqlite3.Connection) -> IndexStatus:
+    """Read the index's recorded state. Assumes the FTS5 surface exists."""
+
     if not _index_exists(conn):
         return IndexStatus(available=True, ready=False, reason="not built yet")
 
