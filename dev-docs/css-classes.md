@@ -105,6 +105,92 @@ rather than `offsetTop`, so the target stays right whatever the card's
 offset parent is (e.g. a layout that sets `display: contents` or positions
 a wrapper).
 
+### Minimal Theme (`--theme minimal`)
+
+The minimal theme (work/minimal-theme-dag.md) **layers over** the classic
+stylesheets rather than replacing them: the minimal page inlines every
+classic sheet, then `components/minimal/tokens.css` and
+`components/minimal/layout.css`. Card classes, ids, `data-uuid`, fold bars
+and `.timestamp[data-timestamp]` are identical to the classic page card for
+card (asserted in `test_theme_option.py`), so the filter, timeline, search,
+fold state machine and live update behave the same in both themes.
+
+**Scope.** Every minimal rule is scoped under `.theme-minimal`, the class
+on `<body>` (set only in the template's minimal branch). Card rules use
+two specificity tiers on purpose:
+
+- `display: grid` on cards goes through
+  `.theme-minimal :where(#transcript .message:not(.session-header))` — one
+  class of specificity — so the classic hide rules (`.message.filtered-hidden`,
+  `.message.search-hidden`, both `display: none`) still win;
+- box properties go through `.theme-minimal #transcript …`, whose id outranks
+  the class-only classic per-type margins and card chrome without `!important`.
+
+`!important` is used only against inline styles: the branch-header indent
+and the timeline container's scripted `top`.
+
+**Tokens** (`tokens.css`). Light values on `:root`; dark values under
+`@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) }`
+and again under `:root[data-theme="dark"]`; `color-scheme` follows
+(`light dark` in Auto, forced in either explicit mode).
+
+| Token | Light | Dark | Use |
+|---|---|---|---|
+| `--bg` / `--fg` | `#ffffff` / `#1f2328` | `#14161a` / `#e4e6e9` | page, text |
+| `--muted` | `#5f6670` | `#969da7` | metadata, dim text |
+| `--rule` / `--rule2` | `#e3e6ea` / `#1f2328` | `#2a2e35` / `#c9ccd1` | hairlines; turn and header rules |
+| `--code` | `#f3f4f6` | `#1d2025` | code and output boxes |
+| `--userbg` | `#fbf2e8` | `#2a2118` | user prompt tint |
+| `--user` `--asst` `--tool` | `#a14a00` `#6d28d9` `#1a7f37` | `#f0a35c` `#b8a1f8` `#6fcf8f` | role colours |
+| `--sys` = `--warn` | `#8a5d00` | `#e0b45a` | system, warnings |
+| `--err` / `--errbg` | `#b42318` / `#fdeceb` | `#ff8b84` / `#3a1b1b` | errors |
+| `--note` | `#1f5fbf` | `#7cb4ff` | async results, links |
+| `--ring` | `#2f8f46` | `#6fcf8f` | sub-agent nest line |
+| `--add`/`--addbg`, `--del`/`--delbg` | `#116329`/`#e6f6eb`, `#a40e26`/`#fdeaec` | `#86e0a2`/`#14291c`, `#ff9da2`/`#331a1d` | diffs |
+| `--ok` / `--okbg` | `#116329` / `#dff3e5` | `#86e0a2` / `#14291c` | success pill |
+| `--l0` `--lA` `--lB` `--lF` | `#9aa1aa` `#2f8f46` `#1e6fd9` `#b0307a` | `#5d646e` `#6fcf8f` `#7cb4ff` `#f08bc4` | DAG lanes (P6) |
+| `--sans`, `--mono` | system stacks | — | fonts (no web fonts) |
+| `--gut`, `--rail`; `--gut-nest`, `--rail-nest` | `58px`, `18px`; `46px`, `16px` | — | row geometry; inside a sub-agent group |
+
+`tokens.css` also points the classic custom properties at the tokens on
+`body.theme-minimal` (`--text-primary: var(--fg)`, `--code-bg-color:
+var(--code)`, `--user-color: var(--user)`, `--message-padding: 0`, …), so
+every classic rule that reads a variable follows the scheme without being
+restated. Rules with colour literals are overridden one by one (the
+common message types in `layout.css`; the remaining components in P3b).
+
+**Classes and elements added by the minimal branch** (never in classic
+output):
+
+| Class / element | Where | Role |
+|---|---|---|
+| `body.theme-minimal` | `<body>` | scope of every minimal rule |
+| `html[data-theme="light"\|"dark"]` | `<html>`, set by `theme_init.js` (head) and `minimal.js` | explicit colour scheme; absent = Auto. Stored in `localStorage` `claude-code-log:theme` (`light`/`dark`; Auto removes the key) |
+| `header.mn-top`, `.mn-title-row`, `.mn-pill`, `.mn-smeta` | page header | title, main model, meta line (`minimal_theme.page_meta`) |
+| `nav.mn-toolbar` | sticky toolbar | holds the classic floating buttons (same ids and classes, see below), `.mn-sp` spacer, `.mn-seg.mn-seg-icons` theme toggle (`button[data-mn-theme=auto\|light\|dark]`, `.on` + `aria-pressed`), `details.mn-more` overflow menu (`.mn-menu`) |
+| `.mn-ibtn`, `.mn-i-<icon>` | toolbar buttons | icon is a CSS mask on `::before` (`--mn-icon`); the button's own text — which the page's scripts rewrite — is hidden with `font-size: 0` |
+| `.mn-stage` | wraps `#transcript` | draws the rail's continuous hairline (`::before`) |
+| `.mn-title`, `.mn-generic` | the card title span | row's first line (column 3); `.mn-generic` titles (`🤷 User`, `🤖 Assistant`, …; `minimal_theme.is_generic_title`) are hidden |
+| `.mn-role`, `.mn-time`, `.mn-tok` | inside `.header-info` | gutter: role label (`minimal_theme.role_label`), short time (server UTC, localised by `minimal.js` from the sibling `.timestamp[data-timestamp]`), compact tokens (`in · out`, full string as `title`) |
+
+**Row layout.** A card is a grid `var(--gut) var(--rail) minmax(0, 1fr)` with
+rows title / debug / content / fold bar / `1fr` slack. `.header` is
+`display: contents`: its title span lands in column 3, its `.header-info`
+becomes the gutter (spanning every row, so a gutter taller than the content
+grows the slack row instead of pushing the content down). `.message::before`
+is the role dot on the rail, coloured by `--rc`, a per-card custom property
+set from the type classes. `pair_middle`/`pair_last` drop gutter and dot.
+A main-lane `user` card that isn't a session's first gets the `--rule2`
+turn rule. Sub-agent groups (`.children` holding `.message.sidechain`) are
+indented to the content column with a 2px left line (classic ring colours)
+and use the nested gutter/rail. Under 640px the rail becomes column 1 and
+the gutter a single line above the content.
+
+**Toolbar offsets.** `minimal.js` keeps `--mn-bar-h` (toolbar height) and
+`--mn-filter-h` (search & filter panel height, 0 when closed) on `<html>`;
+the filter panel sticks at `--mn-bar-h`, the timeline at their sum, and the
+resume toast drops below the toolbar (`--mn-toast-top`).
+
 ---
 
 ## Pairing Behavior

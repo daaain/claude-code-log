@@ -161,6 +161,21 @@ class TestAsyncAgentsHTMLSnapshots:
         assert html == html_snapshot
 
 
+class TestMinimalThemeHTMLSnapshots:
+    """Snapshot tests for the minimal theme (``--theme minimal``).
+
+    The classic snapshots above must never change because of the theme
+    (work/minimal-theme-dag.md § 1.1); these lock in the minimal page.
+    """
+
+    def test_minimal_representative_html(self, html_snapshot, test_data_dir):
+        """Representative messages rendered with the minimal theme (P3a)."""
+        test_file = test_data_dir / "representative_messages.jsonl"
+        messages = load_transcript(test_file)
+        html = generate_html(messages, "Test Transcript", theme="minimal")
+        assert html == html_snapshot
+
+
 class TestIndexHTMLSnapshots:
     """Snapshot tests for project index HTML output."""
 

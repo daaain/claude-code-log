@@ -1,7 +1,7 @@
 # `--theme minimal`: a compact light/dark theme with a DAG layout
 
-Status: **spec + phased plan; P1 and P2 landed (see § 6); § 7 decisions
-1–5 taken.** Branch of origin:
+Status: **spec + phased plan; P1, P2 and P3a landed (see § 6); § 7
+decisions 1–5 taken.** Branch of origin:
 `claude/sweet-mccarthy-64a24r`.
 
 This file is the single source of truth for the feature. Each phase in
@@ -1090,6 +1090,111 @@ shows the timeline); 375px viewport → `scrollWidth <= clientWidth`.
 **Dev-docs:** `css-classes.md` (minimal classes, `theme-minimal` scope,
 token table); `rendering-architecture.md` (template theme branch).
 
+**As built (P3a landed):**
+- **Files.** `components/minimal/tokens.css`, `layout.css`,
+  `theme_init.js`, `minimal.js` as planned, plus
+  `components/minimal/header.html` (page header + sticky toolbar, included
+  from the minimal branch to keep `transcript.html` readable) and
+  `claude_code_log/html/minimal_theme.py` — template-only helpers
+  registered as Jinja globals `mn_role_label`, `mn_is_generic_title`,
+  `mn_compact_tokens`, `mn_gutter_time`, `mn_page_meta` in
+  `html/utils.get_template_environment` (classic never calls them).
+- **Gutter (deviation from step 2).** The title span can't be split by CSS
+  (`📝 Edit <span class='tool-summary'>…`), so the role label is not taken
+  from it: the minimal branch emits `<span class='mn-role'>` (one word
+  from the card's CSS classes; a tool's `tool_name`), `<span
+  class='mn-time'>` (server: UTC time of day; `minimal.js` localises it from
+  the sibling `.timestamp[data-timestamp]`, full local stamp + duration as
+  `title`) and `<span class='mn-tok'>` (`in · out`, in = input + cache
+  creation + cache read, full string as `title`) inside `.header-info`.
+  The title span gets `class='mn-title'` and stays the row's first line
+  in column 3 (the mockup's `.call` line); role-only titles (`🤷 User`,
+  `🤖 Assistant`, `💭 Thinking`, `🔗 Sub-assistant`, …) also get
+  `mn-generic` and are hidden. The title span is still the header's first
+  `span` (search reads `.header span`). Card classes, ids, uuids,
+  timestamps and fold bars are byte-for-byte the classic ones
+  (`test_theme_option.py::test_minimal_keeps_every_card_hook`).
+- **Row grid.** `var(--gut) var(--rail) minmax(0,1fr)` × rows title /
+  debug / content / fold bar / `1fr` slack; `.header` is
+  `display: contents`, `.header-info` (the gutter) and the `::before` dot
+  span all five rows, so a gutter taller than the content grows the slack
+  row instead of pushing the content down (spanning items crossing a
+  flexible track only grow that track). Consequence: a one-line answer
+  with tokens is three gutter lines tall.
+- **Specificity, two tiers** (matters for P4–P7): `display: grid` on cards
+  is set through `.theme-minimal :where(#transcript .message:not(.session-header))`
+  (one class), so `.message.filtered-hidden` / `.message.search-hidden`
+  (`display: none`, two classes) still win; box properties use
+  `.theme-minimal #transcript …` (id) to beat classic per-type margins
+  without `!important`. **P6's `dag-hidden` and anything else that hides a
+  card must be at least two classes**, and the stage grid there must
+  account for each card already being a grid with its own column
+  template (`--gut`/`--rail` are custom properties, so a column layout can
+  shrink them per lane).
+- **Rail.** The hairline is `.mn-stage::before` at
+  `calc(var(--gut) + var(--rail) / 2)`; session headers and fork boxes get
+  `background: var(--bg)` + `z-index: 1` to mask it. `#dag-rail` is not
+  emitted yet (P6 adds it inside `.mn-stage`).
+- **Classic variables mapped to tokens** on `body.theme-minimal`
+  (`--text-primary`, `--code-bg-color`, `--user-color`, `--agent-ring-1`,
+  `--message-padding: 0`, `--font-ui`/`--font-monospace`, …), which
+  re-themes every classic rule that reads a variable in both schemes.
+- **Toolbar.** Main row: `#filterMessages`, `#toggleTimeline`,
+  `#followUpdates` (still hidden until `live_update.js` adds
+  `.live-active`), `#resumeSession` (single-session pages), the theme
+  `.mn-seg`, the overflow `<details class='mn-more'>` (`#toggleDetails`,
+  `#toggleUserView`, `#toggleDebug`; closes on outside click / Escape) and
+  the scroll-top anchor. Same elements, ids and classes as the classic
+  stack (`floating-btn` kept so classic state hooks apply); the bottom
+  stack is not rendered in this theme. Icons are CSS masks on `::before`
+  (`--mn-icon`) and the button text is `font-size: 0`, because the page's
+  scripts rewrite `textContent` (timeline 📆/🗓️, details 📦/🗃️, md/raw);
+  menu items label themselves with `content: attr(title)`, which those
+  scripts keep current. P4/P6 controls go before `.mn-sp` (a Jinja comment
+  marks the slot). `data-theme-name` on `<html>` was not needed and is not
+  emitted.
+- **Sticky stacking.** `minimal.js` keeps `--mn-bar-h` and `--mn-filter-h`
+  on `<html>` (ResizeObserver); the filter panel sticks at `--mn-bar-h`,
+  the timeline at their sum (`!important` over its scripted inline `top`),
+  the resume toast drops below the toolbar's current bottom
+  (`--mn-toast-top`, set on click).
+- **Pulled forward from P3b** (to keep the common types legible in dark):
+  code/pre boxes, Edit diffs (add/del tokens), tool-error box, user tint,
+  thinking/steering/system text, Markdown spacing, flattened
+  `.navigation` / `.page-navigation` / `.session-link`, search input and
+  active filter chips. **Still P3b:** Pygments dark (classic token colours
+  are poor on `--code` dark — e.g. `.nf` blue), timeline colours (white
+  container in dark), tool params tables, bash command box, todo,
+  ask-user-question, teammate `--cc-*` tints (they follow the OS scheme,
+  not `data-theme`), workflow groups (still classic indents), fork-point
+  internals, the depth badge, gutter error pill.
+- **Fold bar** is flattened to one muted mono line (both sections kept);
+  the chevron summary and fold depth are P4.
+- **Storage.** `theme_init.js` and `minimal.js` wrap every storage access
+  in `try/catch`; Auto removes the key. Pre-existing, not fixed (it would
+  change classic bytes): the classic `DOMContentLoaded` handler reads
+  `claude-code-log:user-view` unguarded, so with storage blocked the rest
+  of that handler (filter, folds) doesn't run — in both themes.
+- **Head size.** The minimal head is ~30KB larger (representative page:
+  `<h1>` at 146KB vs 116KB), well inside the converter's 512KB bounded
+  read; `test_minimal_theme.py` asserts the pagination markers stay in it.
+- **Tests.** `test/test_minimal_theme.py` (helpers, gutter markup,
+  pagination markers), `test/test_minimal_theme_browser.py` (19, marker
+  `browser`: toggle + reload persistence, Auto under emulated
+  `prefers-color-scheme`, explicit choice beats the system, choice applied
+  before `<body>` exists, blocked storage, every control in the toolbar and
+  working, sticky toolbar, filter/search still hide grid cards,
+  timeline/filter parity, 375px without horizontal scroll). The P2 test
+  `test_minimal_differs_only_by_theme_markers` was replaced by
+  `test_minimal_keeps_every_card_hook`.
+- **Snapshot.** `TestMinimalThemeHTMLSnapshots.test_minimal_representative_html`
+  added with `just update-snapshot`: `+9404/-0`, block level one block
+  added, none changed or removed.
+- **Screenshots** are committed (on request, instead of only attached) in
+  [`work/minimal-theme-dag-screenshots/p3a/`](minimal-theme-dag-screenshots/p3a/):
+  representative transcript light/dark × desktop/phone, async-agents
+  light/dark desktop with the sub-agent group unfolded.
+
 ### P3b — Minimal components, dark completeness, Pygments dark, timeline — L
 
 **Goal:** every component looks right in minimal light and dark.
@@ -1329,7 +1434,7 @@ tests from P3a–P7 green together.
 
 - [x] P1 groundwork fixes
 - [x] P2 theme plumbing
-- [ ] P3a look, toolbar, light/dark
+- [x] P3a look, toolbar, light/dark
 - [ ] P3b components, Pygments dark, timeline
 - [ ] P4 collapse + fold depth
 - [ ] P5 lane annotation

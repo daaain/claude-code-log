@@ -368,6 +368,25 @@ HTML formatters are split by message category:
 | [tool_formatters.py](../claude_code_log/html/tool_formatters.py) | Tool inputs/outputs | `format_bash_input()`, `format_read_output()`, etc. |
 | [utils.py](../claude_code_log/html/utils.py) | Shared utilities | `render_markdown()`, `escape_html()`, `CSS_CLASS_REGISTRY` |
 
+### Theme branches in `transcript.html`
+
+`HtmlRenderer._generate_inner` passes the resolved theme name
+(`classic`/`minimal`) as `theme`; line 1 of `transcript.html` sets
+`minimal = theme == 'minimal'`. Every minimal-only addition is an
+`{% if minimal %}…{% endif %}` glued to an existing line — the Jinja
+environment has no `trim_blocks`, so a conditional on its own line would
+add a newline to classic output, which must stay byte-identical. The
+minimal branch adds the minimal stylesheets and `theme_init.js` to the
+head, the `<body>` class, the page header and sticky toolbar
+(`components/minimal/header.html`, which carries the classic floating
+buttons instead of the bottom stack), the `.mn-stage` wrapper, the gutter
+spans in each card's header, and `minimal.js` at the end of the body.
+Formatter output is untouched (the fragment store is theme-independent);
+the gutter strings come from template-only helpers in
+[html/minimal_theme.py](../claude_code_log/html/minimal_theme.py),
+registered as `mn_*` Jinja globals. CSS classes and token reference:
+[css-classes.md § Minimal Theme](css-classes.md#minimal-theme-theme-minimal).
+
 ---
 
 ## 9. CSS Class Derivation

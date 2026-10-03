@@ -169,20 +169,43 @@ class TestRendering:
         assert is_html_outdated(page, "classic")
         assert is_html_outdated(page)  # built-in default is classic
 
-    def test_minimal_differs_only_by_theme_markers(self) -> None:
-        """P2's minimal page is the classic page plus three inert markers."""
+    def test_minimal_keeps_every_card_hook(self) -> None:
+        """The minimal page restyles cards but keeps what scripts key on.
+
+        Filter, timeline, search, fold bars and live update read card
+        classes, ids, uuids and `.timestamp[data-timestamp]`; the theme
+        only adds gutter spans inside the header (P3a), so all of those
+        must match the classic page card for card.
+        """
+        import re
+
         messages = load_transcript(REPRESENTATIVE, silent=True)
         classic = generate_html(messages, "T", theme="classic")
         minimal = generate_html(messages, "T", theme="minimal")
-        stripped = (
-            minimal.replace(" theme=minimal -->", " -->", 1)
-            .replace(" class='theme-minimal'", "", 1)
-            .split("/* Minimal theme (--theme minimal)", 1)
+
+        card = re.compile(r"<div class='message ([^']*)'([^>]*)>")
+        assert card.findall(minimal) == card.findall(classic)
+        stamp = re.compile(r"<span class='timestamp'[^>]*>[^<]*</span>")
+        assert stamp.findall(minimal) == stamp.findall(classic)
+        fold = re.compile(r"<div class='fold-bar-section[^>]*>")
+        assert fold.findall(minimal) == fold.findall(classic)
+        for marker in ('<div id="transcript">', '<div class="filter-toolbar">'):
+            assert minimal.count(marker) == classic.count(marker) == 1
+        # The classic floating stack moves into the toolbar: same ids, once.
+        for control in (
+            "filterMessages",
+            "toggleTimeline",
+            "followUpdates",
+            "resumeSession",
+            "toggleDetails",
+            "toggleUserView",
+            "toggleDebug",
+        ):
+            assert minimal.count(f'id="{control}"') == 1, control
+            assert classic.count(f'id="{control}"') == 1, control
+        assert minimal.index("<nav class='mn-toolbar'") < minimal.index(
+            'id="filterMessages"'
         )
-        assert len(stripped) == 2
-        head, tail = stripped
-        tail = tail.split("*/", 1)[1]
-        assert head.rstrip("\n") + tail == classic
 
     def test_classic_page_is_stale_when_the_default_changes(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

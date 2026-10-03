@@ -20,8 +20,12 @@
 {% include 'components/pygments_styles.css' %}
 {% include 'components/page_nav_styles.css' %}
 {% include 'components/teammate_styles.css' %}{% if minimal %}
-{% include 'components/minimal/tokens.css' %}{% endif %}
-    </style>
+{% include 'components/minimal/tokens.css' %}
+{% include 'components/minimal/layout.css' %}{% endif %}
+    </style>{% if minimal %}
+    <script>
+{% include 'components/minimal/theme_init.js' %}
+    </script>{% endif %}
 </head>
 
 <body{% if minimal %} class='theme-minimal'{% endif %}>
@@ -53,7 +57,8 @@
         })();
     </script>
 
-    <h1 id="title">{{ title }}</h1>
+    {% if minimal %}<header class='mn-top'>
+    <div class='mn-title-row'>{% endif %}<h1 id="title">{{ title }}</h1>{% if minimal %}{% include 'components/minimal/header.html' %}{% endif %}
 
     {% if page_info %}
     <!-- Page Navigation -->
@@ -220,15 +225,15 @@
     <div class='message {{ msg_css_class }}{% if message.is_paired %} {{ message.pair_role }}{% endif %}'{% if message.meta and message.meta.uuid %} data-uuid='{{ message.meta.uuid }}'{% endif %} id='msg-{{ message.message_id }}'>
         <div class='header'>
             {% set msg_emoji = get_message_emoji(message) -%}
-            <span{% if message.title_hint %} title="{{ message.title_hint }}"{% endif %}>{% if message_title %}{%
+            <span{% if message.title_hint %} title="{{ message.title_hint }}"{% endif %}{% if minimal %} class='mn-title{% if mn_is_generic_title(message_title) %} mn-generic{% endif %}'{% endif %}>{% if message_title %}{%
                 if message_title == 'Memory' %}💭 {%
                 elif msg_emoji and (message.type != 'tool_use' or not starts_with_emoji(message_title)) %}{{ msg_emoji }} {% endif %}{{ message_title | safe }}{% endif %}</span>
-            <div class='header-info'>
+            <div class='header-info'>{% if minimal %}<span class='mn-role'>{{ mn_role_label(message, msg_css_class) }}</span>{% endif %}
                 <div class='timestamp-row'>
-                    <span class='timestamp'{% if message.meta and message.meta.timestamp %} data-timestamp='{{ message.meta.timestamp }}'{% if message.pair_duration %} data-duration='{{ message.pair_duration }}'{% endif %}{% endif %}>{{ formatted_timestamp }}</span>
+                    <span class='timestamp'{% if message.meta and message.meta.timestamp %} data-timestamp='{{ message.meta.timestamp }}'{% if message.pair_duration %} data-duration='{{ message.pair_duration }}'{% endif %}{% endif %}>{{ formatted_timestamp }}</span>{% if minimal %}<span class='mn-time'>{{ mn_gutter_time(formatted_timestamp) }}</span>{% endif %}
                 </div>
                 {% if message.token_usage %}
-                <span class='token-usage'>{{ message.token_usage }}</span>
+                <span class='token-usage'>{{ message.token_usage }}</span>{% if minimal %}<span class='mn-tok' title='{{ message.token_usage }}'>{{ mn_compact_tokens(message.token_usage) }}</span>{% endif %}
                 {% endif %}
             </div>
         </div>
@@ -289,7 +294,7 @@
       full-page screenshots and the first message's box before and after
       adding it).
     #}
-    <div id="transcript">{% for root in roots %}{{ render_message(root) }}{% endfor %}</div>
+    {% if minimal %}<div class='mn-stage'>{% endif %}<div id="transcript">{% for root in roots %}{{ render_message(root) }}{% endfor %}</div>{% if minimal %}</div>{% else %}
 
     {% if resume_command %}
     <button class="resume-session floating-btn" id="resumeSession" data-command="{{ resume_command }}"
@@ -310,7 +315,7 @@
     <button class="toggle-details floating-btn" id="toggleDetails" title="Toggle all details">📋</button>
     <button class="debug-toggle floating-btn" id="toggleDebug" title="Show UUIDs">uuid</button>
     <button class="user-view-global floating-btn" id="toggleUserView" title="Show user messages as raw text">md</button>
-    <a class="scroll-top floating-btn" title="Scroll to top" href="#title">🔝</a>
+    <a class="scroll-top floating-btn" title="Scroll to top" href="#title">🔝</a>{% endif %}
 
     <script>
         document.addEventListener('DOMContentLoaded', function () {
@@ -1185,7 +1190,10 @@
     </script>
     <!-- Search functionality script -->
     {% set is_transcript = True %}
-    {% include 'components/search.html' %}
+    {% include 'components/search.html' %}{% if minimal %}
+    <script>
+{% include 'components/minimal/minimal.js' %}
+    </script>{% endif %}
 </body>
 
 </html>

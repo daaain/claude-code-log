@@ -94,7 +94,11 @@ single transcript or directory. Major flags:
   default, and an unknown environment value is a usage error
   (`cli._resolve_theme`). Only resolved names (`classic`/`minimal`) are
   ever rendered or stamped. HTML-only: Markdown/JSON warn on an explicit
-  flag and render as before.
+  flag and render as before. The minimal page layers its own stylesheets
+  and a sticky toolbar over the classic markup, with light/dark following
+  `prefers-color-scheme` or an in-page toggle — see
+  [rendering-architecture.md § 8](rendering-architecture.md#theme-branches-in-transcripthtml)
+  and [css-classes.md § Minimal Theme](css-classes.md#minimal-theme-theme-minimal).
 
 CLI orchestration delegates to `converter.py` (which owns the
 high-level "load + render + write" flow) and never touches `renderer.py`

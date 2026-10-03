@@ -1,0 +1,970 @@
+/* Minimal theme (--theme minimal): page, toolbar, stage and message rows.
+   Ported from work/minimal-theme-dag-mockups/MinimalLook.dc.html (system
+   fonts instead of its web fonts). Layered over the classic stylesheets:
+   every rule is scoped under .theme-minimal (the <body> class).
+
+   Specificity, deliberately in two tiers:
+   - `display` on cards is set through :where(), at the specificity of a
+     single class, so the classic state rules that HIDE cards
+     (`.message.filtered-hidden`, `.message.search-hidden`) still win;
+   - box properties (margin, padding, border, background) go through
+     `.theme-minimal #transcript …`, whose id outranks every class-only
+     classic rule (per-type margins, card chrome) without !important.
+   !important is used only against inline styles (branch-header indent,
+   the timeline container's scripted `top`). */
+
+/* ---------------------------------------------------------------- page */
+
+body.theme-minimal {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 0 16px 40px;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 1.4;
+}
+
+.theme-minimal a {
+    color: var(--note);
+}
+
+.theme-minimal a:hover {
+    color: var(--fg);
+}
+
+.theme-minimal .mn-top {
+    padding: 12px 0 8px;
+}
+
+.theme-minimal .mn-title-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    column-gap: 10px;
+    row-gap: 2px;
+}
+
+.theme-minimal .mn-top h1 {
+    margin: 0;
+    font-size: 1.16em;
+    font-weight: 700;
+    text-align: left;
+    color: var(--fg);
+    overflow-wrap: anywhere;
+}
+
+.theme-minimal .mn-smeta {
+    font: 0.72em var(--mono);
+    color: var(--muted);
+}
+
+.theme-minimal .mn-pill {
+    display: inline-block;
+    font: 500 0.7em/1.6 var(--mono);
+    padding: 0 6px;
+    border-radius: 999px;
+    border: 1px solid var(--rule);
+    color: var(--muted);
+}
+
+/* ------------------------------------------------------------- toolbar */
+
+.theme-minimal .mn-toolbar {
+    position: sticky;
+    top: 0;
+    z-index: 200;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 10px;
+    padding: 6px 0;
+    background: var(--bg);
+    border-top: 1px solid var(--rule2);
+    border-bottom: 1px solid var(--rule);
+}
+
+.theme-minimal .mn-sp {
+    flex: 1;
+}
+
+/* The classic floating buttons, moved into the toolbar: same elements,
+   same ids, same classes (scripts and state hooks such as
+   `.follow-updates.live-active` keep working); only their placement and
+   chrome change. `display` is left to the classic rules, which is what
+   keeps the follow button hidden until live_update.js activates it. */
+.theme-minimal .mn-toolbar .floating-btn {
+    position: relative;
+    right: auto;
+    bottom: auto;
+    width: 32px;
+    height: 30px;
+    padding: 0;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--muted);
+    box-shadow: none;
+    transform: none;
+    transition: none;
+    z-index: auto;
+    /* The text is whatever the page's scripts last wrote (emoji, "md");
+       hide it — the icon is a mask on ::before, which no script touches. */
+    font-size: 0;
+}
+
+.theme-minimal .mn-toolbar .floating-btn:hover,
+.theme-minimal .mn-toolbar .floating-btn:visited:hover {
+    background: transparent;
+    color: var(--fg);
+    transform: none;
+}
+
+.theme-minimal .mn-toolbar .floating-btn:visited {
+    color: var(--muted);
+}
+
+.theme-minimal .mn-toolbar .floating-btn.active,
+.theme-minimal .mn-toolbar .follow-updates.floating-btn.following {
+    background: var(--code);
+    color: var(--fg);
+}
+
+/* Icon buttons: a single-colour SVG as a mask, painted in currentColor. */
+/* `display` is not set here: the classic `.floating-btn` rules own it
+   (the follow button must stay hidden until live updates start). */
+.theme-minimal .mn-ibtn {
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 30px;
+    border-radius: 6px;
+    color: var(--muted);
+    cursor: pointer;
+    text-decoration: none;
+}
+
+.theme-minimal .mn-ibtn::before {
+    content: "";
+    width: 15px;
+    height: 15px;
+    background-color: currentColor;
+    -webkit-mask: var(--mn-icon) center / 15px 15px no-repeat;
+    mask: var(--mn-icon) center / 15px 15px no-repeat;
+}
+
+.theme-minimal .mn-ibtn:hover {
+    color: var(--fg);
+}
+
+.theme-minimal .mn-i-search {
+    --mn-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round'%3E%3Ccircle cx='7' cy='7' r='4.5'/%3E%3Cpath d='M10.5 10.5 14 14'/%3E%3C/svg%3E");
+}
+
+.theme-minimal .mn-i-timeline {
+    --mn-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round'%3E%3Cpath d='M2 4h7M5 8h9M2 12h6'/%3E%3C/svg%3E");
+}
+
+.theme-minimal .mn-i-follow {
+    --mn-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 2v9M4 7.5 8 11.5l4-4M3 14h10'/%3E%3C/svg%3E");
+}
+
+.theme-minimal .mn-i-resume {
+    --mn-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='black'%3E%3Cpath d='M5 3.2v9.6L12.5 8z'/%3E%3C/svg%3E");
+}
+
+.theme-minimal .mn-i-more {
+    --mn-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='black'%3E%3Ccircle cx='3' cy='8' r='1.4'/%3E%3Ccircle cx='8' cy='8' r='1.4'/%3E%3Ccircle cx='13' cy='8' r='1.4'/%3E%3C/svg%3E");
+}
+
+.theme-minimal .mn-i-top {
+    --mn-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 14V5M4 8.5 8 4.5l4 4M3 2h10'/%3E%3C/svg%3E");
+}
+
+/* Segmented control (mockup .seg / .seg.icons). */
+.theme-minimal .mn-seg {
+    display: inline-flex;
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.theme-minimal .mn-seg button {
+    font: inherit;
+    font-size: 0.82em;
+    color: var(--muted);
+    background: transparent;
+    border: 0;
+    min-height: 30px;
+    padding: 0 10px;
+    cursor: pointer;
+}
+
+.theme-minimal .mn-seg button + button {
+    border-left: 1px solid var(--rule);
+}
+
+.theme-minimal .mn-seg button.on {
+    background: var(--fg);
+    color: var(--bg);
+}
+
+.theme-minimal .mn-seg button:not(.on):hover {
+    color: var(--fg);
+}
+
+.theme-minimal .mn-seg-icons button {
+    width: 32px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.theme-minimal .mn-seg svg {
+    display: block;
+}
+
+/* Overflow group: the remaining classic controls in a small menu. */
+.theme-minimal .mn-more {
+    position: relative;
+}
+
+.theme-minimal .mn-more > summary {
+    display: inline-flex;
+    list-style: none;
+}
+
+.theme-minimal .mn-more > summary::-webkit-details-marker {
+    display: none;
+}
+
+.theme-minimal .mn-more[open] > summary {
+    background: var(--code);
+    color: var(--fg);
+}
+
+.theme-minimal .mn-menu {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 4px);
+    z-index: 210;
+    display: flex;
+    flex-direction: column;
+    min-width: 220px;
+    padding: 4px;
+    background: var(--bg);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.14);
+}
+
+.theme-minimal .mn-toolbar .mn-menu .floating-btn {
+    width: 100%;
+    height: auto;
+    min-height: 30px;
+    justify-content: flex-start;
+    gap: 8px;
+    padding: 0 10px;
+    border-radius: 4px;
+    text-align: left;
+}
+
+/* Menu items label themselves from their title, which the page's
+   scripts keep current ("Open all details" / "Close all details", …). */
+.theme-minimal .mn-menu .floating-btn::before {
+    content: attr(title);
+    font: 13px/1.3 var(--sans);
+}
+
+.theme-minimal .mn-menu #toggleDebug.active::after {
+    content: "✓";
+    margin-left: auto;
+    font: 13px/1 var(--sans);
+}
+
+/* The copy-confirmation toast follows the resume button to the top. */
+.theme-minimal .resume-toast {
+    top: var(--mn-toast-top, calc(var(--mn-bar-h, 44px) + 8px));
+    bottom: auto;
+    right: 16px;
+    transform: none;
+    background: var(--fg);
+    color: var(--bg);
+    box-shadow: none;
+}
+
+/* Search & filter panel and timeline stack under the sticky toolbar.
+   minimal.js keeps --mn-bar-h / --mn-filter-h current; the timeline's own
+   script writes an inline `top` (the filter panel's height) that doesn't
+   know about the toolbar, hence !important. */
+.theme-minimal .filter-toolbar {
+    top: var(--mn-bar-h, 44px);
+    z-index: 150;
+    box-shadow: none;
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    background: var(--bg);
+    backdrop-filter: none;
+    margin: 8px 0;
+}
+
+.theme-minimal #timeline-container {
+    top: calc(var(--mn-bar-h, 44px) + var(--mn-filter-h, 0px)) !important;
+}
+
+/* Page furniture above the transcript: flattened onto the tokens (no
+   card shadows or translucent whites). P3b restyles their insides. */
+.theme-minimal .navigation,
+.theme-minimal .page-navigation {
+    margin: 8px 0 12px;
+    padding: 10px 12px;
+    background: transparent;
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    box-shadow: none;
+}
+
+.theme-minimal .navigation h2 {
+    font-size: 1em;
+    color: var(--fg);
+}
+
+.theme-minimal .session-link {
+    background: transparent;
+    border-color: var(--rule);
+}
+
+.theme-minimal .session-link:hover {
+    background: var(--code);
+}
+
+/* Search field and filter chips: just enough to stay legible in dark
+   (their classic fills are translucent white). P3b restyles them. */
+.theme-minimal .search-input,
+.theme-minimal .search-input:focus {
+    background: var(--bg);
+    border-color: var(--rule);
+    color: var(--fg);
+    box-shadow: none;
+}
+
+.theme-minimal .search-input:focus {
+    border-color: var(--muted);
+}
+
+.theme-minimal .filter-toggle.active,
+.theme-minimal .filter-toggle.active:hover {
+    background-color: var(--code);
+    color: var(--fg);
+}
+
+.theme-minimal .toolbar-header,
+.theme-minimal .filter-section {
+    border-color: var(--rule);
+}
+
+/* --------------------------------------------------------------- stage */
+
+/* The rail's continuous hairline (mockup .steps::before), drawn once for
+   the whole transcript at the rail column. */
+.theme-minimal .mn-stage {
+    position: relative;
+    padding-top: 4px;
+}
+
+.theme-minimal .mn-stage::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: calc(var(--gut) + var(--rail) / 2 - 0.5px);
+    width: 1px;
+    background: var(--rule);
+}
+
+/* ---------------------------------------------------------------- rows */
+
+/* Each card is a row: [gutter][rail dot][content]. Rows: 1 title line,
+   2 debug uuid, 3 content, 4 fold bar, 5 slack. The gutter and the dot
+   span all five; the last row is 1fr so a gutter taller than the content
+   grows that slack row rather than pushing the content down. */
+.theme-minimal :where(#transcript .message:not(.session-header)) {
+    display: grid;
+}
+
+.theme-minimal #transcript .message {
+    margin: 0;
+    padding: 3px 0;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+    color: var(--fg);
+    font-size: 1em;
+    line-height: 1.4;
+    grid-template-columns: var(--gut) var(--rail) minmax(0, 1fr);
+    grid-template-rows: auto auto auto auto 1fr;
+}
+
+/* Role colour: one custom property per card, read by the dot and the
+   gutter's role label (mockup .k-*). */
+.theme-minimal #transcript .message {
+    --rc: var(--muted);
+}
+
+.theme-minimal #transcript .message.user,
+.theme-minimal #transcript .message.bash-input,
+.theme-minimal #transcript .message.bash-output {
+    --rc: var(--user);
+}
+
+.theme-minimal #transcript .message.assistant {
+    --rc: var(--asst);
+}
+
+.theme-minimal #transcript .message.assistant.sidechain {
+    --rc: var(--ring);
+}
+
+.theme-minimal #transcript .message.tool_use,
+.theme-minimal #transcript .message.tool_result {
+    --rc: var(--tool);
+}
+
+.theme-minimal #transcript .message.system {
+    --rc: var(--sys);
+}
+
+.theme-minimal #transcript .message.system-warning {
+    --rc: var(--warn);
+}
+
+.theme-minimal #transcript .message.task-notification {
+    --rc: var(--note);
+}
+
+.theme-minimal #transcript .message.system-error,
+.theme-minimal #transcript .message.tool_result.error {
+    --rc: var(--err);
+}
+
+/* The dot, on the rail, ringed in the page colour so it sits on the line. */
+.theme-minimal #transcript .message:not(.session-header)::before {
+    content: "";
+    grid-column: 2;
+    grid-row: 1 / 6;
+    justify-self: center;
+    align-self: start;
+    position: relative;
+    z-index: 1;
+    margin-top: calc(0.7em - 3.5px);
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--rc);
+    box-shadow: 0 0 0 2px var(--bg);
+}
+
+.theme-minimal #transcript .message.thinking::before {
+    width: 5px;
+    height: 5px;
+    background: var(--bg);
+    border: 1.5px solid var(--muted);
+}
+
+/* The classic header dissolves into the row: its title span becomes the
+   row's first line (column 3), its info block becomes the gutter. */
+.theme-minimal #transcript .message:not(.session-header) > .header {
+    display: contents;
+}
+
+.theme-minimal #transcript .message > .header > .mn-title {
+    grid-column: 3;
+    grid-row: 1;
+    min-width: 0;
+    padding-left: 4px;
+    font: 0.8em/1.6 var(--mono);
+    font-weight: 600;
+    color: var(--fg);
+    overflow-wrap: anywhere;
+}
+
+.theme-minimal #transcript .message > .header > .mn-title.mn-generic {
+    display: none;
+}
+
+.theme-minimal #transcript .mn-title .tool-summary {
+    font-size: 1em;
+    font-weight: 400;
+    color: var(--muted);
+}
+
+.theme-minimal #transcript .message > .header > .header-info {
+    grid-column: 1;
+    grid-row: 1 / 6;
+    align-self: start;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0;
+    min-width: 0;
+    text-align: right;
+    font: 0.68em/1.85 var(--mono);
+    font-weight: 400;
+}
+
+.theme-minimal #transcript .header-info > * {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.theme-minimal #transcript .header-info .timestamp-row {
+    order: -1;
+    display: block;
+    color: var(--muted);
+}
+
+/* The full timestamp stays in the DOM (timezone_converter.js, the timeline
+   and search read it); the gutter shows the short .mn-time instead. */
+.theme-minimal #transcript .header-info .timestamp {
+    display: none;
+}
+
+.theme-minimal #transcript .mn-role {
+    color: var(--rc);
+    font-weight: 500;
+}
+
+.theme-minimal #transcript .header-info .token-usage {
+    display: none;
+}
+
+.theme-minimal #transcript .mn-tok {
+    color: var(--muted);
+}
+
+.theme-minimal #transcript .message > .debug-info {
+    grid-column: 3;
+    grid-row: 2;
+    padding: 0 0 0 4px;
+    font: 0.68em var(--mono);
+    color: var(--muted);
+}
+
+.theme-minimal #transcript .message > .content {
+    grid-column: 3;
+    grid-row: 3;
+    min-width: 0;
+    padding-left: 4px;
+}
+
+/* Paired cards (tool_use + tool_result): the later half tucks under the
+   first, without its own gutter text or dot. */
+.theme-minimal #transcript .message.pair_first,
+.theme-minimal #transcript .message.pair_middle {
+    padding-bottom: 0;
+}
+
+.theme-minimal #transcript .message.pair_middle,
+.theme-minimal #transcript .message.pair_last {
+    padding-top: 2px;
+}
+
+.theme-minimal #transcript .message.pair_middle > .header > .header-info,
+.theme-minimal #transcript .message.pair_last > .header > .header-info {
+    display: none;
+}
+
+.theme-minimal #transcript .message.pair_middle::before,
+.theme-minimal #transcript .message.pair_last::before {
+    display: none;
+}
+
+/* Turns: one rule above each main-lane prompt, except a session's first. */
+.theme-minimal #transcript .message-node:has(> .message.session-header) > .children > .message-node ~ .message-node > .message.user:not(.steering):not(.task-notification):not(.teammate):not(.sidechain) {
+    margin-top: 4px;
+    padding-top: 7px;
+    border-top: 1px solid var(--rule2);
+}
+
+/* ------------------------------------------------------------ fold bar */
+
+/* One muted mono line under the content; both classic sections kept
+   (left: one level, right: all levels). P4 turns it into the chevron
+   summary of the mockup. */
+.theme-minimal #transcript .fold-bar {
+    grid-column: 3;
+    grid-row: 4;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 14px;
+    height: auto;
+    margin: 1px 0 0;
+    padding-left: 4px;
+    border-radius: 0;
+    overflow: visible;
+}
+
+.theme-minimal #transcript .fold-bar-section {
+    flex: 0 1 auto;
+    justify-content: flex-start;
+    gap: 6px;
+    padding: 0;
+    border: 0;
+    background: none;
+    font: 0.72em/1.7 var(--mono);
+    color: var(--muted);
+    transform: none;
+}
+
+.theme-minimal #transcript .fold-bar-section:hover {
+    background: none;
+    color: var(--fg);
+    transform: none;
+}
+
+.theme-minimal #transcript .fold-bar-section .fold-icon,
+.theme-minimal #transcript .fold-bar-section .fold-label {
+    font-size: 1em;
+    color: inherit;
+}
+
+/* ----------------------------------------- sessions, branches, forks */
+
+.theme-minimal #transcript .session-divider {
+    display: none;
+}
+
+.theme-minimal #transcript .message.session-header {
+    position: relative;
+    z-index: 1;
+    margin: 18px 0 2px;
+    padding: 8px 0 4px;
+    background: var(--bg);
+    border-top: 1px solid var(--rule2);
+}
+
+.theme-minimal #transcript > .session-divider:first-child + .message-node > .message.session-header {
+    margin-top: 0;
+    border-top: 0;
+}
+
+.theme-minimal #transcript .message.session-header > .header {
+    display: block;
+    margin: 0;
+    font-size: 1em;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+.theme-minimal #transcript .message.session-header .message-model {
+    font: 500 0.72em var(--mono);
+    color: var(--muted);
+}
+
+.theme-minimal #transcript .message.session-header > .fold-bar {
+    padding-left: 0;
+}
+
+/* Branch headers: the classic tree indent is an inline style. */
+.theme-minimal #transcript .message.branch-header {
+    margin: 8px 0 2px !important;
+    padding: 6px 0 2px;
+    border: 0;
+    border-top: 1px dashed var(--l0);
+    font-size: 0.92em;
+}
+
+.theme-minimal #transcript .fork-point {
+    position: relative;
+    z-index: 1;
+    margin: 2px 0 6px calc(var(--gut) + var(--rail));
+    padding: 4px 8px;
+    border: 1px dashed var(--l0);
+    border-radius: 4px;
+    background: var(--bg);
+    font-size: 0.85em;
+}
+
+/* ------------------------------------------------ nested sub-agents */
+
+/* No-JS/nested rendering of a sub-agent transcript (mockup .nest): its
+   group hangs under the spawning card's content column, framed by one
+   2px line; the classic per-depth ring colours still apply. Same selector
+   shape as the classic rule, one class more specific. */
+.theme-minimal .message-node:has(> .message.tool_result) > .children:has(> .message-node > .message.sidechain),
+.theme-minimal .message-node:has(> .message.tool_use:not(.workflow_agent)) > .children:has(> .message-node > .message.sidechain) {
+    margin: 4px 0 4px calc(var(--gut) + var(--rail));
+    padding-left: 8px;
+    border-left-width: 2px;
+    border-left-style: solid;
+}
+
+.theme-minimal .message-node:has(> .message.tool_result) > .children:has(> .message-node > .message.agent-deep),
+.theme-minimal .message-node:has(> .message.tool_use:not(.workflow_agent)) > .children:has(> .message-node > .message.agent-deep) {
+    margin-left: 12px;
+}
+
+/* Rows inside a group use the narrower gutter and rail. */
+.theme-minimal .children:has(> .message-node > .message.sidechain) > .message-node {
+    --gut: var(--gut-nest);
+    --rail: var(--rail-nest);
+}
+
+.theme-minimal #transcript .message.sidechain:not(.search-context) {
+    opacity: 1;
+}
+
+/* ------------------------------------------ legacy layout hacks off */
+
+/* Classic tucks the first collapsible up under the card header with a
+   negative margin; the minimal row has no header bar to tuck under. */
+.theme-minimal #transcript .collapsible-details,
+.theme-minimal #transcript .tool_result .collapsible-code,
+.theme-minimal #transcript .tool_result .content > * + * .collapsible-code {
+    margin-top: 0;
+}
+
+/* -------------------------------------------- content: common types */
+
+.theme-minimal #transcript .content p {
+    margin: 0;
+}
+
+.theme-minimal #transcript .content p + p,
+.theme-minimal #transcript .content :is(ul, ol, pre, .highlight, table, blockquote) + p,
+.theme-minimal #transcript .content ul,
+.theme-minimal #transcript .content ol,
+.theme-minimal #transcript .content pre,
+.theme-minimal #transcript .content .highlight,
+.theme-minimal #transcript .content table,
+.theme-minimal #transcript .content blockquote {
+    margin-top: 0.3em;
+    margin-bottom: 0;
+}
+
+.theme-minimal #transcript .content ul,
+.theme-minimal #transcript .content ol {
+    padding-left: 1.2em;
+}
+
+.theme-minimal #transcript .content :is(h1, h2, h3, h4, h5, h6) {
+    margin: 0.5em 0 0.15em;
+    font-size: 1em;
+    line-height: 1.3;
+}
+
+.theme-minimal #transcript .content h1 {
+    font-size: 1.15em;
+}
+
+.theme-minimal #transcript .content h2 {
+    font-size: 1.08em;
+}
+
+.theme-minimal #transcript .content table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+}
+
+/* User prompt: a warm tint (mockup .turn > .k-user .main). */
+.theme-minimal #transcript .message.user:not(.steering):not(.task-notification):not(.teammate):not(.compacted):not(.command-output):not(.sidechain) > .content {
+    margin-left: 4px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: var(--userbg);
+}
+
+.theme-minimal #transcript .message.user.steering > .content {
+    color: var(--muted);
+}
+
+.theme-minimal #transcript .message.user.steering {
+    opacity: 1;
+}
+
+.theme-minimal #transcript .message.thinking > .content {
+    color: var(--muted);
+    font-style: italic;
+}
+
+.theme-minimal #transcript .message.system > .content {
+    font-size: 0.9em;
+    color: var(--muted);
+}
+
+.theme-minimal #transcript .message.system-warning > .content {
+    color: var(--warn);
+}
+
+/* Code: inline and blocks. Tool output is a --code box (mockup pre). */
+.theme-minimal #transcript code {
+    font-family: var(--mono);
+    font-size: 0.84em;
+    padding: 0 3px;
+    border-radius: 3px;
+    background: var(--code);
+    color: inherit;
+}
+
+.theme-minimal #transcript pre code {
+    font-size: inherit;
+    padding: 0;
+    background: none;
+}
+
+.theme-minimal #transcript .content pre {
+    margin-left: 0;
+    margin-right: 0;
+    padding: 4px 8px;
+    border-radius: 4px;
+    background: var(--code);
+    color: var(--fg);
+    font: 0.78em/1.55 var(--mono);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.theme-minimal #transcript .highlight {
+    border-radius: 4px;
+    background: var(--code);
+}
+
+.theme-minimal #transcript .highlight pre {
+    padding: 4px 8px;
+    background: transparent;
+    white-space: pre;
+    overflow-wrap: normal;
+}
+
+.theme-minimal #transcript .content.markdown .highlight pre code {
+    font-size: 1em;
+}
+
+/* Tool errors: an --errbg box with --err text. */
+.theme-minimal #transcript .message.tool_result.error > .content {
+    margin-left: 4px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    background: var(--errbg);
+    color: var(--err);
+}
+
+.theme-minimal #transcript .message.tool_result.error > .content pre {
+    padding: 0;
+    background: transparent;
+    color: inherit;
+}
+
+/* Edit diffs: full-bleed add/del lines (mockup .diff). */
+.theme-minimal #transcript .edit-tool-content {
+    margin: 2px 0 0;
+}
+
+.theme-minimal #transcript .edit-diff {
+    padding: 4px 0;
+    border: 0;
+    border-radius: 4px;
+    background: var(--code);
+    font: 0.78em/1.55 var(--mono);
+}
+
+.theme-minimal #transcript .diff-line {
+    padding: 0 8px 0 4px;
+    border-left: 0;
+}
+
+.theme-minimal #transcript .diff-marker {
+    color: inherit;
+    opacity: 0.7;
+}
+
+.theme-minimal #transcript .diff-added {
+    color: var(--add);
+    background: var(--addbg);
+}
+
+.theme-minimal #transcript .diff-removed {
+    color: var(--del);
+    background: var(--delbg);
+}
+
+.theme-minimal #transcript .diff-context {
+    background: transparent;
+}
+
+.theme-minimal #transcript .diff-char-added {
+    background: color-mix(in srgb, var(--add) 22%, transparent);
+}
+
+.theme-minimal #transcript .diff-char-removed {
+    background: color-mix(in srgb, var(--del) 22%, transparent);
+}
+
+/* ---------------------------------------------------------------- phone */
+
+/* Under 640px the rail moves to column 1 and the gutter becomes a single
+   line above the content (mockup @media). */
+@media (max-width: 640px) {
+    body.theme-minimal {
+        padding: 0 10px 32px;
+    }
+
+    .theme-minimal .mn-stage::before {
+        left: 7.5px;
+    }
+
+    .theme-minimal #transcript .message {
+        grid-template-columns: 16px minmax(0, 1fr);
+        grid-template-rows: auto auto auto auto auto 1fr;
+    }
+
+    .theme-minimal #transcript .message:not(.session-header)::before {
+        grid-column: 1;
+        grid-row: 1 / 7;
+    }
+
+    .theme-minimal #transcript .message > .header > .header-info {
+        grid-column: 2;
+        grid-row: 1;
+        flex-direction: row;
+        align-items: baseline;
+        gap: 8px;
+        padding-left: 4px;
+    }
+
+    .theme-minimal #transcript .message > .header > .mn-title {
+        grid-column: 2;
+        grid-row: 2;
+    }
+
+    .theme-minimal #transcript .message > .debug-info {
+        grid-column: 2;
+        grid-row: 3;
+    }
+
+    .theme-minimal #transcript .message > .content {
+        grid-column: 2;
+        grid-row: 4;
+    }
+
+    .theme-minimal #transcript .fold-bar {
+        grid-column: 2;
+        grid-row: 5;
+    }
+
+    .theme-minimal #transcript .fork-point {
+        margin-left: 16px;
+    }
+
+    .theme-minimal .message-node:has(> .message.tool_result) > .children:has(> .message-node > .message.sidechain),
+    .theme-minimal .message-node:has(> .message.tool_use:not(.workflow_agent)) > .children:has(> .message-node > .message.sidechain) {
+        margin-left: 16px;
+        padding-left: 6px;
+    }
+}
