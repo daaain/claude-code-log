@@ -1,0 +1,1290 @@
+# `--theme minimal`: a compact light/dark theme with a DAG layout
+
+Status: **spec + phased plan, nothing implemented yet.** Branch of origin:
+`claude/sweet-mccarthy-64a24r`.
+
+This file is the single source of truth for the feature. Each phase in
+§ 5 is written to be executed by a fresh agent with no other context: read
+§ 1–4 once (they are short relative to the code they describe), then only
+your phase section. When a phase lands, tick it in § 6 and record anything
+that diverged from this plan **in this file**, in the same commit.
+
+Mockups (interactive "Design Component" files agreed with the user) are
+committed next to this file in
+[`work/minimal-theme-dag-mockups/`](minimal-theme-dag-mockups/). They only
+render inside the design canvas (they need a `support.js` runtime that is
+not in the repo), so treat them as **source code to read**, not pages to
+open. Everything load-bearing from them is restated below; read them when
+you need exact pixel values or want to see the algorithm in context.
+
+| File | What it is | Read it for |
+|---|---|---|
+| `MinimalLook.dc.html` (was "Hairline C") | The chosen look: time rail with role dots | CSS tokens, row grid, collapse previews, fold-depth toolbar (`renderVals` of the depth/theme state) |
+| `DagRail.dc.html` | DAG engine, branches folded by default | **The packing + rail-slot algorithm** in `renderVals()` (lines ~221–381), the rail slot CSS (`.sl`, `.v`, `.vt`, `.vb`, `.dash`, `.h`, `.r`, `.cd`, `.cu`, `.dot`) |
+| `DagThreads.dc.html` | Same engine, default interleaved, with indentation + tint for interleaved rows | The `.c3.in-*` tint rules (diff it against `DagRail`) |
+| `DagLanes.dc.html` | Same engine, default columns | Column header / collapsed strip / grid-template-columns |
+
+The mockups use Google Fonts (JetBrains Mono, Source Sans 3). **The
+product must not**: system font stacks only (see § 1.2).
+
+---
+
+## 1. Design spec (agreed with the user, refined against the code)
+
+### 1.1 Goal and invariants
+
+- An **opt-in** theme for HTML transcript output, selected with
+  `--theme minimal`. `--theme default` is the default.
+- **Default output stays byte-identical** once the plumbing lands. The
+  only phase allowed to change default bytes is P1 (groundwork bug fixes,
+  explicitly approved, regenerated with `just update-snapshot` and
+  reviewed at block level per CONTRIBUTING "Recognising the race").
+  Every later phase must show **zero** diff in
+  `test/__snapshots__/test_snapshot_html.ambr` for existing snapshot
+  names (new snapshot names for the minimal theme are expected — a
+  purely additive `+N/-0`).
+- Light + dark; much denser vertically; long content collapses to a
+  preview; sub-agents and forks drawn as a DAG.
+- Works offline: no web fonts, no new network fetches. (The existing
+  vis-timeline lazy load from unpkg is pre-existing and stays as is.)
+- Without JavaScript the page still reads correctly: nested, as today,
+  styled by the minimal CSS.
+- Timeline and filter parity per CLAUDE.md: whatever the filter hides in
+  the transcript it hides in the timeline, in every branch mode.
+
+### 1.2 Look
+
+- No cards, shadows or gradient background. Plain `--bg`. Content column
+  `max-width: 960px`, centred, 16px side padding (10px under 640px);
+  widens (`max-width: none`) when any swimlane column is open.
+- Each message is a row:
+  `[~58px gutter: time (mono, muted) above role label (small mono,
+  role-coloured) and tokens] [~18px rail: role-coloured dot on a
+  continuous vertical hairline] [content]`.
+  Messages are separated by spacing only (3px vertical padding); turns
+  (user prompts) are separated by a single 1px `--rule2` rule.
+- Fonts — system stacks only:
+  - `--sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif`
+  - `--mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace`
+- User prompt text: `--userbg` tint, 4px radius, `2px 8px` padding.
+  Thinking: muted italic. Tool call line: mono `.8em/1.6`, details in
+  `--muted`. Tool output: `--code` box, mono `.78em/1.55`, 4px radius.
+  Tool errors: `--errbg` box with `--err` text plus an `exit N`/`error`
+  pill in the gutter. Diffs: `--add`/`--addbg`, `--del`/`--delbg` full
+  bleed lines. Hooks/system lines: `.9em`, muted.
+- Gutter on phones (<640px): rail moves to column 1, gutter becomes a
+  single row above the content (see the mockup's `@media` rule).
+
+**Palette** (verbatim from the mockups; light on the left, dark on the
+right). These become custom properties on `:root` under the selectors in
+§ 1.3.
+
+| Token | Light | Dark | Use |
+|---|---|---|---|
+| `--bg` | `#ffffff` | `#14161a` | page |
+| `--fg` | `#1f2328` | `#e4e6e9` | text |
+| `--muted` | `#5f6670` | `#969da7` | metadata, dim text |
+| `--rule` | `#e3e6ea` | `#2a2e35` | hairlines, borders |
+| `--rule2` | `#1f2328` | `#c9ccd1` | turn separator, header rule |
+| `--code` | `#f3f4f6` | `#1d2025` | code / output boxes |
+| `--userbg` | `#fbf2e8` | `#2a2118` | user prompt tint |
+| `--user` | `#a14a00` | `#f0a35c` | user role |
+| `--asst` | `#6d28d9` | `#b8a1f8` | assistant role |
+| `--tool` | `#1a7f37` | `#6fcf8f` | tool role |
+| `--sys` / `--warn` | `#8a5d00` | `#e0b45a` | system / warnings |
+| `--err` | `#b42318` | `#ff8b84` | errors |
+| `--errbg` | `#fdeceb` | `#3a1b1b` | error box |
+| `--note` | `#1f5fbf` | `#7cb4ff` | async results, links |
+| `--ring` | `#2f8f46` | `#6fcf8f` | agent nest line |
+| `--add` / `--addbg` | `#116329` / `#e6f6eb` | `#86e0a2` / `#14291c` | diff add |
+| `--del` / `--delbg` | `#a40e26` / `#fdeaec` | `#ff9da2` / `#331a1d` | diff del |
+| `--ok` / `--okbg` | `#116329` / `#dff3e5` | `#86e0a2` / `#14291c` | success pill |
+| `--l0` | `#9aa1aa` | `#5d646e` | main lane line |
+| `--lA` | `#2f8f46` | `#6fcf8f` | lane colour 1 |
+| `--lB` | `#1e6fd9` | `#7cb4ff` | lane colour 2 |
+| `--lF` | `#b0307a` | `#f08bc4` | lane colour 3 / forks |
+
+Lane colours cycle `lA, lB, lF` by rail slot (add two more — e.g. reuse
+`--sys` and `--asst` — if a fourth/fifth concurrent slot is common in
+practice; decide in P6 from the fixtures).
+
+### 1.3 Dark mode
+
+- Follows `prefers-color-scheme` by default; an in-page Auto / Light /
+  Dark segmented toggle (mockup `.seg.icons`, inline SVG icons) persists
+  the choice in `localStorage` key `claude-code-log:theme`
+  (`auto|light|dark`, same key style as the existing
+  `claude-code-log:user-view`). All storage access in `try/catch`.
+- Mechanism: `data-theme="light|dark"` on `<html>`, absent for auto.
+  Token blocks:
+  ```css
+  :root { /* light tokens */ }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { /* dark tokens */ }
+  }
+  :root[data-theme="dark"] { /* dark tokens */ }
+  ```
+  Also set `color-scheme: light dark` (and `color-scheme: dark` / `light`
+  in the forced blocks) so form controls and scrollbars follow.
+- Apply the stored choice from a tiny inline `<script>` in `<head>`
+  (before the stylesheet paints) to avoid a flash.
+- Pygments: the existing light token CSS stays; a generated
+  **github-dark** token sheet (Pygments 2.20 ships `github-dark`) is
+  scoped under both dark selectors. Generated by a committed script with
+  a drift test (P3b).
+- Timeline (vis-timeline): item and group colours must come from CSS
+  custom properties so they follow the theme. P1 moves the JS-inlined
+  colours into CSS classes; the minimal theme then just redefines the
+  variables. Where JS genuinely needs a colour value (none expected after
+  P1), read it with `getComputedStyle(document.documentElement)`.
+
+### 1.4 Collapse
+
+- Long content shows a 2–3 line preview with a fade, a `+N lines`
+  button reveals all, `− less` collapses. **Restyle the existing
+  `<details>` collapsibles** — they already carry previews:
+  - `details.collapsible-code` (`html/utils.py::render_collapsible_code`)
+    — has `<span class='line-count'>N lines</span>` + `.preview-content`
+    in the `<summary>`, `.code-full` body.
+  - `details.collapsible-details` (`html/tool_formatters.py` ~543,
+    ~1574, ~1606) — `.preview-content` in the summary, `.details-content`
+    body, **no line count**.
+  - `details.tool-param-collapsible` (params tables) — leave behaviour,
+    restyle only.
+- Preview height: `--pv: 4.4em` for code, `2.8em` for prose; mask
+  `linear-gradient(#000 45%, transparent)` (mockup `.clip`).
+- The `+N lines` label: from `.line-count` where present; otherwise the
+  minimal JS computes it from the body text (`\n` count) and writes it to
+  a `data-more` attribute on the `<details>` (rehydrate-safe, see § 3.4).
+  **No formatter changes** — formatter output is shared with the default
+  theme and with the fragment store.
+- `− less`: when open, the summary shows only a small `− less` affordance;
+  the minimal JS also appends one `− less` button after the body of long
+  open blocks (closes the `<details>` and scrolls its summary into view).
+
+### 1.5 Fold depth and toolbar
+
+- A compact sticky top toolbar replaces the floating buttons in this
+  theme. It holds: fold depth (Prompts / Steps / All), Branches (Main
+  only / Interleaved / Columns), search & filter, timeline, colour theme
+  toggle, and — in a small overflow group — the remaining existing
+  controls (details toggle, `uuid` debug, `md`/`raw`, resume, follow,
+  scroll-to-top). **Every existing feature stays reachable.**
+- **Implementation rule:** the toolbar contains the *same* button
+  elements with the *same ids* as today's floating buttons
+  (`toggleDetails`, `toggleTimeline`, `filterMessages`, `toggleDebug`,
+  `toggleUserView`, `resumeSession`, `followUpdates`, scroll-top
+  anchor). The existing JS binds by id and throws on `null`; moving the
+  markup (minimal template branch only) and restyling `.floating-btn`
+  under the theme keeps all of it working untouched.
+- Fold depth maps onto the existing fold-bar state machine
+  (`transcript.html` `applyFoldState(messageEl, 'folded'|'first'|'open')`,
+  see dev-docs/message-hierarchy.md):
+  - **Prompts** — session headers and branch headers `first`; every user
+    message `folded` (each turn shows the prompt + its fold-bar summary
+    line).
+  - **Steps** (default, matches the mockup) — session/branch headers
+    `first`; user messages `open` for main-lane descendants; every
+    `<details>` closed (previews). Sub-agent subtrees are governed by the
+    Branches mode (§ 1.6), not by fold depth.
+  - **All** — everything `open` and every `<details>` open (same set as
+    the existing "toggle all details").
+  - Manual fold-bar clicks after choosing a depth override it locally
+    (the segmented control then shows no active state until the next
+    choice), mirroring the mockup's `ov` overrides.
+- The fold bar renders in this theme as a single muted mono line with a
+  rotating chevron (`.fold` / `.chev` in the mockup), using the existing
+  labels (`get_immediate_children_label()`); both buttons of the
+  two-button bar stay (left: one level, right: all levels).
+
+### 1.6 DAG layout
+
+**Branches** are (a) sub-agent transcripts — `Task`/`Agent` sidechains,
+sync and async, at any nesting depth — and (b) rewind forks (branch
+pseudo-sessions). **Teammates are not branches**: their spawn row gets a
+hyperlink anchor to the corresponding message of the teammate thread
+(§ 1.6.5). Workflow sub-agents (#174) stay nested as today (out of scope;
+see § 7).
+
+#### 1.6.1 Per-branch modes
+
+- **folded** (DEFAULT — "Main only"): branch contents hidden. The spawn
+  row shows a branch control: chevron + branch name + summary
+  `N steps · tokens · duration` (mockup `.bctl`/`.fold`) and a
+  `Column ⇥` mini button. The rail draws the branch lane as a **dashed**
+  line from the spawn row to its merge row (sync: the spawn's
+  tool_result; async: the task-notification; fork: none → a short
+  stub).
+- **interleaved**: branch messages merged into the main stream by
+  timestamp, tagged with the lane name in the gutter (`.tag`), drawn on
+  their own rail lane with curved fork/merge connectors (git
+  `log --graph` style). Rows of interleaved branches get the
+  DagThreads tint + indent (`.c3.in-*`). **Max 3 interleaved per branch
+  group** (§ 1.6.3); selecting a 4th folds the least-recently-selected.
+- **column** (swimlane): branch moved into its own column to the right,
+  rows time-aligned with packing (messages in different columns may share
+  a row; time order kept top to bottom). A column can collapse to a
+  narrow vertical strip (34px, rotated label) and expand again; columns
+  are unlimited; the page scrolls horizontally — the user decides when
+  it's too squashed.
+
+#### 1.6.2 Global control
+
+`Branches: Main only | Interleaved | Columns` in the toolbar sets every
+lane at once (Interleaved = first 3 of each branch group, the rest
+folded; Columns = all). The segment shows "on" only when every lane
+matches (mockup `bm`). Persist the global choice in `localStorage`
+(`claude-code-log:branches`); per-lane overrides are in-memory only.
+
+#### 1.6.3 Branch overflow ("+N more branches")
+
+A **branch group** is the set of branches spawned within one user turn
+(the nearest main-lane user message ancestor of the spawn row; for forks,
+the fork point's turn). When a group has more than 3 branches, only the
+first 3 (by spawn time) get controls and rail lanes; a
+`+N more branches` toggle on the 3rd control's row reveals the rest
+(controls + dashed lanes), so the whole tree stays reachable. The cap on
+interleaving (3) applies per group, LRU by selection.
+
+#### 1.6.4 Merge semantics
+
+| Branch kind | Spawn row | Merge row | Lane id |
+|---|---|---|---|
+| sync agent | the `Task`/`Agent` tool_use card | its paired tool_result card (arrives at completion) | `agent-<agentId>` |
+| async agent (`run_in_background`) | the tool_use card | the `<task-notification>` card (`task-notification` class, real arrival time on the main line) | `agent-<agentId>` |
+| nested agent (#213) | the spawning tool_use inside the parent lane | its tool_result inside the parent lane | `agent-<agentId>` (parent lane recorded) |
+| rewind fork | the fork-point card (the message carrying `junction_forward_links`) | none (stub; forks don't merge) | `branch-<branch sid>` |
+
+**Which branch of a fork continues "main"?** At a rewind, the DAG layer
+makes *every* child a branch pseudo-session (dev-docs/dag.md § 7); none
+is the trunk. Proposal: the **earliest** branch continues the main lane
+(its branch header renders as a slim `⑂ rewound` marker, its messages are
+main), later branches are fork lanes. This matches the mockup (fork drawn
+from an earlier main row) and keeps lane assignment stable when a new
+rewind appears during `serve --watch`. **Open decision — see § 7.**
+
+#### 1.6.5 Teammates
+
+Teammate spawns (`TaskInput.team_name` and `name` set; dev-docs
+teammates.md) are excluded from lanes and modes. Today their transcript
+renders inline, nested under the spawning tool_result (it lives in
+`subagents/agent-*.jsonl` with a synthetic `{trunk}#agent-{id}` session
+id — there is no separate per-teammate page). In this theme:
+
+- the teammate subtree stays nested and folded (no lane, no rail lane);
+- the spawn row shows `→ <name>'s thread` linking to the first card of
+  that thread (`#msg-d-N`, revealed through the existing
+  `window.claudeLogRevealMessage` / `hashchange` handler);
+- `SendMessage` cards and `<teammate-message>` cards link to the matching
+  message in the other side's thread where it can be resolved (match on
+  the message text / `sender_task_id`; an unresolved link renders no
+  anchor rather than a dead one).
+- If a teammate thread turns out to live in a different session file
+  (a future Claude Code layout), link with the existing stable deep link
+  `session-<sid><suffix>.html?uuid=<uuid>` (handled by
+  `revealMessageByUuid` in `transcript.html`).
+
+**Open decision — see § 7** (the user said "the teammate's session";
+the data model has no such session today).
+
+#### 1.6.6 Architecture (validated)
+
+The suggested architecture holds, with one refinement forced by live
+updates:
+
+- **Server** renders branch messages in their current DOM positions
+  (nested `.message-node > .children`, as today), adding `data-*`
+  attributes in the minimal theme only (§ 3.3).
+- **A JS module** (`minimal_dag.js`) re-lays out the page at runtime
+  **without moving any DOM node**: when active it adds `dag-on` to the
+  stage, which turns `.message-node` and `.children` into
+  `display: contents` so every card becomes a grid item of one CSS grid,
+  and assigns each visible card an inline `grid-row` / `grid-column`.
+  Folded/hidden branch cards get a class (`dag-hidden`).
+  *Why not move nodes:* `live_update.js` patches cards **in place** and
+  relies on the nested structure (`stableKeys`, `applyOwn`, fold bars
+  re-synced from their own `.children`); the fold state machine,
+  `revealMessage`, search's ancestor walk and the filter all depend on
+  nesting too. With `display: contents` all of them keep working, and a
+  fold (inline `display:none` on a `.children`) still hides the subtree
+  because an inline `display` beats the class rule.
+- **Ownership split** (no shared mutable state):
+  - fold state machine owns `.children` inline `display`;
+  - filter/search own `filtered-hidden` / `search-hidden` classes;
+  - the DAG engine owns `dag-*` classes and inline `grid-row`,
+    `grid-column` on cards, plus everything inside `#dag-rail`.
+- **Rail:** main-lane line + dots are pure CSS (`.message::before` dot,
+  stage `::before` line) so they also work without JS. Branch lanes and
+  connectors are an **SVG overlay** in `#dag-rail`, a sibling of
+  `#transcript` inside the stage (outside the live-update swap target),
+  drawn from measured card boxes (`getBoundingClientRect`, batched reads)
+  and redrawn on `ResizeObserver`. Port the geometry of the mockup's slot
+  CSS (2px lines, 8px-radius curves `cd`/`cu`, dashed `3px/4px`, 8px dot
+  with a 2px `--bg` ring at `--dy = 3px + .7em`). Rationale for SVG over
+  the mockup's per-row CSS slot pieces: per-row slot elements would be
+  rows × slots extra nodes inside the grid (tens of thousands on a large
+  page) and would have to live inside the swap target.
+- **Relayout triggers:** one `MutationObserver` on `#transcript`
+  (`subtree`, `childList`, `attributes` with
+  `attributeFilter: ['class','style']`), coalesced to one
+  `requestAnimationFrame`, disconnected while the engine applies its own
+  writes; plus `claudeLogOnRehydrate` (live update), `resize`, and the
+  toolbar controls. The engine is a pure function of (DOM, mode state),
+  so re-running it is always safe.
+- **No JS:** the stage has no `dag-on`, nothing is `display: contents`,
+  the minimal CSS renders the nested tree (sidechain `.children` get a
+  2px `--ring` left border like the mockup `.nest`).
+
+---
+
+## 2. Codebase reality — findings that shape the plan
+
+### 2.1 Groundwork defects found (P1 fixes them)
+
+1. **Undefined CSS custom properties** (no definition anywhere, no
+   fallback) — the declarations using them are silently invalid today:
+   - `--color-bg-secondary`, `--color-bg-tertiary` —
+     `message_styles.css` (~1281, ~1286), `pygments_styles.css` (5, 44,
+     88, 102, 166)
+   - `--color-blue`, `--color-green`, `--color-purple`,
+     `--color-border-dim`, `--color-text-dim`, `--color-text-secondary` —
+     `pygments_styles.css`
+   - `--code-bg` (`message_styles.css` ~426, ~466; `--code-bg-color` is
+     the defined one), `--secondary-text` (~406, ~416)
+   - `--font-mono` has fallbacks (`message_styles.css` ~281, ~1796) and
+     `--accent-color` has a fallback (`session_nav_styles.css` 54) — fix
+     for consistency (`--font-monospace` is the defined name).
+   Re-derive the list with the one-liner in P1 rather than trusting it.
+2. **`.line-count` selector mismatch** — `pygments_styles.css:78`
+   targets `.tool-result .line-count`, but the card class is
+   `tool_result` (underscore; `html/utils.py::CSS_CLASS_REGISTRY`). The
+   rule never matches. (`.tool-result-json`, `.tool-result-image` are
+   unrelated inner classes.)
+3. **Timeline colours inlined in JS** —
+   `components/timeline.html`: `messageTypeGroups` (lines ~25–43) sets
+   `style: 'background-color: #…'` per group; the container `<div>`
+   (line ~5) and resize handle (~8–9) carry inline colours
+   (`background: white`, `#ddd`, `#999`); `onTimelineSelect` (~304)
+   flashes `#fff3cd` via `style.backgroundColor`. Item colours are
+   already CSS (`timeline_styles.css` `.vis-item.timeline-item-*`), but
+   with literals.
+
+### 2.2 How CSS and JS reach the page
+
+- One template, `claude_code_log/html/templates/transcript.html`, inlines
+  every stylesheet in `<head>` (lines 11–23, `{% include %}` of
+  `components/*.css`) and every script (timezone, live update, the big
+  `DOMContentLoaded` block ~314–1183, `components/timeline.html`,
+  `components/search.html`).
+- Jinja env: `html/utils.py::get_template_environment()` — **no
+  `trim_blocks`/`lstrip_blocks`**, so every `{% if %}` line leaves its
+  newline in the output. For byte-identity put theme conditionals
+  **inline**, glued to existing text, e.g.
+  `<div id="transcript"{% if minimal %} class="…"{% endif %}>` and
+  `{% include 'components/teammate_styles.css' %}{% if minimal %}
+  …{% endif %}` — never on their own line in shared regions.
+- `HtmlRenderer._generate_inner` (`html/renderer.py` ~1713–1803) renders
+  `transcript.html` with a fixed kwarg set; add `theme` there.
+- `generate_projects_index` (`index.html`) and
+  `generate_archive_search_html` (`archive_search.html`) are separate
+  templates; out of scope for the theme (§ 7).
+- Pagination relies on literal markers in the page header:
+  `<!-- PAGINATION_NEXT_LINK_START -->`…`class="page-nav-link next`…
+  `<!-- PAGINATION_NEXT_LINK_END -->` (`converter.py` `_NEXT_LINK_PATTERN`,
+  and a 512KB bounded-read assumption that the block sits right after
+  the inlined `<style>`). The minimal template branch must keep that
+  markup verbatim and must not push it past ~512KB (it is a performance
+  guard, not correctness).
+- **The `#transcript` rehydrate contract** (`transcript.html` 27–53):
+  anything that decorates cards after load registers with
+  `window.claudeLogOnRehydrate(fn)`; delegated listeners on `document`
+  must **not** be registered there.
+
+### 2.3 Option plumbing: the `no_recaps` precedent
+
+`--no-recaps` is the most recent render-variant flag and touches every
+path the theme must. Follow it file by file:
+
+- `utils.py::variant_suffix(depth, compact, format, no_timestamps,
+  no_recaps)` — filename infix; each variant gets its own files and
+  **its own cache rows** (html_cache is keyed by filename; html_pages by
+  `variant_suffix`, migration 004).
+- `renderer.py`: `Renderer` class attrs (~5342: `depth`, `compact`,
+  `no_recaps`), `get_renderer(...)` (~5705) sets them.
+- `converter.py` functions carrying `no_recaps`:
+  `_render_page_unit_inline`, `_generate_paginated_html` (+ inner
+  `_render_page_inline`), `_stream_paginated_conversion`,
+  `_try_current_or_session_scoped`, `_try_streaming`,
+  `convert_jsonl_to`, `_generate_individual_session_files`,
+  `generate_single_session_file`, `render_normalized_session_file`,
+  `render_provider_wholesale`, `process_projects_hierarchy`,
+  `_process_projects_hierarchy` (+ `_conversion_kwargs`, which feeds the
+  spawn-pool workers). `variant_suffix` call sites: ~2771, ~3222–3223,
+  ~3677, ~3820, ~5053, ~5403, ~5680, ~6521.
+- `render_pool.py`: `_WorkerSetup` (~141), `_build_worker_renderer`
+  (~484), `make_render_pool` (~691). `render_dispatch.py`:
+  `build_render_pool` (~89, ~158).
+- `html/renderer.py::generate_session` (~1842) builds the combined
+  back-link from `variant_suffix(...)` — must include the theme.
+- `cli.py`: `convert` options (~1104–1124 is where `--no-timestamps` /
+  `--no-recaps` live), `_render_provider_input_file`,
+  `_run_provider_wholesale`, `serve` (calls
+  `process_projects_hierarchy(projects_path, silent=True)` at startup and
+  in `reconvert`), `watch` (`process_projects_hierarchy` /
+  `convert_jsonl_to` in its `convert` closure).
+- `tui.py::SessionBrowser._ensure_session_file` (~1811) hard-codes
+  `session-{id}.{ext}` and uses `get_renderer(format)` (no depth either);
+  `run_session_browser` is launched from `cli.py::_launch_tui_with_cache_check`.
+
+### 2.4 Staleness: why the theme is a filename variant
+
+Recommendation (**decision — § 7**): make the theme a **variant suffix**,
+HTML-only (like `--compact` is Markdown-only): `--theme minimal` →
+`combined_transcripts.minimal.html`, `combined_transcripts.minimal_2.html`,
+`session-<id>.minimal.html`, composing after depth
+(`combined_transcripts.agent.minimal.html`).
+
+That makes "the theme decides regeneration" automatic and reuses every
+existing mechanism instead of adding a new axis:
+
+- `CacheManager.is_transcript_stale` / `update_html_cache` key rows by
+  filename → a theme switch is `not_cached` → regenerated; switching back
+  finds the other theme's files current (no needless rebuild).
+- `is_page_stale` / html_pages are keyed by `variant_suffix` → paginated
+  and streaming paths are covered.
+- The session-scoped path (`_try_current_or_session_scoped`), the render
+  pool, and per-project planning in `process_projects_hierarchy` all key
+  off the same suffix.
+- The projects index **already lists every variant** of a project:
+  `converter.py::_enumerate_project_variants` globs
+  `combined_transcripts*.html` via `utils.VARIANT_ENTRY_RE`
+  (`^combined_transcripts((?:\.[a-z-]+)*)\.html$`) and labels it with
+  `_variant_label_from_suffix` → `.minimal` would show as "Minimal".
+  Special-case it to "Minimal theme".
+- Default suffix stays `""` → default files, names and bytes unchanged.
+
+**Collision to know about:** before #159, `--detail minimal` produced
+`combined_transcripts.minimal.html` (`DetailLevel.MINIMAL`, see
+`git show 8b868fe`). Old archives may still contain such files; the
+index would label them "Minimal theme". They are stale (old
+`library_version`) and get overwritten the first time `--theme minimal`
+runs. If that ambiguity is unacceptable, use the infix `.theme-minimal`
+instead (also matches `VARIANT_ENTRY_RE`). **Decision — § 7.**
+
+The alternative (same filenames, a theme marker sniffed from the HTML
+head plus a `theme` column on html_cache/html_pages via a migration, as
+migration 013 did for `combined_linked`) is strictly more work, makes the
+two themes overwrite each other, and still needs every path in § 2.3.
+
+### 2.5 Where branch data lives in the render tree
+
+All of this is in `renderer.py` unless noted; see dev-docs/agents.md,
+dag.md, teammates.md, message-hierarchy.md.
+
+- **Tree shape** — `_build_message_hierarchy` (~2437) assigns levels
+  (`_get_message_hierarchy_level` ~2337): session header 0, branch header
+  0.5, user 1, assistant/thinking/system-cmd 2, tools/system-info/hooks/
+  task-notification 3, sidechain user/assistant/thinking 4, sidechain
+  tools 5; a depth-`d` agent shifts by `2*(d-1)`. The template then
+  recurses `message.children`.
+- **Sub-agent transcripts** — spliced by `_relocate_subagent_blocks`
+  (~2153) right after the spawning tool_result; they become that
+  tool_result's `.children`. Every agent card has
+  `meta.is_sidechain = True`, `meta.session_id = "{trunk}#agent-{agentId}"`,
+  `meta.agent_id = agentId` (membership), and
+  `TemplateMessage.agent_depth >= 1` (also emitted as CSS
+  `agent-depth-{d}`, `agent-ring-{1..5}`, `agent-deep`). The spawn
+  reference is `meta.spawned_agent_id` on the spawning tool_result entry.
+  `_cleanup_sidechain_duplicates` (~3579) drops the duplicate prompt/last
+  answer; `spawns_collapsed_transcript` marks an emptied nested spawn.
+- **Spawn cards** — `ToolUseMessage` whose input is `TaskInput`
+  (`models.py` ~1410: `description`, `subagent_type`,
+  `run_in_background`, `team_name`, `name`); paired result
+  `ToolResultMessage` with `output: TaskOutput` (`metadata:
+  AgentResultMetadata` → `agent_id`, `total_tokens`, `tool_uses`,
+  `duration_ms`; `async_final_answer`). `display_model` carries the
+  sub-agent's model on the spawn card (`_surface_agent_models` ~5092).
+- **Async results** — `TaskNotificationMessage` (`models.py` ~999:
+  `task_id` == agent id, `usage: TaskNotificationUsage`,
+  `result_is_duplicate`, `spawning_task_message_index`), linked by
+  `_link_async_notifications` (~3341). Card classes
+  `user task-notification`; at level 3 under the preceding assistant.
+- **Forks** — branch pseudo-sessions: `SessionHeaderMessage` with
+  `is_branch=True` (`TemplateMessage.is_branch_header`, `branch_depth`,
+  `content.parent_message_index` = fork-point index,
+  `content.attachment_uuid`), built in `_build_branch_header` (~4395);
+  branch messages have `render_session_id = "{sid}@{uuid12}"`. The fork
+  point message carries `junction_forward_links`
+  `[(branch_sid, branch_header_index, preview)]` and
+  `fork_point_preview`; `fork_only` slots render just the fork-point box.
+  Branch headers are children of the **session header** (level 0.5), so
+  in the DOM the trunk turns come first, then each branch header with
+  its own turns.
+- **Teammates** — spawns with `TaskInput.team_name`/`name`; their
+  threads are ordinary agent blocks (above). `TeammateMessage` cards
+  (`user teammate`), `SendMessage` tool cards
+  (`html/teammate_formatter.py`); per-session colours via `--cc-*` vars
+  (`teammate_styles.css`) set inline as `style="--cc-color: var(--cc-…)"`.
+- **Workflows** — `_splice_workflow_runs` grafts phase/agent cards
+  (`tool_use workflow_phase|workflow_agent`) under the Workflow
+  tool_use. Not lanes in this feature.
+
+### 2.6 What is already on message DOM nodes
+
+From `transcript.html` `render_message` (137–278):
+
+- wrapper `div.message-node` → card `div.message.<classes>` (+
+  `pair_first|pair_middle|pair_last` when paired) → sibling
+  `div.children` (holds child `.message-node`s and the `.fork-point` box
+  when the node is a junction).
+- card `id='msg-d-N'` (positional, unique per page);
+  `data-uuid` (stable transcript uuid, **not** unique per card);
+  session headers carry `data-session-id`.
+- timestamp: `.header .timestamp[data-timestamp=<ISO>]`, optional
+  `data-duration` on pair-last; `timezone_converter.js` rewrites the text
+  but keeps the attribute.
+- `.token-usage` text, `.debug-info`, `.content(.markdown)`, `.fold-bar`
+  with `.fold-bar-section[data-action=fold-one|fold-all][data-target=d-N]`.
+- branch headers: `session-header branch-header`, inline
+  `margin-left: {branch_depth*2}em`; fork boxes `.fork-point` with
+  `a.fork-point-branch[href=#msg-d-N]`.
+
+### 2.7 Existing runtime JS the theme must coexist with
+
+All inside `transcript.html` unless noted.
+
+- **Fold state machine** — delegated click on `.fold-bar-section`
+  (~925); `applyFoldState` (~985), `setInitialFoldState` (~1024),
+  `syncFoldBar` registered on rehydrate (~1073–1099),
+  `revealMessage` → `window.claudeLogRevealMessage` (~1107–1127),
+  hash / `?uuid=` deep links (~1129–1182). **Not exported**: the minimal
+  JS needs `window.claudeLogApplyFoldState = applyFoldState` (add the
+  export in P4; it is in a closure today).
+- **`<details>` toggles** — `toggleAllDetails` over
+  `details.collapsible-details, details.collapsible-code,
+  details.tool-param-collapsible` (~507–544); params-table expand logic
+  and a capturing `toggle` listener (~546–659).
+- **Filter** — `applyFilter` (~739) toggles `filtered-hidden` on
+  `.message:not(.session-header)`; sidechain cards need both the
+  `sidechain` toggle and their own type; memory is independent (#192).
+  Counts by class queries (~686–877). URL `?filter=`.
+- **Timeline** — `components/timeline.html`: `buildTimelineData` walks
+  `.message:not(.session-header)` and derives the group from classes
+  (memory > sidechain > system-* > slash-command > … > first type
+  class); listens to filter toggles (~571–613) for group visibility and
+  to search for per-item `timeline-filtered-hidden`; click scrolls with
+  `messageEl.offsetTop` (~284–310) — **breaks under
+  `display: contents` ancestors** (offsetParent changes); switch to
+  `getBoundingClientRect().top + scrollY` (P1, harmless for default).
+- **Search** — `components/search.html`: `search-hidden` /
+  `search-match` / `search-context` classes, ancestor walk via
+  `parentElement` + `.children` (~234–261), opens `<details>` to reveal
+  matches, calls `claudeLogRevealMessage`.
+- **Live update** — `components/live_update.js`: `serve` only (http/s);
+  HEAD poll; patches changed cards in place (`liveCard.replaceWith`),
+  else replaces `#transcript` wholesale; calls
+  `window.claudeLogRehydrate(el)` on new/replaced nodes. Stable keys from
+  `data-uuid` + ordinal, `data-session-id`, then `id`.
+- **Rehydrate hooks today**: timezone, fold-bar resync, timeline
+  rebuild (`scheduleRebuild`), filter/search re-application.
+
+---
+
+## 3. Target design (implementation-level)
+
+### 3.1 Files
+
+```
+claude_code_log/html/templates/components/minimal/
+  tokens.css          light + dark tokens, color-scheme, font stacks
+  layout.css          page, stage, row grid, gutter, rail (CSS part), turns,
+                      toolbar, phone layout, no-JS nested rendering
+  components.css      overrides for every default component in minimal
+                      (tool params, todo, diffs, ask-user-question, bash,
+                      teammates, workflow, fork points, session nav, page
+                      nav, filter toolbar, search, timeline, collapsibles)
+  pygments_dark.css   GENERATED github-dark tokens under dark selectors
+  dag.css             dag-on grid, lane tint, branch controls, columns,
+                      strips, SVG rail styling
+  theme_init.js       <head> inline: apply stored data-theme (tiny)
+  minimal.js          toolbar wiring, theme toggle, fold depth,
+                      collapse labels / "− less"
+  minimal_dag.js      DAG model + layout + rail + branch controls
+scripts/generate_minimal_pygments_css.py
+```
+
+Include order (minimal only): after every default stylesheet,
+`tokens.css`, `layout.css`, `components.css`, `pygments_dark.css`,
+`dag.css`. Every minimal selector is prefixed with `.theme-minimal`
+(class on `<body>`; set in the minimal template branch) so it wins over
+default rules by specificity without `!important` (use `!important`
+only to beat vis-timeline's own `!important` and inline styles).
+
+Layering over the default CSS (rather than replacing it) is deliberate:
+formatter output relies on hundreds of default component rules (params
+tables, todo, diff, ansi…). The cost is overriding legacy layout hacks
+(e.g. `.collapsible-details { margin-top: -2em }`,
+`.tool_result .collapsible-code { margin-top: -2.5em }`, body gradient,
+`.floating-btn` positioning, branch-header inline `margin-left`). P3a/P3b
+list them.
+
+### 3.2 Template changes (minimal branch only)
+
+`transcript.html` receives `theme` (`"default"|"minimal"`); define
+`{% set minimal = theme == 'minimal' %}` at the top **glued to an
+existing line**. Minimal-only additions:
+
+- `<html … data-theme-name='minimal'>`; `theme_init.js` inline in head.
+- extra `<style>` content (the five sheets).
+- `<body class='theme-minimal'>`.
+- a header block: title + session meta line (mockup `.top`/`.smeta`) and
+  the toolbar `<nav class='mn-toolbar'>` containing the moved buttons
+  (same ids) — in the minimal branch the floating buttons are rendered
+  inside the toolbar instead of at the bottom.
+- a stage: `<div class='mn-stage'><div id='dag-rail' aria-hidden='true'></div><div id="transcript">…</div></div>`
+  (`#transcript` id and contents unchanged).
+- card data attributes (§ 3.3).
+- `minimal.js` + `minimal_dag.js` included inside the existing
+  `DOMContentLoaded` block **after** the fold machinery (so
+  `claudeLogApplyFoldState` exists), or as separate scripts that wait for
+  it.
+
+### 3.3 Server-side lane annotation (P5)
+
+A new format-neutral module **`claude_code_log/lanes.py`** (so Markdown/
+JSON could use it later — "backportable") with:
+
+```python
+@dataclass
+class LaneInfo:
+    lane_id: str            # "agent-<agentId>" | "branch-<branch sid>"
+    kind: str               # "agent" | "async-agent" | "fork" | "teammate"
+    name: str               # Task description / teammate name / branch preview
+    parent_lane: str        # "main" or the enclosing lane id (nesting)
+    spawn_index: int | None # message_index of the spawn row
+    merge_index: int | None # message_index of the merge row (None for forks)
+    steps: int              # rendered cards in the lane, pair_last excluded
+    total_tokens: int | None# AgentResultMetadata / TaskNotificationUsage
+    duration_ms: int | None # metadata, else last-first timestamp in the lane
+    first_ts: str | None
+    last_ts: str | None
+
+def annotate_lanes(roots: list[TemplateMessage]) -> dict[str, LaneInfo]:
+    """Set TemplateMessage.lane_id on every node and return lane metadata."""
+```
+
+Rules: a node's lane is `agent-<meta.agent_id>` when `meta.is_sidechain`
+and `meta.session_id` contains `#agent-`; `branch-<render_session_id>`
+when its nearest branch header ancestor is a branch (minus the
+"main-continuation" branch, § 1.6.4 decision); otherwise `main`.
+Teammate lanes get `kind="teammate"`. Add `lane_id: str = "main"` to
+`TemplateMessage.__init__` (renderer.py ~238) — a render-time field, not
+part of the fragment-store key (it is emitted by the template, not by
+formatters). Call `annotate_lanes` from `HtmlRenderer._generate_inner`
+**only when `self.theme == "minimal"`** (keeps default cost and bytes
+unchanged).
+
+Attributes (minimal only):
+
+| Where | Attribute | Value |
+|---|---|---|
+| every `.message` card | `data-lane` | lane id or `main` |
+| spawn card (agent tool_use / fork-point owner) | `data-spawns` | space-separated lane ids it opens |
+| merge card | `data-merges` | space-separated lane ids it closes |
+| lane head (agent: the spawn tool_use card; fork: the branch header card) | `data-lane-id`, `data-lane-kind`, `data-lane-name`, `data-lane-parent`, `data-lane-stats` (`"6 steps · 48.4k tokens · 2m 13s"`, preformatted server-side), `data-lane-ts` (`first_ts last_ts`) | from `LaneInfo` |
+| teammate spawn card | `data-teammate-link` | `d-N` of the thread's first card |
+
+Card timestamps are read from the existing
+`.header .timestamp[data-timestamp]`; cards without one (session/branch
+headers, fork boxes) inherit the previous card's time in their lane.
+
+### 3.4 Client: `minimal.js`
+
+- **Theme toggle**: reads/writes `claude-code-log:theme`, sets
+  `document.documentElement.dataset.theme`, updates `aria-pressed`.
+- **Collapse**: on load and on rehydrate, for each `<details>` of the
+  three collapsible classes inside the scope: compute `+N lines` (from
+  `.line-count` or the body's `\n` count), set `data-more`; long open
+  blocks get a trailing `− less` button (delegated click on `document`,
+  registered once).
+- **Fold depth**: `applyDepth('prompts'|'steps'|'all')` → uses
+  `window.claudeLogApplyFoldState` per § 1.5; persisted in
+  `localStorage` `claude-code-log:fold-depth`; manual fold-bar clicks
+  clear the segmented "on" state.
+- **Gutter time**: render a short local `HH:MM:SS` into a
+  `.mn-time` span from `data-timestamp` (the full localised string from
+  `timezone_converter.js` stays as the `title`). Rehydrate-aware.
+
+### 3.5 Client: `minimal_dag.js` (P6–P7)
+
+Build a model from the DOM, compute a layout, apply it:
+
+1. **Model** — walk `#transcript .message` in DOM order (skip
+   `filtered-hidden`, `search-hidden` and cards inside a `.children` with
+   inline `display:none`): `{el, lane, ts, spawns[], merges[]}`; lanes
+   from `[data-lane-id]` heads: `{id, kind, name, parent, stats, from:
+   spawn el, to: merge el}`; group lanes into branch groups (§ 1.6.3).
+2. **Visible set** — main cards always; a lane's cards iff its mode is
+   `interleaved` or `column` **and** its parent lane is visible (a nested
+   lane inside a folded lane is hidden regardless of its own mode).
+3. **Order** — k-way merge of each visible lane's DOM-ordered sequence
+   by `ts` (stable: ties keep DOM order, main first), so each lane's
+   internal order is untouched and pairs stay adjacent within a lane.
+4. **Rows** — port `DagRail.dc.html` `renderVals()` "Pack rows" verbatim:
+   `key = column lane or 'main'`; `r = max(prev, nextFree[key])`; a lane's
+   first row `> rowOf[spawn]`; a merge row `> lastRowOf[lane]`; `prev = r`.
+   In non-column modes this yields one card per row.
+5. **Rail slots** — port the "Rail" part: slot 0 = main; railed lanes
+   (folded + interleaved, not columned) get slots by greedy interval
+   colouring over `[spawnRow, endRow]` (end = merge row, else last row
+   of the lane when interleaved, else the spawn row → stub), reusing the
+   lowest free slot (the mockup hard-codes `slot`; generalise). Per row
+   and slot produce the same states as the mockup (`v`, `vt`, `vb`,
+   `dash`, `cd`, `cd stub`, `cu`, `h`, `r`, `dot k-*`), then draw them
+   as SVG paths at measured y positions.
+6. **Apply** — set `--rail-w` (18px × slots in use) on the stage, grid
+   template `var(--gut) var(--rail-w) minmax(360px,1fr)` + one
+   `minmax(300px,1fr)` (or `34px` when collapsed to a strip) per column
+   (mockup `gtc`); write `grid-row`/`grid-column` per visible card
+   (column cards span their column only and use the compact column row
+   grid `46px minmax(0,1fr)`), `dag-hidden` on hidden cards, column
+   headers/strips as elements in `#dag-rail`'s sibling header layer
+   (outside `#transcript`), then draw the SVG.
+7. **Controls** — branch control markup is injected **outside the
+   swap-sensitive card markup**: render it into a per-spawn-card
+   container that the engine owns (`.mn-bctl`, appended to the spawn
+   card's `.content`; re-created after every rehydrate because a patched
+   card loses it). Delegated click handlers on `document`.
+8. **Selection** — per group LRU list of interleaved lanes; cap 3.
+
+Performance guard: one batched read pass (`getBoundingClientRect`) then
+one write pass; skip relayout when the page is hidden; measured budget
+< 50ms for 2,000 visible cards on a mid laptop (P6 adds a crude timing
+log under `?debug-dag`).
+
+### 3.6 Testing strategy
+
+- **Unit** (`just test`): option plumbing, suffixes, staleness,
+  `lanes.py` on fixtures, template byte-identity of the default.
+- **Snapshot**: new tests in `test/test_snapshot_html.py`
+  (`TestMinimalThemeHTMLSnapshots`) for `representative_messages.jsonl`
+  and the `async_agents` + `nested_agents` + a fork fixture
+  (`dag_fork.jsonl` / `dag_within_fork.jsonl`) rendered with
+  `--theme minimal`. Existing snapshots must not change. Regenerate only
+  with `just update-snapshot`; expect `+N/-0`.
+- **Browser** (`@pytest.mark.browser`, Playwright, see
+  `test/test_nested_agents_browser.py` for the pattern and
+  `test/conftest.py` for `page`/`context` fixtures): theme toggle +
+  persistence, collapse, fold depth, three branch modes, overflow,
+  teammate anchors, filter/timeline parity, live-update relayout,
+  no horizontal scroll at 375px in main-only mode.
+
+---
+
+## 4. Constraints every phase must honour
+
+- Read `CLAUDE.md` and `CONTRIBUTING.md`. Run **`just ci`** before each
+  commit (format, lint, ty, pyright, unit + TUI + browser tests). If
+  Chromium is missing: `uv run playwright install chromium`.
+- Snapshots: never a bare parallel `--snapshot-update`; use
+  `just update-snapshot`. After it, inspect at **block level** (snapshot
+  names added/removed, per-block diffs), not the raw `-N`.
+- Phases after P1: existing `.ambr` blocks byte-identical.
+- `dev-docs/` is as-built: update the relevant page in the same commit
+  as the behaviour change (named per phase below). Don't edit
+  `CHANGELOG.md`. British English in prose.
+- Keep timeline + filter parity (CLAUDE.md "Timeline Component").
+- One phase = one (or a few) commits on the working branch; commit
+  messages end with the attribution lines your session's system
+  reminder specifies. Don't push unless asked.
+- Update § 6 (progress) of this file at the end of your phase.
+
+---
+
+## 5. Phases
+
+Sizes: S ≈ <300 changed lines, M ≈ 300–900, L ≈ 900–1,800. Every phase
+is independently committable with `just ci` green; later phases only
+depend on earlier ones having landed.
+
+### P1 — Groundwork fixes (default output changes, intentionally) — S
+
+**Goal:** fix the three defects in § 2.1 in the default theme so the
+minimal theme can build on variables, plus one latent timeline bug.
+
+**Files:** `claude_code_log/html/templates/components/global_styles.css`,
+`message_styles.css`, `pygments_styles.css`, `session_nav_styles.css`,
+`timeline_styles.css`, `components/timeline.html`,
+`test/__snapshots__/test_snapshot_html.ambr` (regenerated),
+`dev-docs/css-classes.md`.
+
+**Steps:**
+1. Re-derive undefined vars:
+   ```bash
+   cd claude_code_log/html/templates
+   grep -ohE 'var\(--[a-zA-Z0-9-]+' components/*.css components/*.html *.html | sed 's/var(//' | sort -u > /tmp/used
+   grep -ohE '^\s*--[a-zA-Z0-9-]+\s*:' components/*.css components/*.html *.html | tr -d ' :' | sort -u > /tmp/def
+   comm -23 /tmp/used /tmp/def
+   ```
+   Define the genuinely intended ones in `global_styles.css :root`
+   (`--color-bg-secondary`, `--color-bg-tertiary`, `--color-blue`,
+   `--color-green`, `--color-purple`, `--color-border-dim`,
+   `--color-text-dim`, `--color-text-secondary`) with restrained values
+   that fit the current palette (e.g. `#f6f8fa`, `#eef1f4`, `#1e6fd9`,
+   `#2e7d32`, `#7b1fa2`, `#d0d7de`, `#8c959f`, `#57606a`); rename the
+   misspelt uses (`--code-bg` → `--code-bg-color`, `--secondary-text` →
+   `--text-secondary`, `--font-mono` → `--font-monospace`); give
+   `--accent-color` a definition equal to its fallback.
+2. Fix `.tool-result .line-count` → `.tool_result .line-count` in
+   `pygments_styles.css`.
+3. Timeline: replace each group's `style: 'background-color: …'` in
+   `messageTypeGroups` with `className: 'timeline-group-<id>'` and move
+   the colours to `timeline_styles.css` as
+   `.vis-label.timeline-group-<id> { background-color: var(--timeline-<id>-bg, <same hex>); }`
+   (scope to `.vis-label` — vis applies a group `className` to the label
+   *and* the row, the old inline `style` only hit the label). Move the
+   container/resize-handle inline colours to CSS
+   (`#timeline-container { background: var(--timeline-bg, white); border-bottom: 1px solid var(--timeline-border, #ddd) }`
+   etc.; keep layout inline styles if you prefer, only colours must
+   move). Replace the `#fff3cd` select flash with a
+   `timeline-flash` class defined in `timeline_styles.css`. Re-point the
+   item rules `.vis-item.timeline-item-*` to
+   `var(--timeline-item-<type>-bg, <hex>)` / `-border`.
+4. Timeline scroll: in `onTimelineSelect` replace
+   `messageEl.offsetTop` with
+   `messageEl.getBoundingClientRect().top + window.scrollY`
+   (required by `display: contents` later; identical result today
+   because cards have no positioned ancestor — verify).
+5. `just update-snapshot`; inspect: only CSS/JS text inside each block
+   should differ, no message markup.
+
+**Acceptance:** `just ci` green; snapshot diff limited to style/script
+text; a quick manual or Playwright check that the timeline still
+colours groups (extend `test/test_timeline_browser.py` with an
+assertion that a group label has the expected computed background). Visual delta of the default theme
+limited to the previously-broken rules now applying (Pygments block
+background, line-count badge, read-tool colours) — describe it in the
+commit message.
+
+**Tests:** in `test/test_timeline_browser.py`: open a rendered page, toggle
+the timeline, assert `getComputedStyle(label).backgroundColor` for the
+user group equals `rgb(227, 242, 253)`; set
+`--timeline-user-bg: rgb(1, 2, 3)` on `:root`, assert it follows.
+
+**Dev-docs:** `css-classes.md` — note the timeline group classes and
+variables.
+
+### P2 — Theme plumbing: `--theme {default,minimal}` end to end — M
+
+**Goal:** the option exists everywhere HTML is produced and decides the
+output filename variant; the minimal output is, for now, the default
+page plus a `theme-minimal` body class and an empty minimal stylesheet
+slot. Default output byte-identical.
+
+**Files:** `claude_code_log/utils.py` (`variant_suffix`),
+`renderer.py` (`Renderer.theme`, `get_renderer`), `html/renderer.py`
+(`_generate_inner` passes `theme`; `generate_session` link suffix;
+`generate_html`/`generate_session_html` convenience functions gain
+`theme: str = "default"`), `converter.py` (every function in § 2.3),
+`converter.py::_variant_label_from_suffix` ("Minimal theme"),
+`render_pool.py`, `render_dispatch.py`, `cli.py` (`convert`, provider
+helpers, `serve`, `watch`, TUI launch), `tui.py`
+(`run_session_browser(..., theme=)`, `SessionBrowser.__init__`,
+`_ensure_session_file` uses `session-{id}{suffix}.{ext}` and
+`get_renderer(format, theme=...)`), `models.py` or `utils.py` (a
+`THEMES = ("default", "minimal")` constant and `DEFAULT_THEME`),
+`html/templates/transcript.html`, new empty
+`html/templates/components/minimal/tokens.css`, tests, dev-docs.
+
+**Steps:**
+1. `variant_suffix(..., theme: str = "default")`: append `"minimal"`
+   (or the decided infix, § 7) **only for format `html`**, after depth
+   and no-recaps; update the naming comment block above
+   `VARIANT_ENTRY_RE` in `utils.py`.
+2. Thread `theme` beside `no_recaps` through every function listed in
+   § 2.3 (grep `no_recaps` — every hit is a site to consider). Keyword
+   arguments with default `"default"` everywhere so library callers keep
+   working.
+3. CLI: `@click.option("--theme", type=click.Choice(THEMES),
+   default="default", show_default=True, help=…)` on `convert`, `serve`,
+   `watch`. With `--format md|json`, warn (not error) that `--theme` is
+   HTML-only, like `--no-timestamps`. Under `--tui`, pass it to the TUI
+   (the TUI exports HTML).
+4. Template: `{% set minimal = theme == 'minimal' %}` glued to an
+   existing line; `<body{% if minimal %} class='theme-minimal'{% endif %}>`;
+   after the last `{% include %}` in `<style>`:
+   `{% if minimal %}{% include 'components/minimal/tokens.css' %}{% endif %}`
+   on the **same line** as the teammate include. Diff a default render
+   before/after: must be byte-identical.
+5. Index: `_variant_label_from_suffix` maps the theme segment to
+   "Minimal theme".
+
+**Acceptance:** `just ci` green with **no** `.ambr` change;
+`claude-code-log <dir> --theme minimal` writes
+`combined_transcripts.minimal.html` + `session-*.minimal.html` (and
+`_N` pages with `--page-size`), the index lists the variant, and a
+second run reports everything current; switching back to default
+regenerates nothing of the default variant.
+
+**Tests** (new `test/test_theme_option.py`):
+- `variant_suffix` matrix (html vs md/json, with depth/no-recaps).
+- `get_renderer("html", theme="minimal").theme == "minimal"`.
+- default render byte-identical with `theme="default"` vs omitted
+  (render `representative_messages.jsonl` both ways).
+- minimal render contains `class='theme-minimal'`; default does not.
+- conversion of a tmp project: files named per suffix; second run is a
+  no-op (assert via `RegenerationReport`/mtimes, see
+  `test/test_html_regeneration.py` helpers `bump_mtime`,
+  `assert_regenerated` in `conftest.py`); theme switch regenerates only
+  the minimal files.
+- paginated (`page_size`) and render-pool paths
+  (`CLAUDE_CODE_LOG_RENDER_JOBS=2`; patterns in
+  `test/test_render_cache_equivalence.py` and
+  `test/test_streaming_render.py`) carry the theme into page units.
+- CLI: `--theme minimal --format md` warns; `serve`/`watch` accept the
+  option (Click `CliRunner` with `--help` or a patched converter).
+- TUI: `_ensure_session_file` names the file with the suffix (see
+  `test/test_tui.py`, marker `tui`).
+
+**Dev-docs:** `application_model.md` § 2.1 (flag list; filename
+convention), § 2.2 (TUI honours `--theme`), § 2.15 if `watch`/`serve`
+flags are listed there; `docs/` user docs get a short "Themes" mention
+only in P8.
+
+### P3a — Minimal look: tokens, layout, toolbar, light/dark toggle — L
+
+**Goal:** the minimal page looks like `MinimalLook.dc.html` for the
+common message types, light and dark, with the toolbar and theme toggle;
+no DAG, no fold-depth control yet (toolbar slot reserved).
+
+**Files:** `components/minimal/tokens.css`, `layout.css`,
+`theme_init.js`, `minimal.js` (theme toggle + gutter time only),
+`transcript.html` (minimal branches: head script, header/meta line,
+toolbar with moved buttons, stage wrapper, `.mn-time` span in the
+header), tests, `dev-docs/css-classes.md`.
+
+**Steps:**
+1. Tokens per § 1.2/§ 1.3 (three blocks). Font stacks. `body` explicit
+   background; remove the gradient (`.theme-minimal` override).
+2. Row layout: make `.theme-minimal .message` a grid
+   `58px 18px minmax(0,1fr)`; `.header` → gutter column (role label from
+   the existing title span, `.timestamp` → `.mn-time`, `.token-usage`
+   muted); `.content` → column 3; `.fold-bar` → column 3 below content;
+   dot via `.message::before` in column 2 coloured by role class
+   (`user`→`--user`, `assistant`→`--asst`, `thinking`→hollow muted,
+   `tool_use|tool_result`→`--tool`, `system*`→`--sys`,
+   `task-notification`→`--note`, `error`→`--err`); continuous hairline
+   via the stage's `::before` at the rail column. Pair cards
+   (`pair_first`/`pair_last`): the last half drops gutter text and dot
+   and tucks under the first.
+3. Turn separation: a 1px `--rule2` rule above each main-lane user card
+   except the first in a session; no card borders/backgrounds/shadows.
+4. Neutralise legacy layout hacks under `.theme-minimal`: negative
+   margins on `.collapsible-details` / `.tool_result .collapsible-code`,
+   branch-header inline `margin-left` (`!important` needed — inline
+   style), `.message` padding/border-radius/box-shadow, `.session-divider`.
+5. Toolbar: `<nav class='mn-toolbar'>` sticky top, segmented controls
+   (`.seg`), icon buttons (`.ibtn`), overflow group; the moved buttons
+   keep ids; hide `.floating-btn` positioning. Follow button stays hidden
+   until `live_update.js` enables it (it toggles a class — check the
+   CSS hook it uses and mirror it).
+6. Theme toggle (`minimal.js`), `theme_init.js` in `<head>`.
+7. Phone layout (<640px) per mockup; verify no horizontal scroll.
+8. Nested (no-JS) rendering of sidechains: `.children` containing
+   `.message.sidechain` get `border-left: 2px solid var(--ring)` and a
+   small left padding (mockup `.nest`).
+
+**Acceptance:** `just ci` green, existing snapshots unchanged; new
+snapshot `test_minimal_representative_html` added via
+`just update-snapshot` (`+N/-0`); visual check of light and dark with
+Playwright screenshots attached to the PR/commit description (not
+committed).
+
+**Tests** (browser, new `test/test_minimal_theme_browser.py`):
+toggle Auto/Light/Dark sets `data-theme` and survives reload
+(localStorage); in forced dark, `getComputedStyle(body).backgroundColor`
+is `rgb(20, 22, 26)`; with `prefers-color-scheme: dark` emulation and
+Auto, same; every moved button exists and its existing behaviour works
+(click `#filterMessages` opens `.filter-toolbar`; `#toggleTimeline`
+shows the timeline); 375px viewport → `scrollWidth <= clientWidth`.
+
+**Dev-docs:** `css-classes.md` (minimal classes, `theme-minimal` scope,
+token table); `rendering-architecture.md` (template theme branch).
+
+### P3b — Minimal components, dark completeness, Pygments dark, timeline — L
+
+**Goal:** every component looks right in minimal light and dark.
+
+**Files:** `components/minimal/components.css`, `pygments_dark.css`
+(generated), `scripts/generate_minimal_pygments_css.py`, tests,
+dev-docs.
+
+**Steps:**
+1. Audit colour literals per default file (counts at the time of
+   writing: message_styles 128, global_styles 91, pygments 67, search 36,
+   teammate 34, timeline.html 24 (fewer after P1), project_card 24 (index
+   only — skip), timeline_styles 23, session_nav 23, filter 14,
+   edit_diff 8, page_nav 7, todo 6):
+   `grep -noE '#[0-9a-fA-F]{3,8}\b|rgba?\(' <file>`. For each rule that
+   is visible on a transcript page, add a `.theme-minimal` override
+   mapped to tokens. Teammate colours: redefine `--cc-*` and `--cc-*-bg`
+   for dark. ANSI output (`html/ansi_colors.py` inline styles) stays.
+2. Tool rendering per § 1.2: call line, output box, error box + pill
+   (the gutter pill can be CSS on `.tool_result.error .header::after`
+   content `"error"`; an `exit N` value is only available in the Bash
+   result text — keep it CSS-only unless trivially available), diffs
+   (`edit_diff_styles.css` classes), hooks/system dim.
+3. Pygments dark: the script runs
+   `HtmlFormatter(style="github-dark").get_style_defs(".highlight")` and
+   rewrites each selector twice — prefixed with
+   `@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .theme-minimal …}`
+   and `:root[data-theme="dark"] .theme-minimal …` — writing
+   `pygments_dark.css`. Test that the committed file equals the script's
+   output (drift guard).
+4. Timeline in minimal: redefine the P1 `--timeline-*` variables for
+   light/dark; vis-timeline's own CSS (axis, labels, items) overridden
+   for dark under `.theme-minimal`.
+5. Filter toolbar, search bar, session ToC (`session_nav`), page nav,
+   fork-point boxes, todo lists, ask-user-question, workflow cards:
+   flat, hairline-bordered, token colours.
+
+**Acceptance:** `just ci`; minimal snapshot updated (expected, only the
+minimal block changes — confirm block-level); a browser test sampling
+computed colours in dark for: code block background, a Pygments keyword
+(`.highlight .k`), diff add line, timeline group label, filter toggle.
+Run `uv run python scripts/generate_style_guide.py` with the minimal
+theme (add a `--theme` flag to it if it lacks one) and eyeball both
+schemes.
+
+**Dev-docs:** `css-classes.md` (component overrides, Pygments dark);
+`CONTRIBUTING.md` one line on regenerating `pygments_dark.css`.
+
+### P4 — Collapse previews and fold-depth control — M
+
+**Goal:** § 1.4 and § 1.5 fully working.
+
+**Files:** `transcript.html` (export
+`window.claudeLogApplyFoldState = applyFoldState;` — a default-template
+change of one line: **this alters default bytes**; to keep byte-identity
+put the export inside a `{% if minimal %}…{% endif %}` glued inline, or
+better expose it from the minimal script by having the template's fold
+block assign it only when `document.body.classList.contains('theme-minimal')`
+— prefer the Jinja gate), `components/minimal/layout.css` /
+`components.css` (collapse styling, fold bar), `minimal.js` (collapse
+labels, `− less`, fold depth), tests, `dev-docs/message-hierarchy.md`.
+
+**Steps:**
+1. CSS: closed `<details>` show the summary preview clipped to `--pv`
+   with the mask; `.line-count` restyled as the `+N lines` button text
+   (`.more`); `details[data-more]` without a `.line-count` gets
+   `summary::after { content: attr(data-more) }`; open → summary shows
+   `− less`; body full.
+2. JS per § 3.4; register the label pass with `claudeLogOnRehydrate`.
+3. Fold depth segmented control in the toolbar; mapping per § 1.5;
+   default `steps`; persisted.
+4. Make the fold bar a one-line chevron summary (both sections kept).
+
+**Acceptance & tests** (browser): a long Read result shows ≤ 4.4em +
+fade, `+N lines` text equals the real line count; click opens, `− less`
+closes and scrolls back; Prompts hides every assistant card in a turn
+(assert `display` of child containers), Steps shows main-lane steps with
+all `<details>` closed, All opens every collapsible; manual fold-bar
+click clears the segment's `on`; state survives a reload; existing
+fold-bar browser tests still pass (default theme).
+
+**Dev-docs:** `message-hierarchy.md` (fold-depth mapping onto states
+A/B/C).
+
+### P5 — Server-side lane annotation and data attributes — M
+
+**Goal:** § 3.3. Pure server work; the page renders exactly as after P4
+(attributes are inert until P6).
+
+**Files:** new `claude_code_log/lanes.py`, `renderer.py`
+(`TemplateMessage.lane_id`), `html/renderer.py` (call
+`annotate_lanes` when minimal; pass lanes to the template),
+`transcript.html` (attributes, minimal-gated, inline), tests,
+`dev-docs/agents.md` § 5.4 / `dag.md` (lane ids), `application_model.md`
+§ 1 table row for `lanes.py`.
+
+**Steps:**
+1. Implement `annotate_lanes` per § 3.3; stats: steps = rendered cards
+   in the lane excluding `is_last_in_pair`; tokens/duration from
+   `TaskOutput.metadata` (sync) or `TaskNotificationMessage.usage`
+   (async), else duration from first/last timestamps, tokens omitted;
+   format like `6 steps · 48.4k tokens · 2m 13s` (the pair-duration
+   string built near `renderer.py` ~2327 and
+   `html/async_formatter.py::_format_usage_rows` are the existing
+   formatting precedents — share a helper rather than adding a third).
+2. Merge rows: sync → the spawn's paired tool_result
+   (`pair_last` index); async → the `TaskNotificationMessage` with
+   `task_id == agent_id` (use `spawning_task_message_index` to pair).
+3. Forks: lane per branch header; spawn row = fork-point card
+   (`content.parent_message_index`); main-continuation branch per the
+   § 7 decision.
+4. Teammates: `kind="teammate"`, `data-teammate-link`.
+5. Template: attributes from § 3.3, emitted only when minimal; read
+   `lanes` from a dict keyed by `message_index` passed into the template.
+
+**Acceptance:** `just ci`; default snapshots unchanged; minimal
+snapshots gain attributes only (block-level check).
+
+**Tests** (unit, new `test/test_lanes.py`): fixtures
+`test/test_data/nested_agents/` (load with `load_directory_transcripts`
+— the single-file loader skips agent integration, see teammates.md § 8),
+`async_agents/`, `teammates/`, `dag_fork.jsonl`, `dag_within_fork.jsonl`:
+lane ids, kinds, parents (nested chain depth 3), spawn/merge indices,
+stats strings, teammate exclusion; new minimal snapshot
+`test_minimal_async_agents_html` (+ nested agents).
+
+### P6 — DAG engine: main-only + interleaved + rail — L
+
+**Goal:** § 1.6.1 (folded, interleaved), § 1.6.2 (Main only /
+Interleaved), § 1.6.4, § 3.5 steps 1–8 except columns.
+
+**Files:** `components/minimal/minimal_dag.js`, `dag.css`,
+`transcript.html` (include + `#dag-rail` already there from P3a),
+tests, new `dev-docs/minimal-theme.md` (architecture as built: ownership
+split, triggers, algorithm) linked from `application_model.md` § 1.
+
+**Steps:** follow § 3.5. Port the pack and rail code from
+`work/minimal-theme-dag-mockups/DagRail.dc.html` `renderVals()`
+(generalise the fixed `LANES[x].slot`, keep the per-row slot states),
+then render slot states as SVG. Default mode folded; branch control on
+the spawn card with stats, chevron, `Column ⇥` button (disabled until
+P7); LRU cap 3 per group; tags in the gutter for interleaved rows;
+DagThreads tint/indent for interleaved rows.
+
+**Acceptance & tests** (browser, `test/test_minimal_dag_browser.py`, on
+a converted tmp copy of `nested_agents/` + `async_agents/` + a fork
+fixture):
+- default: no sidechain card visible; each spawn card has a branch
+  control with the server stats text; SVG has one dashed path per
+  visible branch from spawn to merge (async: merge at the notification).
+- interleave one lane: its cards become visible, their visual order
+  (sorted by `getBoundingClientRect().top`) is non-decreasing in
+  `data-timestamp` across main + lane; connector paths exist at spawn
+  and merge rows.
+- interleave a 4th lane in a group → the least recently selected folds.
+- global Main only / Interleaved switch all lanes; persists.
+- filter parity: turning off "Sub-assistant" hides interleaved lane
+  cards *and* the timeline's sidechain group; turning it back restores
+  the layout (MutationObserver relayout).
+- fold parity: folding a user turn containing a spawn hides its lane
+  rows and rail.
+- live update: call `window.claudeLogRehydrate(document.getElementById('transcript'))`
+  after replacing `#transcript` with a clone that has one extra card →
+  layout recomputed, no stale inline `grid-row` on removed nodes.
+- timeline click still scrolls to the card (P1 fix).
+- no-JS: with JavaScript disabled the page shows the nested sidechain
+  blocks (Playwright `java_script_enabled=False` context).
+
+### P7 — Columns, branch overflow, teammate anchors — L
+
+**Goal:** § 1.6.1 column mode, § 1.6.3 overflow, § 1.6.5 teammates.
+
+**Files:** `minimal_dag.js`, `dag.css`, `minimal.js` (toolbar
+Columns), possibly `html/teammate_formatter.py` **only if** a link must
+live inside formatter output (prefer the template/engine-owned
+`data-teammate-link`), tests, `dev-docs/minimal-theme.md`,
+`dev-docs/teammates.md` (§ 6.1 note on the minimal link).
+
+**Steps:**
+1. Column mode: lanes in columns get `grid-column: 4 + i`, packed rows
+   (mockup "Pack rows" with per-column `nextFree`), column header
+   (name, meta + stats, `⇤ Interleave`, `Collapse`), collapse to a 34px
+   strip with vertical label and expand; stage widens
+   (`max-width:none`) and the scroller scrolls horizontally; main column
+   keeps `minmax(360px,1fr)`.
+2. Nested lanes in columns: each lane its own column ordered by spawn
+   time (a nested lane is placed right of its parent column).
+3. Branch overflow per § 1.6.3 (`+N more branches` / `− fewer`).
+4. Teammates: spawn row link `→ <name>'s thread` to `#msg-d-N`
+   (existing hash handler reveals it); `SendMessage` ↔
+   `<teammate-message>` links where resolvable.
+
+**Acceptance & tests** (browser): Columns puts each lane's cards in a
+distinct column with tops time-ordered within the page; two cards from
+different columns can share a row (equal `top` within 1px); collapse to
+strip/expand; horizontal scroll appears when columns exceed the
+viewport; a fixture with ≥ 4 branches in one turn (build one in
+`test/test_data/` with a small generator script modelled on
+`scripts/gen_nested_agents_fixture.py`, or synthesise in-test) shows 3
+controls + `+N more branches`, revealing the rest; teammate spawn link
+navigates to and reveals the teammate thread's first card; teammates
+never get a lane or column.
+
+### P8 — Docs, polish, parity sweep — M
+
+**Goal:** user-facing docs, remaining parity, performance sanity.
+
+**Files:** `docs/themes.md` (new) + `mkdocs.yml` nav, `README.md` (one
+line + screenshot optional), `docs/live-updates.md` (theme works under
+`serve --watch`), `dev-docs/application_model.md` (§ 1 table row
+"Themes"), `dev-docs/css-classes.md`, `dev-docs/minimal-theme.md`
+(final), `scripts/generate_example_output.py` (optionally also render a
+minimal example page for the docs site), tests.
+
+**Steps:**
+1. User docs: what the theme is, `--theme minimal`, filenames, toolbar,
+   branch modes, dark mode, offline note (timeline still loads
+   vis-timeline from unpkg).
+2. Parity sweep: every filter toggle × every branch mode × timeline;
+   search hit inside a folded lane reveals it (search calls
+   `claudeLogRevealMessage`; the engine must switch that lane to
+   interleaved when a match is inside it — add if missing).
+3. Performance: render a large real-ish fixture
+   (`test/test_data/real_projects/` if suitable) and record relayout
+   time in `dev-docs/minimal-theme.md`.
+4. `just docs-build` strict passes.
+
+**Acceptance:** `just ci` and `just docs-build` green; all browser
+tests from P3a–P7 green together.
+
+---
+
+## 6. Progress
+
+- [ ] P1 groundwork fixes
+- [ ] P2 theme plumbing
+- [ ] P3a look, toolbar, light/dark
+- [ ] P3b components, Pygments dark, timeline
+- [ ] P4 collapse + fold depth
+- [ ] P5 lane annotation
+- [ ] P6 DAG engine (main-only, interleaved, rail)
+- [ ] P7 columns, overflow, teammates
+- [ ] P8 docs and polish
+
+---
+
+## 7. Open decisions and risks (need the user's call)
+
+1. **Groundwork changes default bytes (P1).** The three fixes the user
+   asked for necessarily change default CSS/JS and the default look
+   slightly (previously-dead rules start applying). Plan: one explicit,
+   reviewed regeneration in P1; byte-identity from P2 on. Alternative:
+   do the fixes only inside the minimal CSS and leave the default as is.
+2. **Theme as a filename variant** (`.minimal`) vs same filenames with a
+   theme marker. Recommended: variant (§ 2.4). Sub-decision: `.minimal`
+   (collides in name with stale pre-#159 `--detail minimal` outputs) vs
+   `.theme-minimal`.
+3. **Which fork branch continues "main"** — earliest (proposed; stable
+   under live updates, matches mockup) vs latest (what `--resume`
+   continues).
+4. **Teammate anchors** — teammate threads are inline sub-agent blocks,
+   not separate sessions, today. Proposed: keep them nested and folded,
+   link spawn/SendMessage rows to the thread's cards on the same page;
+   fall back to `session-<sid>.html?uuid=` only if a future layout puts
+   teammates in their own session files. Confirm this matches the
+   intent.
+5. **Branch-group cap semantics** — "max 3 interleaved" applied per
+   user turn (proposed, aligns with "+N more branches" per turn) vs one
+   global cap of 3 per page.
+6. **Workflow sub-agents** (#174) are not lanes in this feature; the
+   index page and `search.html` are not themed. Both could follow.
+7. **Risks:** `display: contents` + one big grid on very large combined
+   pages (mitigated: pagination, measured budget in P6, columns only on
+   demand); live-update patches stripping engine-owned controls
+   (mitigated: re-created on rehydrate, engine is idempotent); keeping
+   default bytes identical under Jinja without `trim_blocks` (every
+   conditional inline; P2 adds a byte-identity test).
