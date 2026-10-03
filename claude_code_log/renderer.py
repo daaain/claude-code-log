@@ -82,6 +82,7 @@ from .factories.attachment_factory import (
 )
 from .utils import (
     DEFAULT_THEME,
+    format_duration,
     output_theme,
     format_timestamp,
     best_working_dir,
@@ -330,6 +331,13 @@ class TemplateMessage:
         # follow-up — fork points survive depth filtering like the branches
         # they connect, instead of vanishing and orphaning the branches).
         self.fork_only: bool = False
+
+        # Branch lane this node renders in (``"main"``, ``"agent-<id>"`` or
+        # ``"branch-<branch sid>"``). Set by ``lanes.annotate_lanes``, which
+        # the HTML renderer calls only for the minimal theme; the template
+        # emits it as ``data-lane``. Render-time only: formatters never read
+        # it, so it is not part of the fragment-store key.
+        self.lane_id: str = "main"
 
     # -- Properties derived from content/meta --
 
@@ -2152,6 +2160,32 @@ def _identify_message_pairs(messages: list[TemplateMessage]) -> None:
         i += 1
 
 
+def spawned_agent_id_of(msg: TemplateMessage) -> Optional[str]:
+    """The agent spawned at this message, if it's a spawn anchor.
+
+    The sidecar-resolved ``spawned_agent_id`` (issue #213) works at any
+    nesting depth — an anchor INSIDE agent A's block links agent B's
+    block. The fallback is the legacy trunk shape: a trunk-session
+    tool_result whose ``agent_id`` is a reference backpatched from
+    ``toolUseResult.agentId`` (the ``tool_name`` would normally be
+    ``"Task"`` or ``"Agent"``, but the tool_factory's context-lookup
+    occasionally fails to populate it — e.g. when the tool_use sits in
+    a session-fork branch — so the agent_id alone decides).
+
+    Shared by ``_relocate_subagent_blocks`` and the lane model
+    (``lanes.py``), so both agree on which card opens which agent.
+    """
+    if msg.meta.spawned_agent_id:
+        return msg.meta.spawned_agent_id
+    if (
+        isinstance(msg.content, ToolResultMessage)
+        and msg.meta.agent_id
+        and "#agent-" not in (msg.meta.session_id or "")
+    ):
+        return msg.meta.agent_id
+    return None
+
+
 def _relocate_subagent_blocks(
     messages: list[TemplateMessage],
 ) -> list[TemplateMessage]:
@@ -2180,8 +2214,6 @@ def _relocate_subagent_blocks(
     messages`` leaves at the end) are excluded from blocks and stay
     where they are — the level-stack ignores them at level 0 anyway.
     """
-    from .models import ToolResultMessage
-
     blocks: dict[str, list[TemplateMessage]] = {}
     block_ids: set[int] = set()
     for msg in messages:
@@ -2198,34 +2230,12 @@ def _relocate_subagent_blocks(
 
     result: list[TemplateMessage] = []
 
-    def _spawned_id(msg: TemplateMessage) -> Optional[str]:
-        """The agent spawned at this message, if it's a spawn anchor.
-
-        The sidecar-resolved ``spawned_agent_id`` (issue #213) works at any
-        nesting depth — an anchor INSIDE agent A's block links agent B's
-        block. The fallback is the legacy trunk shape: a trunk-session
-        tool_result whose ``agent_id`` is a reference backpatched from
-        ``toolUseResult.agentId`` (the ``tool_name`` would normally be
-        ``"Task"`` or ``"Agent"``, but the tool_factory's context-lookup
-        occasionally fails to populate it — e.g. when the tool_use sits in
-        a session-fork branch — so the agent_id alone decides).
-        """
-        if msg.meta.spawned_agent_id:
-            return msg.meta.spawned_agent_id
-        if (
-            isinstance(msg.content, ToolResultMessage)
-            and msg.meta.agent_id
-            and "#agent-" not in (msg.meta.session_id or "")
-        ):
-            return msg.meta.agent_id
-        return None
-
     def _emit(msg: TemplateMessage) -> None:
         """Emit a message, then any block it anchors — recursively, so a
         nested agent's block lands right after its spawn entry inside the
         parent agent's block (one frame per nesting level)."""
         result.append(msg)
-        spawned = _spawned_id(msg)
+        spawned = spawned_agent_id_of(msg)
         if spawned:
             block = blocks.pop(spawned, None)
             if block:
@@ -2315,15 +2325,9 @@ def _reorder_paired_messages(messages: list[TemplateMessage]) -> list[TemplateMe
                         duration = last_time - first_time
 
                         # Format duration nicely
-                        total_seconds = duration.total_seconds()
-                        if total_seconds < 1:
-                            duration_str = f"took {int(total_seconds * 1000)} ms"
-                        elif total_seconds < 60:
-                            duration_str = f"took {total_seconds:.1f}s"
-                        else:
-                            minutes = int(total_seconds // 60)
-                            seconds = int(total_seconds % 60)
-                            duration_str = f"took {minutes}m {seconds}s"
+                        duration_str = (
+                            f"took {format_duration(duration.total_seconds())}"
+                        )
 
                         # Store duration in pair_last for template rendering
                         pair_last.pair_duration = duration_str

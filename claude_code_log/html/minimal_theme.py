@@ -17,7 +17,13 @@ import re
 import unicodedata
 from typing import TYPE_CHECKING, Any, Iterable, Optional, cast
 
+# Re-exported: the gutter token counts and the lane stats share it.
+from markupsafe import Markup
+
+from ..utils import compact_count as compact_count
+
 if TYPE_CHECKING:
+    from ..lanes import LaneModel
     from ..renderer import TemplateMessage
 
 # Titles that say nothing the gutter's role label doesn't already say.
@@ -222,20 +228,6 @@ def session_header(content: Any, formatted: Any) -> str:
     return block + text
 
 
-def compact_count(value: int) -> str:
-    """``950`` → ``950``, ``9400`` → ``9.4k``, ``182345`` → ``182k``."""
-    if value < 1000:
-        return str(value)
-    for divisor, suffix in ((1_000_000_000, "B"), (1_000_000, "M"), (1_000, "k")):
-        if value >= divisor:
-            scaled = value / divisor
-            text = f"{scaled:.1f}" if scaled < 100 else f"{scaled:.0f}"
-            if text.endswith(".0"):
-                text = text[:-2]
-            return text + suffix
-    return str(value)  # pragma: no cover - unreachable
-
-
 def _token_parts(summary: str) -> dict[str, int]:
     return {
         name.strip().lower(): int(number.replace(",", ""))
@@ -339,3 +331,89 @@ def page_meta(
     if total_out:
         parts.append(f"{compact_count(total_out)} out")
     return parts
+
+
+# -- Branch lanes (P5) --------------------------------------------------------
+#
+# The lane model (``lanes.annotate_lanes``) becomes ``data-*`` attributes on
+# the cards, read by the DAG engine (P6/P7). Attributes, not a JSON island:
+# ``live_update.js`` patches *cards* in place (a changed card's own markup is
+# swapped), so per-card attributes stay current through a patch, whereas a
+# separate data block would only refresh on a wholesale swap. Schema:
+# work/minimal-theme-dag.md, P5 "As built".
+
+LaneAttrs = dict[int, list[tuple[str, str]]]
+
+
+def lane_attributes(model: "LaneModel") -> LaneAttrs:
+    """``message_index`` → the extra ``data-*`` attributes of that card.
+
+    ``data-lane`` itself is not in here: every card carries it, straight
+    from ``TemplateMessage.lane_id`` (see ``lane_attrs``).
+    """
+    attrs: LaneAttrs = {}
+    spawns: dict[int, list[str]] = {}
+    merges: dict[int, list[str]] = {}
+
+    def add(index: Optional[int], name: str, value: str) -> None:
+        if index is not None:
+            attrs.setdefault(index, []).append((name, value))
+
+    for lane in model.branches:
+        if lane.spawn_index is not None:
+            spawns.setdefault(lane.spawn_index, []).append(lane.lane_id)
+        if lane.merge_index is not None:
+            merges.setdefault(lane.merge_index, []).append(lane.lane_id)
+    for index, lane_ids in spawns.items():
+        add(index, "data-spawns", " ".join(lane_ids))
+    for index, lane_ids in merges.items():
+        add(index, "data-merges", " ".join(lane_ids))
+
+    heads: set[int] = set()
+    for lane in model.branches:
+        head = lane.head_index
+        if head is None or head in heads:
+            continue
+        heads.add(head)
+        add(head, "data-lane-id", lane.lane_id)
+        add(head, "data-lane-kind", lane.kind)
+        add(head, "data-lane-name", lane.name)
+        add(head, "data-lane-tag", lane.tag)
+        if lane.meta:
+            add(head, "data-lane-meta", lane.meta)
+        add(head, "data-lane-parent", lane.parent_lane)
+        add(head, "data-lane-depth", str(lane.depth))
+        if lane.spawn_index is not None:
+            add(head, "data-lane-from", f"d-{lane.spawn_index}")
+        if lane.merge_index is not None:
+            add(head, "data-lane-to", f"d-{lane.merge_index}")
+        if lane.turn_index is not None:
+            add(head, "data-lane-turn", f"d-{lane.turn_index}")
+        add(head, "data-lane-rank", str(lane.rank))
+        add(head, "data-lane-stats", lane.stats)
+        if lane.first_ts:
+            add(
+                head, "data-lane-ts", f"{lane.first_ts} {lane.last_ts or lane.first_ts}"
+            )
+
+    for header, (lane_id, fork_point) in model.continuations.items():
+        add(header, "data-lane-continues", lane_id)
+        if fork_point is not None:
+            add(header, "data-lane-from", f"d-{fork_point}")
+
+    for lane in model.teammates:
+        if lane.spawn_index is None or lane.first_index is None:
+            continue
+        add(lane.spawn_index, "data-teammate-link", f"d-{lane.first_index}")
+        add(lane.spawn_index, "data-teammate-name", lane.name)
+    return attrs
+
+
+def lane_attrs(message: "TemplateMessage", attrs: Optional[LaneAttrs]) -> Markup:
+    """The card's lane attributes as markup (`` data-lane="main" …``)."""
+    parts = [("data-lane", message.lane_id)]
+    if attrs and message.message_index is not None:
+        parts.extend(attrs.get(message.message_index, ()))
+    return Markup(
+        "".join(f' {name}="{html.escape(value, quote=True)}"' for name, value in parts)
+    )

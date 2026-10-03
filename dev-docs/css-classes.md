@@ -69,7 +69,7 @@ These never appear in the generated HTML; they are toggled at runtime on `.messa
 
 | Class | Applied By | Description |
 |-------|------------|-------------|
-| `filtered-hidden` | type filter toggles (`transcript.html`) | Message hidden by the Search & Filter type toggles. The timeline mirrors this per-lane (group visibility). |
+| `filtered-hidden` | type filter toggles (`transcript.html`) | Message hidden by the Search & Filter type toggles. The timeline mirrors this per lane (group visibility, through the same toggle expansion: `tool` → `tool_use` + `tool_result`, `user` → `user` + `bash-input` + `bash-output`) and per item (`timeline-filtered-hidden`), so an item in a lane no toggle governs alone — a sub-assistant's tool call, an async result — hides with its card. |
 | `search-match` | search (`components/search.html`) | Message matches the active search query; contains `.search-highlight` spans. Folded ancestors are unfolded and collapsed `<details>` around each highlight are opened, so every highlight is actually visible. |
 | `search-context` | search | Ancestor of a match, kept visible-but-dimmed when "Show context" is on. |
 | `search-hidden` | search | Message hidden by search-as-filter (strict mode hides everything that isn't a match or context). The timeline mirrors this per-item via `timeline-filtered-hidden`. |
@@ -206,6 +206,11 @@ becomes the gutter (spanning every row, so a gutter taller than the content
 grows the slack row instead of pushing the content down). `.message::before`
 is the role dot on the rail, coloured by `--rc`, a per-card custom property
 set from the type classes. `pair_middle`/`pair_last` drop gutter and dot.
+On wide screens a `pair_first` card's gutter (`height: 0`) and dot
+(negative bottom margin) add no height — the gutter hangs into the next
+half's empty gutter — and the first block under a call line (a
+`tool_use` body, a `pair_middle`/`pair_last` output) has no top margin,
+so a call and its output read as one unit.
 A main-lane `user` card that isn't a session's first gets the `--rule2`
 turn rule. Sub-agent groups (`.children` holding `.message.sidechain`) are
 indented to the content column with a 2px left line (classic ring colours)

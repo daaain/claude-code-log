@@ -155,7 +155,7 @@
        back-links (`from ⟂ Fork point`) and the nav fork item resolve here. #}
     <div class='message-node'>
     <div class='children'>{% for child in message.children %}{{ render_message(child) }}{% endfor %}{% if message.junction_forward_links %}
-        <div class='fork-point' id='msg-{{ message.message_id }}'>
+        <div class='fork-point' id='msg-{{ message.message_id }}'{% if minimal %}{{ mn_lane_attrs(message, lane_attrs) }}{% endif %}>
             <div class='fork-point-header'>&#x2442; Fork point{% if message.fork_point_preview %} &bull; {{ message.fork_point_preview }}{% endif %}</div>
             <div class='fork-point-branches'>
                 {% for branch_sid, branch_idx, branch_preview in message.junction_forward_links %}
@@ -171,7 +171,7 @@
        SIBLINGS here, so the card's border/background/margins frame only the
        card itself, not the whole subtree (issue #174 nested-DOM follow-up). #}
     <div class='message-node'>
-    <div class='message session-header{% if message.is_branch_header %} branch-header{% endif %}' data-session-id='{{ message.session_id }}' id='msg-{{ message.message_id }}'{% if message.branch_depth %} style='margin-left: {{ message.branch_depth * 2 }}em'{% endif %}>
+    <div class='message session-header{% if message.is_branch_header %} branch-header{% endif %}' data-session-id='{{ message.session_id }}' id='msg-{{ message.message_id }}'{% if minimal %}{{ mn_lane_attrs(message, lane_attrs) }}{% endif %}{% if message.branch_depth %} style='margin-left: {{ message.branch_depth * 2 }}em'{% endif %}>
         <div class='header'>{% if minimal and not message.is_branch_header %}{{ mn_session_header(message.content, html_content) | safe }}{% if message.display_model %}<span class='message-model' title='Main agent model'>{{ message.display_model }}</span>{% endif %}{% else %}{% if message.is_branch_header %}&#x21b3; {% else %}Session: {% endif %}{{ html_content|safe }}{% if message.display_model and not message.is_branch_header %} <span class='message-model' title='Main agent model'>{{ message.display_model }}</span>{% endif %}{% endif %}</div>
         {% if message.has_children %}
         <div class='fold-bar' data-border-color='session-header'>
@@ -224,7 +224,7 @@
        NOT unique per card: sibling cards split from one entry (text + tool_use)
        share the entry's UUID, so anything needing per-card identity within a
        page must use the card's `id` (msg-…) or element identity instead. #}
-    <div class='message {{ msg_css_class }}{% if message.is_paired %} {{ message.pair_role }}{% endif %}'{% if message.meta and message.meta.uuid %} data-uuid='{{ message.meta.uuid }}'{% endif %} id='msg-{{ message.message_id }}'>
+    <div class='message {{ msg_css_class }}{% if message.is_paired %} {{ message.pair_role }}{% endif %}'{% if message.meta and message.meta.uuid %} data-uuid='{{ message.meta.uuid }}'{% endif %} id='msg-{{ message.message_id }}'{% if minimal %}{{ mn_lane_attrs(message, lane_attrs) }}{% endif %}>
         <div class='header'>
             {% set msg_emoji = get_message_emoji(message) -%}
             {% if minimal %}{% set mn_full %}{% if message_title %}{% if message_title == 'Memory' %}💭 {% elif msg_emoji and (message.type != 'tool_use' or not starts_with_emoji(message_title)) %}{{ msg_emoji }} {% endif %}{{ message_title | safe }}{% endif %}{% endset %}{% set mn_t = mn_call_title(mn_full, message, msg_css_class, message.title_hint) %}<span class='mn-title{% if mn_t.generic %} mn-generic{% endif %}'{% if mn_t.tooltip %} title="{{ mn_t.tooltip }}"{% endif %}>{% if mn_t.prefix %}<span class='mn-tn'>{{ mn_t.prefix | safe }}</span>{% endif %}{{ mn_t.rest | safe }}</span>{% else %}<span{% if message.title_hint %} title="{{ message.title_hint }}"{% endif %}>{% if message_title %}{%

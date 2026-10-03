@@ -106,6 +106,7 @@ from ..renderer import (
     prepare_projects_index,
     title_for_projects_index,
 )
+from ..lanes import annotate_lanes
 from ..render_cache import markdown_cache, pygments_cache
 from ..renderer_timings import (
     DEBUG_TIMING,
@@ -214,6 +215,7 @@ from .tool_formatters import (
     format_write_output,
     render_params_table,
 )
+from .minimal_theme import LaneAttrs, lane_attributes
 from .utils import (
     css_class_from_message,
     escape_html,
@@ -1799,6 +1801,15 @@ class HtmlRenderer(Renderer):
         with log_timing("Content formatting (pre-order)", t_start):
             render_roots = self._annotate_tree_for_render(root_messages)
 
+        # Branch lanes (sub-agents, rewind forks) for the minimal theme's DAG
+        # layout: per-card `data-*` attributes, emitted by the template's
+        # minimal branch only — classic pays nothing and its bytes stay put.
+        theme = normalize_theme(self.theme)
+        lane_attrs: Optional[LaneAttrs] = None
+        if theme == "minimal":
+            with log_timing("Lane annotation", t_start):
+                lane_attrs = lane_attributes(annotate_lanes(render_roots))
+
         # Resume button: only pages holding a single trunk session get
         # one — `claude -r <session-id>` is unambiguous there. Combined
         # pages spanning several sessions don't (which session would
@@ -1834,7 +1845,8 @@ class HtmlRenderer(Renderer):
                     page_stats=page_stats,
                     resume_command=resume_command,
                     archive_search_link=archive_search_link,
-                    theme=normalize_theme(self.theme),
+                    theme=theme,
+                    lane_attrs=lane_attrs,
                 )
             )
 

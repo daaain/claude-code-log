@@ -606,6 +606,38 @@ body.theme-minimal {
     display: none;
 }
 
+/* The call half's gutter (time over role) is two lines; the call itself is
+   usually one. Left to size the row, the gutter held the output box ~15px
+   below its call. Instead it adds no height and hangs into the next half's
+   gutter, which is empty (hidden above): call and output read as one unit,
+   and the dot, on the first row, stays where it was (P5). Wide layout only —
+   on a phone the gutter is a line of its own above the call. */
+@media (min-width: 641px) {
+    .theme-minimal #transcript .message.pair_first > .header > .header-info {
+        height: 0;
+        overflow: visible;
+    }
+
+    .theme-minimal #transcript .message.pair_first > .header > .header-info > * {
+        flex-shrink: 0;
+    }
+
+    /* The dot spans the slack row too, so it would size that row by its own
+       margin-box (~13px); a negative bottom margin zeroes its contribution
+       without moving it. */
+    .theme-minimal #transcript .message.pair_first::before {
+        margin-bottom: calc(-0.7em - 3.5px);
+    }
+}
+
+/* …and the first block under a call line (the call's own body — a Write's
+   file, say — or the output) starts right under it: no top margin on it,
+   nor on the code box at the head of a preview inside it. */
+.theme-minimal #transcript .message:is(.tool_use, .pair_middle, .pair_last) > .content > :first-child,
+.theme-minimal #transcript .message:is(.tool_use, .pair_middle, .pair_last) > .content > :first-child > details:first-child > summary > .preview-content > .highlight:first-child {
+    margin-top: 0;
+}
+
 /* Turns: one rule above each main-lane prompt, except a session's first.
    A slash command's output (the pair's last half) belongs to its turn. */
 .theme-minimal #transcript .message-node:has(> .message.session-header) > .children > .message-node ~ .message-node > .message.user:not(.steering):not(.task-notification):not(.teammate):not(.sidechain):not(.command-output):not(.pair_middle):not(.pair_last) {

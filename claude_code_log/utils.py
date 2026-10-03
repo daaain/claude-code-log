@@ -182,6 +182,51 @@ def format_timestamp(timestamp_str: str | None) -> str:
         return timestamp_str
 
 
+def parse_timestamp(timestamp_str: str | None) -> Optional[datetime]:
+    """Parse an ISO transcript timestamp to an aware datetime, or None.
+
+    Naive values are taken as UTC, so any two parsed stamps compare.
+    """
+    if not timestamp_str:
+        return None
+    try:
+        dt = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def format_duration(total_seconds: float) -> str:
+    """A short human duration: ``"120 ms"``, ``"4.2s"``, ``"2m 13s"``.
+
+    Shared by the tool-pair duration (``took …``, renderer.py) and the
+    branch-lane stats (lanes.py), so both read the same.
+    """
+    if total_seconds < 1:
+        return f"{int(total_seconds * 1000)} ms"
+    if total_seconds < 60:
+        return f"{total_seconds:.1f}s"
+    minutes = int(total_seconds // 60)
+    seconds = int(total_seconds % 60)
+    return f"{minutes}m {seconds}s"
+
+
+def compact_count(value: int) -> str:
+    """``950`` → ``950``, ``9400`` → ``9.4k``, ``182345`` → ``182k``."""
+    if value < 1000:
+        return str(value)
+    for divisor, suffix in ((1_000_000_000, "B"), (1_000_000, "M"), (1_000, "k")):
+        if value >= divisor:
+            scaled = value / divisor
+            text = f"{scaled:.1f}" if scaled < 100 else f"{scaled:.0f}"
+            if text.endswith(".0"):
+                text = text[:-2]
+            return text + suffix
+    return str(value)  # pragma: no cover - unreachable
+
+
 def format_timestamp_range(first_timestamp: str, last_timestamp: str) -> str:
     """Format timestamp range for display.
 

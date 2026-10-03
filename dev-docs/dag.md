@@ -570,6 +570,28 @@ graph LR
 Branch nodes get their `session_id` rewritten to the branch id so the
 session tree attaches them at the fork point (`attachment_uuid`).
 
+### Branch lanes (minimal theme)
+
+The minimal theme's DAG layout (`lanes.py`; agents in
+[agents.md § 6](agents.md#6-branch-lanes-minimal-theme)) gives rewind
+branches lanes too. At a rewind **every** child is a branch
+pseudo-session, but the layout needs a main line to continue: the
+**earliest** branch at each fork point (grouped by the headers'
+`attachment_uuid`, ordered by their first message's timestamp) continues
+its fork point's lane — its header is recorded as a *continuation* and
+its cards keep that lane — and each later branch becomes lane
+`branch-<branch sid>`, spawned at the fork-point card
+(`parent_message_index`) and never merged. A non-agent card's lane is
+looked up from its `render_session_id`, so a rewind inside a fork lane
+nests (`parent_lane` = the outer fork lane) and a `/compact` that
+continues a branch ([below](#compaction-after-a-rewind)) stays in that
+branch's lane. An agent spawned on a branch has that branch as its
+parent lane. Agent lines are never split into branch pseudo-sessions
+(their render sid is their parent's), so a rewind *inside* a sub-agent
+stays in the agent's lane. A fork point filtered to a `fork_only`
+landmark still spawns its lanes: the attribute goes on the fork-point
+box, which carries the `msg-d-N` id.
+
 ---
 
 ## Compact Boundaries and Multi-Root Sessions

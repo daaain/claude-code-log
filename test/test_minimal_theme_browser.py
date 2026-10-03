@@ -413,6 +413,55 @@ class TestRowLayout:
         )
         assert sidechain_cards and set(sidechain_cards) == {"none"}
 
+    def test_tool_call_and_output_read_as_one_unit(
+        self, page: Page, tmp_path: Path
+    ) -> None:
+        """P5: the call half's two-line gutter no longer sizes its row — it
+        hangs into the output half's empty gutter — so the output box sits
+        right under the call, the gutter stays readable and the dot stays on
+        the call line."""
+        sample = (
+            TEST_DATA
+            / "real_projects"
+            / "-Users-dain-workspace-claude-code-log-sample"
+            / "fe869ecb-c176-478f-9734-7e4b8ef12cff.jsonl"
+        )
+        page.set_viewport_size({"width": 1100, "height": 900})
+        page.goto(_render(tmp_path, sample).as_uri())
+        geometry = page.evaluate(
+            """() => Array.from(document.querySelectorAll(
+                    '#transcript .message.tool_use.pair_first')).map(call => {
+                const out = call.closest('.message-node').nextElementSibling
+                    .querySelector(':scope > .message.pair_last');
+                const title = call.querySelector('.mn-title').getBoundingClientRect();
+                const time = call.querySelector('.mn-time').getBoundingClientRect();
+                const role = call.querySelector('.mn-role').getBoundingClientRect();
+                const dot = getComputedStyle(call, '::before');
+                const box = call.getBoundingClientRect();
+                const body = call.querySelector('.content').getBoundingClientRect();
+                return {
+                    gap: out.querySelector('.content').getBoundingClientRect().top
+                        - (body.height ? body.bottom : title.bottom),
+                    timeH: time.height, roleH: role.height,
+                    // A one-line call is shorter than its gutter: the role
+                    // label then hangs below the call, beside the output.
+                    oneLine: !body.height,
+                    roleBelowCall: role.bottom > box.bottom,
+                    dotTop: parseFloat(dot.marginTop),
+                    // A generic title is hidden: the call starts with its body.
+                    titleTop: (title.height ? title.top : body.top) - box.top,
+                };
+            })"""
+        )
+        assert any(row["oneLine"] for row in geometry)
+        for row in geometry:
+            assert 0 <= row["gap"] <= 4, row
+            assert row["timeH"] > 0 and row["roleH"] > 0, row
+            if row["oneLine"]:
+                assert row["roleBelowCall"], row  # hangs beside the output
+            # The dot's centre sits on the call line's first line.
+            assert row["titleTop"] <= row["dotTop"] + 3.5 <= row["titleTop"] + 18
+
     def test_gutter_shows_role_time_and_tokens(
         self, page: Page, tmp_path: Path
     ) -> None:

@@ -367,3 +367,44 @@ indent, badge, marker). Note the fixture's agents answer directly with
 no thinking blocks; real sub-agents usually *think* before spawning,
 so an agent's own thinking→spawn nesting renders as an invisible
 0-width passthrough group — only true agent boundaries draw a line.
+
+## 6. Branch lanes (minimal theme)
+
+The minimal HTML theme (`--theme minimal`) lays a transcript out as a
+DAG: sub-agents and rewind forks become **lanes** beside the main line
+(design: [`work/minimal-theme-dag.md`](../work/minimal-theme-dag.md)
+§ 1.6). The DOM keeps the nested tree described above; a format-neutral
+pass, `lanes.annotate_lanes(roots)` in
+[`lanes.py`](../claude_code_log/lanes.py), only labels it. The HTML
+renderer runs it after formatting, **for the minimal theme only**, and
+`html/minimal_theme.lane_attributes` turns the result into `data-*`
+attributes on the cards (classic output never carries them).
+
+| Flavour | Lane | Spawn row | Merge row | Kind |
+|---|---|---|---|---|
+| Sync sub-agent | `agent-<agentId>` | the `Task`/`Agent` tool_use | its paired tool_result | `agent` |
+| Async agent | `agent-<agentId>` | the tool_use | the `<task-notification>` card (`task_id` = agent id, else `spawning_task_message_index`) | `async-agent` |
+| Nested agent (§ 5) | `agent-<agentId>`, `parent_lane` = the spawning agent's lane | the tool_use inside the parent lane | its tool_result inside the parent lane | as above |
+| Teammate (§ 3) | none — the thread stays in its spawner's lane | — | — | recorded as `teammate` so the spawn card can link to the thread's first card |
+| Workflow agent (§ 4) | none — everything under the Workflow tool_use inherits its lane | — | — | — |
+
+Membership is the card's own session line: a sidechain card with a
+`{trunk}#agent-<id>` session id is in `agent-<id>`. The spawn anchor
+is found with `renderer.spawned_agent_id_of` — the same
+`spawnedAgentId`-first rule `_relocate_subagent_blocks` uses — and the
+spawn row is that tool_result's `pair_first` (an interrupted spawn with
+no result uses the card the loader stamped). A lane exists only once it
+has a rendered card: a transcript that deduplicated into its spawn pair
+(§ 5.3) or was stripped at a reduced detail level leaves an ordinary
+tool call. Each lane also records its **user turn** (the top-level card
+under the session or branch header that holds the spawn row), its rank
+in that turn by spawn time (the client's "interleave at most three per
+turn" cap) and its stats: `N steps` (rendered cards minus each pair's
+second half), tokens and duration from the notification's `<usage>`
+(async) or the result tail (sync), else the span of the lane's
+timestamps (`"6 steps · 48.4k tokens · 2m 13s"`).
+
+Rewind forks follow the same model; see
+[dag.md § Branch lanes](dag.md#branch-lanes-minimal-theme). Tests:
+`test/test_lanes.py`.
+

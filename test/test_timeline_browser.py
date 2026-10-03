@@ -780,6 +780,65 @@ class TestTimelineBrowser:
         assert all_timeline_count > 0, "Timeline should show items with 'Select All'"
 
     @pytest.mark.browser
+    @pytest.mark.parametrize("theme", ["classic", "minimal"])
+    def test_tool_filter_removes_tool_items_from_timeline(self, page: Page, theme: str):
+        """The "Tool" toggle hides tool items in the timeline too (parity).
+
+        The toggle's type is ``tool`` while the timeline's groups are
+        ``tool_use`` / ``tool_result``, so the groups used to stay on screen.
+        A sub-assistant's tool call lives in the sidechain group, which the
+        toggle doesn't govern: its item must be hidden one by one, like its
+        card.
+        """
+        messages = load_transcript(Path("test/test_data/sidechain.jsonl"))
+        html = generate_html(messages, "Timeline Tool Filter", theme=theme)
+        with tempfile.NamedTemporaryFile(suffix=".html", delete=False) as f:
+            temp_file = Path(f.name)
+        temp_file.write_text(html, encoding="utf-8")
+        self.temp_files.append(temp_file)
+
+        page.goto(f"file://{temp_file}")
+        page.locator("#toggleTimeline").click()
+        self._wait_for_timeline_loaded(page)
+
+        count_items = """(kind) => Array.from(document.querySelectorAll('.vis-item.vis-box'))
+            .filter(i => i.className.split(/\\s+/).some(c => kind.includes(c)))
+            .filter(i => !i.classList.contains('timeline-filtered-hidden')).length"""
+        tool_kinds = ["timeline-item-tool_use", "timeline-item-tool_result"]
+        side_kinds = ["timeline-item-sidechain"]
+        tools_before = page.evaluate(count_items, tool_kinds)
+        side_before = page.evaluate(count_items, side_kinds)
+        side_tool_cards = page.locator(
+            "#transcript .message.sidechain:is(.tool_use, .tool_result)"
+        ).count()
+        assert tools_before > 0 and side_tool_cards > 0
+
+        page.locator("#filterMessages").click()
+        page.locator('.filter-toggle[data-type="tool"]').click()
+        page.wait_for_timeout(300)
+
+        assert page.evaluate(count_items, tool_kinds) == 0
+        assert (
+            page.locator(
+                ".vis-label.timeline-group-tool_use, .vis-label.timeline-group-tool_result"
+            ).count()
+            == 0
+        )
+        side_after = page.evaluate(count_items, side_kinds)
+        assert side_after == side_before - side_tool_cards
+        # The transcript agrees: every tool card is hidden.
+        tool_cards = page.evaluate(
+            "Array.from(document.querySelectorAll('#transcript .message:is(.tool_use, .tool_result)'))"
+            ".map(m => getComputedStyle(m).display)"
+        )
+        assert tool_cards and set(tool_cards) == {"none"}
+
+        page.locator('.filter-toggle[data-type="tool"]').click()
+        page.wait_for_timeout(300)
+        assert page.evaluate(count_items, tool_kinds) == tools_before
+        assert page.evaluate(count_items, side_kinds) == side_before
+
+    @pytest.mark.browser
     def test_timeline_filter_individual_message_types(self, page: Page):
         """Test filtering individual message types in timeline."""
         sidechain_file = Path("test/test_data/sidechain.jsonl")

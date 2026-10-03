@@ -9,7 +9,11 @@ from pathlib import Path
 
 import pytest
 
-from claude_code_log.converter import convert_jsonl_to_html, load_transcript
+from claude_code_log.converter import (
+    convert_jsonl_to_html,
+    load_directory_transcripts,
+    load_transcript,
+)
 from claude_code_log.html.renderer import (
     generate_html,
     generate_projects_index_html,
@@ -173,6 +177,28 @@ class TestMinimalThemeHTMLSnapshots:
         test_file = test_data_dir / "representative_messages.jsonl"
         messages = load_transcript(test_file)
         html = generate_html(messages, "Test Transcript", theme="minimal")
+        assert html == html_snapshot
+
+    def test_minimal_async_agents_html(self, html_snapshot, test_data_dir):
+        """Async agent with the minimal theme: lane attributes (P5) on the
+        spawn, sidechain and notification cards."""
+        messages, tree = load_directory_transcripts(
+            test_data_dir / "async_agents", silent=True
+        )
+        html = generate_html(
+            messages, "Async Agents (minimal)", session_tree=tree, theme="minimal"
+        )
+        assert html == html_snapshot
+
+    def test_minimal_nested_agents_html(self, html_snapshot, test_data_dir):
+        """Nested sub-agents with the minimal theme: nested lane parents and
+        depths (P5)."""
+        messages, tree = load_directory_transcripts(
+            test_data_dir / "nested_agents", silent=True
+        )
+        html = generate_html(
+            messages, "Nested Agents (minimal)", session_tree=tree, theme="minimal"
+        )
         assert html == html_snapshot
 
 

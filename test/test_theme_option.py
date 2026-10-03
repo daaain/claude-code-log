@@ -184,7 +184,13 @@ class TestRendering:
         minimal = generate_html(messages, "T", theme="minimal")
 
         card = re.compile(r"<div class='message ([^']*)'([^>]*)>")
-        assert card.findall(minimal) == card.findall(classic)
+        # P5 adds the lane model as double-quoted `data-lane*` / `data-spawns`
+        # / `data-merges` / `data-teammate-*` attributes; everything else on
+        # the card is the classic markup.
+        lane_attr = re.compile(r' data-(?:lane|spawns|merges|teammate)[\w-]*="[^"]*"')
+        stripped = [(c, lane_attr.sub("", rest)) for c, rest in card.findall(minimal)]
+        assert stripped == card.findall(classic)
+        assert all(' data-lane="' in rest for _c, rest in card.findall(minimal))
         stamp = re.compile(r"<span class='timestamp'[^>]*>[^<]*</span>")
         assert stamp.findall(minimal) == stamp.findall(classic)
         fold = re.compile(r"<div class='fold-bar-section[^>]*>")

@@ -226,33 +226,49 @@
             return { timelineItems, timelineGroups, timelineEnd, timelineStart };
         }
 
+        // The timeline groups a filter toggle governs. Mirrors the toggle
+        // expansion in the transcript's applyFilter: the single "Tool" toggle
+        // stands for both tool groups, and "User" also covers the
+        // user-initiated bash lines. Every other toggle governs the group of
+        // its own name.
+        const TOGGLE_GROUPS = {
+            'tool': ['tool_use', 'tool_result'],
+            'user': ['user', 'bash-input', 'bash-output']
+        };
+        function groupsOfToggle(type) {
+            return TOGGLE_GROUPS[type] || [type];
+        }
+
         // Filter timeline items based on current message filters
         function applyFilters() {
             if (!timeline || !groups) return;
 
-            // Get active filter types from filter toggles
-            const activeTypes = Array.from(document.querySelectorAll('.filter-toggle.active'))
-                .map(toggle => toggle.dataset.type);
-
-            // Get all filter toggle types (to know which groups have filter controls)
-            const allFilterTypes = Array.from(document.querySelectorAll('.filter-toggle'))
-                .map(toggle => toggle.dataset.type);
+            // Groups each active toggle shows, and every group some toggle governs
+            const activeGroups = Array.from(document.querySelectorAll('.filter-toggle.active'))
+                .flatMap(toggle => groupsOfToggle(toggle.dataset.type));
+            const governedGroups = Array.from(document.querySelectorAll('.filter-toggle'))
+                .flatMap(toggle => groupsOfToggle(toggle.dataset.type));
 
             // Update groups visibility based on filter states
             // Groups with filter toggles follow toggle state; groups without toggles stay visible
             const updatedGroups = groups.map(group => ({
                 ...group,
-                visible: allFilterTypes.includes(group.id) ? activeTypes.includes(group.id) : true
+                visible: governedGroups.includes(group.id) ? activeGroups.includes(group.id) : true
             }));
 
             // Update timeline groups
             timeline.setGroups(updatedGroups);
+            // A group a toggle doesn't govern on its own (async results,
+            // teammates, a sub-assistant's tool calls…) can still hold items
+            // whose card the filter hid: hide those items one by one.
+            applySearchFilter();
         }
 
-        // Hide/show individual timeline items to mirror the search filter.
-        // The search component tags non-matching messages with .search-hidden;
-        // group-level type filtering above can't express per-item state, so
-        // this toggles the timeline-filtered-hidden class on each item.
+        // Hide/show individual timeline items to mirror the transcript: the
+        // search component tags non-matching messages with .search-hidden and
+        // the filter tags hidden types with .filtered-hidden. Group-level
+        // type filtering above can't express per-item state, so this toggles
+        // the timeline-filtered-hidden class on each item.
         function applySearchFilter() {
             if (!timeline || !itemsDataSet) return;
 
@@ -261,7 +277,8 @@
                 const item = itemsDataSet.get(id);
                 if (!item) return;
 
-                const hidden = messageEl.classList.contains('search-hidden');
+                const hidden = messageEl.classList.contains('search-hidden')
+                    || messageEl.classList.contains('filtered-hidden');
                 const baseClassName = (item.className || '')
                     .split(/\s+/)
                     .filter(cls => cls && cls !== 'timeline-filtered-hidden')

@@ -1,6 +1,6 @@
 # `--theme minimal`: a compact light/dark theme with a DAG layout
 
-Status: **spec + phased plan; P1, P2, P3a, P3b and P4 landed (see § 6);
+Status: **spec + phased plan; P1, P2, P3a, P3b, P4 and P5 landed (see § 6);
 § 7 decisions 1–5 taken.** Branch of origin:
 `claude/sweet-mccarthy-64a24r`.
 
@@ -1441,7 +1441,8 @@ A/B/C).
 - **Seen, not fixed (P3a layout):** a paired call's first half
   (`pair_first`, empty content) is as tall as its two-line gutter, so a
   ~15px gap sits between a call line and its output box. The timeline's
-  "Tool" filter doesn't drop vis items — classic too, pre-existing.
+  "Tool" filter doesn't drop vis items — classic too, pre-existing. (Both
+  fixed in P5.)
 - **Screenshots** in
   [`work/minimal-theme-dag-screenshots/p4/`](minimal-theme-dag-screenshots/p4/):
   a real sample session (`real_projects/…claude-code-log-sample/fe869ecb…`)
@@ -1488,6 +1489,149 @@ snapshots gain attributes only (block-level check).
 lane ids, kinds, parents (nested chain depth 3), spawn/merge indices,
 stats strings, teammate exclusion; new minimal snapshot
 `test_minimal_async_agents_html` (+ nested agents).
+
+**As built (P5 landed):**
+- **Module.** `claude_code_log/lanes.py`: `LaneInfo` as § 3.3 plus `tag`,
+  `meta`, `depth`, `head_index`, `first_index`, `turn_index`, `rank`,
+  `cards`, `agent_id` / `branch_session_id` and a `stats` property.
+  **Deviation:** `annotate_lanes(roots)` returns a `LaneModel` —
+  `lanes: dict[str, LaneInfo]` (spawn order) plus `continuations`
+  (`{branch-header index: (lane continued, fork-point index)}`, the
+  "earliest branch continues" headers, which are not lanes) — rather than a
+  bare dict. Rendering it as attributes is HTML-only:
+  `html/minimal_theme.lane_attributes(model)` → `{message_index: [(name,
+  value)]}`, and the Jinja global `mn_lane_attrs(message, lane_attrs)`
+  emits them (double-quoted, escaped). `HtmlRenderer._generate_inner` calls
+  both after `_annotate_tree_for_render` (so `should_render` is known),
+  **only for `theme == "minimal"`**; classic gets no call and no bytes.
+  `TemplateMessage.lane_id` (default `"main"`) is render-time only, not in
+  the fragment-store key.
+- **Shared helpers** (plan step 1): `utils.format_duration` now produces
+  the pair duration (`took …`, byte-identical) and the lane stats;
+  `utils.compact_count` moved from `minimal_theme` (re-exported there);
+  `utils.parse_timestamp`; `renderer.spawned_agent_id_of` was
+  `_relocate_subagent_blocks`' inner `_spawned_id`, now shared so the lane
+  model and the block relocation agree on which card opens which agent.
+  `async_formatter._format_usage_rows` keeps its own `15.5s` format (moving
+  it would change classic output past 60 s).
+- **Rules as built.** Agent lane = the card's own `{trunk}#agent-<id>`
+  session line; spawn row = the agent's tool_result `pair_first` (an
+  interrupted spawn without a result: the stamped tool_use card); merge =
+  that tool_result (sync) or the `<task-notification>` (async: matched on
+  `task_id`, else `spawning_task_message_index`; kind `async-agent` when
+  `run_in_background` or a notification matched). Fork lanes per § 1.6.4
+  and § 7 decision 3: branch headers grouped by `attachment_uuid`
+  (fallback `parent_message_index`), the one whose first message is
+  earliest continues the fork point's lane; non-agent cards take the lane
+  of their `render_session_id`. **A lane exists only once it has a
+  rendered card** — a transcript that deduplicated into its spawn pair
+  (#213: `nsleaf11/12/21`, `nschain3` in the fixture) or was stripped at a
+  reduced depth leaves an ordinary tool call; nodes of a dropped lane are
+  re-homed to its parent. **Teammates**: their threads keep the spawner's
+  lane; the model records them (`kind="teammate"`, `rank` 0) only for the
+  link. **Workflow** agents (and everything under a Workflow tool_use)
+  inherit their lane. **Turn** = the top-level card (a direct child of a
+  session or branch header) holding the spawn row — so a fork point that is
+  itself a prompt is its own turn, and a turn inside a fork branch is a
+  group of its own; **rank** = 1-based order in that turn by spawn
+  timestamp, then DOM position, then first message (nested lanes rank in
+  their top-level turn's group). Steps = rendered cards minus each pair's
+  second half (headers excluded); tokens/duration from the notification's
+  `<usage>` (async) then the result tail's metadata, else the span of the
+  lane's timestamps (omitted when zero).
+- **Data available, as asked:** nested agents to any depth (synthetic
+  visible 3-deep chain tested); an agent on a fork branch (parent = the
+  fork lane); a fork inside a fork lane; a `/compact` continuing a branch
+  (#331) stays in that fork lane; a fork point filtered to a `fork_only`
+  landmark still spawns (attributes on the `.fork-point[id]` box). **Forks
+  inside sub-agents: the data doesn't allow them** — agent lines map to
+  their parent's render sid and never become branch pseudo-sessions, so an
+  agent-internal rewind stays in the agent's lane (tested).
+- **No JSON island** (deliberately): `live_update.js` patches changed
+  *cards* in place by hashing each card's own markup, so per-card
+  attributes stay current through a patch (a lane's growth changes its
+  head card's `data-lane-stats`/`-ts`, a merge arriving adds `data-lane-to`
+  — both just patch that card), whereas a separate data block would only
+  refresh on a wholesale swap. Every render path (single page, paginated,
+  forced streaming, render pool, session-scoped `--combined no`) goes
+  through `HtmlRenderer.generate`, so lanes are computed per page/session
+  file; `test_lanes.py::TestRenderPaths` checks all of them produce the
+  same lane data.
+- **Schema P6/P7 consume** (all minimal-only; `d-N` = a card id without
+  the `msg-` prefix):
+
+  | On | Attribute | Value |
+  |---|---|---|
+  | every `.message` card, and a fork-only `.fork-point[id]` box | `data-lane` | `main` \| `agent-<agentId>` \| `branch-<branch sid>` |
+  | spawn card (agent tool_use; fork-point card or fork-only box) | `data-spawns` | space-separated lane ids it opens |
+  | merge card (sync tool_result; async `<task-notification>`) | `data-merges` | space-separated lane ids it closes |
+  | lane head (agent: the spawn tool_use; fork: its branch header) | `data-lane-id` | lane id |
+  | | `data-lane-kind` | `agent` \| `async-agent` \| `fork` |
+  | | `data-lane-name` | Task description / branch preview (fallback `Branch <uuid8>`) |
+  | | `data-lane-tag` | first word of the name, lower-case, ≤ 12 chars (`fork` for forks) — the gutter tag |
+  | | `data-lane-meta` | agents: `subagent_type · model · async` (parts present); forks: `rewind` (P6 adds the local time from `data-lane-from`'s card) |
+  | | `data-lane-parent` | `main` or the enclosing lane id |
+  | | `data-lane-depth` | `1` from main, +1 per enclosing lane |
+  | | `data-lane-from` | `d-N` of the spawn card (absent if unresolvable) |
+  | | `data-lane-to` | `d-N` of the merge card (absent for forks and unfinished agents) |
+  | | `data-lane-turn` | `d-N` of the user turn (branch group) |
+  | | `data-lane-rank` | 1-based rank in that turn (> 3 → "+N more branches") |
+  | | `data-lane-stats` | `6 steps · 48.4k tokens · 2m 13s` |
+  | | `data-lane-ts` | `<first ISO> <last ISO>` of the lane's cards |
+  | branch header that continues its fork point's lane | `data-lane-continues` | the lane it continues (its `data-lane` too) |
+  | | `data-lane-from` | `d-N` of the fork point |
+  | teammate spawn tool_use | `data-teammate-link` | `d-N` of the thread's first card |
+  | | `data-teammate-name` | the teammate's name |
+
+  A lane's cards are every element with that `data-lane`; nested lanes'
+  cards sit inside their parent lane's DOM subtree. Branch headers that
+  start a fork lane carry the fork's `data-lane` themselves.
+- **For P6/P7.** Card timestamps still come from
+  `.timestamp[data-timestamp]`; the fork lane's head (a branch header) has
+  none — use the first value of `data-lane-ts`. An agent's cards nest
+  under its spawn's tool_result, so in the DOM they follow a sync lane's
+  merge card although they pre-date it: order by timestamp, not by DOM. A lane without
+  `data-lane-to` (fork, unfinished or interrupted-without-result agent)
+  draws a stub, or to its last row when interleaved. `SendMessage` ↔
+  `<teammate-message>` links (§ 1.6.5) are not resolved yet (P7).
+- **Extra item 1 — tool pairs (P4's "seen, not fixed").** `layout.css`,
+  wide layout only: a `pair_first` card's gutter is `height: 0` (children
+  `flex-shrink: 0`) and hangs into the result half's empty gutter, and its
+  dot gets a negative bottom margin (`calc(-0.7em - 3.5px)`) — the dot
+  spans the `1fr` slack row and was sizing it by its own margin box
+  (~13px) even with the gutter gone. The first block under a call line (a
+  `tool_use` body, a `pair_middle`/`pair_last` output) and the code box at
+  the head of its preview lose their top margins. Measured on the sample
+  session: call → output 14–19px before, 2px after; dot position
+  unchanged. Test: `test_minimal_theme_browser.py::TestRowLayout::test_tool_call_and_output_read_as_one_unit`
+  (fails on the old CSS). Screenshots (sample session, light, desktop) in
+  [`work/minimal-theme-dag-screenshots/p5/`](minimal-theme-dag-screenshots/p5/):
+  one Read pair before/after, and a stretch of the session after.
+- **Extra item 2 — timeline "Tool" filter (both themes).** The toggle's
+  type is `tool`, the timeline groups `tool_use`/`tool_result`, so the
+  groups never hid. `timeline.html` now maps toggles to groups with the
+  transcript's own expansion (`tool` → `tool_use` + `tool_result`, `user` →
+  `user` + `bash-input` + `bash-output` — the same bug for bash lines) and,
+  for exact parity, also hides **items** whose card is `filtered-hidden`
+  (the per-item pass that already mirrored search): a sub-assistant's tool
+  call (sidechain group) or an async result now hides with its card. Test:
+  `test_timeline_browser.py::test_tool_filter_removes_tool_items_from_timeline[classic|minimal]`
+  (fails on the old timeline).
+- **Snapshots** (`just update-snapshot`): block level — 2 blocks added
+  (`test_minimal_async_agents_html`, `test_minimal_nested_agents_html`),
+  none removed; the nine classic transcript blocks each change by the same
+  43 diff lines, every one a line of the timeline component's old/new text
+  (nothing else); the index block is unchanged; the minimal representative
+  block `+74/-25` (timeline, the pair CSS, `data-lane="main"` on every
+  card).
+- **Tests.** New `test/test_lanes.py` (26): fixtures async/nested/
+  teammates/workflow/`dag_within_fork`/`dag_compact_after_rewind`, synthetic
+  many-forks-in-one-turn (ranks 1–4), fork-in-fork, `fork_only` landmark,
+  visible 3-deep chain, agent on a fork branch, rewind inside an agent;
+  HTML attributes (head, merge, fork headers, escaping, classic carries
+  none, a notification arriving updates the head card); all render paths
+  agree. `test_theme_option.py::test_minimal_keeps_every_card_hook` strips
+  the lane attributes before comparing with classic.
 
 ### P6 — DAG engine: main-only + interleaved + rail — L
 
@@ -1605,7 +1749,7 @@ tests from P3a–P7 green together.
 - [x] P3a look, toolbar, light/dark
 - [x] P3b components, Pygments dark, timeline
 - [x] P4 collapse + fold depth
-- [ ] P5 lane annotation
+- [x] P5 lane annotation
 - [ ] P6 DAG engine (main-only, interleaved, rail)
 - [ ] P7 columns, overflow, teammates
 - [ ] P8 docs and polish
