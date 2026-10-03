@@ -111,7 +111,8 @@ The minimal theme (work/minimal-theme-dag.md) **layers over** the classic
 stylesheets rather than replacing them: the minimal page inlines every
 classic sheet, then `components/minimal/tokens.css`,
 `components/minimal/layout.css`, `components/minimal/components.css` and
-the generated `components/minimal/pygments_dark.css`. Card classes, ids, `data-uuid`, fold bars
+the generated `components/minimal/pygments_dark.css` and
+`components/minimal/dag.css`. Card classes, ids, `data-uuid`, fold bars
 and `.timestamp[data-timestamp]` are identical to the classic page card for
 card (asserted in `test_theme_option.py`), so the filter, timeline, search,
 fold state machine and live update behave the same in both themes.
@@ -190,7 +191,10 @@ output):
 | `header.mn-top`, `.mn-title-row`, `.mn-pill`, `.mn-smeta` | page header | title, main model, meta line (`minimal_theme.page_meta`) |
 | `nav.mn-toolbar` | sticky toolbar | holds the classic floating buttons (same ids and classes, see below), `.mn-sp` spacer, `.mn-seg.mn-seg-icons` theme toggle (`button[data-mn-theme=auto\|light\|dark]`, `.on` + `aria-pressed`), `details.mn-more` overflow menu (`.mn-menu`) |
 | `.mn-ibtn`, `.mn-i-<icon>` | toolbar buttons | icon is a CSS mask on `::before` (`--mn-icon`); the button's own text — which the page's scripts rewrite — is hidden with `font-size: 0` |
-| `.mn-stage` | wraps `#transcript` | draws the rail's continuous hairline (`::before`) |
+| `.mn-stage` | wraps `#dag-rail` and `#transcript` | draws the rail's continuous hairline (`::before`); `dag-on` + `--dag-slots` from the DAG engine |
+| `#dag-rail` | first child of `.mn-stage` | the DAG engine's SVG rail (branch lanes, connectors) |
+| `.mn-seg.mn-branches`, `button[data-mn-branches=main\|interleaved]` | toolbar, after the depth segment | global Branches mode; `hidden` until the engine finds a branch |
+| `dag-*` classes, `.mn-bctls` / `.mn-bctl` / `.mn-bfold` / `.mn-bmini` | cards, containers, spawn cards | written by `minimal_dag.js` only — see [minimal-theme.md](minimal-theme.md) |
 | `.mn-seg.mn-depth`, `button[data-mn-depth=prompts\|steps\|all]` | toolbar, before `.mn-sp` | fold depth (dev-docs/message-hierarchy.md "Fold depth"); `.on` + `aria-pressed` mark the current choice, none after a manual override. Stored in `localStorage` `claude-code-log:fold-depth` |
 | `summary[data-more]` | the `<summary>` of `details.collapsible-code`, `.collapsible-details`, `.tool-param-collapsible` | the closed block's label (`+ N lines`, `+ N items` for a params table, `+ more`), written by `minimal.js` and drawn by `summary::after { content: attr(data-more) }` |
 | `button.mn-less` | last child of a long (≥ 12 lines/items) collapsible | trailing `− less` (label in CSS): closes the block and scrolls its top back under the toolbar |
@@ -200,7 +204,8 @@ output):
 | `.mn-role`, `.mn-time`, `.mn-tok` | inside `.header-info` | gutter: role label (`minimal_theme.role_label`), short time (server UTC, localised by `minimal.js` from the sibling `.timestamp[data-timestamp]`), compact tokens (`in · out`, full string as `title`) |
 
 **Row layout.** A card is a grid `var(--gut) var(--rail) minmax(0, 1fr)` with
-rows title / debug / content / fold bar / `1fr` slack. `.header` is
+rows title / debug / content / branch controls (P6, empty unless the card
+spawns a branch) / fold bar / `1fr` slack. `.header` is
 `display: contents`: its title span lands in column 3, its `.header-info`
 becomes the gutter (spanning every row, so a gutter taller than the content
 grows the slack row instead of pushing the content down). `.message::before`
@@ -216,6 +221,11 @@ turn rule. Sub-agent groups (`.children` holding `.message.sidechain`) are
 indented to the content column with a 2px left line (classic ring colours)
 and use the nested gutter/rail. Under 640px the rail becomes column 1 and
 the gutter a single line above the content.
+
+**DAG layout (`dag.css`, P6).** With JavaScript the engine flattens the
+nesting (`display: contents`) into one grid and lays sub-agents and forks
+out as lanes; the nested look above is what the page shows without it. As
+built in [minimal-theme.md](minimal-theme.md).
 
 **Gutter error pill.** A failed `tool_result` (and a `system-error`) shows
 its role label as a lowercase `error` pill (`--err` on `--errbg`); a paired

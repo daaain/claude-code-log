@@ -15,14 +15,23 @@
 {%- if mn_meta %}<span class='mn-smeta'>{{ mn_meta | join(' · ') }}</span>{% endif %}</div>
     </header>
     <nav class='mn-toolbar' aria-label='Transcript tools'>
-        {#- Fold depth (minimal.js drives the classic fold state machine);
-            P6 adds the Branches control (Main only / Interleaved / Columns)
-            after it, before the spacer. Steps is the default depth; the
-            script corrects `on` from the stored choice. #}
+        {#- Fold depth (minimal.js drives the classic fold state machine).
+            Steps is the default depth; the script corrects `on` from the
+            stored choice. #}
         <div class='mn-seg mn-depth' role='group' aria-label='Fold depth'>
             <button type='button' data-mn-depth='prompts' aria-pressed='false' title='Prompts only: fold every turn to its prompt'>Prompts</button>
             <button type='button' class='on' data-mn-depth='steps' aria-pressed='true' title='Steps: every turn open, long blocks as previews, sub-agents folded'>Steps</button>
             <button type='button' data-mn-depth='all' aria-pressed='false' title='All: everything open, every block in full'>All</button>
+        </div>
+        {#- Branches (minimal_dag.js): every sub-agent / fork lane at once.
+            Hidden until the engine finds a branch on the page (and without
+            JavaScript, where branches render nested). P7 hook: the Columns
+            segment goes after Interleaved, as
+            `<button type='button' data-mn-branches='columns' …>Columns</button>`
+            (and 'columns' joins GLOBAL_MODES in minimal_dag.js). #}
+        <div class='mn-seg mn-branches' role='group' aria-label='Branches' hidden>
+            <button type='button' class='on' data-mn-branches='main' aria-pressed='true' title='Main only: every branch folded to its control on the spawning row'>Main only</button>
+            <button type='button' data-mn-branches='interleaved' aria-pressed='false' title='Interleaved: the first 3 branches of each turn merged into the main line by time'>Interleaved</button>
         </div>
         <span class='mn-sp'></span>
         <button class="filter-messages floating-btn mn-ibtn mn-i-search" id="filterMessages" title="Search & Filter (/)" aria-label="Search and filter">🔍</button>

@@ -85,6 +85,7 @@ nav:
       - Rendering architecture: development/rendering-architecture.md
       - Messages: development/messages.md
       - Message hierarchy: development/message-hierarchy.md
+      - Minimal theme DAG: development/minimal-theme.md
       - DAG: development/dag.md
       - Agents: development/agents.md
       - Teammates: development/teammates.md

@@ -387,9 +387,10 @@ body.theme-minimal {
 /* ---------------------------------------------------------------- rows */
 
 /* Each card is a row: [gutter][rail dot][content]. Rows: 1 title line,
-   2 debug uuid, 3 content, 4 fold bar, 5 slack. The gutter and the dot
-   span all five; the last row is 1fr so a gutter taller than the content
-   grows that slack row rather than pushing the content down. */
+   2 debug uuid, 3 content, 4 branch controls (dag.css, written by the DAG
+   engine on spawn rows; empty otherwise), 5 fold bar, 6 slack. The gutter
+   and the dot span all six; the last row is 1fr so a gutter taller than the
+   content grows that slack row rather than pushing the content down. */
 .theme-minimal :where(#transcript .message:not(.session-header)) {
     display: grid;
 }
@@ -405,7 +406,7 @@ body.theme-minimal {
     font-size: 1em;
     line-height: 1.4;
     grid-template-columns: var(--gut) var(--rail) minmax(0, 1fr);
-    grid-template-rows: auto auto auto auto 1fr;
+    grid-template-rows: auto auto auto auto auto 1fr;
 }
 
 /* Role colour: one custom property per card, read by the dot and the
@@ -454,7 +455,7 @@ body.theme-minimal {
 .theme-minimal #transcript .message:not(.session-header)::before {
     content: "";
     grid-column: 2;
-    grid-row: 1 / 6;
+    grid-row: 1 / 7;
     justify-self: center;
     align-self: start;
     position: relative;
@@ -525,7 +526,7 @@ body.theme-minimal {
 
 .theme-minimal #transcript .message > .header > .header-info {
     grid-column: 1;
-    grid-row: 1 / 6;
+    grid-row: 1 / 7;
     align-self: start;
     display: flex;
     flex-direction: column;
@@ -656,7 +657,7 @@ body.theme-minimal {
    ::before, rotated from the section's `.folded` class. */
 .theme-minimal #transcript .fold-bar {
     grid-column: 3;
-    grid-row: 4;
+    grid-row: 5;
     display: flex;
     flex-wrap: wrap;
     gap: 0 14px;
@@ -1082,12 +1083,12 @@ body.theme-minimal {
 
     .theme-minimal #transcript .message {
         grid-template-columns: 16px minmax(0, 1fr);
-        grid-template-rows: auto auto auto auto auto 1fr;
+        grid-template-rows: auto auto auto auto auto auto 1fr;
     }
 
     .theme-minimal #transcript .message:not(.session-header)::before {
         grid-column: 1;
-        grid-row: 1 / 7;
+        grid-row: 1 / 8;
     }
 
     .theme-minimal #transcript .message > .header > .header-info {
@@ -1116,7 +1117,7 @@ body.theme-minimal {
 
     .theme-minimal #transcript .fold-bar {
         grid-column: 2;
-        grid-row: 5;
+        grid-row: 6;
     }
 
     .theme-minimal #transcript .fork-point {

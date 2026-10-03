@@ -1,6 +1,6 @@
 # `--theme minimal`: a compact light/dark theme with a DAG layout
 
-Status: **spec + phased plan; P1, P2, P3a, P3b, P4 and P5 landed (see § 6);
+Status: **spec + phased plan; P1, P2, P3a, P3b, P4, P5 and P6 landed (see § 6);
 § 7 decisions 1–5 taken.** Branch of origin:
 `claude/sweet-mccarthy-64a24r`.
 
@@ -1675,6 +1675,111 @@ fixture):
 - no-JS: with JavaScript disabled the page shows the nested sidechain
   blocks (Playwright `java_script_enabled=False` context).
 
+**As built (P6 landed):**
+- **Files.** `components/minimal/minimal_dag.js` (engine), `dag.css`;
+  `transcript.html` (dag.css after `pygments_dark.css`; `<div id='dag-rail'
+  aria-hidden='true'>` as the stage's first child — it was *not* there from
+  P3a; the engine inside the minimal `<script>` after `minimal.js`);
+  `header.html` (Branches segment); `layout.css` (card rows renumbered, see
+  below); new `test/dag_demo_fixture.py` (mockup-shaped project:
+  two async agents interleaving with main tool calls, a synchronous agent with
+  a nested one, a rewound prompt; `turns=N` repeats it for timing) and
+  `test/test_minimal_dag_browser.py` (25, marker `browser`); new
+  [`dev-docs/minimal-theme.md`](../dev-docs/minimal-theme.md) (as-built
+  architecture, linked from application_model.md § 1, CLAUDE.md, mkdocs
+  nav).
+- **Always a grid; rows packed over every lane (deviation from § 3.5
+  steps 2–6, for performance).** `dag-on` makes `#transcript` a one-column
+  grid for good and every grid item (card, fork-point box, nested block)
+  gets `grid-row`; rows come from ordering *all* lanes as if interleaved, and
+  a folded lane is hidden with empty (0-height) rows. Toggling a lane, a
+  filter, a search or a fold rewrites no other card's row. The first build
+  (grid only while something was interleaved, open lanes only) cost
+  400–600 ms per lane click on a 2,761-card page — the browser re-laid every
+  later row; now 60–90 ms (below).
+- **`dag-hidden` sits on wrappers, not cards**: a folded sub-agent lane's
+  container (`.children`) or a fork lane's `.message-node` (its head is the
+  branch header). An interleaved sub-agent container gets `dag-entry`
+  (`display: contents !important`), so **the Branches mode, not the fold
+  depth, decides whether a sub-agent shows** (§ 1.5) — P4's
+  `test_steps_folds_sub_agents_and_all_opens_them` now asserts that All opens
+  the containers while Main only keeps the lanes hidden. The owning card
+  (`dag-owner`, the spawn's result) hides its fold bar: the branch control is
+  the one handle. Folding an ancestor (a user turn) still hides the lane —
+  inline `display: none` on the ancestor container.
+- **Nested groups that are not lanes stay nested** (`dag-block`, one grid
+  item, `display: block`, nested gutter): teammate threads (§ 1.6.5),
+  workflow phases (§ 7 decision 6), old-style sidechains. A lane spawned
+  inside such a block is not walked (no control, no rail; renders nested).
+- **Order.** k-way merge by timestamp (main first on ties); a lane waits for
+  its spawn, a merge card for its lane's end. Added beyond the mockup (whose
+  items were whole steps): **a tool call's result half follows its call at
+  once** unless it merges a lane — otherwise concurrent lanes split every
+  pair. A synchronous spawn's call and result are separated by the lane's
+  rows; both halves then get `dag-split` and show their own gutter + dot (the
+  result reads as the merge row).
+- **Rail.** Greedy interval colouring over `[spawn, end]`, nested lanes right
+  of their parent, interleaved lanes first, max 6 slots (folded lanes
+  without a slot keep only their control). Rail column = 18px + 16px × slots
+  in use (`--dag-slots`); main line stays at 9px. Connectors as SVG paths:
+  8px radius, dashed `3 4` vertical for folded lanes, 12px stub for a folded
+  fork; a nested lane forks from / merges into its parent's slot. Paths carry
+  `data-lane` / `data-part` (fork, lane, merge, stub) for tests. **Colours
+  (§ 1.2 decision):** forks always `--lF`; agents by slot `--lA`, `--lB`,
+  `--sys`, `--asst` (the fixtures reach 3 concurrent lanes; the mockup
+  reserves pink for forks, so agents don't use it).
+- **Interleaved rows** (`dag-in dag-sN dag-lc-x`): DagThreads indent
+  (8px + 16px × slot; phone 6 + 6 × slot) and 9% lane tint from the content
+  column, dot on the lane's slot, lane tag in the gutter as generated content
+  (`--dag-tag`, from `data-lane-tag`) — search and the timeline never see it.
+- **Branch control** (`.mn-bctls`, appended to the spawn card, **card grid
+  row 4**: rows are now title / debug / content / controls / fold bar /
+  slack, phone +1): chevron + `data-label` (generated content) = stats (forks:
+  `⑂ <name> · stats`) + ` · interleaved`; title = name · meta (forks:
+  `rewound to HH:MM:SS`, local time of the fork point); `Column ⇥` rendered
+  **disabled** (P7). Re-created after a live patch drops it.
+- **Continuation headers** (`data-lane-continues`) render as a slim
+  `⑂ rewound · …` line (fold bar and back-link hidden); branch headers in the
+  stream start at the content column and no longer mask the rail.
+- **Cap / global.** LRU per `data-lane-turn`, cap 3; selecting a nested lane
+  selects its parents first and never evicts them; folding a lane folds its
+  nested lanes. Global *Interleaved* = rank ≤ 3 per turn. Stored
+  `claude-code-log:branches` (`main` default). The segment is `hidden` until
+  the page has a lane (and without JS). New lanes from a live update take the
+  global choice only if their turn has room.
+- **Pulled forward from P8:** search, `#msg-` links (load + `hashchange`) and
+  `?uuid=` deep links open the lane holding their target (the classic reveal
+  hooks are wrapped by intercepting their assignment). A search matching
+  cards in more than three lanes of one turn leaves only the last three open
+  — P8's parity sweep should decide whether search should lift the cap.
+  Timeline clicks on a card in a folded lane still don't open it (as with
+  P4's folded sub-agents) — P8.
+- **Performance** (`?debug-dag` logs each relayout; `window.claudeLogDag
+  .timing()`), synthetic `write_dag_demo(dir, 60)` page — 2,761 cards,
+  2,821 grid items, 300 lanes — headless Chromium at 1280px: steady
+  relayout 30–36 ms (engine JS); open/fold one lane 35–40 ms JS, 60–90 ms
+  with the browser's style + layout; global Interleaved ≈ 50 ms JS / 800 ms
+  total (1,560 cards appear); global Main only ≈ 420 ms; load ≈ 85 ms JS
+  (680 ms with the page's first full layout). Inside the § 3.5 budget
+  (< 50 ms for 2,000 visible cards) for the engine's own work.
+- **Head size.** Minimal representative `<h1>` at 211KB (P5: 198KB; dag.css
+  ≈ 11KB in the head; the engine, ≈ 54KB, is at the end of the body).
+- **Snapshots** (`just update-snapshot`): block level — none added or
+  removed; every classic block and the index identical; the three minimal
+  blocks each `+1374/-14` (CSS/JS text, the rail host, the row renumbering).
+- **Screenshots** in
+  [`work/minimal-theme-dag-screenshots/p6/`](minimal-theme-dag-screenshots/p6/)
+  (64-colour PNGs): the demo fixture (`async-agents-*`) and
+  `dag_within_fork.jsonl` (`fork-*`), Main only and Interleaved, light and
+  dark, desktop.
+- **For P7.** Hooks are marked: `GLOBAL_MODES` and the header's Columns
+  button; `pack()`'s `key` (per-column `nextFree`); the per-lane `.mn-bcol`
+  button. Column cards need `grid-column` and the stage grid more columns
+  (`#transcript`'s `grid-template-columns`), and column lanes must be left
+  out of `railLanes` (the mockup's `railed` = folded + interleaved only).
+  Overflow (`+N more branches`) is not done: every lane gets a control and,
+  while slots last, a rail lane.
+
 ### P7 — Columns, branch overflow, teammate anchors — L
 
 **Goal:** § 1.6.1 column mode, § 1.6.3 overflow, § 1.6.5 teammates.
@@ -1750,7 +1855,7 @@ tests from P3a–P7 green together.
 - [x] P3b components, Pygments dark, timeline
 - [x] P4 collapse + fold depth
 - [x] P5 lane annotation
-- [ ] P6 DAG engine (main-only, interleaved, rail)
+- [x] P6 DAG engine (main-only, interleaved, rail)
 - [ ] P7 columns, overflow, teammates
 - [ ] P8 docs and polish
 

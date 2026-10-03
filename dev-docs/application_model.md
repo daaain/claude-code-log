@@ -30,6 +30,7 @@ for user-facing operations docs see [`docs/`](../docs/).
 | Dynamic workflows (#174) | [`workflow.py`](../claude_code_log/workflow.py), `converter.py`, `renderer.py` | [workflows.md](workflows.md) |
 | Rendering pipeline | [`renderer.py`](../claude_code_log/renderer.py), `html/`, `markdown/`, `json/` | [rendering-architecture.md](rendering-architecture.md) |
 | Branch lanes (minimal theme's DAG data) | [`lanes.py`](../claude_code_log/lanes.py) (model), `html/minimal_theme.py` (`data-*` attributes) | [agents.md § 6](agents.md#6-branch-lanes-minimal-theme), [dag.md § Branch lanes](dag.md#branch-lanes-minimal-theme); attribute schema in [`work/minimal-theme-dag.md`](../work/minimal-theme-dag.md) (P5 "As built") |
+| Minimal theme's DAG engine (branch modes, rail) | `html/templates/components/minimal/minimal_dag.js`, `dag.css` | [minimal-theme.md](minimal-theme.md) |
 | Fold-bar / message hierarchy | `html/templates/components/`, JS in `transcript.html` | [message-hierarchy.md](message-hierarchy.md) |
 | CSS class taxonomy | `html/templates/components/*.css` | [css-classes.md](css-classes.md) |
 | JSON export (#36) | [`json/`](../claude_code_log/json/) | inlined below (§ 2.5) |

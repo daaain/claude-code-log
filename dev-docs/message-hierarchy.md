@@ -125,8 +125,14 @@ states A/B/C by construction.
 include a `.sidechain` card whose `agent-depth-N` is greater than the
 card's own (non-sidechain cards count as depth 0): the spawning
 `tool_result` of a Task/Agent (sync, async, teammate) or a workflow agent
-card. P6's Branches control takes those over; until then Steps keeps them
-folded, matching that control's future "Main only" default.
+card. Steps keeps their containers folded, but on a page where the DAG
+engine runs (`minimal_dag.js`, [minimal-theme.md](minimal-theme.md)) a
+**sub-agent lane's** container is shown or hidden by the toolbar's
+**Branches** mode instead, at every depth (spec § 1.5: sub-agent subtrees
+follow the Branches mode, not the fold depth) — the engine forces it with
+`dag-entry` / `dag-hidden` and hides that card's fold bar. Containers that
+are not lanes (teammate threads, workflow phases) keep following the
+depth. Without JavaScript nothing folds at all.
 
 - **When.** The stored depth (`localStorage` `claude-code-log:fold-depth`,
   default `steps`) is applied right after `setInitialFoldState()`, before

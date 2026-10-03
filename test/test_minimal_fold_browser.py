@@ -597,11 +597,24 @@ class TestFoldDepth:
         ) == {True}
         page.locator("[data-mn-depth='all']").click()
         assert set(page.evaluate(spawns_js)) == {True}
+        # Since P6 the Branches mode, not the depth, decides whether a
+        # sub-agent's transcript shows (spec § 1.5): at All the containers
+        # are open, but "Main only" (the default) keeps every lane folded…
         assert set(page.evaluate(VISIBLE_JS, "#transcript .message.sidechain")) == {
-            True
+            False
         }
+        # …and interleaving shows them whatever the depth.
+        page.locator("[data-mn-branches='interleaved']").click()
+        page.locator("[data-lane-ref='agent-nsintr01'] .mn-bfold").click()
         page.locator("[data-mn-depth='steps']").click()
         assert set(page.evaluate(spawns_js)) == {False}
+        shown = page.evaluate(
+            """() => [...document.querySelectorAll('#transcript .message.sidechain')]
+                .filter(el => window.claudeLogDag.mode(el.dataset.lane) === 'interleaved')
+                .map(el => el.checkVisibility())"""
+        )
+        assert shown and set(shown) == {True}
+        page.evaluate("localStorage.removeItem('claude-code-log:branches')")
 
     def test_deep_link_beats_a_stored_depth(
         self, clean_depth: Page, tmp_path: Path

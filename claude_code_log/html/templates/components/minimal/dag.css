@@ -1,0 +1,354 @@
+/* Minimal theme (--theme minimal): the DAG layout driven by minimal_dag.js.
+   work/minimal-theme-dag.md § 1.6 / § 3.5; dev-docs/minimal-theme.md.
+
+   Without JavaScript none of this applies (no `dag-on`): sub-agent
+   transcripts render nested under their spawning card (layout.css "nested
+   sub-agents") and fork branches as branch headers, as before.
+
+   With the engine on (`dag-on`), every `.message-node` / `.children`
+   wrapper is `display: contents` and #transcript is a one-column grid in
+   which each card has an inline `grid-row`. Rows are packed as if every
+   branch were interleaved; a folded branch is hidden and its rows are
+   empty (zero height). A fold (inline `display: none` on a `.children`)
+   still hides its subtree: an inline style beats these rules. Hiding rules
+   carry at least two classes (layout.css "Specificity, two tiers"). */
+
+/* Lane colours (rail slot → colour; forks are always --lF). */
+.theme-minimal .dag-lc-a { --lc: var(--lA); }
+.theme-minimal .dag-lc-b { --lc: var(--lB); }
+.theme-minimal .dag-lc-f { --lc: var(--lF); }
+.theme-minimal .dag-lc-s { --lc: var(--sys); }
+.theme-minimal .dag-lc-p { --lc: var(--asst); }
+
+.theme-minimal .dag-s1 { --dag-slot: 1; }
+.theme-minimal .dag-s2 { --dag-slot: 2; }
+.theme-minimal .dag-s3 { --dag-slot: 3; }
+.theme-minimal .dag-s4 { --dag-slot: 4; }
+.theme-minimal .dag-s5 { --dag-slot: 5; }
+.theme-minimal .dag-s6 { --dag-slot: 6; }
+
+/* ------------------------------------------------------------- stage */
+
+/* Rail geometry (the engine reads --dag-x0 / --dag-step to draw): the main
+   line sits --dag-x0 into the rail column, each lane slot --dag-step to its
+   right (mockup .sl: 16px slots). The rail column widens by one step per
+   slot in use (--dag-slots, written by the engine). */
+.theme-minimal .mn-stage {
+    --dag-x0: 9px;
+    --dag-step: 16px;
+    --dag-ind0: 8px;
+    --dag-ind-step: 16px;
+}
+
+.theme-minimal .mn-stage.dag-on {
+    --dag-gut: var(--gut);
+    --dag-rail: calc(var(--rail) + var(--dag-step) * var(--dag-slots, 0));
+}
+
+.theme-minimal #dag-rail {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+}
+
+.theme-minimal #dag-rail svg {
+    position: absolute;
+    top: 0;
+    left: 0;
+    overflow: visible;
+}
+
+.theme-minimal #dag-rail path {
+    fill: none;
+    stroke: var(--lc);
+    stroke-width: 2;
+}
+
+/* Folded branch: a dashed lane (mockup .dash: 3px on, 4px off). */
+.theme-minimal #dag-rail path.dag-dash {
+    stroke-dasharray: 3 4;
+}
+
+/* --------------------------------------------------------- flattening */
+
+.theme-minimal .mn-stage.dag-on #transcript .message-node,
+.theme-minimal .mn-stage.dag-on #transcript .children {
+    display: contents;
+}
+
+/* An interleaved sub-agent's transcript is shown whatever the fold state
+   machine last did to its container (fold depth keeps sub-agents folded;
+   the Branches mode owns them here, spec § 1.5). */
+.theme-minimal .mn-stage.dag-on #transcript .children.dag-entry {
+    display: contents !important;
+}
+
+/* A folded branch: its sub-agent container, or a fork's whole node. */
+.theme-minimal .mn-stage.dag-on #transcript .message-node.dag-hidden,
+.theme-minimal .mn-stage.dag-on #transcript .children.dag-hidden {
+    display: none !important;
+}
+
+/* Nested groups that are not branches (teammate threads, workflow phases)
+   stay one nested block, with their framed look and narrower gutter. */
+.theme-minimal .mn-stage.dag-on #transcript .children.dag-block,
+.theme-minimal .mn-stage.dag-on #transcript .dag-block .message-node,
+.theme-minimal .mn-stage.dag-on #transcript .dag-block .children {
+    display: block;
+}
+
+.theme-minimal .mn-stage.dag-on #transcript {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+}
+
+/* Every row shares the main gutter and the widened rail; nested-group
+   values (layout.css) apply only inside a block. */
+.theme-minimal .mn-stage.dag-on #transcript .message-node {
+    --gut: var(--dag-gut);
+    --rail: var(--dag-rail);
+}
+
+.theme-minimal .mn-stage.dag-on #transcript .dag-block .message-node {
+    --gut: var(--gut-nest);
+    --rail: var(--rail-nest);
+}
+
+/* The spawning result's fold bar would fold the same transcript the branch
+   control does; the control is the one handle. */
+.theme-minimal .mn-stage.dag-on #transcript .message.dag-owner > .fold-bar {
+    display: none;
+}
+
+/* ---------------------------------------------------------- rail dots */
+
+/* Dots sit on their lane's slot: the main line for main rows, the lane's
+   slot for interleaved rows (`--dag-slot` from `dag-sN`). */
+.theme-minimal .mn-stage.dag-on #transcript .message:not(.session-header)::before {
+    justify-self: start;
+    margin-left: calc(var(--dag-x0) + var(--dag-step) * var(--dag-slot, 0));
+    transform: translateX(-50%);
+}
+
+.theme-minimal .mn-stage.dag-on #transcript .dag-block .message:not(.session-header)::before {
+    justify-self: center;
+    margin-left: 0;
+    transform: none;
+}
+
+/* -------------------------------------------------- interleaved rows */
+
+/* DagThreads.dc.html `.c3.in-*`: indented by the lane's slot, with a tint of
+   the lane colour fading out to the right; the gutter names the lane
+   (mockup .tag). */
+.theme-minimal .mn-stage.dag-on #transcript .message.dag-in {
+    --dag-indent: calc(var(--dag-ind0) + var(--dag-ind-step) * var(--dag-slot, 1));
+    --dag-c3: calc(var(--gut) + var(--rail));
+    grid-template-columns: var(--gut) calc(var(--rail) + var(--dag-indent)) minmax(0, 1fr);
+    background: linear-gradient(90deg,
+        transparent var(--dag-c3),
+        color-mix(in srgb, var(--lc) 9%, transparent) var(--dag-c3),
+        transparent 75%);
+}
+
+.theme-minimal .mn-stage.dag-on #transcript .message.dag-in > .header > .header-info::after {
+    content: var(--dag-tag, none);
+    order: 1;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--lc);
+    font-weight: 600;
+}
+
+.theme-minimal .mn-stage.dag-on #transcript .message.dag-in > .header > .header-info > .mn-tok {
+    order: 2;
+}
+
+/* Branch headers in the stream: their text starts at the content column
+   (the rail runs through the space before it, unmasked). */
+.theme-minimal .mn-stage.dag-on #transcript .message.branch-header {
+    z-index: auto;
+    padding-left: calc(var(--gut) + var(--rail) + 4px);
+    background: transparent;
+}
+
+.theme-minimal .mn-stage.dag-on #transcript .message.branch-header.dag-in {
+    padding-left: calc(var(--dag-c3) + var(--dag-indent) + 4px);
+    border-top-color: var(--lc);
+}
+
+/* The earliest branch at a rewind continues the main line (§ 1.6.4): its
+   header shrinks to a slim "⑂ rewound" marker. */
+.theme-minimal .mn-stage.dag-on #transcript .message.branch-header[data-lane-continues] {
+    margin: 4px 0 0 !important;
+    padding-top: 2px;
+    padding-bottom: 0;
+}
+
+.theme-minimal .mn-stage.dag-on #transcript .message.branch-header[data-lane-continues] > .header {
+    font: 400 0.72rem/1.6 var(--mono);
+    color: var(--muted);
+}
+
+.theme-minimal .mn-stage.dag-on #transcript .message.branch-header[data-lane-continues] > .header::before {
+    content: "⑂ rewound · ";
+}
+
+.theme-minimal .mn-stage.dag-on #transcript .message.branch-header[data-lane-continues] > .header > .branch-from,
+.theme-minimal .mn-stage.dag-on #transcript .message.branch-header[data-lane-continues] > .fold-bar {
+    display: none;
+}
+
+/* A tool pair split by interleaved rows: both halves show in full — the
+   result half becomes a row of its own (time, role, dot), as a merge row. */
+.theme-minimal .mn-stage.dag-on #transcript .message.dag-split:is(.pair_middle, .pair_last) {
+    padding-top: 3px;
+}
+
+.theme-minimal .mn-stage.dag-on #transcript .message.dag-split:is(.pair_middle, .pair_last) > .header > .header-info {
+    display: flex;
+}
+
+.theme-minimal .mn-stage.dag-on #transcript .message.dag-split:is(.pair_middle, .pair_last)::before {
+    display: block;
+}
+
+@media (min-width: 641px) {
+    .theme-minimal .mn-stage.dag-on #transcript .message.dag-split.pair_first > .header > .header-info {
+        height: auto;
+    }
+
+    .theme-minimal .mn-stage.dag-on #transcript .message.dag-split.pair_first::before {
+        margin-bottom: 0;
+    }
+}
+
+/* ---------------------------------------------------- branch controls */
+
+/* On the spawn row (mockup .bctl): chevron + summary (+ "· interleaved"),
+   and the Column button P7 enables. Row 4 of the card grid (layout.css). */
+.theme-minimal #transcript .mn-bctls {
+    grid-column: 3;
+    grid-row: 4;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    padding-left: 4px;
+}
+
+.theme-minimal #transcript .fork-point > .mn-bctls {
+    padding-left: 0;
+    margin-top: 2px;
+}
+
+.theme-minimal #transcript .mn-bctl {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 10px;
+    margin-top: 2px;
+}
+
+.theme-minimal #transcript .mn-bfold {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 0;
+    border: 0;
+    background: none;
+    font: 0.72em var(--mono);
+    color: var(--lc);
+    text-align: left;
+    cursor: pointer;
+}
+
+.theme-minimal #transcript .mn-bfold::after {
+    content: attr(data-label);
+}
+
+.theme-minimal #transcript .mn-bfold:hover {
+    text-decoration: underline;
+}
+
+.theme-minimal #transcript .mn-bfold svg {
+    flex: none;
+    transition: transform 0.15s;
+}
+
+.theme-minimal #transcript .mn-bctl.is-open .mn-bfold svg {
+    transform: rotate(90deg);
+}
+
+.theme-minimal #transcript .mn-bmini {
+    min-height: 22px;
+    padding: 0 7px;
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    background: var(--bg);
+    font: 0.68em var(--mono);
+    color: var(--muted);
+    cursor: pointer;
+}
+
+.theme-minimal #transcript .mn-bmini:hover:not(:disabled) {
+    border-color: var(--muted);
+    color: var(--fg);
+}
+
+.theme-minimal #transcript .mn-bmini:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .theme-minimal #transcript .mn-bfold svg {
+        transition: none;
+    }
+}
+
+/* Toolbar: the Branches control shows once the page has a branch. */
+.theme-minimal .mn-seg[hidden] {
+    display: none;
+}
+
+/* --------------------------------------------------------------- phone */
+
+/* Under 640px the rail is the card's first column (layout.css): main line at
+   8px, slots 12px apart, a smaller indent (DagThreads' phone rule). */
+@media (max-width: 640px) {
+    .theme-minimal .mn-stage {
+        --dag-x0: 8px;
+        --dag-step: 12px;
+        --dag-ind0: 6px;
+        --dag-ind-step: 6px;
+    }
+
+    .theme-minimal .mn-stage.dag-on #transcript .message {
+        grid-template-columns: calc(16px + var(--dag-step) * var(--dag-slots, 0)) minmax(0, 1fr);
+    }
+
+    .theme-minimal .mn-stage.dag-on #transcript .message.dag-in {
+        --dag-c3: calc(16px + var(--dag-step) * var(--dag-slots, 0));
+        grid-template-columns: calc(var(--dag-c3) + var(--dag-indent)) minmax(0, 1fr);
+    }
+
+    .theme-minimal .mn-stage.dag-on #transcript .dag-block .message {
+        grid-template-columns: 16px minmax(0, 1fr);
+    }
+
+    .theme-minimal .mn-stage.dag-on #transcript .message.branch-header {
+        padding-left: calc(16px + var(--dag-step) * var(--dag-slots, 0) + 4px);
+    }
+
+    .theme-minimal .mn-stage.dag-on #transcript .message.branch-header.dag-in {
+        padding-left: calc(var(--dag-c3) + var(--dag-indent) + 4px);
+    }
+
+    .theme-minimal #transcript .mn-bctls {
+        grid-column: 2;
+        grid-row: 5;
+    }
+}

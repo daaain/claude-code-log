@@ -343,7 +343,16 @@ class TestMinimalPage:
         # P3b sheets are inlined.
         assert ':root[data-theme="dark"] .theme-minimal .highlight .k' in html
         assert "--cc-blue-bg: color-mix(" in html
-        assert "<div class='mn-stage'><div id=\"transcript\">" in html
+        assert (
+            "<div class='mn-stage'><div id='dag-rail' aria-hidden='true'></div>"
+            '<div id="transcript">' in html
+        )
+        assert (
+            "<div class='mn-seg mn-branches' role='group' aria-label='Branches' hidden>"
+            in html
+        )
+        assert ".theme-minimal .mn-stage.dag-on #transcript .children.dag-entry" in html
+        assert "window.claudeLogDag = {" in html
         assert "<nav class='mn-toolbar' aria-label='Transcript tools'>" in html
         # The head applies a stored colour scheme before the body exists.
         head = html.split("</head>", 1)[0]

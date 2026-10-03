@@ -23,7 +23,8 @@
 {% include 'components/minimal/tokens.css' %}
 {% include 'components/minimal/layout.css' %}
 {% include 'components/minimal/components.css' %}
-{% include 'components/minimal/pygments_dark.css' %}{% endif %}
+{% include 'components/minimal/pygments_dark.css' %}
+{% include 'components/minimal/dag.css' %}{% endif %}
     </style>{% if minimal %}
     <script>
 {% include 'components/minimal/theme_init.js' %}
@@ -296,7 +297,7 @@
       full-page screenshots and the first message's box before and after
       adding it).
     #}
-    {% if minimal %}<div class='mn-stage'>{% endif %}<div id="transcript">{% for root in roots %}{{ render_message(root) }}{% endfor %}</div>{% if minimal %}</div>{% else %}
+    {% if minimal %}<div class='mn-stage'><div id='dag-rail' aria-hidden='true'></div>{% endif %}<div id="transcript">{% for root in roots %}{{ render_message(root) }}{% endfor %}</div>{% if minimal %}</div>{% else %}
 
     {% if resume_command %}
     <button class="resume-session floating-btn" id="resumeSession" data-command="{{ resume_command }}"
@@ -1214,6 +1215,7 @@
     {% include 'components/search.html' %}{% if minimal %}
     <script>
 {% include 'components/minimal/minimal.js' %}
+{% include 'components/minimal/minimal_dag.js' %}
     </script>{% endif %}
 </body>
 
