@@ -200,8 +200,9 @@ class TestColourScheme:
         page.locator("[data-mn-theme='dark']").click()
         expect(html).to_have_attribute("data-theme", "dark")
         assert _body_bg(page) == DARK_BG
-        # Only the classic md/raw restore touches storage unguarded, and it
-        # predates the theme; nothing in the minimal scripts may throw.
+        # The search panel's saved-state restore (search.html, shared with
+        # classic) still reads storage unguarded; nothing in the minimal
+        # scripts may throw.
         assert not [e for e in errors if "minimal" in e.lower() or "theme" in e.lower()]
 
 

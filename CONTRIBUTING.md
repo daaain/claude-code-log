@@ -240,6 +240,13 @@ uv run pyright
 uv run ty check
 ```
 
+The minimal theme's dark syntax-highlighting sheet
+(`claude_code_log/html/templates/components/minimal/pygments_dark.css`) is
+generated — don't edit it by hand. After a Pygments upgrade or a change to
+`pygments_styles.css`, regenerate it with
+`uv run python scripts/generate_minimal_pygments_css.py`; a unit test fails
+while the committed file differs from the script's output.
+
 ### Whitespace
 
 An [`.editorconfig`](.editorconfig) at the repo root defines the baseline —

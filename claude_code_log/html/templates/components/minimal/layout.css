@@ -486,7 +486,7 @@ body.theme-minimal {
     min-width: 0;
     padding-left: 4px;
     font: 0.8em/1.6 var(--mono);
-    font-weight: 600;
+    font-weight: 400;
     color: var(--fg);
     overflow-wrap: anywhere;
 }
@@ -495,9 +495,31 @@ body.theme-minimal {
     display: none;
 }
 
+/* The call line (mockup .call): the gutter already names the tool, so the
+   title's pictograph and repeated name (`.mn-tn`, split off server-side by
+   minimal_theme.call_title) are hidden; they stay in the DOM, so search and
+   the timeline still read the whole title. What remains is the path or
+   arguments in --fg and the details dimmed. */
+.theme-minimal #transcript .mn-title .mn-tn {
+    display: none;
+}
+
 .theme-minimal #transcript .mn-title .tool-summary {
     font-size: 1em;
     font-weight: 400;
+    color: var(--fg);
+}
+
+.theme-minimal #transcript .mn-title :is(.tool-subagent, .message-model, .task-action, .task-async-hint, .pair-duration) {
+    font: inherit;
+    font-weight: 400;
+    color: var(--muted);
+}
+
+.theme-minimal #transcript .mn-title code {
+    padding: 0;
+    background: none;
+    font-size: 1em;
     color: var(--muted);
 }
 
@@ -584,8 +606,9 @@ body.theme-minimal {
     display: none;
 }
 
-/* Turns: one rule above each main-lane prompt, except a session's first. */
-.theme-minimal #transcript .message-node:has(> .message.session-header) > .children > .message-node ~ .message-node > .message.user:not(.steering):not(.task-notification):not(.teammate):not(.sidechain) {
+/* Turns: one rule above each main-lane prompt, except a session's first.
+   A slash command's output (the pair's last half) belongs to its turn. */
+.theme-minimal #transcript .message-node:has(> .message.session-header) > .children > .message-node ~ .message-node > .message.user:not(.steering):not(.task-notification):not(.teammate):not(.sidechain):not(.command-output):not(.pair_middle):not(.pair_last) {
     margin-top: 4px;
     padding-top: 7px;
     border-top: 1px solid var(--rule2);
@@ -661,9 +684,62 @@ body.theme-minimal {
     overflow-wrap: anywhere;
 }
 
+/* Session header (mockup top area): the summary on its own, at most two
+   lines (minimal.js adds a more/less toggle when it is clamped; the full
+   text is also its title), then the short session id, team badge and
+   model as one dim mono line. Branch headers keep the plain layout. */
+.theme-minimal #transcript .message.session-header:not(.branch-header) > .header {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    align-items: baseline;
+    gap: 2px 8px;
+    font-size: 0.95em;
+    font-weight: 400;
+}
+
+.theme-minimal #transcript .message.session-header:not(.branch-header) > .header > * {
+    flex: none;
+    min-width: 0;
+}
+
+.theme-minimal #transcript .message.session-header > .header > .mn-sh-sum {
+    flex: 1 1 100%;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
+    font-weight: 600;
+    line-height: 1.35;
+}
+
+.theme-minimal #transcript .message.session-header > .header > .mn-sh-sum.mn-open {
+    display: block;
+}
+
+.theme-minimal #transcript .mn-sh-id,
 .theme-minimal #transcript .message.session-header .message-model {
-    font: 500 0.72em var(--mono);
+    font: 400 0.72rem/1.7 var(--mono);
     color: var(--muted);
+}
+
+.theme-minimal #transcript .mn-sh-more {
+    padding: 0;
+    border: 0;
+    background: none;
+    font: 0.72rem/1.7 var(--mono);
+    color: var(--muted);
+    cursor: pointer;
+}
+
+.theme-minimal #transcript .mn-sh-more:hover {
+    color: var(--fg);
+}
+
+.theme-minimal #transcript .message.session-header > .header > .session-backlink {
+    flex: 1 1 100%;
+    font: 400 0.72rem var(--mono);
 }
 
 .theme-minimal #transcript .message.session-header > .fold-bar {

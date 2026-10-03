@@ -381,6 +381,12 @@ head, the `<body>` class, the page header and sticky toolbar
 (`components/minimal/header.html`, which carries the classic floating
 buttons instead of the bottom stack), the `.mn-stage` wrapper, the gutter
 spans in each card's header, and `minimal.js` at the end of the body.
+Two shared regions take a full `{% if minimal %}…{% else %}…{% endif %}`
+instead of an inline addition: each card's title span (minimal splits it
+into a hidden `.mn-tn` prefix and the visible call line,
+`minimal_theme.call_title`) and a non-branch session header's title
+(`minimal_theme.session_header`); the `else` arm is the classic markup
+verbatim.
 Formatter output is untouched (the fragment store is theme-independent);
 the gutter strings come from template-only helpers in
 [html/minimal_theme.py](../claude_code_log/html/minimal_theme.py),

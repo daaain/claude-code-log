@@ -1,4 +1,4 @@
-"""Unit tests for the minimal theme's template helpers and page structure (P3a).
+"""Unit tests for the minimal theme's template helpers and page structure (P3a/P3b).
 
 The helpers in ``claude_code_log.html.minimal_theme`` feed the minimal
 row's gutter (role label, short time, compact tokens) and the header's
@@ -89,6 +89,139 @@ class TestGenericTitle:
     )
     def test_informative_titles_stay(self, title: str) -> None:
         assert not minimal_theme.is_generic_title(title)
+
+
+class TestCallTitle:
+    """The call line drops the pictograph and the name the gutter repeats."""
+
+    def _split(self, title: str, classes: str = "tool_use", **content: Any) -> Any:
+        return minimal_theme.call_title(title, _msg(**content), classes)
+
+    def test_tool_name_and_emoji_move_to_the_hidden_prefix(self) -> None:
+        parts = self._split(
+            "📝 Edit <span class='tool-summary'>/tmp/x.py</span>", tool_name="Edit"
+        )
+        assert parts["prefix"] == "📝 Edit "
+        assert parts["rest"] == "<span class='tool-summary'>/tmp/x.py</span>"
+        assert not parts["generic"]
+        # The whole title survives as plain text for the tooltip.
+        assert parts["tooltip"] == "📝 Edit /tmp/x.py"
+
+    def test_name_only_titles_become_generic(self) -> None:
+        for title, name in (
+            ("🛠️ TodoWrite", "TodoWrite"),
+            ("📝 Todo List", "TodoWrite"),
+        ):
+            parts = self._split(title, tool_name=name)
+            assert parts["generic"], title
+            assert parts["rest"] == ""
+
+    def test_role_label_and_separator(self) -> None:
+        hook = self._split("🪝 Hook · Stop", "system system-hook-attachment")
+        assert (hook["prefix"], hook["rest"]) == ("🪝 Hook · ", "Stop")
+        phase = self._split("🧩 Phase: Map", "tool_use workflow_phase")
+        assert phase["rest"] == "Map"
+        error = self._split("🚨 Error", "tool_result error")
+        assert error["generic"]
+
+    def test_task_tools_drop_the_task_word(self) -> None:
+        parts = self._split(
+            "🛠️ Task <code>#1</code> <span class='tool-summary'>Add</span>",
+            tool_name="TaskCreate",
+        )
+        assert parts["rest"].startswith("<code>#1</code>")
+
+    def test_a_longer_word_is_not_the_name(self) -> None:
+        parts = self._split("🛠️ Tasks remaining", tool_name="Task")
+        assert parts["rest"] == "Tasks remaining"
+
+    def test_ascii_symbols_are_content_not_decoration(self) -> None:
+        parts = self._split("/test-command", "user slash-command")
+        assert parts["prefix"] == ""
+        assert parts["rest"] == "/test-command"
+
+    def test_title_hint_joins_the_tooltip(self) -> None:
+        parts = minimal_theme.call_title(
+            "💻 Bash <span class='tool-summary'>Run it</span>",
+            _msg(tool_name="Bash"),
+            "tool_use",
+            "ID: toolu_1",
+        )
+        assert parts["tooltip"] == "💻 Bash Run it · ID: toolu_1"
+
+    def test_role_only_titles_stay_generic(self) -> None:
+        assert self._split("🤷 User", "user")["generic"]
+        assert self._split("🔗 Sub-assistant", "assistant sidechain")["generic"]
+        assert self._split("", "assistant")["generic"]
+
+
+class TestSessionHeader:
+    def test_summary_and_short_id(self) -> None:
+        content = SimpleNamespace(
+            title="Fix the bug • abcdef12",
+            session_id="abcdef1234",
+            summary="Fix the bug",
+        )
+        html = minimal_theme.session_header(content, "Fix the bug • abcdef12")
+        assert "<span class='mn-sh-sum' title='Fix the bug'>Fix the bug</span>" in html
+        assert (
+            "<span class='mn-sh-id' title='Session abcdef1234'>abcdef12</span>" in html
+        )
+        assert "•" not in html
+
+    def test_keeps_badges_and_backlink(self) -> None:
+        content = SimpleNamespace(
+            title="abcdef12", session_id="abcdef1234", summary=None
+        )
+        formatted = (
+            '<a class="session-backlink">↳ continues from x</a>abcdef12'
+            '<span class="session-team-badge">Team</span>'
+        )
+        html = minimal_theme.session_header(content, formatted)
+        assert html.startswith('<a class="session-backlink">')
+        assert "<span class='mn-sh-id'" in html
+        assert html.endswith('<span class="session-team-badge">Team</span>')
+
+
+class TestPygmentsDark:
+    def test_committed_sheet_matches_the_generator(self) -> None:
+        """Drift guard: regenerate with scripts/generate_minimal_pygments_css.py."""
+        import importlib.util
+
+        script = (
+            Path(__file__).parent.parent
+            / "scripts"
+            / "generate_minimal_pygments_css.py"
+        )
+        spec = importlib.util.spec_from_file_location("gen_pygments_dark", script)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        assert module.OUTPUT.read_text(encoding="utf-8") == module.build_css()
+
+    def test_sheet_is_scoped_to_both_dark_selectors(self) -> None:
+        sheet = (
+            Path(str(minimal_theme.__file__)).parent
+            / "templates"
+            / "components"
+            / "minimal"
+            / "pygments_dark.css"
+        ).read_text(encoding="utf-8")
+        rules = [
+            line.strip()
+            for line in sheet.splitlines()
+            if line.strip().startswith((":root", ".highlight"))
+        ]
+        assert rules
+        media = [r for r in rules if r.startswith(':root:not([data-theme="light"])')]
+        forced = [r for r in rules if r.startswith(':root[data-theme="dark"]')]
+        assert len(media) == len(forced) == len(rules) / 2
+        assert all(" .theme-minimal .highlight ." in r for r in rules)
+        # The classic bold keyword must not leak into dark mode.
+        assert any(
+            r.endswith(".highlight .k { font-weight: normal; color: #ff7b72 }")
+            for r in forced
+        )
 
 
 class TestCompactNumbers:
@@ -195,6 +328,21 @@ class TestMinimalPage:
             in html
         )
         assert "class='mn-title mn-generic'" in html
+        # Call line: emoji and tool name hidden (kept for search), path shown.
+        assert (
+            "<span class='mn-tn'>📝 Edit </span><span class='tool-summary'>"
+            "/tmp/decorator_example.py</span>" in html
+        )
+        # Compact session header: summary, short id, model.
+        assert "<span class='mn-sh-sum' title='User learned about" in html
+        assert (
+            "<span class='mn-sh-id' title='Session test_session'>test_ses</span>"
+            in html
+        )
+        assert "Session: User learned" not in html
+        # P3b sheets are inlined.
+        assert ':root[data-theme="dark"] .theme-minimal .highlight .k' in html
+        assert "--cc-blue-bg: color-mix(" in html
         assert "<div class='mn-stage'><div id=\"transcript\">" in html
         assert "<nav class='mn-toolbar' aria-label='Transcript tools'>" in html
         # The head applies a stored colour scheme before the body exists.

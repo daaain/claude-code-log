@@ -21,7 +21,9 @@
 {% include 'components/page_nav_styles.css' %}
 {% include 'components/teammate_styles.css' %}{% if minimal %}
 {% include 'components/minimal/tokens.css' %}
-{% include 'components/minimal/layout.css' %}{% endif %}
+{% include 'components/minimal/layout.css' %}
+{% include 'components/minimal/components.css' %}
+{% include 'components/minimal/pygments_dark.css' %}{% endif %}
     </style>{% if minimal %}
     <script>
 {% include 'components/minimal/theme_init.js' %}
@@ -170,7 +172,7 @@
        card itself, not the whole subtree (issue #174 nested-DOM follow-up). #}
     <div class='message-node'>
     <div class='message session-header{% if message.is_branch_header %} branch-header{% endif %}' data-session-id='{{ message.session_id }}' id='msg-{{ message.message_id }}'{% if message.branch_depth %} style='margin-left: {{ message.branch_depth * 2 }}em'{% endif %}>
-        <div class='header'>{% if message.is_branch_header %}&#x21b3; {% else %}Session: {% endif %}{{ html_content|safe }}{% if message.display_model and not message.is_branch_header %} <span class='message-model' title='Main agent model'>{{ message.display_model }}</span>{% endif %}</div>
+        <div class='header'>{% if minimal and not message.is_branch_header %}{{ mn_session_header(message.content, html_content) | safe }}{% if message.display_model %}<span class='message-model' title='Main agent model'>{{ message.display_model }}</span>{% endif %}{% else %}{% if message.is_branch_header %}&#x21b3; {% else %}Session: {% endif %}{{ html_content|safe }}{% if message.display_model and not message.is_branch_header %} <span class='message-model' title='Main agent model'>{{ message.display_model }}</span>{% endif %}{% endif %}</div>
         {% if message.has_children %}
         <div class='fold-bar' data-border-color='session-header'>
             {% if message.immediate_children_count == message.total_descendants_count %}
@@ -225,9 +227,9 @@
     <div class='message {{ msg_css_class }}{% if message.is_paired %} {{ message.pair_role }}{% endif %}'{% if message.meta and message.meta.uuid %} data-uuid='{{ message.meta.uuid }}'{% endif %} id='msg-{{ message.message_id }}'>
         <div class='header'>
             {% set msg_emoji = get_message_emoji(message) -%}
-            <span{% if message.title_hint %} title="{{ message.title_hint }}"{% endif %}{% if minimal %} class='mn-title{% if mn_is_generic_title(message_title) %} mn-generic{% endif %}'{% endif %}>{% if message_title %}{%
+            {% if minimal %}{% set mn_full %}{% if message_title %}{% if message_title == 'Memory' %}💭 {% elif msg_emoji and (message.type != 'tool_use' or not starts_with_emoji(message_title)) %}{{ msg_emoji }} {% endif %}{{ message_title | safe }}{% endif %}{% endset %}{% set mn_t = mn_call_title(mn_full, message, msg_css_class, message.title_hint) %}<span class='mn-title{% if mn_t.generic %} mn-generic{% endif %}'{% if mn_t.tooltip %} title="{{ mn_t.tooltip }}"{% endif %}>{% if mn_t.prefix %}<span class='mn-tn'>{{ mn_t.prefix | safe }}</span>{% endif %}{{ mn_t.rest | safe }}</span>{% else %}<span{% if message.title_hint %} title="{{ message.title_hint }}"{% endif %}>{% if message_title %}{%
                 if message_title == 'Memory' %}💭 {%
-                elif msg_emoji and (message.type != 'tool_use' or not starts_with_emoji(message_title)) %}{{ msg_emoji }} {% endif %}{{ message_title | safe }}{% endif %}</span>
+                elif msg_emoji and (message.type != 'tool_use' or not starts_with_emoji(message_title)) %}{{ msg_emoji }} {% endif %}{{ message_title | safe }}{% endif %}</span>{% endif %}
             <div class='header-info'>{% if minimal %}<span class='mn-role'>{{ mn_role_label(message, msg_css_class) }}</span>{% endif %}
                 <div class='timestamp-row'>
                     <span class='timestamp'{% if message.meta and message.meta.timestamp %} data-timestamp='{{ message.meta.timestamp }}'{% if message.pair_duration %} data-duration='{{ message.pair_duration }}'{% endif %}{% endif %}>{{ formatted_timestamp }}</span>{% if minimal %}<span class='mn-time'>{{ mn_gutter_time(formatted_timestamp) }}</span>{% endif %}
@@ -431,18 +433,24 @@
                     : 'Show user messages as raw text';
                 userViewButton.classList.toggle('active', showingRaw);
             }
-            // Restore saved preference on load.
-            if (localStorage.getItem('claude-code-log:user-view') === 'raw') {
-                document.body.classList.add('show-raw-user');
-            }
+            // Restore saved preference on load. Storage can be unavailable
+            // (private mode, a sandboxed file:// page): reading it then
+            // throws, which must not abort the rest of this handler.
+            try {
+                if (localStorage.getItem('claude-code-log:user-view') === 'raw') {
+                    document.body.classList.add('show-raw-user');
+                }
+            } catch (err) { /* storage unavailable: default to Markdown */ }
             applyUserViewButtonLabel();
             applyPerMessageToggleLabels();
             userViewButton.addEventListener('click', function () {
                 const showingRaw = document.body.classList.toggle('show-raw-user');
-                localStorage.setItem(
-                    'claude-code-log:user-view',
-                    showingRaw ? 'raw' : 'md'
-                );
+                try {
+                    localStorage.setItem(
+                        'claude-code-log:user-view',
+                        showingRaw ? 'raw' : 'md'
+                    );
+                } catch (err) { /* storage unavailable: lasts this page */ }
                 applyUserViewButtonLabel();
                 // Messages without an explicit per-message override
                 // just flipped — refresh their button labels too.

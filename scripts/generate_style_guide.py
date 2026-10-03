@@ -8,8 +8,19 @@ test and as documentation for the visual design.
 
 Session 1: Hand-crafted examples showing various formatting scenarios
 Session 2: Auto-generated from dev-docs/messages/claude-code samples
+
+Usage:
+    uv run python scripts/generate_style_guide.py
+    uv run python scripts/generate_style_guide.py --theme minimal [--output-dir DIR]
+
+With ``--theme minimal`` only the transcript guide is rendered (the index
+page isn't themed), into ``--output-dir`` — by default a scratch directory,
+so the committed classic guide in ``style_guide_output/`` is left alone.
+Open it and switch the page's Auto / Light / Dark toggle to check both
+schemes.
 """
 
+import argparse
 import copy
 import json
 import sys
@@ -644,6 +655,24 @@ def create_sample_messages_session() -> list[dict]:
     return messages
 
 
+def generate_themed_transcript_guide(theme: str, output_dir: Path) -> Path:
+    """Render only the transcript style guide with a non-classic theme."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory() as temp_dir:
+        jsonl_file = Path(temp_dir) / "style_guide.jsonl"
+        with open(jsonl_file, "w", encoding="utf-8") as f:
+            for entry in create_style_guide_data() + create_sample_messages_session():
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        result = convert_jsonl_to(
+            "html",
+            jsonl_file,
+            output_dir / "transcript_style_guide.html",
+            theme=theme,
+        )
+    print(f"✅ Transcript style guide ({theme} theme) saved to: {result}")
+    return result
+
+
 def generate_style_guide():
     """Generate the complete style guide HTML files."""
     script_dir = Path(__file__).parent
@@ -838,4 +867,28 @@ if __name__ == "__main__":
     # Ensure stdout uses UTF-8 for emoji output when running as a script
     if sys.stdout.encoding != "utf-8" and hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
-    generate_style_guide()
+    parser = argparse.ArgumentParser(
+        description="Generate the transcript and index style guides."
+    )
+    parser.add_argument(
+        "--theme",
+        choices=["classic", "minimal"],
+        default="classic",
+        help="HTML theme for the transcript guide (default: classic)",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="Where a non-classic guide is written (default: a scratch dir)",
+    )
+    args = parser.parse_args()
+    if args.theme == "classic":
+        generate_style_guide()
+    else:
+        generate_themed_transcript_guide(
+            args.theme,
+            args.output_dir
+            or Path(tempfile.gettempdir())
+            / f"claude-code-log-style-guide-{args.theme}",
+        )

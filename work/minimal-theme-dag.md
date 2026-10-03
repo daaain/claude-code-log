@@ -1,6 +1,6 @@
 # `--theme minimal`: a compact light/dark theme with a DAG layout
 
-Status: **spec + phased plan; P1, P2 and P3a landed (see § 6); § 7
+Status: **spec + phased plan; P1, P2, P3a and P3b landed (see § 6); § 7
 decisions 1–5 taken.** Branch of origin:
 `claude/sweet-mccarthy-64a24r`.
 
@@ -1243,6 +1243,88 @@ schemes.
 **Dev-docs:** `css-classes.md` (component overrides, Pygments dark);
 `CONTRIBUTING.md` one line on regenerating `pygments_dark.css`.
 
+**As built (P3b landed):**
+- **Files.** `components/minimal/components.css` (every remaining
+  component), `components/minimal/pygments_dark.css` (generated) and
+  `scripts/generate_minimal_pygments_css.py` as planned; small additions to
+  `layout.css` (call line, compact session header, turn rule), `tokens.css`
+  (dark `--cc-*`), `minimal.js` (session-summary more/less) and
+  `minimal_theme.py` (`call_title`, `session_header`, registered as
+  `mn_call_title` / `mn_session_header`). `mn_is_generic_title` is no longer
+  called by the template (the function stays; `call_title` uses it).
+- **Variables first, literals second.** `components.css` opens by mapping
+  the remaining classic custom properties to tokens (todo, question/answer,
+  workflow, depth rings 2–5 → `--lB`/`--asst`/`--user`/`--lF`, translucent
+  tints → transparent, every `--timeline-*`), then overrides literal rules
+  by component. ANSI colours stay as planned.
+- **Pygments dark.** The script emits github-dark's `.highlight .<tok>`
+  rules under both dark selectors. Deviation from step 3: each rule also
+  resets what the classic light sheet sets on that token and github-dark
+  doesn't (`font-weight: bold` on keywords, `.err`'s red border), and
+  tokens only the classic sheet styles get the reset alone — otherwise light
+  styling leaked into dark. github-dark's background and the unprefixed
+  line-number rules are dropped (the box keeps `--code`). `--check` mode
+  exists; the drift test is `test_minimal_theme.py::TestPygmentsDark`.
+- **Teammate tints** follow the in-page toggle: `--cc-*-bg` are
+  `color-mix(…13%, var(--bg))` on `body.theme-minimal`, dark `--cc-*` live in
+  the token blocks; badges use `--bg` text.
+- **Timeline** follows the scheme: `--timeline-*` as role tints of `--bg`;
+  vis-timeline's own sheet (loaded from unpkg after ours) overridden for
+  borders, grid, axis text, generic items and the tooltip.
+- **Error pill** (step 2): CSS-only on the gutter's role label (`error`,
+  lowercase), shown for a paired failed result too; no `exit N` (only in
+  the Bash result text).
+- **Call line (review feedback 1).** The title span is a full
+  `{% if minimal %}…{% else %}classic{% endif %}`: `call_title` splits the
+  leading pictograph and a leading repeat of the gutter label (tool name,
+  role label, or an alias: `Todo List`, `Async result`, `Slash Command`,
+  `Task`, `Error`, `Teammate`, `Sub-assistant`) into a hidden `.mn-tn` span;
+  the full title is the span's `title` (plus the classic `title_hint`).
+  `.mn-tn` stays in the DOM, so search/timeline text is unchanged. Titles
+  with nothing left (`🛠️ TodoWrite`, `🚨 Error`, `🤷 Slash Command`) become
+  `mn-generic` (hidden). Only ASCII-free pictographs count as decoration,
+  so `/cmd` or `$ x` titles keep their first character.
+- **Session header (review feedback 2).** Non-branch headers render
+  `.mn-sh-sum` (summary, clamped to two lines, full text as `title`,
+  `+ more`/`− less` from `minimal.js` when clamped — on load, rehydrate,
+  resize) then `.mn-sh-id` and the model as dim mono metadata; the
+  `Session:` prefix and `• id` suffix are gone. Branch headers unchanged.
+  The formatter output is reused (the escaped title is replaced in it), so
+  the team badge and `continues from` back-link stay.
+- **Classic fix (review feedback 3).** The classic `DOMContentLoaded`
+  handler's `claude-code-log:user-view` read *and* write are wrapped in
+  `try/catch`. Classic bytes changed by exactly that: snapshot update
+  `+1564/-97`; block level — no block added or removed, all nine classic
+  HTML blocks identical apart from the two try/catch hunks (checked by
+  substituting the old text back), the minimal block changed as intended.
+  `search.html`'s `restoreSearchState` still reads storage unguarded, so
+  with storage blocked the in-page search doesn't initialise (both themes;
+  filters, folds and the md/raw toggle now do). Left for a follow-up: it
+  changes classic and index output.
+- **Turn rule** no longer drawn above a slash command's output
+  (`.command-output`, `pair_middle`/`pair_last` excluded).
+- **Style guide.** `scripts/generate_style_guide.py --theme minimal
+  [--output-dir DIR]` renders only the transcript guide (default output: a
+  scratch dir, so the committed classic guide is untouched).
+- **Collapsibles** (`details.collapsible-*` previews, the `+N lines`
+  summaries) are legible in both schemes but otherwise classic — P4.
+- **Head size.** The minimal head grew by ~50KB (components ≈ 31KB,
+  Pygments dark ≈ 15KB): representative page `<h1>` at 196KB vs classic
+  116KB, still well inside the 512KB bounded read.
+- **Tests.** `test_minimal_theme.py`: `TestCallTitle`, `TestSessionHeader`,
+  `TestPygmentsDark` (drift + selector shape), page markup. New
+  `test_minimal_components_browser.py` (13, marker `browser`): Pygments
+  tokens differ from light and reach 4.5:1 on the dark code box (toggle and
+  system), light choice beats a dark system; the acceptance sample (code
+  box, diff add line, filter chip and dot); timeline container/labels/axis/
+  items dark; teammate tints follow `data-theme`; call line + search still
+  matching the hidden name; error pill; session summary clamp/expand;
+  blocked storage for classic and minimal.
+- **Screenshots** in
+  [`work/minimal-theme-dag-screenshots/p3b/`](minimal-theme-dag-screenshots/p3b/):
+  representative light/dark, edge cases (error pill, params, Pygments),
+  teammates, workflow, todo, fork, timeline — desktop, dark unless named.
+
 ### P4 — Collapse previews and fold-depth control — M
 
 **Goal:** § 1.4 and § 1.5 fully working.
@@ -1435,7 +1517,7 @@ tests from P3a–P7 green together.
 - [x] P1 groundwork fixes
 - [x] P2 theme plumbing
 - [x] P3a look, toolbar, light/dark
-- [ ] P3b components, Pygments dark, timeline
+- [x] P3b components, Pygments dark, timeline
 - [ ] P4 collapse + fold depth
 - [ ] P5 lane annotation
 - [ ] P6 DAG engine (main-only, interleaved, rail)

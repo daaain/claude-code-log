@@ -988,4 +988,6 @@ def get_template_environment() -> Environment:
     globals_dict["mn_compact_tokens"] = minimal_theme.compact_token_usage
     globals_dict["mn_gutter_time"] = minimal_theme.gutter_time
     globals_dict["mn_page_meta"] = minimal_theme.page_meta
+    globals_dict["mn_call_title"] = minimal_theme.call_title
+    globals_dict["mn_session_header"] = minimal_theme.session_header
     return env

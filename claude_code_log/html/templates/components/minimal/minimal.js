@@ -1,5 +1,6 @@
         // Minimal theme (--theme minimal) runtime: colour-scheme toggle,
-        // gutter times, toolbar offsets and the overflow menu. Collapse
+        // gutter times, session-summary more/less, toolbar offsets and the
+        // overflow menu. Collapse
         // labels and fold depth arrive in P4 (work/minimal-theme-dag.md).
         // Everything bound here is either on the toolbar or delegated on
         // `document`, so a live update's #transcript swap leaves it intact;
@@ -73,6 +74,43 @@
             }
             localiseGutterTimes(document);
             if (window.claudeLogOnRehydrate) window.claudeLogOnRehydrate(localiseGutterTimes);
+
+            // ---- session summary: two lines, more / less -------------------
+            // CSS clamps a session header's summary to two lines; when that
+            // hides text, a small toggle (placed on the meta line after it)
+            // expands it. The full text is also the summary's `title`. A live
+            // update can replace a header, so this runs on rehydrate too.
+            function decorateSessionSummaries(scope) {
+                (scope || document).querySelectorAll('.mn-sh-sum').forEach(function (sum) {
+                    const next = sum.nextElementSibling;
+                    const toggle = next && next.classList.contains('mn-sh-more') ? next : null;
+                    const open = sum.classList.contains('mn-open');
+                    const clamped = open || sum.scrollHeight > sum.clientHeight + 1;
+                    if (!clamped) {
+                        if (toggle) toggle.remove();
+                        return;
+                    }
+                    if (toggle) return;
+                    const btn = document.createElement('button');
+                    btn.type = 'button';
+                    btn.className = 'mn-sh-more';
+                    btn.textContent = open ? '− less' : '+ more';
+                    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+                    sum.after(btn);
+                });
+            }
+            document.addEventListener('click', function (event) {
+                const btn = event.target.closest('.mn-sh-more');
+                if (!btn) return;
+                const sum = btn.previousElementSibling;
+                if (!sum || !sum.classList.contains('mn-sh-sum')) return;
+                const open = sum.classList.toggle('mn-open');
+                btn.textContent = open ? '− less' : '+ more';
+                btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+            });
+            decorateSessionSummaries(document);
+            if (window.claudeLogOnRehydrate) window.claudeLogOnRehydrate(decorateSessionSummaries);
+            window.addEventListener('resize', function () { decorateSessionSummaries(document); });
 
             // ---- sticky offsets ------------------------------------------
             // The search & filter panel and the timeline are sticky too; they

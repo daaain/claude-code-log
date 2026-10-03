@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import html
 import re
+import unicodedata
 from typing import TYPE_CHECKING, Any, Iterable, Optional, cast
 
 if TYPE_CHECKING:
@@ -99,6 +100,126 @@ def is_generic_title(title: Optional[str]) -> bool:
     text = html.unescape(_TAG.sub("", title)).strip()
     text = _LEADING_DECORATION.sub("", text).strip().lower()
     return not text or text in _GENERIC_TITLES
+
+
+# Leading text of a title that only repeats the gutter's role label, beyond
+# the tool name / role label themselves: "📝 Todo List" (TodoWrite),
+# "🛠️ Task #1 …" (TaskCreate), "🔄 Async result …", "🤷 Slash Command".
+_TITLE_ALIASES = (
+    "Todo List",
+    "Async result",
+    "Slash Command",
+    "Sub-assistant",
+    "Teammate",
+    "Error",
+    "Task",
+)
+_AFTER_NAME = re.compile(r"[\s·:]*")
+_SPACES = re.compile(r"\s+")
+# Unicode categories of the pictographs a title starts with (emoji, their
+# variation selector and joiner, arrows such as ↳). ASCII symbols ("/", "$",
+# "#") are content, never decoration.
+_DECORATION_CATEGORIES = frozenset({"So", "Sk", "Sm", "Mn", "Me", "Cf"})
+
+
+def _decoration_length(text: str) -> int:
+    """Length of the leading run of pictographs and whitespace."""
+    for index, char in enumerate(text):
+        if char.isspace():
+            continue
+        if ord(char) > 0x7F and unicodedata.category(char) in _DECORATION_CATEGORIES:
+            continue
+        return index
+    return len(text)
+
+
+def _plain(fragment: str) -> str:
+    return _SPACES.sub(" ", html.unescape(_TAG.sub("", fragment))).strip()
+
+
+def call_title(
+    full_title: Any,
+    message: "TemplateMessage",
+    css_classes: str,
+    title_hint: Optional[str] = None,
+) -> dict[str, Any]:
+    """Split a card title into what the minimal row shows and what it hides.
+
+    The gutter already names the role (``Edit``, ``Hook``, ``User``), so the
+    row's call line drops the title's leading pictograph and a leading
+    repeat of that name — ``📝 Edit <span class='tool-summary'>/tmp/x.py``
+    shows just the path (mockup ``.call``, whose ``.tn`` is hidden).
+
+    Returns ``prefix`` (HTML the template keeps in a hidden ``.mn-tn`` span,
+    so the title's text content — which search and the timeline read — is
+    unchanged), ``rest`` (HTML shown), ``generic`` (nothing left to show: the
+    title line is hidden) and ``tooltip`` (the whole title as plain text, plus
+    the classic ``title_hint`` such as ``ID: toolu_…``).
+    """
+    full = str(full_title or "")
+    cut = full.find("<")
+    lead, tail = (full, "") if cut < 0 else (full[:cut], full[cut:])
+    lead_text = html.unescape(lead)
+
+    start = _decoration_length(lead_text)
+    after = lead_text[start:]
+    names: set[str] = {role_label(message, css_classes), *_TITLE_ALIASES}
+    tool_name = getattr(message.content, "tool_name", None)
+    if tool_name:
+        names.add(str(tool_name))
+    for name in sorted(names, key=lambda n: len(n), reverse=True):
+        if not after.startswith(name):
+            continue
+        following = after[len(name) : len(name) + 1]
+        if following and not (following.isspace() or following in "·:"):
+            continue  # "Tasks…" is not the name "Task"
+        separators = _AFTER_NAME.match(after, len(name))
+        start += separators.end() if separators else len(name)
+        break
+
+    prefix_text, rest_text = lead_text[:start], lead_text[start:]
+    rest = html.escape(rest_text, quote=False) + tail
+    plain = _plain(full)
+    tooltip = f"{plain} · {title_hint}" if plain and title_hint else plain or ""
+    return {
+        "prefix": html.escape(prefix_text, quote=False),
+        "rest": rest,
+        "generic": not _plain(rest) or is_generic_title(full),
+        "tooltip": tooltip or (title_hint or ""),
+    }
+
+
+def session_header(content: Any, formatted: Any) -> str:
+    """The minimal session header's title block (non-branch headers).
+
+    Classic renders ``Session: <summary> • <id8>`` as one bold line. The
+    minimal header shows the summary on its own (clamped to two lines by CSS;
+    the full text is its ``title`` and ``minimal.js`` expands it on click) and
+    the short session id as dim mono metadata beside the model. The rest of
+    the formatter's output (the "continues from" back-link, the team badge)
+    is kept as it is.
+    """
+    text = str(formatted or "")
+    title = getattr(content, "title", None) or ""
+    session_id = str(getattr(content, "session_id", "") or "")
+    summary = getattr(content, "summary", None)
+    escaped_title = html.escape(title)
+    short_id = html.escape(session_id[:8])
+    id_span = (
+        f"<span class='mn-sh-id' title='Session {html.escape(session_id)}'>"
+        f"{short_id}</span>"
+    )
+    if summary:
+        escaped_summary = html.escape(summary)
+        block = (
+            f"<span class='mn-sh-sum' title='{escaped_summary}'>"
+            f"{escaped_summary}</span>{id_span}"
+        )
+    else:
+        block = id_span
+    if escaped_title and escaped_title in text:
+        return text.replace(escaped_title, block, 1)
+    return block + text
 
 
 def compact_count(value: int) -> str:

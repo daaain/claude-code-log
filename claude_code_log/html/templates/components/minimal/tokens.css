@@ -74,6 +74,17 @@
         --lA: #6fcf8f;
         --lB: #7cb4ff;
         --lF: #f08bc4;
+        /* Teammate colours, lifted for the dark background. */
+        --cc-blue: #6ea8fe;
+        --cc-cyan: #4dd4e8;
+        --cc-green: #6fcf8f;
+        --cc-yellow: #e0c050;
+        --cc-orange: #f0a35c;
+        --cc-red: #ff8b84;
+        --cc-pink: #f08bc4;
+        --cc-purple: #c89cf0;
+        --cc-gray: #9aa1aa;
+        --cc-system: #8b949e;
     }
 }
 
@@ -104,6 +115,17 @@
     --lA: #6fcf8f;
     --lB: #7cb4ff;
     --lF: #f08bc4;
+    /* Teammate colours, lifted for the dark background. */
+    --cc-blue: #6ea8fe;
+    --cc-cyan: #4dd4e8;
+    --cc-green: #6fcf8f;
+    --cc-yellow: #e0c050;
+    --cc-orange: #f0a35c;
+    --cc-red: #ff8b84;
+    --cc-pink: #f08bc4;
+    --cc-purple: #c89cf0;
+    --cc-gray: #9aa1aa;
+    --cc-system: #8b949e;
     color-scheme: dark;
 }
 
