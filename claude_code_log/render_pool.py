@@ -143,6 +143,9 @@ class _WorkerSetup:
     archive_search_link: Optional[str]
     library_version: str
     session_tree: Any = None
+    # HTML theme (utils.THEME_CHOICES). Defaulted only so the field can
+    # follow `session_tree`; make_render_pool always passes it.
+    theme: str = "default"
 
 
 RENDER_JOBS_ENV = "CLAUDE_CODE_LOG_RENDER_JOBS"
@@ -482,6 +485,7 @@ def _build_worker_renderer() -> Any:
         compact=_worker_setup.compact,
         no_timestamps=_worker_setup.no_timestamps,
         no_recaps=_worker_setup.no_recaps,
+        theme=_worker_setup.theme,
     )
 
 
@@ -694,6 +698,7 @@ def make_render_pool(
     library_version: str,
     max_workers: int,
     session_tree: Any = None,
+    theme: str = "default",
 ) -> RenderPool:
     """Construct a pool. Cheap — no process starts until the first submit.
 
@@ -715,6 +720,7 @@ def make_render_pool(
             archive_search_link=archive_search_link,
             library_version=library_version,
             session_tree=session_tree,
+            theme=theme,
         ),
         max_workers,
     )

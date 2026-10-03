@@ -1,6 +1,7 @@
 # `--theme minimal`: a compact light/dark theme with a DAG layout
 
-Status: **spec + phased plan; P1 landed (see § 6).** Branch of origin:
+Status: **spec + phased plan; P1 and P2 landed (see § 6); § 7 decisions
+1–5 taken.** Branch of origin:
 `claude/sweet-mccarthy-64a24r`.
 
 This file is the single source of truth for the feature. Each phase in
@@ -34,8 +35,12 @@ product must not**: system font stacks only (see § 1.2).
 ### 1.1 Goal and invariants
 
 - An **opt-in** theme for HTML transcript output, selected with
-  `--theme minimal`. `--theme default` is the default.
-- **Default output stays byte-identical** once the plumbing lands. The
+  `--theme minimal` (or `CLAUDE_CODE_LOG_THEME=minimal`). The existing
+  look is the `classic` theme; `--theme default` means "the built-in
+  default", resolved through `utils.DEFAULT_THEME` (currently `classic`,
+  so switching the default later is a one-line change). Decided in P2,
+  see § 7 decision 7.
+- **Default (classic) output stays byte-identical** once the plumbing lands. The
   only phase allowed to change default bytes is P1 (groundwork bug fixes,
   explicitly approved, regenerated with `just update-snapshot` and
   reviewed at block level per CONTRIBUTING "Recognising the race").
@@ -244,7 +249,9 @@ the fork point's turn). When a group has more than 3 branches, only the
 first 3 (by spawn time) get controls and rail lanes; a
 `+N more branches` toggle on the 3rd control's row reveals the rest
 (controls + dashed lanes), so the whole tree stays reachable. The cap on
-interleaving (3) applies per group, LRU by selection.
+interleaving (3) applies per group, LRU by selection. **Decided (§ 7
+decision 5):** the cap and the `+N more branches` overflow are per user
+turn, not per page.
 
 #### 1.6.4 Merge semantics
 
@@ -257,11 +264,11 @@ interleaving (3) applies per group, LRU by selection.
 
 **Which branch of a fork continues "main"?** At a rewind, the DAG layer
 makes *every* child a branch pseudo-session (dev-docs/dag.md § 7); none
-is the trunk. Proposal: the **earliest** branch continues the main lane
-(its branch header renders as a slim `⑂ rewound` marker, its messages are
-main), later branches are fork lanes. This matches the mockup (fork drawn
-from an earlier main row) and keeps lane assignment stable when a new
-rewind appears during `serve --watch`. **Open decision — see § 7.**
+is the trunk. **Decided (§ 7 decision 3):** the **earliest** branch
+continues the main lane (its branch header renders as a slim `⑂ rewound`
+marker, its messages are main), later branches are fork lanes. This
+matches the mockup (fork drawn from an earlier main row) and keeps lane
+assignment stable when a new rewind appears during `serve --watch`.
 
 #### 1.6.5 Teammates
 
@@ -271,7 +278,8 @@ renders inline, nested under the spawning tool_result (it lives in
 `subagents/agent-*.jsonl` with a synthetic `{trunk}#agent-{id}` session
 id — there is no separate per-teammate page). In this theme:
 
-- the teammate subtree stays nested and folded (no lane, no rail lane);
+- the teammate subtree stays nested where it is today and is collapsed
+  by default (no lane, no rail lane, never a DAG branch);
 - the spawn row shows `→ <name>'s thread` linking to the first card of
   that thread (`#msg-d-N`, revealed through the existing
   `window.claudeLogRevealMessage` / `hashchange` handler);
@@ -284,8 +292,9 @@ id — there is no separate per-teammate page). In this theme:
   `session-<sid><suffix>.html?uuid=<uuid>` (handled by
   `revealMessageByUuid` in `transcript.html`).
 
-**Open decision — see § 7** (the user said "the teammate's session";
-the data model has no such session today).
+**Decided (§ 7 decision 4):** keep the threads nested, collapsed by
+default, not DAG branches; links go to the matching anchor on the same
+page.
 
 #### 1.6.6 Architecture (validated)
 
@@ -425,7 +434,9 @@ path the theme must. Follow it file by file:
   (~484), `make_render_pool` (~691). `render_dispatch.py`:
   `build_render_pool` (~89, ~158).
 - `html/renderer.py::generate_session` (~1842) builds the combined
-  back-link from `variant_suffix(...)` — must include the theme.
+  back-link from `variant_suffix(...)`. (After § 7 decision 2 the theme
+  shares filenames, so neither `variant_suffix` nor the back-link carry
+  it; P2 threads `theme` beside `no_recaps` everywhere else.)
 - `cli.py`: `convert` options (~1104–1124 is where `--no-timestamps` /
   `--no-recaps` live), `_render_provider_input_file`,
   `_run_provider_wholesale`, `serve` (calls
@@ -436,45 +447,49 @@ path the theme must. Follow it file by file:
   `session-{id}.{ext}` and uses `get_renderer(format)` (no depth either);
   `run_session_browser` is launched from `cli.py::_launch_tui_with_cache_check`.
 
-### 2.4 Staleness: why the theme is a filename variant
+### 2.4 Staleness: the theme lives in the generator stamp
 
-Recommendation (**decision — § 7**): make the theme a **variant suffix**,
-HTML-only (like `--compact` is Markdown-only): `--theme minimal` →
-`combined_transcripts.minimal.html`, `combined_transcripts.minimal_2.html`,
-`session-<id>.minimal.html`, composing after depth
-(`combined_transcripts.agent.minimal.html`).
+*Superseded recommendation:* this section originally proposed making the
+theme a filename variant (`combined_transcripts.minimal.html`, …). The
+user decided otherwise (§ 7 decision 2): **`--theme minimal` overwrites
+the normal output files** (`combined_transcripts.html`, `_N` pages,
+`session-*.html`, `index.html`). That rules out filename keying, so the
+theme has to be part of every staleness decision instead.
 
-That makes "the theme decides regeneration" automatic and reuses every
-existing mechanism instead of adding a new axis:
+As built in P2 — the cleanest persisted marker turned out to be the one
+every check already reads: the generator comment on line 2 of each page.
 
-- `CacheManager.is_transcript_stale` / `update_html_cache` key rows by
-  filename → a theme switch is `not_cached` → regenerated; switching back
-  finds the other theme's files current (no needless rebuild).
-- `is_page_stale` / html_pages are keyed by `variant_suffix` → paginated
-  and streaming paths are covered.
-- The session-scoped path (`_try_current_or_session_scoped`), the render
-  pool, and per-project planning in `process_projects_hierarchy` all key
-  off the same suffix.
-- The projects index **already lists every variant** of a project:
-  `converter.py::_enumerate_project_variants` globs
-  `combined_transcripts*.html` via `utils.VARIANT_ENTRY_RE`
-  (`^combined_transcripts((?:\.[a-z-]+)*)\.html$`) and labels it with
-  `_variant_label_from_suffix` → `.minimal` would show as "Minimal".
-  Special-case it to "Minimal theme".
-- Default suffix stays `""` → default files, names and bytes unchanged.
+- Classic: `<!-- Generated by claude-code-log v1.2.3 -->` (unchanged, so
+  classic bytes are identical to pre-theme output).
+- Minimal: `<!-- Generated by claude-code-log v1.2.3 theme=minimal -->`.
+- `html/renderer.py::html_generator_stamp(theme)` is the expected stamp;
+  `check_html_version` reads the whole stamp back, `check_html_theme`
+  parses the theme out of it.
+- `HtmlRenderer.is_outdated` (via `renderer.theme`),
+  `renderer.is_html_outdated(path, theme)` and the cache's
+  `is_transcript_stale` / `get_stale_sessions` / `is_page_stale`
+  (`theme=` keyword) compare against the stamp a page rendered *now*
+  would carry, so a page of the other theme is `file_version_mismatch`
+  on every path: single-file, paginated, streaming, session-scoped,
+  render pool, the all-projects plan, provider wholesale, TUI export,
+  `watch`/`serve`.
+- Cache rows (`html_cache`, `html_pages`) are shared between themes — no
+  migration, no theme column. A row's `library_version` matches, and the
+  file sniff that follows catches the theme.
+- Older releases parse the whole stamp as the version, so they see a
+  minimal page as outdated too.
+- A changed built-in default is caught as well: only resolved names are
+  stamped, so an archive built with `--theme default` (= classic) is
+  stale once `DEFAULT_THEME` names another theme.
+- `--combined no` never writes the combined output, yet its session
+  pages link back to it. To keep archives single-themed, a `--combined
+  no` run (every `watch` tick) whose combined output carries the other
+  theme is promoted to rewrite it once
+  (`converter.combined_theme_mismatch`, used by `convert_jsonl_to` and
+  `_plan_project`).
 
-**Collision to know about:** before #159, `--detail minimal` produced
-`combined_transcripts.minimal.html` (`DetailLevel.MINIMAL`, see
-`git show 8b868fe`). Old archives may still contain such files; the
-index would label them "Minimal theme". They are stale (old
-`library_version`) and get overwritten the first time `--theme minimal`
-runs. If that ambiguity is unacceptable, use the infix `.theme-minimal`
-instead (also matches `VARIANT_ENTRY_RE`). **Decision — § 7.**
-
-The alternative (same filenames, a theme marker sniffed from the HTML
-head plus a `theme` column on html_cache/html_pages via a migration, as
-migration 013 did for `combined_linked`) is strictly more work, makes the
-two themes overwrite each other, and still needs every path in § 2.3.
+The pre-#159 `--detail minimal` filename collision
+(`combined_transcripts.minimal.html`) is moot: no theme filename exists.
 
 ### 2.5 Where branch data lives in the render tree
 
@@ -921,82 +936,99 @@ variables.
   `apt-get install -y libnss3-tools && certutil -d sql:$HOME/.pki/nssdb -A -n ccr-agent-proxy -t "C,," -i /root/.ccr/agent-proxy-ca.crt`.
   `just` itself: `uv tool install rust-just`.
 
-### P2 — Theme plumbing: `--theme {default,minimal}` end to end — M
+### P2 — Theme plumbing: `--theme {classic,minimal,default}` end to end — M
 
-**Goal:** the option exists everywhere HTML is produced and decides the
-output filename variant; the minimal output is, for now, the default
-page plus a `theme-minimal` body class and an empty minimal stylesheet
-slot. Default output byte-identical.
+**Goal:** the option exists everywhere HTML is produced and takes part in
+every staleness decision; the minimal output is, for now, the classic
+page plus a `theme-minimal` body class, a `theme=minimal` generator stamp
+and an empty minimal stylesheet slot. Classic output byte-identical.
 
-**Files:** `claude_code_log/utils.py` (`variant_suffix`),
-`renderer.py` (`Renderer.theme`, `get_renderer`), `html/renderer.py`
-(`_generate_inner` passes `theme`; `generate_session` link suffix;
-`generate_html`/`generate_session_html` convenience functions gain
-`theme: str = "default"`), `converter.py` (every function in § 2.3),
-`converter.py::_variant_label_from_suffix` ("Minimal theme"),
-`render_pool.py`, `render_dispatch.py`, `cli.py` (`convert`, provider
-helpers, `serve`, `watch`, TUI launch), `tui.py`
-(`run_session_browser(..., theme=)`, `SessionBrowser.__init__`,
-`_ensure_session_file` uses `session-{id}{suffix}.{ext}` and
-`get_renderer(format, theme=...)`), `models.py` or `utils.py` (a
-`THEMES = ("default", "minimal")` constant and `DEFAULT_THEME`),
-`html/templates/transcript.html`, new empty
-`html/templates/components/minimal/tokens.css`, tests, dev-docs.
+*Revised after the § 7 decisions* (originally the theme was to be a
+filename variant): themes overwrite the same files (decision 2), the
+original look is named `classic` and `default` resolves through
+`DEFAULT_THEME` (decision 7), and `CLAUDE_CODE_LOG_THEME` sets the theme
+when `--theme` isn't passed (decision 8).
 
-**Steps:**
-1. `variant_suffix(..., theme: str = "default")`: append `"minimal"`
-   (or the decided infix, § 7) **only for format `html`**, after depth
-   and no-recaps; update the naming comment block above
-   `VARIANT_ENTRY_RE` in `utils.py`.
-2. Thread `theme` beside `no_recaps` through every function listed in
-   § 2.3 (grep `no_recaps` — every hit is a site to consider). Keyword
-   arguments with default `"default"` everywhere so library callers keep
-   working.
-3. CLI: `@click.option("--theme", type=click.Choice(THEMES),
-   default="default", show_default=True, help=…)` on `convert`, `serve`,
-   `watch`. With `--format md|json`, warn (not error) that `--theme` is
-   HTML-only, like `--no-timestamps`. Under `--tui`, pass it to the TUI
-   (the TUI exports HTML).
-4. Template: `{% set minimal = theme == 'minimal' %}` glued to an
-   existing line; `<body{% if minimal %} class='theme-minimal'{% endif %}>`;
-   after the last `{% include %}` in `<style>`:
-   `{% if minimal %}{% include 'components/minimal/tokens.css' %}{% endif %}`
-   on the **same line** as the teammate include. Diff a default render
-   before/after: must be byte-identical.
-5. Index: `_variant_label_from_suffix` maps the theme segment to
-   "Minimal theme".
+**Files:** `utils.py` (`THEMES`, `THEME_CHOICES`, `DEFAULT_THEME`,
+`CLASSIC_THEME`, `THEME_ENV_VAR`, `normalize_theme`, `output_theme`),
+`renderer.py` (`Renderer.theme`, `get_renderer(theme=)`,
+`is_html_outdated(path, theme)`), `html/renderer.py` (stamp helpers,
+`is_outdated`, `_generate_inner` passes `theme`, convenience functions),
+`cache.py` (`theme=` on the three staleness checks), `converter.py`
+(every function in § 2.3), `render_pool.py`, `render_dispatch.py`,
+`cli.py` (`convert`, provider helpers, `serve`, `watch`, TUI launch),
+`tui.py`, `html/templates/transcript.html`, new
+`html/templates/components/minimal/tokens.css`, tests, docs.
+
+**Steps:** thread `theme` beside `no_recaps` through § 2.3 (keyword,
+default `DEFAULT_THEME`); stamp the theme into the generator comment and
+compare it in every staleness check (§ 2.4); CLI option + env var with
+precedence flag > env > built-in default; template branch (below).
 
 **Acceptance:** `just ci` green with **no** `.ambr` change;
-`claude-code-log <dir> --theme minimal` writes
-`combined_transcripts.minimal.html` + `session-*.minimal.html` (and
-`_N` pages with `--page-size`), the index lists the variant, and a
-second run reports everything current; switching back to default
-regenerates nothing of the default variant.
+`claude-code-log <dir> --theme minimal` rewrites the same filenames with
+the minimal stamp (pages with `--page-size` too), a second run reports
+everything current, switching back regenerates everything again.
 
-**Tests** (new `test/test_theme_option.py`):
-- `variant_suffix` matrix (html vs md/json, with depth/no-recaps).
-- `get_renderer("html", theme="minimal").theme == "minimal"`.
-- default render byte-identical with `theme="default"` vs omitted
-  (render `representative_messages.jsonl` both ways).
-- minimal render contains `class='theme-minimal'`; default does not.
-- conversion of a tmp project: files named per suffix; second run is a
-  no-op (assert via `RegenerationReport`/mtimes, see
-  `test/test_html_regeneration.py` helpers `bump_mtime`,
-  `assert_regenerated` in `conftest.py`); theme switch regenerates only
-  the minimal files.
-- paginated (`page_size`) and render-pool paths
-  (`CLAUDE_CODE_LOG_RENDER_JOBS=2`; patterns in
-  `test/test_render_cache_equivalence.py` and
-  `test/test_streaming_render.py`) carry the theme into page units.
-- CLI: `--theme minimal --format md` warns; `serve`/`watch` accept the
-  option (Click `CliRunner` with `--help` or a patched converter).
-- TUI: `_ensure_session_file` names the file with the suffix (see
-  `test/test_tui.py`, marker `tui`).
-
-**Dev-docs:** `application_model.md` § 2.1 (flag list; filename
-convention), § 2.2 (TUI honours `--theme`), § 2.15 if `watch`/`serve`
-flags are listed there; `docs/` user docs get a short "Themes" mention
-only in P8.
+**As built (P2 landed):**
+- **Names.** `utils.THEMES = ("classic", "minimal")`,
+  `THEME_CHOICES` adds `"default"`; `normalize_theme` is
+  case-insensitive and maps `default` → `DEFAULT_THEME` (one constant;
+  `CLASSIC_THEME` separately names the stamp-less theme so moving the
+  default never changes what a classic page looks like on disk).
+  Everything downstream of the CLI/`get_renderer` holds a *resolved*
+  name; `output_theme(format, theme)` forces `classic` for Markdown/JSON.
+- **Marker.** § 2.4: the generator comment carries ` theme=<name>` for
+  non-classic themes; `html_generator_stamp` / `check_html_theme` in
+  `html/renderer.py`. Cache rows are shared between themes, no migration.
+- **No mixed archives under `--combined no`.**
+  `converter.combined_theme_mismatch(dir, suffix, theme)`: when the
+  combined output (page 1 — same name paginated or not) carries another
+  theme, `convert_jsonl_to` promotes the run to `write_combined=True`
+  once, and `_plan_project` counts it as work. Only for HTML runs that
+  write session pages (a `--combined no` run's pages link back to it).
+  Single-file exports (`--session-id`, TUI) write just their file; the
+  next archive run in the other theme rewrites it (stamp mismatch).
+- **Index / search page** are written on every run anyway, so they need
+  no stamp; neither is themed yet (§ 7 decision 6). `get_renderer(...)`
+  for the index is called without a theme.
+- **CLI.** `--theme` (Click `Choice(THEME_CHOICES)`, no Click default
+  and no Click `envvar`) on `convert`, `serve`, `watch`;
+  `cli._resolve_theme` applies flag > `CLAUDE_CODE_LOG_THEME` > default
+  and raises a `UsageError` naming the variable and the valid choices for
+  an unknown env value (an empty variable counts as unset). An explicit
+  `--theme` with `--format md|json` warns; the env var alone doesn't.
+  `--tui` passes the theme to `run_session_browser(theme=)`.
+- **TUI.** `SessionBrowser(html_theme=)` — *not* `theme`, which is
+  Textual's UI theme (`"gruvbox"`). `_ensure_session_file` keeps the
+  `session-{id}.{ext}` name and renders via
+  `get_renderer(format, theme=self.html_theme)`.
+- **Render pool.** `_WorkerSetup.theme` (last field, defaulted), passed
+  by `build_render_pool(theme=)` → `make_render_pool(theme=)`.
+- **Template.** Line 1: `<!DOCTYPE html>{% set minimal = theme ==
+  'minimal' %}`; line 2's stamp:
+  `{% if theme and theme != 'classic' %} theme={{ theme }}{% endif %}`;
+  `{% include 'components/teammate_styles.css' %}{% if minimal %}` +
+  newline + `{% include 'components/minimal/tokens.css' %}{% endif %}`;
+  `<body{% if minimal %} class='theme-minimal'{% endif %}>`. The template
+  receives the resolved name as `theme`. **Later CSS keys on
+  `body.theme-minimal`** (P3a adds the `:root` token blocks; § 3.2's
+  `data-theme-name` on `<html>` is not emitted yet — add it in P3a if
+  needed, glued to the existing `<html lang='en'>` line).
+- **Fragment store / memo caches** are untouched: formatter output is
+  theme-independent (§ 1.4 "no formatter changes"), and a store lives
+  inside one conversion, which has one theme. If a later phase ever makes
+  a formatter theme-dependent, the theme must join the store key.
+- **Tests:** `test/test_theme_option.py` (36): names and the `default`
+  constant indirection, classic byte-identity vs unthemed and
+  `default`, minimal = classic + exactly three markers, stamp
+  round-trip, changed-default staleness, theme round trips (single file,
+  paginated, streaming forced and spied, `--combined no` promotion,
+  render pool with dispatch counted, all-projects incl. the watch
+  shape), CLI precedence/env error/alias/warning, `serve`/`watch`
+  plumbing, TUI export (`tui` marker). No `.ambr` change.
+- **Docs:** README "Choosing a Theme", `docs/live-updates.md` tuning
+  table, `dev-docs/application_model.md` § 2.1 / 2.2 / 2.15.
 
 ### P3a — Minimal look: tokens, layout, toolbar, light/dark toggle — L
 
@@ -1167,8 +1199,8 @@ A/B/C).
    (`pair_last` index); async → the `TaskNotificationMessage` with
    `task_id == agent_id` (use `spawning_task_message_index` to pair).
 3. Forks: lane per branch header; spawn row = fork-point card
-   (`content.parent_message_index`); main-continuation branch per the
-   § 7 decision.
+   (`content.parent_message_index`); the main-continuation branch is the
+   earliest one at the rewind (§ 7 decision 3).
 4. Teammates: `kind="teammate"`, `data-teammate-link`.
 5. Template: attributes from § 3.3, emitted only when minimal; read
    `lanes` from a dict keyed by `message_index` passed into the template.
@@ -1273,7 +1305,10 @@ line + screenshot optional), `docs/live-updates.md` (theme works under
 minimal example page for the docs site), tests.
 
 **Steps:**
-1. User docs: what the theme is, `--theme minimal`, filenames, toolbar,
+1. User docs: what the theme is, `--theme minimal` /
+   `CLAUDE_CODE_LOG_THEME`, classic/minimal/default naming, that themes
+   overwrite the same files (README "Choosing a Theme" already has the
+   P2 basics), toolbar,
    branch modes, dark mode, offline note (timeline still loads
    vis-timeline from unpkg).
 2. Parity sweep: every filter toggle × every branch mode × timeline;
@@ -1293,7 +1328,7 @@ tests from P3a–P7 green together.
 ## 6. Progress
 
 - [x] P1 groundwork fixes
-- [ ] P2 theme plumbing
+- [x] P2 theme plumbing
 - [ ] P3a look, toolbar, light/dark
 - [ ] P3b components, Pygments dark, timeline
 - [ ] P4 collapse + fold depth
@@ -1304,34 +1339,56 @@ tests from P3a–P7 green together.
 
 ---
 
-## 7. Open decisions and risks (need the user's call)
+## 7. Decisions and risks
 
-1. **Groundwork changes default bytes (P1).** The three fixes the user
-   asked for necessarily change default CSS/JS and the default look
-   slightly (previously-dead rules start applying). Plan: one explicit,
-   reviewed regeneration in P1; byte-identity from P2 on. Alternative:
-   do the fixes only inside the minimal CSS and leave the default as is.
-2. **Theme as a filename variant** (`.minimal`) vs same filenames with a
-   theme marker. Recommended: variant (§ 2.4). Sub-decision: `.minimal`
-   (collides in name with stale pre-#159 `--detail minimal` outputs) vs
-   `.theme-minimal`.
-3. **Which fork branch continues "main"** — earliest (proposed; stable
-   under live updates, matches mockup) vs latest (what `--resume`
-   continues).
-4. **Teammate anchors** — teammate threads are inline sub-agent blocks,
-   not separate sessions, today. Proposed: keep them nested and folded,
-   link spawn/SendMessage rows to the thread's cards on the same page;
-   fall back to `session-<sid>.html?uuid=` only if a future layout puts
-   teammates in their own session files. Confirm this matches the
-   intent.
-5. **Branch-group cap semantics** — "max 3 interleaved" applied per
-   user turn (proposed, aligns with "+N more branches" per turn) vs one
-   global cap of 3 per page.
+Decisions 1–5 and 7–8 were taken by the user (1 implicitly by approving
+P1; the rest before P2) and are recorded as decided; 6 remains open.
+
+1. **Groundwork changes default bytes (P1).** *Decided:* one explicit,
+   reviewed regeneration in P1 (landed); classic byte-identity from P2
+   on.
+2. **Output files.** *Decided:* `--theme minimal` **overwrites** the
+   normal output files (`combined_transcripts.html`, `_N` pages,
+   `session-*.html`, `index.html` …) — no filename variant. The theme is
+   therefore part of every staleness decision, so switching theme
+   regenerates everything and switching back does too; an output written
+   in one theme is never current for the other, including session files
+   and pages regenerated incrementally (no mixed-theme archives). As
+   built: the generator stamp (§ 2.4, P2 as-built). The old
+   `--detail minimal`-era filename collision is no longer a concern.
+3. **Which fork branch continues "main".** *Decided:* the **earliest**
+   branch at a rewind continues the main line; later branches are fork
+   lanes (§ 1.6.4).
+4. **Teammates.** *Decided:* keep teammate threads nested where they
+   are, collapsed by default, not DAG branches; spawn / `SendMessage` /
+   `<teammate-message>` rows hyperlink to the matching anchor on the same
+   page (§ 1.6.5). The `session-<sid>.html?uuid=` fallback only matters
+   if a future layout moves teammates into their own files.
+5. **Branch-group cap.** *Decided:* the cap of 3 interleaved branches —
+   and the `+N more branches` overflow — applies **per user turn**
+   (§ 1.6.3).
 6. **Workflow sub-agents** (#174) are not lanes in this feature; the
    index page and `search.html` are not themed. Both could follow.
-7. **Risks:** `display: contents` + one big grid on very large combined
+   *(Open.)*
+7. **Theme names.** *Decided (with P2):* the existing look is `classic`;
+   valid values are `classic`, `minimal` and `default`. `default` means
+   "the built-in default theme" — `classic` today, possibly `minimal`
+   later — and resolves through the single constant
+   `utils.DEFAULT_THEME`, so switching is a one-line change. Only
+   resolved names are rendered and stamped, so an archive built with
+   `default` regenerates if the constant changes rather than passing as
+   fresh. `--theme default` is an explicit flag (it overrides the
+   environment). Help/docs wording: "classic (current look), minimal, or
+   default (the built-in default, currently classic)". Classic output
+   stays byte-identical.
+8. **`CLAUDE_CODE_LOG_THEME`.** *Decided (with P2):* sets the theme when
+   `--theme` isn't passed, wherever the option exists (`convert`/default
+   command, `serve`, `watch`, TUI exports); precedence flag > env >
+   built-in default; it may be `default` too; an unknown value is a
+   usage error naming the valid choices, never a silent fallback.
+9. **Risks:** `display: contents` + one big grid on very large combined
    pages (mitigated: pagination, measured budget in P6, columns only on
    demand); live-update patches stripping engine-owned controls
    (mitigated: re-created on rehydrate, engine is idempotent); keeping
-   default bytes identical under Jinja without `trim_blocks` (every
+   classic bytes identical under Jinja without `trim_blocks` (every
    conditional inline; P2 adds a byte-identity test).

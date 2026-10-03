@@ -2411,6 +2411,7 @@ class CacheManager:
         session_id: Optional[str] = None,
         output_dir: Optional[Path] = None,
         combined_linked: Optional[bool] = None,
+        theme: str = "default",
     ) -> tuple[bool, str]:
         """Check if a rendered output file needs regeneration.
 
@@ -2431,6 +2432,12 @@ class CacheManager:
                 carry the combined back-link (see
                 ``converter.combined_link_available``). A page rendered
                 with the other answer is stale. None skips the check.
+            theme: The HTML theme a page rendered now would carry
+                (``utils.THEME_CHOICES``; Markdown callers pass the
+                resolved ``utils.output_theme``). Themes share
+                filenames, so the file's generator stamp is what tells
+                them apart: a file stamped with another theme reports
+                ``file_version_mismatch``.
 
         Returns:
             Tuple of (is_stale: bool, reason: str)
@@ -2456,7 +2463,7 @@ class CacheManager:
         actual_file = (output_dir or self.project_path) / html_path
         if not actual_file.exists():
             return True, "file_missing"
-        if is_html_outdated(actual_file):
+        if is_html_outdated(actual_file, theme):
             return True, "file_version_mismatch"
 
         with self._get_connection() as conn:
@@ -2496,6 +2503,7 @@ class CacheManager:
         ext: str = "html",
         output_dir: Optional[Path] = None,
         combined_linked: Optional[bool] = None,
+        theme: str = "default",
     ) -> List[tuple[str, str]]:
         """Get list of sessions whose rendered file needs regeneration.
 
@@ -2515,6 +2523,9 @@ class CacheManager:
                 ``converter.combined_link_available``). A page rendered
                 with the other answer is stale. None skips the check, for
                 callers that don't render session pages.
+            theme: The HTML theme the session pages would be rendered in
+                now; a page stamped with another theme is stale
+                (``file_version_mismatch``), as in ``is_transcript_stale``.
 
         Returns:
             List of (session_id, reason) tuples for sessions needing regeneration
@@ -2580,7 +2591,7 @@ class CacheManager:
                 if not actual_file.exists():
                     stale_sessions.append((session_id, "file_missing"))
                     continue
-                if is_html_outdated(actual_file):
+                if is_html_outdated(actual_file, theme):
                     stale_sessions.append((session_id, "file_version_mismatch"))
                     continue
                 # `session_not_found` cannot arise here — the candidate
@@ -2933,6 +2944,7 @@ class CacheManager:
         variant_suffix: str = "",
         output_dir: Optional[Path] = None,
         expected_session_ids: Optional[List[str]] = None,
+        theme: str = "default",
     ) -> tuple[bool, str]:
         """Check if a page needs regeneration.
 
@@ -2951,6 +2963,11 @@ class CacheManager:
                 the page's *cached* membership, so without this a page whose
                 membership changed while its previously-held sessions stayed
                 untouched reports ``up_to_date`` (see ``sessions_changed``).
+            theme: The HTML theme the page would be rendered in now; a page
+                stamped with another theme is stale
+                (``file_version_mismatch``). Page rows are shared between
+                themes (themes don't change filenames), so the stamp is the
+                only theme-aware check.
 
         Returns:
             Tuple of (is_stale: bool, reason: str)
@@ -2976,7 +2993,7 @@ class CacheManager:
         actual_file = (output_dir or self.project_path) / page_data.html_path
         if not actual_file.exists():
             return True, "file_missing"
-        if is_html_outdated(actual_file):
+        if is_html_outdated(actual_file, theme):
             return True, "file_version_mismatch"
 
         # Check if the page's *membership* changed. The caller recomputes the

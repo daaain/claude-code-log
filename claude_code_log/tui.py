@@ -36,6 +36,7 @@ from .converter import (
     load_directory_transcripts,
 )
 from .renderer import get_renderer
+from .utils import DEFAULT_THEME, normalize_theme
 from .utils import atomic_write_text, get_project_display_name
 
 
@@ -1289,10 +1290,20 @@ class SessionBrowser(App[Optional[str]]):
     sessions: dict[str, SessionCacheData]
     archived_sessions: dict[str, SessionCacheData]
 
-    def __init__(self, project_path: Path, is_archived: bool = False):
-        """Initialize the session browser with a project path."""
+    def __init__(
+        self,
+        project_path: Path,
+        is_archived: bool = False,
+        html_theme: str = DEFAULT_THEME,
+    ):
+        """Initialize the session browser with a project path.
+
+        ``html_theme`` is the ``--theme`` for HTML exports — not to be
+        confused with ``self.theme``, Textual's own UI theme.
+        """
         super().__init__()
         self.theme = "gruvbox"
+        self.html_theme = normalize_theme(html_theme)
         self.project_path = project_path.resolve()
         self.is_archived_project = is_archived
         self.cache_manager = CacheManager(self.project_path, get_library_version())
@@ -1825,7 +1836,10 @@ class SessionBrowser(App[Optional[str]]):
         """
         ext = get_file_extension(format)
         session_file = self.project_path / f"session-{session_id}.{ext}"
-        renderer = get_renderer(format)
+        # The HTML theme shares filenames with every other theme; the
+        # renderer's is_outdated() reads the theme from the file's stamp, so
+        # a page left by a run in another theme is regenerated here.
+        renderer = get_renderer(format, theme=self.html_theme)
 
         # Check if we need to regenerate
         needs_regeneration = (
@@ -2133,8 +2147,13 @@ def run_project_selector(
         return None
 
 
-def run_session_browser(project_path: Path, is_archived: bool = False) -> Optional[str]:
-    """Run the session browser TUI for the given project path."""
+def run_session_browser(
+    project_path: Path, is_archived: bool = False, theme: str = DEFAULT_THEME
+) -> Optional[str]:
+    """Run the session browser TUI for the given project path.
+
+    ``theme`` is the HTML theme its exports render in (``--theme``).
+    """
     if not project_path.exists():
         # For archived projects, the directory may not exist but cache may
         if is_archived:
@@ -2143,7 +2162,9 @@ def run_session_browser(project_path: Path, is_archived: bool = False) -> Option
                 cache_manager = CacheManager(project_path, get_library_version())
                 project_cache = cache_manager.get_cached_project_data()
                 if project_cache and project_cache.sessions:
-                    app = SessionBrowser(project_path, is_archived=True)
+                    app = SessionBrowser(
+                        project_path, is_archived=True, html_theme=theme
+                    )
                     return app.run()
             except Exception:
                 pass
@@ -2163,14 +2184,16 @@ def run_session_browser(project_path: Path, is_archived: bool = False) -> Option
                 cache_manager = CacheManager(project_path, get_library_version())
                 project_cache = cache_manager.get_cached_project_data()
                 if project_cache and project_cache.sessions:
-                    app = SessionBrowser(project_path, is_archived=True)
+                    app = SessionBrowser(
+                        project_path, is_archived=True, html_theme=theme
+                    )
                     return app.run()
             except Exception:
                 pass
         print(f"Error: No JSONL transcript files found in {project_path}")
         return None
 
-    app = SessionBrowser(project_path, is_archived=is_archived)
+    app = SessionBrowser(project_path, is_archived=is_archived, html_theme=theme)
     try:
         return app.run()
     except KeyboardInterrupt:

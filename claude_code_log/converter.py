@@ -33,6 +33,8 @@ if TYPE_CHECKING:
     from .render_pool import RenderPool
 
 from .utils import (
+    DEFAULT_THEME,
+    output_theme,
     atomic_write_text,
     real_path_to_project_dirname,
     coalesce_trunk_session_id,
@@ -2144,6 +2146,27 @@ def combined_link_available(
     return (output_dir / f"combined_transcripts{variant_suffix}.{ext}").exists()
 
 
+def combined_theme_mismatch(output_dir: Path, variant_suffix: str, theme: str) -> bool:
+    """Is an existing combined HTML output stamped with another theme?
+
+    Themes overwrite the same files, so a run must not leave behind an
+    output of the other theme that its own pages link to. A ``--combined
+    no`` run (every ``watch`` tick by default) never rewrites the combined
+    output, yet its session pages carry a back-link to it
+    (``combined_link_available``); left alone, a theme switch would strand
+    a combined page in the old theme next to session pages in the new one.
+    Callers use this to promote such a run to writing the combined output
+    once — after that it carries the new theme and the run goes back to
+    skipping it. ``False`` when there is no combined file (or no stamp:
+    not ours). Paginated projects name page 1 like the single file, and
+    the paginated pass then re-checks every page's stamp itself.
+    """
+    from .html.renderer import check_html_theme
+
+    found = check_html_theme(output_dir / f"combined_transcripts{variant_suffix}.html")
+    return found is not None and found != theme
+
+
 def _variant_label_from_suffix(suffix: str) -> str:
     """Human-readable label for a filename suffix (e.g. '.agent.compact')."""
     if not suffix:
@@ -2691,6 +2714,7 @@ def _render_page_unit_inline(
     depth: RenderingDepth,
     compact: bool,
     no_recaps: bool,
+    theme: str,
     fragment_store: "Optional[RenderFragmentStore]",
     session_tree: Optional[SessionTree],
     archive_search_link: Optional[str],
@@ -2703,6 +2727,7 @@ def _render_page_unit_inline(
     page_renderer.depth = depth
     page_renderer.compact = compact
     page_renderer.no_recaps = no_recaps
+    page_renderer.theme = theme
     page_renderer.fragment_store = fragment_store
     html_content = page_renderer.generate(
         unit.entries,
@@ -2733,6 +2758,7 @@ def _generate_paginated_html(
     depth: RenderingDepth = DEFAULT_DEPTH,
     compact: bool = False,
     no_recaps: bool = False,
+    theme: str = DEFAULT_THEME,
     archive_search_link: Optional[str] = None,
     render_pool: "Optional[RenderPool]" = None,
     fragment_store: "Optional[RenderFragmentStore]" = None,
@@ -2759,6 +2785,8 @@ def _generate_paginated_html(
         silent: Suppress verbose output
         archive_search_link: Relative href to the archive-search page; see
             ``convert_jsonl_to``. Every page of a paginated project gets it.
+        theme: HTML theme. Pages share filenames and cache rows across
+            themes; ``is_page_stale`` reads the theme from each page's stamp.
 
     Returns:
         ``(first_page_path, wrote_any)`` — the path to the first page
@@ -2841,6 +2869,7 @@ def _generate_paginated_html(
             suffix,
             output_dir=output_dir,
             expected_session_ids=page_session_ids,
+            theme=theme,
         )
 
         if not is_stale and page_file.exists():
@@ -2896,6 +2925,7 @@ def _generate_paginated_html(
             depth=depth,
             compact=compact,
             no_recaps=no_recaps,
+            theme=theme,
             fragment_store=fragment_store,
             session_tree=session_tree,
             archive_search_link=archive_search_link,
@@ -2991,6 +3021,7 @@ def _combined_output_is_stale(
     format: str,
     page_size: int,
     suffix: str,
+    theme: str = DEFAULT_THEME,
 ) -> bool:
     """Cache-only combined-output staleness, pagination-aware.
 
@@ -3023,7 +3054,7 @@ def _combined_output_is_stale(
     )
     if not paginated:
         stale, _reason = cache_manager.is_transcript_stale(
-            output_path.name, None, output_dir=effective_output_dir
+            output_path.name, None, output_dir=effective_output_dir, theme=theme
         )
         return stale
 
@@ -3063,6 +3094,7 @@ def _combined_output_is_stale(
             suffix,
             output_dir=effective_output_dir,
             expected_session_ids=page_session_ids,
+            theme=theme,
         )
         if is_stale or not page_file.exists():
             return True
@@ -3175,6 +3207,7 @@ def _stream_paginated_conversion(
     compact: bool,
     no_timestamps: bool,
     no_recaps: bool,
+    theme: str,
     image_export_mode: Optional[str],
     archive_search_link: Optional[str],
     generate_individual_sessions: bool,
@@ -3293,6 +3326,7 @@ def _stream_paginated_conversion(
                     combined_linked=combined_link_available(
                         effective_output_dir, session_suffix, "html", write_combined
                     ),
+                    theme=theme,
                 )
             }
 
@@ -3310,6 +3344,7 @@ def _stream_paginated_conversion(
                 page_suffix,
                 output_dir=effective_output_dir,
                 expected_session_ids=page_session_ids,
+                theme=theme,
             )
             page_needs_render = is_stale or not page_file.exists()
             page_stale_sessions = stale_session_ids & set(page_session_ids)
@@ -3417,6 +3452,7 @@ def _stream_paginated_conversion(
                     depth=depth,
                     compact=compact,
                     no_recaps=no_recaps,
+                    theme=theme,
                     fragment_store=fragment_store,
                     session_tree=page_tree,
                     archive_search_link=archive_search_link,
@@ -3441,6 +3477,7 @@ def _stream_paginated_conversion(
                     write_combined=write_combined,
                     no_timestamps=no_timestamps,
                     no_recaps=no_recaps,
+                    theme=theme,
                     render_pool=None,
                     fragment_store=fragment_store,
                     restrict_to_sessions=page_stale_sessions,
@@ -3489,6 +3526,7 @@ def _try_current_or_session_scoped(
     compact: bool,
     no_timestamps: bool,
     no_recaps: bool,
+    theme: str,
     silent: bool,
     report: Optional["RegenerationReport"],
     entry_store: "Optional[ParsedEntryStore]" = None,
@@ -3556,6 +3594,7 @@ def _try_current_or_session_scoped(
             format,
             page_size,
             suffix,
+            theme,
         )
     else:
         combined_stale = False
@@ -3570,6 +3609,7 @@ def _try_current_or_session_scoped(
         combined_linked=combined_link_available(
             effective_output_dir, suffix, ext, write_combined
         ),
+        theme=theme,
     )
     if not stale_sessions or not generate_individual_sessions:
         # Nothing needs regeneration - skip loading
@@ -3617,6 +3657,7 @@ def _try_current_or_session_scoped(
         write_combined=write_combined,
         no_timestamps=no_timestamps,
         no_recaps=no_recaps,
+        theme=theme,
         render_pool=None,
         fragment_store=None,
     )
@@ -3644,6 +3685,7 @@ def _try_streaming(
     compact: bool,
     no_timestamps: bool,
     no_recaps: bool,
+    theme: str,
     silent: bool,
     report: Optional["RegenerationReport"],
 ) -> Optional[Path]:
@@ -3703,6 +3745,7 @@ def _try_streaming(
         compact=compact,
         no_timestamps=no_timestamps,
         no_recaps=no_recaps,
+        theme=theme,
         image_export_mode=image_export_mode,
         archive_search_link=archive_search_link,
         generate_individual_sessions=(
@@ -3740,6 +3783,7 @@ def convert_jsonl_to(
     write_combined: bool = True,
     no_timestamps: bool = False,
     no_recaps: bool = False,
+    theme: str = DEFAULT_THEME,
     force_regenerate: bool = False,
     report: Optional["RegenerationReport"] = None,
     archive_search_link: Optional[str] = None,
@@ -3793,6 +3837,14 @@ def convert_jsonl_to(
             single-threaded behaviour. An explicit int overrides the
             environment. See ``build_render_pool`` for the further
             conditions under which a pool is actually created.
+        theme: HTML theme: ``"classic"``, ``"minimal"``, or ``"default"``
+            (the built-in default, ``utils.DEFAULT_THEME``). Ignored for
+            Markdown/JSON. Themes overwrite the same filenames; every
+            staleness check compares the theme in each file's generator
+            stamp, so switching theme regenerates every output this run
+            writes. Under ``write_combined=False`` an
+            existing combined output in another theme is rewritten too (see
+            ``combined_theme_mismatch``), so no archive is left mixed.
     """
     if not input_path.exists():
         raise FileNotFoundError(f"Input path not found: {input_path}")
@@ -3807,6 +3859,7 @@ def convert_jsonl_to(
             print(f"Warning: Failed to initialize cache manager: {e}")
 
     ext = get_file_extension(format)
+    theme = output_theme(format, theme)
 
     # Initialize working_directories for both branches (used by pagination in directory mode)
     working_directories: List[str] = []
@@ -3867,6 +3920,21 @@ def convert_jsonl_to(
         if output_path is None:
             output_path = effective_output_dir / f"combined_transcripts{suffix}.{ext}"
 
+        # Never leave a combined output of another theme behind for this
+        # run's session pages to link back to: rewrite it once.
+        if (
+            format == "html"
+            and not write_combined
+            and generate_individual_sessions
+            and combined_theme_mismatch(effective_output_dir, suffix, theme)
+        ):
+            if not silent:
+                print(
+                    f"Combined output in {effective_output_dir.name} has another "
+                    f"theme; regenerating it in the {theme} theme"
+                )
+            write_combined = True
+
         # A store holds whatever the cache refresh parses, so Phase 1b
         # doesn't rebuild it from the rows the refresh just wrote
         # (entry_store.py). Deliberately not handed to the streaming path
@@ -3914,6 +3982,7 @@ def convert_jsonl_to(
             compact=compact,
             no_timestamps=no_timestamps,
             no_recaps=no_recaps,
+            theme=theme,
             silent=silent,
             report=report,
             entry_store=entry_store,
@@ -3948,6 +4017,7 @@ def convert_jsonl_to(
             compact=compact,
             no_timestamps=no_timestamps,
             no_recaps=no_recaps,
+            theme=theme,
             silent=silent,
             report=report,
         )
@@ -3999,6 +4069,7 @@ def convert_jsonl_to(
         compact=compact,
         no_timestamps=no_timestamps,
         no_recaps=no_recaps,
+        theme=theme,
     )
 
     # One fragment store per conversion, shared by the combined pages and
@@ -4068,6 +4139,7 @@ def convert_jsonl_to(
         compact=compact,
         no_timestamps=no_timestamps,
         no_recaps=no_recaps,
+        theme=theme,
         image_export_mode=image_export_mode,
         archive_search_link=archive_search_link,
         render_jobs=render_jobs,
@@ -4105,6 +4177,7 @@ def convert_jsonl_to(
                 depth=depth,
                 compact=compact,
                 no_recaps=no_recaps,
+                theme=theme,
                 archive_search_link=archive_search_link,
                 render_pool=render_pool,
                 fragment_store=fragment_store,
@@ -4115,7 +4188,10 @@ def convert_jsonl_to(
             # Use incremental regeneration via html_cache when available
             if cache_manager is not None and input_path.is_dir():
                 is_stale, _reason = cache_manager.is_transcript_stale(
-                    output_path.name, None, output_dir=output_path.parent
+                    output_path.name,
+                    None,
+                    output_dir=output_path.parent,
+                    theme=theme,
                 )
                 should_regenerate = (
                     # force_regenerate first so the is_outdated() sniff is
@@ -4246,6 +4322,7 @@ def convert_jsonl_to(
                 write_combined=write_combined,
                 no_timestamps=no_timestamps,
                 no_recaps=no_recaps,
+                theme=theme,
                 render_pool=render_pool,
                 fragment_store=fragment_store,
             )
@@ -5024,6 +5101,7 @@ def _generate_individual_session_files(
     write_combined: bool = True,
     no_timestamps: bool = False,
     no_recaps: bool = False,
+    theme: str = DEFAULT_THEME,
     render_pool: "Optional[RenderPool]" = None,
     fragment_store: "Optional[RenderFragmentStore]" = None,
     restrict_to_sessions: Optional[set[str]] = None,
@@ -5050,6 +5128,7 @@ def _generate_individual_session_files(
     from .utils import variant_suffix as _variant_suffix
 
     ext = get_file_extension(format)
+    theme = output_theme(format, theme)
     suffix = _variant_suffix(depth, compact, format, no_timestamps, no_recaps)
     combined_available = combined_link_available(
         output_dir, suffix, ext, write_combined
@@ -5089,6 +5168,7 @@ def _generate_individual_session_files(
         compact=compact,
         no_timestamps=no_timestamps,
         no_recaps=no_recaps,
+        theme=theme,
     )
     if fragment_store is not None:
         from .html.renderer import HtmlRenderer as _HtmlRenderer
@@ -5147,6 +5227,7 @@ def _generate_individual_session_files(
                     session_id,
                     output_dir=output_dir,
                     combined_linked=combined_available,
+                    theme=theme,
                 )
                 should_regenerate_session = (
                     is_stale
@@ -5298,6 +5379,7 @@ def generate_single_session_file(
     compact: bool = False,
     no_timestamps: bool = False,
     no_recaps: bool = False,
+    theme: str = DEFAULT_THEME,
 ) -> Path:
     """Generate a single session output file for the given session ID.
 
@@ -5310,6 +5392,7 @@ def generate_single_session_file(
         image_export_mode: Image export mode
         depth: Output depth level.
         compact: Whether to merge consecutive same-type headings (Markdown only).
+        theme: HTML theme (ignored for other formats).
 
     Returns:
         Path to the generated file
@@ -5417,6 +5500,7 @@ def generate_single_session_file(
         compact=compact,
         no_timestamps=no_timestamps,
         no_recaps=no_recaps,
+        theme=theme,
     )
     session_content = renderer.generate_session(
         session_messages, matched_id, session_title, cache_manager, output_dir
@@ -5440,6 +5524,7 @@ def render_normalized_session_file(
     no_timestamps: bool = False,
     no_recaps: bool = False,
     suppress_combined_link: bool = False,
+    theme: str = DEFAULT_THEME,
 ) -> Path:
     """Render already-normalized provider entries to one output file.
 
@@ -5458,6 +5543,7 @@ def render_normalized_session_file(
         compact=compact,
         no_timestamps=no_timestamps,
         no_recaps=no_recaps,
+        theme=theme,
     )
     content = renderer.generate_session(
         messages,
@@ -5512,6 +5598,7 @@ def _wholesale_should_render(
     session_id: Optional[str],
     dest_dir: Path,
     source_changed: bool,
+    theme: str = DEFAULT_THEME,
 ) -> bool:
     """Whether a wholesale output file must be (re)written.
 
@@ -5527,7 +5614,7 @@ def _wholesale_should_render(
     if source_changed:
         return True
     stale, _reason = cache.is_transcript_stale(
-        output_name, session_id=session_id, output_dir=dest_dir
+        output_name, session_id=session_id, output_dir=dest_dir, theme=theme
     )
     return stale
 
@@ -5603,6 +5690,7 @@ def render_provider_wholesale(
     compact: bool = False,
     no_timestamps: bool = False,
     no_recaps: bool = False,
+    theme: str = DEFAULT_THEME,
     write_combined: bool = True,
     write_individual: bool = True,
     use_cache: bool = True,
@@ -5677,6 +5765,7 @@ def render_provider_wholesale(
     from .utils import project_destination, variant_suffix as _variant_suffix
 
     ext = get_file_extension(output_format)
+    theme = output_theme(output_format, theme)
     suffix = _variant_suffix(depth, compact, output_format, no_timestamps, no_recaps)
     library_version = get_library_version()
     cache_db_path = get_cache_db_path(output_root) if use_cache else None
@@ -5850,7 +5939,7 @@ def render_provider_wholesale(
                     and info.source_path.resolve() in modified_sources
                 )
                 if _wholesale_should_render(
-                    cache, output_name, session_key, dest_dir, source_changed
+                    cache, output_name, session_key, dest_dir, source_changed, theme
                 ):
                     render_normalized_session_file(
                         messages,
@@ -5864,6 +5953,7 @@ def render_provider_wholesale(
                         no_timestamps,
                         no_recaps,
                         suppress_combined_link=not combined_available,
+                        theme=theme,
                     )
                     if cache is not None:
                         cache.update_html_cache(
@@ -5909,7 +5999,7 @@ def render_provider_wholesale(
         if write_combined:
             # Any changed session in the project invalidates the combined page.
             if _wholesale_should_render(
-                cache, combined_name, None, dest_dir, bool(modified_sources)
+                cache, combined_name, None, dest_dir, bool(modified_sources), theme
             ):
                 combined_renderer = get_renderer(
                     output_format,
@@ -5918,6 +6008,7 @@ def render_provider_wholesale(
                     compact=compact,
                     no_timestamps=no_timestamps,
                     no_recaps=no_recaps,
+                    theme=theme,
                 )
                 combined_content = combined_renderer.generate(
                     combined_messages,
@@ -6188,6 +6279,8 @@ def _plan_project(
     filter_path: Optional[str],
     write_combined: bool,
     page_size: int,
+    theme: str = DEFAULT_THEME,
+    generate_individual_sessions: bool = True,
 ) -> Optional[_ProjectPlan]:
     """Resolve destination and staleness for one project (no rendering).
 
@@ -6249,6 +6342,7 @@ def _plan_project(
             combined_linked=combined_link_available(
                 dest_dir, variant, combined_ext, write_combined
             ),
+            theme=theme,
         )
         if cache_manager
         else []
@@ -6271,7 +6365,7 @@ def _plan_project(
             # the page file against dest_dir (--output) like the
             # non-paginated branch below.
             combined_stale = cache_manager.is_page_stale(
-                1, page_size, variant, output_dir=dest_dir
+                1, page_size, variant, output_dir=dest_dir, theme=theme
             )[0]
         else:
             # Non-paginated project: check html_cache for the
@@ -6279,7 +6373,7 @@ def _plan_project(
             # `combined_transcripts.low.compact.md`), not the
             # default `combined_transcripts.html`.
             combined_stale = cache_manager.is_transcript_stale(
-                output_path.name, None, output_dir=dest_dir
+                output_path.name, None, output_dir=dest_dir, theme=theme
             )[0]
     else:
         combined_stale = True
@@ -6297,7 +6391,17 @@ def _plan_project(
             or not output_path.exists()
         )
     else:
-        needs_work = bool(modified_files) or bool(stale_sessions)
+        # A combined output left in another theme is rewritten even here
+        # (convert_jsonl_to promotes the run; see combined_theme_mismatch).
+        needs_work = (
+            bool(modified_files)
+            or bool(stale_sessions)
+            or (
+                combined_ext == "html"
+                and generate_individual_sessions
+                and combined_theme_mismatch(dest_dir, variant, theme)
+            )
+        )
 
     if needs_work:
         stats.files_updated = len(modified_files) if modified_files else 0
@@ -6372,6 +6476,7 @@ def process_projects_hierarchy(
     write_combined: bool = True,
     no_timestamps: bool = False,
     no_recaps: bool = False,
+    theme: str = DEFAULT_THEME,
     jobs: Optional[int] = None,
     entry_store: "Optional[ParsedEntryStore]" = None,
 ) -> Path:
@@ -6409,6 +6514,7 @@ def process_projects_hierarchy(
             write_combined=write_combined,
             no_timestamps=no_timestamps,
             no_recaps=no_recaps,
+            theme=theme,
             jobs=jobs,
             entry_store=entry_store,
         )
@@ -6432,6 +6538,7 @@ def _process_projects_hierarchy(
     write_combined: bool = True,
     no_timestamps: bool = False,
     no_recaps: bool = False,
+    theme: str = DEFAULT_THEME,
     jobs: Optional[int] = None,
     entry_store: "Optional[ParsedEntryStore]" = None,
 ) -> Path:
@@ -6462,6 +6569,9 @@ def _process_projects_hierarchy(
             progress line per project as results arrive. Peak memory
             scales with roughly ``jobs ×`` the largest stale project,
             so lower it on memory-constrained machines.
+        theme: HTML theme (see ``convert_jsonl_to``). The theme shares
+            filenames with every other theme, so it reaches the per-project
+            staleness plan (``_plan_project``) as well as the conversion.
     """
     import time
 
@@ -6519,6 +6629,7 @@ def _process_projects_hierarchy(
     # would make non-default --format / --detail / --compact
     # combinations cache-miss forever and link to the wrong file.
     variant = _variant_suffix(depth, compact, output_format, no_timestamps, no_recaps)
+    theme = output_theme(output_format, theme)
     combined_ext = get_file_extension(output_format)
     combined_name = f"combined_transcripts{variant}.{combined_ext}"
 
@@ -6587,6 +6698,8 @@ def _process_projects_hierarchy(
                 filter_path=filter_path,
                 write_combined=write_combined,
                 page_size=page_size,
+                theme=theme,
+                generate_individual_sessions=generate_individual_sessions,
             )
         except Exception as e:
             stats = GenerationStats()
@@ -6742,6 +6855,7 @@ def _process_projects_hierarchy(
             "write_combined": write_combined,
             "no_timestamps": no_timestamps,
             "no_recaps": no_recaps,
+            "theme": theme,
             "archive_search_link": _archive_search_link(plan),
             # Nested pools: a project worker gets its own share of the job
             # budget for the render fan-out, computed by the parent so the

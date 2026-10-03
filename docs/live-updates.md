@@ -84,9 +84,15 @@ page notices on its next poll.
 | `--max-latency` | `2.0` | Convert anyway after this long, so a long unbroken stream still surfaces |
 | `--all-projects` | off | Watch the whole archive instead of one project |
 | `--combined` | `no` | `no` keeps ticks cheap: only the changed session is regenerated |
+| `--theme` | `$CLAUDE_CODE_LOG_THEME`, else `default` | HTML theme: `classic` (current look), `minimal`, or `default` (the built-in default, currently `classic`). Also on `serve` |
 
 Raise `--quiet-period` if conversions feel too frequent on a large
 project; lower `--interval` if you want changes noticed sooner.
+
+Switching `--theme` rewrites every page in the new theme on the first
+tick — including a combined page that `--combined no` would otherwise
+leave alone, so its session pages never link back into a page of the
+other theme. Later ticks are cheap again.
 
 ## Cost
 

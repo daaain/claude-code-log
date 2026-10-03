@@ -186,6 +186,24 @@ claude-code-log --tui
 
 Placeholders: `{host}`, `{path}`, `{sha}`. The template fires only when the static map doesn't already know the host, so a mix of GitHub repos + self-hosted GitLab gets correct links from both. SHAs not reachable from any local remote-tracking ref render as plain text — local-only work-in-progress commits never produce broken links.
 
+### Choosing a Theme
+
+HTML output comes in themes, selected with `--theme` (on the default command, `serve` and `watch`, and for the TUI's HTML exports) or the `CLAUDE_CODE_LOG_THEME` environment variable:
+
+- `classic` — the current look
+- `minimal` — a compact light/dark theme (in development: it currently renders like `classic`)
+- `default` — the built-in default, currently `classic`
+
+```bash
+claude-code-log --theme minimal
+
+# Same thing via env var; an explicit --theme always wins over it
+export CLAUDE_CODE_LOG_THEME=minimal
+claude-code-log --theme classic   # still classic
+```
+
+Themes write the same files (`combined_transcripts.html`, `session-*.html`, …) rather than separate ones, and each page records the theme it was rendered in, so switching theme regenerates the whole archive (and switching back regenerates it again). `--theme` is HTML-only; with `--format md` it is ignored with a warning. An unknown `CLAUDE_CODE_LOG_THEME` value is an error.
+
 ## Project Hierarchy Output
 
 When processing all projects, the tool generates:

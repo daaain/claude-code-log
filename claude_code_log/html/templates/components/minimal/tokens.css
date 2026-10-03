@@ -1,0 +1,5 @@
+/* Minimal theme (--theme minimal): light/dark design tokens.
+   Included only when the theme is minimal, after every default stylesheet.
+   Every rule here is scoped under .theme-minimal (the <body> class) or the
+   :root token blocks described in work/minimal-theme-dag.md § 1.3.
+   Empty until P3a lands the tokens. */

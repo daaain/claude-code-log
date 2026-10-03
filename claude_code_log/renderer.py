@@ -81,6 +81,8 @@ from .factories.attachment_factory import (
     queued_command_prompt_items,
 )
 from .utils import (
+    DEFAULT_THEME,
+    output_theme,
     format_timestamp,
     best_working_dir,
     format_timestamp_range,
@@ -5345,6 +5347,9 @@ class Renderer:
     # level (#179). Recaps are otherwise always visible (see
     # ``AwaySummaryMessage.depth_visibility``).
     no_recaps: bool = False
+    # HTML theme (``--theme``, see ``utils.THEMES``). Only ``HtmlRenderer``
+    # reads it; ``get_renderer`` stores the resolved name (never "default").
+    theme: str = DEFAULT_THEME
 
     # Output format identifier consulted by the class-side dispatch path
     # below. Subclasses override to ``"html"`` etc.; the default
@@ -5709,6 +5714,7 @@ def get_renderer(
     compact: bool = False,
     no_timestamps: bool = False,
     no_recaps: bool = False,
+    theme: str = DEFAULT_THEME,
 ) -> Renderer:
     """Get a renderer instance for the specified format.
 
@@ -5724,6 +5730,9 @@ def get_renderer(
         no_recaps: If True, suppress ``※ recap`` (away_summary) messages at
             every depth level (issue #179). Recaps are otherwise always
             visible.
+        theme: HTML theme: ``"classic"``, ``"minimal"`` or ``"default"``
+            (resolved through ``utils.DEFAULT_THEME``). HTML-only: other
+            formats carry no theme (stamped like ``"classic"``).
 
     Returns:
         A Renderer instance for the specified format.
@@ -5752,13 +5761,19 @@ def get_renderer(
     renderer.depth = depth
     renderer.compact = compact
     renderer.no_recaps = no_recaps
+    renderer.theme = output_theme(format, theme)
     return renderer
 
 
-def is_html_outdated(html_file_path: Path) -> bool:
+def is_html_outdated(html_file_path: Path, theme: str = DEFAULT_THEME) -> bool:
     """Check if an HTML file is outdated based on its version comment.
 
     This is a convenience function that uses the HtmlRenderer's is_outdated method.
+
+    ``theme`` is the theme the caller would render in now: the comment
+    carries the theme a page was written with (see
+    ``html.renderer.html_generator_stamp``), so a page written in another
+    theme reads as outdated exactly like one from another version.
 
     Returns:
         True if the file should be regenerated (missing version, different version, or file doesn't exist).
@@ -5767,4 +5782,5 @@ def is_html_outdated(html_file_path: Path) -> bool:
     from .html.renderer import HtmlRenderer
 
     renderer = HtmlRenderer()
+    renderer.theme = output_theme("html", theme)
     return renderer.is_outdated(html_file_path)
