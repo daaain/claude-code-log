@@ -991,7 +991,9 @@
         }
     }
 
-    // Save search state to localStorage
+    // Save search state to localStorage. Storage can be unavailable
+    // (private mode, a sandboxed file:// page): writing then throws, and
+    // performSearch calls this mid-search — the search must still run.
     function saveSearchState() {
         const state = {
             query: searchState.query,
@@ -999,12 +1001,19 @@
             searchInFiltered: searchState.searchInFiltered,
             showContext: searchState.showContext
         };
-        localStorage.setItem('claudeLogSearchState', JSON.stringify(state));
+        try {
+            localStorage.setItem('claudeLogSearchState', JSON.stringify(state));
+        } catch (err) { /* storage unavailable: state lasts this page */ }
     }
 
-    // Restore search state from localStorage
+    // Restore search state from localStorage. Reading throws when storage
+    // is unavailable, which must not abort initSearch (no listeners would
+    // be bound and in-page search would never start).
     function restoreSearchState() {
-        const saved = localStorage.getItem('claudeLogSearchState');
+        let saved = null;
+        try {
+            saved = localStorage.getItem('claudeLogSearchState');
+        } catch (err) { /* storage unavailable: start from the defaults */ }
         if (saved) {
             try {
                 const state = JSON.parse(saved);

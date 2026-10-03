@@ -1074,7 +1074,20 @@
             }
 
             // Apply initial fold state
-            setInitialFoldState();
+            setInitialFoldState();{% if minimal %}
+
+            // Minimal theme: the fold-depth control (minimal.js) drives this
+            // state machine through these hooks. The stored depth is applied
+            // here — after the classic initial state, before the deep links
+            // below and the search component reveal their targets — so it
+            // never re-folds what a link or a query has just unfolded.
+            window.claudeLogApplyFoldState = applyFoldState;
+            window.claudeLogSyncFoldBar = syncFoldBar;
+            window.claudeLogUpdateDetailsToggle = updateToggleButton;
+            if (window.claudeLogMinimalInitFolds) {
+                window.claudeLogMinimalInitFolds();
+                updateToggleButton();
+            }{% endif %}
 
             // Re-sync a fold bar to what its children container is actually
             // doing. A live update re-renders a card whenever its descendant

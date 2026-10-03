@@ -333,7 +333,16 @@ class TestBlockedStorage:
         expect(
             page.locator('.filter-toggle[data-type="user"] .count')
         ).not_to_have_text("(0)")
-        assert page.locator(".fold-bar-section.folded").count() > 0
+        if theme == "classic":
+            assert page.locator(".fold-bar-section.folded").count() > 0
+        else:
+            # Minimal's default depth (Steps) leaves this fixture with
+            # nothing folded; the handler reaching the fold-depth hooks (and
+            # applying the default without storage) is the same signal.
+            assert page.evaluate("typeof window.claudeLogSyncFoldBar") == "function"
+            expect(page.locator("[data-mn-depth='steps']")).to_have_attribute(
+                "aria-pressed", "true"
+            )
         button = page.locator("#toggleUserView")
         if theme == "minimal":
             page.locator(".mn-more > summary").click()

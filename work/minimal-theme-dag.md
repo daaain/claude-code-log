@@ -1,7 +1,7 @@
 # `--theme minimal`: a compact light/dark theme with a DAG layout
 
-Status: **spec + phased plan; P1, P2, P3a and P3b landed (see § 6); § 7
-decisions 1–5 taken.** Branch of origin:
+Status: **spec + phased plan; P1, P2, P3a, P3b and P4 landed (see § 6);
+§ 7 decisions 1–5 taken.** Branch of origin:
 `claude/sweet-mccarthy-64a24r`.
 
 This file is the single source of truth for the feature. Each phase in
@@ -1361,6 +1361,92 @@ fold-bar browser tests still pass (default theme).
 **Dev-docs:** `message-hierarchy.md` (fold-depth mapping onto states
 A/B/C).
 
+**As built (P4 landed):**
+- **Exports, minimal-gated.** The `{% if minimal %}` block glued after
+  `setInitialFoldState();` exports `window.claudeLogApplyFoldState`,
+  `window.claudeLogSyncFoldBar` and `window.claudeLogUpdateDetailsToggle`
+  (the 📋 label) and calls `window.claudeLogMinimalInitFolds()` — defined
+  by `minimal.js`, which runs at parse time, before `DOMContentLoaded`. So
+  the stored depth lands after the classic initial state and **before** the
+  hash / `?uuid=` deep links and search's `?q=` reveal anything: a link
+  always beats the depth (tested). Classic bytes: unchanged.
+- **Depth = own container per card, then sync** (deviation from "apply
+  `first`/`open` top-down"): each card with a fold bar decides only whether
+  its own `.children` is shown (`claudeLogApplyFoldState(card, 'folded')`
+  to hide), then `claudeLogSyncFoldBar` re-derives every bar's icons — O(n),
+  order-free, and the same code serves the live-update path. Prompts:
+  headers shown, everything else folded. Steps: everything shown except a
+  card whose immediate children include a deeper agent (`.sidechain` with a
+  higher `agent-depth-N` than the card; non-sidechain = 0) — sync/async/
+  teammate spawns and workflow agents — which stays folded (P6's "Main
+  only" will own these). All: everything shown, every collapsible open.
+  Table in dev-docs/message-hierarchy.md "Fold depth".
+- **Overrides.** A fold-bar click **and the 📋 open/close-all** clear the
+  segment's `on` (all `aria-pressed="false"`); opening one preview doesn't
+  (the mockup's per-item `ov` keeps the depth too). Re-choosing a depth
+  re-applies it everywhere. Stored in `claude-code-log:fold-depth` (always
+  written, default `steps`), storage in `try/catch`.
+- **Live update.** The rehydrate hook applies the current depth only to
+  cards tagged `live-new` (not yet seen, tracked in a `WeakSet`) and, on
+  the patch path (scope ≠ `#transcript`), to a card whose `.children` it
+  has never seen (a card that just gained its first children takes the new
+  container wholesale). The swap's restored state and every hand override
+  are left alone; tested on a real `serve`-style server through a swap
+  then a patch, at Prompts and at All.
+- **Collapse labels.** `data-more` is written on the **`<summary>`**, not
+  the `<details>` (deviation): CSS `attr()` reads only the pseudo-element's
+  own element. Values: `+ N lines` (from `.line-count`, else the body's
+  `\n` count — `N` is the block's **total** line count, as the acceptance
+  asks, not "lines beyond the preview", which would need layout per block),
+  `+ N items` for a params table fold, `+ more` when ≤ 2 lines (a long
+  single line). Labels and `− less` are generated content (also the
+  trailing `button.mn-less`, appended to blocks of ≥ 12 lines/items), so
+  `textContent` — search, timeline — never sees them. No JS: the
+  `.line-count` is the label (`+ ` prefix), else `+ more`.
+- **Previews.** `--pv` 4.4em (code, output), 2.8em (`.preview-content.markdown`
+  — assistant text, thinking, Task results — and params); the mask is
+  `linear-gradient(#000 calc(var(--pv) * .45), transparent var(--pv))`,
+  measured in `--pv` so a preview shorter than the clip fades only at its
+  foot. Open: summary = one `− less` line. Params keep their key-toggle
+  design: label beside the preview, a keyed row's open summary stays hidden
+  (classic). Hooks, IDE selections and workflow errors (other `<details>`)
+  are untouched.
+- **Pygments polish (pulled in).** Line-numbered code lost its stacked top
+  margins/td padding (`.highlight`, its table and both `<pre>`s each added
+  one), so a clipped code preview starts with code.
+- **Fold bar** per step 4: chevron masks (`--mn-chev`, double for
+  `.fold-all-levels`) on `.fold-icon::before`, rotated from `.folded`; the
+  glyph text the state machine writes is hidden.
+- **Cross-theme fix (requested).** `search.html`: `restoreSearchState`'s
+  read **and** `saveSearchState`'s write are in `try/catch` — the write too,
+  because `performSearch` calls it mid-search and a throw there left
+  `isSearching` stuck, so the search never ran. Snapshots via `just
+  update-snapshot` (`+601/-51`): block level, no block added or removed;
+  the ten classic/index blocks each `+9` and identical to before once the
+  two search hunks are substituted back; the minimal block `+460` (CSS, JS,
+  toolbar).
+- **Head size.** Minimal representative `<h1>` at 198KB (P3b: 196KB);
+  classic 113KB.
+- **Tests.** New `test/test_minimal_fold_browser.py` (23, marker `browser`):
+  preview clip/fade/labels (= real line counts), open/`− less`/scroll-back,
+  trailing `− less` only on long blocks, params key toggle, 📋 still works,
+  labels after a rehydrate, no-JS label fallback; Steps default, Prompts,
+  All, reload persistence, fold-bar override, preview click keeps the
+  depth, sub-agents folded at Steps, deep link beats a stored depth, blocked
+  storage; filter at every depth, search revealing a match past a preview at
+  Prompts, timeline independent of depth; live update (swap + patch)
+  preserving depth and overrides, All on new cards; in-page search with
+  storage blocked (classic + minimal). Adjusted: P3b's blocked-storage test
+  (minimal at Steps has nothing folded), P3a's (no page error at all now).
+- **Seen, not fixed (P3a layout):** a paired call's first half
+  (`pair_first`, empty content) is as tall as its two-line gutter, so a
+  ~15px gap sits between a call line and its output box. The timeline's
+  "Tool" filter doesn't drop vis items — classic too, pre-existing.
+- **Screenshots** in
+  [`work/minimal-theme-dag-screenshots/p4/`](minimal-theme-dag-screenshots/p4/):
+  a real sample session (`real_projects/…claude-code-log-sample/fe869ecb…`)
+  at Prompts / Steps / All, light and dark, desktop.
+
 ### P5 — Server-side lane annotation and data attributes — M
 
 **Goal:** § 3.3. Pure server work; the page renders exactly as after P4
@@ -1518,7 +1604,7 @@ tests from P3a–P7 green together.
 - [x] P2 theme plumbing
 - [x] P3a look, toolbar, light/dark
 - [x] P3b components, Pygments dark, timeline
-- [ ] P4 collapse + fold depth
+- [x] P4 collapse + fold depth
 - [ ] P5 lane annotation
 - [ ] P6 DAG engine (main-only, interleaved, rail)
 - [ ] P7 columns, overflow, teammates

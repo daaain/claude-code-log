@@ -440,6 +440,151 @@ body.theme-minimal {
     display: none;
 }
 
+/* -------------------------------------------------- collapse previews */
+
+/* The formatters' <details> (work/minimal-theme-dag.md § 1.4), restyled
+   as the mockup's .clip: closed, the summary's preview is clipped to --pv
+   with a fade and followed by a "+N lines" line; open, the summary is a
+   single "− less" line above the full body. The label is `data-more` on
+   the <summary>, written by minimal.js (from `.line-count`, the body's
+   lines or a params table's rows); without JS the `.line-count` stands in
+   for it, or a plain "+ more". Generated content, so search and the
+   timeline never see it.
+   --pv: 4.4em for code and output, 2.8em for prose and params (mockup). */
+.theme-minimal #transcript :is(details.collapsible-code, details.collapsible-details) {
+    --pv: 4.4em;
+    margin: 2px 0 0;
+}
+
+.theme-minimal #transcript details.collapsible-code:has(> summary > .preview-content.markdown),
+.theme-minimal #transcript details.tool-param-collapsible {
+    --pv: 2.8em;
+}
+
+.theme-minimal #transcript :is(details.collapsible-code, details.collapsible-details, details.tool-param-collapsible) > summary {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    margin: 0;
+    padding: 0;
+    border-radius: 0;
+    background: none;
+    color: inherit;
+    list-style: none;
+    cursor: pointer;
+}
+
+.theme-minimal #transcript :is(details.collapsible-code, details.collapsible-details, details.tool-param-collapsible) > summary::-webkit-details-marker {
+    display: none;
+}
+
+.theme-minimal #transcript :is(details.collapsible-code, details.collapsible-details) > summary:hover {
+    background: none;
+}
+
+/* The preview, clipped. The fade is measured in --pv, not in the box, so
+   a preview shorter than the clip fades only at its foot. */
+.theme-minimal #transcript details:not([open]) > summary > :is(.preview-content, .tool-param-preview) {
+    display: block;
+    max-height: var(--pv);
+    margin: 0;
+    overflow: hidden;
+    opacity: 1;
+    -webkit-mask-image: linear-gradient(#000 calc(var(--pv) * 0.45), transparent var(--pv));
+    mask-image: linear-gradient(#000 calc(var(--pv) * 0.45), transparent var(--pv));
+}
+
+/* The "+N lines" / "− less" line (mockup .more). */
+.theme-minimal #transcript :is(details.collapsible-code, details.collapsible-details, details.tool-param-collapsible) > summary::after,
+.theme-minimal #transcript details.collapsible-code > summary > .line-count,
+.theme-minimal #transcript .mn-less {
+    order: 2;
+    align-self: flex-start;
+    margin: 0;
+    padding: 2px 0;
+    border: 0;
+    background: none;
+    font: 0.7rem/1.4 var(--mono);
+    font-style: normal;
+    font-weight: 400;
+    color: var(--muted);
+}
+
+.theme-minimal #transcript :is(details.collapsible-code, details.collapsible-details, details.tool-param-collapsible) > summary::after {
+    content: "+ more";
+}
+
+.theme-minimal #transcript :is(details.collapsible-code, details.collapsible-details, details.tool-param-collapsible) > summary[data-more]::after {
+    content: attr(data-more);
+}
+
+/* No JS: the formatter's line count is the label. */
+.theme-minimal #transcript details.collapsible-code > summary:not([data-more])::after {
+    content: none;
+}
+
+.theme-minimal #transcript details.collapsible-code > summary > .line-count::before {
+    content: "+ ";
+}
+
+.theme-minimal #transcript details.collapsible-code > summary[data-more] > .line-count,
+.theme-minimal #transcript details.collapsible-code[open] > summary > .line-count {
+    display: none;
+}
+
+.theme-minimal #transcript details[open] > summary > :is(.preview-content, .tool-param-preview) {
+    display: none;
+}
+
+.theme-minimal #transcript :is(details.collapsible-code, details.collapsible-details, details.tool-param-collapsible)[open] > summary::after {
+    content: "− less";
+}
+
+.theme-minimal #transcript :is(details.collapsible-code, details.collapsible-details, details.tool-param-collapsible) > summary:hover::after,
+.theme-minimal #transcript details.collapsible-code > summary:hover > .line-count,
+.theme-minimal #transcript .mn-less:hover {
+    color: var(--fg);
+}
+
+/* The trailing "− less" of a long open block (minimal.js). */
+.theme-minimal #transcript .mn-less {
+    display: block;
+    cursor: pointer;
+}
+
+.theme-minimal #transcript .mn-less::before {
+    content: "− less";
+}
+
+/* The open body follows the "− less" line without a gap of its own. */
+.theme-minimal #transcript :is(details.collapsible-code > .code-full, details.collapsible-details > .details-content) {
+    margin-top: 0;
+}
+
+/* Params: the label sits beside the preview (a folded table row stays
+   one line where it fits), and a keyed row's open fold keeps the classic
+   look — its key's ⏷ closes it, so the summary stays hidden. */
+.theme-minimal #transcript details.tool-param-collapsible > summary {
+    flex-flow: row wrap;
+    align-items: baseline;
+    column-gap: 8px;
+    color: var(--muted);
+}
+
+.theme-minimal #transcript details.tool-param-collapsible > summary > .tool-param-preview {
+    flex: 0 1 auto;
+    min-width: 0;
+}
+
+.theme-minimal #transcript details.tool-param-collapsible > summary::after {
+    flex: none;
+    font-style: normal;
+}
+
+.theme-minimal #transcript .tool-param-row-fold > .tool-param-value > details[open] > summary {
+    display: none;
+}
+
 /* --------------------------------------------- tool parameter tables */
 
 .theme-minimal #transcript .tool-params-table {

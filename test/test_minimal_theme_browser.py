@@ -200,10 +200,9 @@ class TestColourScheme:
         page.locator("[data-mn-theme='dark']").click()
         expect(html).to_have_attribute("data-theme", "dark")
         assert _body_bg(page) == DARK_BG
-        # The search panel's saved-state restore (search.html, shared with
-        # classic) still reads storage unguarded; nothing in the minimal
-        # scripts may throw.
-        assert not [e for e in errors if "minimal" in e.lower() or "theme" in e.lower()]
+        # Nothing on the page may throw — the search panel's saved-state
+        # restore (search.html) included, since P4 guards it too.
+        assert errors == []
 
 
 @pytest.mark.browser

@@ -191,6 +191,9 @@ output):
 | `nav.mn-toolbar` | sticky toolbar | holds the classic floating buttons (same ids and classes, see below), `.mn-sp` spacer, `.mn-seg.mn-seg-icons` theme toggle (`button[data-mn-theme=auto\|light\|dark]`, `.on` + `aria-pressed`), `details.mn-more` overflow menu (`.mn-menu`) |
 | `.mn-ibtn`, `.mn-i-<icon>` | toolbar buttons | icon is a CSS mask on `::before` (`--mn-icon`); the button's own text — which the page's scripts rewrite — is hidden with `font-size: 0` |
 | `.mn-stage` | wraps `#transcript` | draws the rail's continuous hairline (`::before`) |
+| `.mn-seg.mn-depth`, `button[data-mn-depth=prompts\|steps\|all]` | toolbar, before `.mn-sp` | fold depth (dev-docs/message-hierarchy.md "Fold depth"); `.on` + `aria-pressed` mark the current choice, none after a manual override. Stored in `localStorage` `claude-code-log:fold-depth` |
+| `summary[data-more]` | the `<summary>` of `details.collapsible-code`, `.collapsible-details`, `.tool-param-collapsible` | the closed block's label (`+ N lines`, `+ N items` for a params table, `+ more`), written by `minimal.js` and drawn by `summary::after { content: attr(data-more) }` |
+| `button.mn-less` | last child of a long (≥ 12 lines/items) collapsible | trailing `− less` (label in CSS): closes the block and scrolls its top back under the toolbar |
 | `.mn-title`, `.mn-generic` | the card title span | the row's call line (column 3, mono). `minimal_theme.call_title` moves the title's leading pictograph and a leading repeat of the gutter label (tool name, role label, or an alias such as `Todo List`, `Async result`, `Task`) into a hidden `.mn-tn` span, so the line shows only the path/arguments (`.tool-summary` in `--fg`, details such as `.tool-subagent`/`.message-model` dimmed); the whole title is the span's `title` (plus the classic `title_hint`). `.mn-tn` stays in the DOM, so search and the timeline, which read the title's `textContent`, see the same text as in classic. `.mn-generic` (nothing left to show, or a role-only title) hides the line |
 | `.mn-tn` | inside `.mn-title` | hidden pictograph + repeated name (mockup `.tn`) |
 | `.mn-sh-sum`, `.mn-sh-id`, `.mn-sh-more` | non-branch session header's `.header` | compact header (`minimal_theme.session_header`): the summary alone, clamped to two lines (`-webkit-line-clamp`; full text as `title`; `.mn-open` unclamps), then the short session id, team badge and model as dim mono metadata. `minimal.js` adds the `+ more` / `− less` button (`.mn-sh-more`) only when the clamp hides text, on load, rehydrate and resize |
@@ -229,6 +232,27 @@ classes, so the filter script is untouched.
 role colour) and overrides vis-timeline's own sheet (panel borders, grid
 lines, axis text, generic items, the tooltip) under `.theme-minimal`, so
 the timeline follows the scheme too.
+
+**Collapse previews.** The formatters' `<details>` (`.collapsible-code`,
+`.collapsible-details`, `.tool-param-collapsible`) keep their markup; the
+theme restyles them as the mockup's `.clip`. Closed: the summary's
+`.preview-content` / `.tool-param-preview` is clipped to `--pv` (4.4em for
+code and output, 2.8em for prose — a `.preview-content.markdown` — and
+params) under a `mask-image` fade measured in `--pv`, followed by the
+`data-more` label (params: beside the preview). Open: the preview is
+hidden and the summary is a single `− less` line; a keyed params row keeps
+its classic open state (summary hidden, the key's ⏷ closes it). All labels
+are generated content, so search and the timeline (which read
+`textContent`) never see them. Without JS a `.collapsible-code` shows its
+formatter-written `.line-count` as the label (`+ ` prefix), the others
+`+ more`. The classic 📋 open/close-all and every per-item toggle work as
+before: the styling keys on `[open]` only.
+
+**Fold bar.** One muted mono line; each section's classic glyph
+(`.fold-icon`, rewritten by the fold state machine) is hidden and replaced
+by a chevron mask on `::before` (`--mn-chev`, double for
+`.fold-all-levels`), pointing right while the section is `.folded` and
+rotated down otherwise.
 
 **Toolbar offsets.** `minimal.js` keeps `--mn-bar-h` (toolbar height) and
 `--mn-filter-h` (search & filter panel height, 0 when closed) on `<html>`;

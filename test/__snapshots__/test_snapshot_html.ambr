@@ -7925,7 +7925,9 @@
           }
       }
   
-      // Save search state to localStorage
+      // Save search state to localStorage. Storage can be unavailable
+      // (private mode, a sandboxed file:// page): writing then throws, and
+      // performSearch calls this mid-search — the search must still run.
       function saveSearchState() {
           const state = {
               query: searchState.query,
@@ -7933,12 +7935,19 @@
               searchInFiltered: searchState.searchInFiltered,
               showContext: searchState.showContext
           };
-          localStorage.setItem('claudeLogSearchState', JSON.stringify(state));
+          try {
+              localStorage.setItem('claudeLogSearchState', JSON.stringify(state));
+          } catch (err) { /* storage unavailable: state lasts this page */ }
       }
   
-      // Restore search state from localStorage
+      // Restore search state from localStorage. Reading throws when storage
+      // is unavailable, which must not abort initSearch (no listeners would
+      // be bound and in-page search would never start).
       function restoreSearchState() {
-          const saved = localStorage.getItem('claudeLogSearchState');
+          let saved = null;
+          try {
+              saved = localStorage.getItem('claudeLogSearchState');
+          } catch (err) { /* storage unavailable: start from the defaults */ }
           if (saved) {
               try {
                   const state = JSON.parse(saved);
@@ -15839,7 +15848,9 @@
           }
       }
   
-      // Save search state to localStorage
+      // Save search state to localStorage. Storage can be unavailable
+      // (private mode, a sandboxed file:// page): writing then throws, and
+      // performSearch calls this mid-search — the search must still run.
       function saveSearchState() {
           const state = {
               query: searchState.query,
@@ -15847,12 +15858,19 @@
               searchInFiltered: searchState.searchInFiltered,
               showContext: searchState.showContext
           };
-          localStorage.setItem('claudeLogSearchState', JSON.stringify(state));
+          try {
+              localStorage.setItem('claudeLogSearchState', JSON.stringify(state));
+          } catch (err) { /* storage unavailable: state lasts this page */ }
       }
   
-      // Restore search state from localStorage
+      // Restore search state from localStorage. Reading throws when storage
+      // is unavailable, which must not abort initSearch (no listeners would
+      // be bound and in-page search would never start).
       function restoreSearchState() {
-          const saved = localStorage.getItem('claudeLogSearchState');
+          let saved = null;
+          try {
+              saved = localStorage.getItem('claudeLogSearchState');
+          } catch (err) { /* storage unavailable: start from the defaults */ }
           if (saved) {
               try {
                   const state = JSON.parse(saved);
@@ -18219,7 +18237,9 @@
           }
       }
   
-      // Save search state to localStorage
+      // Save search state to localStorage. Storage can be unavailable
+      // (private mode, a sandboxed file:// page): writing then throws, and
+      // performSearch calls this mid-search — the search must still run.
       function saveSearchState() {
           const state = {
               query: searchState.query,
@@ -18227,12 +18247,19 @@
               searchInFiltered: searchState.searchInFiltered,
               showContext: searchState.showContext
           };
-          localStorage.setItem('claudeLogSearchState', JSON.stringify(state));
+          try {
+              localStorage.setItem('claudeLogSearchState', JSON.stringify(state));
+          } catch (err) { /* storage unavailable: state lasts this page */ }
       }
   
-      // Restore search state from localStorage
+      // Restore search state from localStorage. Reading throws when storage
+      // is unavailable, which must not abort initSearch (no listeners would
+      // be bound and in-page search would never start).
       function restoreSearchState() {
-          const saved = localStorage.getItem('claudeLogSearchState');
+          let saved = null;
+          try {
+              saved = localStorage.getItem('claudeLogSearchState');
+          } catch (err) { /* storage unavailable: start from the defaults */ }
           if (saved) {
               try {
                   const state = JSON.parse(saved);
@@ -23790,9 +23817,12 @@
   
   /* ------------------------------------------------------------ fold bar */
   
-  /* One muted mono line under the content; both classic sections kept
-     (left: one level, right: all levels). P4 turns it into the chevron
-     summary of the mockup. */
+  /* One muted mono line under the content (mockup .fold): both classic
+     sections kept (left: one level, right: all levels), each a chevron that
+     points right while folded and down while open, then its label. The
+     classic glyphs (⏷/⏵, ⏷⏷/⏵⏵) are still written to `.fold-icon` by the
+     fold state machine; the text is hidden and the chevron is a mask on
+     ::before, rotated from the section's `.folded` class. */
   .theme-minimal #transcript .fold-bar {
       grid-column: 3;
       grid-row: 4;
@@ -23828,6 +23858,43 @@
   .theme-minimal #transcript .fold-bar-section .fold-label {
       font-size: 1em;
       color: inherit;
+  }
+  
+  .theme-minimal #transcript .fold-bar-section .fold-icon {
+      display: inline-flex;
+      flex: none;
+      width: 10px;
+      height: 10px;
+      font-size: 0;
+      transform: rotate(90deg);
+      transition: transform 0.15s;
+  }
+  
+  .theme-minimal #transcript .fold-bar-section.folded .fold-icon {
+      transform: none;
+  }
+  
+  .theme-minimal #transcript .fold-bar-section .fold-icon::before {
+      content: "";
+      width: 10px;
+      height: 10px;
+      background-color: currentColor;
+      -webkit-mask: var(--mn-chev) center / 10px 10px no-repeat;
+      mask: var(--mn-chev) center / 10px 10px no-repeat;
+  }
+  
+  .theme-minimal #transcript .fold-bar-section {
+      --mn-chev: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 2.5 7.5 6 4 9.5'/%3E%3C/svg%3E");
+  }
+  
+  .theme-minimal #transcript .fold-bar-section.fold-all-levels {
+      --mn-chev: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.5 2.5 6 6 2.5 9.5M6.5 2.5 10 6 6.5 9.5'/%3E%3C/svg%3E");
+  }
+  
+  @media (prefers-reduced-motion: reduce) {
+      .theme-minimal #transcript .fold-bar-section .fold-icon {
+          transition: none;
+      }
   }
   
   /* ----------------------------------------- sessions, branches, forks */
@@ -24086,10 +24153,23 @@
   }
   
   .theme-minimal #transcript .highlight pre {
+      margin: 0;
       padding: 4px 8px;
       background: transparent;
       white-space: pre;
       overflow-wrap: normal;
+  }
+  
+  /* Line-numbered code: no stacked margins above the first line (the box,
+     its table and each column's <pre> each added one), so a clipped preview
+     (components.css "collapse previews") starts with code, not a gap. */
+  .theme-minimal #transcript .highlight > .highlighttable {
+      margin: 0;
+  }
+  
+  .theme-minimal #transcript .highlighttable > tbody > tr > td {
+      padding-top: 0;
+      padding-bottom: 0;
   }
   
   .theme-minimal #transcript .content.markdown .highlight pre code {
@@ -24657,6 +24737,151 @@
   }
   
   .theme-minimal #transcript .message.tool_result.error:is(.pair_middle, .pair_last) > .header > .header-info > :not(.mn-role) {
+      display: none;
+  }
+  
+  /* -------------------------------------------------- collapse previews */
+  
+  /* The formatters' <details> (work/minimal-theme-dag.md § 1.4), restyled
+     as the mockup's .clip: closed, the summary's preview is clipped to --pv
+     with a fade and followed by a "+N lines" line; open, the summary is a
+     single "− less" line above the full body. The label is `data-more` on
+     the <summary>, written by minimal.js (from `.line-count`, the body's
+     lines or a params table's rows); without JS the `.line-count` stands in
+     for it, or a plain "+ more". Generated content, so search and the
+     timeline never see it.
+     --pv: 4.4em for code and output, 2.8em for prose and params (mockup). */
+  .theme-minimal #transcript :is(details.collapsible-code, details.collapsible-details) {
+      --pv: 4.4em;
+      margin: 2px 0 0;
+  }
+  
+  .theme-minimal #transcript details.collapsible-code:has(> summary > .preview-content.markdown),
+  .theme-minimal #transcript details.tool-param-collapsible {
+      --pv: 2.8em;
+  }
+  
+  .theme-minimal #transcript :is(details.collapsible-code, details.collapsible-details, details.tool-param-collapsible) > summary {
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      margin: 0;
+      padding: 0;
+      border-radius: 0;
+      background: none;
+      color: inherit;
+      list-style: none;
+      cursor: pointer;
+  }
+  
+  .theme-minimal #transcript :is(details.collapsible-code, details.collapsible-details, details.tool-param-collapsible) > summary::-webkit-details-marker {
+      display: none;
+  }
+  
+  .theme-minimal #transcript :is(details.collapsible-code, details.collapsible-details) > summary:hover {
+      background: none;
+  }
+  
+  /* The preview, clipped. The fade is measured in --pv, not in the box, so
+     a preview shorter than the clip fades only at its foot. */
+  .theme-minimal #transcript details:not([open]) > summary > :is(.preview-content, .tool-param-preview) {
+      display: block;
+      max-height: var(--pv);
+      margin: 0;
+      overflow: hidden;
+      opacity: 1;
+      -webkit-mask-image: linear-gradient(#000 calc(var(--pv) * 0.45), transparent var(--pv));
+      mask-image: linear-gradient(#000 calc(var(--pv) * 0.45), transparent var(--pv));
+  }
+  
+  /* The "+N lines" / "− less" line (mockup .more). */
+  .theme-minimal #transcript :is(details.collapsible-code, details.collapsible-details, details.tool-param-collapsible) > summary::after,
+  .theme-minimal #transcript details.collapsible-code > summary > .line-count,
+  .theme-minimal #transcript .mn-less {
+      order: 2;
+      align-self: flex-start;
+      margin: 0;
+      padding: 2px 0;
+      border: 0;
+      background: none;
+      font: 0.7rem/1.4 var(--mono);
+      font-style: normal;
+      font-weight: 400;
+      color: var(--muted);
+  }
+  
+  .theme-minimal #transcript :is(details.collapsible-code, details.collapsible-details, details.tool-param-collapsible) > summary::after {
+      content: "+ more";
+  }
+  
+  .theme-minimal #transcript :is(details.collapsible-code, details.collapsible-details, details.tool-param-collapsible) > summary[data-more]::after {
+      content: attr(data-more);
+  }
+  
+  /* No JS: the formatter's line count is the label. */
+  .theme-minimal #transcript details.collapsible-code > summary:not([data-more])::after {
+      content: none;
+  }
+  
+  .theme-minimal #transcript details.collapsible-code > summary > .line-count::before {
+      content: "+ ";
+  }
+  
+  .theme-minimal #transcript details.collapsible-code > summary[data-more] > .line-count,
+  .theme-minimal #transcript details.collapsible-code[open] > summary > .line-count {
+      display: none;
+  }
+  
+  .theme-minimal #transcript details[open] > summary > :is(.preview-content, .tool-param-preview) {
+      display: none;
+  }
+  
+  .theme-minimal #transcript :is(details.collapsible-code, details.collapsible-details, details.tool-param-collapsible)[open] > summary::after {
+      content: "− less";
+  }
+  
+  .theme-minimal #transcript :is(details.collapsible-code, details.collapsible-details, details.tool-param-collapsible) > summary:hover::after,
+  .theme-minimal #transcript details.collapsible-code > summary:hover > .line-count,
+  .theme-minimal #transcript .mn-less:hover {
+      color: var(--fg);
+  }
+  
+  /* The trailing "− less" of a long open block (minimal.js). */
+  .theme-minimal #transcript .mn-less {
+      display: block;
+      cursor: pointer;
+  }
+  
+  .theme-minimal #transcript .mn-less::before {
+      content: "− less";
+  }
+  
+  /* The open body follows the "− less" line without a gap of its own. */
+  .theme-minimal #transcript :is(details.collapsible-code > .code-full, details.collapsible-details > .details-content) {
+      margin-top: 0;
+  }
+  
+  /* Params: the label sits beside the preview (a folded table row stays
+     one line where it fits), and a keyed row's open fold keeps the classic
+     look — its key's ⏷ closes it, so the summary stays hidden. */
+  .theme-minimal #transcript details.tool-param-collapsible > summary {
+      flex-flow: row wrap;
+      align-items: baseline;
+      column-gap: 8px;
+      color: var(--muted);
+  }
+  
+  .theme-minimal #transcript details.tool-param-collapsible > summary > .tool-param-preview {
+      flex: 0 1 auto;
+      min-width: 0;
+  }
+  
+  .theme-minimal #transcript details.tool-param-collapsible > summary::after {
+      flex: none;
+      font-style: normal;
+  }
+  
+  .theme-minimal #transcript .tool-param-row-fold > .tool-param-value > details[open] > summary {
       display: none;
   }
   
@@ -25539,6 +25764,11 @@
       <div class='mn-title-row'><h1 id="title">Test Transcript</h1><span class='mn-pill' title='Main agent model'>claude-3-sonnet-20240229</span><span class='mn-smeta'>test_ses · 2025-07-03 15:50:07 - 2025-07-03 16:10:07 · 11 msgs · 218 in · 445 out</span></div>
       </header>
       <nav class='mn-toolbar' aria-label='Transcript tools'>
+          <div class='mn-seg mn-depth' role='group' aria-label='Fold depth'>
+              <button type='button' data-mn-depth='prompts' aria-pressed='false' title='Prompts only: fold every turn to its prompt'>Prompts</button>
+              <button type='button' class='on' data-mn-depth='steps' aria-pressed='true' title='Steps: every turn open, long blocks as previews, sub-agents folded'>Steps</button>
+              <button type='button' data-mn-depth='all' aria-pressed='false' title='All: everything open, every block in full'>All</button>
+          </div>
           <span class='mn-sp'></span>
           <button class="filter-messages floating-btn mn-ibtn mn-i-search" id="filterMessages" title="Search & Filter (/)" aria-label="Search and filter">🔍</button>
           <button class="timeline-toggle floating-btn mn-ibtn mn-i-timeline" id="toggleTimeline" title="Show timeline" aria-label="Timeline">📆</button>
@@ -28100,6 +28330,19 @@
               // Apply initial fold state
               setInitialFoldState();
   
+              // Minimal theme: the fold-depth control (minimal.js) drives this
+              // state machine through these hooks. The stored depth is applied
+              // here — after the classic initial state, before the deep links
+              // below and the search component reveal their targets — so it
+              // never re-folds what a link or a query has just unfolded.
+              window.claudeLogApplyFoldState = applyFoldState;
+              window.claudeLogSyncFoldBar = syncFoldBar;
+              window.claudeLogUpdateDetailsToggle = updateToggleButton;
+              if (window.claudeLogMinimalInitFolds) {
+                  window.claudeLogMinimalInitFolds();
+                  updateToggleButton();
+              }
+  
               // Re-sync a fold bar to what its children container is actually
               // doing. A live update re-renders a card whenever its descendant
               // count changes — which is every ancestor of every append — and
@@ -29172,7 +29415,9 @@
           }
       }
   
-      // Save search state to localStorage
+      // Save search state to localStorage. Storage can be unavailable
+      // (private mode, a sandboxed file:// page): writing then throws, and
+      // performSearch calls this mid-search — the search must still run.
       function saveSearchState() {
           const state = {
               query: searchState.query,
@@ -29180,12 +29425,19 @@
               searchInFiltered: searchState.searchInFiltered,
               showContext: searchState.showContext
           };
-          localStorage.setItem('claudeLogSearchState', JSON.stringify(state));
+          try {
+              localStorage.setItem('claudeLogSearchState', JSON.stringify(state));
+          } catch (err) { /* storage unavailable: state lasts this page */ }
       }
   
-      // Restore search state from localStorage
+      // Restore search state from localStorage. Reading throws when storage
+      // is unavailable, which must not abort initSearch (no listeners would
+      // be bound and in-page search would never start).
       function restoreSearchState() {
-          const saved = localStorage.getItem('claudeLogSearchState');
+          let saved = null;
+          try {
+              saved = localStorage.getItem('claudeLogSearchState');
+          } catch (err) { /* storage unavailable: start from the defaults */ }
           if (saved) {
               try {
                   const state = JSON.parse(saved);
@@ -29263,12 +29515,15 @@
   </script>
       <script>
           // Minimal theme (--theme minimal) runtime: colour-scheme toggle,
-          // gutter times, session-summary more/less, toolbar offsets and the
-          // overflow menu. Collapse
-          // labels and fold depth arrive in P4 (work/minimal-theme-dag.md).
+          // gutter times, session-summary more/less, toolbar offsets, the
+          // overflow menu, collapse previews ("+N lines" / "− less") and the
+          // fold-depth control (Prompts / Steps / All). See
+          // work/minimal-theme-dag.md § 1.4–1.5 and § 3.4.
           // Everything bound here is either on the toolbar or delegated on
           // `document`, so a live update's #transcript swap leaves it intact;
-          // only the per-card gutter times register with the rehydrate hook.
+          // only per-card decoration (gutter times, session summaries,
+          // collapse labels, fold depth for new cards) registers with the
+          // rehydrate hook.
           (function () {
               'use strict';
               const THEME_KEY = 'claude-code-log:theme';
@@ -29404,6 +29659,238 @@
                   root.style.setProperty('--mn-toast-top',
                       Math.max(0, toolbar.getBoundingClientRect().bottom) + 8 + 'px');
               });
+  
+              // ---- collapse previews: "+N lines" / "− less" -----------------
+              // The formatters' <details> already carry a preview in their
+              // <summary>; CSS clips it (with a fade) while closed and shows
+              // the summary as a "− less" line while open. The label comes
+              // from the `.line-count` the formatter wrote, else from the
+              // body's text (\n count) or a params table's row count, and is
+              // written to `data-more` on the <summary> — CSS renders it with
+              // `attr()`, which only reads the pseudo-element's own element.
+              // Generated content stays out of textContent, so search and the
+              // timeline never index the labels. Long bodies also get a
+              // trailing "− less" button (label in CSS too).
+              const COLLAPSIBLES = 'details.collapsible-code, details.collapsible-details, details.tool-param-collapsible';
+              const LONG_BODY = 12;
+  
+              function countLines(text) {
+                  const trimmed = text.trim();
+                  return trimmed ? trimmed.split('\n').length : 0;
+              }
+              function measureBody(details, summary) {
+                  const lineCount = summary.querySelector(':scope > .line-count');
+                  const counted = lineCount ? parseInt(lineCount.textContent, 10) : NaN;
+                  if (counted > 0) return { n: counted, unit: 'line' };
+                  const table = details.querySelector(':scope > table');
+                  if (table) {
+                      const rows = table.querySelectorAll(':scope > tbody > tr, :scope > tr').length;
+                      return { n: rows, unit: 'item' };
+                  }
+                  let text = '';
+                  Array.from(details.children).forEach(function (child) {
+                      if (child === summary || child.classList.contains('mn-less')
+                          || child.classList.contains('tool-param-fold-controls')) return;
+                      text += child.textContent;
+                  });
+                  return { n: countLines(text), unit: 'line' };
+              }
+              function moreLabel(size) {
+                  if (size.unit === 'item' && size.n > 0) {
+                      return '+ ' + size.n + (size.n === 1 ? ' item' : ' items');
+                  }
+                  // One or two lines are (mostly) in the preview already: what
+                  // is hidden is the rest of a long line, not more lines.
+                  if (size.n >= 3) return '+ ' + size.n + ' lines';
+                  return '+ more';
+              }
+              function decorateCollapsibles(scope) {
+                  const found = Array.from((scope || document).querySelectorAll(COLLAPSIBLES));
+                  if (scope && scope.matches && scope.matches(COLLAPSIBLES)) found.unshift(scope);
+                  found.forEach(function (details) {
+                      const summary = details.querySelector(':scope > summary');
+                      if (!summary || summary.hasAttribute('data-more')) return;
+                      const size = measureBody(details, summary);
+                      summary.setAttribute('data-more', moreLabel(size));
+                      if (size.n >= LONG_BODY && !details.querySelector(':scope > .mn-less')) {
+                          const less = document.createElement('button');
+                          less.type = 'button';
+                          less.className = 'mn-less';
+                          less.setAttribute('aria-label', 'Show less');
+                          details.appendChild(less);
+                      }
+                  });
+              }
+              // A trailing "− less" closes its block and, when the block's top
+              // has scrolled away under the sticky toolbar, brings it back.
+              document.addEventListener('click', function (event) {
+                  const btn = event.target.closest('.mn-less');
+                  if (!btn) return;
+                  const details = btn.parentElement;
+                  if (!details || details.tagName !== 'DETAILS') return;
+                  details.open = false;
+                  const bar = document.querySelector('.mn-toolbar');
+                  const barBottom = bar ? Math.max(0, bar.getBoundingClientRect().bottom) : 0;
+                  const top = details.getBoundingClientRect().top;
+                  if (top < barBottom) window.scrollBy(0, top - barBottom - 8);
+              });
+              decorateCollapsibles(document);
+              if (window.claudeLogOnRehydrate) window.claudeLogOnRehydrate(decorateCollapsibles);
+  
+              // ---- fold depth: Prompts / Steps / All -------------------------
+              // Maps onto the classic fold state machine (transcript.html,
+              // dev-docs/message-hierarchy.md) through the hooks the minimal
+              // template branch exports: every card decides only its OWN
+              // children container, then each fold bar is re-synced from what
+              // the containers show.
+              //   prompts — session and branch headers open, everything else
+              //             folded: each turn is its prompt + fold-bar line;
+              //   steps   — everything open except sub-agent subtrees (cards
+              //             that open a deeper agent's transcript); long blocks
+              //             as previews (every collapsible closed);
+              //   all     — everything open, every collapsible open.
+              // A fold-bar click or the 📋 open/close-all overrides the depth
+              // locally: the segment then shows no choice until the next one.
+              // Opening one preview doesn't (reading a block isn't a new depth).
+              const DEPTH_KEY = 'claude-code-log:fold-depth';
+              const DEPTHS = ['prompts', 'steps', 'all'];
+              function readDepth() {
+                  try {
+                      const stored = window.localStorage.getItem(DEPTH_KEY);
+                      return DEPTHS.indexOf(stored) >= 0 ? stored : 'steps';
+                  } catch (err) {
+                      return 'steps';
+                  }
+              }
+              function writeDepth(value) {
+                  try {
+                      window.localStorage.setItem(DEPTH_KEY, value);
+                  } catch (err) { /* storage unavailable: depth lasts this page */ }
+              }
+              let depth = readDepth();
+  
+              function markDepth(active) {
+                  document.querySelectorAll('[data-mn-depth]').forEach(function (btn) {
+                      const on = active && btn.getAttribute('data-mn-depth') === depth;
+                      btn.classList.toggle('on', on);
+                      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+                  });
+              }
+              function childrenOf(card) {
+                  const node = card.parentElement;
+                  return node && node.classList.contains('message-node')
+                      ? node.querySelector(':scope > .children') : null;
+              }
+              function agentDepth(card) {
+                  const match = /(?:^|\s)agent-depth-(\d+)(?:\s|$)/.exec(card.className);
+                  if (match) return parseInt(match[1], 10);
+                  return card.classList.contains('sidechain') ? 1 : 0;
+              }
+              // A card whose children start a deeper agent's transcript: the
+              // spawning tool_result (or a workflow agent card). P6's Branches
+              // control takes these over; until then Steps keeps them folded,
+              // which is what its default ("Main only") will show.
+              function opensBranch(card, children) {
+                  const own = agentDepth(card);
+                  return Array.from(children.querySelectorAll(':scope > .message-node > .message.sidechain'))
+                      .some(function (kid) { return agentDepth(kid) > own; });
+              }
+              function wantsOpen(card, children, value) {
+                  if (value === 'all') return true;
+                  if (card.classList.contains('session-header')) return true;
+                  if (value === 'prompts') return false;
+                  return !opensBranch(card, children);
+              }
+              const seenContainers = new WeakSet();
+              const depthApplied = new WeakSet();
+              function applyDepthTo(cards, value) {
+                  const fold = window.claudeLogApplyFoldState;
+                  const sync = window.claudeLogSyncFoldBar;
+                  if (!fold || !sync) return;
+                  const touched = [];
+                  cards.forEach(function (card) {
+                      depthApplied.add(card);
+                      const children = childrenOf(card);
+                      if (!children) return;
+                      seenContainers.add(children);
+                      if (wantsOpen(card, children, value)) children.style.display = '';
+                      else fold(card, 'folded');
+                      touched.push(card);
+                  });
+                  touched.forEach(sync);
+              }
+              function setCollapsibles(scope, open) {
+                  scope.querySelectorAll(COLLAPSIBLES).forEach(function (details) {
+                      if (details.open !== open) details.open = open;
+                  });
+              }
+              function transcriptCards() {
+                  const transcript = document.getElementById('transcript');
+                  return transcript ? Array.from(transcript.querySelectorAll('.message')) : [];
+              }
+              function chooseDepth(value) {
+                  depth = value;
+                  writeDepth(value);
+                  applyDepthTo(transcriptCards(), value);
+                  const transcript = document.getElementById('transcript');
+                  if (transcript) setCollapsibles(transcript, value === 'all');
+                  markDepth(true);
+                  if (window.claudeLogUpdateDetailsToggle) window.claudeLogUpdateDetailsToggle();
+              }
+              document.addEventListener('click', function (event) {
+                  const btn = event.target.closest('[data-mn-depth]');
+                  if (btn) {
+                      chooseDepth(btn.getAttribute('data-mn-depth'));
+                      return;
+                  }
+                  if (event.target.closest('#transcript .fold-bar-section, #toggleDetails')) {
+                      markDepth(false);
+                  }
+              });
+              // Called by transcript.html right after the classic initial fold
+              // state, before deep links and the search component reveal
+              // anything. Previews start closed in the markup, so only All has
+              // collapsibles to open.
+              window.claudeLogMinimalInitFolds = function () {
+                  applyDepthTo(transcriptCards(), depth);
+                  if (depth === 'all') {
+                      const transcript = document.getElementById('transcript');
+                      if (transcript) setCollapsibles(transcript, true);
+                  }
+                  markDepth(true);
+              };
+              markDepth(true);
+  
+              // Live updates (serve --watch): the swap restores the fold state
+              // of every card that was already on screen and tags the new ones
+              // `live-new`; the patch keeps existing cards' containers and also
+              // tags its additions. New cards — and, on a patch, a card that
+              // just gained its first children (its container arrives
+              // wholesale) — get the current depth; nothing the reader folded
+              // or unfolded by hand is touched.
+              if (window.claudeLogOnRehydrate) {
+                  window.claudeLogOnRehydrate(function (scope) {
+                      if (!scope || !scope.querySelectorAll) return;
+                      const swap = scope.id === 'transcript';
+                      const cards = Array.from(scope.querySelectorAll('.message'));
+                      if (scope.matches && scope.matches('.message')) cards.unshift(scope);
+                      const fresh = cards.filter(function (card) {
+                          if (card.classList.contains('live-new') && !depthApplied.has(card)) return true;
+                          if (swap) return false;
+                          const children = childrenOf(card);
+                          return !!children && !seenContainers.has(children);
+                      });
+                      cards.forEach(function (card) {
+                          const children = childrenOf(card);
+                          if (children) seenContainers.add(children);
+                          if (!card.classList.contains('live-new')) depthApplied.add(card);
+                      });
+                      applyDepthTo(fresh, depth);
+                      if (depth === 'all') {
+                          fresh.forEach(function (card) { setCollapsibles(card, true); });
+                      }
+                  });
+              }
   
               // ---- overflow menu ---------------------------------------------
               // A <details>: closes on a click outside it or on Escape. Clicks
@@ -37471,7 +37958,9 @@
           }
       }
   
-      // Save search state to localStorage
+      // Save search state to localStorage. Storage can be unavailable
+      // (private mode, a sandboxed file:// page): writing then throws, and
+      // performSearch calls this mid-search — the search must still run.
       function saveSearchState() {
           const state = {
               query: searchState.query,
@@ -37479,12 +37968,19 @@
               searchInFiltered: searchState.searchInFiltered,
               showContext: searchState.showContext
           };
-          localStorage.setItem('claudeLogSearchState', JSON.stringify(state));
+          try {
+              localStorage.setItem('claudeLogSearchState', JSON.stringify(state));
+          } catch (err) { /* storage unavailable: state lasts this page */ }
       }
   
-      // Restore search state from localStorage
+      // Restore search state from localStorage. Reading throws when storage
+      // is unavailable, which must not abort initSearch (no listeners would
+      // be bound and in-page search would never start).
       function restoreSearchState() {
-          const saved = localStorage.getItem('claudeLogSearchState');
+          let saved = null;
+          try {
+              saved = localStorage.getItem('claudeLogSearchState');
+          } catch (err) { /* storage unavailable: start from the defaults */ }
           if (saved) {
               try {
                   const state = JSON.parse(saved);
@@ -45888,7 +46384,9 @@
           }
       }
   
-      // Save search state to localStorage
+      // Save search state to localStorage. Storage can be unavailable
+      // (private mode, a sandboxed file:// page): writing then throws, and
+      // performSearch calls this mid-search — the search must still run.
       function saveSearchState() {
           const state = {
               query: searchState.query,
@@ -45896,12 +46394,19 @@
               searchInFiltered: searchState.searchInFiltered,
               showContext: searchState.showContext
           };
-          localStorage.setItem('claudeLogSearchState', JSON.stringify(state));
+          try {
+              localStorage.setItem('claudeLogSearchState', JSON.stringify(state));
+          } catch (err) { /* storage unavailable: state lasts this page */ }
       }
   
-      // Restore search state from localStorage
+      // Restore search state from localStorage. Reading throws when storage
+      // is unavailable, which must not abort initSearch (no listeners would
+      // be bound and in-page search would never start).
       function restoreSearchState() {
-          const saved = localStorage.getItem('claudeLogSearchState');
+          let saved = null;
+          try {
+              saved = localStorage.getItem('claudeLogSearchState');
+          } catch (err) { /* storage unavailable: start from the defaults */ }
           if (saved) {
               try {
                   const state = JSON.parse(saved);
@@ -54252,7 +54757,9 @@
           }
       }
   
-      // Save search state to localStorage
+      // Save search state to localStorage. Storage can be unavailable
+      // (private mode, a sandboxed file:// page): writing then throws, and
+      // performSearch calls this mid-search — the search must still run.
       function saveSearchState() {
           const state = {
               query: searchState.query,
@@ -54260,12 +54767,19 @@
               searchInFiltered: searchState.searchInFiltered,
               showContext: searchState.showContext
           };
-          localStorage.setItem('claudeLogSearchState', JSON.stringify(state));
+          try {
+              localStorage.setItem('claudeLogSearchState', JSON.stringify(state));
+          } catch (err) { /* storage unavailable: state lasts this page */ }
       }
   
-      // Restore search state from localStorage
+      // Restore search state from localStorage. Reading throws when storage
+      // is unavailable, which must not abort initSearch (no listeners would
+      // be bound and in-page search would never start).
       function restoreSearchState() {
-          const saved = localStorage.getItem('claudeLogSearchState');
+          let saved = null;
+          try {
+              saved = localStorage.getItem('claudeLogSearchState');
+          } catch (err) { /* storage unavailable: start from the defaults */ }
           if (saved) {
               try {
                   const state = JSON.parse(saved);
@@ -62561,7 +63075,9 @@
           }
       }
   
-      // Save search state to localStorage
+      // Save search state to localStorage. Storage can be unavailable
+      // (private mode, a sandboxed file:// page): writing then throws, and
+      // performSearch calls this mid-search — the search must still run.
       function saveSearchState() {
           const state = {
               query: searchState.query,
@@ -62569,12 +63085,19 @@
               searchInFiltered: searchState.searchInFiltered,
               showContext: searchState.showContext
           };
-          localStorage.setItem('claudeLogSearchState', JSON.stringify(state));
+          try {
+              localStorage.setItem('claudeLogSearchState', JSON.stringify(state));
+          } catch (err) { /* storage unavailable: state lasts this page */ }
       }
   
-      // Restore search state from localStorage
+      // Restore search state from localStorage. Reading throws when storage
+      // is unavailable, which must not abort initSearch (no listeners would
+      // be bound and in-page search would never start).
       function restoreSearchState() {
-          const saved = localStorage.getItem('claudeLogSearchState');
+          let saved = null;
+          try {
+              saved = localStorage.getItem('claudeLogSearchState');
+          } catch (err) { /* storage unavailable: start from the defaults */ }
           if (saved) {
               try {
                   const state = JSON.parse(saved);
@@ -70698,7 +71221,9 @@
           }
       }
   
-      // Save search state to localStorage
+      // Save search state to localStorage. Storage can be unavailable
+      // (private mode, a sandboxed file:// page): writing then throws, and
+      // performSearch calls this mid-search — the search must still run.
       function saveSearchState() {
           const state = {
               query: searchState.query,
@@ -70706,12 +71231,19 @@
               searchInFiltered: searchState.searchInFiltered,
               showContext: searchState.showContext
           };
-          localStorage.setItem('claudeLogSearchState', JSON.stringify(state));
+          try {
+              localStorage.setItem('claudeLogSearchState', JSON.stringify(state));
+          } catch (err) { /* storage unavailable: state lasts this page */ }
       }
   
-      // Restore search state from localStorage
+      // Restore search state from localStorage. Reading throws when storage
+      // is unavailable, which must not abort initSearch (no listeners would
+      // be bound and in-page search would never start).
       function restoreSearchState() {
-          const saved = localStorage.getItem('claudeLogSearchState');
+          let saved = null;
+          try {
+              saved = localStorage.getItem('claudeLogSearchState');
+          } catch (err) { /* storage unavailable: start from the defaults */ }
           if (saved) {
               try {
                   const state = JSON.parse(saved);
@@ -78640,7 +79172,9 @@
           }
       }
   
-      // Save search state to localStorage
+      // Save search state to localStorage. Storage can be unavailable
+      // (private mode, a sandboxed file:// page): writing then throws, and
+      // performSearch calls this mid-search — the search must still run.
       function saveSearchState() {
           const state = {
               query: searchState.query,
@@ -78648,12 +79182,19 @@
               searchInFiltered: searchState.searchInFiltered,
               showContext: searchState.showContext
           };
-          localStorage.setItem('claudeLogSearchState', JSON.stringify(state));
+          try {
+              localStorage.setItem('claudeLogSearchState', JSON.stringify(state));
+          } catch (err) { /* storage unavailable: state lasts this page */ }
       }
   
-      // Restore search state from localStorage
+      // Restore search state from localStorage. Reading throws when storage
+      // is unavailable, which must not abort initSearch (no listeners would
+      // be bound and in-page search would never start).
       function restoreSearchState() {
-          const saved = localStorage.getItem('claudeLogSearchState');
+          let saved = null;
+          try {
+              saved = localStorage.getItem('claudeLogSearchState');
+          } catch (err) { /* storage unavailable: start from the defaults */ }
           if (saved) {
               try {
                   const state = JSON.parse(saved);
@@ -86531,7 +87072,9 @@
           }
       }
   
-      // Save search state to localStorage
+      // Save search state to localStorage. Storage can be unavailable
+      // (private mode, a sandboxed file:// page): writing then throws, and
+      // performSearch calls this mid-search — the search must still run.
       function saveSearchState() {
           const state = {
               query: searchState.query,
@@ -86539,12 +87082,19 @@
               searchInFiltered: searchState.searchInFiltered,
               showContext: searchState.showContext
           };
-          localStorage.setItem('claudeLogSearchState', JSON.stringify(state));
+          try {
+              localStorage.setItem('claudeLogSearchState', JSON.stringify(state));
+          } catch (err) { /* storage unavailable: state lasts this page */ }
       }
   
-      // Restore search state from localStorage
+      // Restore search state from localStorage. Reading throws when storage
+      // is unavailable, which must not abort initSearch (no listeners would
+      // be bound and in-page search would never start).
       function restoreSearchState() {
-          const saved = localStorage.getItem('claudeLogSearchState');
+          let saved = null;
+          try {
+              saved = localStorage.getItem('claudeLogSearchState');
+          } catch (err) { /* storage unavailable: start from the defaults */ }
           if (saved) {
               try {
                   const state = JSON.parse(saved);

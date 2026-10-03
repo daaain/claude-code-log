@@ -616,9 +616,12 @@ body.theme-minimal {
 
 /* ------------------------------------------------------------ fold bar */
 
-/* One muted mono line under the content; both classic sections kept
-   (left: one level, right: all levels). P4 turns it into the chevron
-   summary of the mockup. */
+/* One muted mono line under the content (mockup .fold): both classic
+   sections kept (left: one level, right: all levels), each a chevron that
+   points right while folded and down while open, then its label. The
+   classic glyphs (⏷/⏵, ⏷⏷/⏵⏵) are still written to `.fold-icon` by the
+   fold state machine; the text is hidden and the chevron is a mask on
+   ::before, rotated from the section's `.folded` class. */
 .theme-minimal #transcript .fold-bar {
     grid-column: 3;
     grid-row: 4;
@@ -654,6 +657,43 @@ body.theme-minimal {
 .theme-minimal #transcript .fold-bar-section .fold-label {
     font-size: 1em;
     color: inherit;
+}
+
+.theme-minimal #transcript .fold-bar-section .fold-icon {
+    display: inline-flex;
+    flex: none;
+    width: 10px;
+    height: 10px;
+    font-size: 0;
+    transform: rotate(90deg);
+    transition: transform 0.15s;
+}
+
+.theme-minimal #transcript .fold-bar-section.folded .fold-icon {
+    transform: none;
+}
+
+.theme-minimal #transcript .fold-bar-section .fold-icon::before {
+    content: "";
+    width: 10px;
+    height: 10px;
+    background-color: currentColor;
+    -webkit-mask: var(--mn-chev) center / 10px 10px no-repeat;
+    mask: var(--mn-chev) center / 10px 10px no-repeat;
+}
+
+.theme-minimal #transcript .fold-bar-section {
+    --mn-chev: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 2.5 7.5 6 4 9.5'/%3E%3C/svg%3E");
+}
+
+.theme-minimal #transcript .fold-bar-section.fold-all-levels {
+    --mn-chev: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.5 2.5 6 6 2.5 9.5M6.5 2.5 10 6 6.5 9.5'/%3E%3C/svg%3E");
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .theme-minimal #transcript .fold-bar-section .fold-icon {
+        transition: none;
+    }
 }
 
 /* ----------------------------------------- sessions, branches, forks */
@@ -912,10 +952,23 @@ body.theme-minimal {
 }
 
 .theme-minimal #transcript .highlight pre {
+    margin: 0;
     padding: 4px 8px;
     background: transparent;
     white-space: pre;
     overflow-wrap: normal;
+}
+
+/* Line-numbered code: no stacked margins above the first line (the box,
+   its table and each column's <pre> each added one), so a clipped preview
+   (components.css "collapse previews") starts with code, not a gap. */
+.theme-minimal #transcript .highlight > .highlighttable {
+    margin: 0;
+}
+
+.theme-minimal #transcript .highlighttable > tbody > tr > td {
+    padding-top: 0;
+    padding-bottom: 0;
 }
 
 .theme-minimal #transcript .content.markdown .highlight pre code {
