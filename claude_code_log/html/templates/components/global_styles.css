@@ -91,6 +91,19 @@
     --text-muted: #666;
     --text-secondary: #495057;
     --fold-color: #888;
+    --accent-color: #6c757d;
+
+    /* Code/tool palette used by pygments_styles.css (Pygments blocks,
+       Read/Write/MultiEdit tool content, system reminders) and by the
+       collapsible tool-result summary in message_styles.css. */
+    --color-bg-secondary: #f6f8fa;
+    --color-bg-tertiary: #eef1f4;
+    --color-blue: #1e6fd9;
+    --color-green: #2e7d32;
+    --color-purple: #7b1fa2;
+    --color-border-dim: #d0d7de;
+    --color-text-dim: #8c959f;
+    --color-text-secondary: #57606a;
 
     /* Border colors */
     --border-light: #e0e0e0;

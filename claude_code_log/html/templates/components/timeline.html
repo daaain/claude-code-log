@@ -2,11 +2,11 @@
 <!-- vis-timeline integration for transcript visualization -->
 
 <div id="timeline-container"
-    style="display: none; position: sticky; top: 0; z-index: 100; background: white; border-bottom: 1px solid #ddd; width: 100vw; margin-left: calc(-50vw + 50%); overflow: hidden; min-height: 150px; max-height: 80vh;">
+    style="display: none; position: sticky; top: 0; z-index: 100; width: 100vw; margin-left: calc(-50vw + 50%); overflow: hidden; min-height: 150px; max-height: 80vh;">
     <div id="timeline-visualization" style="height: calc(100% - 8px); width: 100%;"></div>
     <div id="timeline-resize-handle"
-        style="position: absolute; bottom: 0; left: 0; right: 0; height: 8px; background: linear-gradient(to bottom, transparent, #ddd); cursor: ns-resize; display: flex; align-items: center; justify-content: center;">
-        <div style="width: 40px; height: 3px; background: #999; border-radius: 2px;"></div>
+        style="position: absolute; bottom: 0; left: 0; right: 0; height: 8px; cursor: ns-resize; display: flex; align-items: center; justify-content: center;">
+        <div style="width: 40px; height: 3px; border-radius: 2px;"></div>
     </div>
 </div>
 
@@ -23,23 +23,23 @@
 
         // Message type to group mapping
         const messageTypeGroups = {
-            'user': { id: 'user', content: '🤷 User', style: 'background-color: #e3f2fd;' },
-            'assistant': { id: 'assistant', content: '🤖 Assistant', style: 'background-color: #f3e5f5;' },
-            'tool_use': { id: 'tool_use', content: '🛠️ Tool Use', style: 'background-color: #fff3e0;' },
-            'tool_result': { id: 'tool_result', content: '🧰 Tool Result', style: 'background-color: #e8f5e8;' },
-            'thinking': { id: 'thinking', content: '💭 Thinking', style: 'background-color: #fce4ec;' },
-            'system': { id: 'system', content: '⚙️ System', style: 'background-color: #ffeee1;' },
-            'image': { id: 'image', content: '🖼️ Image', style: 'background-color: #e1f5fe;' },
-            'sidechain': { id: 'sidechain', content: '🔗 Sub-assistant', style: 'background-color: #f5f5f5;' },
-            'memory': { id: 'memory', content: '🧠 Memory', style: 'background-color: #ede7f6;' },
-            'slash-command': { id: 'slash-command', content: '⌨️ Slash Command', style: 'background-color: #e8eaf6;' },
-            'command-output': { id: 'command-output', content: '📋 Command Output', style: 'background-color: #efebe9;' },
-            'bash-input': { id: 'bash-input', content: '💻 Bash Input', style: 'background-color: #e8eaf6;' },
-            'bash-output': { id: 'bash-output', content: '📄 Bash Output', style: 'background-color: #efebe9;' },
-            'teammate': { id: 'teammate', content: '👥 Teammate', style: 'background-color: #e8f2fd;' },
-            'task-notification': { id: 'task-notification', content: '🔄 Async result', style: 'background-color: #e8f2fd;' },
-            'workflow_phase': { id: 'workflow_phase', content: '🧩 Workflow Phase', style: 'background-color: #fff8e1;' },
-            'workflow_agent': { id: 'workflow_agent', content: '🤖 Workflow Agent', style: 'background-color: #f3e5f5;' }
+            'user': { id: 'user', content: '🤷 User', className: 'timeline-group-user' },
+            'assistant': { id: 'assistant', content: '🤖 Assistant', className: 'timeline-group-assistant' },
+            'tool_use': { id: 'tool_use', content: '🛠️ Tool Use', className: 'timeline-group-tool_use' },
+            'tool_result': { id: 'tool_result', content: '🧰 Tool Result', className: 'timeline-group-tool_result' },
+            'thinking': { id: 'thinking', content: '💭 Thinking', className: 'timeline-group-thinking' },
+            'system': { id: 'system', content: '⚙️ System', className: 'timeline-group-system' },
+            'image': { id: 'image', content: '🖼️ Image', className: 'timeline-group-image' },
+            'sidechain': { id: 'sidechain', content: '🔗 Sub-assistant', className: 'timeline-group-sidechain' },
+            'memory': { id: 'memory', content: '🧠 Memory', className: 'timeline-group-memory' },
+            'slash-command': { id: 'slash-command', content: '⌨️ Slash Command', className: 'timeline-group-slash-command' },
+            'command-output': { id: 'command-output', content: '📋 Command Output', className: 'timeline-group-command-output' },
+            'bash-input': { id: 'bash-input', content: '💻 Bash Input', className: 'timeline-group-bash-input' },
+            'bash-output': { id: 'bash-output', content: '📄 Bash Output', className: 'timeline-group-bash-output' },
+            'teammate': { id: 'teammate', content: '👥 Teammate', className: 'timeline-group-teammate' },
+            'task-notification': { id: 'task-notification', content: '🔄 Async result', className: 'timeline-group-task-notification' },
+            'workflow_phase': { id: 'workflow_phase', content: '🧩 Workflow Phase', className: 'timeline-group-workflow_phase' },
+            'workflow_agent': { id: 'workflow_agent', content: '🤖 Workflow Agent', className: 'timeline-group-workflow_agent' }
         };
 
         // Build timeline data from messages
@@ -292,7 +292,7 @@
                     const timelineHeight = timelineContainer ? timelineContainer.offsetHeight : 0;
 
                     // Scroll so message top aligns with timeline bottom
-                    const elementTop = messageEl.offsetTop;
+                    const elementTop = messageEl.getBoundingClientRect().top + window.scrollY;
                     const scrollPosition = elementTop - timelineHeight - 10; // 10px padding
 
                     window.scrollTo({
@@ -301,9 +301,9 @@
                     });
 
                     // Highlight the message briefly
-                    messageEl.style.backgroundColor = '#fff3cd';
+                    messageEl.classList.add('timeline-flash');
                     setTimeout(() => {
-                        messageEl.style.backgroundColor = '';
+                        messageEl.classList.remove('timeline-flash');
                     }, 2000);
                 }
             }

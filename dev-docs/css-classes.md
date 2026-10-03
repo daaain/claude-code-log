@@ -73,11 +73,37 @@ These never appear in the generated HTML; they are toggled at runtime on `.messa
 | `search-match` | search (`components/search.html`) | Message matches the active search query; contains `.search-highlight` spans. Folded ancestors are unfolded and collapsed `<details>` around each highlight are opened, so every highlight is actually visible. |
 | `search-context` | search | Ancestor of a match, kept visible-but-dimmed when "Show context" is on. |
 | `search-hidden` | search | Message hidden by search-as-filter (strict mode hides everything that isn't a match or context). The timeline mirrors this per-item via `timeline-filtered-hidden`. |
+| `timeline-flash` | timeline (`components/timeline.html`, `onTimelineSelect`) | Brief (2 s) highlight of the message a timeline item was selected for. Coloured by `--timeline-flash-bg` (fallback `#fff3cd`) in `timeline_styles.css`; `!important` so it beats every card background, as the inline style it replaced did. |
 
 Message cards also carry a `data-uuid` attribute (the transcript UUID — stable
 across re-renders, unlike the positional `msg-d-N`/`data-message-id` slot ids).
 Search uses it to keep the current match pinned when the same query is re-run
 after an option or filter change.
+
+### Timeline Classes and Colour Variables
+
+The vis-timeline component (`components/timeline.html`) keeps every colour
+in `components/timeline_styles.css`; nothing colour-related is set inline
+or from JS. The per-type colours (group labels, items) and the
+container, resize-handle and select-flash colours each read a
+`--timeline-*` custom property whose fallback is the default theme's
+value (the remaining vis-timeline overrides use shared tokens such as
+`--border-light` or literals). The default theme defines **none**
+of them — a theme recolours the timeline by defining the properties alone.
+
+| Class / element | Set by | Colour variable(s) |
+|-----------------|--------|--------------------|
+| `timeline-group-<id>` | `messageTypeGroups[<id>].className`; vis-timeline puts it on the group's label (`.vis-label`) **and** its row (`.vis-group`) | `--timeline-<id>-bg` (e.g. `--timeline-user-bg`, `--timeline-tool_use-bg`). The rule is scoped to `.vis-labelset .vis-label.timeline-group-<id>`, so only the label is coloured. `<id>` is the timeline message type: `user`, `assistant`, `tool_use`, `tool_result`, `thinking`, `system`, `image`, `sidechain`, `memory`, `slash-command`, `command-output`, `bash-input`, `bash-output`, `teammate`, `task-notification`, `workflow_phase`, `workflow_agent`. |
+| `timeline-item-<type>` | `buildTimelineData()` on each item | `--timeline-item-<type>-bg`, `--timeline-item-<type>-border` (rules exist for `user`, `assistant`, `tool_use`, `tool_result`, `thinking`, `system`, `image`, `sidechain`; other types keep vis-timeline's item colours). |
+| `timeline-filtered-hidden` | filter/search sync | — (`display: none`) |
+| `#timeline-container` | template | `--timeline-bg`, `--timeline-border` |
+| `#timeline-resize-handle` (and its grip `> div`) | template | `--timeline-handle-bg`, `--timeline-handle-hover-bg`, `--timeline-handle-active-bg`, `--timeline-grip`, `--timeline-grip-hover`, `--timeline-grip-active` |
+| `.message.timeline-flash` | `onTimelineSelect` | `--timeline-flash-bg` |
+
+`onTimelineSelect` scrolls to `getBoundingClientRect().top + window.scrollY`
+rather than `offsetTop`, so the target stays right whatever the card's
+offset parent is (e.g. a layout that sets `display: contents` or positions
+a wrapper).
 
 ---
 

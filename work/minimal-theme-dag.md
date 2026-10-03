@@ -1,6 +1,6 @@
 # `--theme minimal`: a compact light/dark theme with a DAG layout
 
-Status: **spec + phased plan, nothing implemented yet.** Branch of origin:
+Status: **spec + phased plan; P1 landed (see § 6).** Branch of origin:
 `claude/sweet-mccarthy-64a24r`.
 
 This file is the single source of truth for the feature. Each phase in
@@ -874,6 +874,53 @@ user group equals `rgb(227, 242, 253)`; set
 **Dev-docs:** `css-classes.md` — note the timeline group classes and
 variables.
 
+**As built (P1 landed):**
+- **The step-1 one-liner misses underscores.** `[a-zA-Z0-9-]` truncates
+  `--timeline-tool_use-bg` to `--timeline-tool`; use `[a-zA-Z0-9_-]`.
+  After P1 the only used-but-undefined properties are the 42
+  `--timeline-*` ones, all deliberately undefined in the default theme
+  and all read with a fallback (`var(--timeline-…, <hex>)`). A later
+  theme defines them; nothing else needs defining.
+- **`.tool-result .preview-text` fixed too.** The `.line-count` rule in
+  `pygments_styles.css` was a two-selector list; its sibling
+  `.tool-result .preview-text` was dead for the same reason (the card
+  class is `tool_result`). Both now use `.tool_result`.
+- **Group label rules are `.vis-labelset .vis-label.timeline-group-<id>`**
+  (one more class than planned) so they outrank vis-timeline's own
+  `.vis-labelset .vis-label` rules as reliably as the inline style did.
+  The group row (`.vis-group.timeline-group-<id>`) stays uncoloured
+  (asserted in the test).
+- **More timeline variables than listed:** resize handle
+  `--timeline-handle-bg`/`-hover-bg`/`-active-bg`, grip
+  `--timeline-grip`/`-grip-hover`/`-grip-active`, flash
+  `--timeline-flash-bg`, container `--timeline-bg`/`--timeline-border`.
+  The handle's `:hover`/`:active` rules dropped their `!important` (they
+  only needed it to beat the inline style that is now gone).
+  `.message.timeline-flash` keeps `!important` instead, standing in for
+  the inline style it replaces. Item rules exist only for the eight types
+  that had them; the other nine group types still fall back to vis's
+  item colours, as before. Full table: `dev-docs/css-classes.md`
+  § "Timeline Classes and Colour Variables".
+- **`offsetTop` vs bounding rect verified identical** for all 86 cards
+  (everything unfolded, scrolled) across the async-agents, nested-agents,
+  teammates, workflow and sidechain renders.
+- **Snapshot diff (block level):** 10 blocks, none added or removed;
+  the nine transcript blocks carry an identical +158/−53 diff (CSS/JS
+  text only), and the index block +14/−1 (`global_styles.css` `:root` and
+  `session_nav_styles.css`, which `index.html` also inlines). No message
+  markup changed.
+- **Tests added:** `test_timeline_group_label_colours_come_from_css`
+  (uses `representative_messages.jsonl` — `sidechain.jsonl` has no user
+  group) and `test_timeline_select_flashes_message_via_class`.
+- **Browser tests in a CCR container:** Chromium's NSS store did not
+  trust the agent-proxy CA. `ignore_https_errors` got pages loaded, but
+  Chromium does not cache responses with certificate errors, so every
+  test re-fetched vis-timeline from unpkg and the fetch failed
+  intermittently (`ERR_TOO_MANY_RETRIES`, 30 s timeouts). Fix (outside
+  the repo):
+  `apt-get install -y libnss3-tools && certutil -d sql:$HOME/.pki/nssdb -A -n ccr-agent-proxy -t "C,," -i /root/.ccr/agent-proxy-ca.crt`.
+  `just` itself: `uv tool install rust-just`.
+
 ### P2 — Theme plumbing: `--theme {default,minimal}` end to end — M
 
 **Goal:** the option exists everywhere HTML is produced and decides the
@@ -1245,7 +1292,7 @@ tests from P3a–P7 green together.
 
 ## 6. Progress
 
-- [ ] P1 groundwork fixes
+- [x] P1 groundwork fixes
 - [ ] P2 theme plumbing
 - [ ] P3a look, toolbar, light/dark
 - [ ] P3b components, Pygments dark, timeline

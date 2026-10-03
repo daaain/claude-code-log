@@ -104,6 +104,19 @@
       --text-muted: #666;
       --text-secondary: #495057;
       --fold-color: #888;
+      --accent-color: #6c757d;
+  
+      /* Code/tool palette used by pygments_styles.css (Pygments blocks,
+         Read/Write/MultiEdit tool content, system reminders) and by the
+         collapsible tool-result summary in message_styles.css. */
+      --color-bg-secondary: #f6f8fa;
+      --color-bg-tertiary: #eef1f4;
+      --color-blue: #1e6fd9;
+      --color-green: #2e7d32;
+      --color-purple: #7b1fa2;
+      --color-border-dim: #d0d7de;
+      --color-text-dim: #8c959f;
+      --color-text-secondary: #57606a;
   
       /* Border colors */
       --border-light: #e0e0e0;
@@ -717,7 +730,7 @@
   /* Model id surfaced on sub-agent message headers (issue #246) */
   .message-model {
       font-size: 0.75em;
-      font-family: var(--font-mono, 'SFMono-Regular', Consolas, monospace);
+      font-family: var(--font-monospace);
       color: var(--text-secondary, #888);
   }
   
@@ -842,7 +855,7 @@
   }
   
   .hook-attachment-meta {
-      color: var(--secondary-text);
+      color: var(--text-secondary);
       font-size: 0.85em;
   }
   
@@ -852,7 +865,7 @@
   
   .hook-attachment-stream-label {
       font-size: 0.75em;
-      color: var(--secondary-text);
+      color: var(--text-secondary);
       margin-bottom: 0.2em;
       text-transform: uppercase;
       letter-spacing: 0.05em;
@@ -862,7 +875,7 @@
   .hook-attachment-content {
       margin: 0;
       padding: 0.5em;
-      background-color: var(--code-bg);
+      background-color: var(--code-bg-color);
       border-radius: 4px;
       font-size: 0.85em;
       white-space: pre-wrap;
@@ -902,7 +915,7 @@
   .hook-details {
       margin-top: 0.5em;
       padding: 0.5em;
-      background-color: var(--code-bg);
+      background-color: var(--code-bg-color);
       border-radius: 4px;
   }
   
@@ -2232,7 +2245,7 @@
   }
   
   .workflow-agent-model {
-      font-family: var(--font-mono, monospace);
+      font-family: var(--font-monospace);
       color: var(--text-secondary);
   }
   
@@ -2411,7 +2424,7 @@
   
   /* Child session hierarchy */
   .session-nav-item.session-child {
-      border-left: 3px solid var(--accent-color, #6c757d);
+      border-left: 3px solid var(--accent-color);
       padding-left: 8px;
   }
   
@@ -2956,38 +2969,58 @@
   }
   /* Timeline-specific styles for vis-timeline */
   
+  /* The container, resize-handle, select-flash, group-label and item colours
+     read --timeline-* custom properties whose fallbacks are the default
+     theme's values, so a theme can recolour the timeline by defining the
+     properties alone. The default theme defines none of them. */
+  
   /* Timeline toggle button styling */
   .timeline-toggle.active {
       background-color: #fff3cd;
   }
   
-  /* Timeline container positioning and styling */
+  /* Timeline container positioning and styling (layout stays inline in
+     timeline.html; only the colours live here) */
   #timeline-container {
       margin-bottom: 20px;
       box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
       transition: top 0.3s ease;
       position: relative;
+      background: var(--timeline-bg, white);
+      border-bottom: 1px solid var(--timeline-border, #ddd);
   }
   
   /* Timeline resize handle styling */
   #timeline-resize-handle {
+      background: linear-gradient(to bottom, transparent, var(--timeline-handle-bg, #ddd));
       transition: background 0.2s ease;
   }
   
+  #timeline-resize-handle>div {
+      background: var(--timeline-grip, #999);
+  }
+  
   #timeline-resize-handle:hover {
-      background: linear-gradient(to bottom, transparent, #bbb) !important;
+      background: linear-gradient(to bottom, transparent, var(--timeline-handle-hover-bg, #bbb));
   }
   
   #timeline-resize-handle:hover>div {
-      background: #777 !important;
+      background: var(--timeline-grip-hover, #777);
   }
   
   #timeline-resize-handle:active {
-      background: linear-gradient(to bottom, transparent, #999) !important;
+      background: linear-gradient(to bottom, transparent, var(--timeline-handle-active-bg, #999));
   }
   
   #timeline-resize-handle:active>div {
-      background: #555 !important;
+      background: var(--timeline-grip-active, #555);
+  }
+  
+  /* Brief highlight of the message a timeline item was clicked for
+     (onTimelineSelect adds the class for 2s). !important stands in for the
+     inline style it replaces, which beat every card background rule. */
+  .message.timeline-flash {
+      background-color: var(--timeline-flash-bg, #fff3cd) !important;
   }
   
   /* vis-timeline customizations */
@@ -2999,6 +3032,78 @@
       font-size: 12px !important;
       font-weight: 500 !important;
       color: var(--text-secondary) !important;
+  }
+  
+  /* Group (row label) colours. timeline.html gives each group a
+     `timeline-group-<id>` className; vis-timeline puts a group's className
+     on its label *and* on its row, so the rules are scoped to the label,
+     which is all the inline style they replace used to colour. */
+  .vis-labelset .vis-label.timeline-group-user {
+      background-color: var(--timeline-user-bg, #e3f2fd);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-assistant {
+      background-color: var(--timeline-assistant-bg, #f3e5f5);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-tool_use {
+      background-color: var(--timeline-tool_use-bg, #fff3e0);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-tool_result {
+      background-color: var(--timeline-tool_result-bg, #e8f5e8);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-thinking {
+      background-color: var(--timeline-thinking-bg, #fce4ec);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-system {
+      background-color: var(--timeline-system-bg, #ffeee1);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-image {
+      background-color: var(--timeline-image-bg, #e1f5fe);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-sidechain {
+      background-color: var(--timeline-sidechain-bg, #f5f5f5);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-memory {
+      background-color: var(--timeline-memory-bg, #ede7f6);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-slash-command {
+      background-color: var(--timeline-slash-command-bg, #e8eaf6);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-command-output {
+      background-color: var(--timeline-command-output-bg, #efebe9);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-bash-input {
+      background-color: var(--timeline-bash-input-bg, #e8eaf6);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-bash-output {
+      background-color: var(--timeline-bash-output-bg, #efebe9);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-teammate {
+      background-color: var(--timeline-teammate-bg, #e8f2fd);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-task-notification {
+      background-color: var(--timeline-task-notification-bg, #e8f2fd);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-workflow_phase {
+      background-color: var(--timeline-workflow_phase-bg, #fff8e1);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-workflow_agent {
+      background-color: var(--timeline-workflow_agent-bg, #f3e5f5);
   }
   
   /* Timeline items styling */
@@ -3021,43 +3126,43 @@
   
   /* Message type specific styling */
   .vis-item.timeline-item-user {
-      background-color: #e3f2fd !important;
-      border-color: var(--system-warning-color) !important;
+      background-color: var(--timeline-item-user-bg, #e3f2fd) !important;
+      border-color: var(--timeline-item-user-border, var(--system-warning-color)) !important;
   }
   
   .vis-item.timeline-item-assistant {
-      background-color: #f3e5f5 !important;
-      border-color: #9c27b0 !important;
+      background-color: var(--timeline-item-assistant-bg, #f3e5f5) !important;
+      border-color: var(--timeline-item-assistant-border, #9c27b0) !important;
   }
   
   .vis-item.timeline-item-tool_use {
-      background-color: #fff8e1 !important;
-      border-color: #ffc107 !important;
+      background-color: var(--timeline-item-tool_use-bg, #fff8e1) !important;
+      border-color: var(--timeline-item-tool_use-border, #ffc107) !important;
   }
   
   .vis-item.timeline-item-tool_result {
-      background-color: #e8f5e8 !important;
-      border-color: #4caf50 !important;
+      background-color: var(--timeline-item-tool_result-bg, #e8f5e8) !important;
+      border-color: var(--timeline-item-tool_result-border, #4caf50) !important;
   }
   
   .vis-item.timeline-item-thinking {
-      background-color: #fce4ec !important;
-      border-color: #e91e63 !important;
+      background-color: var(--timeline-item-thinking-bg, #fce4ec) !important;
+      border-color: var(--timeline-item-thinking-border, #e91e63) !important;
   }
   
   .vis-item.timeline-item-system {
-      background-color: #ffeee1 !important;
-      border-color: #ff8707 !important;
+      background-color: var(--timeline-item-system-bg, #ffeee1) !important;
+      border-color: var(--timeline-item-system-border, #ff8707) !important;
   }
   
   .vis-item.timeline-item-image {
-      background-color: #e1f5fe !important;
-      border-color: #00bcd4 !important;
+      background-color: var(--timeline-item-image-bg, #e1f5fe) !important;
+      border-color: var(--timeline-item-image-border, #00bcd4) !important;
   }
   
   .vis-item.timeline-item-sidechain {
-      background-color: #f5f5f5 !important;
-      border-color: #9e9e9e !important;
+      background-color: var(--timeline-item-sidechain-bg, #f5f5f5) !important;
+      border-color: var(--timeline-item-sidechain-border, #9e9e9e) !important;
   }
   
   /* Hide filtered timeline items */
@@ -3672,8 +3777,8 @@
   }
   
   /* Unified styling for inline preview text in tool results */
-  .tool-result .line-count,
-  .tool-result .preview-text {
+  .tool_result .line-count,
+  .tool_result .preview-text {
       font-size: 0.9em;
       color: var(--color-text-secondary);
       margin-left: 0.5em;
@@ -4323,11 +4428,11 @@
   <!-- vis-timeline integration for transcript visualization -->
   
   <div id="timeline-container"
-      style="display: none; position: sticky; top: 0; z-index: 100; background: white; border-bottom: 1px solid #ddd; width: 100vw; margin-left: calc(-50vw + 50%); overflow: hidden; min-height: 150px; max-height: 80vh;">
+      style="display: none; position: sticky; top: 0; z-index: 100; width: 100vw; margin-left: calc(-50vw + 50%); overflow: hidden; min-height: 150px; max-height: 80vh;">
       <div id="timeline-visualization" style="height: calc(100% - 8px); width: 100%;"></div>
       <div id="timeline-resize-handle"
-          style="position: absolute; bottom: 0; left: 0; right: 0; height: 8px; background: linear-gradient(to bottom, transparent, #ddd); cursor: ns-resize; display: flex; align-items: center; justify-content: center;">
-          <div style="width: 40px; height: 3px; background: #999; border-radius: 2px;"></div>
+          style="position: absolute; bottom: 0; left: 0; right: 0; height: 8px; cursor: ns-resize; display: flex; align-items: center; justify-content: center;">
+          <div style="width: 40px; height: 3px; border-radius: 2px;"></div>
       </div>
   </div>
   
@@ -4344,23 +4449,23 @@
   
           // Message type to group mapping
           const messageTypeGroups = {
-              'user': { id: 'user', content: '🤷 User', style: 'background-color: #e3f2fd;' },
-              'assistant': { id: 'assistant', content: '🤖 Assistant', style: 'background-color: #f3e5f5;' },
-              'tool_use': { id: 'tool_use', content: '🛠️ Tool Use', style: 'background-color: #fff3e0;' },
-              'tool_result': { id: 'tool_result', content: '🧰 Tool Result', style: 'background-color: #e8f5e8;' },
-              'thinking': { id: 'thinking', content: '💭 Thinking', style: 'background-color: #fce4ec;' },
-              'system': { id: 'system', content: '⚙️ System', style: 'background-color: #ffeee1;' },
-              'image': { id: 'image', content: '🖼️ Image', style: 'background-color: #e1f5fe;' },
-              'sidechain': { id: 'sidechain', content: '🔗 Sub-assistant', style: 'background-color: #f5f5f5;' },
-              'memory': { id: 'memory', content: '🧠 Memory', style: 'background-color: #ede7f6;' },
-              'slash-command': { id: 'slash-command', content: '⌨️ Slash Command', style: 'background-color: #e8eaf6;' },
-              'command-output': { id: 'command-output', content: '📋 Command Output', style: 'background-color: #efebe9;' },
-              'bash-input': { id: 'bash-input', content: '💻 Bash Input', style: 'background-color: #e8eaf6;' },
-              'bash-output': { id: 'bash-output', content: '📄 Bash Output', style: 'background-color: #efebe9;' },
-              'teammate': { id: 'teammate', content: '👥 Teammate', style: 'background-color: #e8f2fd;' },
-              'task-notification': { id: 'task-notification', content: '🔄 Async result', style: 'background-color: #e8f2fd;' },
-              'workflow_phase': { id: 'workflow_phase', content: '🧩 Workflow Phase', style: 'background-color: #fff8e1;' },
-              'workflow_agent': { id: 'workflow_agent', content: '🤖 Workflow Agent', style: 'background-color: #f3e5f5;' }
+              'user': { id: 'user', content: '🤷 User', className: 'timeline-group-user' },
+              'assistant': { id: 'assistant', content: '🤖 Assistant', className: 'timeline-group-assistant' },
+              'tool_use': { id: 'tool_use', content: '🛠️ Tool Use', className: 'timeline-group-tool_use' },
+              'tool_result': { id: 'tool_result', content: '🧰 Tool Result', className: 'timeline-group-tool_result' },
+              'thinking': { id: 'thinking', content: '💭 Thinking', className: 'timeline-group-thinking' },
+              'system': { id: 'system', content: '⚙️ System', className: 'timeline-group-system' },
+              'image': { id: 'image', content: '🖼️ Image', className: 'timeline-group-image' },
+              'sidechain': { id: 'sidechain', content: '🔗 Sub-assistant', className: 'timeline-group-sidechain' },
+              'memory': { id: 'memory', content: '🧠 Memory', className: 'timeline-group-memory' },
+              'slash-command': { id: 'slash-command', content: '⌨️ Slash Command', className: 'timeline-group-slash-command' },
+              'command-output': { id: 'command-output', content: '📋 Command Output', className: 'timeline-group-command-output' },
+              'bash-input': { id: 'bash-input', content: '💻 Bash Input', className: 'timeline-group-bash-input' },
+              'bash-output': { id: 'bash-output', content: '📄 Bash Output', className: 'timeline-group-bash-output' },
+              'teammate': { id: 'teammate', content: '👥 Teammate', className: 'timeline-group-teammate' },
+              'task-notification': { id: 'task-notification', content: '🔄 Async result', className: 'timeline-group-task-notification' },
+              'workflow_phase': { id: 'workflow_phase', content: '🧩 Workflow Phase', className: 'timeline-group-workflow_phase' },
+              'workflow_agent': { id: 'workflow_agent', content: '🤖 Workflow Agent', className: 'timeline-group-workflow_agent' }
           };
   
           // Build timeline data from messages
@@ -4613,7 +4718,7 @@
                       const timelineHeight = timelineContainer ? timelineContainer.offsetHeight : 0;
   
                       // Scroll so message top aligns with timeline bottom
-                      const elementTop = messageEl.offsetTop;
+                      const elementTop = messageEl.getBoundingClientRect().top + window.scrollY;
                       const scrollPosition = elementTop - timelineHeight - 10; // 10px padding
   
                       window.scrollTo({
@@ -4622,9 +4727,9 @@
                       });
   
                       // Highlight the message briefly
-                      messageEl.style.backgroundColor = '#fff3cd';
+                      messageEl.classList.add('timeline-flash');
                       setTimeout(() => {
-                          messageEl.style.backgroundColor = '';
+                          messageEl.classList.remove('timeline-flash');
                       }, 2000);
                   }
               }
@@ -8012,6 +8117,19 @@
       --text-muted: #666;
       --text-secondary: #495057;
       --fold-color: #888;
+      --accent-color: #6c757d;
+  
+      /* Code/tool palette used by pygments_styles.css (Pygments blocks,
+         Read/Write/MultiEdit tool content, system reminders) and by the
+         collapsible tool-result summary in message_styles.css. */
+      --color-bg-secondary: #f6f8fa;
+      --color-bg-tertiary: #eef1f4;
+      --color-blue: #1e6fd9;
+      --color-green: #2e7d32;
+      --color-purple: #7b1fa2;
+      --color-border-dim: #d0d7de;
+      --color-text-dim: #8c959f;
+      --color-text-secondary: #57606a;
   
       /* Border colors */
       --border-light: #e0e0e0;
@@ -8625,7 +8743,7 @@
   /* Model id surfaced on sub-agent message headers (issue #246) */
   .message-model {
       font-size: 0.75em;
-      font-family: var(--font-mono, 'SFMono-Regular', Consolas, monospace);
+      font-family: var(--font-monospace);
       color: var(--text-secondary, #888);
   }
   
@@ -8750,7 +8868,7 @@
   }
   
   .hook-attachment-meta {
-      color: var(--secondary-text);
+      color: var(--text-secondary);
       font-size: 0.85em;
   }
   
@@ -8760,7 +8878,7 @@
   
   .hook-attachment-stream-label {
       font-size: 0.75em;
-      color: var(--secondary-text);
+      color: var(--text-secondary);
       margin-bottom: 0.2em;
       text-transform: uppercase;
       letter-spacing: 0.05em;
@@ -8770,7 +8888,7 @@
   .hook-attachment-content {
       margin: 0;
       padding: 0.5em;
-      background-color: var(--code-bg);
+      background-color: var(--code-bg-color);
       border-radius: 4px;
       font-size: 0.85em;
       white-space: pre-wrap;
@@ -8810,7 +8928,7 @@
   .hook-details {
       margin-top: 0.5em;
       padding: 0.5em;
-      background-color: var(--code-bg);
+      background-color: var(--code-bg-color);
       border-radius: 4px;
   }
   
@@ -10140,7 +10258,7 @@
   }
   
   .workflow-agent-model {
-      font-family: var(--font-mono, monospace);
+      font-family: var(--font-monospace);
       color: var(--text-secondary);
   }
   
@@ -10319,7 +10437,7 @@
   
   /* Child session hierarchy */
   .session-nav-item.session-child {
-      border-left: 3px solid var(--accent-color, #6c757d);
+      border-left: 3px solid var(--accent-color);
       padding-left: 8px;
   }
   
@@ -10864,38 +10982,58 @@
   }
   /* Timeline-specific styles for vis-timeline */
   
+  /* The container, resize-handle, select-flash, group-label and item colours
+     read --timeline-* custom properties whose fallbacks are the default
+     theme's values, so a theme can recolour the timeline by defining the
+     properties alone. The default theme defines none of them. */
+  
   /* Timeline toggle button styling */
   .timeline-toggle.active {
       background-color: #fff3cd;
   }
   
-  /* Timeline container positioning and styling */
+  /* Timeline container positioning and styling (layout stays inline in
+     timeline.html; only the colours live here) */
   #timeline-container {
       margin-bottom: 20px;
       box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
       transition: top 0.3s ease;
       position: relative;
+      background: var(--timeline-bg, white);
+      border-bottom: 1px solid var(--timeline-border, #ddd);
   }
   
   /* Timeline resize handle styling */
   #timeline-resize-handle {
+      background: linear-gradient(to bottom, transparent, var(--timeline-handle-bg, #ddd));
       transition: background 0.2s ease;
   }
   
+  #timeline-resize-handle>div {
+      background: var(--timeline-grip, #999);
+  }
+  
   #timeline-resize-handle:hover {
-      background: linear-gradient(to bottom, transparent, #bbb) !important;
+      background: linear-gradient(to bottom, transparent, var(--timeline-handle-hover-bg, #bbb));
   }
   
   #timeline-resize-handle:hover>div {
-      background: #777 !important;
+      background: var(--timeline-grip-hover, #777);
   }
   
   #timeline-resize-handle:active {
-      background: linear-gradient(to bottom, transparent, #999) !important;
+      background: linear-gradient(to bottom, transparent, var(--timeline-handle-active-bg, #999));
   }
   
   #timeline-resize-handle:active>div {
-      background: #555 !important;
+      background: var(--timeline-grip-active, #555);
+  }
+  
+  /* Brief highlight of the message a timeline item was clicked for
+     (onTimelineSelect adds the class for 2s). !important stands in for the
+     inline style it replaces, which beat every card background rule. */
+  .message.timeline-flash {
+      background-color: var(--timeline-flash-bg, #fff3cd) !important;
   }
   
   /* vis-timeline customizations */
@@ -10907,6 +11045,78 @@
       font-size: 12px !important;
       font-weight: 500 !important;
       color: var(--text-secondary) !important;
+  }
+  
+  /* Group (row label) colours. timeline.html gives each group a
+     `timeline-group-<id>` className; vis-timeline puts a group's className
+     on its label *and* on its row, so the rules are scoped to the label,
+     which is all the inline style they replace used to colour. */
+  .vis-labelset .vis-label.timeline-group-user {
+      background-color: var(--timeline-user-bg, #e3f2fd);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-assistant {
+      background-color: var(--timeline-assistant-bg, #f3e5f5);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-tool_use {
+      background-color: var(--timeline-tool_use-bg, #fff3e0);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-tool_result {
+      background-color: var(--timeline-tool_result-bg, #e8f5e8);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-thinking {
+      background-color: var(--timeline-thinking-bg, #fce4ec);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-system {
+      background-color: var(--timeline-system-bg, #ffeee1);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-image {
+      background-color: var(--timeline-image-bg, #e1f5fe);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-sidechain {
+      background-color: var(--timeline-sidechain-bg, #f5f5f5);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-memory {
+      background-color: var(--timeline-memory-bg, #ede7f6);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-slash-command {
+      background-color: var(--timeline-slash-command-bg, #e8eaf6);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-command-output {
+      background-color: var(--timeline-command-output-bg, #efebe9);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-bash-input {
+      background-color: var(--timeline-bash-input-bg, #e8eaf6);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-bash-output {
+      background-color: var(--timeline-bash-output-bg, #efebe9);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-teammate {
+      background-color: var(--timeline-teammate-bg, #e8f2fd);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-task-notification {
+      background-color: var(--timeline-task-notification-bg, #e8f2fd);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-workflow_phase {
+      background-color: var(--timeline-workflow_phase-bg, #fff8e1);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-workflow_agent {
+      background-color: var(--timeline-workflow_agent-bg, #f3e5f5);
   }
   
   /* Timeline items styling */
@@ -10929,43 +11139,43 @@
   
   /* Message type specific styling */
   .vis-item.timeline-item-user {
-      background-color: #e3f2fd !important;
-      border-color: var(--system-warning-color) !important;
+      background-color: var(--timeline-item-user-bg, #e3f2fd) !important;
+      border-color: var(--timeline-item-user-border, var(--system-warning-color)) !important;
   }
   
   .vis-item.timeline-item-assistant {
-      background-color: #f3e5f5 !important;
-      border-color: #9c27b0 !important;
+      background-color: var(--timeline-item-assistant-bg, #f3e5f5) !important;
+      border-color: var(--timeline-item-assistant-border, #9c27b0) !important;
   }
   
   .vis-item.timeline-item-tool_use {
-      background-color: #fff8e1 !important;
-      border-color: #ffc107 !important;
+      background-color: var(--timeline-item-tool_use-bg, #fff8e1) !important;
+      border-color: var(--timeline-item-tool_use-border, #ffc107) !important;
   }
   
   .vis-item.timeline-item-tool_result {
-      background-color: #e8f5e8 !important;
-      border-color: #4caf50 !important;
+      background-color: var(--timeline-item-tool_result-bg, #e8f5e8) !important;
+      border-color: var(--timeline-item-tool_result-border, #4caf50) !important;
   }
   
   .vis-item.timeline-item-thinking {
-      background-color: #fce4ec !important;
-      border-color: #e91e63 !important;
+      background-color: var(--timeline-item-thinking-bg, #fce4ec) !important;
+      border-color: var(--timeline-item-thinking-border, #e91e63) !important;
   }
   
   .vis-item.timeline-item-system {
-      background-color: #ffeee1 !important;
-      border-color: #ff8707 !important;
+      background-color: var(--timeline-item-system-bg, #ffeee1) !important;
+      border-color: var(--timeline-item-system-border, #ff8707) !important;
   }
   
   .vis-item.timeline-item-image {
-      background-color: #e1f5fe !important;
-      border-color: #00bcd4 !important;
+      background-color: var(--timeline-item-image-bg, #e1f5fe) !important;
+      border-color: var(--timeline-item-image-border, #00bcd4) !important;
   }
   
   .vis-item.timeline-item-sidechain {
-      background-color: #f5f5f5 !important;
-      border-color: #9e9e9e !important;
+      background-color: var(--timeline-item-sidechain-bg, #f5f5f5) !important;
+      border-color: var(--timeline-item-sidechain-border, #9e9e9e) !important;
   }
   
   /* Hide filtered timeline items */
@@ -11580,8 +11790,8 @@
   }
   
   /* Unified styling for inline preview text in tool results */
-  .tool-result .line-count,
-  .tool-result .preview-text {
+  .tool_result .line-count,
+  .tool_result .preview-text {
       font-size: 0.9em;
       color: var(--color-text-secondary);
       margin-left: 0.5em;
@@ -12231,11 +12441,11 @@
   <!-- vis-timeline integration for transcript visualization -->
   
   <div id="timeline-container"
-      style="display: none; position: sticky; top: 0; z-index: 100; background: white; border-bottom: 1px solid #ddd; width: 100vw; margin-left: calc(-50vw + 50%); overflow: hidden; min-height: 150px; max-height: 80vh;">
+      style="display: none; position: sticky; top: 0; z-index: 100; width: 100vw; margin-left: calc(-50vw + 50%); overflow: hidden; min-height: 150px; max-height: 80vh;">
       <div id="timeline-visualization" style="height: calc(100% - 8px); width: 100%;"></div>
       <div id="timeline-resize-handle"
-          style="position: absolute; bottom: 0; left: 0; right: 0; height: 8px; background: linear-gradient(to bottom, transparent, #ddd); cursor: ns-resize; display: flex; align-items: center; justify-content: center;">
-          <div style="width: 40px; height: 3px; background: #999; border-radius: 2px;"></div>
+          style="position: absolute; bottom: 0; left: 0; right: 0; height: 8px; cursor: ns-resize; display: flex; align-items: center; justify-content: center;">
+          <div style="width: 40px; height: 3px; border-radius: 2px;"></div>
       </div>
   </div>
   
@@ -12252,23 +12462,23 @@
   
           // Message type to group mapping
           const messageTypeGroups = {
-              'user': { id: 'user', content: '🤷 User', style: 'background-color: #e3f2fd;' },
-              'assistant': { id: 'assistant', content: '🤖 Assistant', style: 'background-color: #f3e5f5;' },
-              'tool_use': { id: 'tool_use', content: '🛠️ Tool Use', style: 'background-color: #fff3e0;' },
-              'tool_result': { id: 'tool_result', content: '🧰 Tool Result', style: 'background-color: #e8f5e8;' },
-              'thinking': { id: 'thinking', content: '💭 Thinking', style: 'background-color: #fce4ec;' },
-              'system': { id: 'system', content: '⚙️ System', style: 'background-color: #ffeee1;' },
-              'image': { id: 'image', content: '🖼️ Image', style: 'background-color: #e1f5fe;' },
-              'sidechain': { id: 'sidechain', content: '🔗 Sub-assistant', style: 'background-color: #f5f5f5;' },
-              'memory': { id: 'memory', content: '🧠 Memory', style: 'background-color: #ede7f6;' },
-              'slash-command': { id: 'slash-command', content: '⌨️ Slash Command', style: 'background-color: #e8eaf6;' },
-              'command-output': { id: 'command-output', content: '📋 Command Output', style: 'background-color: #efebe9;' },
-              'bash-input': { id: 'bash-input', content: '💻 Bash Input', style: 'background-color: #e8eaf6;' },
-              'bash-output': { id: 'bash-output', content: '📄 Bash Output', style: 'background-color: #efebe9;' },
-              'teammate': { id: 'teammate', content: '👥 Teammate', style: 'background-color: #e8f2fd;' },
-              'task-notification': { id: 'task-notification', content: '🔄 Async result', style: 'background-color: #e8f2fd;' },
-              'workflow_phase': { id: 'workflow_phase', content: '🧩 Workflow Phase', style: 'background-color: #fff8e1;' },
-              'workflow_agent': { id: 'workflow_agent', content: '🤖 Workflow Agent', style: 'background-color: #f3e5f5;' }
+              'user': { id: 'user', content: '🤷 User', className: 'timeline-group-user' },
+              'assistant': { id: 'assistant', content: '🤖 Assistant', className: 'timeline-group-assistant' },
+              'tool_use': { id: 'tool_use', content: '🛠️ Tool Use', className: 'timeline-group-tool_use' },
+              'tool_result': { id: 'tool_result', content: '🧰 Tool Result', className: 'timeline-group-tool_result' },
+              'thinking': { id: 'thinking', content: '💭 Thinking', className: 'timeline-group-thinking' },
+              'system': { id: 'system', content: '⚙️ System', className: 'timeline-group-system' },
+              'image': { id: 'image', content: '🖼️ Image', className: 'timeline-group-image' },
+              'sidechain': { id: 'sidechain', content: '🔗 Sub-assistant', className: 'timeline-group-sidechain' },
+              'memory': { id: 'memory', content: '🧠 Memory', className: 'timeline-group-memory' },
+              'slash-command': { id: 'slash-command', content: '⌨️ Slash Command', className: 'timeline-group-slash-command' },
+              'command-output': { id: 'command-output', content: '📋 Command Output', className: 'timeline-group-command-output' },
+              'bash-input': { id: 'bash-input', content: '💻 Bash Input', className: 'timeline-group-bash-input' },
+              'bash-output': { id: 'bash-output', content: '📄 Bash Output', className: 'timeline-group-bash-output' },
+              'teammate': { id: 'teammate', content: '👥 Teammate', className: 'timeline-group-teammate' },
+              'task-notification': { id: 'task-notification', content: '🔄 Async result', className: 'timeline-group-task-notification' },
+              'workflow_phase': { id: 'workflow_phase', content: '🧩 Workflow Phase', className: 'timeline-group-workflow_phase' },
+              'workflow_agent': { id: 'workflow_agent', content: '🤖 Workflow Agent', className: 'timeline-group-workflow_agent' }
           };
   
           // Build timeline data from messages
@@ -12521,7 +12731,7 @@
                       const timelineHeight = timelineContainer ? timelineContainer.offsetHeight : 0;
   
                       // Scroll so message top aligns with timeline bottom
-                      const elementTop = messageEl.offsetTop;
+                      const elementTop = messageEl.getBoundingClientRect().top + window.scrollY;
                       const scrollPosition = elementTop - timelineHeight - 10; // 10px padding
   
                       window.scrollTo({
@@ -12530,9 +12740,9 @@
                       });
   
                       // Highlight the message briefly
-                      messageEl.style.backgroundColor = '#fff3cd';
+                      messageEl.classList.add('timeline-flash');
                       setTimeout(() => {
-                          messageEl.style.backgroundColor = '';
+                          messageEl.classList.remove('timeline-flash');
                       }, 2000);
                   }
               }
@@ -15815,6 +16025,19 @@
       --text-muted: #666;
       --text-secondary: #495057;
       --fold-color: #888;
+      --accent-color: #6c757d;
+  
+      /* Code/tool palette used by pygments_styles.css (Pygments blocks,
+         Read/Write/MultiEdit tool content, system reminders) and by the
+         collapsible tool-result summary in message_styles.css. */
+      --color-bg-secondary: #f6f8fa;
+      --color-bg-tertiary: #eef1f4;
+      --color-blue: #1e6fd9;
+      --color-green: #2e7d32;
+      --color-purple: #7b1fa2;
+      --color-border-dim: #d0d7de;
+      --color-text-dim: #8c959f;
+      --color-text-secondary: #57606a;
   
       /* Border colors */
       --border-light: #e0e0e0;
@@ -16201,7 +16424,7 @@
   
   /* Child session hierarchy */
   .session-nav-item.session-child {
-      border-left: 3px solid var(--accent-color, #6c757d);
+      border-left: 3px solid var(--accent-color);
       padding-left: 8px;
   }
   
@@ -18480,6 +18703,19 @@
       --text-muted: #666;
       --text-secondary: #495057;
       --fold-color: #888;
+      --accent-color: #6c757d;
+  
+      /* Code/tool palette used by pygments_styles.css (Pygments blocks,
+         Read/Write/MultiEdit tool content, system reminders) and by the
+         collapsible tool-result summary in message_styles.css. */
+      --color-bg-secondary: #f6f8fa;
+      --color-bg-tertiary: #eef1f4;
+      --color-blue: #1e6fd9;
+      --color-green: #2e7d32;
+      --color-purple: #7b1fa2;
+      --color-border-dim: #d0d7de;
+      --color-text-dim: #8c959f;
+      --color-text-secondary: #57606a;
   
       /* Border colors */
       --border-light: #e0e0e0;
@@ -19093,7 +19329,7 @@
   /* Model id surfaced on sub-agent message headers (issue #246) */
   .message-model {
       font-size: 0.75em;
-      font-family: var(--font-mono, 'SFMono-Regular', Consolas, monospace);
+      font-family: var(--font-monospace);
       color: var(--text-secondary, #888);
   }
   
@@ -19218,7 +19454,7 @@
   }
   
   .hook-attachment-meta {
-      color: var(--secondary-text);
+      color: var(--text-secondary);
       font-size: 0.85em;
   }
   
@@ -19228,7 +19464,7 @@
   
   .hook-attachment-stream-label {
       font-size: 0.75em;
-      color: var(--secondary-text);
+      color: var(--text-secondary);
       margin-bottom: 0.2em;
       text-transform: uppercase;
       letter-spacing: 0.05em;
@@ -19238,7 +19474,7 @@
   .hook-attachment-content {
       margin: 0;
       padding: 0.5em;
-      background-color: var(--code-bg);
+      background-color: var(--code-bg-color);
       border-radius: 4px;
       font-size: 0.85em;
       white-space: pre-wrap;
@@ -19278,7 +19514,7 @@
   .hook-details {
       margin-top: 0.5em;
       padding: 0.5em;
-      background-color: var(--code-bg);
+      background-color: var(--code-bg-color);
       border-radius: 4px;
   }
   
@@ -20608,7 +20844,7 @@
   }
   
   .workflow-agent-model {
-      font-family: var(--font-mono, monospace);
+      font-family: var(--font-monospace);
       color: var(--text-secondary);
   }
   
@@ -20787,7 +21023,7 @@
   
   /* Child session hierarchy */
   .session-nav-item.session-child {
-      border-left: 3px solid var(--accent-color, #6c757d);
+      border-left: 3px solid var(--accent-color);
       padding-left: 8px;
   }
   
@@ -21332,38 +21568,58 @@
   }
   /* Timeline-specific styles for vis-timeline */
   
+  /* The container, resize-handle, select-flash, group-label and item colours
+     read --timeline-* custom properties whose fallbacks are the default
+     theme's values, so a theme can recolour the timeline by defining the
+     properties alone. The default theme defines none of them. */
+  
   /* Timeline toggle button styling */
   .timeline-toggle.active {
       background-color: #fff3cd;
   }
   
-  /* Timeline container positioning and styling */
+  /* Timeline container positioning and styling (layout stays inline in
+     timeline.html; only the colours live here) */
   #timeline-container {
       margin-bottom: 20px;
       box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
       transition: top 0.3s ease;
       position: relative;
+      background: var(--timeline-bg, white);
+      border-bottom: 1px solid var(--timeline-border, #ddd);
   }
   
   /* Timeline resize handle styling */
   #timeline-resize-handle {
+      background: linear-gradient(to bottom, transparent, var(--timeline-handle-bg, #ddd));
       transition: background 0.2s ease;
   }
   
+  #timeline-resize-handle>div {
+      background: var(--timeline-grip, #999);
+  }
+  
   #timeline-resize-handle:hover {
-      background: linear-gradient(to bottom, transparent, #bbb) !important;
+      background: linear-gradient(to bottom, transparent, var(--timeline-handle-hover-bg, #bbb));
   }
   
   #timeline-resize-handle:hover>div {
-      background: #777 !important;
+      background: var(--timeline-grip-hover, #777);
   }
   
   #timeline-resize-handle:active {
-      background: linear-gradient(to bottom, transparent, #999) !important;
+      background: linear-gradient(to bottom, transparent, var(--timeline-handle-active-bg, #999));
   }
   
   #timeline-resize-handle:active>div {
-      background: #555 !important;
+      background: var(--timeline-grip-active, #555);
+  }
+  
+  /* Brief highlight of the message a timeline item was clicked for
+     (onTimelineSelect adds the class for 2s). !important stands in for the
+     inline style it replaces, which beat every card background rule. */
+  .message.timeline-flash {
+      background-color: var(--timeline-flash-bg, #fff3cd) !important;
   }
   
   /* vis-timeline customizations */
@@ -21375,6 +21631,78 @@
       font-size: 12px !important;
       font-weight: 500 !important;
       color: var(--text-secondary) !important;
+  }
+  
+  /* Group (row label) colours. timeline.html gives each group a
+     `timeline-group-<id>` className; vis-timeline puts a group's className
+     on its label *and* on its row, so the rules are scoped to the label,
+     which is all the inline style they replace used to colour. */
+  .vis-labelset .vis-label.timeline-group-user {
+      background-color: var(--timeline-user-bg, #e3f2fd);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-assistant {
+      background-color: var(--timeline-assistant-bg, #f3e5f5);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-tool_use {
+      background-color: var(--timeline-tool_use-bg, #fff3e0);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-tool_result {
+      background-color: var(--timeline-tool_result-bg, #e8f5e8);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-thinking {
+      background-color: var(--timeline-thinking-bg, #fce4ec);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-system {
+      background-color: var(--timeline-system-bg, #ffeee1);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-image {
+      background-color: var(--timeline-image-bg, #e1f5fe);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-sidechain {
+      background-color: var(--timeline-sidechain-bg, #f5f5f5);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-memory {
+      background-color: var(--timeline-memory-bg, #ede7f6);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-slash-command {
+      background-color: var(--timeline-slash-command-bg, #e8eaf6);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-command-output {
+      background-color: var(--timeline-command-output-bg, #efebe9);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-bash-input {
+      background-color: var(--timeline-bash-input-bg, #e8eaf6);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-bash-output {
+      background-color: var(--timeline-bash-output-bg, #efebe9);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-teammate {
+      background-color: var(--timeline-teammate-bg, #e8f2fd);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-task-notification {
+      background-color: var(--timeline-task-notification-bg, #e8f2fd);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-workflow_phase {
+      background-color: var(--timeline-workflow_phase-bg, #fff8e1);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-workflow_agent {
+      background-color: var(--timeline-workflow_agent-bg, #f3e5f5);
   }
   
   /* Timeline items styling */
@@ -21397,43 +21725,43 @@
   
   /* Message type specific styling */
   .vis-item.timeline-item-user {
-      background-color: #e3f2fd !important;
-      border-color: var(--system-warning-color) !important;
+      background-color: var(--timeline-item-user-bg, #e3f2fd) !important;
+      border-color: var(--timeline-item-user-border, var(--system-warning-color)) !important;
   }
   
   .vis-item.timeline-item-assistant {
-      background-color: #f3e5f5 !important;
-      border-color: #9c27b0 !important;
+      background-color: var(--timeline-item-assistant-bg, #f3e5f5) !important;
+      border-color: var(--timeline-item-assistant-border, #9c27b0) !important;
   }
   
   .vis-item.timeline-item-tool_use {
-      background-color: #fff8e1 !important;
-      border-color: #ffc107 !important;
+      background-color: var(--timeline-item-tool_use-bg, #fff8e1) !important;
+      border-color: var(--timeline-item-tool_use-border, #ffc107) !important;
   }
   
   .vis-item.timeline-item-tool_result {
-      background-color: #e8f5e8 !important;
-      border-color: #4caf50 !important;
+      background-color: var(--timeline-item-tool_result-bg, #e8f5e8) !important;
+      border-color: var(--timeline-item-tool_result-border, #4caf50) !important;
   }
   
   .vis-item.timeline-item-thinking {
-      background-color: #fce4ec !important;
-      border-color: #e91e63 !important;
+      background-color: var(--timeline-item-thinking-bg, #fce4ec) !important;
+      border-color: var(--timeline-item-thinking-border, #e91e63) !important;
   }
   
   .vis-item.timeline-item-system {
-      background-color: #ffeee1 !important;
-      border-color: #ff8707 !important;
+      background-color: var(--timeline-item-system-bg, #ffeee1) !important;
+      border-color: var(--timeline-item-system-border, #ff8707) !important;
   }
   
   .vis-item.timeline-item-image {
-      background-color: #e1f5fe !important;
-      border-color: #00bcd4 !important;
+      background-color: var(--timeline-item-image-bg, #e1f5fe) !important;
+      border-color: var(--timeline-item-image-border, #00bcd4) !important;
   }
   
   .vis-item.timeline-item-sidechain {
-      background-color: #f5f5f5 !important;
-      border-color: #9e9e9e !important;
+      background-color: var(--timeline-item-sidechain-bg, #f5f5f5) !important;
+      border-color: var(--timeline-item-sidechain-border, #9e9e9e) !important;
   }
   
   /* Hide filtered timeline items */
@@ -22048,8 +22376,8 @@
   }
   
   /* Unified styling for inline preview text in tool results */
-  .tool-result .line-count,
-  .tool-result .preview-text {
+  .tool_result .line-count,
+  .tool_result .preview-text {
       font-size: 0.9em;
       color: var(--color-text-secondary);
       margin-left: 0.5em;
@@ -22699,11 +23027,11 @@
   <!-- vis-timeline integration for transcript visualization -->
   
   <div id="timeline-container"
-      style="display: none; position: sticky; top: 0; z-index: 100; background: white; border-bottom: 1px solid #ddd; width: 100vw; margin-left: calc(-50vw + 50%); overflow: hidden; min-height: 150px; max-height: 80vh;">
+      style="display: none; position: sticky; top: 0; z-index: 100; width: 100vw; margin-left: calc(-50vw + 50%); overflow: hidden; min-height: 150px; max-height: 80vh;">
       <div id="timeline-visualization" style="height: calc(100% - 8px); width: 100%;"></div>
       <div id="timeline-resize-handle"
-          style="position: absolute; bottom: 0; left: 0; right: 0; height: 8px; background: linear-gradient(to bottom, transparent, #ddd); cursor: ns-resize; display: flex; align-items: center; justify-content: center;">
-          <div style="width: 40px; height: 3px; background: #999; border-radius: 2px;"></div>
+          style="position: absolute; bottom: 0; left: 0; right: 0; height: 8px; cursor: ns-resize; display: flex; align-items: center; justify-content: center;">
+          <div style="width: 40px; height: 3px; border-radius: 2px;"></div>
       </div>
   </div>
   
@@ -22720,23 +23048,23 @@
   
           // Message type to group mapping
           const messageTypeGroups = {
-              'user': { id: 'user', content: '🤷 User', style: 'background-color: #e3f2fd;' },
-              'assistant': { id: 'assistant', content: '🤖 Assistant', style: 'background-color: #f3e5f5;' },
-              'tool_use': { id: 'tool_use', content: '🛠️ Tool Use', style: 'background-color: #fff3e0;' },
-              'tool_result': { id: 'tool_result', content: '🧰 Tool Result', style: 'background-color: #e8f5e8;' },
-              'thinking': { id: 'thinking', content: '💭 Thinking', style: 'background-color: #fce4ec;' },
-              'system': { id: 'system', content: '⚙️ System', style: 'background-color: #ffeee1;' },
-              'image': { id: 'image', content: '🖼️ Image', style: 'background-color: #e1f5fe;' },
-              'sidechain': { id: 'sidechain', content: '🔗 Sub-assistant', style: 'background-color: #f5f5f5;' },
-              'memory': { id: 'memory', content: '🧠 Memory', style: 'background-color: #ede7f6;' },
-              'slash-command': { id: 'slash-command', content: '⌨️ Slash Command', style: 'background-color: #e8eaf6;' },
-              'command-output': { id: 'command-output', content: '📋 Command Output', style: 'background-color: #efebe9;' },
-              'bash-input': { id: 'bash-input', content: '💻 Bash Input', style: 'background-color: #e8eaf6;' },
-              'bash-output': { id: 'bash-output', content: '📄 Bash Output', style: 'background-color: #efebe9;' },
-              'teammate': { id: 'teammate', content: '👥 Teammate', style: 'background-color: #e8f2fd;' },
-              'task-notification': { id: 'task-notification', content: '🔄 Async result', style: 'background-color: #e8f2fd;' },
-              'workflow_phase': { id: 'workflow_phase', content: '🧩 Workflow Phase', style: 'background-color: #fff8e1;' },
-              'workflow_agent': { id: 'workflow_agent', content: '🤖 Workflow Agent', style: 'background-color: #f3e5f5;' }
+              'user': { id: 'user', content: '🤷 User', className: 'timeline-group-user' },
+              'assistant': { id: 'assistant', content: '🤖 Assistant', className: 'timeline-group-assistant' },
+              'tool_use': { id: 'tool_use', content: '🛠️ Tool Use', className: 'timeline-group-tool_use' },
+              'tool_result': { id: 'tool_result', content: '🧰 Tool Result', className: 'timeline-group-tool_result' },
+              'thinking': { id: 'thinking', content: '💭 Thinking', className: 'timeline-group-thinking' },
+              'system': { id: 'system', content: '⚙️ System', className: 'timeline-group-system' },
+              'image': { id: 'image', content: '🖼️ Image', className: 'timeline-group-image' },
+              'sidechain': { id: 'sidechain', content: '🔗 Sub-assistant', className: 'timeline-group-sidechain' },
+              'memory': { id: 'memory', content: '🧠 Memory', className: 'timeline-group-memory' },
+              'slash-command': { id: 'slash-command', content: '⌨️ Slash Command', className: 'timeline-group-slash-command' },
+              'command-output': { id: 'command-output', content: '📋 Command Output', className: 'timeline-group-command-output' },
+              'bash-input': { id: 'bash-input', content: '💻 Bash Input', className: 'timeline-group-bash-input' },
+              'bash-output': { id: 'bash-output', content: '📄 Bash Output', className: 'timeline-group-bash-output' },
+              'teammate': { id: 'teammate', content: '👥 Teammate', className: 'timeline-group-teammate' },
+              'task-notification': { id: 'task-notification', content: '🔄 Async result', className: 'timeline-group-task-notification' },
+              'workflow_phase': { id: 'workflow_phase', content: '🧩 Workflow Phase', className: 'timeline-group-workflow_phase' },
+              'workflow_agent': { id: 'workflow_agent', content: '🤖 Workflow Agent', className: 'timeline-group-workflow_agent' }
           };
   
           // Build timeline data from messages
@@ -22989,7 +23317,7 @@
                       const timelineHeight = timelineContainer ? timelineContainer.offsetHeight : 0;
   
                       // Scroll so message top aligns with timeline bottom
-                      const elementTop = messageEl.offsetTop;
+                      const elementTop = messageEl.getBoundingClientRect().top + window.scrollY;
                       const scrollPosition = elementTop - timelineHeight - 10; // 10px padding
   
                       window.scrollTo({
@@ -22998,9 +23326,9 @@
                       });
   
                       // Highlight the message briefly
-                      messageEl.style.backgroundColor = '#fff3cd';
+                      messageEl.classList.add('timeline-flash');
                       setTimeout(() => {
-                          messageEl.style.backgroundColor = '';
+                          messageEl.classList.remove('timeline-flash');
                       }, 2000);
                   }
               }
@@ -26506,6 +26834,19 @@
       --text-muted: #666;
       --text-secondary: #495057;
       --fold-color: #888;
+      --accent-color: #6c757d;
+  
+      /* Code/tool palette used by pygments_styles.css (Pygments blocks,
+         Read/Write/MultiEdit tool content, system reminders) and by the
+         collapsible tool-result summary in message_styles.css. */
+      --color-bg-secondary: #f6f8fa;
+      --color-bg-tertiary: #eef1f4;
+      --color-blue: #1e6fd9;
+      --color-green: #2e7d32;
+      --color-purple: #7b1fa2;
+      --color-border-dim: #d0d7de;
+      --color-text-dim: #8c959f;
+      --color-text-secondary: #57606a;
   
       /* Border colors */
       --border-light: #e0e0e0;
@@ -27119,7 +27460,7 @@
   /* Model id surfaced on sub-agent message headers (issue #246) */
   .message-model {
       font-size: 0.75em;
-      font-family: var(--font-mono, 'SFMono-Regular', Consolas, monospace);
+      font-family: var(--font-monospace);
       color: var(--text-secondary, #888);
   }
   
@@ -27244,7 +27585,7 @@
   }
   
   .hook-attachment-meta {
-      color: var(--secondary-text);
+      color: var(--text-secondary);
       font-size: 0.85em;
   }
   
@@ -27254,7 +27595,7 @@
   
   .hook-attachment-stream-label {
       font-size: 0.75em;
-      color: var(--secondary-text);
+      color: var(--text-secondary);
       margin-bottom: 0.2em;
       text-transform: uppercase;
       letter-spacing: 0.05em;
@@ -27264,7 +27605,7 @@
   .hook-attachment-content {
       margin: 0;
       padding: 0.5em;
-      background-color: var(--code-bg);
+      background-color: var(--code-bg-color);
       border-radius: 4px;
       font-size: 0.85em;
       white-space: pre-wrap;
@@ -27304,7 +27645,7 @@
   .hook-details {
       margin-top: 0.5em;
       padding: 0.5em;
-      background-color: var(--code-bg);
+      background-color: var(--code-bg-color);
       border-radius: 4px;
   }
   
@@ -28634,7 +28975,7 @@
   }
   
   .workflow-agent-model {
-      font-family: var(--font-mono, monospace);
+      font-family: var(--font-monospace);
       color: var(--text-secondary);
   }
   
@@ -28813,7 +29154,7 @@
   
   /* Child session hierarchy */
   .session-nav-item.session-child {
-      border-left: 3px solid var(--accent-color, #6c757d);
+      border-left: 3px solid var(--accent-color);
       padding-left: 8px;
   }
   
@@ -29358,38 +29699,58 @@
   }
   /* Timeline-specific styles for vis-timeline */
   
+  /* The container, resize-handle, select-flash, group-label and item colours
+     read --timeline-* custom properties whose fallbacks are the default
+     theme's values, so a theme can recolour the timeline by defining the
+     properties alone. The default theme defines none of them. */
+  
   /* Timeline toggle button styling */
   .timeline-toggle.active {
       background-color: #fff3cd;
   }
   
-  /* Timeline container positioning and styling */
+  /* Timeline container positioning and styling (layout stays inline in
+     timeline.html; only the colours live here) */
   #timeline-container {
       margin-bottom: 20px;
       box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
       transition: top 0.3s ease;
       position: relative;
+      background: var(--timeline-bg, white);
+      border-bottom: 1px solid var(--timeline-border, #ddd);
   }
   
   /* Timeline resize handle styling */
   #timeline-resize-handle {
+      background: linear-gradient(to bottom, transparent, var(--timeline-handle-bg, #ddd));
       transition: background 0.2s ease;
   }
   
+  #timeline-resize-handle>div {
+      background: var(--timeline-grip, #999);
+  }
+  
   #timeline-resize-handle:hover {
-      background: linear-gradient(to bottom, transparent, #bbb) !important;
+      background: linear-gradient(to bottom, transparent, var(--timeline-handle-hover-bg, #bbb));
   }
   
   #timeline-resize-handle:hover>div {
-      background: #777 !important;
+      background: var(--timeline-grip-hover, #777);
   }
   
   #timeline-resize-handle:active {
-      background: linear-gradient(to bottom, transparent, #999) !important;
+      background: linear-gradient(to bottom, transparent, var(--timeline-handle-active-bg, #999));
   }
   
   #timeline-resize-handle:active>div {
-      background: #555 !important;
+      background: var(--timeline-grip-active, #555);
+  }
+  
+  /* Brief highlight of the message a timeline item was clicked for
+     (onTimelineSelect adds the class for 2s). !important stands in for the
+     inline style it replaces, which beat every card background rule. */
+  .message.timeline-flash {
+      background-color: var(--timeline-flash-bg, #fff3cd) !important;
   }
   
   /* vis-timeline customizations */
@@ -29401,6 +29762,78 @@
       font-size: 12px !important;
       font-weight: 500 !important;
       color: var(--text-secondary) !important;
+  }
+  
+  /* Group (row label) colours. timeline.html gives each group a
+     `timeline-group-<id>` className; vis-timeline puts a group's className
+     on its label *and* on its row, so the rules are scoped to the label,
+     which is all the inline style they replace used to colour. */
+  .vis-labelset .vis-label.timeline-group-user {
+      background-color: var(--timeline-user-bg, #e3f2fd);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-assistant {
+      background-color: var(--timeline-assistant-bg, #f3e5f5);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-tool_use {
+      background-color: var(--timeline-tool_use-bg, #fff3e0);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-tool_result {
+      background-color: var(--timeline-tool_result-bg, #e8f5e8);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-thinking {
+      background-color: var(--timeline-thinking-bg, #fce4ec);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-system {
+      background-color: var(--timeline-system-bg, #ffeee1);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-image {
+      background-color: var(--timeline-image-bg, #e1f5fe);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-sidechain {
+      background-color: var(--timeline-sidechain-bg, #f5f5f5);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-memory {
+      background-color: var(--timeline-memory-bg, #ede7f6);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-slash-command {
+      background-color: var(--timeline-slash-command-bg, #e8eaf6);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-command-output {
+      background-color: var(--timeline-command-output-bg, #efebe9);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-bash-input {
+      background-color: var(--timeline-bash-input-bg, #e8eaf6);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-bash-output {
+      background-color: var(--timeline-bash-output-bg, #efebe9);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-teammate {
+      background-color: var(--timeline-teammate-bg, #e8f2fd);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-task-notification {
+      background-color: var(--timeline-task-notification-bg, #e8f2fd);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-workflow_phase {
+      background-color: var(--timeline-workflow_phase-bg, #fff8e1);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-workflow_agent {
+      background-color: var(--timeline-workflow_agent-bg, #f3e5f5);
   }
   
   /* Timeline items styling */
@@ -29423,43 +29856,43 @@
   
   /* Message type specific styling */
   .vis-item.timeline-item-user {
-      background-color: #e3f2fd !important;
-      border-color: var(--system-warning-color) !important;
+      background-color: var(--timeline-item-user-bg, #e3f2fd) !important;
+      border-color: var(--timeline-item-user-border, var(--system-warning-color)) !important;
   }
   
   .vis-item.timeline-item-assistant {
-      background-color: #f3e5f5 !important;
-      border-color: #9c27b0 !important;
+      background-color: var(--timeline-item-assistant-bg, #f3e5f5) !important;
+      border-color: var(--timeline-item-assistant-border, #9c27b0) !important;
   }
   
   .vis-item.timeline-item-tool_use {
-      background-color: #fff8e1 !important;
-      border-color: #ffc107 !important;
+      background-color: var(--timeline-item-tool_use-bg, #fff8e1) !important;
+      border-color: var(--timeline-item-tool_use-border, #ffc107) !important;
   }
   
   .vis-item.timeline-item-tool_result {
-      background-color: #e8f5e8 !important;
-      border-color: #4caf50 !important;
+      background-color: var(--timeline-item-tool_result-bg, #e8f5e8) !important;
+      border-color: var(--timeline-item-tool_result-border, #4caf50) !important;
   }
   
   .vis-item.timeline-item-thinking {
-      background-color: #fce4ec !important;
-      border-color: #e91e63 !important;
+      background-color: var(--timeline-item-thinking-bg, #fce4ec) !important;
+      border-color: var(--timeline-item-thinking-border, #e91e63) !important;
   }
   
   .vis-item.timeline-item-system {
-      background-color: #ffeee1 !important;
-      border-color: #ff8707 !important;
+      background-color: var(--timeline-item-system-bg, #ffeee1) !important;
+      border-color: var(--timeline-item-system-border, #ff8707) !important;
   }
   
   .vis-item.timeline-item-image {
-      background-color: #e1f5fe !important;
-      border-color: #00bcd4 !important;
+      background-color: var(--timeline-item-image-bg, #e1f5fe) !important;
+      border-color: var(--timeline-item-image-border, #00bcd4) !important;
   }
   
   .vis-item.timeline-item-sidechain {
-      background-color: #f5f5f5 !important;
-      border-color: #9e9e9e !important;
+      background-color: var(--timeline-item-sidechain-bg, #f5f5f5) !important;
+      border-color: var(--timeline-item-sidechain-border, #9e9e9e) !important;
   }
   
   /* Hide filtered timeline items */
@@ -30074,8 +30507,8 @@
   }
   
   /* Unified styling for inline preview text in tool results */
-  .tool-result .line-count,
-  .tool-result .preview-text {
+  .tool_result .line-count,
+  .tool_result .preview-text {
       font-size: 0.9em;
       color: var(--color-text-secondary);
       margin-left: 0.5em;
@@ -30725,11 +31158,11 @@
   <!-- vis-timeline integration for transcript visualization -->
   
   <div id="timeline-container"
-      style="display: none; position: sticky; top: 0; z-index: 100; background: white; border-bottom: 1px solid #ddd; width: 100vw; margin-left: calc(-50vw + 50%); overflow: hidden; min-height: 150px; max-height: 80vh;">
+      style="display: none; position: sticky; top: 0; z-index: 100; width: 100vw; margin-left: calc(-50vw + 50%); overflow: hidden; min-height: 150px; max-height: 80vh;">
       <div id="timeline-visualization" style="height: calc(100% - 8px); width: 100%;"></div>
       <div id="timeline-resize-handle"
-          style="position: absolute; bottom: 0; left: 0; right: 0; height: 8px; background: linear-gradient(to bottom, transparent, #ddd); cursor: ns-resize; display: flex; align-items: center; justify-content: center;">
-          <div style="width: 40px; height: 3px; background: #999; border-radius: 2px;"></div>
+          style="position: absolute; bottom: 0; left: 0; right: 0; height: 8px; cursor: ns-resize; display: flex; align-items: center; justify-content: center;">
+          <div style="width: 40px; height: 3px; border-radius: 2px;"></div>
       </div>
   </div>
   
@@ -30746,23 +31179,23 @@
   
           // Message type to group mapping
           const messageTypeGroups = {
-              'user': { id: 'user', content: '🤷 User', style: 'background-color: #e3f2fd;' },
-              'assistant': { id: 'assistant', content: '🤖 Assistant', style: 'background-color: #f3e5f5;' },
-              'tool_use': { id: 'tool_use', content: '🛠️ Tool Use', style: 'background-color: #fff3e0;' },
-              'tool_result': { id: 'tool_result', content: '🧰 Tool Result', style: 'background-color: #e8f5e8;' },
-              'thinking': { id: 'thinking', content: '💭 Thinking', style: 'background-color: #fce4ec;' },
-              'system': { id: 'system', content: '⚙️ System', style: 'background-color: #ffeee1;' },
-              'image': { id: 'image', content: '🖼️ Image', style: 'background-color: #e1f5fe;' },
-              'sidechain': { id: 'sidechain', content: '🔗 Sub-assistant', style: 'background-color: #f5f5f5;' },
-              'memory': { id: 'memory', content: '🧠 Memory', style: 'background-color: #ede7f6;' },
-              'slash-command': { id: 'slash-command', content: '⌨️ Slash Command', style: 'background-color: #e8eaf6;' },
-              'command-output': { id: 'command-output', content: '📋 Command Output', style: 'background-color: #efebe9;' },
-              'bash-input': { id: 'bash-input', content: '💻 Bash Input', style: 'background-color: #e8eaf6;' },
-              'bash-output': { id: 'bash-output', content: '📄 Bash Output', style: 'background-color: #efebe9;' },
-              'teammate': { id: 'teammate', content: '👥 Teammate', style: 'background-color: #e8f2fd;' },
-              'task-notification': { id: 'task-notification', content: '🔄 Async result', style: 'background-color: #e8f2fd;' },
-              'workflow_phase': { id: 'workflow_phase', content: '🧩 Workflow Phase', style: 'background-color: #fff8e1;' },
-              'workflow_agent': { id: 'workflow_agent', content: '🤖 Workflow Agent', style: 'background-color: #f3e5f5;' }
+              'user': { id: 'user', content: '🤷 User', className: 'timeline-group-user' },
+              'assistant': { id: 'assistant', content: '🤖 Assistant', className: 'timeline-group-assistant' },
+              'tool_use': { id: 'tool_use', content: '🛠️ Tool Use', className: 'timeline-group-tool_use' },
+              'tool_result': { id: 'tool_result', content: '🧰 Tool Result', className: 'timeline-group-tool_result' },
+              'thinking': { id: 'thinking', content: '💭 Thinking', className: 'timeline-group-thinking' },
+              'system': { id: 'system', content: '⚙️ System', className: 'timeline-group-system' },
+              'image': { id: 'image', content: '🖼️ Image', className: 'timeline-group-image' },
+              'sidechain': { id: 'sidechain', content: '🔗 Sub-assistant', className: 'timeline-group-sidechain' },
+              'memory': { id: 'memory', content: '🧠 Memory', className: 'timeline-group-memory' },
+              'slash-command': { id: 'slash-command', content: '⌨️ Slash Command', className: 'timeline-group-slash-command' },
+              'command-output': { id: 'command-output', content: '📋 Command Output', className: 'timeline-group-command-output' },
+              'bash-input': { id: 'bash-input', content: '💻 Bash Input', className: 'timeline-group-bash-input' },
+              'bash-output': { id: 'bash-output', content: '📄 Bash Output', className: 'timeline-group-bash-output' },
+              'teammate': { id: 'teammate', content: '👥 Teammate', className: 'timeline-group-teammate' },
+              'task-notification': { id: 'task-notification', content: '🔄 Async result', className: 'timeline-group-task-notification' },
+              'workflow_phase': { id: 'workflow_phase', content: '🧩 Workflow Phase', className: 'timeline-group-workflow_phase' },
+              'workflow_agent': { id: 'workflow_agent', content: '🤖 Workflow Agent', className: 'timeline-group-workflow_agent' }
           };
   
           // Build timeline data from messages
@@ -31015,7 +31448,7 @@
                       const timelineHeight = timelineContainer ? timelineContainer.offsetHeight : 0;
   
                       // Scroll so message top aligns with timeline bottom
-                      const elementTop = messageEl.offsetTop;
+                      const elementTop = messageEl.getBoundingClientRect().top + window.scrollY;
                       const scrollPosition = elementTop - timelineHeight - 10; // 10px padding
   
                       window.scrollTo({
@@ -31024,9 +31457,9 @@
                       });
   
                       // Highlight the message briefly
-                      messageEl.style.backgroundColor = '#fff3cd';
+                      messageEl.classList.add('timeline-flash');
                       setTimeout(() => {
-                          messageEl.style.backgroundColor = '';
+                          messageEl.classList.remove('timeline-flash');
                       }, 2000);
                   }
               }
@@ -34812,6 +35245,19 @@
       --text-muted: #666;
       --text-secondary: #495057;
       --fold-color: #888;
+      --accent-color: #6c757d;
+  
+      /* Code/tool palette used by pygments_styles.css (Pygments blocks,
+         Read/Write/MultiEdit tool content, system reminders) and by the
+         collapsible tool-result summary in message_styles.css. */
+      --color-bg-secondary: #f6f8fa;
+      --color-bg-tertiary: #eef1f4;
+      --color-blue: #1e6fd9;
+      --color-green: #2e7d32;
+      --color-purple: #7b1fa2;
+      --color-border-dim: #d0d7de;
+      --color-text-dim: #8c959f;
+      --color-text-secondary: #57606a;
   
       /* Border colors */
       --border-light: #e0e0e0;
@@ -35425,7 +35871,7 @@
   /* Model id surfaced on sub-agent message headers (issue #246) */
   .message-model {
       font-size: 0.75em;
-      font-family: var(--font-mono, 'SFMono-Regular', Consolas, monospace);
+      font-family: var(--font-monospace);
       color: var(--text-secondary, #888);
   }
   
@@ -35550,7 +35996,7 @@
   }
   
   .hook-attachment-meta {
-      color: var(--secondary-text);
+      color: var(--text-secondary);
       font-size: 0.85em;
   }
   
@@ -35560,7 +36006,7 @@
   
   .hook-attachment-stream-label {
       font-size: 0.75em;
-      color: var(--secondary-text);
+      color: var(--text-secondary);
       margin-bottom: 0.2em;
       text-transform: uppercase;
       letter-spacing: 0.05em;
@@ -35570,7 +36016,7 @@
   .hook-attachment-content {
       margin: 0;
       padding: 0.5em;
-      background-color: var(--code-bg);
+      background-color: var(--code-bg-color);
       border-radius: 4px;
       font-size: 0.85em;
       white-space: pre-wrap;
@@ -35610,7 +36056,7 @@
   .hook-details {
       margin-top: 0.5em;
       padding: 0.5em;
-      background-color: var(--code-bg);
+      background-color: var(--code-bg-color);
       border-radius: 4px;
   }
   
@@ -36940,7 +37386,7 @@
   }
   
   .workflow-agent-model {
-      font-family: var(--font-mono, monospace);
+      font-family: var(--font-monospace);
       color: var(--text-secondary);
   }
   
@@ -37119,7 +37565,7 @@
   
   /* Child session hierarchy */
   .session-nav-item.session-child {
-      border-left: 3px solid var(--accent-color, #6c757d);
+      border-left: 3px solid var(--accent-color);
       padding-left: 8px;
   }
   
@@ -37664,38 +38110,58 @@
   }
   /* Timeline-specific styles for vis-timeline */
   
+  /* The container, resize-handle, select-flash, group-label and item colours
+     read --timeline-* custom properties whose fallbacks are the default
+     theme's values, so a theme can recolour the timeline by defining the
+     properties alone. The default theme defines none of them. */
+  
   /* Timeline toggle button styling */
   .timeline-toggle.active {
       background-color: #fff3cd;
   }
   
-  /* Timeline container positioning and styling */
+  /* Timeline container positioning and styling (layout stays inline in
+     timeline.html; only the colours live here) */
   #timeline-container {
       margin-bottom: 20px;
       box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
       transition: top 0.3s ease;
       position: relative;
+      background: var(--timeline-bg, white);
+      border-bottom: 1px solid var(--timeline-border, #ddd);
   }
   
   /* Timeline resize handle styling */
   #timeline-resize-handle {
+      background: linear-gradient(to bottom, transparent, var(--timeline-handle-bg, #ddd));
       transition: background 0.2s ease;
   }
   
+  #timeline-resize-handle>div {
+      background: var(--timeline-grip, #999);
+  }
+  
   #timeline-resize-handle:hover {
-      background: linear-gradient(to bottom, transparent, #bbb) !important;
+      background: linear-gradient(to bottom, transparent, var(--timeline-handle-hover-bg, #bbb));
   }
   
   #timeline-resize-handle:hover>div {
-      background: #777 !important;
+      background: var(--timeline-grip-hover, #777);
   }
   
   #timeline-resize-handle:active {
-      background: linear-gradient(to bottom, transparent, #999) !important;
+      background: linear-gradient(to bottom, transparent, var(--timeline-handle-active-bg, #999));
   }
   
   #timeline-resize-handle:active>div {
-      background: #555 !important;
+      background: var(--timeline-grip-active, #555);
+  }
+  
+  /* Brief highlight of the message a timeline item was clicked for
+     (onTimelineSelect adds the class for 2s). !important stands in for the
+     inline style it replaces, which beat every card background rule. */
+  .message.timeline-flash {
+      background-color: var(--timeline-flash-bg, #fff3cd) !important;
   }
   
   /* vis-timeline customizations */
@@ -37707,6 +38173,78 @@
       font-size: 12px !important;
       font-weight: 500 !important;
       color: var(--text-secondary) !important;
+  }
+  
+  /* Group (row label) colours. timeline.html gives each group a
+     `timeline-group-<id>` className; vis-timeline puts a group's className
+     on its label *and* on its row, so the rules are scoped to the label,
+     which is all the inline style they replace used to colour. */
+  .vis-labelset .vis-label.timeline-group-user {
+      background-color: var(--timeline-user-bg, #e3f2fd);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-assistant {
+      background-color: var(--timeline-assistant-bg, #f3e5f5);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-tool_use {
+      background-color: var(--timeline-tool_use-bg, #fff3e0);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-tool_result {
+      background-color: var(--timeline-tool_result-bg, #e8f5e8);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-thinking {
+      background-color: var(--timeline-thinking-bg, #fce4ec);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-system {
+      background-color: var(--timeline-system-bg, #ffeee1);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-image {
+      background-color: var(--timeline-image-bg, #e1f5fe);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-sidechain {
+      background-color: var(--timeline-sidechain-bg, #f5f5f5);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-memory {
+      background-color: var(--timeline-memory-bg, #ede7f6);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-slash-command {
+      background-color: var(--timeline-slash-command-bg, #e8eaf6);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-command-output {
+      background-color: var(--timeline-command-output-bg, #efebe9);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-bash-input {
+      background-color: var(--timeline-bash-input-bg, #e8eaf6);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-bash-output {
+      background-color: var(--timeline-bash-output-bg, #efebe9);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-teammate {
+      background-color: var(--timeline-teammate-bg, #e8f2fd);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-task-notification {
+      background-color: var(--timeline-task-notification-bg, #e8f2fd);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-workflow_phase {
+      background-color: var(--timeline-workflow_phase-bg, #fff8e1);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-workflow_agent {
+      background-color: var(--timeline-workflow_agent-bg, #f3e5f5);
   }
   
   /* Timeline items styling */
@@ -37729,43 +38267,43 @@
   
   /* Message type specific styling */
   .vis-item.timeline-item-user {
-      background-color: #e3f2fd !important;
-      border-color: var(--system-warning-color) !important;
+      background-color: var(--timeline-item-user-bg, #e3f2fd) !important;
+      border-color: var(--timeline-item-user-border, var(--system-warning-color)) !important;
   }
   
   .vis-item.timeline-item-assistant {
-      background-color: #f3e5f5 !important;
-      border-color: #9c27b0 !important;
+      background-color: var(--timeline-item-assistant-bg, #f3e5f5) !important;
+      border-color: var(--timeline-item-assistant-border, #9c27b0) !important;
   }
   
   .vis-item.timeline-item-tool_use {
-      background-color: #fff8e1 !important;
-      border-color: #ffc107 !important;
+      background-color: var(--timeline-item-tool_use-bg, #fff8e1) !important;
+      border-color: var(--timeline-item-tool_use-border, #ffc107) !important;
   }
   
   .vis-item.timeline-item-tool_result {
-      background-color: #e8f5e8 !important;
-      border-color: #4caf50 !important;
+      background-color: var(--timeline-item-tool_result-bg, #e8f5e8) !important;
+      border-color: var(--timeline-item-tool_result-border, #4caf50) !important;
   }
   
   .vis-item.timeline-item-thinking {
-      background-color: #fce4ec !important;
-      border-color: #e91e63 !important;
+      background-color: var(--timeline-item-thinking-bg, #fce4ec) !important;
+      border-color: var(--timeline-item-thinking-border, #e91e63) !important;
   }
   
   .vis-item.timeline-item-system {
-      background-color: #ffeee1 !important;
-      border-color: #ff8707 !important;
+      background-color: var(--timeline-item-system-bg, #ffeee1) !important;
+      border-color: var(--timeline-item-system-border, #ff8707) !important;
   }
   
   .vis-item.timeline-item-image {
-      background-color: #e1f5fe !important;
-      border-color: #00bcd4 !important;
+      background-color: var(--timeline-item-image-bg, #e1f5fe) !important;
+      border-color: var(--timeline-item-image-border, #00bcd4) !important;
   }
   
   .vis-item.timeline-item-sidechain {
-      background-color: #f5f5f5 !important;
-      border-color: #9e9e9e !important;
+      background-color: var(--timeline-item-sidechain-bg, #f5f5f5) !important;
+      border-color: var(--timeline-item-sidechain-border, #9e9e9e) !important;
   }
   
   /* Hide filtered timeline items */
@@ -38380,8 +38918,8 @@
   }
   
   /* Unified styling for inline preview text in tool results */
-  .tool-result .line-count,
-  .tool-result .preview-text {
+  .tool_result .line-count,
+  .tool_result .preview-text {
       font-size: 0.9em;
       color: var(--color-text-secondary);
       margin-left: 0.5em;
@@ -39031,11 +39569,11 @@
   <!-- vis-timeline integration for transcript visualization -->
   
   <div id="timeline-container"
-      style="display: none; position: sticky; top: 0; z-index: 100; background: white; border-bottom: 1px solid #ddd; width: 100vw; margin-left: calc(-50vw + 50%); overflow: hidden; min-height: 150px; max-height: 80vh;">
+      style="display: none; position: sticky; top: 0; z-index: 100; width: 100vw; margin-left: calc(-50vw + 50%); overflow: hidden; min-height: 150px; max-height: 80vh;">
       <div id="timeline-visualization" style="height: calc(100% - 8px); width: 100%;"></div>
       <div id="timeline-resize-handle"
-          style="position: absolute; bottom: 0; left: 0; right: 0; height: 8px; background: linear-gradient(to bottom, transparent, #ddd); cursor: ns-resize; display: flex; align-items: center; justify-content: center;">
-          <div style="width: 40px; height: 3px; background: #999; border-radius: 2px;"></div>
+          style="position: absolute; bottom: 0; left: 0; right: 0; height: 8px; cursor: ns-resize; display: flex; align-items: center; justify-content: center;">
+          <div style="width: 40px; height: 3px; border-radius: 2px;"></div>
       </div>
   </div>
   
@@ -39052,23 +39590,23 @@
   
           // Message type to group mapping
           const messageTypeGroups = {
-              'user': { id: 'user', content: '🤷 User', style: 'background-color: #e3f2fd;' },
-              'assistant': { id: 'assistant', content: '🤖 Assistant', style: 'background-color: #f3e5f5;' },
-              'tool_use': { id: 'tool_use', content: '🛠️ Tool Use', style: 'background-color: #fff3e0;' },
-              'tool_result': { id: 'tool_result', content: '🧰 Tool Result', style: 'background-color: #e8f5e8;' },
-              'thinking': { id: 'thinking', content: '💭 Thinking', style: 'background-color: #fce4ec;' },
-              'system': { id: 'system', content: '⚙️ System', style: 'background-color: #ffeee1;' },
-              'image': { id: 'image', content: '🖼️ Image', style: 'background-color: #e1f5fe;' },
-              'sidechain': { id: 'sidechain', content: '🔗 Sub-assistant', style: 'background-color: #f5f5f5;' },
-              'memory': { id: 'memory', content: '🧠 Memory', style: 'background-color: #ede7f6;' },
-              'slash-command': { id: 'slash-command', content: '⌨️ Slash Command', style: 'background-color: #e8eaf6;' },
-              'command-output': { id: 'command-output', content: '📋 Command Output', style: 'background-color: #efebe9;' },
-              'bash-input': { id: 'bash-input', content: '💻 Bash Input', style: 'background-color: #e8eaf6;' },
-              'bash-output': { id: 'bash-output', content: '📄 Bash Output', style: 'background-color: #efebe9;' },
-              'teammate': { id: 'teammate', content: '👥 Teammate', style: 'background-color: #e8f2fd;' },
-              'task-notification': { id: 'task-notification', content: '🔄 Async result', style: 'background-color: #e8f2fd;' },
-              'workflow_phase': { id: 'workflow_phase', content: '🧩 Workflow Phase', style: 'background-color: #fff8e1;' },
-              'workflow_agent': { id: 'workflow_agent', content: '🤖 Workflow Agent', style: 'background-color: #f3e5f5;' }
+              'user': { id: 'user', content: '🤷 User', className: 'timeline-group-user' },
+              'assistant': { id: 'assistant', content: '🤖 Assistant', className: 'timeline-group-assistant' },
+              'tool_use': { id: 'tool_use', content: '🛠️ Tool Use', className: 'timeline-group-tool_use' },
+              'tool_result': { id: 'tool_result', content: '🧰 Tool Result', className: 'timeline-group-tool_result' },
+              'thinking': { id: 'thinking', content: '💭 Thinking', className: 'timeline-group-thinking' },
+              'system': { id: 'system', content: '⚙️ System', className: 'timeline-group-system' },
+              'image': { id: 'image', content: '🖼️ Image', className: 'timeline-group-image' },
+              'sidechain': { id: 'sidechain', content: '🔗 Sub-assistant', className: 'timeline-group-sidechain' },
+              'memory': { id: 'memory', content: '🧠 Memory', className: 'timeline-group-memory' },
+              'slash-command': { id: 'slash-command', content: '⌨️ Slash Command', className: 'timeline-group-slash-command' },
+              'command-output': { id: 'command-output', content: '📋 Command Output', className: 'timeline-group-command-output' },
+              'bash-input': { id: 'bash-input', content: '💻 Bash Input', className: 'timeline-group-bash-input' },
+              'bash-output': { id: 'bash-output', content: '📄 Bash Output', className: 'timeline-group-bash-output' },
+              'teammate': { id: 'teammate', content: '👥 Teammate', className: 'timeline-group-teammate' },
+              'task-notification': { id: 'task-notification', content: '🔄 Async result', className: 'timeline-group-task-notification' },
+              'workflow_phase': { id: 'workflow_phase', content: '🧩 Workflow Phase', className: 'timeline-group-workflow_phase' },
+              'workflow_agent': { id: 'workflow_agent', content: '🤖 Workflow Agent', className: 'timeline-group-workflow_agent' }
           };
   
           // Build timeline data from messages
@@ -39321,7 +39859,7 @@
                       const timelineHeight = timelineContainer ? timelineContainer.offsetHeight : 0;
   
                       // Scroll so message top aligns with timeline bottom
-                      const elementTop = messageEl.offsetTop;
+                      const elementTop = messageEl.getBoundingClientRect().top + window.scrollY;
                       const scrollPosition = elementTop - timelineHeight - 10; // 10px padding
   
                       window.scrollTo({
@@ -39330,9 +39868,9 @@
                       });
   
                       // Highlight the message briefly
-                      messageEl.style.backgroundColor = '#fff3cd';
+                      messageEl.classList.add('timeline-flash');
                       setTimeout(() => {
-                          messageEl.style.backgroundColor = '';
+                          messageEl.classList.remove('timeline-flash');
                       }, 2000);
                   }
               }
@@ -43065,6 +43603,19 @@
       --text-muted: #666;
       --text-secondary: #495057;
       --fold-color: #888;
+      --accent-color: #6c757d;
+  
+      /* Code/tool palette used by pygments_styles.css (Pygments blocks,
+         Read/Write/MultiEdit tool content, system reminders) and by the
+         collapsible tool-result summary in message_styles.css. */
+      --color-bg-secondary: #f6f8fa;
+      --color-bg-tertiary: #eef1f4;
+      --color-blue: #1e6fd9;
+      --color-green: #2e7d32;
+      --color-purple: #7b1fa2;
+      --color-border-dim: #d0d7de;
+      --color-text-dim: #8c959f;
+      --color-text-secondary: #57606a;
   
       /* Border colors */
       --border-light: #e0e0e0;
@@ -43678,7 +44229,7 @@
   /* Model id surfaced on sub-agent message headers (issue #246) */
   .message-model {
       font-size: 0.75em;
-      font-family: var(--font-mono, 'SFMono-Regular', Consolas, monospace);
+      font-family: var(--font-monospace);
       color: var(--text-secondary, #888);
   }
   
@@ -43803,7 +44354,7 @@
   }
   
   .hook-attachment-meta {
-      color: var(--secondary-text);
+      color: var(--text-secondary);
       font-size: 0.85em;
   }
   
@@ -43813,7 +44364,7 @@
   
   .hook-attachment-stream-label {
       font-size: 0.75em;
-      color: var(--secondary-text);
+      color: var(--text-secondary);
       margin-bottom: 0.2em;
       text-transform: uppercase;
       letter-spacing: 0.05em;
@@ -43823,7 +44374,7 @@
   .hook-attachment-content {
       margin: 0;
       padding: 0.5em;
-      background-color: var(--code-bg);
+      background-color: var(--code-bg-color);
       border-radius: 4px;
       font-size: 0.85em;
       white-space: pre-wrap;
@@ -43863,7 +44414,7 @@
   .hook-details {
       margin-top: 0.5em;
       padding: 0.5em;
-      background-color: var(--code-bg);
+      background-color: var(--code-bg-color);
       border-radius: 4px;
   }
   
@@ -45193,7 +45744,7 @@
   }
   
   .workflow-agent-model {
-      font-family: var(--font-mono, monospace);
+      font-family: var(--font-monospace);
       color: var(--text-secondary);
   }
   
@@ -45372,7 +45923,7 @@
   
   /* Child session hierarchy */
   .session-nav-item.session-child {
-      border-left: 3px solid var(--accent-color, #6c757d);
+      border-left: 3px solid var(--accent-color);
       padding-left: 8px;
   }
   
@@ -45917,38 +46468,58 @@
   }
   /* Timeline-specific styles for vis-timeline */
   
+  /* The container, resize-handle, select-flash, group-label and item colours
+     read --timeline-* custom properties whose fallbacks are the default
+     theme's values, so a theme can recolour the timeline by defining the
+     properties alone. The default theme defines none of them. */
+  
   /* Timeline toggle button styling */
   .timeline-toggle.active {
       background-color: #fff3cd;
   }
   
-  /* Timeline container positioning and styling */
+  /* Timeline container positioning and styling (layout stays inline in
+     timeline.html; only the colours live here) */
   #timeline-container {
       margin-bottom: 20px;
       box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
       transition: top 0.3s ease;
       position: relative;
+      background: var(--timeline-bg, white);
+      border-bottom: 1px solid var(--timeline-border, #ddd);
   }
   
   /* Timeline resize handle styling */
   #timeline-resize-handle {
+      background: linear-gradient(to bottom, transparent, var(--timeline-handle-bg, #ddd));
       transition: background 0.2s ease;
   }
   
+  #timeline-resize-handle>div {
+      background: var(--timeline-grip, #999);
+  }
+  
   #timeline-resize-handle:hover {
-      background: linear-gradient(to bottom, transparent, #bbb) !important;
+      background: linear-gradient(to bottom, transparent, var(--timeline-handle-hover-bg, #bbb));
   }
   
   #timeline-resize-handle:hover>div {
-      background: #777 !important;
+      background: var(--timeline-grip-hover, #777);
   }
   
   #timeline-resize-handle:active {
-      background: linear-gradient(to bottom, transparent, #999) !important;
+      background: linear-gradient(to bottom, transparent, var(--timeline-handle-active-bg, #999));
   }
   
   #timeline-resize-handle:active>div {
-      background: #555 !important;
+      background: var(--timeline-grip-active, #555);
+  }
+  
+  /* Brief highlight of the message a timeline item was clicked for
+     (onTimelineSelect adds the class for 2s). !important stands in for the
+     inline style it replaces, which beat every card background rule. */
+  .message.timeline-flash {
+      background-color: var(--timeline-flash-bg, #fff3cd) !important;
   }
   
   /* vis-timeline customizations */
@@ -45960,6 +46531,78 @@
       font-size: 12px !important;
       font-weight: 500 !important;
       color: var(--text-secondary) !important;
+  }
+  
+  /* Group (row label) colours. timeline.html gives each group a
+     `timeline-group-<id>` className; vis-timeline puts a group's className
+     on its label *and* on its row, so the rules are scoped to the label,
+     which is all the inline style they replace used to colour. */
+  .vis-labelset .vis-label.timeline-group-user {
+      background-color: var(--timeline-user-bg, #e3f2fd);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-assistant {
+      background-color: var(--timeline-assistant-bg, #f3e5f5);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-tool_use {
+      background-color: var(--timeline-tool_use-bg, #fff3e0);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-tool_result {
+      background-color: var(--timeline-tool_result-bg, #e8f5e8);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-thinking {
+      background-color: var(--timeline-thinking-bg, #fce4ec);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-system {
+      background-color: var(--timeline-system-bg, #ffeee1);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-image {
+      background-color: var(--timeline-image-bg, #e1f5fe);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-sidechain {
+      background-color: var(--timeline-sidechain-bg, #f5f5f5);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-memory {
+      background-color: var(--timeline-memory-bg, #ede7f6);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-slash-command {
+      background-color: var(--timeline-slash-command-bg, #e8eaf6);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-command-output {
+      background-color: var(--timeline-command-output-bg, #efebe9);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-bash-input {
+      background-color: var(--timeline-bash-input-bg, #e8eaf6);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-bash-output {
+      background-color: var(--timeline-bash-output-bg, #efebe9);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-teammate {
+      background-color: var(--timeline-teammate-bg, #e8f2fd);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-task-notification {
+      background-color: var(--timeline-task-notification-bg, #e8f2fd);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-workflow_phase {
+      background-color: var(--timeline-workflow_phase-bg, #fff8e1);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-workflow_agent {
+      background-color: var(--timeline-workflow_agent-bg, #f3e5f5);
   }
   
   /* Timeline items styling */
@@ -45982,43 +46625,43 @@
   
   /* Message type specific styling */
   .vis-item.timeline-item-user {
-      background-color: #e3f2fd !important;
-      border-color: var(--system-warning-color) !important;
+      background-color: var(--timeline-item-user-bg, #e3f2fd) !important;
+      border-color: var(--timeline-item-user-border, var(--system-warning-color)) !important;
   }
   
   .vis-item.timeline-item-assistant {
-      background-color: #f3e5f5 !important;
-      border-color: #9c27b0 !important;
+      background-color: var(--timeline-item-assistant-bg, #f3e5f5) !important;
+      border-color: var(--timeline-item-assistant-border, #9c27b0) !important;
   }
   
   .vis-item.timeline-item-tool_use {
-      background-color: #fff8e1 !important;
-      border-color: #ffc107 !important;
+      background-color: var(--timeline-item-tool_use-bg, #fff8e1) !important;
+      border-color: var(--timeline-item-tool_use-border, #ffc107) !important;
   }
   
   .vis-item.timeline-item-tool_result {
-      background-color: #e8f5e8 !important;
-      border-color: #4caf50 !important;
+      background-color: var(--timeline-item-tool_result-bg, #e8f5e8) !important;
+      border-color: var(--timeline-item-tool_result-border, #4caf50) !important;
   }
   
   .vis-item.timeline-item-thinking {
-      background-color: #fce4ec !important;
-      border-color: #e91e63 !important;
+      background-color: var(--timeline-item-thinking-bg, #fce4ec) !important;
+      border-color: var(--timeline-item-thinking-border, #e91e63) !important;
   }
   
   .vis-item.timeline-item-system {
-      background-color: #ffeee1 !important;
-      border-color: #ff8707 !important;
+      background-color: var(--timeline-item-system-bg, #ffeee1) !important;
+      border-color: var(--timeline-item-system-border, #ff8707) !important;
   }
   
   .vis-item.timeline-item-image {
-      background-color: #e1f5fe !important;
-      border-color: #00bcd4 !important;
+      background-color: var(--timeline-item-image-bg, #e1f5fe) !important;
+      border-color: var(--timeline-item-image-border, #00bcd4) !important;
   }
   
   .vis-item.timeline-item-sidechain {
-      background-color: #f5f5f5 !important;
-      border-color: #9e9e9e !important;
+      background-color: var(--timeline-item-sidechain-bg, #f5f5f5) !important;
+      border-color: var(--timeline-item-sidechain-border, #9e9e9e) !important;
   }
   
   /* Hide filtered timeline items */
@@ -46633,8 +47276,8 @@
   }
   
   /* Unified styling for inline preview text in tool results */
-  .tool-result .line-count,
-  .tool-result .preview-text {
+  .tool_result .line-count,
+  .tool_result .preview-text {
       font-size: 0.9em;
       color: var(--color-text-secondary);
       margin-left: 0.5em;
@@ -47284,11 +47927,11 @@
   <!-- vis-timeline integration for transcript visualization -->
   
   <div id="timeline-container"
-      style="display: none; position: sticky; top: 0; z-index: 100; background: white; border-bottom: 1px solid #ddd; width: 100vw; margin-left: calc(-50vw + 50%); overflow: hidden; min-height: 150px; max-height: 80vh;">
+      style="display: none; position: sticky; top: 0; z-index: 100; width: 100vw; margin-left: calc(-50vw + 50%); overflow: hidden; min-height: 150px; max-height: 80vh;">
       <div id="timeline-visualization" style="height: calc(100% - 8px); width: 100%;"></div>
       <div id="timeline-resize-handle"
-          style="position: absolute; bottom: 0; left: 0; right: 0; height: 8px; background: linear-gradient(to bottom, transparent, #ddd); cursor: ns-resize; display: flex; align-items: center; justify-content: center;">
-          <div style="width: 40px; height: 3px; background: #999; border-radius: 2px;"></div>
+          style="position: absolute; bottom: 0; left: 0; right: 0; height: 8px; cursor: ns-resize; display: flex; align-items: center; justify-content: center;">
+          <div style="width: 40px; height: 3px; border-radius: 2px;"></div>
       </div>
   </div>
   
@@ -47305,23 +47948,23 @@
   
           // Message type to group mapping
           const messageTypeGroups = {
-              'user': { id: 'user', content: '🤷 User', style: 'background-color: #e3f2fd;' },
-              'assistant': { id: 'assistant', content: '🤖 Assistant', style: 'background-color: #f3e5f5;' },
-              'tool_use': { id: 'tool_use', content: '🛠️ Tool Use', style: 'background-color: #fff3e0;' },
-              'tool_result': { id: 'tool_result', content: '🧰 Tool Result', style: 'background-color: #e8f5e8;' },
-              'thinking': { id: 'thinking', content: '💭 Thinking', style: 'background-color: #fce4ec;' },
-              'system': { id: 'system', content: '⚙️ System', style: 'background-color: #ffeee1;' },
-              'image': { id: 'image', content: '🖼️ Image', style: 'background-color: #e1f5fe;' },
-              'sidechain': { id: 'sidechain', content: '🔗 Sub-assistant', style: 'background-color: #f5f5f5;' },
-              'memory': { id: 'memory', content: '🧠 Memory', style: 'background-color: #ede7f6;' },
-              'slash-command': { id: 'slash-command', content: '⌨️ Slash Command', style: 'background-color: #e8eaf6;' },
-              'command-output': { id: 'command-output', content: '📋 Command Output', style: 'background-color: #efebe9;' },
-              'bash-input': { id: 'bash-input', content: '💻 Bash Input', style: 'background-color: #e8eaf6;' },
-              'bash-output': { id: 'bash-output', content: '📄 Bash Output', style: 'background-color: #efebe9;' },
-              'teammate': { id: 'teammate', content: '👥 Teammate', style: 'background-color: #e8f2fd;' },
-              'task-notification': { id: 'task-notification', content: '🔄 Async result', style: 'background-color: #e8f2fd;' },
-              'workflow_phase': { id: 'workflow_phase', content: '🧩 Workflow Phase', style: 'background-color: #fff8e1;' },
-              'workflow_agent': { id: 'workflow_agent', content: '🤖 Workflow Agent', style: 'background-color: #f3e5f5;' }
+              'user': { id: 'user', content: '🤷 User', className: 'timeline-group-user' },
+              'assistant': { id: 'assistant', content: '🤖 Assistant', className: 'timeline-group-assistant' },
+              'tool_use': { id: 'tool_use', content: '🛠️ Tool Use', className: 'timeline-group-tool_use' },
+              'tool_result': { id: 'tool_result', content: '🧰 Tool Result', className: 'timeline-group-tool_result' },
+              'thinking': { id: 'thinking', content: '💭 Thinking', className: 'timeline-group-thinking' },
+              'system': { id: 'system', content: '⚙️ System', className: 'timeline-group-system' },
+              'image': { id: 'image', content: '🖼️ Image', className: 'timeline-group-image' },
+              'sidechain': { id: 'sidechain', content: '🔗 Sub-assistant', className: 'timeline-group-sidechain' },
+              'memory': { id: 'memory', content: '🧠 Memory', className: 'timeline-group-memory' },
+              'slash-command': { id: 'slash-command', content: '⌨️ Slash Command', className: 'timeline-group-slash-command' },
+              'command-output': { id: 'command-output', content: '📋 Command Output', className: 'timeline-group-command-output' },
+              'bash-input': { id: 'bash-input', content: '💻 Bash Input', className: 'timeline-group-bash-input' },
+              'bash-output': { id: 'bash-output', content: '📄 Bash Output', className: 'timeline-group-bash-output' },
+              'teammate': { id: 'teammate', content: '👥 Teammate', className: 'timeline-group-teammate' },
+              'task-notification': { id: 'task-notification', content: '🔄 Async result', className: 'timeline-group-task-notification' },
+              'workflow_phase': { id: 'workflow_phase', content: '🧩 Workflow Phase', className: 'timeline-group-workflow_phase' },
+              'workflow_agent': { id: 'workflow_agent', content: '🤖 Workflow Agent', className: 'timeline-group-workflow_agent' }
           };
   
           // Build timeline data from messages
@@ -47574,7 +48217,7 @@
                       const timelineHeight = timelineContainer ? timelineContainer.offsetHeight : 0;
   
                       // Scroll so message top aligns with timeline bottom
-                      const elementTop = messageEl.offsetTop;
+                      const elementTop = messageEl.getBoundingClientRect().top + window.scrollY;
                       const scrollPosition = elementTop - timelineHeight - 10; // 10px padding
   
                       window.scrollTo({
@@ -47583,9 +48226,9 @@
                       });
   
                       // Highlight the message briefly
-                      messageEl.style.backgroundColor = '#fff3cd';
+                      messageEl.classList.add('timeline-flash');
                       setTimeout(() => {
-                          messageEl.style.backgroundColor = '';
+                          messageEl.classList.remove('timeline-flash');
                       }, 2000);
                   }
               }
@@ -51263,6 +51906,19 @@
       --text-muted: #666;
       --text-secondary: #495057;
       --fold-color: #888;
+      --accent-color: #6c757d;
+  
+      /* Code/tool palette used by pygments_styles.css (Pygments blocks,
+         Read/Write/MultiEdit tool content, system reminders) and by the
+         collapsible tool-result summary in message_styles.css. */
+      --color-bg-secondary: #f6f8fa;
+      --color-bg-tertiary: #eef1f4;
+      --color-blue: #1e6fd9;
+      --color-green: #2e7d32;
+      --color-purple: #7b1fa2;
+      --color-border-dim: #d0d7de;
+      --color-text-dim: #8c959f;
+      --color-text-secondary: #57606a;
   
       /* Border colors */
       --border-light: #e0e0e0;
@@ -51876,7 +52532,7 @@
   /* Model id surfaced on sub-agent message headers (issue #246) */
   .message-model {
       font-size: 0.75em;
-      font-family: var(--font-mono, 'SFMono-Regular', Consolas, monospace);
+      font-family: var(--font-monospace);
       color: var(--text-secondary, #888);
   }
   
@@ -52001,7 +52657,7 @@
   }
   
   .hook-attachment-meta {
-      color: var(--secondary-text);
+      color: var(--text-secondary);
       font-size: 0.85em;
   }
   
@@ -52011,7 +52667,7 @@
   
   .hook-attachment-stream-label {
       font-size: 0.75em;
-      color: var(--secondary-text);
+      color: var(--text-secondary);
       margin-bottom: 0.2em;
       text-transform: uppercase;
       letter-spacing: 0.05em;
@@ -52021,7 +52677,7 @@
   .hook-attachment-content {
       margin: 0;
       padding: 0.5em;
-      background-color: var(--code-bg);
+      background-color: var(--code-bg-color);
       border-radius: 4px;
       font-size: 0.85em;
       white-space: pre-wrap;
@@ -52061,7 +52717,7 @@
   .hook-details {
       margin-top: 0.5em;
       padding: 0.5em;
-      background-color: var(--code-bg);
+      background-color: var(--code-bg-color);
       border-radius: 4px;
   }
   
@@ -53391,7 +54047,7 @@
   }
   
   .workflow-agent-model {
-      font-family: var(--font-mono, monospace);
+      font-family: var(--font-monospace);
       color: var(--text-secondary);
   }
   
@@ -53570,7 +54226,7 @@
   
   /* Child session hierarchy */
   .session-nav-item.session-child {
-      border-left: 3px solid var(--accent-color, #6c757d);
+      border-left: 3px solid var(--accent-color);
       padding-left: 8px;
   }
   
@@ -54115,38 +54771,58 @@
   }
   /* Timeline-specific styles for vis-timeline */
   
+  /* The container, resize-handle, select-flash, group-label and item colours
+     read --timeline-* custom properties whose fallbacks are the default
+     theme's values, so a theme can recolour the timeline by defining the
+     properties alone. The default theme defines none of them. */
+  
   /* Timeline toggle button styling */
   .timeline-toggle.active {
       background-color: #fff3cd;
   }
   
-  /* Timeline container positioning and styling */
+  /* Timeline container positioning and styling (layout stays inline in
+     timeline.html; only the colours live here) */
   #timeline-container {
       margin-bottom: 20px;
       box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
       transition: top 0.3s ease;
       position: relative;
+      background: var(--timeline-bg, white);
+      border-bottom: 1px solid var(--timeline-border, #ddd);
   }
   
   /* Timeline resize handle styling */
   #timeline-resize-handle {
+      background: linear-gradient(to bottom, transparent, var(--timeline-handle-bg, #ddd));
       transition: background 0.2s ease;
   }
   
+  #timeline-resize-handle>div {
+      background: var(--timeline-grip, #999);
+  }
+  
   #timeline-resize-handle:hover {
-      background: linear-gradient(to bottom, transparent, #bbb) !important;
+      background: linear-gradient(to bottom, transparent, var(--timeline-handle-hover-bg, #bbb));
   }
   
   #timeline-resize-handle:hover>div {
-      background: #777 !important;
+      background: var(--timeline-grip-hover, #777);
   }
   
   #timeline-resize-handle:active {
-      background: linear-gradient(to bottom, transparent, #999) !important;
+      background: linear-gradient(to bottom, transparent, var(--timeline-handle-active-bg, #999));
   }
   
   #timeline-resize-handle:active>div {
-      background: #555 !important;
+      background: var(--timeline-grip-active, #555);
+  }
+  
+  /* Brief highlight of the message a timeline item was clicked for
+     (onTimelineSelect adds the class for 2s). !important stands in for the
+     inline style it replaces, which beat every card background rule. */
+  .message.timeline-flash {
+      background-color: var(--timeline-flash-bg, #fff3cd) !important;
   }
   
   /* vis-timeline customizations */
@@ -54158,6 +54834,78 @@
       font-size: 12px !important;
       font-weight: 500 !important;
       color: var(--text-secondary) !important;
+  }
+  
+  /* Group (row label) colours. timeline.html gives each group a
+     `timeline-group-<id>` className; vis-timeline puts a group's className
+     on its label *and* on its row, so the rules are scoped to the label,
+     which is all the inline style they replace used to colour. */
+  .vis-labelset .vis-label.timeline-group-user {
+      background-color: var(--timeline-user-bg, #e3f2fd);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-assistant {
+      background-color: var(--timeline-assistant-bg, #f3e5f5);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-tool_use {
+      background-color: var(--timeline-tool_use-bg, #fff3e0);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-tool_result {
+      background-color: var(--timeline-tool_result-bg, #e8f5e8);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-thinking {
+      background-color: var(--timeline-thinking-bg, #fce4ec);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-system {
+      background-color: var(--timeline-system-bg, #ffeee1);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-image {
+      background-color: var(--timeline-image-bg, #e1f5fe);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-sidechain {
+      background-color: var(--timeline-sidechain-bg, #f5f5f5);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-memory {
+      background-color: var(--timeline-memory-bg, #ede7f6);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-slash-command {
+      background-color: var(--timeline-slash-command-bg, #e8eaf6);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-command-output {
+      background-color: var(--timeline-command-output-bg, #efebe9);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-bash-input {
+      background-color: var(--timeline-bash-input-bg, #e8eaf6);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-bash-output {
+      background-color: var(--timeline-bash-output-bg, #efebe9);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-teammate {
+      background-color: var(--timeline-teammate-bg, #e8f2fd);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-task-notification {
+      background-color: var(--timeline-task-notification-bg, #e8f2fd);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-workflow_phase {
+      background-color: var(--timeline-workflow_phase-bg, #fff8e1);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-workflow_agent {
+      background-color: var(--timeline-workflow_agent-bg, #f3e5f5);
   }
   
   /* Timeline items styling */
@@ -54180,43 +54928,43 @@
   
   /* Message type specific styling */
   .vis-item.timeline-item-user {
-      background-color: #e3f2fd !important;
-      border-color: var(--system-warning-color) !important;
+      background-color: var(--timeline-item-user-bg, #e3f2fd) !important;
+      border-color: var(--timeline-item-user-border, var(--system-warning-color)) !important;
   }
   
   .vis-item.timeline-item-assistant {
-      background-color: #f3e5f5 !important;
-      border-color: #9c27b0 !important;
+      background-color: var(--timeline-item-assistant-bg, #f3e5f5) !important;
+      border-color: var(--timeline-item-assistant-border, #9c27b0) !important;
   }
   
   .vis-item.timeline-item-tool_use {
-      background-color: #fff8e1 !important;
-      border-color: #ffc107 !important;
+      background-color: var(--timeline-item-tool_use-bg, #fff8e1) !important;
+      border-color: var(--timeline-item-tool_use-border, #ffc107) !important;
   }
   
   .vis-item.timeline-item-tool_result {
-      background-color: #e8f5e8 !important;
-      border-color: #4caf50 !important;
+      background-color: var(--timeline-item-tool_result-bg, #e8f5e8) !important;
+      border-color: var(--timeline-item-tool_result-border, #4caf50) !important;
   }
   
   .vis-item.timeline-item-thinking {
-      background-color: #fce4ec !important;
-      border-color: #e91e63 !important;
+      background-color: var(--timeline-item-thinking-bg, #fce4ec) !important;
+      border-color: var(--timeline-item-thinking-border, #e91e63) !important;
   }
   
   .vis-item.timeline-item-system {
-      background-color: #ffeee1 !important;
-      border-color: #ff8707 !important;
+      background-color: var(--timeline-item-system-bg, #ffeee1) !important;
+      border-color: var(--timeline-item-system-border, #ff8707) !important;
   }
   
   .vis-item.timeline-item-image {
-      background-color: #e1f5fe !important;
-      border-color: #00bcd4 !important;
+      background-color: var(--timeline-item-image-bg, #e1f5fe) !important;
+      border-color: var(--timeline-item-image-border, #00bcd4) !important;
   }
   
   .vis-item.timeline-item-sidechain {
-      background-color: #f5f5f5 !important;
-      border-color: #9e9e9e !important;
+      background-color: var(--timeline-item-sidechain-bg, #f5f5f5) !important;
+      border-color: var(--timeline-item-sidechain-border, #9e9e9e) !important;
   }
   
   /* Hide filtered timeline items */
@@ -54831,8 +55579,8 @@
   }
   
   /* Unified styling for inline preview text in tool results */
-  .tool-result .line-count,
-  .tool-result .preview-text {
+  .tool_result .line-count,
+  .tool_result .preview-text {
       font-size: 0.9em;
       color: var(--color-text-secondary);
       margin-left: 0.5em;
@@ -55482,11 +56230,11 @@
   <!-- vis-timeline integration for transcript visualization -->
   
   <div id="timeline-container"
-      style="display: none; position: sticky; top: 0; z-index: 100; background: white; border-bottom: 1px solid #ddd; width: 100vw; margin-left: calc(-50vw + 50%); overflow: hidden; min-height: 150px; max-height: 80vh;">
+      style="display: none; position: sticky; top: 0; z-index: 100; width: 100vw; margin-left: calc(-50vw + 50%); overflow: hidden; min-height: 150px; max-height: 80vh;">
       <div id="timeline-visualization" style="height: calc(100% - 8px); width: 100%;"></div>
       <div id="timeline-resize-handle"
-          style="position: absolute; bottom: 0; left: 0; right: 0; height: 8px; background: linear-gradient(to bottom, transparent, #ddd); cursor: ns-resize; display: flex; align-items: center; justify-content: center;">
-          <div style="width: 40px; height: 3px; background: #999; border-radius: 2px;"></div>
+          style="position: absolute; bottom: 0; left: 0; right: 0; height: 8px; cursor: ns-resize; display: flex; align-items: center; justify-content: center;">
+          <div style="width: 40px; height: 3px; border-radius: 2px;"></div>
       </div>
   </div>
   
@@ -55503,23 +56251,23 @@
   
           // Message type to group mapping
           const messageTypeGroups = {
-              'user': { id: 'user', content: '🤷 User', style: 'background-color: #e3f2fd;' },
-              'assistant': { id: 'assistant', content: '🤖 Assistant', style: 'background-color: #f3e5f5;' },
-              'tool_use': { id: 'tool_use', content: '🛠️ Tool Use', style: 'background-color: #fff3e0;' },
-              'tool_result': { id: 'tool_result', content: '🧰 Tool Result', style: 'background-color: #e8f5e8;' },
-              'thinking': { id: 'thinking', content: '💭 Thinking', style: 'background-color: #fce4ec;' },
-              'system': { id: 'system', content: '⚙️ System', style: 'background-color: #ffeee1;' },
-              'image': { id: 'image', content: '🖼️ Image', style: 'background-color: #e1f5fe;' },
-              'sidechain': { id: 'sidechain', content: '🔗 Sub-assistant', style: 'background-color: #f5f5f5;' },
-              'memory': { id: 'memory', content: '🧠 Memory', style: 'background-color: #ede7f6;' },
-              'slash-command': { id: 'slash-command', content: '⌨️ Slash Command', style: 'background-color: #e8eaf6;' },
-              'command-output': { id: 'command-output', content: '📋 Command Output', style: 'background-color: #efebe9;' },
-              'bash-input': { id: 'bash-input', content: '💻 Bash Input', style: 'background-color: #e8eaf6;' },
-              'bash-output': { id: 'bash-output', content: '📄 Bash Output', style: 'background-color: #efebe9;' },
-              'teammate': { id: 'teammate', content: '👥 Teammate', style: 'background-color: #e8f2fd;' },
-              'task-notification': { id: 'task-notification', content: '🔄 Async result', style: 'background-color: #e8f2fd;' },
-              'workflow_phase': { id: 'workflow_phase', content: '🧩 Workflow Phase', style: 'background-color: #fff8e1;' },
-              'workflow_agent': { id: 'workflow_agent', content: '🤖 Workflow Agent', style: 'background-color: #f3e5f5;' }
+              'user': { id: 'user', content: '🤷 User', className: 'timeline-group-user' },
+              'assistant': { id: 'assistant', content: '🤖 Assistant', className: 'timeline-group-assistant' },
+              'tool_use': { id: 'tool_use', content: '🛠️ Tool Use', className: 'timeline-group-tool_use' },
+              'tool_result': { id: 'tool_result', content: '🧰 Tool Result', className: 'timeline-group-tool_result' },
+              'thinking': { id: 'thinking', content: '💭 Thinking', className: 'timeline-group-thinking' },
+              'system': { id: 'system', content: '⚙️ System', className: 'timeline-group-system' },
+              'image': { id: 'image', content: '🖼️ Image', className: 'timeline-group-image' },
+              'sidechain': { id: 'sidechain', content: '🔗 Sub-assistant', className: 'timeline-group-sidechain' },
+              'memory': { id: 'memory', content: '🧠 Memory', className: 'timeline-group-memory' },
+              'slash-command': { id: 'slash-command', content: '⌨️ Slash Command', className: 'timeline-group-slash-command' },
+              'command-output': { id: 'command-output', content: '📋 Command Output', className: 'timeline-group-command-output' },
+              'bash-input': { id: 'bash-input', content: '💻 Bash Input', className: 'timeline-group-bash-input' },
+              'bash-output': { id: 'bash-output', content: '📄 Bash Output', className: 'timeline-group-bash-output' },
+              'teammate': { id: 'teammate', content: '👥 Teammate', className: 'timeline-group-teammate' },
+              'task-notification': { id: 'task-notification', content: '🔄 Async result', className: 'timeline-group-task-notification' },
+              'workflow_phase': { id: 'workflow_phase', content: '🧩 Workflow Phase', className: 'timeline-group-workflow_phase' },
+              'workflow_agent': { id: 'workflow_agent', content: '🤖 Workflow Agent', className: 'timeline-group-workflow_agent' }
           };
   
           // Build timeline data from messages
@@ -55772,7 +56520,7 @@
                       const timelineHeight = timelineContainer ? timelineContainer.offsetHeight : 0;
   
                       // Scroll so message top aligns with timeline bottom
-                      const elementTop = messageEl.offsetTop;
+                      const elementTop = messageEl.getBoundingClientRect().top + window.scrollY;
                       const scrollPosition = elementTop - timelineHeight - 10; // 10px padding
   
                       window.scrollTo({
@@ -55781,9 +56529,9 @@
                       });
   
                       // Highlight the message briefly
-                      messageEl.style.backgroundColor = '#fff3cd';
+                      messageEl.classList.add('timeline-flash');
                       setTimeout(() => {
-                          messageEl.style.backgroundColor = '';
+                          messageEl.classList.remove('timeline-flash');
                       }, 2000);
                   }
               }
@@ -59289,6 +60037,19 @@
       --text-muted: #666;
       --text-secondary: #495057;
       --fold-color: #888;
+      --accent-color: #6c757d;
+  
+      /* Code/tool palette used by pygments_styles.css (Pygments blocks,
+         Read/Write/MultiEdit tool content, system reminders) and by the
+         collapsible tool-result summary in message_styles.css. */
+      --color-bg-secondary: #f6f8fa;
+      --color-bg-tertiary: #eef1f4;
+      --color-blue: #1e6fd9;
+      --color-green: #2e7d32;
+      --color-purple: #7b1fa2;
+      --color-border-dim: #d0d7de;
+      --color-text-dim: #8c959f;
+      --color-text-secondary: #57606a;
   
       /* Border colors */
       --border-light: #e0e0e0;
@@ -59902,7 +60663,7 @@
   /* Model id surfaced on sub-agent message headers (issue #246) */
   .message-model {
       font-size: 0.75em;
-      font-family: var(--font-mono, 'SFMono-Regular', Consolas, monospace);
+      font-family: var(--font-monospace);
       color: var(--text-secondary, #888);
   }
   
@@ -60027,7 +60788,7 @@
   }
   
   .hook-attachment-meta {
-      color: var(--secondary-text);
+      color: var(--text-secondary);
       font-size: 0.85em;
   }
   
@@ -60037,7 +60798,7 @@
   
   .hook-attachment-stream-label {
       font-size: 0.75em;
-      color: var(--secondary-text);
+      color: var(--text-secondary);
       margin-bottom: 0.2em;
       text-transform: uppercase;
       letter-spacing: 0.05em;
@@ -60047,7 +60808,7 @@
   .hook-attachment-content {
       margin: 0;
       padding: 0.5em;
-      background-color: var(--code-bg);
+      background-color: var(--code-bg-color);
       border-radius: 4px;
       font-size: 0.85em;
       white-space: pre-wrap;
@@ -60087,7 +60848,7 @@
   .hook-details {
       margin-top: 0.5em;
       padding: 0.5em;
-      background-color: var(--code-bg);
+      background-color: var(--code-bg-color);
       border-radius: 4px;
   }
   
@@ -61417,7 +62178,7 @@
   }
   
   .workflow-agent-model {
-      font-family: var(--font-mono, monospace);
+      font-family: var(--font-monospace);
       color: var(--text-secondary);
   }
   
@@ -61596,7 +62357,7 @@
   
   /* Child session hierarchy */
   .session-nav-item.session-child {
-      border-left: 3px solid var(--accent-color, #6c757d);
+      border-left: 3px solid var(--accent-color);
       padding-left: 8px;
   }
   
@@ -62141,38 +62902,58 @@
   }
   /* Timeline-specific styles for vis-timeline */
   
+  /* The container, resize-handle, select-flash, group-label and item colours
+     read --timeline-* custom properties whose fallbacks are the default
+     theme's values, so a theme can recolour the timeline by defining the
+     properties alone. The default theme defines none of them. */
+  
   /* Timeline toggle button styling */
   .timeline-toggle.active {
       background-color: #fff3cd;
   }
   
-  /* Timeline container positioning and styling */
+  /* Timeline container positioning and styling (layout stays inline in
+     timeline.html; only the colours live here) */
   #timeline-container {
       margin-bottom: 20px;
       box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
       transition: top 0.3s ease;
       position: relative;
+      background: var(--timeline-bg, white);
+      border-bottom: 1px solid var(--timeline-border, #ddd);
   }
   
   /* Timeline resize handle styling */
   #timeline-resize-handle {
+      background: linear-gradient(to bottom, transparent, var(--timeline-handle-bg, #ddd));
       transition: background 0.2s ease;
   }
   
+  #timeline-resize-handle>div {
+      background: var(--timeline-grip, #999);
+  }
+  
   #timeline-resize-handle:hover {
-      background: linear-gradient(to bottom, transparent, #bbb) !important;
+      background: linear-gradient(to bottom, transparent, var(--timeline-handle-hover-bg, #bbb));
   }
   
   #timeline-resize-handle:hover>div {
-      background: #777 !important;
+      background: var(--timeline-grip-hover, #777);
   }
   
   #timeline-resize-handle:active {
-      background: linear-gradient(to bottom, transparent, #999) !important;
+      background: linear-gradient(to bottom, transparent, var(--timeline-handle-active-bg, #999));
   }
   
   #timeline-resize-handle:active>div {
-      background: #555 !important;
+      background: var(--timeline-grip-active, #555);
+  }
+  
+  /* Brief highlight of the message a timeline item was clicked for
+     (onTimelineSelect adds the class for 2s). !important stands in for the
+     inline style it replaces, which beat every card background rule. */
+  .message.timeline-flash {
+      background-color: var(--timeline-flash-bg, #fff3cd) !important;
   }
   
   /* vis-timeline customizations */
@@ -62184,6 +62965,78 @@
       font-size: 12px !important;
       font-weight: 500 !important;
       color: var(--text-secondary) !important;
+  }
+  
+  /* Group (row label) colours. timeline.html gives each group a
+     `timeline-group-<id>` className; vis-timeline puts a group's className
+     on its label *and* on its row, so the rules are scoped to the label,
+     which is all the inline style they replace used to colour. */
+  .vis-labelset .vis-label.timeline-group-user {
+      background-color: var(--timeline-user-bg, #e3f2fd);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-assistant {
+      background-color: var(--timeline-assistant-bg, #f3e5f5);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-tool_use {
+      background-color: var(--timeline-tool_use-bg, #fff3e0);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-tool_result {
+      background-color: var(--timeline-tool_result-bg, #e8f5e8);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-thinking {
+      background-color: var(--timeline-thinking-bg, #fce4ec);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-system {
+      background-color: var(--timeline-system-bg, #ffeee1);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-image {
+      background-color: var(--timeline-image-bg, #e1f5fe);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-sidechain {
+      background-color: var(--timeline-sidechain-bg, #f5f5f5);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-memory {
+      background-color: var(--timeline-memory-bg, #ede7f6);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-slash-command {
+      background-color: var(--timeline-slash-command-bg, #e8eaf6);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-command-output {
+      background-color: var(--timeline-command-output-bg, #efebe9);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-bash-input {
+      background-color: var(--timeline-bash-input-bg, #e8eaf6);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-bash-output {
+      background-color: var(--timeline-bash-output-bg, #efebe9);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-teammate {
+      background-color: var(--timeline-teammate-bg, #e8f2fd);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-task-notification {
+      background-color: var(--timeline-task-notification-bg, #e8f2fd);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-workflow_phase {
+      background-color: var(--timeline-workflow_phase-bg, #fff8e1);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-workflow_agent {
+      background-color: var(--timeline-workflow_agent-bg, #f3e5f5);
   }
   
   /* Timeline items styling */
@@ -62206,43 +63059,43 @@
   
   /* Message type specific styling */
   .vis-item.timeline-item-user {
-      background-color: #e3f2fd !important;
-      border-color: var(--system-warning-color) !important;
+      background-color: var(--timeline-item-user-bg, #e3f2fd) !important;
+      border-color: var(--timeline-item-user-border, var(--system-warning-color)) !important;
   }
   
   .vis-item.timeline-item-assistant {
-      background-color: #f3e5f5 !important;
-      border-color: #9c27b0 !important;
+      background-color: var(--timeline-item-assistant-bg, #f3e5f5) !important;
+      border-color: var(--timeline-item-assistant-border, #9c27b0) !important;
   }
   
   .vis-item.timeline-item-tool_use {
-      background-color: #fff8e1 !important;
-      border-color: #ffc107 !important;
+      background-color: var(--timeline-item-tool_use-bg, #fff8e1) !important;
+      border-color: var(--timeline-item-tool_use-border, #ffc107) !important;
   }
   
   .vis-item.timeline-item-tool_result {
-      background-color: #e8f5e8 !important;
-      border-color: #4caf50 !important;
+      background-color: var(--timeline-item-tool_result-bg, #e8f5e8) !important;
+      border-color: var(--timeline-item-tool_result-border, #4caf50) !important;
   }
   
   .vis-item.timeline-item-thinking {
-      background-color: #fce4ec !important;
-      border-color: #e91e63 !important;
+      background-color: var(--timeline-item-thinking-bg, #fce4ec) !important;
+      border-color: var(--timeline-item-thinking-border, #e91e63) !important;
   }
   
   .vis-item.timeline-item-system {
-      background-color: #ffeee1 !important;
-      border-color: #ff8707 !important;
+      background-color: var(--timeline-item-system-bg, #ffeee1) !important;
+      border-color: var(--timeline-item-system-border, #ff8707) !important;
   }
   
   .vis-item.timeline-item-image {
-      background-color: #e1f5fe !important;
-      border-color: #00bcd4 !important;
+      background-color: var(--timeline-item-image-bg, #e1f5fe) !important;
+      border-color: var(--timeline-item-image-border, #00bcd4) !important;
   }
   
   .vis-item.timeline-item-sidechain {
-      background-color: #f5f5f5 !important;
-      border-color: #9e9e9e !important;
+      background-color: var(--timeline-item-sidechain-bg, #f5f5f5) !important;
+      border-color: var(--timeline-item-sidechain-border, #9e9e9e) !important;
   }
   
   /* Hide filtered timeline items */
@@ -62857,8 +63710,8 @@
   }
   
   /* Unified styling for inline preview text in tool results */
-  .tool-result .line-count,
-  .tool-result .preview-text {
+  .tool_result .line-count,
+  .tool_result .preview-text {
       font-size: 0.9em;
       color: var(--color-text-secondary);
       margin-left: 0.5em;
@@ -63508,11 +64361,11 @@
   <!-- vis-timeline integration for transcript visualization -->
   
   <div id="timeline-container"
-      style="display: none; position: sticky; top: 0; z-index: 100; background: white; border-bottom: 1px solid #ddd; width: 100vw; margin-left: calc(-50vw + 50%); overflow: hidden; min-height: 150px; max-height: 80vh;">
+      style="display: none; position: sticky; top: 0; z-index: 100; width: 100vw; margin-left: calc(-50vw + 50%); overflow: hidden; min-height: 150px; max-height: 80vh;">
       <div id="timeline-visualization" style="height: calc(100% - 8px); width: 100%;"></div>
       <div id="timeline-resize-handle"
-          style="position: absolute; bottom: 0; left: 0; right: 0; height: 8px; background: linear-gradient(to bottom, transparent, #ddd); cursor: ns-resize; display: flex; align-items: center; justify-content: center;">
-          <div style="width: 40px; height: 3px; background: #999; border-radius: 2px;"></div>
+          style="position: absolute; bottom: 0; left: 0; right: 0; height: 8px; cursor: ns-resize; display: flex; align-items: center; justify-content: center;">
+          <div style="width: 40px; height: 3px; border-radius: 2px;"></div>
       </div>
   </div>
   
@@ -63529,23 +64382,23 @@
   
           // Message type to group mapping
           const messageTypeGroups = {
-              'user': { id: 'user', content: '🤷 User', style: 'background-color: #e3f2fd;' },
-              'assistant': { id: 'assistant', content: '🤖 Assistant', style: 'background-color: #f3e5f5;' },
-              'tool_use': { id: 'tool_use', content: '🛠️ Tool Use', style: 'background-color: #fff3e0;' },
-              'tool_result': { id: 'tool_result', content: '🧰 Tool Result', style: 'background-color: #e8f5e8;' },
-              'thinking': { id: 'thinking', content: '💭 Thinking', style: 'background-color: #fce4ec;' },
-              'system': { id: 'system', content: '⚙️ System', style: 'background-color: #ffeee1;' },
-              'image': { id: 'image', content: '🖼️ Image', style: 'background-color: #e1f5fe;' },
-              'sidechain': { id: 'sidechain', content: '🔗 Sub-assistant', style: 'background-color: #f5f5f5;' },
-              'memory': { id: 'memory', content: '🧠 Memory', style: 'background-color: #ede7f6;' },
-              'slash-command': { id: 'slash-command', content: '⌨️ Slash Command', style: 'background-color: #e8eaf6;' },
-              'command-output': { id: 'command-output', content: '📋 Command Output', style: 'background-color: #efebe9;' },
-              'bash-input': { id: 'bash-input', content: '💻 Bash Input', style: 'background-color: #e8eaf6;' },
-              'bash-output': { id: 'bash-output', content: '📄 Bash Output', style: 'background-color: #efebe9;' },
-              'teammate': { id: 'teammate', content: '👥 Teammate', style: 'background-color: #e8f2fd;' },
-              'task-notification': { id: 'task-notification', content: '🔄 Async result', style: 'background-color: #e8f2fd;' },
-              'workflow_phase': { id: 'workflow_phase', content: '🧩 Workflow Phase', style: 'background-color: #fff8e1;' },
-              'workflow_agent': { id: 'workflow_agent', content: '🤖 Workflow Agent', style: 'background-color: #f3e5f5;' }
+              'user': { id: 'user', content: '🤷 User', className: 'timeline-group-user' },
+              'assistant': { id: 'assistant', content: '🤖 Assistant', className: 'timeline-group-assistant' },
+              'tool_use': { id: 'tool_use', content: '🛠️ Tool Use', className: 'timeline-group-tool_use' },
+              'tool_result': { id: 'tool_result', content: '🧰 Tool Result', className: 'timeline-group-tool_result' },
+              'thinking': { id: 'thinking', content: '💭 Thinking', className: 'timeline-group-thinking' },
+              'system': { id: 'system', content: '⚙️ System', className: 'timeline-group-system' },
+              'image': { id: 'image', content: '🖼️ Image', className: 'timeline-group-image' },
+              'sidechain': { id: 'sidechain', content: '🔗 Sub-assistant', className: 'timeline-group-sidechain' },
+              'memory': { id: 'memory', content: '🧠 Memory', className: 'timeline-group-memory' },
+              'slash-command': { id: 'slash-command', content: '⌨️ Slash Command', className: 'timeline-group-slash-command' },
+              'command-output': { id: 'command-output', content: '📋 Command Output', className: 'timeline-group-command-output' },
+              'bash-input': { id: 'bash-input', content: '💻 Bash Input', className: 'timeline-group-bash-input' },
+              'bash-output': { id: 'bash-output', content: '📄 Bash Output', className: 'timeline-group-bash-output' },
+              'teammate': { id: 'teammate', content: '👥 Teammate', className: 'timeline-group-teammate' },
+              'task-notification': { id: 'task-notification', content: '🔄 Async result', className: 'timeline-group-task-notification' },
+              'workflow_phase': { id: 'workflow_phase', content: '🧩 Workflow Phase', className: 'timeline-group-workflow_phase' },
+              'workflow_agent': { id: 'workflow_agent', content: '🤖 Workflow Agent', className: 'timeline-group-workflow_agent' }
           };
   
           // Build timeline data from messages
@@ -63798,7 +64651,7 @@
                       const timelineHeight = timelineContainer ? timelineContainer.offsetHeight : 0;
   
                       // Scroll so message top aligns with timeline bottom
-                      const elementTop = messageEl.offsetTop;
+                      const elementTop = messageEl.getBoundingClientRect().top + window.scrollY;
                       const scrollPosition = elementTop - timelineHeight - 10; // 10px padding
   
                       window.scrollTo({
@@ -63807,9 +64660,9 @@
                       });
   
                       // Highlight the message briefly
-                      messageEl.style.backgroundColor = '#fff3cd';
+                      messageEl.classList.add('timeline-flash');
                       setTimeout(() => {
-                          messageEl.style.backgroundColor = '';
+                          messageEl.classList.remove('timeline-flash');
                       }, 2000);
                   }
               }
@@ -67120,6 +67973,19 @@
       --text-muted: #666;
       --text-secondary: #495057;
       --fold-color: #888;
+      --accent-color: #6c757d;
+  
+      /* Code/tool palette used by pygments_styles.css (Pygments blocks,
+         Read/Write/MultiEdit tool content, system reminders) and by the
+         collapsible tool-result summary in message_styles.css. */
+      --color-bg-secondary: #f6f8fa;
+      --color-bg-tertiary: #eef1f4;
+      --color-blue: #1e6fd9;
+      --color-green: #2e7d32;
+      --color-purple: #7b1fa2;
+      --color-border-dim: #d0d7de;
+      --color-text-dim: #8c959f;
+      --color-text-secondary: #57606a;
   
       /* Border colors */
       --border-light: #e0e0e0;
@@ -67733,7 +68599,7 @@
   /* Model id surfaced on sub-agent message headers (issue #246) */
   .message-model {
       font-size: 0.75em;
-      font-family: var(--font-mono, 'SFMono-Regular', Consolas, monospace);
+      font-family: var(--font-monospace);
       color: var(--text-secondary, #888);
   }
   
@@ -67858,7 +68724,7 @@
   }
   
   .hook-attachment-meta {
-      color: var(--secondary-text);
+      color: var(--text-secondary);
       font-size: 0.85em;
   }
   
@@ -67868,7 +68734,7 @@
   
   .hook-attachment-stream-label {
       font-size: 0.75em;
-      color: var(--secondary-text);
+      color: var(--text-secondary);
       margin-bottom: 0.2em;
       text-transform: uppercase;
       letter-spacing: 0.05em;
@@ -67878,7 +68744,7 @@
   .hook-attachment-content {
       margin: 0;
       padding: 0.5em;
-      background-color: var(--code-bg);
+      background-color: var(--code-bg-color);
       border-radius: 4px;
       font-size: 0.85em;
       white-space: pre-wrap;
@@ -67918,7 +68784,7 @@
   .hook-details {
       margin-top: 0.5em;
       padding: 0.5em;
-      background-color: var(--code-bg);
+      background-color: var(--code-bg-color);
       border-radius: 4px;
   }
   
@@ -69248,7 +70114,7 @@
   }
   
   .workflow-agent-model {
-      font-family: var(--font-mono, monospace);
+      font-family: var(--font-monospace);
       color: var(--text-secondary);
   }
   
@@ -69427,7 +70293,7 @@
   
   /* Child session hierarchy */
   .session-nav-item.session-child {
-      border-left: 3px solid var(--accent-color, #6c757d);
+      border-left: 3px solid var(--accent-color);
       padding-left: 8px;
   }
   
@@ -69972,38 +70838,58 @@
   }
   /* Timeline-specific styles for vis-timeline */
   
+  /* The container, resize-handle, select-flash, group-label and item colours
+     read --timeline-* custom properties whose fallbacks are the default
+     theme's values, so a theme can recolour the timeline by defining the
+     properties alone. The default theme defines none of them. */
+  
   /* Timeline toggle button styling */
   .timeline-toggle.active {
       background-color: #fff3cd;
   }
   
-  /* Timeline container positioning and styling */
+  /* Timeline container positioning and styling (layout stays inline in
+     timeline.html; only the colours live here) */
   #timeline-container {
       margin-bottom: 20px;
       box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
       transition: top 0.3s ease;
       position: relative;
+      background: var(--timeline-bg, white);
+      border-bottom: 1px solid var(--timeline-border, #ddd);
   }
   
   /* Timeline resize handle styling */
   #timeline-resize-handle {
+      background: linear-gradient(to bottom, transparent, var(--timeline-handle-bg, #ddd));
       transition: background 0.2s ease;
   }
   
+  #timeline-resize-handle>div {
+      background: var(--timeline-grip, #999);
+  }
+  
   #timeline-resize-handle:hover {
-      background: linear-gradient(to bottom, transparent, #bbb) !important;
+      background: linear-gradient(to bottom, transparent, var(--timeline-handle-hover-bg, #bbb));
   }
   
   #timeline-resize-handle:hover>div {
-      background: #777 !important;
+      background: var(--timeline-grip-hover, #777);
   }
   
   #timeline-resize-handle:active {
-      background: linear-gradient(to bottom, transparent, #999) !important;
+      background: linear-gradient(to bottom, transparent, var(--timeline-handle-active-bg, #999));
   }
   
   #timeline-resize-handle:active>div {
-      background: #555 !important;
+      background: var(--timeline-grip-active, #555);
+  }
+  
+  /* Brief highlight of the message a timeline item was clicked for
+     (onTimelineSelect adds the class for 2s). !important stands in for the
+     inline style it replaces, which beat every card background rule. */
+  .message.timeline-flash {
+      background-color: var(--timeline-flash-bg, #fff3cd) !important;
   }
   
   /* vis-timeline customizations */
@@ -70015,6 +70901,78 @@
       font-size: 12px !important;
       font-weight: 500 !important;
       color: var(--text-secondary) !important;
+  }
+  
+  /* Group (row label) colours. timeline.html gives each group a
+     `timeline-group-<id>` className; vis-timeline puts a group's className
+     on its label *and* on its row, so the rules are scoped to the label,
+     which is all the inline style they replace used to colour. */
+  .vis-labelset .vis-label.timeline-group-user {
+      background-color: var(--timeline-user-bg, #e3f2fd);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-assistant {
+      background-color: var(--timeline-assistant-bg, #f3e5f5);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-tool_use {
+      background-color: var(--timeline-tool_use-bg, #fff3e0);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-tool_result {
+      background-color: var(--timeline-tool_result-bg, #e8f5e8);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-thinking {
+      background-color: var(--timeline-thinking-bg, #fce4ec);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-system {
+      background-color: var(--timeline-system-bg, #ffeee1);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-image {
+      background-color: var(--timeline-image-bg, #e1f5fe);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-sidechain {
+      background-color: var(--timeline-sidechain-bg, #f5f5f5);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-memory {
+      background-color: var(--timeline-memory-bg, #ede7f6);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-slash-command {
+      background-color: var(--timeline-slash-command-bg, #e8eaf6);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-command-output {
+      background-color: var(--timeline-command-output-bg, #efebe9);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-bash-input {
+      background-color: var(--timeline-bash-input-bg, #e8eaf6);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-bash-output {
+      background-color: var(--timeline-bash-output-bg, #efebe9);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-teammate {
+      background-color: var(--timeline-teammate-bg, #e8f2fd);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-task-notification {
+      background-color: var(--timeline-task-notification-bg, #e8f2fd);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-workflow_phase {
+      background-color: var(--timeline-workflow_phase-bg, #fff8e1);
+  }
+  
+  .vis-labelset .vis-label.timeline-group-workflow_agent {
+      background-color: var(--timeline-workflow_agent-bg, #f3e5f5);
   }
   
   /* Timeline items styling */
@@ -70037,43 +70995,43 @@
   
   /* Message type specific styling */
   .vis-item.timeline-item-user {
-      background-color: #e3f2fd !important;
-      border-color: var(--system-warning-color) !important;
+      background-color: var(--timeline-item-user-bg, #e3f2fd) !important;
+      border-color: var(--timeline-item-user-border, var(--system-warning-color)) !important;
   }
   
   .vis-item.timeline-item-assistant {
-      background-color: #f3e5f5 !important;
-      border-color: #9c27b0 !important;
+      background-color: var(--timeline-item-assistant-bg, #f3e5f5) !important;
+      border-color: var(--timeline-item-assistant-border, #9c27b0) !important;
   }
   
   .vis-item.timeline-item-tool_use {
-      background-color: #fff8e1 !important;
-      border-color: #ffc107 !important;
+      background-color: var(--timeline-item-tool_use-bg, #fff8e1) !important;
+      border-color: var(--timeline-item-tool_use-border, #ffc107) !important;
   }
   
   .vis-item.timeline-item-tool_result {
-      background-color: #e8f5e8 !important;
-      border-color: #4caf50 !important;
+      background-color: var(--timeline-item-tool_result-bg, #e8f5e8) !important;
+      border-color: var(--timeline-item-tool_result-border, #4caf50) !important;
   }
   
   .vis-item.timeline-item-thinking {
-      background-color: #fce4ec !important;
-      border-color: #e91e63 !important;
+      background-color: var(--timeline-item-thinking-bg, #fce4ec) !important;
+      border-color: var(--timeline-item-thinking-border, #e91e63) !important;
   }
   
   .vis-item.timeline-item-system {
-      background-color: #ffeee1 !important;
-      border-color: #ff8707 !important;
+      background-color: var(--timeline-item-system-bg, #ffeee1) !important;
+      border-color: var(--timeline-item-system-border, #ff8707) !important;
   }
   
   .vis-item.timeline-item-image {
-      background-color: #e1f5fe !important;
-      border-color: #00bcd4 !important;
+      background-color: var(--timeline-item-image-bg, #e1f5fe) !important;
+      border-color: var(--timeline-item-image-border, #00bcd4) !important;
   }
   
   .vis-item.timeline-item-sidechain {
-      background-color: #f5f5f5 !important;
-      border-color: #9e9e9e !important;
+      background-color: var(--timeline-item-sidechain-bg, #f5f5f5) !important;
+      border-color: var(--timeline-item-sidechain-border, #9e9e9e) !important;
   }
   
   /* Hide filtered timeline items */
@@ -70688,8 +71646,8 @@
   }
   
   /* Unified styling for inline preview text in tool results */
-  .tool-result .line-count,
-  .tool-result .preview-text {
+  .tool_result .line-count,
+  .tool_result .preview-text {
       font-size: 0.9em;
       color: var(--color-text-secondary);
       margin-left: 0.5em;
@@ -71339,11 +72297,11 @@
   <!-- vis-timeline integration for transcript visualization -->
   
   <div id="timeline-container"
-      style="display: none; position: sticky; top: 0; z-index: 100; background: white; border-bottom: 1px solid #ddd; width: 100vw; margin-left: calc(-50vw + 50%); overflow: hidden; min-height: 150px; max-height: 80vh;">
+      style="display: none; position: sticky; top: 0; z-index: 100; width: 100vw; margin-left: calc(-50vw + 50%); overflow: hidden; min-height: 150px; max-height: 80vh;">
       <div id="timeline-visualization" style="height: calc(100% - 8px); width: 100%;"></div>
       <div id="timeline-resize-handle"
-          style="position: absolute; bottom: 0; left: 0; right: 0; height: 8px; background: linear-gradient(to bottom, transparent, #ddd); cursor: ns-resize; display: flex; align-items: center; justify-content: center;">
-          <div style="width: 40px; height: 3px; background: #999; border-radius: 2px;"></div>
+          style="position: absolute; bottom: 0; left: 0; right: 0; height: 8px; cursor: ns-resize; display: flex; align-items: center; justify-content: center;">
+          <div style="width: 40px; height: 3px; border-radius: 2px;"></div>
       </div>
   </div>
   
@@ -71360,23 +72318,23 @@
   
           // Message type to group mapping
           const messageTypeGroups = {
-              'user': { id: 'user', content: '🤷 User', style: 'background-color: #e3f2fd;' },
-              'assistant': { id: 'assistant', content: '🤖 Assistant', style: 'background-color: #f3e5f5;' },
-              'tool_use': { id: 'tool_use', content: '🛠️ Tool Use', style: 'background-color: #fff3e0;' },
-              'tool_result': { id: 'tool_result', content: '🧰 Tool Result', style: 'background-color: #e8f5e8;' },
-              'thinking': { id: 'thinking', content: '💭 Thinking', style: 'background-color: #fce4ec;' },
-              'system': { id: 'system', content: '⚙️ System', style: 'background-color: #ffeee1;' },
-              'image': { id: 'image', content: '🖼️ Image', style: 'background-color: #e1f5fe;' },
-              'sidechain': { id: 'sidechain', content: '🔗 Sub-assistant', style: 'background-color: #f5f5f5;' },
-              'memory': { id: 'memory', content: '🧠 Memory', style: 'background-color: #ede7f6;' },
-              'slash-command': { id: 'slash-command', content: '⌨️ Slash Command', style: 'background-color: #e8eaf6;' },
-              'command-output': { id: 'command-output', content: '📋 Command Output', style: 'background-color: #efebe9;' },
-              'bash-input': { id: 'bash-input', content: '💻 Bash Input', style: 'background-color: #e8eaf6;' },
-              'bash-output': { id: 'bash-output', content: '📄 Bash Output', style: 'background-color: #efebe9;' },
-              'teammate': { id: 'teammate', content: '👥 Teammate', style: 'background-color: #e8f2fd;' },
-              'task-notification': { id: 'task-notification', content: '🔄 Async result', style: 'background-color: #e8f2fd;' },
-              'workflow_phase': { id: 'workflow_phase', content: '🧩 Workflow Phase', style: 'background-color: #fff8e1;' },
-              'workflow_agent': { id: 'workflow_agent', content: '🤖 Workflow Agent', style: 'background-color: #f3e5f5;' }
+              'user': { id: 'user', content: '🤷 User', className: 'timeline-group-user' },
+              'assistant': { id: 'assistant', content: '🤖 Assistant', className: 'timeline-group-assistant' },
+              'tool_use': { id: 'tool_use', content: '🛠️ Tool Use', className: 'timeline-group-tool_use' },
+              'tool_result': { id: 'tool_result', content: '🧰 Tool Result', className: 'timeline-group-tool_result' },
+              'thinking': { id: 'thinking', content: '💭 Thinking', className: 'timeline-group-thinking' },
+              'system': { id: 'system', content: '⚙️ System', className: 'timeline-group-system' },
+              'image': { id: 'image', content: '🖼️ Image', className: 'timeline-group-image' },
+              'sidechain': { id: 'sidechain', content: '🔗 Sub-assistant', className: 'timeline-group-sidechain' },
+              'memory': { id: 'memory', content: '🧠 Memory', className: 'timeline-group-memory' },
+              'slash-command': { id: 'slash-command', content: '⌨️ Slash Command', className: 'timeline-group-slash-command' },
+              'command-output': { id: 'command-output', content: '📋 Command Output', className: 'timeline-group-command-output' },
+              'bash-input': { id: 'bash-input', content: '💻 Bash Input', className: 'timeline-group-bash-input' },
+              'bash-output': { id: 'bash-output', content: '📄 Bash Output', className: 'timeline-group-bash-output' },
+              'teammate': { id: 'teammate', content: '👥 Teammate', className: 'timeline-group-teammate' },
+              'task-notification': { id: 'task-notification', content: '🔄 Async result', className: 'timeline-group-task-notification' },
+              'workflow_phase': { id: 'workflow_phase', content: '🧩 Workflow Phase', className: 'timeline-group-workflow_phase' },
+              'workflow_agent': { id: 'workflow_agent', content: '🤖 Workflow Agent', className: 'timeline-group-workflow_agent' }
           };
   
           // Build timeline data from messages
@@ -71629,7 +72587,7 @@
                       const timelineHeight = timelineContainer ? timelineContainer.offsetHeight : 0;
   
                       // Scroll so message top aligns with timeline bottom
-                      const elementTop = messageEl.offsetTop;
+                      const elementTop = messageEl.getBoundingClientRect().top + window.scrollY;
                       const scrollPosition = elementTop - timelineHeight - 10; // 10px padding
   
                       window.scrollTo({
@@ -71638,9 +72596,9 @@
                       });
   
                       // Highlight the message briefly
-                      messageEl.style.backgroundColor = '#fff3cd';
+                      messageEl.classList.add('timeline-flash');
                       setTimeout(() => {
-                          messageEl.style.backgroundColor = '';
+                          messageEl.classList.remove('timeline-flash');
                       }, 2000);
                   }
               }
