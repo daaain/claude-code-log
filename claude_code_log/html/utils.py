@@ -964,16 +964,22 @@ def starts_with_emoji(text: str) -> bool:
     """Check if a string starts with an emoji character.
 
     Checks common emoji Unicode ranges:
-    - Misc Technical: U+2300 - U+23FF (⏰ ⏳ ⏱️ ⏲️ ⏸ ⏹ ⏺ ⏏ ↩ etc.)
+    - Misc Technical: U+2300 - U+23FF (⏰ ⏳ ⏱️ ⏲️ ⏸ ⏹ ⏺ ⏏ etc.)
     - Misc Symbols: U+2600 - U+26FF
     - Dingbats: U+2700 - U+27BF
     - Misc Symbols and Pictographs: U+1F300 - U+1F5FF
     - Emoticons: U+1F600 - U+1F64F
     - Transport and Map Symbols: U+1F680 - U+1F6FF
     - Supplemental Symbols: U+1F900 - U+1F9FF
+    - Geometric Shapes Extended, coloured circles/squares: U+1F7E0 - U+1F7FF (🟢 🟦)
+    - Symbols and Pictographs Extended-A: U+1FA70 - U+1FAFF (🪝 🩺 🪙)
+    - White medium star: U+2B50 (⭐)
 
     Used by the transcript template to suppress the default ``🛠️``
-    emoji prefix when a tool title already starts with its own icon.
+    (tool_use) or ``🧰`` (tool_result) emoji prefix when a tool title
+    already starts with its own icon — e.g. a plugin result titled
+    ``📨 Mails …``. The error ``🚨`` is never suppressed. No built-in
+    result title starts with an emoji.
     Misses here cause a redundant wrench to appear in front of an
     otherwise-iconified title (e.g. ``🛠️ ⏰ ScheduleWakeup ...``);
     Misc Technical (U+2300-U+23FF) is included because the alarm
@@ -994,6 +1000,9 @@ def starts_with_emoji(text: str) -> bool:
         or 0x1F600 <= code_point <= 0x1F64F  # Emoticons
         or 0x1F680 <= code_point <= 0x1F6FF  # Transport and Map Symbols
         or 0x1F900 <= code_point <= 0x1F9FF  # Supplemental Symbols
+        or 0x1F7E0 <= code_point <= 0x1F7FF  # Coloured circles/squares (🟢 🟦)
+        or 0x1FA70 <= code_point <= 0x1FAFF  # Pictographs Extended-A (🪝 🩺)
+        or code_point == 0x2B50  # White medium star (⭐)
     )
 
 
