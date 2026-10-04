@@ -671,6 +671,9 @@ Pinned by `test_compact_after_rewind.py` (fixtures
 `dag_compact_after_rewind.jsonl` and
 `dag_compact_after_rewind_preserved.jsonl`).
 
+The same field is also displayed, on the boundary's debug uuid line; see
+[Compaction nav landmarks](#compaction-nav-landmarks).
+
 ### Queue-ops inside a branch
 
 Queue-operation entries (`<task-notification>` / `<agent-message>`
@@ -749,6 +752,16 @@ own timestamp. Older transcripts without `compactMetadata` get
 `Conversation compacted • <timestamp>`.
 
 `compact_trigger` (`"manual"` / `"auto"`) is plumbed but not rendered.
+
+`SystemMessage.compact_logical_parent_uuid: Optional[str]` carries the
+boundary's `logicalParentUuid` — the message it continues, see
+[Compaction after a rewind](#compaction-after-a-rewind) — (str only,
+same factory branch). It is
+display-only: the HTML debug uuid line, which prints `uuid → parent`,
+falls back to `uuid ⇢ logical` (dashed arrow, tooltip *logical parent
+(across /compact)*) when `meta.parent_uuid` is empty, so the chain no
+longer looks broken at every /compact. It is deliberately **not** copied
+into `meta.parent_uuid`, which drives parent lookup and pairing.
 
 ---
 

@@ -141,6 +141,11 @@ def create_system_message(
     # and trigger without having to crawl back to the transcript entry.
     pre_tokens: Optional[int] = None
     compact_trigger: Optional[str] = None
+    logical_parent: Optional[str] = None
+    if transcript.subtype == "compact_boundary" and isinstance(
+        transcript.logicalParentUuid, str
+    ):
+        logical_parent = transcript.logicalParentUuid
     if transcript.subtype == "compact_boundary" and transcript.compactMetadata:
         raw_pre = transcript.compactMetadata.get("preTokens")
         # `bool` is a subclass of `int` in Python — `isinstance(True, int)`
@@ -158,4 +163,5 @@ def create_system_message(
         meta=meta,
         compact_pre_tokens=pre_tokens,
         compact_trigger=compact_trigger,
+        compact_logical_parent_uuid=logical_parent,
     )
