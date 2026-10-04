@@ -751,3 +751,107 @@ class TestLayout:
             expect(page.locator("[data-lane-kind='fork']")).to_be_visible()
         finally:
             browser.close()
+
+
+# Installed before any page script: records every call that reads layout
+# (and so forces one), with the page's phase at that moment, and the stage's
+# display when the parse ends (readyState → interactive, just before the
+# DOMContentLoaded listeners). A long parse lets the browser render frames
+# before DOMContentLoaded; to make that deterministic, animation-frame
+# callbacks requested while the page parses run at the end of the parse,
+# before DOMContentLoaded — the earliest a real frame could run them.
+WATCH_LAYOUT_READS = """(() => {
+    const parseFrames = [];
+    const raf = window.requestAnimationFrame.bind(window);
+    window.requestAnimationFrame = function (cb) {
+        if (document.readyState !== 'loading') return raf(cb);
+        parseFrames.push(cb);
+        return 0;
+    };
+    const reads = [];
+    window.__layoutReads = reads;
+    const record = (name, el) => {
+        const stage = document.querySelector('.mn-stage');
+        reads.push({
+            name,
+            inStage: !!(stage && stage.contains(el)),
+            loading: document.readyState === 'loading',
+            parsing: document.documentElement.classList.contains('mn-parsing'),
+            grid: !!(stage && stage.classList.contains('dag-on')),
+            stack: (new Error().stack || '').split('\\n').slice(2, 5).join(' | '),
+        });
+    };
+    const getters = [
+        [Element.prototype, ['clientTop', 'clientLeft', 'clientWidth', 'clientHeight',
+            'scrollWidth', 'scrollHeight', 'scrollTop', 'scrollLeft']],
+        [HTMLElement.prototype, ['offsetTop', 'offsetLeft', 'offsetWidth',
+            'offsetHeight', 'offsetParent', 'innerText']],
+    ];
+    getters.forEach(([proto, names]) => names.forEach(name => {
+        const d = Object.getOwnPropertyDescriptor(proto, name);
+        if (!d || !d.get) return;
+        Object.defineProperty(proto, name, Object.assign({}, d, {
+            get() { record(name, this); return d.get.call(this); },
+        }));
+    }));
+    ['getBoundingClientRect', 'getClientRects', 'scrollIntoView', 'checkVisibility']
+        .forEach(name => {
+            const f = Element.prototype[name];
+            Element.prototype[name] = function () { record(name, this); return f.apply(this, arguments); };
+        });
+    document.addEventListener('readystatechange', () => {
+        if (document.readyState !== 'interactive') return;
+        const stage = document.querySelector('.mn-stage');
+        window.__stageAtParseEnd = stage ? getComputedStyle(stage).display : null;
+        parseFrames.splice(0).forEach(cb => cb(performance.now()));
+    });
+})();"""
+
+
+class TestLoadLaysOutOnce:
+    """The transcript's first layout is the engine's grid (follow-up to P8;
+    dev-docs/minimal-theme.md § 5 "Load"). Structural, not timed: while the
+    page parses the stage is not rendered, and every layout read once it is
+    happens with the grid on — so no nested layout of the transcript is
+    ever computed and then thrown away."""
+
+    # The demo (lanes), a real project and the representative fixture (a
+    # session summary, which minimal.js measures for its "+ more").
+    @pytest.mark.parametrize(
+        "which",
+        [
+            "demo",
+            "real_projects/-experiments-worktrees",
+            "representative_messages.jsonl",
+        ],
+    )
+    def test_no_layout_before_the_grid(
+        self, clean: Page, pages: dict[str, Path], tmp_path: Path, which: str
+    ):
+        page = clean
+        path = (
+            pages["demo"]
+            if which == "demo"
+            else _render(TEST_DATA / which, tmp_path / "page.html", which)
+        )
+        page.add_init_script(WATCH_LAYOUT_READS)
+        _open(page, path)
+        _settle(page)
+        assert page.evaluate("window.__stageAtParseEnd") == "none", (
+            "the stage was rendered while the page parsed"
+        )
+        reads = page.evaluate("window.__layoutReads")
+        assert reads, "the watcher saw no layout read at all (is it installed?)"
+        # While the stage is hidden a read costs a layout of the header at
+        # most (the toolbar's ResizeObserver reads it in a frame during a
+        # long parse) — but must not measure the stage, which reads as
+        # zero-sized then; once the stage shows, reads come with the grid on.
+        assert all(r["parsing"] for r in reads if r["loading"])
+        hidden = [r for r in reads if r["parsing"] and r["inStage"]]
+        assert hidden == [], [(r["name"], r["stack"]) for r in hidden[:5]]
+        nested = [r for r in reads if not r["parsing"] and not r["grid"]]
+        assert nested == [], [(r["name"], r["stack"]) for r in nested[:5]]
+        assert page.evaluate(
+            "!document.documentElement.classList.contains('mn-parsing')"
+            " && getComputedStyle(document.querySelector('.mn-stage')).display !== 'none'"
+        )

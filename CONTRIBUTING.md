@@ -469,6 +469,10 @@ for every change:
   toggle × fold depth × branch mode with the timeline open, search and
   live updates included; extend it when adding a message type.
 
+To compare how long a page takes to load and lay out in each theme, run
+`uv run python scripts/bench_page_load.py` (the minimal theme lays the
+transcript out once, as the DAG grid — dev-docs/minimal-theme.md § 5).
+
 ### Data Flow Overview
 
 ```

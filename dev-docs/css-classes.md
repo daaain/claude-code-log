@@ -192,6 +192,7 @@ output):
 | `header.mn-top`, `.mn-title-row`, `.mn-pill`, `.mn-smeta` | page header | title, main model, meta line (`minimal_theme.page_meta`) |
 | `nav.mn-toolbar` | sticky toolbar | holds the classic floating buttons (same ids and classes, see below), `.mn-sp` spacer, `.mn-seg.mn-seg-icons` theme toggle (`button[data-mn-theme=auto\|light\|dark]`, `.on` + `aria-pressed`), `details.mn-more` overflow menu (`.mn-menu`) |
 | `.mn-ibtn`, `.mn-i-<icon>` | toolbar buttons | icon is a CSS mask on `::before` (`--mn-icon`); the button's own text — which the page's scripts rewrite — is hidden with `font-size: 0` |
+| `html.mn-parsing` | `<html>`, set by `theme_init.js` (head), removed by its `DOMContentLoaded` listener (the page's first) | hides `.mn-stage` while the page parses, so the transcript's first layout is the DAG engine's grid ([minimal-theme.md § 5](minimal-theme.md#5-performance)); never present without JavaScript |
 | `.mn-stage` | wraps `#dag-rail` and `#transcript` | draws the rail's continuous hairline (`::before`); `dag-on` + `--dag-slots` from the DAG engine |
 | `#dag-rail` | first child of `.mn-stage` | the DAG engine's SVG rail (branch lanes, connectors) |
 | `.mn-seg.mn-branches`, `button[data-mn-branches=main\|interleaved]` | toolbar, after the depth segment | global Branches mode; `hidden` until the engine finds a branch |

@@ -955,7 +955,10 @@
             applyUrlFilters();
 
             // Apply all filters on page load
-            applyFilter();
+            {% if minimal %}// (Minimal theme: only when a toggle is off — with every type
+            // shown it removes nothing and rewrites the counts just written,
+            // ≈ 70ms of selector work on a 5MB page before its first layout.)
+            if (document.querySelector('.filter-toggle:not(.active)')) {% endif %}applyFilter();
             // The live-update refresh above re-applies the filter to the
             // markup an update brings (it carries no filtered-hidden).
             window.claudeLogApplyFilter = applyFilter;

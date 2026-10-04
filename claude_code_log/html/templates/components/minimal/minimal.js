@@ -114,8 +114,17 @@
             // Measuring a clamp forces a layout. At parse time that would be a
             // whole extra layout of a large page (≈ 0.6s on a 5MB one, P8),
             // thrown away when the DAG engine turns the grid on; in the first
-            // frame it reuses the layout the page needs anyway.
-            requestAnimationFrame(function () { decorateSessionSummaries(document); });
+            // frame after DOMContentLoaded it reuses the layout the page needs
+            // anyway. (Not the first frame: during a long parse the stage is
+            // not rendered yet — theme_init.js — and nothing would measure.)
+            function decorateFirstFrame() {
+                requestAnimationFrame(function () { decorateSessionSummaries(document); });
+            }
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', decorateFirstFrame);
+            } else {
+                decorateFirstFrame();
+            }
             if (window.claudeLogOnRehydrate) window.claudeLogOnRehydrate(decorateSessionSummaries);
             window.addEventListener('resize', function () { decorateSessionSummaries(document); });
 

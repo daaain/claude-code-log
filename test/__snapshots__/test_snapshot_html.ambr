@@ -26173,6 +26173,17 @@
       --dag-ind-step: 16px;
   }
   
+  /* One layout at load (follow-up to P8): while the page parses, the stage is
+     not rendered — theme_init.js puts `mn-parsing` on <html> and its
+     DOMContentLoaded listener, the page's first, takes it off — so the
+     browser's frames during a long parse lay out the header only, and the
+     transcript's first layout is the engine's grid rather than the nested
+     page it then replaces. Only with JavaScript: without it the class never
+     exists and the transcript renders nested as it parses. */
+  .mn-parsing .theme-minimal .mn-stage {
+      display: none;
+  }
+  
   .theme-minimal .mn-stage.dag-on {
       --dag-gut: var(--gut);
       --dag-rail: calc(var(--rail) + var(--dag-step) * var(--dag-slots, 0));
@@ -26950,6 +26961,21 @@
                       document.documentElement.setAttribute('data-theme', mode);
                   }
               } catch (err) { /* storage unavailable: follow the system */ }
+          })();
+          // Lay the transcript out once: hide the stage while the page parses
+          // (dag.css, `mn-parsing`), so the first layout it gets is the DAG
+          // engine's grid at DOMContentLoaded, not a nested page laid out
+          // frame by frame during the parse and then thrown away. This is the
+          // page's first DOMContentLoaded listener, so every other one —
+          // folds, filter, deep links, search, the engine — sees the stage
+          // rendered, as before; they run in one task, so nothing paints in
+          // between.
+          (function () {
+              var root = document.documentElement;
+              root.classList.add('mn-parsing');
+              document.addEventListener('DOMContentLoaded', function () {
+                  root.classList.remove('mn-parsing');
+              });
           })();
       </script>
   </head>
@@ -29347,7 +29373,10 @@
               applyUrlFilters();
   
               // Apply all filters on page load
-              applyFilter();
+              // (Minimal theme: only when a toggle is off — with every type
+              // shown it removes nothing and rewrites the counts just written,
+              // ≈ 70ms of selector work on a 5MB page before its first layout.)
+              if (document.querySelector('.filter-toggle:not(.active)')) applyFilter();
               // The live-update refresh above re-applies the filter to the
               // markup an update brings (it carries no filtered-hidden).
               window.claudeLogApplyFilter = applyFilter;
@@ -29674,8 +29703,10 @@
           // Detect page type by content rather than URL so it works regardless of filename
           searchState.isIndexPage = document.querySelector('.project-list') !== null;
   
-          // Build search index from page content
-          buildSearchIndex();
+          // Build search index from page content — on first use
+          // in the minimal theme (performSearch): reading every card's text
+          // here held the page's first layout back by ≈ 0.17s on a 5MB page.
+          
   
           // Restore previous search state from localStorage
           restoreSearchState();
@@ -30104,6 +30135,7 @@
           }
   
           // Search through index
+          if (!searchState.searchIndex) buildSearchIndex();
           searchState.matches = [];
           let totalMatchCount = 0;
   
@@ -30835,8 +30867,17 @@
               // Measuring a clamp forces a layout. At parse time that would be a
               // whole extra layout of a large page (≈ 0.6s on a 5MB one, P8),
               // thrown away when the DAG engine turns the grid on; in the first
-              // frame it reuses the layout the page needs anyway.
-              requestAnimationFrame(function () { decorateSessionSummaries(document); });
+              // frame after DOMContentLoaded it reuses the layout the page needs
+              // anyway. (Not the first frame: during a long parse the stage is
+              // not rendered yet — theme_init.js — and nothing would measure.)
+              function decorateFirstFrame() {
+                  requestAnimationFrame(function () { decorateSessionSummaries(document); });
+              }
+              if (document.readyState === 'loading') {
+                  document.addEventListener('DOMContentLoaded', decorateFirstFrame);
+              } else {
+                  decorateFirstFrame();
+              }
               if (window.claudeLogOnRehydrate) window.claudeLogOnRehydrate(decorateSessionSummaries);
               window.addEventListener('resize', function () { decorateSessionSummaries(document); });
   
@@ -40201,6 +40242,17 @@
       --dag-ind-step: 16px;
   }
   
+  /* One layout at load (follow-up to P8): while the page parses, the stage is
+     not rendered — theme_init.js puts `mn-parsing` on <html> and its
+     DOMContentLoaded listener, the page's first, takes it off — so the
+     browser's frames during a long parse lay out the header only, and the
+     transcript's first layout is the engine's grid rather than the nested
+     page it then replaces. Only with JavaScript: without it the class never
+     exists and the transcript renders nested as it parses. */
+  .mn-parsing .theme-minimal .mn-stage {
+      display: none;
+  }
+  
   .theme-minimal .mn-stage.dag-on {
       --dag-gut: var(--gut);
       --dag-rail: calc(var(--rail) + var(--dag-step) * var(--dag-slots, 0));
@@ -40978,6 +41030,21 @@
                       document.documentElement.setAttribute('data-theme', mode);
                   }
               } catch (err) { /* storage unavailable: follow the system */ }
+          })();
+          // Lay the transcript out once: hide the stage while the page parses
+          // (dag.css, `mn-parsing`), so the first layout it gets is the DAG
+          // engine's grid at DOMContentLoaded, not a nested page laid out
+          // frame by frame during the parse and then thrown away. This is the
+          // page's first DOMContentLoaded listener, so every other one —
+          // folds, filter, deep links, search, the engine — sees the stage
+          // rendered, as before; they run in one task, so nothing paints in
+          // between.
+          (function () {
+              var root = document.documentElement;
+              root.classList.add('mn-parsing');
+              document.addEventListener('DOMContentLoaded', function () {
+                  root.classList.remove('mn-parsing');
+              });
           })();
       </script>
   </head>
@@ -43942,7 +44009,10 @@
               applyUrlFilters();
   
               // Apply all filters on page load
-              applyFilter();
+              // (Minimal theme: only when a toggle is off — with every type
+              // shown it removes nothing and rewrites the counts just written,
+              // ≈ 70ms of selector work on a 5MB page before its first layout.)
+              if (document.querySelector('.filter-toggle:not(.active)')) applyFilter();
               // The live-update refresh above re-applies the filter to the
               // markup an update brings (it carries no filtered-hidden).
               window.claudeLogApplyFilter = applyFilter;
@@ -44269,8 +44339,10 @@
           // Detect page type by content rather than URL so it works regardless of filename
           searchState.isIndexPage = document.querySelector('.project-list') !== null;
   
-          // Build search index from page content
-          buildSearchIndex();
+          // Build search index from page content — on first use
+          // in the minimal theme (performSearch): reading every card's text
+          // here held the page's first layout back by ≈ 0.17s on a 5MB page.
+          
   
           // Restore previous search state from localStorage
           restoreSearchState();
@@ -44699,6 +44771,7 @@
           }
   
           // Search through index
+          if (!searchState.searchIndex) buildSearchIndex();
           searchState.matches = [];
           let totalMatchCount = 0;
   
@@ -45430,8 +45503,17 @@
               // Measuring a clamp forces a layout. At parse time that would be a
               // whole extra layout of a large page (≈ 0.6s on a 5MB one, P8),
               // thrown away when the DAG engine turns the grid on; in the first
-              // frame it reuses the layout the page needs anyway.
-              requestAnimationFrame(function () { decorateSessionSummaries(document); });
+              // frame after DOMContentLoaded it reuses the layout the page needs
+              // anyway. (Not the first frame: during a long parse the stage is
+              // not rendered yet — theme_init.js — and nothing would measure.)
+              function decorateFirstFrame() {
+                  requestAnimationFrame(function () { decorateSessionSummaries(document); });
+              }
+              if (document.readyState === 'loading') {
+                  document.addEventListener('DOMContentLoaded', decorateFirstFrame);
+              } else {
+                  decorateFirstFrame();
+              }
               if (window.claudeLogOnRehydrate) window.claudeLogOnRehydrate(decorateSessionSummaries);
               window.addEventListener('resize', function () { decorateSessionSummaries(document); });
   
@@ -54796,6 +54878,17 @@
       --dag-ind-step: 16px;
   }
   
+  /* One layout at load (follow-up to P8): while the page parses, the stage is
+     not rendered — theme_init.js puts `mn-parsing` on <html> and its
+     DOMContentLoaded listener, the page's first, takes it off — so the
+     browser's frames during a long parse lay out the header only, and the
+     transcript's first layout is the engine's grid rather than the nested
+     page it then replaces. Only with JavaScript: without it the class never
+     exists and the transcript renders nested as it parses. */
+  .mn-parsing .theme-minimal .mn-stage {
+      display: none;
+  }
+  
   .theme-minimal .mn-stage.dag-on {
       --dag-gut: var(--gut);
       --dag-rail: calc(var(--rail) + var(--dag-step) * var(--dag-slots, 0));
@@ -55573,6 +55666,21 @@
                       document.documentElement.setAttribute('data-theme', mode);
                   }
               } catch (err) { /* storage unavailable: follow the system */ }
+          })();
+          // Lay the transcript out once: hide the stage while the page parses
+          // (dag.css, `mn-parsing`), so the first layout it gets is the DAG
+          // engine's grid at DOMContentLoaded, not a nested page laid out
+          // frame by frame during the parse and then thrown away. This is the
+          // page's first DOMContentLoaded listener, so every other one —
+          // folds, filter, deep links, search, the engine — sees the stage
+          // rendered, as before; they run in one task, so nothing paints in
+          // between.
+          (function () {
+              var root = document.documentElement;
+              root.classList.add('mn-parsing');
+              document.addEventListener('DOMContentLoaded', function () {
+                  root.classList.remove('mn-parsing');
+              });
           })();
       </script>
   </head>
@@ -58086,7 +58194,10 @@
               applyUrlFilters();
   
               // Apply all filters on page load
-              applyFilter();
+              // (Minimal theme: only when a toggle is off — with every type
+              // shown it removes nothing and rewrites the counts just written,
+              // ≈ 70ms of selector work on a 5MB page before its first layout.)
+              if (document.querySelector('.filter-toggle:not(.active)')) applyFilter();
               // The live-update refresh above re-applies the filter to the
               // markup an update brings (it carries no filtered-hidden).
               window.claudeLogApplyFilter = applyFilter;
@@ -58413,8 +58524,10 @@
           // Detect page type by content rather than URL so it works regardless of filename
           searchState.isIndexPage = document.querySelector('.project-list') !== null;
   
-          // Build search index from page content
-          buildSearchIndex();
+          // Build search index from page content — on first use
+          // in the minimal theme (performSearch): reading every card's text
+          // here held the page's first layout back by ≈ 0.17s on a 5MB page.
+          
   
           // Restore previous search state from localStorage
           restoreSearchState();
@@ -58843,6 +58956,7 @@
           }
   
           // Search through index
+          if (!searchState.searchIndex) buildSearchIndex();
           searchState.matches = [];
           let totalMatchCount = 0;
   
@@ -59574,8 +59688,17 @@
               // Measuring a clamp forces a layout. At parse time that would be a
               // whole extra layout of a large page (≈ 0.6s on a 5MB one, P8),
               // thrown away when the DAG engine turns the grid on; in the first
-              // frame it reuses the layout the page needs anyway.
-              requestAnimationFrame(function () { decorateSessionSummaries(document); });
+              // frame after DOMContentLoaded it reuses the layout the page needs
+              // anyway. (Not the first frame: during a long parse the stage is
+              // not rendered yet — theme_init.js — and nothing would measure.)
+              function decorateFirstFrame() {
+                  requestAnimationFrame(function () { decorateSessionSummaries(document); });
+              }
+              if (document.readyState === 'loading') {
+                  document.addEventListener('DOMContentLoaded', decorateFirstFrame);
+              } else {
+                  decorateFirstFrame();
+              }
               if (window.claudeLogOnRehydrate) window.claudeLogOnRehydrate(decorateSessionSummaries);
               window.addEventListener('resize', function () { decorateSessionSummaries(document); });
   

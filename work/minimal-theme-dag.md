@@ -30,6 +30,12 @@ This file is now a historical record.** Branch of origin:
   one path for both themes, quiet as before; the filter observer reacts to
   `filtered-hidden` only and the current match survives a swap
   (dev-docs/minimal-theme.md § 11).
+- ~~**Load is slower than classic**~~ (P8: the engine's grid was a second
+  full layout after the browser's nested ones) — **done** (follow-up after
+  P8): the stage is hidden while the page parses and the transcript's
+  first layout is the grid; the search index is built on first use. Now
+  1.44s / 1.06s / 0.28s against classic's 1.70s / 0.95s / 0.32s
+  (dev-docs/minimal-theme.md § 5 "Load").
 - **Making `minimal` the default** is a one-line change of
   `utils.DEFAULT_THEME` (§ 7 decision 7), not taken.
 - **Teammates in their own files**: the `session-<sid>.html?uuid=` fallback

@@ -293,19 +293,56 @@ largest page; a steady relayout (nothing changed) is ≈ 20ms. *All* opens
 every `<details>` on the page, which is the browser laying out every
 long block in full.
 
-**Load.** Time until a page is laid out after `load` (median of three):
-sample 1.85s classic → 2.79s minimal, coderabbit 1.18s → 2.29s, worktrees
-0.36s → 0.53s. Most of the difference is one more full style and layout
-pass when the engine turns the grid on (`dag-on`) after the browser's
-first, nested layout — the parser yields on a large page, so that first
-layout happens before `DOMContentLoaded`. P8 removed two avoidable ones
-(≈ 0.3–0.4s on these pages): `minimal.js` measured the toolbar at parse
-time (forcing a layout of the still-nested page) and then wrote
-`--mn-bar-h` / `--mn-filter-h` on the root, and changing a custom property
-on the root restyles every element; it now measures from its
-ResizeObserver's first report, reads before it writes, and writes only a
-real change (`tokens.css` declares the usual 46px / 0px). Session
-summaries are measured in the first frame rather than at parse time.
+**Load.** Time until a page is laid out: from navigation start to a
+forced layout in the first animation frame after `load`, median of five,
+headless Chromium at 1280px on the 4-core VM
+(`scripts/bench_page_load.py`, which renders each project as one combined
+page per theme and also reports Chrome's layout and style counters):
+
+| Page | Classic | Minimal (P8) | Minimal (now) | Layouts, minimal P8 → now |
+|---|---|---|---|---|
+| `…claude-code-log-sample` (10.5MB) | 1.70s | 2.36s | **1.44s** | 9 (0.51s) → 2 (0.30s) |
+| `…coderabbit-review-helper` (5.2MB) | 0.95s | 1.85s | **1.06s** | 9 (0.45s) → 4 (0.28s) |
+| `-experiments-worktrees` (1.3MB) | 0.32s | 0.48s | **0.28s** | 6 (0.13s) → 4 (0.08s) |
+
+(P8 recorded 1.85 → 2.79s, 1.18 → 2.29s and 0.36 → 0.53s on the same
+pages with its own, uncommitted, harness; the "P8" column is the same code
+re-measured with this one.) The page now lays out once:
+
+- **The stage is not rendered while the page parses.** The parser yields
+  on a large page, and every frame it yields to used to lay out the
+  nested transcript parsed so far — three full style + layout + paint
+  passes on the sample — all thrown away when the engine turned the grid
+  on at `DOMContentLoaded` and the page was laid out again as a grid.
+  `theme_init.js` (in `<head>`) puts `mn-parsing` on `<html>`, which
+  hides `.mn-stage` (`dag.css`), and removes it in the page's first
+  `DOMContentLoaded` listener. Every other listener — the fold state and
+  fold depth, the filter, deep links, the search, the engine's start —
+  then runs in that same task with the stage rendered, as before, and the
+  first layout is the one the engine's first draw forces, already the
+  grid. The class only exists with JavaScript (§ 6).
+- **Non-visible work leaves the critical path.** The search index (the
+  text of every card) is built on the first search instead of at load
+  (`search.html`, minimal-gated: ≈ 0.17s on coderabbit), and the
+  load-time `applyFilter()` runs only when a toggle is off (with every
+  type shown it removes nothing and rewrites the counts just written;
+  ≈ 70ms). Session summaries are measured in the first frame *after*
+  `DOMContentLoaded` (a frame during the parse would measure a hidden
+  stage). Earlier (P8): `minimal.js` measures the toolbar from its
+  ResizeObserver, not at parse time, and writes `--mn-bar-h` /
+  `--mn-filter-h` only when they change (a root custom property restyles
+  every element; `tokens.css` declares the usual 46px / 0px).
+
+The trade: on a large page the transcript appears once, laid out, instead
+of growing nested during the parse and then jumping into the grid (the
+classic page shows its first screen during the parse — on the sample at
+≈ 0.8s). `test_minimal_dag_browser.py::TestLoadLaysOutOnce` guards it
+structurally, not by timing: with every layout-reading DOM API
+instrumented from before the first script, the stage is `display: none`
+when the parse ends, nothing measures the stage while it is hidden
+(animation frames requested during the parse are run at its end, the
+earliest a real frame could), and every layout read once it shows happens
+with `dag-on` set.
 
 **Conversion (P8).** `scripts/bench_render.py --theme {classic,minimal}`
 on the eight `test/test_data/real_projects` (19MB of transcripts, 4
@@ -319,7 +356,8 @@ transcript: 288KB classic, 540KB minimal) — plus the lane attributes.
 
 ## 6. Without JavaScript
 
-No `dag-on`: nothing is `display: contents`, sub-agent transcripts render
+No `dag-on` and no `mn-parsing` (the transcript renders as it parses):
+nothing is `display: contents`, sub-agent transcripts render
 nested under their spawning result (2px `--ring` line), fork branches as
 branch headers, the Branches segment stays `hidden` and no controls exist.
 Teammate anchors and the async `Result ↓` link are server-rendered and work
