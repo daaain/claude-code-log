@@ -154,7 +154,8 @@ and again under `:root[data-theme="dark"]`; `color-scheme` follows
 | `--bg` / `--fg` | `#ffffff` / `#1f2328` | `#14161a` / `#e4e6e9` | page, text |
 | `--muted` | `#5f6670` | `#969da7` | metadata, dim text |
 | `--dim` | `#868d96` | `#6b727c` | fold bars at rest (P7c; ≥ 3:1 on `--bg`) |
-| `--rule` / `--rule2` | `#e3e6ea` / `#1f2328` | `#2a2e35` / `#c9ccd1` | hairlines; turn and header rules |
+| `--rule` / `--rule2` | `#e3e6ea` / `#1f2328` | `#2a2e35` / `#c9ccd1` | the rail, project rules; turn and header rules |
+| `--hair` | `#edeff1` | `#22262c` | the faint rule between rows (`--rule` 65% towards `--bg`) |
 | `--code` | `#f3f4f6` | `#1d2025` | code and output boxes |
 | `--userbg` | `#fbf2e8` | `#2a2118` | user prompt tint |
 | `--user` `--asst` `--tool` | `#a14a00` `#6d28d9` `#1a7f37` | `#f0a35c` `#b8a1f8` `#6fcf8f` | role colours |
@@ -166,7 +167,8 @@ and again under `:root[data-theme="dark"]`; `color-scheme` follows
 | `--ok` / `--okbg` | `#116329` / `#dff3e5` | `#86e0a2` / `#14291c` | success pill |
 | `--l0` `--lA` `--lB` `--lF` | `#9aa1aa` `#2f8f46` `#1e6fd9` `#b0307a` | `#5d646e` `#6fcf8f` `#7cb4ff` `#f08bc4` | DAG lanes (P6) |
 | `--sans`, `--mono` | system stacks | — | fonts (no web fonts) |
-| `--gut`, `--rail`; `--gut-nest`, `--rail-nest` | `58px`, `18px`; `46px`, `16px` | — | row geometry; inside a sub-agent group |
+| `--gut`, `--rail`; `--gut-nest`, `--rail-nest` | `72px`, `18px`; `60px`, `16px` | — | row geometry; inside a sub-agent group (the gutters hold the role icon beside a ~10-character label) |
+| `--ic`, `--ic-gap` | `12px`, `3px` | — | the gutter's role icon and its gap to the label |
 
 `tokens.css` also points the classic custom properties at the tokens on
 `body.theme-minimal` (`--text-primary: var(--fg)`, `--code-bg-color:
@@ -222,6 +224,9 @@ output):
 | `.mn-tn` | inside `.mn-title` | hidden pictograph + repeated name (mockup `.tn`) |
 | `.mn-sh-sum`, `.mn-sh-id`, `.mn-sh-more` | non-branch session header's `.header` | compact header (`minimal_theme.session_header`): the summary alone, clamped to two lines (`-webkit-line-clamp`; full text as `title`; `.mn-open` unclamps), then the short session id, team badge and model as dim mono metadata. `minimal.js` adds the `+ more` / `− less` button (`.mn-sh-more`) only when the clamp hides text, on load, rehydrate and resize |
 | `.mn-role`, `.mn-time`, `.mn-tok` | inside `.header-info` | gutter: role label (`minimal_theme.role_label`), short time (server UTC, localised by `minimal.js` from the sibling `.timestamp[data-timestamp]`), compact tokens (`in · out`, full string as `title`) |
+| `svg.mn-sprite` > `symbol#mi-<glyph>` | right after `<body>`'s opening tag, outside `#transcript` | the page's one icon sprite (`minimal_icons.icon_sprite`): every glyph, so a live update that brings a new kind finds its symbol; zero-size, `aria-hidden` |
+| `svg.mn-ic[aria-hidden] > use[href="#mi-<glyph>"]` | first child of `.mn-role`; a branch header's `.header` (in place of `↳`) | the role icon (`minimal_icons.role_icon`): `fill: none`, stroke `currentColor` (`--rc`; `--lF` on a branch header), 1.5, round caps and joins, `--ic` square. Absolutely placed in the label's padding: at its right end on a wide row (a column of icons beside the rail; the label truncates before it), leading it on a phone and in a column (`dag-col`), inside the `error` pill. No text, so search, the filter and the timeline read only the label — [minimal-theme.md § 9](minimal-theme.md#9-compact-spawn-rows-and-other-polish-p7c-p8) |
+| `.message::after` | every row but a session header | the hairline: 1px of `--hair` on the row's top edge, content column only (grid column 3; 2 on a phone) — none on a tool pair's result half (unless `dag-split`), a turn-rule row, a session header's first row, or a column's first card (`dag-cfirst`, written by the engine). The index's `.mn-srow + .mn-srow` and the search page's `.mn-hit + .mn-hit > a` draw the same line |
 
 **Row layout.** A card is a grid `var(--gut) var(--rail) minmax(0, 1fr)` with
 rows title / debug / content / branch controls (P6, empty unless the card
@@ -230,7 +235,9 @@ spawns a branch) / fold bar / `1fr` slack. `.header` is
 becomes the gutter (spanning every row, so a gutter taller than the content
 grows the slack row instead of pushing the content down). `.message::before`
 is the role dot on the rail, coloured by `--rc`, a per-card custom property
-set from the type classes. `pair_middle`/`pair_last` drop gutter and dot.
+set from the type classes; the gutter's role label carries the role icon
+(`.mn-ic`) and `.message::after` the hairline above the row (both in the
+table above). `pair_middle`/`pair_last` drop gutter, dot and hairline.
 On wide screens a `pair_first` card's gutter (`height: 0`) and dot
 (negative bottom margin) add no height — the gutter hangs into the next
 half's empty gutter — and the first block under a call line (a

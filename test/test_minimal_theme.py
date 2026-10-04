@@ -364,8 +364,14 @@ class TestMinimalPage:
         html = generate_html(
             load_transcript(REPRESENTATIVE, silent=True), "T", theme="minimal"
         )
-        assert "<span class='mn-role'>User</span>" in html
-        assert "<span class='mn-role'>Edit</span>" in html
+        assert (
+            "<span class='mn-role'><svg class='mn-ic' aria-hidden='true'>"
+            "<use href='#mi-user'/></svg>User</span>" in html
+        )
+        assert (
+            "<span class='mn-role'><svg class='mn-ic' aria-hidden='true'>"
+            "<use href='#mi-edit'/></svg>Edit</span>" in html
+        )
         assert "<span class='mn-time'>15:50:07</span>" in html
         assert (
             "<span class='mn-tok' title='Input: 25 | Output: 120'>25 · 120</span>"

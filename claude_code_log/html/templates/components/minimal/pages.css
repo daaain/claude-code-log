@@ -427,6 +427,21 @@
     outline-offset: -2px;
 }
 
+/* A transcript's hairline (layout.css) between consecutive rows, across
+   the content column only, so the rail stays one unbroken line. */
+.mn-page :is(.mn-srow + .mn-srow, .mn-hit + .mn-hit > a)::after {
+    content: "";
+    grid-column: 3;
+    grid-row: 1;
+    align-self: start;
+    position: relative;
+    top: -3px;
+    height: 1px;
+    margin-bottom: -1px;
+    background: var(--hair);
+    pointer-events: none;
+}
+
 /* The dot, ringed in the page colour so it sits on the line. */
 .mn-page :is(.mn-srow, .mn-hit > a)::before {
     content: "";
@@ -737,6 +752,10 @@
 
     .mn-page :is(.mn-srow, .mn-hit > a)::before {
         grid-column: 1;
+    }
+
+    .mn-page :is(.mn-srow + .mn-srow, .mn-hit + .mn-hit > a)::after {
+        grid-column: 2;
     }
 
     .mn-page :is(.mn-sgut, .mn-hgut) {

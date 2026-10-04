@@ -308,6 +308,30 @@ class TestRows:
         href = page.locator(".search-result-item a").first.get_attribute("href")
         assert href and "uuid=" in href
 
+    def test_search_hits_are_separated_by_hairlines(
+        self, clean: Page, archive: Path, server: Any
+    ) -> None:
+        """A transcript's hairline between consecutive hits of a group (not
+        above its first), across the content column only."""
+        page = clean
+        _open(page, f"{server.url}/search.html")
+        _search(page, server, "the")
+        lines = page.evaluate(
+            """() => [...document.querySelectorAll('.mn-rgroup')].flatMap(group =>
+                [...group.querySelectorAll('.mn-hit > a')].map((a, i) => {
+                    const after = getComputedStyle(a, '::after');
+                    return {first: i === 0, content: after.content,
+                            height: parseFloat(after.height), column: after.gridColumnStart};
+                }))"""
+        )
+        assert any(not line["first"] for line in lines)
+        for line in lines:
+            if line["first"]:
+                assert line["content"] == "none", line
+            else:
+                assert line["content"] != "none" and line["height"] == 1, line
+                assert line["column"] == "3", line
+
     def test_dates_follow_the_viewer_time_zone(
         self, playwright, tmp_path: Path
     ) -> None:

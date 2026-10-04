@@ -19892,6 +19892,7 @@
       --muted: #5f6670;
       --dim: #868d96; /* fold bars at rest (P7c): 3.3:1 on --bg */
       --rule: #e3e6ea;
+      --hair: #edeff1; /* hairline between rows: --rule 65% toward --bg */
       --rule2: #1f2328;
       --code: #f3f4f6;
       --userbg: #fbf2e8;
@@ -19920,10 +19921,13 @@
       --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   
       /* Row geometry: gutter, rail, and the narrower pair used inside a
-         nested sub-agent group (mockup .row / .nest .row). */
-      --gut: 58px;
+         nested sub-agent group (mockup .row / .nest .row). The gutters carry
+         the role icon (--ic plus its gap) beside a label of ~10 characters. */
+      --ic: 12px;
+      --ic-gap: 3px;
+      --gut: 72px;
       --rail: 18px;
-      --gut-nest: 46px;
+      --gut-nest: 60px;
       --rail-nest: 16px;
   
       color-scheme: light dark;
@@ -19936,6 +19940,7 @@
           --muted: #969da7;
           --dim: #6b727c;
           --rule: #2a2e35;
+          --hair: #22262c;
           --rule2: #c9ccd1;
           --code: #1d2025;
           --userbg: #2a2118;
@@ -19978,6 +19983,7 @@
       --muted: #969da7;
       --dim: #6b727c;
       --rule: #2a2e35;
+      --hair: #22262c;
       --rule2: #c9ccd1;
       --code: #1d2025;
       --userbg: #2a2118;
@@ -20698,6 +20704,21 @@
       outline-offset: -2px;
   }
   
+  /* A transcript's hairline (layout.css) between consecutive rows, across
+     the content column only, so the rail stays one unbroken line. */
+  .mn-page :is(.mn-srow + .mn-srow, .mn-hit + .mn-hit > a)::after {
+      content: "";
+      grid-column: 3;
+      grid-row: 1;
+      align-self: start;
+      position: relative;
+      top: -3px;
+      height: 1px;
+      margin-bottom: -1px;
+      background: var(--hair);
+      pointer-events: none;
+  }
+  
   /* The dot, ringed in the page colour so it sits on the line. */
   .mn-page :is(.mn-srow, .mn-hit > a)::before {
       content: "";
@@ -21008,6 +21029,10 @@
   
       .mn-page :is(.mn-srow, .mn-hit > a)::before {
           grid-column: 1;
+      }
+  
+      .mn-page :is(.mn-srow + .mn-srow, .mn-hit + .mn-hit > a)::after {
+          grid-column: 2;
       }
   
       .mn-page :is(.mn-sgut, .mn-hgut) {
@@ -26179,6 +26204,7 @@
       --muted: #5f6670;
       --dim: #868d96; /* fold bars at rest (P7c): 3.3:1 on --bg */
       --rule: #e3e6ea;
+      --hair: #edeff1; /* hairline between rows: --rule 65% toward --bg */
       --rule2: #1f2328;
       --code: #f3f4f6;
       --userbg: #fbf2e8;
@@ -26207,10 +26233,13 @@
       --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   
       /* Row geometry: gutter, rail, and the narrower pair used inside a
-         nested sub-agent group (mockup .row / .nest .row). */
-      --gut: 58px;
+         nested sub-agent group (mockup .row / .nest .row). The gutters carry
+         the role icon (--ic plus its gap) beside a label of ~10 characters. */
+      --ic: 12px;
+      --ic-gap: 3px;
+      --gut: 72px;
       --rail: 18px;
-      --gut-nest: 46px;
+      --gut-nest: 60px;
       --rail-nest: 16px;
   
       color-scheme: light dark;
@@ -26223,6 +26252,7 @@
           --muted: #969da7;
           --dim: #6b727c;
           --rule: #2a2e35;
+          --hair: #22262c;
           --rule2: #c9ccd1;
           --code: #1d2025;
           --userbg: #2a2118;
@@ -26265,6 +26295,7 @@
       --muted: #969da7;
       --dim: #6b727c;
       --rule: #2a2e35;
+      --hair: #22262c;
       --rule2: #c9ccd1;
       --code: #1d2025;
       --userbg: #2a2118;
@@ -26904,8 +26935,46 @@
   }
   
   .theme-minimal #transcript .mn-role {
+      position: relative;
+      padding-right: calc(var(--ic) + var(--ic-gap));
       color: var(--rc);
       font-weight: 500;
+  }
+  
+  /* Role icons (html/minimal_icons.py): a stroke glyph in the role colour,
+     from the page's one sprite (`.mn-sprite`, right after <body>). Wide, it
+     ends the role line in the label's right padding, so the icons form one
+     column beside the rail and a long label truncates before its icon; on a
+     phone and in a column (left-aligned gutters) it leads the label. */
+  .theme-minimal .mn-sprite {
+      position: absolute;
+      width: 0;
+      height: 0;
+      overflow: hidden;
+  }
+  
+  .theme-minimal .mn-ic {
+      width: var(--ic);
+      height: var(--ic);
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.5;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+  }
+  
+  .theme-minimal #transcript .mn-role > .mn-ic {
+      position: absolute;
+      top: 50%;
+      right: 0;
+      margin-top: calc(var(--ic) / -2);
+  }
+  
+  /* A branch header's fork glyph, in the fork lane's colour. */
+  .theme-minimal #transcript .message.branch-header > .header > .mn-ic {
+      margin-right: 5px;
+      vertical-align: -2px;
+      color: var(--lF);
   }
   
   .theme-minimal #transcript .header-info .token-usage {
@@ -26991,6 +27060,34 @@
       margin-top: 4px;
       padding-top: 7px;
       border-top: 1px solid var(--rule2);
+  }
+  
+  /* Hairlines: a barely-there 1px rule (--hair) on top of every row, across
+     the content column only — the gutter and the rail stay clear, so the
+     rail line is unbroken and the dots untouched. A grid item of the row's
+     first line, lifted onto the row's top edge (its padding) and adding no
+     height. None inside a tool pair (call and result read as one unit),
+     above a turn rule (that row has its own), right under a session or
+     branch header, or on a column's first card (`dag-cfirst`, under the
+     column head). */
+  .theme-minimal #transcript .message:not(.session-header)::after {
+      content: "";
+      grid-column: 3;
+      grid-row: 1;
+      align-self: start;
+      position: relative;
+      top: -3px;
+      height: 1px;
+      margin-bottom: -1px;
+      background: var(--hair);
+      pointer-events: none;
+  }
+  
+  .theme-minimal #transcript .message:is(.pair_middle, .pair_last):not(.dag-split)::after,
+  .theme-minimal #transcript .message.dag-cfirst::after,
+  .theme-minimal #transcript .message-node:has(> .message.session-header) > .children > .message-node:first-child > .message::after,
+  .theme-minimal #transcript .message-node:has(> .message.session-header) > .children > .message-node ~ .message-node > .message.user:not(.steering):not(.task-notification):not(.teammate):not(.sidechain):not(.command-output):not(.pair_middle):not(.pair_last)::after {
+      content: none;
   }
   
   /* ------------------------------------------------------------ fold bar */
@@ -27488,9 +27585,23 @@
           padding-left: 4px;
       }
   
+      .theme-minimal #transcript .mn-role {
+          padding-right: 0;
+          padding-left: calc(var(--ic) + var(--ic-gap));
+      }
+  
+      .theme-minimal #transcript .mn-role > .mn-ic {
+          right: auto;
+          left: 0;
+      }
+  
       .theme-minimal #transcript .message > .header > .mn-title {
           grid-column: 2;
           grid-row: 2;
+      }
+  
+      .theme-minimal #transcript .message:not(.session-header)::after {
+          grid-column: 2;
       }
   
       .theme-minimal #transcript .message > .debug-info {
@@ -27950,6 +28061,30 @@
       color: var(--err);
       line-height: 1.6;
       text-transform: lowercase;
+  }
+  
+  .theme-minimal #transcript .message.tool_result.error .mn-role,
+  .theme-minimal #transcript .message.system-error .mn-role {
+      padding-right: calc(5px + var(--ic) + var(--ic-gap));
+  }
+  
+  .theme-minimal #transcript .message.tool_result.error .mn-role > .mn-ic,
+  .theme-minimal #transcript .message.system-error .mn-role > .mn-ic {
+      right: 5px;
+  }
+  
+  @media (max-width: 640px) {
+      .theme-minimal #transcript .message.tool_result.error .mn-role,
+      .theme-minimal #transcript .message.system-error .mn-role {
+          padding-right: 5px;
+          padding-left: calc(5px + var(--ic) + var(--ic-gap));
+      }
+  
+      .theme-minimal #transcript .message.tool_result.error .mn-role > .mn-ic,
+      .theme-minimal #transcript .message.system-error .mn-role > .mn-ic {
+          right: auto;
+          left: 5px;
+      }
   }
   
   .theme-minimal #transcript .message.tool_result.error:is(.pair_middle, .pair_last) > .header > .header-info {
@@ -29337,6 +29472,7 @@
       content: "⑂ rewound · ";
   }
   
+  .theme-minimal .mn-stage.dag-on #transcript .message.branch-header[data-lane-continues] > .header > .mn-ic,
   .theme-minimal .mn-stage.dag-on #transcript .message.branch-header[data-lane-continues] > .header > .branch-from,
   .theme-minimal .mn-stage.dag-on #transcript .message.branch-header[data-lane-continues] > .fold-bar {
       display: none;
@@ -29783,7 +29919,7 @@
   /* Cards in a column: the compact row (mockup .w-col) — gutter (time, role)
      left-aligned, no rail and no dot. */
   .theme-minimal .mn-stage.dag-on #transcript .message.dag-col {
-      grid-template-columns: 46px 6px minmax(0, 1fr);
+      grid-template-columns: 60px 6px minmax(0, 1fr);
       min-width: 0;
       padding-right: 10px;
       padding-left: 8px;
@@ -29796,6 +29932,26 @@
   .theme-minimal .mn-stage.dag-on #transcript .message.dag-col > .header > .header-info {
       align-items: flex-start;
       text-align: left;
+  }
+  
+  /* …so the role icon leads its label, as on a phone. */
+  .theme-minimal .mn-stage.dag-on #transcript .message.dag-col .mn-role {
+      padding-right: 0;
+      padding-left: calc(var(--ic) + var(--ic-gap));
+  }
+  
+  .theme-minimal .mn-stage.dag-on #transcript .message.dag-col .mn-role > .mn-ic {
+      right: auto;
+      left: 0;
+  }
+  
+  .theme-minimal .mn-stage.dag-on #transcript .message.dag-col:is(.system-error, .tool_result.error) .mn-role {
+      padding-right: 5px;
+      padding-left: calc(5px + var(--ic) + var(--ic-gap));
+  }
+  
+  .theme-minimal .mn-stage.dag-on #transcript .message.dag-col:is(.system-error, .tool_result.error) .mn-role > .mn-ic {
+      left: 5px;
   }
   
   /* A row shared with a taller card in another column would leave a gap
@@ -29927,7 +30083,7 @@
       </script>
   </head>
   
-  <body class='theme-minimal'>
+  <body class='theme-minimal'><svg class='mn-sprite' xmlns='http://www.w3.org/2000/svg' width='0' height='0' aria-hidden='true' focusable='false'><symbol id="mi-user" viewBox="0 0 16 16"><circle cx="8" cy="5" r="2.75"/><path d="M2.75 14c0-2.9 2.35-4.75 5.25-4.75s5.25 1.85 5.25 4.75"/></symbol><symbol id="mi-steer" viewBox="0 0 16 16"><path d="M3 14V9.5A4.5 4.5 0 0 1 7.5 5H13"/><path d="M10.25 2.25 13 5l-2.75 2.75"/></symbol><symbol id="mi-command" viewBox="0 0 16 16"><rect x="2" y="2" width="12" height="12" rx="2.5"/><path d="M9.75 4.75 6.25 11.25"/></symbol><symbol id="mi-output" viewBox="0 0 16 16"><path d="M2.5 3.5h11M2.5 6.5h11M2.5 9.5h7.5M2.5 12.5h4.5"/></symbol><symbol id="mi-bash-in" viewBox="0 0 16 16"><path d="M2.5 3.75 6.75 8 2.5 12.25M8.75 12.25h4.75"/></symbol><symbol id="mi-compacted" viewBox="0 0 16 16"><path d="M8 1.5v4.5M5.5 3.5 8 6l2.5-2.5M8 14.5V10M5.5 12.5 8 10l2.5 2.5M2 8h12"/></symbol><symbol id="mi-memory" viewBox="0 0 16 16"><path d="M4 2.25h8v11.5l-4-3-4 3z"/></symbol><symbol id="mi-memory-write" viewBox="0 0 16 16"><path d="M4 2.25h8v11.5l-4-3-4 3z"/><path d="M8 4.75v3.5M6.25 6.5h3.5"/></symbol><symbol id="mi-teammate" viewBox="0 0 16 16"><circle cx="6" cy="5.25" r="2.25"/><path d="M1.75 13.75c0-2.5 1.9-4.25 4.25-4.25s4.25 1.75 4.25 4.25"/><path d="M10.5 3.15a2.25 2.25 0 0 1 0 4.2M12.25 9.9c1.3.55 2 1.85 2 3.85"/></symbol><symbol id="mi-async" viewBox="0 0 16 16"><path d="M4 11.25V7a4 4 0 0 1 8 0v4.25l1.25 1.5H2.75z"/><path d="M6.5 14.75h3"/></symbol><symbol id="mi-assistant" viewBox="0 0 16 16"><path d="M8 1.75c.45 3.3 2.95 5.8 6.25 6.25-3.3.45-5.8 2.95-6.25 6.25-.45-3.3-2.95-5.8-6.25-6.25C5.05 7.55 7.55 5.05 8 1.75z"/></symbol><symbol id="mi-agent" viewBox="0 0 16 16"><rect x="2.5" y="5" width="11" height="8.75" rx="2.25"/><path d="M8 5V2.5M6 8.5V10M10 8.5V10"/></symbol><symbol id="mi-thinking" viewBox="0 0 16 16"><path d="M5.5 10.5a3 3 0 0 1-.75-5.9 4 4 0 0 1 7.15-.85 3.4 3.4 0 0 1 .35 6.75z"/><circle cx="4.25" cy="12.75" r="1"/><path d="M1.9 14.75v.01"/></symbol><symbol id="mi-info" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.25"/><path d="M8 7.25v4M8 4.75v.01"/></symbol><symbol id="mi-warning" viewBox="0 0 16 16"><path d="M8 2.25 14.5 13.5h-13z"/><path d="M8 6.75v3M8 11.5v.01"/></symbol><symbol id="mi-error" viewBox="0 0 16 16"><path d="M5.4 1.75h5.2l3.65 3.65v5.2l-3.65 3.65H5.4L1.75 10.6V5.4z"/><path d="M8 4.75v3.75M8 11.25v.01"/></symbol><symbol id="mi-hook" viewBox="0 0 16 16"><circle cx="10.5" cy="3.25" r="1.5"/><path d="M10.5 4.75V10a3.5 3.5 0 0 1-7 0V8l2.25 2.25"/></symbol><symbol id="mi-recap" viewBox="0 0 16 16"><path d="M2.75 8a5.25 5.25 0 1 0 1.54-3.71"/><path d="M4.25 1.75v2.5h2.5M8 5.25V8l2 1.25"/></symbol><symbol id="mi-image" viewBox="0 0 16 16"><rect x="1.75" y="2.75" width="12.5" height="10.5" rx="1.75"/><circle cx="10.25" cy="6.25" r="1.25"/><path d="M2.25 12.25 6 8.5l3.25 3.25 1.5-1.5 3 3"/></symbol><symbol id="mi-branch" viewBox="0 0 16 16"><circle cx="4.5" cy="3.5" r="1.75"/><circle cx="4.5" cy="12.5" r="1.75"/><circle cx="11.5" cy="3.5" r="1.75"/><path d="M4.5 5.25v5.5M11.5 5.25c0 3.75-7 2.5-7 5.5"/></symbol><symbol id="mi-result" viewBox="0 0 16 16"><path d="M13 2.5v5A2.5 2.5 0 0 1 10.5 10H3"/><path d="M6 7 3 10l3 3"/></symbol><symbol id="mi-tool-error" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.25"/><path d="M5.75 5.75l4.5 4.5M10.25 5.75l-4.5 4.5"/></symbol><symbol id="mi-tool" viewBox="0 0 16 16"><path d="M10.1 2a3.6 3.6 0 0 0-3.55 4.75L2.3 11a1.6 1.6 0 0 0 2.3 2.25l4.2-4.2a3.6 3.6 0 0 0 4.75-3.55l-2 2-2.2-.35-.35-2.2z"/></symbol><symbol id="mi-read" viewBox="0 0 16 16"><path d="M1.5 8S4 3.25 8 3.25 14.5 8 14.5 8 12 12.75 8 12.75 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/></symbol><symbol id="mi-write" viewBox="0 0 16 16"><path d="M9.5 1.75H4.25a1 1 0 0 0-1 1v10.5a1 1 0 0 0 1 1h7.5a1 1 0 0 0 1-1V5z"/><path d="M9.5 1.75V5h3.25M8 7.5v4.5M5.75 9.75h4.5"/></symbol><symbol id="mi-edit" viewBox="0 0 16 16"><path d="M10.5 2.5a1.75 1.75 0 0 1 2.5 0l.5.5a1.75 1.75 0 0 1 0 2.5L5.5 13.5 2.25 14l.5-3.25z"/><path d="M9.25 3.75 12.25 6.75"/></symbol><symbol id="mi-multiedit" viewBox="0 0 16 16"><path d="M1.75 3h5M1.75 6h3"/><path d="M11.25 4a1.6 1.6 0 0 1 2.25 0l.5.5a1.6 1.6 0 0 1 0 2.25L7.25 13.5 4.25 14l.5-3z"/><path d="M1.75 13.75h1"/></symbol><symbol id="mi-delete" viewBox="0 0 16 16"><path d="M2.25 4.25h11.5M6 4.25V2.25h4v2M3.75 4.25l.75 9.5h7l.75-9.5M6.75 7v4M9.25 7v4"/></symbol><symbol id="mi-bash" viewBox="0 0 16 16"><rect x="1.75" y="2.5" width="12.5" height="11" rx="2"/><path d="M4.5 6.25 6.75 8.5 4.5 10.75M8.5 10.75h3"/></symbol><symbol id="mi-glob" viewBox="0 0 16 16"><path d="M8 2v12M2.8 5l10.4 6M2.8 11l10.4-6"/></symbol><symbol id="mi-grep" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.75"/><path d="M10.5 10.5 14.25 14.25"/></symbol><symbol id="mi-websearch" viewBox="0 0 16 16"><circle cx="6.75" cy="6.75" r="5"/><path d="M1.75 6.75h10M6.75 1.75c-1.75 1.6-1.75 8.4 0 10M6.75 1.75c1.75 1.6 1.75 8.4 0 10M10.5 10.5l3.75 3.75"/></symbol><symbol id="mi-webfetch" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.25"/><path d="M1.75 8h12.5M8 1.75c-2.2 2-2.2 10.5 0 12.5M8 1.75c2.2 2 2.2 10.5 0 12.5"/></symbol><symbol id="mi-taskoutput" viewBox="0 0 16 16"><path d="M1.75 9.25h3.5l1 2h3.5l1-2h3.5"/><path d="M3.75 3h8.5l2 6.25V13a1 1 0 0 1-1 1H2.75a1 1 0 0 1-1-1V9.25z"/></symbol><symbol id="mi-taskstop" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.25"/><rect x="5.75" y="5.75" width="4.5" height="4.5" rx=".5"/></symbol><symbol id="mi-todo" viewBox="0 0 16 16"><path d="M1.75 4.5 3.25 6 5.75 3M1.75 10.5 3.25 12l2.5-3M8.25 4.75h6M8.25 10.75h6"/></symbol><symbol id="mi-ask" viewBox="0 0 16 16"><path d="M2.75 2.5h10.5a1.25 1.25 0 0 1 1.25 1.25v6.5a1.25 1.25 0 0 1-1.25 1.25H7.5L4.5 14v-2.5H2.75a1.25 1.25 0 0 1-1.25-1.25v-6.5A1.25 1.25 0 0 1 2.75 2.5z"/><path d="M6.5 5.4a1.5 1.5 0 1 1 2.1 1.4c-.4.2-.6.55-.6 1v.2M8 9.6v.01"/></symbol><symbol id="mi-plan" viewBox="0 0 16 16"><path d="M5.5 2.75H4.25A1.25 1.25 0 0 0 3 4v9.25a1.25 1.25 0 0 0 1.25 1.25h7.5A1.25 1.25 0 0 0 13 13.25V4a1.25 1.25 0 0 0-1.25-1.25H10.5"/><rect x="5.5" y="1.5" width="5" height="2.5" rx=".75"/><path d="M5.5 9.25 7.25 11l3.25-3.5"/></symbol><symbol id="mi-skill" viewBox="0 0 16 16"><path d="M9.25 1.5 3.5 9h4.25l-1 5.5L12.5 7H8.25z"/></symbol><symbol id="mi-artifact" viewBox="0 0 16 16"><rect x="1.75" y="2.5" width="12.5" height="11" rx="2"/><path d="M1.75 5.75h12.5M6.25 11.25 9.75 7.75M6.75 7.75h3v3"/></symbol><symbol id="mi-monitor" viewBox="0 0 16 16"><path d="M1.5 8.5h2.75l1.75-4.25 3 8.5 1.75-4.25h3.75"/></symbol><symbol id="mi-wakeup" viewBox="0 0 16 16"><circle cx="8" cy="8.75" r="5.25"/><path d="M8 6.25v2.5l1.75 1.25M1.75 4.25 4 2.25M14.25 4.25 12 2.25"/></symbol><symbol id="mi-cron" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="11" rx="1.75"/><path d="M2 6.75h12M5.25 1.75v2.5M10.75 1.75v2.5M5.5 10.25h1M9.5 10.25h1"/></symbol><symbol id="mi-taskcreate" viewBox="0 0 16 16"><rect x="2.25" y="2.25" width="11.5" height="11.5" rx="2.5"/><path d="M8 5.25v5.5M5.25 8h5.5"/></symbol><symbol id="mi-taskupdate" viewBox="0 0 16 16"><rect x="2.25" y="2.25" width="11.5" height="11.5" rx="2.5"/><path d="M5.25 8.25 7.25 10.25 10.75 6"/></symbol><symbol id="mi-tasklist" viewBox="0 0 16 16"><path d="M6 4h8M6 8h8M6 12h8M2 4h1M2 8h1M2 12h1"/></symbol><symbol id="mi-send" viewBox="0 0 16 16"><path d="M14.25 1.75 7 9M14.25 1.75 9.75 14.25 7 9 1.75 6.25z"/></symbol><symbol id="mi-workflow" viewBox="0 0 16 16"><rect x="1.75" y="1.75" width="5.5" height="4.5" rx="1"/><rect x="8.75" y="9.75" width="5.5" height="4.5" rx="1"/><path d="M4.5 6.25v3.5a2 2 0 0 0 2 2h2.25"/></symbol><symbol id="mi-phase" viewBox="0 0 16 16"><path d="M3.5 14.5V1.75"/><path d="M3.5 2.5h9l-2.25 3.25L12.5 9h-9"/></symbol><symbol id="mi-code" viewBox="0 0 16 16"><path d="M5 4.25 1.75 8 5 11.75M11 4.25 14.25 8 11 11.75M9.25 2.75l-2.5 10.5"/></symbol><symbol id="mi-wait" viewBox="0 0 16 16"><path d="M4 1.75h8M4 14.25h8M5 1.75v2.5C5 6 8 6.5 8 8s-3 2-3 3.75v2.5M11 1.75v2.5C11 6 8 6.5 8 8s3 2 3 3.75v2.5"/></symbol></svg>
       <script>
           // ---- rehydrate contract -------------------------------------------
           // A live update (see live_update.js) replaces #transcript wholesale.
@@ -30746,7 +30902,7 @@
       <div class='message user' data-uuid='11111111-0000-4000-8000-000000000001' id='msg-d-1' data-lane="main">
           <div class='header'>
               <span class='mn-title mn-generic' title="🤷 User"><span class='mn-tn'>🤷 User</span></span>
-              <div class='header-info'><span class='mn-role'>User</span>
+              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-user'/></svg>User</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-04-19T10:01:00.000Z'>2026-04-19 10:01:00</span><span class='mn-time'>10:01:00</span>
                   </div>
@@ -30782,7 +30938,7 @@
       <div class='message tool_use pair_first' data-uuid='22222222-0000-4000-8000-000000000002' id='msg-d-2' data-lane="main" data-spawns="agent-cccc333" data-lane-id="agent-cccc333" data-lane-kind="async-agent" data-lane-name="Coverage analysis" data-lane-tag="coverage" data-lane-meta="Explore · claude-opus-4-7 · async" data-lane-parent="main" data-lane-depth="1" data-lane-from="d-2" data-lane-to="d-9" data-lane-turn="d-1" data-lane-rank="1" data-lane-stats="1 step · 23.1k tokens · 15.5s" data-lane-ts="2026-04-19T10:04:00.000Z 2026-04-19T10:04:00.000Z">
           <div class='header'>
               <span class='mn-title' title="🔧 Task Coverage analysis (Explore) [async #cccc333] claude-opus-4-7 · ID: tu_Task_async_001"><span class='mn-tn'>🔧 Task </span><span class='tool-summary'>Coverage analysis</span> <span class='tool-subagent'>(Explore)</span> <span class='task-async-hint'>[async <a class='task-id-forward-link' href='#msg-d-7'><code>#cccc333</code></a>]</span> <span class='message-model' title='Model this sub-agent ran on'>claude-opus-4-7</span></span>
-              <div class='header-info'><span class='mn-role'>Task</span>
+              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-agent'/></svg>Task</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-04-19T10:02:00.000Z'>2026-04-19 10:02:00</span><span class='mn-time'>10:02:00</span>
                   </div>
@@ -30805,7 +30961,7 @@
       <div class='message tool_result pair_last' data-uuid='11111111-0000-4000-8000-000000000003' id='msg-d-3' data-lane="main">
           <div class='header'>
               <span class='mn-title mn-generic' title="ID: tu_Task_async_001"></span>
-              <div class='header-info'><span class='mn-role'>Result</span>
+              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-result'/></svg>Result</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-04-19T10:03:00.000Z' data-duration='took 1m 0s'>2026-04-19 10:03:00</span><span class='mn-time'>10:03:00</span>
                   </div>
@@ -30837,7 +30993,7 @@
       <div class='message assistant sidechain agent-depth-1 agent-ring-1' data-uuid='cccccccc-0000-4000-8000-000000000002' id='msg-d-5' data-lane="agent-cccc333">
           <div class='header'>
               <span class='mn-title mn-generic' title="🔗 Sub-assistant"><span class='mn-tn'>🔗 Sub-assistant</span></span>
-              <div class='header-info'><span class='mn-role'>Agent</span>
+              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-agent'/></svg>Agent</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-04-19T10:04:00.000Z'>2026-04-19 10:04:00</span><span class='mn-time'>10:04:00</span>
                   </div>
@@ -30865,7 +31021,7 @@
       <div class='message tool_use pair_first' data-uuid='22222222-0000-4000-8000-000000000004' id='msg-d-7' data-lane="main">
           <div class='header'>
               <span class='mn-title' title="🔍 TaskOutput #cccc333 · ID: tu_TaskOutput_001"><span class='mn-tn'>🔍 TaskOutput </span><a class='task-id-backlink' href='#msg-d-2'><code>#cccc333</code></a></span>
-              <div class='header-info'><span class='mn-role'>TaskOutput</span>
+              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-taskoutput'/></svg>TaskOutput</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-04-19T10:04:00.000Z'>2026-04-19 10:04:00</span><span class='mn-time'>10:04:00</span>
                   </div>
@@ -30887,7 +31043,7 @@
       <div class='message tool_result pair_last' data-uuid='11111111-0000-4000-8000-000000000005' id='msg-d-8' data-lane="main">
           <div class='header'>
               <span class='mn-title mn-generic' title="ID: tu_TaskOutput_001"></span>
-              <div class='header-info'><span class='mn-role'>Result</span>
+              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-result'/></svg>Result</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-04-19T10:05:00.000Z' data-duration='took 1m 0s'>2026-04-19 10:05:00</span><span class='mn-time'>10:05:00</span>
                   </div>
@@ -30909,7 +31065,7 @@
       <div class='message user task-notification' data-uuid='11111111-0000-4000-8000-000000000006' id='msg-d-9' data-lane="main" data-merges="agent-cccc333">
           <div class='header'>
               <span class='mn-title' title="🔄 Async result Agent &#34;Coverage analysis&#34; completed"><span class='mn-tn'>🔄 Async result </span><span class='tool-summary'>Agent &quot;Coverage analysis&quot; completed</span></span>
-              <div class='header-info'><span class='mn-role'>Async</span>
+              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-async'/></svg>Async</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-04-19T10:06:00.000Z'>2026-04-19 10:06:00</span><span class='mn-time'>10:06:00</span>
                   </div>
@@ -30946,7 +31102,7 @@
       <div class='message assistant' data-uuid='22222222-0000-4000-8000-000000000007' id='msg-d-10' data-lane="main">
           <div class='header'>
               <span class='mn-title mn-generic' title="🤖 Assistant"><span class='mn-tn'>🤖 Assistant</span></span>
-              <div class='header-info'><span class='mn-role'>Assistant</span>
+              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-assistant'/></svg>Assistant</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-04-19T10:07:00.000Z'>2026-04-19 10:07:00</span><span class='mn-time'>10:07:00</span>
                   </div>
@@ -35397,6 +35553,17 @@
                           });
                       });
                   });
+                  if (tracks.length) {
+                      // The first shown card under each column head (main's
+                      // included) draws no hairline: the head's edge is there.
+                      const firstSeen = new Set();
+                      sequence.forEach(function (item) {
+                          if (item.kind !== 'card' || item.hidden || firstSeen.has(item.key)) return;
+                          if (item.key !== 'main' && !colIndex.has(item.key)) return;
+                          firstSeen.add(item.key);
+                          want(item.el, 'dag-cfirst');
+                      });
+                  }
                   {
                       // Only rows that are shown count: a folded lane between
                       // two halves leaves empty rows, not a split.
@@ -35555,7 +35722,7 @@
                   const style = getComputedStyle(stage);
                   const step = parseFloat(style.getPropertyValue('--dag-step')) || 16;
                   const x0 = parseFloat(style.getPropertyValue('--dag-x0')) || 9;
-                  const gut = phone && phone.matches ? 0 : (parseFloat(style.getPropertyValue('--gut')) || 58);
+                  const gut = phone && phone.matches ? 0 : (parseFloat(style.getPropertyValue('--gut')) || 72);
                   const base = transcriptBox.left - stageBox.left + gut + x0;
                   const slotOf = layout.rail.slotOf;
                   function x(slot) { return base + step * slot; }
@@ -40279,6 +40446,7 @@
       --muted: #5f6670;
       --dim: #868d96; /* fold bars at rest (P7c): 3.3:1 on --bg */
       --rule: #e3e6ea;
+      --hair: #edeff1; /* hairline between rows: --rule 65% toward --bg */
       --rule2: #1f2328;
       --code: #f3f4f6;
       --userbg: #fbf2e8;
@@ -40307,10 +40475,13 @@
       --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   
       /* Row geometry: gutter, rail, and the narrower pair used inside a
-         nested sub-agent group (mockup .row / .nest .row). */
-      --gut: 58px;
+         nested sub-agent group (mockup .row / .nest .row). The gutters carry
+         the role icon (--ic plus its gap) beside a label of ~10 characters. */
+      --ic: 12px;
+      --ic-gap: 3px;
+      --gut: 72px;
       --rail: 18px;
-      --gut-nest: 46px;
+      --gut-nest: 60px;
       --rail-nest: 16px;
   
       color-scheme: light dark;
@@ -40323,6 +40494,7 @@
           --muted: #969da7;
           --dim: #6b727c;
           --rule: #2a2e35;
+          --hair: #22262c;
           --rule2: #c9ccd1;
           --code: #1d2025;
           --userbg: #2a2118;
@@ -40365,6 +40537,7 @@
       --muted: #969da7;
       --dim: #6b727c;
       --rule: #2a2e35;
+      --hair: #22262c;
       --rule2: #c9ccd1;
       --code: #1d2025;
       --userbg: #2a2118;
@@ -41004,8 +41177,46 @@
   }
   
   .theme-minimal #transcript .mn-role {
+      position: relative;
+      padding-right: calc(var(--ic) + var(--ic-gap));
       color: var(--rc);
       font-weight: 500;
+  }
+  
+  /* Role icons (html/minimal_icons.py): a stroke glyph in the role colour,
+     from the page's one sprite (`.mn-sprite`, right after <body>). Wide, it
+     ends the role line in the label's right padding, so the icons form one
+     column beside the rail and a long label truncates before its icon; on a
+     phone and in a column (left-aligned gutters) it leads the label. */
+  .theme-minimal .mn-sprite {
+      position: absolute;
+      width: 0;
+      height: 0;
+      overflow: hidden;
+  }
+  
+  .theme-minimal .mn-ic {
+      width: var(--ic);
+      height: var(--ic);
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.5;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+  }
+  
+  .theme-minimal #transcript .mn-role > .mn-ic {
+      position: absolute;
+      top: 50%;
+      right: 0;
+      margin-top: calc(var(--ic) / -2);
+  }
+  
+  /* A branch header's fork glyph, in the fork lane's colour. */
+  .theme-minimal #transcript .message.branch-header > .header > .mn-ic {
+      margin-right: 5px;
+      vertical-align: -2px;
+      color: var(--lF);
   }
   
   .theme-minimal #transcript .header-info .token-usage {
@@ -41091,6 +41302,34 @@
       margin-top: 4px;
       padding-top: 7px;
       border-top: 1px solid var(--rule2);
+  }
+  
+  /* Hairlines: a barely-there 1px rule (--hair) on top of every row, across
+     the content column only — the gutter and the rail stay clear, so the
+     rail line is unbroken and the dots untouched. A grid item of the row's
+     first line, lifted onto the row's top edge (its padding) and adding no
+     height. None inside a tool pair (call and result read as one unit),
+     above a turn rule (that row has its own), right under a session or
+     branch header, or on a column's first card (`dag-cfirst`, under the
+     column head). */
+  .theme-minimal #transcript .message:not(.session-header)::after {
+      content: "";
+      grid-column: 3;
+      grid-row: 1;
+      align-self: start;
+      position: relative;
+      top: -3px;
+      height: 1px;
+      margin-bottom: -1px;
+      background: var(--hair);
+      pointer-events: none;
+  }
+  
+  .theme-minimal #transcript .message:is(.pair_middle, .pair_last):not(.dag-split)::after,
+  .theme-minimal #transcript .message.dag-cfirst::after,
+  .theme-minimal #transcript .message-node:has(> .message.session-header) > .children > .message-node:first-child > .message::after,
+  .theme-minimal #transcript .message-node:has(> .message.session-header) > .children > .message-node ~ .message-node > .message.user:not(.steering):not(.task-notification):not(.teammate):not(.sidechain):not(.command-output):not(.pair_middle):not(.pair_last)::after {
+      content: none;
   }
   
   /* ------------------------------------------------------------ fold bar */
@@ -41588,9 +41827,23 @@
           padding-left: 4px;
       }
   
+      .theme-minimal #transcript .mn-role {
+          padding-right: 0;
+          padding-left: calc(var(--ic) + var(--ic-gap));
+      }
+  
+      .theme-minimal #transcript .mn-role > .mn-ic {
+          right: auto;
+          left: 0;
+      }
+  
       .theme-minimal #transcript .message > .header > .mn-title {
           grid-column: 2;
           grid-row: 2;
+      }
+  
+      .theme-minimal #transcript .message:not(.session-header)::after {
+          grid-column: 2;
       }
   
       .theme-minimal #transcript .message > .debug-info {
@@ -42050,6 +42303,30 @@
       color: var(--err);
       line-height: 1.6;
       text-transform: lowercase;
+  }
+  
+  .theme-minimal #transcript .message.tool_result.error .mn-role,
+  .theme-minimal #transcript .message.system-error .mn-role {
+      padding-right: calc(5px + var(--ic) + var(--ic-gap));
+  }
+  
+  .theme-minimal #transcript .message.tool_result.error .mn-role > .mn-ic,
+  .theme-minimal #transcript .message.system-error .mn-role > .mn-ic {
+      right: 5px;
+  }
+  
+  @media (max-width: 640px) {
+      .theme-minimal #transcript .message.tool_result.error .mn-role,
+      .theme-minimal #transcript .message.system-error .mn-role {
+          padding-right: 5px;
+          padding-left: calc(5px + var(--ic) + var(--ic-gap));
+      }
+  
+      .theme-minimal #transcript .message.tool_result.error .mn-role > .mn-ic,
+      .theme-minimal #transcript .message.system-error .mn-role > .mn-ic {
+          right: auto;
+          left: 5px;
+      }
   }
   
   .theme-minimal #transcript .message.tool_result.error:is(.pair_middle, .pair_last) > .header > .header-info {
@@ -43437,6 +43714,7 @@
       content: "⑂ rewound · ";
   }
   
+  .theme-minimal .mn-stage.dag-on #transcript .message.branch-header[data-lane-continues] > .header > .mn-ic,
   .theme-minimal .mn-stage.dag-on #transcript .message.branch-header[data-lane-continues] > .header > .branch-from,
   .theme-minimal .mn-stage.dag-on #transcript .message.branch-header[data-lane-continues] > .fold-bar {
       display: none;
@@ -43883,7 +44161,7 @@
   /* Cards in a column: the compact row (mockup .w-col) — gutter (time, role)
      left-aligned, no rail and no dot. */
   .theme-minimal .mn-stage.dag-on #transcript .message.dag-col {
-      grid-template-columns: 46px 6px minmax(0, 1fr);
+      grid-template-columns: 60px 6px minmax(0, 1fr);
       min-width: 0;
       padding-right: 10px;
       padding-left: 8px;
@@ -43896,6 +44174,26 @@
   .theme-minimal .mn-stage.dag-on #transcript .message.dag-col > .header > .header-info {
       align-items: flex-start;
       text-align: left;
+  }
+  
+  /* …so the role icon leads its label, as on a phone. */
+  .theme-minimal .mn-stage.dag-on #transcript .message.dag-col .mn-role {
+      padding-right: 0;
+      padding-left: calc(var(--ic) + var(--ic-gap));
+  }
+  
+  .theme-minimal .mn-stage.dag-on #transcript .message.dag-col .mn-role > .mn-ic {
+      right: auto;
+      left: 0;
+  }
+  
+  .theme-minimal .mn-stage.dag-on #transcript .message.dag-col:is(.system-error, .tool_result.error) .mn-role {
+      padding-right: 5px;
+      padding-left: calc(5px + var(--ic) + var(--ic-gap));
+  }
+  
+  .theme-minimal .mn-stage.dag-on #transcript .message.dag-col:is(.system-error, .tool_result.error) .mn-role > .mn-ic {
+      left: 5px;
   }
   
   /* A row shared with a taller card in another column would leave a gap
@@ -44027,7 +44325,7 @@
       </script>
   </head>
   
-  <body class='theme-minimal'>
+  <body class='theme-minimal'><svg class='mn-sprite' xmlns='http://www.w3.org/2000/svg' width='0' height='0' aria-hidden='true' focusable='false'><symbol id="mi-user" viewBox="0 0 16 16"><circle cx="8" cy="5" r="2.75"/><path d="M2.75 14c0-2.9 2.35-4.75 5.25-4.75s5.25 1.85 5.25 4.75"/></symbol><symbol id="mi-steer" viewBox="0 0 16 16"><path d="M3 14V9.5A4.5 4.5 0 0 1 7.5 5H13"/><path d="M10.25 2.25 13 5l-2.75 2.75"/></symbol><symbol id="mi-command" viewBox="0 0 16 16"><rect x="2" y="2" width="12" height="12" rx="2.5"/><path d="M9.75 4.75 6.25 11.25"/></symbol><symbol id="mi-output" viewBox="0 0 16 16"><path d="M2.5 3.5h11M2.5 6.5h11M2.5 9.5h7.5M2.5 12.5h4.5"/></symbol><symbol id="mi-bash-in" viewBox="0 0 16 16"><path d="M2.5 3.75 6.75 8 2.5 12.25M8.75 12.25h4.75"/></symbol><symbol id="mi-compacted" viewBox="0 0 16 16"><path d="M8 1.5v4.5M5.5 3.5 8 6l2.5-2.5M8 14.5V10M5.5 12.5 8 10l2.5 2.5M2 8h12"/></symbol><symbol id="mi-memory" viewBox="0 0 16 16"><path d="M4 2.25h8v11.5l-4-3-4 3z"/></symbol><symbol id="mi-memory-write" viewBox="0 0 16 16"><path d="M4 2.25h8v11.5l-4-3-4 3z"/><path d="M8 4.75v3.5M6.25 6.5h3.5"/></symbol><symbol id="mi-teammate" viewBox="0 0 16 16"><circle cx="6" cy="5.25" r="2.25"/><path d="M1.75 13.75c0-2.5 1.9-4.25 4.25-4.25s4.25 1.75 4.25 4.25"/><path d="M10.5 3.15a2.25 2.25 0 0 1 0 4.2M12.25 9.9c1.3.55 2 1.85 2 3.85"/></symbol><symbol id="mi-async" viewBox="0 0 16 16"><path d="M4 11.25V7a4 4 0 0 1 8 0v4.25l1.25 1.5H2.75z"/><path d="M6.5 14.75h3"/></symbol><symbol id="mi-assistant" viewBox="0 0 16 16"><path d="M8 1.75c.45 3.3 2.95 5.8 6.25 6.25-3.3.45-5.8 2.95-6.25 6.25-.45-3.3-2.95-5.8-6.25-6.25C5.05 7.55 7.55 5.05 8 1.75z"/></symbol><symbol id="mi-agent" viewBox="0 0 16 16"><rect x="2.5" y="5" width="11" height="8.75" rx="2.25"/><path d="M8 5V2.5M6 8.5V10M10 8.5V10"/></symbol><symbol id="mi-thinking" viewBox="0 0 16 16"><path d="M5.5 10.5a3 3 0 0 1-.75-5.9 4 4 0 0 1 7.15-.85 3.4 3.4 0 0 1 .35 6.75z"/><circle cx="4.25" cy="12.75" r="1"/><path d="M1.9 14.75v.01"/></symbol><symbol id="mi-info" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.25"/><path d="M8 7.25v4M8 4.75v.01"/></symbol><symbol id="mi-warning" viewBox="0 0 16 16"><path d="M8 2.25 14.5 13.5h-13z"/><path d="M8 6.75v3M8 11.5v.01"/></symbol><symbol id="mi-error" viewBox="0 0 16 16"><path d="M5.4 1.75h5.2l3.65 3.65v5.2l-3.65 3.65H5.4L1.75 10.6V5.4z"/><path d="M8 4.75v3.75M8 11.25v.01"/></symbol><symbol id="mi-hook" viewBox="0 0 16 16"><circle cx="10.5" cy="3.25" r="1.5"/><path d="M10.5 4.75V10a3.5 3.5 0 0 1-7 0V8l2.25 2.25"/></symbol><symbol id="mi-recap" viewBox="0 0 16 16"><path d="M2.75 8a5.25 5.25 0 1 0 1.54-3.71"/><path d="M4.25 1.75v2.5h2.5M8 5.25V8l2 1.25"/></symbol><symbol id="mi-image" viewBox="0 0 16 16"><rect x="1.75" y="2.75" width="12.5" height="10.5" rx="1.75"/><circle cx="10.25" cy="6.25" r="1.25"/><path d="M2.25 12.25 6 8.5l3.25 3.25 1.5-1.5 3 3"/></symbol><symbol id="mi-branch" viewBox="0 0 16 16"><circle cx="4.5" cy="3.5" r="1.75"/><circle cx="4.5" cy="12.5" r="1.75"/><circle cx="11.5" cy="3.5" r="1.75"/><path d="M4.5 5.25v5.5M11.5 5.25c0 3.75-7 2.5-7 5.5"/></symbol><symbol id="mi-result" viewBox="0 0 16 16"><path d="M13 2.5v5A2.5 2.5 0 0 1 10.5 10H3"/><path d="M6 7 3 10l3 3"/></symbol><symbol id="mi-tool-error" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.25"/><path d="M5.75 5.75l4.5 4.5M10.25 5.75l-4.5 4.5"/></symbol><symbol id="mi-tool" viewBox="0 0 16 16"><path d="M10.1 2a3.6 3.6 0 0 0-3.55 4.75L2.3 11a1.6 1.6 0 0 0 2.3 2.25l4.2-4.2a3.6 3.6 0 0 0 4.75-3.55l-2 2-2.2-.35-.35-2.2z"/></symbol><symbol id="mi-read" viewBox="0 0 16 16"><path d="M1.5 8S4 3.25 8 3.25 14.5 8 14.5 8 12 12.75 8 12.75 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/></symbol><symbol id="mi-write" viewBox="0 0 16 16"><path d="M9.5 1.75H4.25a1 1 0 0 0-1 1v10.5a1 1 0 0 0 1 1h7.5a1 1 0 0 0 1-1V5z"/><path d="M9.5 1.75V5h3.25M8 7.5v4.5M5.75 9.75h4.5"/></symbol><symbol id="mi-edit" viewBox="0 0 16 16"><path d="M10.5 2.5a1.75 1.75 0 0 1 2.5 0l.5.5a1.75 1.75 0 0 1 0 2.5L5.5 13.5 2.25 14l.5-3.25z"/><path d="M9.25 3.75 12.25 6.75"/></symbol><symbol id="mi-multiedit" viewBox="0 0 16 16"><path d="M1.75 3h5M1.75 6h3"/><path d="M11.25 4a1.6 1.6 0 0 1 2.25 0l.5.5a1.6 1.6 0 0 1 0 2.25L7.25 13.5 4.25 14l.5-3z"/><path d="M1.75 13.75h1"/></symbol><symbol id="mi-delete" viewBox="0 0 16 16"><path d="M2.25 4.25h11.5M6 4.25V2.25h4v2M3.75 4.25l.75 9.5h7l.75-9.5M6.75 7v4M9.25 7v4"/></symbol><symbol id="mi-bash" viewBox="0 0 16 16"><rect x="1.75" y="2.5" width="12.5" height="11" rx="2"/><path d="M4.5 6.25 6.75 8.5 4.5 10.75M8.5 10.75h3"/></symbol><symbol id="mi-glob" viewBox="0 0 16 16"><path d="M8 2v12M2.8 5l10.4 6M2.8 11l10.4-6"/></symbol><symbol id="mi-grep" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.75"/><path d="M10.5 10.5 14.25 14.25"/></symbol><symbol id="mi-websearch" viewBox="0 0 16 16"><circle cx="6.75" cy="6.75" r="5"/><path d="M1.75 6.75h10M6.75 1.75c-1.75 1.6-1.75 8.4 0 10M6.75 1.75c1.75 1.6 1.75 8.4 0 10M10.5 10.5l3.75 3.75"/></symbol><symbol id="mi-webfetch" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.25"/><path d="M1.75 8h12.5M8 1.75c-2.2 2-2.2 10.5 0 12.5M8 1.75c2.2 2 2.2 10.5 0 12.5"/></symbol><symbol id="mi-taskoutput" viewBox="0 0 16 16"><path d="M1.75 9.25h3.5l1 2h3.5l1-2h3.5"/><path d="M3.75 3h8.5l2 6.25V13a1 1 0 0 1-1 1H2.75a1 1 0 0 1-1-1V9.25z"/></symbol><symbol id="mi-taskstop" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.25"/><rect x="5.75" y="5.75" width="4.5" height="4.5" rx=".5"/></symbol><symbol id="mi-todo" viewBox="0 0 16 16"><path d="M1.75 4.5 3.25 6 5.75 3M1.75 10.5 3.25 12l2.5-3M8.25 4.75h6M8.25 10.75h6"/></symbol><symbol id="mi-ask" viewBox="0 0 16 16"><path d="M2.75 2.5h10.5a1.25 1.25 0 0 1 1.25 1.25v6.5a1.25 1.25 0 0 1-1.25 1.25H7.5L4.5 14v-2.5H2.75a1.25 1.25 0 0 1-1.25-1.25v-6.5A1.25 1.25 0 0 1 2.75 2.5z"/><path d="M6.5 5.4a1.5 1.5 0 1 1 2.1 1.4c-.4.2-.6.55-.6 1v.2M8 9.6v.01"/></symbol><symbol id="mi-plan" viewBox="0 0 16 16"><path d="M5.5 2.75H4.25A1.25 1.25 0 0 0 3 4v9.25a1.25 1.25 0 0 0 1.25 1.25h7.5A1.25 1.25 0 0 0 13 13.25V4a1.25 1.25 0 0 0-1.25-1.25H10.5"/><rect x="5.5" y="1.5" width="5" height="2.5" rx=".75"/><path d="M5.5 9.25 7.25 11l3.25-3.5"/></symbol><symbol id="mi-skill" viewBox="0 0 16 16"><path d="M9.25 1.5 3.5 9h4.25l-1 5.5L12.5 7H8.25z"/></symbol><symbol id="mi-artifact" viewBox="0 0 16 16"><rect x="1.75" y="2.5" width="12.5" height="11" rx="2"/><path d="M1.75 5.75h12.5M6.25 11.25 9.75 7.75M6.75 7.75h3v3"/></symbol><symbol id="mi-monitor" viewBox="0 0 16 16"><path d="M1.5 8.5h2.75l1.75-4.25 3 8.5 1.75-4.25h3.75"/></symbol><symbol id="mi-wakeup" viewBox="0 0 16 16"><circle cx="8" cy="8.75" r="5.25"/><path d="M8 6.25v2.5l1.75 1.25M1.75 4.25 4 2.25M14.25 4.25 12 2.25"/></symbol><symbol id="mi-cron" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="11" rx="1.75"/><path d="M2 6.75h12M5.25 1.75v2.5M10.75 1.75v2.5M5.5 10.25h1M9.5 10.25h1"/></symbol><symbol id="mi-taskcreate" viewBox="0 0 16 16"><rect x="2.25" y="2.25" width="11.5" height="11.5" rx="2.5"/><path d="M8 5.25v5.5M5.25 8h5.5"/></symbol><symbol id="mi-taskupdate" viewBox="0 0 16 16"><rect x="2.25" y="2.25" width="11.5" height="11.5" rx="2.5"/><path d="M5.25 8.25 7.25 10.25 10.75 6"/></symbol><symbol id="mi-tasklist" viewBox="0 0 16 16"><path d="M6 4h8M6 8h8M6 12h8M2 4h1M2 8h1M2 12h1"/></symbol><symbol id="mi-send" viewBox="0 0 16 16"><path d="M14.25 1.75 7 9M14.25 1.75 9.75 14.25 7 9 1.75 6.25z"/></symbol><symbol id="mi-workflow" viewBox="0 0 16 16"><rect x="1.75" y="1.75" width="5.5" height="4.5" rx="1"/><rect x="8.75" y="9.75" width="5.5" height="4.5" rx="1"/><path d="M4.5 6.25v3.5a2 2 0 0 0 2 2h2.25"/></symbol><symbol id="mi-phase" viewBox="0 0 16 16"><path d="M3.5 14.5V1.75"/><path d="M3.5 2.5h9l-2.25 3.25L12.5 9h-9"/></symbol><symbol id="mi-code" viewBox="0 0 16 16"><path d="M5 4.25 1.75 8 5 11.75M11 4.25 14.25 8 11 11.75M9.25 2.75l-2.5 10.5"/></symbol><symbol id="mi-wait" viewBox="0 0 16 16"><path d="M4 1.75h8M4 14.25h8M5 1.75v2.5C5 6 8 6.5 8 8s-3 2-3 3.75v2.5M11 1.75v2.5C11 6 8 6.5 8 8s3 2 3 3.75v2.5"/></symbol></svg>
       <script>
           // ---- rehydrate contract -------------------------------------------
           // A live update (see live_update.js) replaces #transcript wholesale.
@@ -44846,7 +45144,7 @@
       <div class='message user' data-uuid='ns-u1' id='msg-d-1' data-lane="main">
           <div class='header'>
               <span class='mn-title mn-generic' title="🤷 User"><span class='mn-tn'>🤷 User</span></span>
-              <div class='header-info'><span class='mn-role'>User</span>
+              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-user'/></svg>User</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-06-12T09:00:00.000Z'>2026-06-12 09:00:00</span><span class='mn-time'>09:00:00</span>
                   </div>
@@ -44882,7 +45180,7 @@
       <div class='message assistant' data-uuid='ns-a1' id='msg-d-2' data-lane="main">
           <div class='header'>
               <span class='mn-title mn-generic' title="🤖 Assistant"><span class='mn-tn'>🤖 Assistant</span></span>
-              <div class='header-info'><span class='mn-role'>Assistant</span>
+              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-assistant'/></svg>Assistant</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-06-12T09:00:00.000Z'>2026-06-12 09:00:00</span><span class='mn-time'>09:00:00</span>
                   </div>
@@ -44918,7 +45216,7 @@
       <div class='message tool_use pair_first' data-uuid='ns-a1' id='msg-d-3' data-lane="main" data-spawns="agent-nsmid001" data-lane-id="agent-nsmid001" data-lane-kind="agent" data-lane-name="Mid-agent 1" data-lane-tag="mid-agent" data-lane-meta="general-purpose · claude-haiku-4-5-20251001" data-lane-parent="main" data-lane-depth="1" data-lane-from="d-3" data-lane-to="d-5" data-lane-turn="d-1" data-lane-rank="1" data-lane-stats="2 steps · 1.5s" data-lane-ts="2026-06-12T09:00:00.000Z 2026-06-12T09:00:00.000Z">
           <div class='header'>
               <span class='mn-title' title="🔧 Agent Mid-agent 1 (general-purpose) claude-haiku-4-5-20251001 · ID: toolu_ns_nsmid001"><span class='mn-tn'>🔧 Agent </span><span class='tool-summary'>Mid-agent 1</span> <span class='tool-subagent'>(general-purpose)</span> <span class='message-model' title='Model this sub-agent ran on'>claude-haiku-4-5-20251001</span></span>
-              <div class='header-info'><span class='mn-role'>Agent</span>
+              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-agent'/></svg>Agent</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-06-12T09:00:00.000Z'>2026-06-12 09:00:00</span><span class='mn-time'>09:00:00</span>
                   </div>
@@ -44941,7 +45239,7 @@
       <div class='message tool_result pair_last' data-uuid='ns-r1' id='msg-d-5' data-lane="main" data-merges="agent-nsmid001">
           <div class='header'>
               <span class='mn-title mn-generic' title="ID: toolu_ns_nsmid001"></span>
-              <div class='header-info'><span class='mn-role'>Result</span>
+              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-result'/></svg>Result</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-06-12T09:00:00.000Z' data-duration='took 0 ms'>2026-06-12 09:00:00</span><span class='mn-time'>09:00:00</span>
                   </div>
@@ -44978,7 +45276,7 @@
       <div class='message tool_use sidechain agent-depth-1 agent-ring-1 pair_first' data-uuid='nsmid001-a1' id='msg-d-7' data-lane="agent-nsmid001">
           <div class='header'>
               <span class='mn-title' title="🔧 Agent Leaf 1.1 (general-purpose) Depth 2 claude-haiku-4-5-20251001 · ID: toolu_ns_nsleaf11"><span class='mn-tn'>🔧 Agent </span><span class='tool-summary'>Leaf 1.1</span> <span class='tool-subagent'>(general-purpose)</span> <span class='agent-depth-badge agent-ring-2' title='Opens a depth-2 sub-agent transcript'>Depth 2</span> <span class='message-model' title='Model this sub-agent ran on'>claude-haiku-4-5-20251001</span></span>
-              <div class='header-info'><span class='mn-role'>Agent</span>
+              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-agent'/></svg>Agent</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-06-12T09:00:00.000Z'>2026-06-12 09:00:00</span><span class='mn-time'>09:00:00</span>
                   </div>
@@ -45001,7 +45299,7 @@
       <div class='message tool_result sidechain agent-depth-1 agent-ring-1 pair_last' data-uuid='nsmid001-r1' id='msg-d-9' data-lane="agent-nsmid001">
           <div class='header'>
               <span class='mn-title' title="🧰 ≡ full transcript · ID: toolu_ns_nsleaf11"><span class='mn-tn'>🧰 </span><span class='spawn-collapsed-marker' title='The sub-agent answered directly (no tool calls); its full transcript was just the prompt and this result'>≡ full transcript</span></span>
-              <div class='header-info'><span class='mn-role'>Result</span>
+              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-result'/></svg>Result</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-06-12T09:00:00.000Z' data-duration='took 0 ms'>2026-06-12 09:00:00</span><span class='mn-time'>09:00:00</span>
                   </div>
@@ -45024,7 +45322,7 @@
       <div class='message tool_use sidechain agent-depth-1 agent-ring-1 pair_first' data-uuid='nsmid001-a1' id='msg-d-8' data-lane="agent-nsmid001">
           <div class='header'>
               <span class='mn-title' title="🔧 Agent Leaf 1.2 (general-purpose) Depth 2 claude-haiku-4-5-20251001 · ID: toolu_ns_nsleaf12"><span class='mn-tn'>🔧 Agent </span><span class='tool-summary'>Leaf 1.2</span> <span class='tool-subagent'>(general-purpose)</span> <span class='agent-depth-badge agent-ring-2' title='Opens a depth-2 sub-agent transcript'>Depth 2</span> <span class='message-model' title='Model this sub-agent ran on'>claude-haiku-4-5-20251001</span></span>
-              <div class='header-info'><span class='mn-role'>Agent</span>
+              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-agent'/></svg>Agent</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-06-12T09:00:00.000Z'>2026-06-12 09:00:00</span><span class='mn-time'>09:00:00</span>
                   </div>
@@ -45047,7 +45345,7 @@
       <div class='message tool_result sidechain agent-depth-1 agent-ring-1 pair_last' data-uuid='nsmid001-r2' id='msg-d-12' data-lane="agent-nsmid001">
           <div class='header'>
               <span class='mn-title' title="🧰 ≡ full transcript · ID: toolu_ns_nsleaf12"><span class='mn-tn'>🧰 </span><span class='spawn-collapsed-marker' title='The sub-agent answered directly (no tool calls); its full transcript was just the prompt and this result'>≡ full transcript</span></span>
-              <div class='header-info'><span class='mn-role'>Result</span>
+              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-result'/></svg>Result</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-06-12T09:00:00.000Z' data-duration='took 0 ms'>2026-06-12 09:00:00</span><span class='mn-time'>09:00:00</span>
                   </div>
@@ -45075,7 +45373,7 @@
       <div class='message tool_use pair_first' data-uuid='ns-a1' id='msg-d-4' data-lane="main" data-spawns="agent-nsmid002" data-lane-id="agent-nsmid002" data-lane-kind="agent" data-lane-name="Mid-agent 2" data-lane-tag="mid-agent" data-lane-meta="general-purpose · claude-haiku-4-5-20251001" data-lane-parent="main" data-lane-depth="1" data-lane-from="d-4" data-lane-to="d-16" data-lane-turn="d-1" data-lane-rank="2" data-lane-stats="2 steps · 1.5s" data-lane-ts="2026-06-12T09:00:00.000Z 2026-06-12T09:00:00.000Z">
           <div class='header'>
               <span class='mn-title' title="🔧 Agent Mid-agent 2 (general-purpose) claude-haiku-4-5-20251001 · ID: toolu_ns_nsmid002"><span class='mn-tn'>🔧 Agent </span><span class='tool-summary'>Mid-agent 2</span> <span class='tool-subagent'>(general-purpose)</span> <span class='message-model' title='Model this sub-agent ran on'>claude-haiku-4-5-20251001</span></span>
-              <div class='header-info'><span class='mn-role'>Agent</span>
+              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-agent'/></svg>Agent</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-06-12T09:00:00.000Z'>2026-06-12 09:00:00</span><span class='mn-time'>09:00:00</span>
                   </div>
@@ -45098,7 +45396,7 @@
       <div class='message tool_result pair_last' data-uuid='ns-r2' id='msg-d-16' data-lane="main" data-merges="agent-nsmid002">
           <div class='header'>
               <span class='mn-title mn-generic' title="ID: toolu_ns_nsmid002"></span>
-              <div class='header-info'><span class='mn-role'>Result</span>
+              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-result'/></svg>Result</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-06-12T09:00:00.000Z' data-duration='took 0 ms'>2026-06-12 09:00:00</span><span class='mn-time'>09:00:00</span>
                   </div>
@@ -45135,7 +45433,7 @@
       <div class='message tool_use sidechain agent-depth-1 agent-ring-1 pair_first' data-uuid='nsmid002-a1' id='msg-d-18' data-lane="agent-nsmid002">
           <div class='header'>
               <span class='mn-title' title="🔧 Agent Leaf 2.1 (general-purpose) Depth 2 claude-haiku-4-5-20251001 · ID: toolu_ns_nsleaf21"><span class='mn-tn'>🔧 Agent </span><span class='tool-summary'>Leaf 2.1</span> <span class='tool-subagent'>(general-purpose)</span> <span class='agent-depth-badge agent-ring-2' title='Opens a depth-2 sub-agent transcript'>Depth 2</span> <span class='message-model' title='Model this sub-agent ran on'>claude-haiku-4-5-20251001</span></span>
-              <div class='header-info'><span class='mn-role'>Agent</span>
+              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-agent'/></svg>Agent</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-06-12T09:00:00.000Z'>2026-06-12 09:00:00</span><span class='mn-time'>09:00:00</span>
                   </div>
@@ -45158,7 +45456,7 @@
       <div class='message tool_result sidechain agent-depth-1 agent-ring-1 pair_last' data-uuid='nsmid002-r1' id='msg-d-20' data-lane="agent-nsmid002">
           <div class='header'>
               <span class='mn-title' title="🧰 ≡ full transcript · ID: toolu_ns_nsleaf21"><span class='mn-tn'>🧰 </span><span class='spawn-collapsed-marker' title='The sub-agent answered directly (no tool calls); its full transcript was just the prompt and this result'>≡ full transcript</span></span>
-              <div class='header-info'><span class='mn-role'>Result</span>
+              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-result'/></svg>Result</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-06-12T09:00:00.000Z' data-duration='took 0 ms'>2026-06-12 09:00:00</span><span class='mn-time'>09:00:00</span>
                   </div>
@@ -45181,7 +45479,7 @@
       <div class='message tool_use sidechain agent-depth-1 agent-ring-1 pair_first' data-uuid='nsmid002-a1' id='msg-d-19' data-lane="agent-nsmid002" data-spawns="agent-nsleaf22" data-lane-id="agent-nsleaf22" data-lane-kind="agent" data-lane-name="Leaf 2.2" data-lane-tag="leaf" data-lane-meta="general-purpose · claude-haiku-4-5-20251001" data-lane-parent="agent-nsmid002" data-lane-depth="2" data-lane-from="d-19" data-lane-to="d-23" data-lane-turn="d-1" data-lane-rank="3" data-lane-stats="1 step · 1.5s" data-lane-ts="2026-06-12T09:00:00.000Z 2026-06-12T09:00:00.000Z">
           <div class='header'>
               <span class='mn-title' title="🔧 Agent Leaf 2.2 (general-purpose) Depth 2 claude-haiku-4-5-20251001 · ID: toolu_ns_nsleaf22"><span class='mn-tn'>🔧 Agent </span><span class='tool-summary'>Leaf 2.2</span> <span class='tool-subagent'>(general-purpose)</span> <span class='agent-depth-badge agent-ring-2' title='Opens a depth-2 sub-agent transcript'>Depth 2</span> <span class='message-model' title='Model this sub-agent ran on'>claude-haiku-4-5-20251001</span></span>
-              <div class='header-info'><span class='mn-role'>Agent</span>
+              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-agent'/></svg>Agent</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-06-12T09:00:00.000Z'>2026-06-12 09:00:00</span><span class='mn-time'>09:00:00</span>
                   </div>
@@ -45204,7 +45502,7 @@
       <div class='message tool_result sidechain agent-depth-1 agent-ring-1 pair_last' data-uuid='nsmid002-r2' id='msg-d-23' data-lane="agent-nsmid002" data-merges="agent-nsleaf22">
           <div class='header'>
               <span class='mn-title mn-generic' title="ID: toolu_ns_nsleaf22"></span>
-              <div class='header-info'><span class='mn-role'>Result</span>
+              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-result'/></svg>Result</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-06-12T09:00:00.000Z' data-duration='took 0 ms'>2026-06-12 09:00:00</span><span class='mn-time'>09:00:00</span>
                   </div>
@@ -45236,7 +45534,7 @@
       <div class='message assistant sidechain agent-depth-2 agent-ring-2' data-uuid='nsleaf22-a1' id='msg-d-25' data-lane="agent-nsleaf22">
           <div class='header'>
               <span class='mn-title mn-generic' title="🔗 Sub-assistant"><span class='mn-tn'>🔗 Sub-assistant</span></span>
-              <div class='header-info'><span class='mn-role'>Agent</span>
+              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-agent'/></svg>Agent</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-06-12T09:00:00.000Z'>2026-06-12 09:00:00</span><span class='mn-time'>09:00:00</span>
                   </div>
@@ -45274,7 +45572,7 @@
       <div class='message assistant' data-uuid='ns-a2' id='msg-d-27' data-lane="main">
           <div class='header'>
               <span class='mn-title mn-generic' title="🤖 Assistant"><span class='mn-tn'>🤖 Assistant</span></span>
-              <div class='header-info'><span class='mn-role'>Assistant</span>
+              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-assistant'/></svg>Assistant</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-06-12T09:00:00.000Z'>2026-06-12 09:00:00</span><span class='mn-time'>09:00:00</span>
                   </div>
@@ -45310,7 +45608,7 @@
       <div class='message tool_use pair_first' data-uuid='ns-a2' id='msg-d-28' data-lane="main" data-spawns="agent-nschain1" data-lane-id="agent-nschain1" data-lane-kind="agent" data-lane-name="Chain depth 1" data-lane-tag="chain" data-lane-meta="general-purpose · claude-haiku-4-5-20251001" data-lane-parent="main" data-lane-depth="1" data-lane-from="d-28" data-lane-to="d-29" data-lane-turn="d-1" data-lane-rank="4" data-lane-stats="1 step · 1.5s" data-lane-ts="2026-06-12T09:00:00.000Z 2026-06-12T09:00:00.000Z">
           <div class='header'>
               <span class='mn-title' title="🔧 Agent Chain depth 1 (general-purpose) claude-haiku-4-5-20251001 · ID: toolu_ns_nschain1"><span class='mn-tn'>🔧 Agent </span><span class='tool-summary'>Chain depth 1</span> <span class='tool-subagent'>(general-purpose)</span> <span class='message-model' title='Model this sub-agent ran on'>claude-haiku-4-5-20251001</span></span>
-              <div class='header-info'><span class='mn-role'>Agent</span>
+              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-agent'/></svg>Agent</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-06-12T09:00:00.000Z'>2026-06-12 09:00:00</span><span class='mn-time'>09:00:00</span>
                   </div>
@@ -45333,7 +45631,7 @@
       <div class='message tool_result pair_last' data-uuid='ns-r3' id='msg-d-29' data-lane="main" data-merges="agent-nschain1">
           <div class='header'>
               <span class='mn-title mn-generic' title="ID: toolu_ns_nschain1"></span>
-              <div class='header-info'><span class='mn-role'>Result</span>
+              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-result'/></svg>Result</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-06-12T09:00:00.000Z' data-duration='took 0 ms'>2026-06-12 09:00:00</span><span class='mn-time'>09:00:00</span>
                   </div>
@@ -45369,7 +45667,7 @@
       <div class='message tool_use sidechain agent-depth-1 agent-ring-1 pair_first' data-uuid='nschain1-a1' id='msg-d-31' data-lane="agent-nschain1" data-spawns="agent-nschain2" data-lane-id="agent-nschain2" data-lane-kind="agent" data-lane-name="Chain depth 2" data-lane-tag="chain" data-lane-meta="general-purpose · claude-haiku-4-5-20251001" data-lane-parent="agent-nschain1" data-lane-depth="2" data-lane-from="d-31" data-lane-to="d-32" data-lane-turn="d-1" data-lane-rank="5" data-lane-stats="1 step · 1.5s" data-lane-ts="2026-06-12T09:00:00.000Z 2026-06-12T09:00:00.000Z">
           <div class='header'>
               <span class='mn-title' title="🔧 Agent Chain depth 2 (general-purpose) Depth 2 claude-haiku-4-5-20251001 · ID: toolu_ns_nschain2"><span class='mn-tn'>🔧 Agent </span><span class='tool-summary'>Chain depth 2</span> <span class='tool-subagent'>(general-purpose)</span> <span class='agent-depth-badge agent-ring-2' title='Opens a depth-2 sub-agent transcript'>Depth 2</span> <span class='message-model' title='Model this sub-agent ran on'>claude-haiku-4-5-20251001</span></span>
-              <div class='header-info'><span class='mn-role'>Agent</span>
+              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-agent'/></svg>Agent</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-06-12T09:00:00.000Z'>2026-06-12 09:00:00</span><span class='mn-time'>09:00:00</span>
                   </div>
@@ -45392,7 +45690,7 @@
       <div class='message tool_result sidechain agent-depth-1 agent-ring-1 pair_last' data-uuid='nschain1-r1' id='msg-d-32' data-lane="agent-nschain1" data-merges="agent-nschain2">
           <div class='header'>
               <span class='mn-title mn-generic' title="ID: toolu_ns_nschain2"></span>
-              <div class='header-info'><span class='mn-role'>Result</span>
+              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-result'/></svg>Result</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-06-12T09:00:00.000Z' data-duration='took 0 ms'>2026-06-12 09:00:00</span><span class='mn-time'>09:00:00</span>
                   </div>
@@ -45428,7 +45726,7 @@
       <div class='message tool_use sidechain agent-depth-2 agent-ring-2 pair_first' data-uuid='nschain2-a1' id='msg-d-34' data-lane="agent-nschain2">
           <div class='header'>
               <span class='mn-title' title="🔧 Agent Chain depth 3 (general-purpose) Depth 3 claude-haiku-4-5-20251001 · ID: toolu_ns_nschain3"><span class='mn-tn'>🔧 Agent </span><span class='tool-summary'>Chain depth 3</span> <span class='tool-subagent'>(general-purpose)</span> <span class='agent-depth-badge agent-ring-3' title='Opens a depth-3 sub-agent transcript'>Depth 3</span> <span class='message-model' title='Model this sub-agent ran on'>claude-haiku-4-5-20251001</span></span>
-              <div class='header-info'><span class='mn-role'>Agent</span>
+              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-agent'/></svg>Agent</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-06-12T09:00:00.000Z'>2026-06-12 09:00:00</span><span class='mn-time'>09:00:00</span>
                   </div>
@@ -45451,7 +45749,7 @@
       <div class='message tool_result sidechain agent-depth-2 agent-ring-2 pair_last' data-uuid='nschain2-r1' id='msg-d-35' data-lane="agent-nschain2">
           <div class='header'>
               <span class='mn-title' title="🧰 ≡ full transcript · ID: toolu_ns_nschain3"><span class='mn-tn'>🧰 </span><span class='spawn-collapsed-marker' title='The sub-agent answered directly (no tool calls); its full transcript was just the prompt and this result'>≡ full transcript</span></span>
-              <div class='header-info'><span class='mn-role'>Result</span>
+              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-result'/></svg>Result</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-06-12T09:00:00.000Z' data-duration='took 0 ms'>2026-06-12 09:00:00</span><span class='mn-time'>09:00:00</span>
                   </div>
@@ -45489,7 +45787,7 @@
       <div class='message assistant' data-uuid='ns-a3' id='msg-d-40' data-lane="main">
           <div class='header'>
               <span class='mn-title mn-generic' title="🤖 Assistant"><span class='mn-tn'>🤖 Assistant</span></span>
-              <div class='header-info'><span class='mn-role'>Assistant</span>
+              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-assistant'/></svg>Assistant</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-06-12T09:00:00.000Z'>2026-06-12 09:00:00</span><span class='mn-time'>09:00:00</span>
                   </div>
@@ -45525,7 +45823,7 @@
       <div class='message tool_use pair_first' data-uuid='ns-a3' id='msg-d-41' data-lane="main" data-spawns="agent-nsintr01" data-lane-id="agent-nsintr01" data-lane-kind="agent" data-lane-name="Doomed spawn" data-lane-tag="doomed" data-lane-meta="general-purpose · claude-haiku-4-5-20251001" data-lane-parent="main" data-lane-depth="1" data-lane-from="d-41" data-lane-to="d-42" data-lane-turn="d-1" data-lane-rank="6" data-lane-stats="1 step" data-lane-ts="2026-06-12T09:00:00.000Z 2026-06-12T09:00:00.000Z">
           <div class='header'>
               <span class='mn-title' title="🔧 Agent Doomed spawn (general-purpose) claude-haiku-4-5-20251001 · ID: toolu_ns_nsintr01"><span class='mn-tn'>🔧 Agent </span><span class='tool-summary'>Doomed spawn</span> <span class='tool-subagent'>(general-purpose)</span> <span class='message-model' title='Model this sub-agent ran on'>claude-haiku-4-5-20251001</span></span>
-              <div class='header-info'><span class='mn-role'>Agent</span>
+              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-agent'/></svg>Agent</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-06-12T09:00:00.000Z'>2026-06-12 09:00:00</span><span class='mn-time'>09:00:00</span>
                   </div>
@@ -45548,7 +45846,7 @@
       <div class='message tool_result error pair_last' data-uuid='ns-r4' id='msg-d-42' data-lane="main" data-merges="agent-nsintr01">
           <div class='header'>
               <span class='mn-title mn-generic' title="🚨 Error · ID: toolu_ns_nsintr01"><span class='mn-tn'>🚨 Error</span></span>
-              <div class='header-info'><span class='mn-role'>Error</span>
+              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-tool-error'/></svg>Error</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-06-12T09:00:00.000Z' data-duration='took 0 ms'>2026-06-12 09:00:00</span><span class='mn-time'>09:00:00</span>
                   </div>
@@ -45580,7 +45878,7 @@
       <div class='message thinking sidechain agent-depth-1 agent-ring-1 pair_first' data-uuid='nsintr01-a1' id='msg-d-44' data-lane="agent-nsintr01">
           <div class='header'>
               <span class='mn-title mn-generic' title="💭 Thinking"><span class='mn-tn'>💭 Thinking</span></span>
-              <div class='header-info'><span class='mn-role'>Thinking</span>
+              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-thinking'/></svg>Thinking</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-06-12T09:00:00.000Z'>2026-06-12 09:00:00</span><span class='mn-time'>09:00:00</span>
                   </div>
@@ -45613,7 +45911,7 @@
       <div class='message assistant pair_last' data-uuid='ns-a4' id='msg-d-45' data-lane="main">
           <div class='header'>
               <span class='mn-title mn-generic' title="🤖 Assistant"><span class='mn-tn'>🤖 Assistant</span></span>
-              <div class='header-info'><span class='mn-role'>Assistant</span>
+              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-assistant'/></svg>Assistant</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-06-12T09:00:00.000Z'>2026-06-12 09:00:00</span><span class='mn-time'>09:00:00</span>
                   </div>
@@ -50064,6 +50362,17 @@
                           });
                       });
                   });
+                  if (tracks.length) {
+                      // The first shown card under each column head (main's
+                      // included) draws no hairline: the head's edge is there.
+                      const firstSeen = new Set();
+                      sequence.forEach(function (item) {
+                          if (item.kind !== 'card' || item.hidden || firstSeen.has(item.key)) return;
+                          if (item.key !== 'main' && !colIndex.has(item.key)) return;
+                          firstSeen.add(item.key);
+                          want(item.el, 'dag-cfirst');
+                      });
+                  }
                   {
                       // Only rows that are shown count: a folded lane between
                       // two halves leaves empty rows, not a split.
@@ -50222,7 +50531,7 @@
                   const style = getComputedStyle(stage);
                   const step = parseFloat(style.getPropertyValue('--dag-step')) || 16;
                   const x0 = parseFloat(style.getPropertyValue('--dag-x0')) || 9;
-                  const gut = phone && phone.matches ? 0 : (parseFloat(style.getPropertyValue('--gut')) || 58);
+                  const gut = phone && phone.matches ? 0 : (parseFloat(style.getPropertyValue('--gut')) || 72);
                   const base = transcriptBox.left - stageBox.left + gut + x0;
                   const slotOf = layout.rail.slotOf;
                   function x(slot) { return base + step * slot; }
@@ -51843,6 +52152,7 @@
       --muted: #5f6670;
       --dim: #868d96; /* fold bars at rest (P7c): 3.3:1 on --bg */
       --rule: #e3e6ea;
+      --hair: #edeff1; /* hairline between rows: --rule 65% toward --bg */
       --rule2: #1f2328;
       --code: #f3f4f6;
       --userbg: #fbf2e8;
@@ -51871,10 +52181,13 @@
       --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   
       /* Row geometry: gutter, rail, and the narrower pair used inside a
-         nested sub-agent group (mockup .row / .nest .row). */
-      --gut: 58px;
+         nested sub-agent group (mockup .row / .nest .row). The gutters carry
+         the role icon (--ic plus its gap) beside a label of ~10 characters. */
+      --ic: 12px;
+      --ic-gap: 3px;
+      --gut: 72px;
       --rail: 18px;
-      --gut-nest: 46px;
+      --gut-nest: 60px;
       --rail-nest: 16px;
   
       color-scheme: light dark;
@@ -51887,6 +52200,7 @@
           --muted: #969da7;
           --dim: #6b727c;
           --rule: #2a2e35;
+          --hair: #22262c;
           --rule2: #c9ccd1;
           --code: #1d2025;
           --userbg: #2a2118;
@@ -51929,6 +52243,7 @@
       --muted: #969da7;
       --dim: #6b727c;
       --rule: #2a2e35;
+      --hair: #22262c;
       --rule2: #c9ccd1;
       --code: #1d2025;
       --userbg: #2a2118;
@@ -52649,6 +52964,21 @@
       outline-offset: -2px;
   }
   
+  /* A transcript's hairline (layout.css) between consecutive rows, across
+     the content column only, so the rail stays one unbroken line. */
+  .mn-page :is(.mn-srow + .mn-srow, .mn-hit + .mn-hit > a)::after {
+      content: "";
+      grid-column: 3;
+      grid-row: 1;
+      align-self: start;
+      position: relative;
+      top: -3px;
+      height: 1px;
+      margin-bottom: -1px;
+      background: var(--hair);
+      pointer-events: none;
+  }
+  
   /* The dot, ringed in the page colour so it sits on the line. */
   .mn-page :is(.mn-srow, .mn-hit > a)::before {
       content: "";
@@ -52959,6 +53289,10 @@
   
       .mn-page :is(.mn-srow, .mn-hit > a)::before {
           grid-column: 1;
+      }
+  
+      .mn-page :is(.mn-srow + .mn-srow, .mn-hit + .mn-hit > a)::after {
+          grid-column: 2;
       }
   
       .mn-page :is(.mn-sgut, .mn-hgut) {
@@ -55720,6 +56054,7 @@
       --muted: #5f6670;
       --dim: #868d96; /* fold bars at rest (P7c): 3.3:1 on --bg */
       --rule: #e3e6ea;
+      --hair: #edeff1; /* hairline between rows: --rule 65% toward --bg */
       --rule2: #1f2328;
       --code: #f3f4f6;
       --userbg: #fbf2e8;
@@ -55748,10 +56083,13 @@
       --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   
       /* Row geometry: gutter, rail, and the narrower pair used inside a
-         nested sub-agent group (mockup .row / .nest .row). */
-      --gut: 58px;
+         nested sub-agent group (mockup .row / .nest .row). The gutters carry
+         the role icon (--ic plus its gap) beside a label of ~10 characters. */
+      --ic: 12px;
+      --ic-gap: 3px;
+      --gut: 72px;
       --rail: 18px;
-      --gut-nest: 46px;
+      --gut-nest: 60px;
       --rail-nest: 16px;
   
       color-scheme: light dark;
@@ -55764,6 +56102,7 @@
           --muted: #969da7;
           --dim: #6b727c;
           --rule: #2a2e35;
+          --hair: #22262c;
           --rule2: #c9ccd1;
           --code: #1d2025;
           --userbg: #2a2118;
@@ -55806,6 +56145,7 @@
       --muted: #969da7;
       --dim: #6b727c;
       --rule: #2a2e35;
+      --hair: #22262c;
       --rule2: #c9ccd1;
       --code: #1d2025;
       --userbg: #2a2118;
@@ -56526,6 +56866,21 @@
       outline-offset: -2px;
   }
   
+  /* A transcript's hairline (layout.css) between consecutive rows, across
+     the content column only, so the rail stays one unbroken line. */
+  .mn-page :is(.mn-srow + .mn-srow, .mn-hit + .mn-hit > a)::after {
+      content: "";
+      grid-column: 3;
+      grid-row: 1;
+      align-self: start;
+      position: relative;
+      top: -3px;
+      height: 1px;
+      margin-bottom: -1px;
+      background: var(--hair);
+      pointer-events: none;
+  }
+  
   /* The dot, ringed in the page colour so it sits on the line. */
   .mn-page :is(.mn-srow, .mn-hit > a)::before {
       content: "";
@@ -56836,6 +57191,10 @@
   
       .mn-page :is(.mn-srow, .mn-hit > a)::before {
           grid-column: 1;
+      }
+  
+      .mn-page :is(.mn-srow + .mn-srow, .mn-hit + .mn-hit > a)::after {
+          grid-column: 2;
       }
   
       .mn-page :is(.mn-sgut, .mn-hgut) {
@@ -62732,6 +63091,7 @@
       --muted: #5f6670;
       --dim: #868d96; /* fold bars at rest (P7c): 3.3:1 on --bg */
       --rule: #e3e6ea;
+      --hair: #edeff1; /* hairline between rows: --rule 65% toward --bg */
       --rule2: #1f2328;
       --code: #f3f4f6;
       --userbg: #fbf2e8;
@@ -62760,10 +63120,13 @@
       --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   
       /* Row geometry: gutter, rail, and the narrower pair used inside a
-         nested sub-agent group (mockup .row / .nest .row). */
-      --gut: 58px;
+         nested sub-agent group (mockup .row / .nest .row). The gutters carry
+         the role icon (--ic plus its gap) beside a label of ~10 characters. */
+      --ic: 12px;
+      --ic-gap: 3px;
+      --gut: 72px;
       --rail: 18px;
-      --gut-nest: 46px;
+      --gut-nest: 60px;
       --rail-nest: 16px;
   
       color-scheme: light dark;
@@ -62776,6 +63139,7 @@
           --muted: #969da7;
           --dim: #6b727c;
           --rule: #2a2e35;
+          --hair: #22262c;
           --rule2: #c9ccd1;
           --code: #1d2025;
           --userbg: #2a2118;
@@ -62818,6 +63182,7 @@
       --muted: #969da7;
       --dim: #6b727c;
       --rule: #2a2e35;
+      --hair: #22262c;
       --rule2: #c9ccd1;
       --code: #1d2025;
       --userbg: #2a2118;
@@ -63457,8 +63822,46 @@
   }
   
   .theme-minimal #transcript .mn-role {
+      position: relative;
+      padding-right: calc(var(--ic) + var(--ic-gap));
       color: var(--rc);
       font-weight: 500;
+  }
+  
+  /* Role icons (html/minimal_icons.py): a stroke glyph in the role colour,
+     from the page's one sprite (`.mn-sprite`, right after <body>). Wide, it
+     ends the role line in the label's right padding, so the icons form one
+     column beside the rail and a long label truncates before its icon; on a
+     phone and in a column (left-aligned gutters) it leads the label. */
+  .theme-minimal .mn-sprite {
+      position: absolute;
+      width: 0;
+      height: 0;
+      overflow: hidden;
+  }
+  
+  .theme-minimal .mn-ic {
+      width: var(--ic);
+      height: var(--ic);
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.5;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+  }
+  
+  .theme-minimal #transcript .mn-role > .mn-ic {
+      position: absolute;
+      top: 50%;
+      right: 0;
+      margin-top: calc(var(--ic) / -2);
+  }
+  
+  /* A branch header's fork glyph, in the fork lane's colour. */
+  .theme-minimal #transcript .message.branch-header > .header > .mn-ic {
+      margin-right: 5px;
+      vertical-align: -2px;
+      color: var(--lF);
   }
   
   .theme-minimal #transcript .header-info .token-usage {
@@ -63544,6 +63947,34 @@
       margin-top: 4px;
       padding-top: 7px;
       border-top: 1px solid var(--rule2);
+  }
+  
+  /* Hairlines: a barely-there 1px rule (--hair) on top of every row, across
+     the content column only — the gutter and the rail stay clear, so the
+     rail line is unbroken and the dots untouched. A grid item of the row's
+     first line, lifted onto the row's top edge (its padding) and adding no
+     height. None inside a tool pair (call and result read as one unit),
+     above a turn rule (that row has its own), right under a session or
+     branch header, or on a column's first card (`dag-cfirst`, under the
+     column head). */
+  .theme-minimal #transcript .message:not(.session-header)::after {
+      content: "";
+      grid-column: 3;
+      grid-row: 1;
+      align-self: start;
+      position: relative;
+      top: -3px;
+      height: 1px;
+      margin-bottom: -1px;
+      background: var(--hair);
+      pointer-events: none;
+  }
+  
+  .theme-minimal #transcript .message:is(.pair_middle, .pair_last):not(.dag-split)::after,
+  .theme-minimal #transcript .message.dag-cfirst::after,
+  .theme-minimal #transcript .message-node:has(> .message.session-header) > .children > .message-node:first-child > .message::after,
+  .theme-minimal #transcript .message-node:has(> .message.session-header) > .children > .message-node ~ .message-node > .message.user:not(.steering):not(.task-notification):not(.teammate):not(.sidechain):not(.command-output):not(.pair_middle):not(.pair_last)::after {
+      content: none;
   }
   
   /* ------------------------------------------------------------ fold bar */
@@ -64041,9 +64472,23 @@
           padding-left: 4px;
       }
   
+      .theme-minimal #transcript .mn-role {
+          padding-right: 0;
+          padding-left: calc(var(--ic) + var(--ic-gap));
+      }
+  
+      .theme-minimal #transcript .mn-role > .mn-ic {
+          right: auto;
+          left: 0;
+      }
+  
       .theme-minimal #transcript .message > .header > .mn-title {
           grid-column: 2;
           grid-row: 2;
+      }
+  
+      .theme-minimal #transcript .message:not(.session-header)::after {
+          grid-column: 2;
       }
   
       .theme-minimal #transcript .message > .debug-info {
@@ -64503,6 +64948,30 @@
       color: var(--err);
       line-height: 1.6;
       text-transform: lowercase;
+  }
+  
+  .theme-minimal #transcript .message.tool_result.error .mn-role,
+  .theme-minimal #transcript .message.system-error .mn-role {
+      padding-right: calc(5px + var(--ic) + var(--ic-gap));
+  }
+  
+  .theme-minimal #transcript .message.tool_result.error .mn-role > .mn-ic,
+  .theme-minimal #transcript .message.system-error .mn-role > .mn-ic {
+      right: 5px;
+  }
+  
+  @media (max-width: 640px) {
+      .theme-minimal #transcript .message.tool_result.error .mn-role,
+      .theme-minimal #transcript .message.system-error .mn-role {
+          padding-right: 5px;
+          padding-left: calc(5px + var(--ic) + var(--ic-gap));
+      }
+  
+      .theme-minimal #transcript .message.tool_result.error .mn-role > .mn-ic,
+      .theme-minimal #transcript .message.system-error .mn-role > .mn-ic {
+          right: auto;
+          left: 5px;
+      }
   }
   
   .theme-minimal #transcript .message.tool_result.error:is(.pair_middle, .pair_last) > .header > .header-info {
@@ -65890,6 +66359,7 @@
       content: "⑂ rewound · ";
   }
   
+  .theme-minimal .mn-stage.dag-on #transcript .message.branch-header[data-lane-continues] > .header > .mn-ic,
   .theme-minimal .mn-stage.dag-on #transcript .message.branch-header[data-lane-continues] > .header > .branch-from,
   .theme-minimal .mn-stage.dag-on #transcript .message.branch-header[data-lane-continues] > .fold-bar {
       display: none;
@@ -66336,7 +66806,7 @@
   /* Cards in a column: the compact row (mockup .w-col) — gutter (time, role)
      left-aligned, no rail and no dot. */
   .theme-minimal .mn-stage.dag-on #transcript .message.dag-col {
-      grid-template-columns: 46px 6px minmax(0, 1fr);
+      grid-template-columns: 60px 6px minmax(0, 1fr);
       min-width: 0;
       padding-right: 10px;
       padding-left: 8px;
@@ -66349,6 +66819,26 @@
   .theme-minimal .mn-stage.dag-on #transcript .message.dag-col > .header > .header-info {
       align-items: flex-start;
       text-align: left;
+  }
+  
+  /* …so the role icon leads its label, as on a phone. */
+  .theme-minimal .mn-stage.dag-on #transcript .message.dag-col .mn-role {
+      padding-right: 0;
+      padding-left: calc(var(--ic) + var(--ic-gap));
+  }
+  
+  .theme-minimal .mn-stage.dag-on #transcript .message.dag-col .mn-role > .mn-ic {
+      right: auto;
+      left: 0;
+  }
+  
+  .theme-minimal .mn-stage.dag-on #transcript .message.dag-col:is(.system-error, .tool_result.error) .mn-role {
+      padding-right: 5px;
+      padding-left: calc(5px + var(--ic) + var(--ic-gap));
+  }
+  
+  .theme-minimal .mn-stage.dag-on #transcript .message.dag-col:is(.system-error, .tool_result.error) .mn-role > .mn-ic {
+      left: 5px;
   }
   
   /* A row shared with a taller card in another column would leave a gap
@@ -66480,7 +66970,7 @@
       </script>
   </head>
   
-  <body class='theme-minimal'>
+  <body class='theme-minimal'><svg class='mn-sprite' xmlns='http://www.w3.org/2000/svg' width='0' height='0' aria-hidden='true' focusable='false'><symbol id="mi-user" viewBox="0 0 16 16"><circle cx="8" cy="5" r="2.75"/><path d="M2.75 14c0-2.9 2.35-4.75 5.25-4.75s5.25 1.85 5.25 4.75"/></symbol><symbol id="mi-steer" viewBox="0 0 16 16"><path d="M3 14V9.5A4.5 4.5 0 0 1 7.5 5H13"/><path d="M10.25 2.25 13 5l-2.75 2.75"/></symbol><symbol id="mi-command" viewBox="0 0 16 16"><rect x="2" y="2" width="12" height="12" rx="2.5"/><path d="M9.75 4.75 6.25 11.25"/></symbol><symbol id="mi-output" viewBox="0 0 16 16"><path d="M2.5 3.5h11M2.5 6.5h11M2.5 9.5h7.5M2.5 12.5h4.5"/></symbol><symbol id="mi-bash-in" viewBox="0 0 16 16"><path d="M2.5 3.75 6.75 8 2.5 12.25M8.75 12.25h4.75"/></symbol><symbol id="mi-compacted" viewBox="0 0 16 16"><path d="M8 1.5v4.5M5.5 3.5 8 6l2.5-2.5M8 14.5V10M5.5 12.5 8 10l2.5 2.5M2 8h12"/></symbol><symbol id="mi-memory" viewBox="0 0 16 16"><path d="M4 2.25h8v11.5l-4-3-4 3z"/></symbol><symbol id="mi-memory-write" viewBox="0 0 16 16"><path d="M4 2.25h8v11.5l-4-3-4 3z"/><path d="M8 4.75v3.5M6.25 6.5h3.5"/></symbol><symbol id="mi-teammate" viewBox="0 0 16 16"><circle cx="6" cy="5.25" r="2.25"/><path d="M1.75 13.75c0-2.5 1.9-4.25 4.25-4.25s4.25 1.75 4.25 4.25"/><path d="M10.5 3.15a2.25 2.25 0 0 1 0 4.2M12.25 9.9c1.3.55 2 1.85 2 3.85"/></symbol><symbol id="mi-async" viewBox="0 0 16 16"><path d="M4 11.25V7a4 4 0 0 1 8 0v4.25l1.25 1.5H2.75z"/><path d="M6.5 14.75h3"/></symbol><symbol id="mi-assistant" viewBox="0 0 16 16"><path d="M8 1.75c.45 3.3 2.95 5.8 6.25 6.25-3.3.45-5.8 2.95-6.25 6.25-.45-3.3-2.95-5.8-6.25-6.25C5.05 7.55 7.55 5.05 8 1.75z"/></symbol><symbol id="mi-agent" viewBox="0 0 16 16"><rect x="2.5" y="5" width="11" height="8.75" rx="2.25"/><path d="M8 5V2.5M6 8.5V10M10 8.5V10"/></symbol><symbol id="mi-thinking" viewBox="0 0 16 16"><path d="M5.5 10.5a3 3 0 0 1-.75-5.9 4 4 0 0 1 7.15-.85 3.4 3.4 0 0 1 .35 6.75z"/><circle cx="4.25" cy="12.75" r="1"/><path d="M1.9 14.75v.01"/></symbol><symbol id="mi-info" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.25"/><path d="M8 7.25v4M8 4.75v.01"/></symbol><symbol id="mi-warning" viewBox="0 0 16 16"><path d="M8 2.25 14.5 13.5h-13z"/><path d="M8 6.75v3M8 11.5v.01"/></symbol><symbol id="mi-error" viewBox="0 0 16 16"><path d="M5.4 1.75h5.2l3.65 3.65v5.2l-3.65 3.65H5.4L1.75 10.6V5.4z"/><path d="M8 4.75v3.75M8 11.25v.01"/></symbol><symbol id="mi-hook" viewBox="0 0 16 16"><circle cx="10.5" cy="3.25" r="1.5"/><path d="M10.5 4.75V10a3.5 3.5 0 0 1-7 0V8l2.25 2.25"/></symbol><symbol id="mi-recap" viewBox="0 0 16 16"><path d="M2.75 8a5.25 5.25 0 1 0 1.54-3.71"/><path d="M4.25 1.75v2.5h2.5M8 5.25V8l2 1.25"/></symbol><symbol id="mi-image" viewBox="0 0 16 16"><rect x="1.75" y="2.75" width="12.5" height="10.5" rx="1.75"/><circle cx="10.25" cy="6.25" r="1.25"/><path d="M2.25 12.25 6 8.5l3.25 3.25 1.5-1.5 3 3"/></symbol><symbol id="mi-branch" viewBox="0 0 16 16"><circle cx="4.5" cy="3.5" r="1.75"/><circle cx="4.5" cy="12.5" r="1.75"/><circle cx="11.5" cy="3.5" r="1.75"/><path d="M4.5 5.25v5.5M11.5 5.25c0 3.75-7 2.5-7 5.5"/></symbol><symbol id="mi-result" viewBox="0 0 16 16"><path d="M13 2.5v5A2.5 2.5 0 0 1 10.5 10H3"/><path d="M6 7 3 10l3 3"/></symbol><symbol id="mi-tool-error" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.25"/><path d="M5.75 5.75l4.5 4.5M10.25 5.75l-4.5 4.5"/></symbol><symbol id="mi-tool" viewBox="0 0 16 16"><path d="M10.1 2a3.6 3.6 0 0 0-3.55 4.75L2.3 11a1.6 1.6 0 0 0 2.3 2.25l4.2-4.2a3.6 3.6 0 0 0 4.75-3.55l-2 2-2.2-.35-.35-2.2z"/></symbol><symbol id="mi-read" viewBox="0 0 16 16"><path d="M1.5 8S4 3.25 8 3.25 14.5 8 14.5 8 12 12.75 8 12.75 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/></symbol><symbol id="mi-write" viewBox="0 0 16 16"><path d="M9.5 1.75H4.25a1 1 0 0 0-1 1v10.5a1 1 0 0 0 1 1h7.5a1 1 0 0 0 1-1V5z"/><path d="M9.5 1.75V5h3.25M8 7.5v4.5M5.75 9.75h4.5"/></symbol><symbol id="mi-edit" viewBox="0 0 16 16"><path d="M10.5 2.5a1.75 1.75 0 0 1 2.5 0l.5.5a1.75 1.75 0 0 1 0 2.5L5.5 13.5 2.25 14l.5-3.25z"/><path d="M9.25 3.75 12.25 6.75"/></symbol><symbol id="mi-multiedit" viewBox="0 0 16 16"><path d="M1.75 3h5M1.75 6h3"/><path d="M11.25 4a1.6 1.6 0 0 1 2.25 0l.5.5a1.6 1.6 0 0 1 0 2.25L7.25 13.5 4.25 14l.5-3z"/><path d="M1.75 13.75h1"/></symbol><symbol id="mi-delete" viewBox="0 0 16 16"><path d="M2.25 4.25h11.5M6 4.25V2.25h4v2M3.75 4.25l.75 9.5h7l.75-9.5M6.75 7v4M9.25 7v4"/></symbol><symbol id="mi-bash" viewBox="0 0 16 16"><rect x="1.75" y="2.5" width="12.5" height="11" rx="2"/><path d="M4.5 6.25 6.75 8.5 4.5 10.75M8.5 10.75h3"/></symbol><symbol id="mi-glob" viewBox="0 0 16 16"><path d="M8 2v12M2.8 5l10.4 6M2.8 11l10.4-6"/></symbol><symbol id="mi-grep" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.75"/><path d="M10.5 10.5 14.25 14.25"/></symbol><symbol id="mi-websearch" viewBox="0 0 16 16"><circle cx="6.75" cy="6.75" r="5"/><path d="M1.75 6.75h10M6.75 1.75c-1.75 1.6-1.75 8.4 0 10M6.75 1.75c1.75 1.6 1.75 8.4 0 10M10.5 10.5l3.75 3.75"/></symbol><symbol id="mi-webfetch" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.25"/><path d="M1.75 8h12.5M8 1.75c-2.2 2-2.2 10.5 0 12.5M8 1.75c2.2 2 2.2 10.5 0 12.5"/></symbol><symbol id="mi-taskoutput" viewBox="0 0 16 16"><path d="M1.75 9.25h3.5l1 2h3.5l1-2h3.5"/><path d="M3.75 3h8.5l2 6.25V13a1 1 0 0 1-1 1H2.75a1 1 0 0 1-1-1V9.25z"/></symbol><symbol id="mi-taskstop" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.25"/><rect x="5.75" y="5.75" width="4.5" height="4.5" rx=".5"/></symbol><symbol id="mi-todo" viewBox="0 0 16 16"><path d="M1.75 4.5 3.25 6 5.75 3M1.75 10.5 3.25 12l2.5-3M8.25 4.75h6M8.25 10.75h6"/></symbol><symbol id="mi-ask" viewBox="0 0 16 16"><path d="M2.75 2.5h10.5a1.25 1.25 0 0 1 1.25 1.25v6.5a1.25 1.25 0 0 1-1.25 1.25H7.5L4.5 14v-2.5H2.75a1.25 1.25 0 0 1-1.25-1.25v-6.5A1.25 1.25 0 0 1 2.75 2.5z"/><path d="M6.5 5.4a1.5 1.5 0 1 1 2.1 1.4c-.4.2-.6.55-.6 1v.2M8 9.6v.01"/></symbol><symbol id="mi-plan" viewBox="0 0 16 16"><path d="M5.5 2.75H4.25A1.25 1.25 0 0 0 3 4v9.25a1.25 1.25 0 0 0 1.25 1.25h7.5A1.25 1.25 0 0 0 13 13.25V4a1.25 1.25 0 0 0-1.25-1.25H10.5"/><rect x="5.5" y="1.5" width="5" height="2.5" rx=".75"/><path d="M5.5 9.25 7.25 11l3.25-3.5"/></symbol><symbol id="mi-skill" viewBox="0 0 16 16"><path d="M9.25 1.5 3.5 9h4.25l-1 5.5L12.5 7H8.25z"/></symbol><symbol id="mi-artifact" viewBox="0 0 16 16"><rect x="1.75" y="2.5" width="12.5" height="11" rx="2"/><path d="M1.75 5.75h12.5M6.25 11.25 9.75 7.75M6.75 7.75h3v3"/></symbol><symbol id="mi-monitor" viewBox="0 0 16 16"><path d="M1.5 8.5h2.75l1.75-4.25 3 8.5 1.75-4.25h3.75"/></symbol><symbol id="mi-wakeup" viewBox="0 0 16 16"><circle cx="8" cy="8.75" r="5.25"/><path d="M8 6.25v2.5l1.75 1.25M1.75 4.25 4 2.25M14.25 4.25 12 2.25"/></symbol><symbol id="mi-cron" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="11" rx="1.75"/><path d="M2 6.75h12M5.25 1.75v2.5M10.75 1.75v2.5M5.5 10.25h1M9.5 10.25h1"/></symbol><symbol id="mi-taskcreate" viewBox="0 0 16 16"><rect x="2.25" y="2.25" width="11.5" height="11.5" rx="2.5"/><path d="M8 5.25v5.5M5.25 8h5.5"/></symbol><symbol id="mi-taskupdate" viewBox="0 0 16 16"><rect x="2.25" y="2.25" width="11.5" height="11.5" rx="2.5"/><path d="M5.25 8.25 7.25 10.25 10.75 6"/></symbol><symbol id="mi-tasklist" viewBox="0 0 16 16"><path d="M6 4h8M6 8h8M6 12h8M2 4h1M2 8h1M2 12h1"/></symbol><symbol id="mi-send" viewBox="0 0 16 16"><path d="M14.25 1.75 7 9M14.25 1.75 9.75 14.25 7 9 1.75 6.25z"/></symbol><symbol id="mi-workflow" viewBox="0 0 16 16"><rect x="1.75" y="1.75" width="5.5" height="4.5" rx="1"/><rect x="8.75" y="9.75" width="5.5" height="4.5" rx="1"/><path d="M4.5 6.25v3.5a2 2 0 0 0 2 2h2.25"/></symbol><symbol id="mi-phase" viewBox="0 0 16 16"><path d="M3.5 14.5V1.75"/><path d="M3.5 2.5h9l-2.25 3.25L12.5 9h-9"/></symbol><symbol id="mi-code" viewBox="0 0 16 16"><path d="M5 4.25 1.75 8 5 11.75M11 4.25 14.25 8 11 11.75M9.25 2.75l-2.5 10.5"/></symbol><symbol id="mi-wait" viewBox="0 0 16 16"><path d="M4 1.75h8M4 14.25h8M5 1.75v2.5C5 6 8 6.5 8 8s-3 2-3 3.75v2.5M11 1.75v2.5C11 6 8 6.5 8 8s3 2 3 3.75v2.5"/></symbol></svg>
       <script>
           // ---- rehydrate contract -------------------------------------------
           // A live update (see live_update.js) replaces #transcript wholesale.
@@ -67299,7 +67789,7 @@
       <div class='message user' data-uuid='msg_001' id='msg-d-1' data-lane="main">
           <div class='header'>
               <span class='mn-title mn-generic' title="🤷 User"><span class='mn-tn'>🤷 User</span></span>
-              <div class='header-info'><span class='mn-role'>User</span>
+              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-user'/></svg>User</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2025-07-03T15:50:07.874907Z'>2025-07-03 15:50:07</span><span class='mn-time'>15:50:07</span>
                   </div>
@@ -67331,7 +67821,7 @@
       <div class='message assistant' data-uuid='msg_002' id='msg-d-2' data-lane="main">
           <div class='header'>
               <span class='mn-title mn-generic' title="🤖 Assistant"><span class='mn-tn'>🤖 Assistant</span></span>
-              <div class='header-info'><span class='mn-role'>Assistant</span>
+              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-assistant'/></svg>Assistant</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2025-07-03T15:52:07.874907Z'>2025-07-03 15:52:07</span><span class='mn-time'>15:52:07</span>
                   </div>
@@ -67380,7 +67870,7 @@
       <div class='message user' data-uuid='msg_003' id='msg-d-3' data-lane="main">
           <div class='header'>
               <span class='mn-title mn-generic' title="🤷 User"><span class='mn-tn'>🤷 User</span></span>
-              <div class='header-info'><span class='mn-role'>User</span>
+              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-user'/></svg>User</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2025-07-03T15:54:07.874907Z'>2025-07-03 15:54:07</span><span class='mn-time'>15:54:07</span>
                   </div>
@@ -67412,7 +67902,7 @@
       <div class='message tool_use pair_first' data-uuid='msg_004' id='msg-d-4' data-lane="main">
           <div class='header'>
               <span class='mn-title' title="📝 Edit /tmp/decorator_example.py · ID: tool_001"><span class='mn-tn'>📝 Edit </span><span class='tool-summary'>/tmp/decorator_example.py</span></span>
-              <div class='header-info'><span class='mn-role'>Edit</span>
+              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-edit'/></svg>Edit</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2025-07-03T15:56:07.874907Z'>2025-07-03 15:56:07</span><span class='mn-time'>15:56:07</span>
                   </div>
@@ -67440,7 +67930,7 @@
       <div class='message tool_result pair_last' data-uuid='msg_005' id='msg-d-5' data-lane="main">
           <div class='header'>
               <span class='mn-title mn-generic' title="ID: tool_001"></span>
-              <div class='header-info'><span class='mn-role'>Result</span>
+              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-result'/></svg>Result</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2025-07-03T15:58:07.874907Z' data-duration='took 2m 0s'>2025-07-03 15:58:07</span><span class='mn-time'>15:58:07</span>
                   </div>
@@ -67462,7 +67952,7 @@
       <div class='message assistant' data-uuid='msg_006' id='msg-d-6' data-lane="main">
           <div class='header'>
               <span class='mn-title mn-generic' title="🤖 Assistant"><span class='mn-tn'>🤖 Assistant</span></span>
-              <div class='header-info'><span class='mn-role'>Assistant</span>
+              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-assistant'/></svg>Assistant</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2025-07-03T16:00:07.874907Z'>2025-07-03 16:00:07</span><span class='mn-time'>16:00:07</span>
                   </div>
@@ -67504,7 +67994,7 @@
       <div class='message user' data-uuid='msg_007' id='msg-d-7' data-lane="main">
           <div class='header'>
               <span class='mn-title mn-generic' title="🤷 User"><span class='mn-tn'>🤷 User</span></span>
-              <div class='header-info'><span class='mn-role'>User</span>
+              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-user'/></svg>User</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2025-07-03T16:02:07.874907Z'>2025-07-03 16:02:07</span><span class='mn-time'>16:02:07</span>
                   </div>
@@ -67536,7 +68026,7 @@
       <div class='message tool_use pair_first' data-uuid='msg_008' id='msg-d-8' data-lane="main">
           <div class='header'>
               <span class='mn-title' title="💻 Bash Run the decorator example to show output · ID: tool_002"><span class='mn-tn'>💻 Bash </span><span class='tool-summary'>Run the decorator example to show output</span></span>
-              <div class='header-info'><span class='mn-role'>Bash</span>
+              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-bash'/></svg>Bash</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2025-07-03T16:04:07.874907Z'>2025-07-03 16:04:07</span><span class='mn-time'>16:04:07</span>
                   </div>
@@ -67558,7 +68048,7 @@
       <div class='message tool_result pair_last' data-uuid='msg_009' id='msg-d-9' data-lane="main">
           <div class='header'>
               <span class='mn-title mn-generic' title="ID: tool_002"></span>
-              <div class='header-info'><span class='mn-role'>Result</span>
+              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-result'/></svg>Result</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2025-07-03T16:06:07.874907Z' data-duration='took 2m 0s'>2025-07-03 16:06:07</span><span class='mn-time'>16:06:07</span>
                   </div>
@@ -67582,7 +68072,7 @@
       <div class='message assistant' data-uuid='msg_010' id='msg-d-10' data-lane="main">
           <div class='header'>
               <span class='mn-title mn-generic' title="🤖 Assistant"><span class='mn-tn'>🤖 Assistant</span></span>
-              <div class='header-info'><span class='mn-role'>Assistant</span>
+              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-assistant'/></svg>Assistant</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2025-07-03T16:08:07.874907Z'>2025-07-03 16:08:07</span><span class='mn-time'>16:08:07</span>
                   </div>
@@ -67620,7 +68110,7 @@
       <div class='message user' data-uuid='msg_011' id='msg-d-11' data-lane="main">
           <div class='header'>
               <span class='mn-title mn-generic' title="🤷 User"><span class='mn-tn'>🤷 User</span></span>
-              <div class='header-info'><span class='mn-role'>User</span>
+              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-user'/></svg>User</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2025-07-03T16:10:07.874907Z'>2025-07-03 16:10:07</span><span class='mn-time'>16:10:07</span>
                   </div>
@@ -72066,6 +72556,17 @@
                           });
                       });
                   });
+                  if (tracks.length) {
+                      // The first shown card under each column head (main's
+                      // included) draws no hairline: the head's edge is there.
+                      const firstSeen = new Set();
+                      sequence.forEach(function (item) {
+                          if (item.kind !== 'card' || item.hidden || firstSeen.has(item.key)) return;
+                          if (item.key !== 'main' && !colIndex.has(item.key)) return;
+                          firstSeen.add(item.key);
+                          want(item.el, 'dag-cfirst');
+                      });
+                  }
                   {
                       // Only rows that are shown count: a folded lane between
                       // two halves leaves empty rows, not a split.
@@ -72224,7 +72725,7 @@
                   const style = getComputedStyle(stage);
                   const step = parseFloat(style.getPropertyValue('--dag-step')) || 16;
                   const x0 = parseFloat(style.getPropertyValue('--dag-x0')) || 9;
-                  const gut = phone && phone.matches ? 0 : (parseFloat(style.getPropertyValue('--gut')) || 58);
+                  const gut = phone && phone.matches ? 0 : (parseFloat(style.getPropertyValue('--gut')) || 72);
                   const base = transcriptBox.left - stageBox.left + gut + x0;
                   const slotOf = layout.rail.slotOf;
                   function x(slot) { return base + step * slot; }

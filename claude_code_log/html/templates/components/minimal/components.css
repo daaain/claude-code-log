@@ -432,6 +432,30 @@ body.theme-minimal {
     text-transform: lowercase;
 }
 
+.theme-minimal #transcript .message.tool_result.error .mn-role,
+.theme-minimal #transcript .message.system-error .mn-role {
+    padding-right: calc(5px + var(--ic) + var(--ic-gap));
+}
+
+.theme-minimal #transcript .message.tool_result.error .mn-role > .mn-ic,
+.theme-minimal #transcript .message.system-error .mn-role > .mn-ic {
+    right: 5px;
+}
+
+@media (max-width: 640px) {
+    .theme-minimal #transcript .message.tool_result.error .mn-role,
+    .theme-minimal #transcript .message.system-error .mn-role {
+        padding-right: 5px;
+        padding-left: calc(5px + var(--ic) + var(--ic-gap));
+    }
+
+    .theme-minimal #transcript .message.tool_result.error .mn-role > .mn-ic,
+    .theme-minimal #transcript .message.system-error .mn-role > .mn-ic {
+        right: auto;
+        left: 5px;
+    }
+}
+
 .theme-minimal #transcript .message.tool_result.error:is(.pair_middle, .pair_last) > .header > .header-info {
     display: flex;
 }

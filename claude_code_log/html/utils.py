@@ -1029,9 +1029,12 @@ def get_template_environment() -> Environment:
     globals_dict["starts_with_emoji"] = starts_with_emoji
     # Minimal-theme gutter/meta helpers — called only from the template's
     # `{% if minimal %}` branches, so classic output never touches them.
-    from . import minimal_theme
+    from . import minimal_icons, minimal_theme
 
     globals_dict["mn_role_label"] = minimal_theme.role_label
+    globals_dict["mn_role_icon"] = minimal_icons.role_icon_markup
+    globals_dict["mn_icon"] = minimal_icons.icon_markup
+    globals_dict["mn_icon_sprite"] = minimal_icons.icon_sprite
     globals_dict["mn_is_generic_title"] = minimal_theme.is_generic_title
     globals_dict["mn_compact_tokens"] = minimal_theme.compact_token_usage
     globals_dict["mn_gutter_time"] = minimal_theme.gutter_time

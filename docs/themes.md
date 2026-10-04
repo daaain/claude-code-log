@@ -69,10 +69,22 @@ theme too — whether the run is a plain `claude-code-log`, `serve`
 
 Each message is one row: a narrow **gutter** on the left with its time,
 role (`User`, `Assistant`, the tool name …) and tokens, a coloured **dot**
-on a continuous vertical **rail**, then the content. A tool call and its
-output read as one unit; a failed result shows an `error` pill in the
-gutter. User prompts are tinted and each one starts a new turn, separated
-by a thin rule.
+on a continuous vertical **rail**, then the content. Beside the role is a
+small **icon** in the role's colour — one per kind of message and per tool
+(below) — so you can scan a long page for, say, every edit or every hook
+at a glance. A tool call and its output read as one unit; a failed result
+shows an `error` pill in the gutter. User prompts are tinted and each one
+starts a new turn, separated by a thin rule; other rows are separated by
+a fainter hairline across the content.
+
+<figure markdown>
+  ![The gutter icons: one per kind of message (user prompt, steering, slash command, output, Bash input, compacted, memory, teammate, async result, assistant, agent, thinking, image, branch), per system message (system, warning, error, hook, recap) and per tool (Read, Write, Edit, MultiEdit, Delete, Bash, Glob, Grep, WebSearch, WebFetch, TaskOutput, TaskStop, TodoWrite, AskUserQuestion, ExitPlanMode, Skill, Artifact, Monitor, ScheduleWakeup, Cron, TaskCreate, TaskUpdate, TaskList, SendMessage, Workflow, workflow phase, ToolExecution, wait), plus tool result, tool error and a wrench for MCP and other tools](assets/themes/icons.png)
+  <figcaption>The gutter icons, each in the colour of the rows that use it. Tools without an icon of their own — MCP servers' tools, plugins' — get the wrench; a Read, Write or Edit of a memory file gets the memory bookmark.</figcaption>
+</figure>
+
+On a phone, and in a branch's column, the gutter is left-aligned and the
+icon comes before the role instead of after it. The icons are decoration:
+screen readers, search and the filter read the role's text as before.
 
 Long content shows a **two- or three-line preview** that fades out, with a
 `+ N lines` label: a long tool output, file, diff, Bash script, sub-agent

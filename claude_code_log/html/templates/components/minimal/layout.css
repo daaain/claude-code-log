@@ -347,8 +347,46 @@
 }
 
 .theme-minimal #transcript .mn-role {
+    position: relative;
+    padding-right: calc(var(--ic) + var(--ic-gap));
     color: var(--rc);
     font-weight: 500;
+}
+
+/* Role icons (html/minimal_icons.py): a stroke glyph in the role colour,
+   from the page's one sprite (`.mn-sprite`, right after <body>). Wide, it
+   ends the role line in the label's right padding, so the icons form one
+   column beside the rail and a long label truncates before its icon; on a
+   phone and in a column (left-aligned gutters) it leads the label. */
+.theme-minimal .mn-sprite {
+    position: absolute;
+    width: 0;
+    height: 0;
+    overflow: hidden;
+}
+
+.theme-minimal .mn-ic {
+    width: var(--ic);
+    height: var(--ic);
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.theme-minimal #transcript .mn-role > .mn-ic {
+    position: absolute;
+    top: 50%;
+    right: 0;
+    margin-top: calc(var(--ic) / -2);
+}
+
+/* A branch header's fork glyph, in the fork lane's colour. */
+.theme-minimal #transcript .message.branch-header > .header > .mn-ic {
+    margin-right: 5px;
+    vertical-align: -2px;
+    color: var(--lF);
 }
 
 .theme-minimal #transcript .header-info .token-usage {
@@ -434,6 +472,34 @@
     margin-top: 4px;
     padding-top: 7px;
     border-top: 1px solid var(--rule2);
+}
+
+/* Hairlines: a barely-there 1px rule (--hair) on top of every row, across
+   the content column only — the gutter and the rail stay clear, so the
+   rail line is unbroken and the dots untouched. A grid item of the row's
+   first line, lifted onto the row's top edge (its padding) and adding no
+   height. None inside a tool pair (call and result read as one unit),
+   above a turn rule (that row has its own), right under a session or
+   branch header, or on a column's first card (`dag-cfirst`, under the
+   column head). */
+.theme-minimal #transcript .message:not(.session-header)::after {
+    content: "";
+    grid-column: 3;
+    grid-row: 1;
+    align-self: start;
+    position: relative;
+    top: -3px;
+    height: 1px;
+    margin-bottom: -1px;
+    background: var(--hair);
+    pointer-events: none;
+}
+
+.theme-minimal #transcript .message:is(.pair_middle, .pair_last):not(.dag-split)::after,
+.theme-minimal #transcript .message.dag-cfirst::after,
+.theme-minimal #transcript .message-node:has(> .message.session-header) > .children > .message-node:first-child > .message::after,
+.theme-minimal #transcript .message-node:has(> .message.session-header) > .children > .message-node ~ .message-node > .message.user:not(.steering):not(.task-notification):not(.teammate):not(.sidechain):not(.command-output):not(.pair_middle):not(.pair_last)::after {
+    content: none;
 }
 
 /* ------------------------------------------------------------ fold bar */
@@ -931,9 +997,23 @@
         padding-left: 4px;
     }
 
+    .theme-minimal #transcript .mn-role {
+        padding-right: 0;
+        padding-left: calc(var(--ic) + var(--ic-gap));
+    }
+
+    .theme-minimal #transcript .mn-role > .mn-ic {
+        right: auto;
+        left: 0;
+    }
+
     .theme-minimal #transcript .message > .header > .mn-title {
         grid-column: 2;
         grid-row: 2;
+    }
+
+    .theme-minimal #transcript .message:not(.session-header)::after {
+        grid-column: 2;
     }
 
     .theme-minimal #transcript .message > .debug-info {

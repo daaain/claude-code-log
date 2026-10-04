@@ -1246,6 +1246,17 @@
                         });
                     });
                 });
+                if (tracks.length) {
+                    // The first shown card under each column head (main's
+                    // included) draws no hairline: the head's edge is there.
+                    const firstSeen = new Set();
+                    sequence.forEach(function (item) {
+                        if (item.kind !== 'card' || item.hidden || firstSeen.has(item.key)) return;
+                        if (item.key !== 'main' && !colIndex.has(item.key)) return;
+                        firstSeen.add(item.key);
+                        want(item.el, 'dag-cfirst');
+                    });
+                }
                 {
                     // Only rows that are shown count: a folded lane between
                     // two halves leaves empty rows, not a split.
@@ -1404,7 +1415,7 @@
                 const style = getComputedStyle(stage);
                 const step = parseFloat(style.getPropertyValue('--dag-step')) || 16;
                 const x0 = parseFloat(style.getPropertyValue('--dag-x0')) || 9;
-                const gut = phone && phone.matches ? 0 : (parseFloat(style.getPropertyValue('--gut')) || 58);
+                const gut = phone && phone.matches ? 0 : (parseFloat(style.getPropertyValue('--gut')) || 72);
                 const base = transcriptBox.left - stageBox.left + gut + x0;
                 const slotOf = layout.rail.slotOf;
                 function x(slot) { return base + step * slot; }

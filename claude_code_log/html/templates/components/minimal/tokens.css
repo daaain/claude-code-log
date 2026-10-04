@@ -16,6 +16,7 @@
     --muted: #5f6670;
     --dim: #868d96; /* fold bars at rest (P7c): 3.3:1 on --bg */
     --rule: #e3e6ea;
+    --hair: #edeff1; /* hairline between rows: --rule 65% toward --bg */
     --rule2: #1f2328;
     --code: #f3f4f6;
     --userbg: #fbf2e8;
@@ -44,10 +45,13 @@
     --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
 
     /* Row geometry: gutter, rail, and the narrower pair used inside a
-       nested sub-agent group (mockup .row / .nest .row). */
-    --gut: 58px;
+       nested sub-agent group (mockup .row / .nest .row). The gutters carry
+       the role icon (--ic plus its gap) beside a label of ~10 characters. */
+    --ic: 12px;
+    --ic-gap: 3px;
+    --gut: 72px;
     --rail: 18px;
-    --gut-nest: 46px;
+    --gut-nest: 60px;
     --rail-nest: 16px;
 
     color-scheme: light dark;
@@ -60,6 +64,7 @@
         --muted: #969da7;
         --dim: #6b727c;
         --rule: #2a2e35;
+        --hair: #22262c;
         --rule2: #c9ccd1;
         --code: #1d2025;
         --userbg: #2a2118;
@@ -102,6 +107,7 @@
     --muted: #969da7;
     --dim: #6b727c;
     --rule: #2a2e35;
+    --hair: #22262c;
     --rule2: #c9ccd1;
     --code: #1d2025;
     --userbg: #2a2118;

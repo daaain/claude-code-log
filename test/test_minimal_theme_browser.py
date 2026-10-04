@@ -499,3 +499,108 @@ class TestRowLayout:
             "[document.documentElement.scrollWidth, document.documentElement.clientWidth]"
         )
         assert widths[0] <= widths[1], widths
+
+
+# A card's hairline (its ::after): drawn?, height, colour and --hair as rgb.
+_HAIRLINE = """(id) => {
+    const card = document.getElementById(id);
+    const after = getComputedStyle(card, '::after');
+    const probe = document.createElement('span');
+    probe.style.color = getComputedStyle(document.documentElement).getPropertyValue('--hair').trim();
+    document.body.append(probe);
+    const hair = getComputedStyle(probe).color;
+    probe.remove();
+    return {content: after.content, height: parseFloat(after.height),
+            colour: after.backgroundColor, hair: hair};
+}"""
+
+# Visible cards in reading order, split into rows that follow another row
+# (no tool-pair half, turn rule or first row under a session header) and
+# the result halves of tool pairs.
+_ROWS = """() => {
+    const cards = [...document.querySelectorAll('#transcript .message:not(.session-header)')]
+        .filter(c => c.checkVisibility());
+    const firstUnderHeader = c => {
+        const node = c.parentElement;
+        const parent = node.parentElement && node.parentElement.parentElement;
+        return !node.previousElementSibling && !!parent
+            && !!parent.querySelector(':scope > .message.session-header');
+    };
+    const following = cards.filter((c, i) => i > 0
+        && !/\\bpair_(middle|last)\\b/.test(c.className)
+        && getComputedStyle(c).borderTopStyle !== 'solid'
+        && !firstUnderHeader(c));
+    const halves = cards.filter(c => /\\bpair_(middle|last)\\b/.test(c.className));
+    return {following: following.map(c => c.id), halves: halves.map(c => c.id)};
+}"""
+
+
+@pytest.mark.browser
+class TestHairlines:
+    """A barely-there rule between rows, across the content column only."""
+
+    @pytest.mark.parametrize("scheme", ["light", "dark"])
+    @pytest.mark.parametrize("width", [1280, 390])
+    def test_between_rows_but_not_inside_a_pair(
+        self, clean_theme: Page, tmp_path: Path, scheme: str, width: int
+    ) -> None:
+        page = clean_theme
+        page.emulate_media(color_scheme="dark" if scheme == "dark" else "light")
+        page.set_viewport_size({"width": width, "height": 800})
+        _open(page, _render(tmp_path, REPRESENTATIVE))
+        rows = page.evaluate(_ROWS)
+        assert len(rows["following"]) >= 3 and rows["halves"]
+        for card_id in rows["following"]:
+            line = page.evaluate(_HAIRLINE, card_id)
+            assert line["content"] != "none", (card_id, line)
+            assert line["height"] == 1, line
+            assert line["colour"] == line["hair"], line
+        for card_id in rows["halves"]:
+            assert page.evaluate(_HAIRLINE, card_id)["content"] == "none", card_id
+
+    @pytest.mark.parametrize("width", [1280, 390])
+    def test_content_column_only(
+        self, clean_theme: Page, tmp_path: Path, width: int
+    ) -> None:
+        """Gutter and rail stay clear: the line starts where the content
+        does, right of the dot, and sits on the row's top edge."""
+        page = clean_theme
+        page.set_viewport_size({"width": width, "height": 800})
+        _open(page, _render(tmp_path, REPRESENTATIVE))
+        card_id = page.evaluate(_ROWS)["following"][0]
+        # Probe the pseudo-element's box through a real element styled alike.
+        geometry = page.evaluate(
+            """(id) => {
+                const card = document.getElementById(id);
+                const after = getComputedStyle(card, '::after');
+                const probe = document.createElement('i');
+                probe.style.cssText = `grid-column:${after.gridColumnStart};grid-row:1;`
+                    + `align-self:start;position:relative;top:${after.top};height:1px;margin-bottom:-1px`;
+                card.append(probe);
+                const line = probe.getBoundingClientRect();
+                probe.remove();
+                const dot = card.getBoundingClientRect();
+                const cols = getComputedStyle(card).gridTemplateColumns.split(' ').map(parseFloat);
+                const railRight = dot.left + cols.slice(0, -1).reduce((a, b) => a + b, 0);
+                const content = card.querySelector(':scope > .content').getBoundingClientRect();
+                return {lineLeft: line.left, lineTop: line.top, railRight: railRight,
+                        contentLeft: content.left, cardTop: dot.top};
+            }""",
+            card_id,
+        )
+        assert abs(geometry["lineLeft"] - geometry["contentLeft"]) < 1, geometry
+        assert geometry["lineLeft"] >= geometry["railRight"] - 0.5, geometry
+        assert abs(geometry["lineTop"] - geometry["cardTop"]) < 1, geometry
+
+    def test_turn_rule_rows_have_no_hairline(
+        self, clean_theme: Page, tmp_path: Path
+    ) -> None:
+        page = clean_theme
+        _open(page, _render(tmp_path, REPRESENTATIVE))
+        turns = page.evaluate(
+            """() => [...document.querySelectorAll('#transcript .message.user')]
+                .filter(c => getComputedStyle(c).borderTopStyle === 'solid').map(c => c.id)"""
+        )
+        assert turns
+        for card_id in turns:
+            assert page.evaluate(_HAIRLINE, card_id)["content"] == "none"

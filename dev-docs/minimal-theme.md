@@ -16,13 +16,14 @@ record now; where it and this page disagree, this page (and the code) win.
 | Template branches (`{% if minimal %}`, glued inline so classic bytes never change), header and toolbar | `transcript.html`, `components/minimal/header.html` | [rendering-architecture.md § 8](rendering-architecture.md#theme-branches-in-transcripthtml) |
 | Look: tokens, row grid, components, light/dark, dark Pygments | `components/minimal/` `tokens.css`, `layout.css` (includes `chrome.css`: page, header, toolbar), `components.css`, `pygments_dark.css` (generated), `theme_init.js` (includes `scheme_init.js`) | [css-classes.md § Minimal Theme](css-classes.md#minimal-theme-theme-minimal) |
 | Server helpers: gutter, call line, session header, page meta, cross links, lane attributes | `html/minimal_theme.py` | css-classes.md (table), § 7, § 12 |
+| Role icons: the glyphs, kind / tool → glyph, the page's sprite | `html/minimal_icons.py` (`mn_role_icon`, `mn_icon`, `mn_icon_sprite`); legend `scripts/generate_icon_legend.py` → `docs/assets/themes/icons.png` | § 9 |
 | Minimal-only formatter output: compact spawn rows, answers on merge rows, previews of long answers, diffs and commands | `HtmlRenderer.format_TaskInput` / `format_TaskOutput` / `format_TaskNotificationMessage` / `format_EditInput` / `format_MultiEditInput` / `format_BashInput`, `utils.render_markdown_preview`, `tool_formatters.collapse_long_diff` | § 7, § 9, § 10 |
 | Collapse labels, fold depth, colour-scheme toggle, keyboard fold bars | `components/minimal/minimal.js` (the toggle's code and markup are shared with § 13: `scheme.js`, `scheme_toggle.html`; the live filter / search refresh is shared: `transcript.html`, `search.html`) | [message-hierarchy.md § Fold depth](message-hierarchy.md#fold-depth-minimal-theme), § 9, § 11 |
 | Lane model (which cards form a branch — sub-agents, workflow agents, forks —, spawn / merge rows, turn or workflow group, rank, stats, running state) | `lanes.py` | [agents.md § 6](agents.md#6-branch-lanes-minimal-theme), [dag.md § Branch lanes](dag.md#branch-lanes-minimal-theme), § 12 |
 | DAG engine: branch modes, rail, columns, live relayout | `components/minimal/minimal_dag.js`, `dag.css` | § 1–8 |
 | Teammate anchors | `lanes.teammate_links`, `minimal_theme.cross_links` | § 7, [teammates.md](teammates.md#minimal-theme-anchors) |
 | Project index and archive search page | `index.html`, `archive_search.html`; `components/minimal/` `index_rows.html`, `search_rows.js`, `pages.css`, `pages.js`; `minimal_theme.index_sessions` / `project_meta` / `project_when` … | § 13 |
-| Tests | `test_minimal_pages.py`, `test_minimal_pages_browser.py`, `test_minimal_theme.py`, `test_lanes.py`, `test_theme_option.py`, `test_minimal_*_browser.py` (look, components, folds, DAG, columns, live, polish, parity sweep and smoke test), `TestMinimalThemeHTMLSnapshots`; fixtures `test/dag_demo_fixture.py` (`write_dag_demo`, `write_team_demo`, `write_workflow_demo`), `test/dag_live_fixture.py` | § 11 |
+| Tests | `test_minimal_pages.py`, `test_minimal_pages_browser.py`, `test_minimal_theme.py`, `test_minimal_icons.py`, `test_minimal_icons_browser.py`, `test_lanes.py`, `test_theme_option.py`, `test_minimal_*_browser.py` (look, components, folds, DAG, columns, live, polish, parity sweep and smoke test), `TestMinimalThemeHTMLSnapshots`; fixtures `test/dag_demo_fixture.py` (`write_dag_demo`, `write_team_demo`, `write_workflow_demo`), `test/dag_live_fixture.py` | § 11 |
 
 ## 1. What it does
 
@@ -406,8 +407,8 @@ No `dag-on` and no `mn-parsing` (the transcript renders as it parses):
 nothing is `display: contents`, sub-agent transcripts render
 nested under their spawning result (2px `--ring` line), fork branches as
 branch headers, the Branches segment stays `hidden` and no controls exist.
-Teammate anchors and the async `Result ↓` link are server-rendered and work
-as plain links; an async spawn's result card shows its launch line and that
+Teammate anchors, the role icons and the async `Result ↓` link are
+server-rendered (the anchors and the link work as plain links); an async spawn's result card shows its launch line and that
 link as before (folding them into the branch control is the engine's, § 9).
 
 ## 7. Teammate anchors and results at the merge row
@@ -551,6 +552,39 @@ change (`test_lanes.py::TestLiveGrowth`).
   and `aria-label`. In Columns with four columns at 1600px the main column
   has ≈ 470px of content, which used to push `⇤ Interleave` onto a line of
   its own. A phone keeps wrapping.
+- **Role icons.** Each gutter's role label starts with a 16×16 stroke glyph
+  (`html/minimal_icons.py`; original drawings, legend in the user guide):
+  one per kind (prompt, steering, slash command, output, `!` input,
+  compacted, memory, teammate, async result, assistant, agent, thinking,
+  system / warning / error, hook, recap, image, tool result / error,
+  workflow phase, branch header) and per tool with a renderer
+  (`TOOL_ICONS`, every `TOOL_INPUT_MODELS` name; aliases share — `Task` /
+  `Agent`, the `Cron*` and `Team*` tools; a `Read` / `Write` / `Edit` of a
+  memory file takes a memory glyph), anything else — `mcp__*`, plugins —
+  the generic wrench. The glyphs are defined once, as `<symbol id="mi-…">`
+  in an inline sprite right after `<body>` (≈ 8KB, every glyph: a live
+  update can bring a kind the page did not have, and the sprite sits
+  outside the `#transcript` a swap replaces), and each row references
+  one (`<svg class='mn-ic' aria-hidden='true'><use href='#mi-read'/></svg>`,
+  ≈ 70 bytes a row). Drawn in `currentColor`, so the role colour in
+  either scheme. Placement keeps the gutter's three lines: on a wide row
+  the icon ends the role line, in the label's right padding — the icons
+  form one column beside the rail, and a long label truncates before its
+  icon (`--gut` grew 58 → 72px, `--gut-nest` 46 → 60px, a column's gutter
+  46 → 60px, so the label keeps its ~10 characters); on a phone and in a
+  column, whose gutters are left-aligned, it leads the label. A branch
+  header shows the fork glyph in place of `↳`. The label's text is
+  unchanged, so search, the filter and the timeline never see the icon.
+- **Hairlines.** Rows on the same plain background used to run together:
+  each row draws a 1px `--hair` rule (`--rule` 65% towards `--bg`) on its
+  top edge, across the content column only, so the rail line stays whole
+  and the dots untouched. It is the card's `::after`, a grid item on the
+  first line lifted into the row's top padding, adding no height. None
+  inside a tool pair (unless split by interleaved rows), on a turn-rule
+  row, on a session header's first row, or on a column's first card (the
+  engine marks it `dag-cfirst`, under the column head). Interleaved rows
+  draw it across their tint. The index's session rows and the search
+  page's hits draw the same line between consecutive rows.
 - **Column heads (P8).** Line 1: the name (truncated) and two compact
   actions, `⇤` and `−` (`data-label`; a container query writes their
   `data-long` words, *⇤ Interleave* / *Collapse*, once the head is 400px

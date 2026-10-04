@@ -268,6 +268,7 @@
     content: "⑂ rewound · ";
 }
 
+.theme-minimal .mn-stage.dag-on #transcript .message.branch-header[data-lane-continues] > .header > .mn-ic,
 .theme-minimal .mn-stage.dag-on #transcript .message.branch-header[data-lane-continues] > .header > .branch-from,
 .theme-minimal .mn-stage.dag-on #transcript .message.branch-header[data-lane-continues] > .fold-bar {
     display: none;
@@ -714,7 +715,7 @@ body.theme-minimal.dag-wide :is(.mn-top, .mn-toolbar, .filter-toolbar, #timeline
 /* Cards in a column: the compact row (mockup .w-col) — gutter (time, role)
    left-aligned, no rail and no dot. */
 .theme-minimal .mn-stage.dag-on #transcript .message.dag-col {
-    grid-template-columns: 46px 6px minmax(0, 1fr);
+    grid-template-columns: 60px 6px minmax(0, 1fr);
     min-width: 0;
     padding-right: 10px;
     padding-left: 8px;
@@ -727,6 +728,26 @@ body.theme-minimal.dag-wide :is(.mn-top, .mn-toolbar, .filter-toolbar, #timeline
 .theme-minimal .mn-stage.dag-on #transcript .message.dag-col > .header > .header-info {
     align-items: flex-start;
     text-align: left;
+}
+
+/* …so the role icon leads its label, as on a phone. */
+.theme-minimal .mn-stage.dag-on #transcript .message.dag-col .mn-role {
+    padding-right: 0;
+    padding-left: calc(var(--ic) + var(--ic-gap));
+}
+
+.theme-minimal .mn-stage.dag-on #transcript .message.dag-col .mn-role > .mn-ic {
+    right: auto;
+    left: 0;
+}
+
+.theme-minimal .mn-stage.dag-on #transcript .message.dag-col:is(.system-error, .tool_result.error) .mn-role {
+    padding-right: 5px;
+    padding-left: calc(5px + var(--ic) + var(--ic-gap));
+}
+
+.theme-minimal .mn-stage.dag-on #transcript .message.dag-col:is(.system-error, .tool_result.error) .mn-role > .mn-ic {
+    left: 5px;
 }
 
 /* A row shared with a taller card in another column would leave a gap
