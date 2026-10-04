@@ -219,7 +219,7 @@ class TestRendering:
         """An archive built with `default` regenerates if the default moves."""
         messages = load_transcript(REPRESENTATIVE, silent=True)
         page = tmp_path / "page.html"
-        page.write_text(generate_html(messages, "T", theme="default"))
+        page.write_text(generate_html(messages, "T", theme="default"), encoding="utf-8")
         assert not is_html_outdated(page, "default")
         monkeypatch.setattr(utils, "DEFAULT_THEME", "minimal")
         assert is_html_outdated(page, "default")
