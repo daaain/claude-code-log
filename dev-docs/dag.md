@@ -728,6 +728,14 @@ own timestamp. Older transcripts without `compactMetadata` get
 
 `compact_trigger` (`"manual"` / `"auto"`) is plumbed but not rendered.
 
+`SystemMessage.compact_logical_parent_uuid: Optional[str]` carries the
+boundary's `logicalParentUuid` (str only, same factory branch). It is
+display-only: the HTML debug uuid line, which prints `uuid → parent`,
+falls back to `uuid ⇢ logical` (dashed arrow, tooltip *logical parent
+(across /compact)*) when `meta.parent_uuid` is empty, so the chain no
+longer looks broken at every /compact. It is deliberately **not** copied
+into `meta.parent_uuid`, which drives parent lookup and pairing.
+
 ---
 
 ## Assertions / Invariants
