@@ -28,6 +28,7 @@ _REPO_ROOTS = (
     "work/",
     "dev-docs/",
     "stubs/",
+    ".github/",
     "README.md",
     "CONTRIBUTING.md",
     "CHANGELOG.md",

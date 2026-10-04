@@ -483,29 +483,57 @@ The cache automatically rebuilds when source files change or cache schema versio
 
 ## Release Process
 
-The project uses automated releases with semantic versioning.
+Releases are tag-driven: pushing a version tag runs
+[`.github/workflows/release.yml`](.github/workflows/release.yml), which
+publishes to PyPI only after a maintainer approves it.
 
-### Quick Release
+### Cutting a release
 
 ```bash
-# Bump version and create release (patch/minor/major)
-just release-prep patch    # Bug fixes
-just release-prep minor    # New features
-just release-prep major    # Breaking changes
+# On main, with a clean tree: bump version, update uv.lock and CHANGELOG.md,
+# commit and tag — all local (patch/minor/major, or an exact version)
+just release-prep minor
 
-# Or specify exact version
-just release-prep 0.4.3
-
-# Preview what would be released
+# Check the notes the GitHub Release will carry, and the commit
 just release-preview
+git show --stat HEAD
 
-# Push to PyPI and create GitHub release
+# Push main and the tag together (--atomic), which starts the workflow
 just release-push
 ```
 
-### GitHub Release Only
+Until the push, `git tag -d X.Y.Z && git reset --hard HEAD~1` undoes it.
 
-```bash
-just github-release          # For latest tag
-just github-release 0.4.2    # For specific version
-```
+### What the workflow does
+
+1. **ci** — waits for the CI run (`ci.yml`) that the same push started on the
+   release commit, and fails the release if it fails. Nothing is re-run.
+2. **build** — in parallel, checks that the tag, `[project].version`,
+   `uv.lock`'s own `claude-code-log` entry and a `## [X.Y.Z]` CHANGELOG
+   section all agree, then runs `uv build` and extracts the release notes
+   (`scripts/release_notes.py`).
+3. **publish** — once both pass, waits in the `pypi` environment for a
+   required reviewer to **approve the deployment** in the run's page on
+   GitHub, then `uv publish`es.
+4. **github-release** — once PyPI has it, creates the GitHub Release from the
+   notes, with the same wheel and sdist attached.
+
+Publishing uses PyPI **trusted publishing**: PyPI trusts this workflow and the
+`pypi` environment, so no API token exists anywhere. A version, once
+published, is burned — PyPI refuses re-uploads even after a delete, so a
+botched release is fixed by releasing the next number.
+
+`just publish` is the manual escape hatch for when GitHub is down; it needs
+PyPI credentials (e.g. `UV_PUBLISH_TOKEN`) locally.
+
+### One-time setup
+
+- **PyPI** → project settings → Publishing → add a GitHub publisher: owner
+  `daaain`, repo `claude-code-log`, workflow `release.yml`, environment `pypi`.
+- **GitHub** → Settings → Environments → `pypi`: add the maintainers as
+  required reviewers (any one approval releases), and limit deployments to
+  tags matching `[0-9]*.[0-9]*.[0-9]*`.
+- **GitHub** → Settings → Rules → Rulesets: the "release tags are immutable"
+  tag ruleset blocks deleting, moving or force-pushing `refs/tags/[0-9]*`, so
+  a published version's tag always names what was released. Releasing a
+  botched version again means the next number, which PyPI requires anyway.
