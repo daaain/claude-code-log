@@ -58,6 +58,8 @@ LANE = """(lane) => {
         state: head && head.getAttribute('data-lane-state'),
         label: ctl && ctl.querySelector('.mn-bfold').getAttribute('data-label'),
         pill: !!pill && getComputedStyle(pill).display !== 'none',
+        pillLabel: pill && pill.getAttribute('data-label'),
+        quietMs: dag.quietMs(lane),
         controls: document.querySelectorAll(`[data-lane-ref="${lane}"]`).length,
         visible: [...document.querySelectorAll('#transcript .message')]
             .filter(el => el.getAttribute('data-lane') === lane && el.checkVisibility()).length,
@@ -455,13 +457,14 @@ def test_reader_choices_survive_patches_and_swaps(page: Page, live: Any) -> None
     scrolled: every update — patch or swap — keeps all of it, with exactly
     one set of engine controls and column heads, a redrawn rail and fresh
     stats."""
-    page.set_viewport_size({"width": 1400, "height": 420})
+    page.set_viewport_size({"width": 1400, "height": 360})
     harness = live("start")
     errors = _open(page, harness.url)
     _click(page, LANE_A)
     _click(page, LANE_C, ".mn-bcol")
     _wait(page, "(lane) => window.claudeLogDag.mode(lane) === 'column'", LANE_C)
-    assert page.evaluate("document.documentElement.scrollHeight") > 600
+    # Room to scroll to 180px (the P7c spawn rows made the page shorter).
+    assert page.evaluate("document.documentElement.scrollHeight") > 360 + 180
     page.evaluate("window.scrollTo(0, 180)")
 
     expected_stats = {
@@ -532,43 +535,75 @@ def test_reader_choices_survive_patches_and_swaps(page: Page, live: Any) -> None
 
 
 # ------------------------------------------------- not running forever
+#
+# P7c revised P7b's rule: a live-served page no longer ends an open lane
+# after 30 quiet minutes (agents wait on background processes, watchers and
+# Monitor tasks far longer); it shows how long the lane has been quiet.
+# Only a session silent for a week reads as stopped.
+
+WEEK_S = 7 * 24 * 60 * 60  # minimal_dag.js RUNNING_MAX_QUIET_MS, in seconds
 
 
-def test_an_idle_session_shows_no_running_lane(page: Page, live: Any) -> None:
-    """Served, but the session has been quiet for days: an agent without a
-    result ended without one — no running label, a fork-like stub."""
-    harness = live("start", base=_recent() - timedelta(days=2))
+@pytest.mark.parametrize("live", ["session"], indirect=True)
+@pytest.mark.parametrize(
+    ("ago", "quiet"),
+    [(timedelta(minutes=45), r"4[45]m"), (timedelta(days=2), r"2d")],
+    ids=["45-minutes", "2-days"],
+)
+def test_a_quiet_lane_keeps_running(
+    page: Page, live: Any, ago: timedelta, quiet: str
+) -> None:
+    """Quiet for well over the old 30-minute window, served live: an agent
+    without a result still reads as running, and says for how long it has
+    been quiet."""
+    import re
+
+    harness = live("start", base=_recent() - ago)
+    _open(page, harness.url)
+    assert page.evaluate("window.claudeLogDag.runningMaxQuietMs") == WEEK_S * 1000
+    for lane in (LANE_A, LANE_C):
+        info = _lane(page, lane)
+        assert info["state"] == "open" and info["running"], info
+        assert info["pill"] and "no result" not in info["label"], info
+        assert re.fullmatch(rf"running · quiet {quiet}", info["pillLabel"]), info
+        assert info["quietMs"] >= ago.total_seconds() * 1000 - 60_000, info
+        assert "end" in _parts(page, lane) and "stub" not in _parts(page, lane)
+
+
+@pytest.mark.parametrize("live", ["session"], indirect=True)
+def test_the_quiet_label_follows_the_clock(page: Page, live: Any) -> None:
+    """Under a minute the label is just "running"; the engine's re-check
+    brings it up to date as the lane stays quiet, without any update."""
+    # The lane's newest card is ~6 s after base: quiet for ~44 s now.
+    harness = live("start", base=datetime.now(timezone.utc) - timedelta(seconds=50))
+    _open(page, harness.url)
+    assert _lane(page, LANE_C)["pillLabel"] == "running"
+    # The engine's own timer runs every 30 s; ask for its relayout directly
+    # rather than waiting that out.
+    _wait(
+        page,
+        """(lane) => { window.claudeLogDag.relayout();
+            const pill = document.querySelector(`[data-lane-ref="${lane}"] .mn-brun`);
+            return pill && pill.getAttribute('data-label') === 'running · quiet 1m'; }""",
+        LANE_C,
+    )
+    assert _lane(page, LANE_C)["running"]
+
+
+def test_a_session_silent_for_a_week_shows_no_running_lane(
+    page: Page, live: Any
+) -> None:
+    """Served (``serve`` runs over whole archives), but nothing in the
+    session has moved for over a week: an agent without a result ended
+    without one — no running label, a fork-like stub."""
+    harness = live("start", base=_recent() - timedelta(days=8))
     _open(page, harness.url)
     for lane in (LANE_A, LANE_C):
         info = _lane(page, lane)
         assert info["state"] == "open" and not info["running"], info
         assert not info["pill"] and "no result" in info["label"], info
+        assert info["quietMs"] is None
         assert set(_parts(page, lane)) == {"stub"}
-
-
-IDLE_S = 30 * 60  # minimal_dag.js RUNNING_IDLE_MS, in seconds
-
-
-@pytest.mark.parametrize("live", ["session"], indirect=True)
-def test_a_running_lane_times_out(page: Page, live: Any) -> None:
-    """A session that goes quiet stops showing a running lane, even if
-    nothing else changes (the engine re-checks on a timer)."""
-    # The newest card is written at base + 7 s: running for ~15 s from now.
-    base = datetime.now(timezone.utc) - timedelta(seconds=IDLE_S - 8)
-    harness = live("start", base=base)
-    _open(page, harness.url)
-    assert page.evaluate("window.claudeLogDag.runningIdleMs") == IDLE_S * 1000
-    assert _lane(page, LANE_C)["running"], "should start out running"
-    # The engine's own timer runs every 30 s; ask its decision directly
-    # (relayout re-evaluates it) rather than waiting that out.
-    _wait(
-        page,
-        "(lane) => { window.claudeLogDag.relayout(); return !window.claudeLogDag.running(lane); }",
-        LANE_C,
-    )
-    info = _lane(page, LANE_C)
-    assert "no result" in info["label"] and not info["pill"]
-    assert set(_parts(page, LANE_C)) == {"stub"}
 
 
 OLD_SESSION = "dade0000-0000-4000-8000-0000000000c1"
@@ -583,7 +618,7 @@ def test_a_live_session_does_not_wake_an_old_one(page: Page, live: Any) -> None:
     def add_old_session(harness: LiveHarness) -> None:
         old = LiveDagScript(
             harness.project,
-            base=_recent() - timedelta(days=2),
+            base=_recent() - timedelta(days=8),
             session=OLD_SESSION,
             suffix="old",
             uid_space=7,

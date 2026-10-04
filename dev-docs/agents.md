@@ -113,9 +113,11 @@ identification and tree building. For every Task tool_result whose
   branch's merge row, at the time the answer arrived — never ghosted,
   at any depth), while the spawn's result keeps only the launch line and
   a `Result ↓` link to it (`.mn-async-jump`; the Agent id row, repeated
-  as the notification's Task ID, is dropped). Classic and Markdown
+  as the notification's Task ID, is dropped) — with JavaScript folded into
+  the spawn's branch control (P7c). Classic and Markdown
   output are unchanged. See
-  [minimal-theme.md § 7](minimal-theme.md#7-teammate-anchors-and-results-at-the-merge-row).
+  [minimal-theme.md § 7](minimal-theme.md#7-teammate-anchors-and-results-at-the-merge-row)
+  and [§ 9](minimal-theme.md#9-compact-spawn-rows-and-other-polish-p7c).
 - **Sidechain dedup (HOOK/TOOL only):** when the last sub-assistant
   text matches the notification's `result_text`, drops the duplicate
   from the sidechain tree. No-op at AGENT (sidechain already gone).
@@ -416,9 +418,10 @@ timestamps (`"6 steps · 48.4k tokens · 2m 13s"`).
 An agent lane **without a merge row** also carries a `state`
 (`data-lane-state`): `ended` when the page proves the agent is over — a
 synchronous agent's parent line (same lane, same session) has a later
-model step or prompt, or the lane is nested in one that merged or ended —
-else `open`. The minimal theme draws an `open` lane as *running* only on a
-live, recently active page; see
+model step or prompt, a `TaskStop` reported the agent stopped, or the lane
+is nested in one that merged or ended — else `open`. The minimal theme
+draws an `open` lane as *running* on a live-served page, with how long it
+has been quiet (a session silent for over a week reads as stopped); see
 [minimal-theme.md § 8](minimal-theme.md#8-live-updates-and-running-lanes).
 
 Rewind forks follow the same model; see

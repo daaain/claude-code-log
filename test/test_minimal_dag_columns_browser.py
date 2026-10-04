@@ -467,8 +467,11 @@ class TestResultAtMerge:
         assert "from async notification" not in spawn_text
         # The answer is on the notification, at its arrival time …
         expect(page.locator(f"#{note}")).to_contain_text(answer)
-        # … and the spawn's result links there.
-        jump = page.locator(f".mn-async-jump a[href='#{note}']")
+        # … and the spawn's result links there: the result card's own line
+        # (server-rendered, for no-JS) folds with the launch acknowledgement
+        # into the branch control's `Result ↓` (P7c).
+        expect(page.locator(f".mn-async-jump a[href='#{note}']")).to_have_count(1)
+        jump = page.locator(f"[data-lane-ref='{A}'] .mn-bres[href='#{note}']")
         expect(jump).to_have_count(1)
         jump.click()
         expect(page.locator(f"#{note}")).to_be_in_viewport()

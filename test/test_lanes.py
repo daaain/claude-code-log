@@ -919,6 +919,7 @@ class TestRenderPaths:
 # ------------------------------------------------- live sessions (P7b)
 
 from test.dag_live_fixture import (  # noqa: E402
+    AGENT_A,
     AGENT_C,
     LANE_A,
     LANE_C,
@@ -1075,6 +1076,36 @@ class TestLaneState:
         heads = self._render(script)
         assert "data-lane-state" not in heads[LANE_C]
         assert heads[f"agent-{nested}"]["data-lane-state"] == "ended"
+
+    def test_a_stopped_background_agent_has_ended(self, tmp_path: Path) -> None:
+        """A ``TaskStop`` that reports the agent stopped ends its lane (P7c:
+        the client no longer guesses from elapsed time, so the page has to
+        say it). A stop that found nothing proves nothing."""
+        from test.dag_demo_fixture import _result, _tool
+
+        def stop(script: LiveDagScript, tool: str, at: float, ok: bool) -> None:
+            use = script._entry(
+                "assistant",
+                script.last["main"],
+                at,
+                _tool(tool, "TaskStop", {"task_id": AGENT_A}),
+            )
+            text = (
+                f"Successfully stopped task: {AGENT_A} (audit)"
+                if ok
+                else f"Error: No task found with ID: {AGENT_A}"
+            )
+            res = script._entry("user", use["uuid"], at + 1, _result(tool, text))
+            res["toolUseResult"] = {"message": text} if ok else text
+            script._append(script.trunk, [use, res])
+            script.last["main"] = res["uuid"]
+
+        script = LiveDagScript(tmp_path / "p")
+        script.run_to("start")
+        stop(script, "toolu_live_stop_miss", 20, ok=False)
+        assert self._render(script)[LANE_A]["data-lane-state"] == "open"
+        stop(script, "toolu_live_stop_hit", 25, ok=True)
+        assert self._render(script)[LANE_A]["data-lane-state"] == "ended"
 
     def test_classic_carries_no_state(self, tmp_path: Path) -> None:
         script = LiveDagScript(tmp_path / "p")

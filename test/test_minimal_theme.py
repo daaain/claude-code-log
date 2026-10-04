@@ -382,3 +382,61 @@ class TestMinimalPage:
         start = first.index("<!-- PAGINATION_NEXT_LINK_START -->")
         assert "<!-- PAGINATION_NEXT_LINK_END -->" in first
         assert start < _NAV_BLOCK_PREFIX_CHARS
+
+
+class TestCompactSpawnRows:
+    """P7c: the minimal theme's spawn row — prompt preview, no ``Run`` row,
+    the async acknowledgement marked for the engine; classic unchanged."""
+
+    def test_short_prompt_stays_inline(self) -> None:
+        from claude_code_log.html.tool_formatters import format_task_prompt_preview
+
+        html = format_task_prompt_preview("Find every hard-coded colour.")
+        assert html.startswith('<div class="task-prompt markdown">')
+        assert "<details" not in html
+
+    @pytest.mark.parametrize(
+        "prompt",
+        [
+            "Explore the codebase. Focus on:\n\n1. How ZIP files are found\n2. Tests\n3. Docs",
+            "word " * 60,  # one long line
+        ],
+        ids=["many-lines", "one-long-line"],
+    )
+    def test_long_prompt_is_a_two_line_preview(self, prompt: str) -> None:
+        from claude_code_log.html.tool_formatters import format_task_prompt_preview
+
+        html = format_task_prompt_preview(prompt)
+        assert "<details class='collapsible-code'>" in html
+        preview = html.split("<div class='preview-content markdown'>", 1)[1].split(
+            "</div>", 1
+        )[0]
+        full = html.split("<div class='code-full markdown'>", 1)[1]
+        # The first two non-blank lines, no "..." filler; the body has it all.
+        assert "..." not in preview
+        if "\n" in prompt:
+            assert "How ZIP files are found" in preview and "Tests" not in preview
+            assert "Docs" in full
+        else:
+            assert full.count("word") == 60
+
+    def _spawn(self, theme: str) -> str:
+        from claude_code_log.html.renderer import HtmlRenderer
+        from claude_code_log.models import TaskInput
+
+        renderer = HtmlRenderer()
+        renderer.theme = theme
+        task = TaskInput(
+            prompt="Audit the colours.",
+            description="Audit",
+            subagent_type="Explore",
+            run_in_background=True,
+            name="alice",
+        )
+        return renderer.format_TaskInput(task, cast(Any, SimpleNamespace(meta=None)))
+
+    def test_minimal_drops_the_run_row_only(self) -> None:
+        minimal, classic = self._spawn("minimal"), self._spawn("classic")
+        assert "<dt>Run</dt>" in classic
+        assert "<dt>Run</dt>" not in minimal
+        assert "alice" in minimal  # the other teammate fields stay

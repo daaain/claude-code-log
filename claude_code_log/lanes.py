@@ -47,11 +47,13 @@ Only what is on the page decides, so the render stays a pure function of the
 transcript: ``state`` is ``"ended"`` when the page proves the agent is over —
 a *synchronous* agent's parent line moved on past its spawn (the parent
 blocks on a synchronous call, so a later model step or prompt there means the
-call is over), or the lane is nested in a lane that merged or ended — and
-``"open"`` otherwise. Merged lanes and forks have no state. Whether an open
-lane is shown as *running* is the client's call (served live and recently
-active; dev-docs/minimal-theme.md § 8), so a static page of a finished
-session never shows one running.
+call is over), a ``TaskStop`` of the agent's id reported it stopped (P7c), or
+the lane is nested in a lane that merged or ended — and ``"open"``
+otherwise. (A killed or failed background agent still gets its
+``<task-notification>``, which is its merge row.) Merged lanes and forks
+have no state. Whether an open lane is shown as *running* is the client's
+call (served live; dev-docs/minimal-theme.md § 8), so a static page of a
+finished session never shows one running.
 
 Each branch lane also carries the **user turn** it belongs to — the
 top-level card of the conversation (a direct child of a session or branch
@@ -72,6 +74,8 @@ from .models import (
     TaskInput,
     TaskNotificationMessage,
     TaskOutput,
+    TaskStopInput,
+    TaskStopOutput,
     ThinkingMessage,
     ToolResultMessage,
     ToolUseMessage,
@@ -624,8 +628,30 @@ def _settle_open_lanes(
         seen = latest.get(key)
         if seen is None or parsed > seen:
             latest[key] = parsed
+    # Agent ids a TaskStop reported stopped (its result says so; a stop
+    # that found nothing — the task had already finished — proves nothing
+    # here, and neither does one still waiting for its result).
+    stop_target: dict[str, str] = {}
+    stopped: set[str] = set()
+    for node, _parent in order:
+        content = node.content
+        if isinstance(content, ToolUseMessage) and isinstance(
+            content.input, TaskStopInput
+        ):
+            if content.input.task_id:
+                stop_target[content.tool_use_id] = content.input.task_id
+        elif isinstance(content, ToolResultMessage) and isinstance(
+            content.output, TaskStopOutput
+        ):
+            target = stop_target.get(content.tool_use_id)
+            if target and content.output.stopped:
+                stopped.add(target)
+
     for info in unmerged:
         info.state = "open"
+        if info.agent_id and info.agent_id in stopped:
+            info.state = "ended"
+            continue
         if info.kind != "agent":
             continue  # async: the parent never waits for it
         rec = spawns.get(info.agent_id or "")

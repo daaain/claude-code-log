@@ -472,11 +472,14 @@ def format_sendmessage_output(
 def format_task_input_teammate_extras(
     input_: TaskInput,
     teammate_colors: Optional[dict[str, str]] = None,
+    include_run: bool = True,
 ) -> str:
     """Return a small HTML fragment surfacing teammate-spawn fields on Task.
 
     Empty string when no teammate fields are present — callers can append
-    this fragment to the existing Task rendering.
+    this fragment to the existing Task rendering. ``include_run`` off drops
+    the ``Run background`` row (the minimal theme, whose call line carries
+    the ``[async …]`` marker instead).
     """
     rows: list[tuple[str, str]] = []
     if input_.name:
@@ -486,7 +489,7 @@ def format_task_input_teammate_extras(
         rows.append(("Team", escape_html(input_.team_name)))
     if input_.mode:
         rows.append(("Mode", escape_html(input_.mode)))
-    if input_.run_in_background:
+    if input_.run_in_background and include_run:
         rows.append(("Run", "background"))
     if not rows:
         return ""

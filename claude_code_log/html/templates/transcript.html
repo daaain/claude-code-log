@@ -157,10 +157,10 @@
     <div class='message-node'>
     <div class='children'>{% for child in message.children %}{{ render_message(child) }}{% endfor %}{% if message.junction_forward_links %}
         <div class='fork-point' id='msg-{{ message.message_id }}'{% if minimal %}{{ mn_lane_attrs(message, lane_attrs) }}{% endif %}>
-            <div class='fork-point-header'>&#x2442; Fork point{% if message.fork_point_preview %} &bull; {{ message.fork_point_preview }}{% endif %}</div>
+            <div class='fork-point-header'>&#x2442; Fork point{% if message.fork_point_preview %}{% if minimal %}<span class='fork-point-preview'>{% endif %} &bull; {{ message.fork_point_preview }}{% if minimal %}</span>{% endif %}{% endif %}</div>
             <div class='fork-point-branches'>
                 {% for branch_sid, branch_idx, branch_preview in message.junction_forward_links %}
-                <a href='#msg-d-{{ branch_idx }}' class='fork-point-branch'>&#x21b3; Branch{% if branch_preview %} &bull; {{ branch_preview }}{% endif %}</a>
+                <a href='#msg-d-{{ branch_idx }}' class='fork-point-branch'{% if minimal and branch_preview %} title='{{ branch_preview }}'{% endif %}>&#x21b3; Branch{% if branch_preview %} &bull; {{ branch_preview }}{% endif %}</a>
                 {% endfor %}
             </div>
         </div>
@@ -204,10 +204,10 @@
            sole occupant. The opening tag is glued to endfor so non-junction
            nodes emit no extra whitespace. #}
         <div class='fork-point'>
-            <div class='fork-point-header'>&#x2442; Fork point{% if message.fork_point_preview %} &bull; {{ message.fork_point_preview }}{% endif %}</div>
+            <div class='fork-point-header'>&#x2442; Fork point{% if message.fork_point_preview %}{% if minimal %}<span class='fork-point-preview'>{% endif %} &bull; {{ message.fork_point_preview }}{% if minimal %}</span>{% endif %}{% endif %}</div>
             <div class='fork-point-branches'>
                 {% for branch_sid, branch_idx, branch_preview in message.junction_forward_links %}
-                <a href='#msg-d-{{ branch_idx }}' class='fork-point-branch'>&#x21b3; Branch{% if branch_preview %} &bull; {{ branch_preview }}{% endif %}</a>
+                <a href='#msg-d-{{ branch_idx }}' class='fork-point-branch'{% if minimal and branch_preview %} title='{{ branch_preview }}'{% endif %}>&#x21b3; Branch{% if branch_preview %} &bull; {{ branch_preview }}{% endif %}</a>
                 {% endfor %}
             </div>
         </div>
@@ -272,10 +272,10 @@
            sole occupant. The opening tag is glued to endfor so non-junction
            nodes emit no extra whitespace. #}
         <div class='fork-point'>
-            <div class='fork-point-header'>&#x2442; Fork point{% if message.fork_point_preview %} &bull; {{ message.fork_point_preview }}{% endif %}</div>
+            <div class='fork-point-header'>&#x2442; Fork point{% if message.fork_point_preview %}{% if minimal %}<span class='fork-point-preview'>{% endif %} &bull; {{ message.fork_point_preview }}{% if minimal %}</span>{% endif %}{% endif %}</div>
             <div class='fork-point-branches'>
                 {% for branch_sid, branch_idx, branch_preview in message.junction_forward_links %}
-                <a href='#msg-d-{{ branch_idx }}' class='fork-point-branch'>&#x21b3; Branch{% if branch_preview %} &bull; {{ branch_preview }}{% endif %}</a>
+                <a href='#msg-d-{{ branch_idx }}' class='fork-point-branch'{% if minimal and branch_preview %} title='{{ branch_preview }}'{% endif %}>&#x21b3; Branch{% if branch_preview %} &bull; {{ branch_preview }}{% endif %}</a>
                 {% endfor %}
             </div>
         </div>

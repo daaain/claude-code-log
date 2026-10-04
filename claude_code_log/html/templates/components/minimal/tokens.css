@@ -8,6 +8,7 @@
     --bg: #ffffff;
     --fg: #1f2328;
     --muted: #5f6670;
+    --dim: #868d96; /* fold bars at rest (P7c): 3.3:1 on --bg */
     --rule: #e3e6ea;
     --rule2: #1f2328;
     --code: #f3f4f6;
@@ -51,6 +52,8 @@
         --bg: #14161a;
         --fg: #e4e6e9;
         --muted: #969da7;
+    --dim: #6b727c;
+        --dim: #6b727c;
         --rule: #2a2e35;
         --rule2: #c9ccd1;
         --code: #1d2025;

@@ -61,9 +61,13 @@ stay that way across updates, a sub-agent that has not returned yet is
 drawn as **running** (its lane carries on to the newest message with an
 open end and a pulsing *running* label) and turns into an ordinary merge
 when its result arrives, and a rewind adds its fork lane without moving
-the main line. "Running" needs a live page: a page opened from `file://`,
-or a session that has been quiet for half an hour, shows such an agent as
-having ended without a result instead.
+the main line. An agent waiting on something slow — a background process,
+a watcher — keeps reading as running however long it takes; once it has
+been silent for a minute its label says for how long (*running · quiet
+42m*). "Running" needs a live page: a page opened from `file://` (or a
+session nothing has moved in for over a week) shows such an agent as
+having ended without a result instead, and so does one the session
+stopped with `TaskStop`.
 
 To follow the **combined** page live as well, run `claude-code-log watch
 --combined yes` (with the same `--theme`) beside `serve`: the server

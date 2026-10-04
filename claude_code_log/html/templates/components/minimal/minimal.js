@@ -378,6 +378,30 @@
                 });
             }
 
+            // ---- fold bars: keyboard (P7c) ----------------------------------
+            // The classic fold-bar sections are click-only <div>s. Here they
+            // become focusable buttons (Enter / Space fold like a click), so
+            // the dimmed-at-rest bars (layout.css) come up on keyboard focus
+            // as they do on hover. Re-applied to patched / swapped cards.
+            function focusableFoldBars(scope) {
+                const root = scope && scope.querySelectorAll ? scope : document;
+                root.querySelectorAll('.fold-bar-section').forEach(function (section) {
+                    if (section.hasAttribute('tabindex')) return;
+                    section.setAttribute('tabindex', '0');
+                    section.setAttribute('role', 'button');
+                });
+            }
+            document.addEventListener('keydown', function (event) {
+                if (event.key !== 'Enter' && event.key !== ' ') return;
+                const section = event.target && event.target.closest
+                    ? event.target.closest('#transcript .fold-bar-section') : null;
+                if (!section || section !== event.target) return;
+                event.preventDefault();
+                section.click();
+            });
+            focusableFoldBars(document.getElementById('transcript'));
+            if (window.claudeLogOnRehydrate) window.claudeLogOnRehydrate(focusableFoldBars);
+
             // ---- overflow menu ---------------------------------------------
             // A <details>: closes on a click outside it or on Escape. Clicks
             // on its items keep it open, so a state change stays visible.

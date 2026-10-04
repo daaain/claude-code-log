@@ -43,8 +43,14 @@
             // 'strip' (a column collapsed to a narrow strip).
             const GLOBAL_MODES = ['main', 'interleaved', 'columns'];
             const CAP = 3;              // interleaved lanes (and controls shown) per user turn
-            const MAIN_MIN = 360;       // px: the main column's minimum in column mode
+            // Column mode (P7c): the main column takes twice a branch column's
+            // share of the spare width, and never less than MAIN_MIN; on a
+            // phone every column (main too) is the viewport's width, one at a
+            // time, with horizontal scroll snapping (dag.css).
+            const MAIN_MIN = 520;       // px: the main column's minimum in column mode
+            const MAIN_FR = 2;          // the main column's share of the spare width
             const COL_MIN = 300;        // px: a column's minimum
+            const PHONE_PAD = 20;       // px: the body's side padding on a phone (2 × 10px)
             const STRIP = 34;           // px: a collapsed column
             const ROW0 = 2;             // grid row of the first card (row 1: column heads)
             const MAX_SLOTS = 6;        // rail slots beside the main line
@@ -52,11 +58,16 @@
             const STUB = 12;            // a folded fork's stub below its row
             const END_R = 3.5;          // a running lane's open end marker
             // An open lane (an agent with no result yet, P7b) reads as
-            // *running* only on a page served live (`serve`, live_update.js)
-            // whose newest activity is this recent; otherwise it is a lane
-            // that ended without a result (a crash, a killed agent, a
-            // static export). dev-docs/minimal-theme.md § 8.
-            const RUNNING_IDLE_MS = 30 * 60 * 1000;
+            // *running* on a page served live (`serve`, live_update.js) —
+            // however long it has been quiet (P7c: agents wait on background
+            // processes, watchers and Monitor tasks for hours); its label
+            // says how long instead ("running · quiet 42m"). Only a session
+            // silent for a week is taken to have stopped: `serve` runs over
+            // whole archives, and an agent that died with a session closed
+            // months ago is not running. A static page (file://, an export)
+            // never shows one running. dev-docs/minimal-theme.md § 8.
+            const RUNNING_MAX_QUIET_MS = 7 * 24 * 60 * 60 * 1000;
+            const QUIET_LABEL_MS = 60 * 1000;   // "quiet …" from a minute
             const RUNNING_RECHECK_MS = 30 * 1000;
             // Forks are always --lF; agents cycle through the other lane colours.
             const AGENT_COLOURS = ['a', 'b', 's', 'p'];
@@ -71,6 +82,7 @@
             // per-turn cap and overflow must follow the turn, not the slot.
             const recency = new Map();    // turn key -> interleaved lane ids, least recent first
             const expanded = new Set();   // turn keys whose "+N more branches" are shown
+            const acksShown = new Set();  // lane ids whose launch acknowledgement is shown (P7c)
             let lanes = new Map();        // lane id -> record (rebuilt each relayout)
             let started = false;
             let layout = null;            // last relayout's result, for redraws
@@ -110,6 +122,7 @@
                         meta: head.getAttribute('data-lane-meta') || '',
                         parent: head.getAttribute('data-lane-parent') || 'main',
                         from: head.getAttribute('data-lane-from') || '',
+                        to: head.getAttribute('data-lane-to') || '',
                         turn: turn,
                         turnKey: turnKeyOf(turn),
                         rank: parseInt(head.getAttribute('data-lane-rank') || '1', 10) || 1,
@@ -296,14 +309,16 @@
                 return match;
             }
 
-            // ---- running lanes (P7b) -------------------------------------
+            // ---- running lanes (P7b, rule revised in P7c) ------------------
             // The server marks an agent lane without a result 'open' unless
-            // the page proves it is over ('ended'); it cannot know whether
-            // the session is still being written, so the page decides: an
-            // open lane is *running* while the page is served live and its
-            // session's newest activity (any card, in any lane) is recent. A
-            // static page — file://, an export, a finished session served
-            // later — never shows one running.
+            // the page proves it is over ('ended': a parent that moved on, a
+            // TaskStop, a finished parent lane); it cannot know whether the
+            // session is still being written, so the page decides: an open
+            // lane is *running* while the page is served live — unless its
+            // session (any card, in any lane) has been silent for
+            // RUNNING_MAX_QUIET_MS. Elapsed time alone never ends it sooner:
+            // the label shows how long the lane has been quiet instead. A
+            // static page never shows one running.
             // Newest activity per session (top-level node): on a combined
             // page a live session must not make another session's crashed
             // agent read as running. Lane id -> its session's newest time.
@@ -323,19 +338,58 @@
                 });
                 return byLane;
             }
-            function runningLanes(newest) {
-                const out = new Set();
+            // A lane's last activity: its newest card, or a nested lane's
+            // (a parent waiting on a busy child is not quiet), else its
+            // spawn's time.
+            function laneActivity(model, sequence) {
+                const out = new Map();
+                sequence.forEach(function (item) {
+                    if (isNaN(item.ts) || item.lane === 'main') return;
+                    let id = item.lane;
+                    let guard = 0;
+                    while (id && guard++ < 64) {
+                        const seen = out.get(id);
+                        if (seen === undefined || item.ts > seen) out.set(id, item.ts);
+                        id = parentOf(id);
+                    }
+                });
+                lanes.forEach(function (lane, id) {
+                    if (out.has(id)) return;
+                    const spawn = model.spawns.get(id);
+                    if (spawn && !isNaN(spawn.ts)) out.set(id, spawn.ts);
+                });
+                return out;
+            }
+            // Running lanes: lane id -> how long it has been quiet (ms).
+            function runningLanes(newest, activity) {
+                const out = new Map();
                 if (!window.claudeLogLiveUpdate) return out;
                 const now = Date.now();
                 newest.forEach(function (ts, id) {
-                    if (now - ts <= RUNNING_IDLE_MS && lanes.has(id) && lanes.get(id).state === 'open') out.add(id);
+                    if (now - ts > RUNNING_MAX_QUIET_MS) return;
+                    if (!lanes.has(id) || lanes.get(id).state !== 'open') return;
+                    const last = activity.get(id);
+                    out.set(id, last === undefined || isNaN(last) ? 0 : Math.max(0, now - last));
                 });
                 return out;
+            }
+            function quietText(ms) {
+                if (!(ms >= QUIET_LABEL_MS)) return '';
+                const m = Math.floor(ms / 60000);
+                if (m < 60) return m + 'm';
+                const h = Math.floor(m / 60);
+                if (h < 24) return h + 'h' + (m % 60 ? ' ' + (m % 60) + 'm' : '');
+                const d = Math.floor(h / 24);
+                return d + 'd' + (h % 24 ? ' ' + (h % 24) + 'h' : '');
+            }
+            function runningText(running, id) {
+                const quiet = quietText(running.get(id));
+                return 'running' + (quiet ? ' · quiet ' + quiet : '');
             }
             function sameSet(a, b) {
                 if (a.size !== b.size) return false;
                 let same = true;
-                a.forEach(function (x) { if (!b.has(x)) same = false; });
+                a.forEach(function (_value, key) { if (!b.has(key)) same = false; });
                 return same;
             }
 
@@ -770,7 +824,36 @@
             function setAttr(el, name, value) {
                 if (el.getAttribute(name) !== value) el.setAttribute(name, value);
             }
-            function ensureControls(item, colours, memo, overflow, running) {
+            // An async spawn's result card that holds nothing but the launch
+            // acknowledgement (`.mn-ack`, html/renderer.py) and its
+            // `Result ↓` line (P7c compact spawn rows): the engine hides it
+            // (`dag-ack`) and the spawn's control carries both — a
+            // `Result ↓` link and a `launched` toggle that shows the card
+            // again. A result card with anything else on it stays.
+            function ackCardOf(card) {
+                const node = card.parentElement;
+                const next = node && node.classList.contains('message-node') ? node.nextElementSibling : null;
+                const result = next && next.classList.contains('message-node')
+                    ? next.querySelector(':scope > .message.tool_result.pair_last') : null;
+                const content = result ? result.querySelector(':scope > .content') : null;
+                if (!content || !content.querySelector(':scope > .mn-ack')) return null;
+                const kids = content.children;
+                for (let i = 0; i < kids.length; i++) {
+                    if (!kids[i].classList.contains('mn-ack') && !kids[i].classList.contains('mn-async-jump')) return null;
+                }
+                return result;
+            }
+            function ensureExtra(ctl, cls, tag, before) {
+                let el = ctl.querySelector(':scope > .' + cls);
+                if (!el) {
+                    el = document.createElement(tag);
+                    el.className = cls + (tag === 'button' ? ' mn-bmini' : '');
+                    if (tag === 'button') el.type = 'button';
+                    ctl.insertBefore(el, before);
+                }
+                return el;
+            }
+            function ensureControls(item, colours, memo, overflow, running, acks) {
                 const ids = (item.el.getAttribute('data-spawns') || '').split(' ').filter(function (id) { return lanes.has(id); });
                 let box = item.el.querySelector(':scope > .mn-bctls');
                 if (!ids.length) {
@@ -816,10 +899,13 @@
                     const btn = ctl.querySelector('.mn-bfold');
                     setAttr(btn, 'data-label', label);
                     setAttr(btn, 'aria-expanded', opened ? 'true' : 'false');
+                    const runLabel = live ? runningText(running, id) : 'running';
+                    const pill = ctl.querySelector('.mn-brun');
+                    if (pill) setAttr(pill, 'data-label', runLabel);
                     setAttr(btn, 'aria-label', (mode === 'folded' ? 'Interleave branch: ' : 'Fold branch: ') + lane.name
-                        + (lane.stats ? ' (' + lane.stats + (live ? ', running' : unfinished ? ', no result' : '') + ')' : ''));
+                        + (lane.stats ? ' (' + lane.stats + (live ? ', ' + runLabel : unfinished ? ', no result' : '') + ')' : ''));
                     let title = lane.name + (lane.meta ? ' · ' + lane.meta : '')
-                        + (live ? ' · still running' : unfinished ? ' · ended without a result' : '');
+                        + (live ? ' · still ' + runLabel : unfinished ? ' · ended without a result' : '');
                     if (fork) {
                         // Keyed by lane and card: a live swap can renumber d-N.
                         const key = id + '|' + lane.from;
@@ -834,6 +920,32 @@
                         setAttr(col, 'aria-label', (inColumn(mode) ? 'Interleave branch: ' : 'Show in its own column: ') + lane.name);
                         const colTitle = inColumn(mode) ? 'Merge this branch back into the main line' : 'Show this branch in its own column';
                         if (col.title !== colTitle) col.title = colTitle;
+                    }
+                    // P7c: an async agent's `Result ↓` (its answer is on the
+                    // notification, the merge row further down) and the
+                    // folded launch acknowledgement, between the stats and
+                    // the Column button.
+                    const resultHref = lane.kind === 'async-agent' && lane.to ? '#msg-' + lane.to : '';
+                    let res = ctl.querySelector(':scope > .mn-bres');
+                    if (resultHref) {
+                        res = ensureExtra(ctl, 'mn-bres', 'a', col);
+                        setAttr(res, 'href', resultHref);
+                        setAttr(res, 'data-label', 'Result ↓');
+                        setAttr(res, 'aria-label', 'Result of ' + lane.name + ' (with the async notification)');
+                        if (res.title !== 'Jump to the result, with the async notification') res.title = 'Jump to the result, with the async notification';
+                    } else if (res) {
+                        res.remove();
+                    }
+                    let ack = ctl.querySelector(':scope > .mn-back');
+                    if (acks.has(id)) {
+                        ack = ensureExtra(ctl, 'mn-back', 'button', col);
+                        const shown = acksShown.has(id);
+                        setAttr(ack, 'data-label', shown ? 'launched ▾' : 'launched ▸');
+                        setAttr(ack, 'aria-expanded', shown ? 'true' : 'false');
+                        setAttr(ack, 'aria-label', (shown ? 'Hide' : 'Show') + ' the launch acknowledgement of ' + lane.name);
+                        if (ack.title !== 'The launch acknowledgement (the tool result)') ack.title = 'The launch acknowledgement (the tool result)';
+                    } else if (ack) {
+                        ack.remove();
                     }
                     // "+N more branches" / "− fewer branches" on the turn's
                     // third control.
@@ -1003,7 +1115,7 @@
                     el.style.gridColumn = String(i + 1);
                     el.style.gridRow = '1 / span ' + Math.max(1, rows + ROW0 - 1);
                     if (lane) {
-                        const meta = [lane.meta, lane.stats, running.has(key) ? 'running' : ''].filter(Boolean).join(' · ');
+                        const meta = [lane.meta, lane.stats, running.has(key) ? runningText(running, key) : ''].filter(Boolean).join(' · ');
                         if (isStrip) {
                             const btn = el.querySelector('.dag-strip');
                             setAttr(btn, 'aria-label', 'Expand column: ' + lane.name);
@@ -1043,7 +1155,8 @@
                 const sequence = order(model);
                 const packed = pack(sequence, model, keyOf);
                 const newest = newestTimes(model, sequence);
-                const running = runningLanes(newest);
+                const activity = laneActivity(model, sequence);
+                const running = runningLanes(newest, activity);
                 const tracks = columnTracks(model, memo);
                 const colIndex = new Map();
                 const colours = new Map();
@@ -1080,6 +1193,17 @@
                     (model.seqs.get(id) || []).forEach(function (item) {
                         want(item.el, cls);
                         if (item.kind === 'card') tags.set(item.el, lane.tag || lane.kind);
+                    });
+                });
+                const acks = new Map();
+                model.spawnCards.forEach(function (item) {
+                    if (item.el.classList.contains('fork-point')) return;
+                    const card = ackCardOf(item.el);
+                    if (!card) return;
+                    (item.el.getAttribute('data-spawns') || '').split(' ').forEach(function (id) {
+                        if (!id || !lanes.has(id)) return;
+                        acks.set(id, card);
+                        if (!acksShown.has(id)) want(card, 'dag-ack');
                     });
                 });
                 const shownLanes = new Set(openSet);
@@ -1133,19 +1257,23 @@
                 stage.classList.toggle('dag-cols', cols);
                 document.body.classList.toggle('dag-wide', cols);
                 if (cols) {
-                    let min = MAIN_MIN;
-                    const gtc = ['minmax(' + MAIN_MIN + 'px, 1fr)'];
+                    const narrow = !!(phone && phone.matches);
+                    const pane = Math.max(240, view - PHONE_PAD);
+                    let min = narrow ? pane : MAIN_MIN;
+                    const gtc = [narrow ? pane + 'px' : 'minmax(' + MAIN_MIN + 'px, ' + MAIN_FR + 'fr)'];
                     tracks.forEach(function (id) {
                         const isStrip = modeOf(id) === 'strip';
-                        gtc.push(isStrip ? STRIP + 'px' : 'minmax(' + COL_MIN + 'px, 1fr)');
-                        min += isStrip ? STRIP : COL_MIN;
+                        gtc.push(isStrip ? STRIP + 'px' : narrow ? pane + 'px' : 'minmax(' + COL_MIN + 'px, 1fr)');
+                        min += isStrip ? STRIP : narrow ? pane : COL_MIN;
                     });
+                    stage.classList.toggle('dag-panes', narrow);
                     const value = gtc.join(' ');
                     if (stage.style.getPropertyValue('--dag-cols') !== value) stage.style.setProperty('--dag-cols', value);
                     if (document.body.style.getPropertyValue('--dag-min') !== min + 'px') document.body.style.setProperty('--dag-min', min + 'px');
                     setView(view);
                 } else {
                     stage.style.removeProperty('--dag-cols');
+                    stage.classList.remove('dag-panes');
                     document.body.style.removeProperty('--dag-min');
                 }
                 const nextClassed = new Set();
@@ -1183,12 +1311,12 @@
                 });
                 const transcript = document.getElementById('transcript');
                 if (transcript) syncChrome(transcript, tracks, colours, packed.rows, running);
-                model.spawnCards.forEach(function (item) { ensureControls(item, colours, memo, overflow, running); });
+                model.spawnCards.forEach(function (item) { ensureControls(item, colours, memo, overflow, running, acks); });
                 markToolbar();
                 if (observer && observed) observe(observed);
                 const t3 = performance.now();
 
-                layout = { model: model, rail: rail, packed: packed, sequence: sequence, newest: newest, running: running };
+                layout = { model: model, rail: rail, packed: packed, sequence: sequence, newest: newest, activity: activity, running: running };
                 draw();
                 const t4 = performance.now();
                 lastTiming = {
@@ -1411,7 +1539,11 @@
                 }
             }
             const resizer = window.ResizeObserver ? new ResizeObserver(scheduleDraw) : null;
-            window.addEventListener('resize', scheduleDraw);
+            // Phone columns are sized to the viewport: a resize re-lays them.
+            window.addEventListener('resize', function () {
+                if (stage.classList.contains('dag-panes')) schedule();
+                else scheduleDraw();
+            });
             // A card a live update adds fades in from a few px below
             // (`live-new-in`, a transform): the rail measured it mid-way, and
             // a transform resizes nothing, so redraw once it has landed.
@@ -1419,7 +1551,10 @@
                 if (event.animationName === 'live-new-in') scheduleDraw();
             });
             if (phone) {
-                const onPhone = function () { scheduleDraw(); };
+                const onPhone = function () {
+                    if (stage.classList.contains('dag-cols')) schedule();
+                    else scheduleDraw();
+                };
                 if (phone.addEventListener) phone.addEventListener('change', onPhone);
                 else if (phone.addListener) phone.addListener(onPhone);
             }
@@ -1427,7 +1562,7 @@
             document.addEventListener('click', function (event) {
                 const target = event.target;
                 if (!target || !target.closest) return;
-                const toggle = target.closest('.mn-bfold, .mn-bcol, .mn-bmore');
+                const toggle = target.closest('.mn-bfold, .mn-bcol, .mn-bmore, .mn-back');
                 if (toggle) {
                     if (toggle.classList.contains('mn-bmore')) {
                         const turn = toggle.getAttribute('data-turn');
@@ -1439,7 +1574,10 @@
                     const ctl = toggle.closest('[data-lane-ref]');
                     const id = ctl ? ctl.getAttribute('data-lane-ref') : null;
                     if (!id || !lanes.has(id)) return;
-                    if (toggle.classList.contains('mn-bcol')) {
+                    if (toggle.classList.contains('mn-back')) {
+                        if (acksShown.has(id)) acksShown.delete(id);
+                        else acksShown.add(id);
+                    } else if (toggle.classList.contains('mn-bcol')) {
                         if (inColumn(modeOf(id))) select(id);
                         else column(id);
                     } else if (modeOf(id) !== 'folded' && parentOpen(id, new Map())) {
@@ -1499,11 +1637,13 @@
                     else Promise.resolve().then(run);
                 });
             }
-            // A running lane stops reading as running once the session has
-            // been quiet for RUNNING_IDLE_MS, with or without an update.
+            // While a lane runs, its "quiet …" label is brought up to date
+            // (and a session silent for RUNNING_MAX_QUIET_MS stops showing
+            // one), with or without an update.
             setInterval(function () {
                 if (!started || !layout || document.hidden || !window.claudeLogLiveUpdate) return;
-                if (!sameSet(runningLanes(layout.newest), layout.running)) relayout();
+                const next = runningLanes(layout.newest, layout.activity);
+                if (next.size || !sameSet(next, layout.running)) relayout();
             }, RUNNING_RECHECK_MS);
 
             function start() {
@@ -1540,7 +1680,11 @@
                 running: function (id) {
                     return !!(layout && layout.running.has(id));
                 },
-                runningIdleMs: RUNNING_IDLE_MS,
+                // How long a running lane has been quiet (ms), else null (P7c).
+                quietMs: function (id) {
+                    return layout && layout.running.has(id) ? layout.running.get(id) : null;
+                },
+                runningMaxQuietMs: RUNNING_MAX_QUIET_MS,
             };
 
             if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);

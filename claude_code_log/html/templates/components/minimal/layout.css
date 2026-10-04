@@ -686,6 +686,39 @@ body.theme-minimal {
     transform: none;
 }
 
+/* P7c: fold summaries are dimmed at rest (--dim, still ≥ 3:1 against the
+   page, so they stay readable — and usable on touch, where nothing
+   hovers) and come up to full strength while their row is hovered or the
+   bar holds keyboard focus (minimal.js makes the sections focusable
+   buttons). The bar under a user prompt — the turn's summary — keeps its
+   strength. */
+.theme-minimal #transcript .message > .fold-bar > .fold-bar-section {
+    color: var(--dim);
+    transition: color 0.12s;
+}
+
+.theme-minimal #transcript .message.user:not(.task-notification):not(.teammate):not(.sidechain):not(.steering) > .fold-bar > .fold-bar-section,
+.theme-minimal #transcript .message:hover > .fold-bar > .fold-bar-section,
+.theme-minimal #transcript .message > .fold-bar:focus-within > .fold-bar-section {
+    color: var(--muted);
+}
+
+.theme-minimal #transcript .message > .fold-bar > .fold-bar-section:is(:hover, :focus-visible) {
+    color: var(--fg);
+}
+
+.theme-minimal #transcript .fold-bar-section:focus-visible {
+    outline: 2px solid var(--note);
+    outline-offset: 1px;
+    border-radius: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .theme-minimal #transcript .message > .fold-bar > .fold-bar-section {
+        transition: none;
+    }
+}
+
 .theme-minimal #transcript .fold-bar-section .fold-icon,
 .theme-minimal #transcript .fold-bar-section .fold-label {
     font-size: 1em;
@@ -828,15 +861,24 @@ body.theme-minimal {
     font-size: 0.92em;
 }
 
+/* The fork-point box (P7c): one muted line under the fork's card — "⑂ Fork
+   point" and its branch links side by side, each link truncated (full text
+   in its title). The card above already shows the text the classic header
+   previews, so the preview is hidden; the rail and the fork's branch
+   control draw the branches themselves. */
 .theme-minimal #transcript .fork-point {
     position: relative;
     z-index: 1;
-    margin: 2px 0 6px calc(var(--gut) + var(--rail));
-    padding: 4px 8px;
-    border: 1px dashed var(--l0);
-    border-radius: 4px;
-    background: var(--bg);
-    font-size: 0.85em;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0 12px;
+    margin: 0 0 4px calc(var(--gut) + var(--rail));
+    padding: 0 0 0 4px;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    font: 0.72em/1.7 var(--mono);
 }
 
 /* ------------------------------------------------ nested sub-agents */

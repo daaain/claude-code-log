@@ -17,8 +17,9 @@ threads and workflow phases are not branches: they stay nested blocks.
 Each branch is in one of four modes:
 
 - **folded** (default, "Main only"): its cards are hidden; the spawn row
-  carries a control (chevron, `N steps · tokens · duration`, `Column ⇥`)
-  and the rail draws a **dashed** lane from the spawn row to the merge row
+  carries a control (chevron, `N steps · tokens · duration`, for an async
+  agent `Result ↓` and `launched ▸`, then `Column ⇥` — § 9) and the rail
+  draws a **dashed** lane from the spawn row to the merge row
   (sync: the tool result; async: the `<task-notification>`), or a short
   **stub** for a fork, which never merges;
 - **interleaved**: its cards join the main stream at their real times, on
@@ -37,8 +38,9 @@ Each branch is in one of four modes:
 
 A sub-agent that has not returned yet is drawn **running** on a live page
 (§ 8): instead of a stub, its lane carries on to the newest row and ends in
-an open marker, and its control shows a pulsing `running` label; when the
-result or notification arrives it becomes the ordinary merge.
+an open marker, and its control shows a pulsing `running` label — with
+`· quiet 42m` once it has been silent for a minute; when the result or
+notification arrives it becomes the ordinary merge.
 
 A lane nested in a column lane that is *interleaved* shows inside that
 column (tinted, its tag in the column's gutter); put in a column itself, it
@@ -113,8 +115,13 @@ The card that owns a lane container gets `dag-owner` (its fold bar is hidden
 — the branch control is the one handle).
 
 **Columns** add tracks to the same grid: `--dag-cols` on the stage
-(`minmax(360px, 1fr)` for main, `minmax(300px, 1fr)` per column, `34px` per
-strip), row 1 for the heads (`--dag-head-h`), cards from row 2 (always —
+(`minmax(520px, 2fr)` for main — it gets twice a column's share of the
+spare width —, `minmax(300px, 1fr)` per column, `34px` per strip; on a
+phone, `dag-panes`, every column and main is the viewport's width minus the
+page padding, and `<html>` snaps sideways from one column to the next with
+`scroll-snap-type: x mandatory`, strips passed over), row 1 for the heads
+(`--dag-head-h`, 46px: the name on its own line, truncated with the full
+name in the head's `title`, meta and actions below), cards from row 2 (always —
 so entering columns renumbers nothing by itself). Every item gets an inline
 `grid-column` while columns exist (auto-placement would otherwise put a
 definite-row item after the last placed one). Column cards (`dag-col`, plus
@@ -164,10 +171,11 @@ A pure function of (DOM, lane modes), in `relayout()`:
 6. **Write** (MutationObserver disconnected; the only layout read,
    the viewport width, happens before it): engine classes (`dag-hidden`,
    `dag-entry`, `dag-block`, `dag-owner`, `dag-in`, `dag-sN`, `dag-lc-x`,
-   `dag-split`, `dag-col`, `dag-colin`) diffed per element; `grid-row`,
+   `dag-split`, `dag-col`, `dag-colin`, `dag-ack`) diffed per element; `grid-row`,
    `grid-column` and `--dag-tag` only when changed; `--dag-slots` (the rail
    column widens by one `--dag-step` per slot) and `--dag-cols` on the
-   stage, `dag-wide` / `--dag-min` / `--dag-view` on `<body>`; the column
+   stage (and `dag-panes` for phone columns), `dag-wide` / `--dag-min` /
+   `--dag-view` on `<body>`; the column
    chrome; branch controls ensured on every spawn card (overflow: `hidden`
    on the extra lanes' controls, the `+N more branches` toggle).
 7. **Draw** (`draw`): one batched read of the few rows the rail needs (spawn,
@@ -194,9 +202,9 @@ inline `display`; filter and search own their classes.
 |---|---|
 | MutationObserver on `#transcript` (structure; `style` on `.children`; a card's hidden classes changing) | relayout in the next frame |
 | `claudeLogOnRehydrate` (live swap or patch) | re-observe a swapped `#transcript`; relayout in a microtask, coalesced over the update's rehydrate calls — before the browser lays out or paints the new markup (a patched card's control and classes come back) |
-| ResizeObserver on `#transcript`, `resize`, the phone media query | redraw only |
+| ResizeObserver on `#transcript`, `resize`, the phone media query | redraw only — relayout when phone columns (`dag-panes`, sized to the viewport) are shown, or the phone query flips with columns |
 | `animationend` of `live-new-in` (a live card's fade-in, a transform) | redraw only: the rail measured the card mid-way |
-| a 30 s timer, on a live page with an open lane | relayout if a lane stopped (or started) reading as running |
+| a 30 s timer, on a live page | relayout while a lane runs (its `quiet …` label), or if one stopped / started reading as running |
 | branch control / column head / toolbar click, a reveal that opens a lane | relayout now |
 | hidden page | deferred until `visibilitychange` |
 
@@ -205,8 +213,8 @@ Labels (control text, gutter tag) are generated content (`attr(data-label)`,
 
 `window.claudeLogDag` exposes `relayout()`, `timing()`, `mode(laneId)`
 (`folded` | `interleaved` | `column` | `strip`, as shown: a lane inside a
-folded one reads `folded`), `running(laneId)` and `runningIdleMs` for
-tests; `?debug-dag` logs each relayout's timing to the console.
+folded one reads `folded`), `running(laneId)`, `quietMs(laneId)` (how long a
+running lane has been quiet, else `null`) and `runningMaxQuietMs` for tests; `?debug-dag` logs each relayout's timing to the console.
 
 Engine state that outlives a relayout — per-lane modes, the per-turn LRU of
 interleaved lanes, the turns whose `+N more branches` are shown — is keyed
@@ -255,7 +263,8 @@ No `dag-on`: nothing is `display: contents`, sub-agent transcripts render
 nested under their spawning result (2px `--ring` line), fork branches as
 branch headers, the Branches segment stays `hidden` and no controls exist.
 Teammate anchors and the async `Result ↓` link are server-rendered and work
-as plain links.
+as plain links; an async spawn's result card shows its launch line and that
+link as before (folding them into the branch control is the engine's, § 9).
 
 ## 7. Teammate anchors and results at the merge row
 
@@ -271,9 +280,11 @@ Server-side, minimal theme only (classic and Markdown output unchanged):
   [teammates.md § Minimal theme: anchors](teammates.md#minimal-theme-anchors).
 - **An async agent's answer** is shown on its `<task-notification>` card —
   the branch's merge row, at the time it arrived — and not on the spawn:
-  the spawn's result keeps the launch line and a `Result ↓` link
-  (`.mn-async-jump`, to `TaskOutput.async_notification_index`), and drops
-  the Agent id row (the notification shows it as its Task ID). A sync
+  the spawn's result keeps the launch line (wrapped in `.mn-ack`) and a
+  `Result ↓` link (`.mn-async-jump`, to
+  `TaskOutput.async_notification_index`), and drops the Agent id row (the
+  notification shows it as its Task ID). With JavaScript both fold into the
+  spawn's branch control (§ 9). A sync
   agent's answer already is its merge row (the paired tool result). The
   page holds one copy of the answer either way
   ([agents.md § 2.3](agents.md#23-the-fold-phase-3)).
@@ -303,19 +314,31 @@ transcript:
   when the page proves it — a *synchronous* agent's parent line (same lane,
   same session) has a later model step or prompt (the parent blocks on a
   synchronous call; steering, tool calls, results, notifications and hooks
-  prove nothing), or the lane is nested in a lane that merged or ended —
-  else `open`. Merged lanes and forks carry no state. An async agent is
-  never ended by its parent moving on: the parent does not wait for it.
-- **Client** (`minimal_dag.js`): an `open` lane reads as **running** only
-  on a page served live (`window.claudeLogLiveUpdate` — never from
-  `file://`) whose session's newest card (any lane; per session, so one
-  live session on a combined page does not wake another's) is at most
-  30 minutes old (`RUNNING_IDLE_MS`) by the viewer's clock. A timer
-  re-checks every 30 s, so a session that goes quiet stops showing it
-  without an update.
+  prove nothing), a `TaskStop` of the agent's id whose result says it
+  stopped (P7c; a stop that found nothing proves nothing), or the lane is
+  nested in a lane that merged or ended — else `open`. Merged lanes and
+  forks carry no state; a killed or failed background agent still gets its
+  `<task-notification>`, which is its merge row. An async agent is never
+  ended by its parent moving on: the parent does not wait for it.
+- **Client** (`minimal_dag.js`, rule revised in P7c): an `open` lane reads
+  as **running** on a page served live (`window.claudeLogLiveUpdate` —
+  never from `file://`), **however long it has been quiet**: agents wait on
+  background processes, watchers and Monitor tasks that can run silently
+  for hours. Its label says how long instead — `running · quiet 42m`
+  (`2h 5m`, `2d 3h`), from the lane's last activity (its newest card, or a
+  nested lane's; else the spawn), omitted under a minute and brought up to
+  date by a 30 s timer. One bound remains, per session: a session whose
+  newest card (any lane; per session, so one live session on a combined
+  page does not wake another's) is more than **a week** old
+  (`RUNNING_MAX_QUIET_MS`) reads as stopped. `serve` runs over whole
+  archives, and an agent that died with a session closed months ago is
+  not running; a week is far past any silent wait seen in practice.
+  (P7b's rule — running only while the session's newest card was at most
+  30 minutes old — called long background waits ended.)
 
-Everything else — `ended`, or `open` but not running — reads as **ended
-without a result**: the control says `· no result`, and the rail draws it
+Everything else — `ended`, `open` on a static page, or `open` in a session
+silent for over a week — reads as **ended without a result**: the control
+says `· no result`, and the rail draws it
 as before (a stub while folded, to its last row while interleaved).
 
 A running lane, folded or interleaved, takes a rail slot over `[spawn row,
@@ -324,7 +347,8 @@ then a lane (dashed while folded, the dashes drifting towards the open end;
 solid while interleaved) to the bottom of the newest shown row, ending in
 an open circle (`data-part='end'`, `dag-end`, filled with `--bg`). Its
 control gets `is-running` and a `running` pill (`.mn-brun`, generated
-content); a running column's head adds `running` to its meta. Animations
+content, `running · quiet …` once quiet); a running column's head adds the
+same to its meta. Animations
 stop under `prefers-reduced-motion`.
 
 **Server-side freshness.** A running agent appends to
@@ -336,3 +360,35 @@ covers `agent-*.jsonl` (count, newest `mtime_ns`, total bytes) as well as
 the sidecars, and the entry store's stamp includes that fingerprint.
 Before P7b a watch served the agent's block as it was at the last trunk
 change (`test_lanes.py::TestLiveGrowth`).
+
+## 9. Compact spawn rows and other polish (P7c)
+
+- **Spawn rows.** A `Task` / `Agent` spawn on the main line is its call
+  line (description, subagent type, `[async #id]`, model — dim metadata),
+  the prompt and the branch control. A prompt longer than two lines or 160
+  characters is the shared `<details>` preview of its first two non-blank
+  lines (`tool_formatters.format_task_prompt_preview`), its `+N lines`
+  label beside the preview; the `Run background` row is left out (the call
+  line's `[async …]` says it). Teammate fields on the spawn, agent metadata
+  on its result and an async notification's task fields read as one dim
+  wrapped line of `key value` pairs.
+- **Async acknowledgement.** An async spawn's result card that holds only
+  `.mn-ack` + `.mn-async-jump` gets `dag-ack` (hidden) from the engine; the
+  spawn's control gains `Result ↓` (`.mn-bres`, to `#msg-<data-lane-to>`,
+  the notification) and `launched ▸` (`.mn-back`, `aria-expanded`), which
+  shows the card again (state per lane id, `acksShown`). Without JavaScript
+  the card reads as before.
+- **Fold bars** are `--dim` at rest (light `#868d96`, 3.3:1; dark `#6b727c`,
+  3.7:1 against `--bg`), `--muted` while their card is hovered or the bar
+  has focus, `--fg` on the section itself; a main prompt's bar stays
+  `--muted`. `minimal.js` makes the sections focusable buttons
+  (`tabindex=0`, `role=button`, Enter / Space click), re-applied on
+  rehydrate.
+- **Forks.** The fork-point box is one muted line — `⑂ Fork point` and the
+  branch links (truncated, full text in `title`); the header's preview of
+  the card above is wrapped in `.fork-point-preview` (minimal template only)
+  and hidden. The session navigation lays a fork point and its branches
+  out as one wrapped line of short links (sessions still start a line).
+- **Interleaved gutters.** A call half's gutter hangs into its result
+  half's; the lane tag (and an error pill) now sits on the result half, one
+  gutter line (1.85em) down, so the lines never overlap.

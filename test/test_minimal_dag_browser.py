@@ -276,14 +276,18 @@ class TestInterleave:
         # Really interleaved: main rows sit between lane rows.
         first, last = lanes.index(A), len(lanes) - 1 - lanes[::-1].index(A)
         assert "main" in lanes[first:last]
-        # Interleaved rows carry the lane's gutter tag and slot.
+        # Interleaved rows carry the lane's gutter tag and slot. A call half
+        # hangs its gutter into its result half's, so the tag sits on the
+        # result half, one gutter line down (P7c: it used to collide).
         tag = page.evaluate(
-            """(lane) => { const el = document.querySelector(`#transcript .message[data-lane="${lane}"]`);
-                return [getComputedStyle(el.querySelector('.header-info'), '::after').content,
-                        el.classList.contains('dag-in')]; }""",
+            """(lane) => { const cards = [...document.querySelectorAll(`#transcript .message[data-lane="${lane}"]`)];
+                const call = cards.find(el => el.classList.contains('pair_first'));
+                const el = cards.find(el => !el.classList.contains('pair_first'));
+                const after = (card) => getComputedStyle(card.querySelector('.header-info'), '::after').content;
+                return [after(el), el.classList.contains('dag-in'), after(call)]; }""",
             A,
         )
-        assert tag == ['"' + _head_attr(page, A, "data-lane-tag") + '"', True]
+        assert tag == ['"' + _head_attr(page, A, "data-lane-tag") + '"', True, "none"]
         # Solid lane between a fork and a merge connector.
         rail = _rail(page, A)
         assert set(rail["parts"]) == {"fork", "lane", "merge"}
@@ -298,9 +302,14 @@ class TestInterleave:
             """() => [...document.querySelectorAll('#transcript .message')]
                 .filter(el => el.checkVisibility())
                 .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)
-                .map(el => [el.getAttribute('data-lane'), el.className])"""
+                .map(el => [el.getAttribute('data-lane'), el.className,
+                            !!el.querySelector(':scope > .mn-bctls .mn-back[aria-expanded="false"]')])"""
         )
-        for (lane, cls), (next_lane, next_cls) in zip(order, order[1:]):
+        for (lane, cls, folded), (next_lane, _next_cls, _) in zip(order, order[1:]):
+            # An async spawn's launch acknowledgement (its result half) is
+            # folded into its branch control (P7c): it ends its own row.
+            if folded:
+                continue
             if "pair_first" in cls.split() and next_lane != lane:
                 pytest.fail(f"a {lane} call is followed by a {next_lane} row: {order}")
 

@@ -1,6 +1,6 @@
 # `--theme minimal`: a compact light/dark theme with a DAG layout
 
-Status: **spec + phased plan; P1–P7 and P7b landed (see § 6);
+Status: **spec + phased plan; P1–P7, P7b and P7c landed (see § 6);
 § 7 decisions 1–5 taken.** Branch of origin:
 `claude/sweet-mccarthy-64a24r`.
 
@@ -2048,7 +2048,10 @@ dark, in `work/minimal-theme-dag-screenshots/p7b/`.
   yes` (both pages) emit exactly the card attributes of a cold conversion.
   Fails without fix 1 (no store) or fix 2 (store). Unit tests for both
   fixes in `test_nested_agents.py` / `test_entry_store.py`.
-- **Running lanes — the rule (decided).** Split so the HTML stays a pure
+- **Running lanes — the rule (decided; the client's 30-minute window is
+  superseded by P7c item 6: a live-served page shows an open lane running
+  however long it has been quiet, with `· quiet …`, up to a week of
+  session silence).** Split so the HTML stays a pure
   function of the transcript:
   - *server* (`lanes._settle_open_lanes`, `data-lane-state` on the head of
     an agent lane with no merge row): `ended` when the page proves it — a
@@ -2090,10 +2093,187 @@ dark, in `work/minimal-theme-dag-screenshots/p7b/`.
   result row, A still running to the new newest row. Light and dark.
 - **Left for P8 / later:** the 30-minute idle window is a heuristic (a
   sub-agent busy in one tool call for longer, with nothing else written,
-  reads as ended until its next line); Markdown output has no notion of
+  reads as ended until its next line) — *resolved in P7c item 6*; Markdown output has no notion of
   running; `serve --watch` still leaves combined pages as they were at
   startup by design (documented in docs/live-updates.md with the `watch
   --combined yes` recipe).
+
+### P7c — Visual polish — M
+
+**Goal:** the user reviewed the P6/P7 screenshots and agreed five polish
+items. Minimal theme only; classic output byte-identical; nothing that is
+reachable today may become unreachable.
+
+**Files:** `html/renderer.py` (`format_TaskInput` / `format_TaskOutput`,
+minimal branch only), `transcript.html` (minimal-only attributes inline),
+`components/minimal/` (`tokens.css`, `layout.css`, `components.css`,
+`dag.css`, `minimal.js`, `minimal_dag.js`), browser tests (marker
+`browser`), `dev-docs/minimal-theme.md`, `dev-docs/css-classes.md`.
+
+**Steps:**
+1. **Compact spawn rows.** A `Task`/`Agent` spawn on the main line reads
+   today as five or six lines: call line, prompt, a `Run background` params
+   card, the branch control, "Async agent launched successfully." and the
+   `Result ↓ with the async notification` line. Target (mockup `DagRail`
+   `k-spawn`): ~2 lines — the call line (description, subagent type,
+   `[async #id]`, model as dim metadata) and the branch control with its
+   stats. The prompt becomes a collapsed 2-line preview through the existing
+   `<details>` preview mechanism (`+N lines` / `− less`); `Run background`
+   folds into the call line's `[async …]` (it is only ever shown beside
+   it); the launch acknowledgement folds into the control line as a small
+   toggle that reveals it; `Result ↓` becomes a compact link in the control
+   line. Prompt text, ids and the raw acknowledgement stay reachable (and
+   without JavaScript the result card shows as before).
+2. **Fold bars dimmed at rest.** Fold summaries in a low-contrast colour
+   until the row is hovered or the bar has keyboard focus (`:focus-visible`
+   / `:focus-within`; the sections become focusable buttons in this theme),
+   full strength on interaction; the bar directly under a user prompt keeps
+   its normal strength. Dimmed, never hidden (touch has no hover); text
+   contrast at rest ≥ 3:1 in light and dark.
+3. **Fork duplication.** The fork-point box repeats the branch list the rail
+   and the fork's branch control already show: compact it to one line (the
+   links stay). The top-of-page session navigation's fork point and its
+   `↳ Branch` entries collapse to one wrapped line of short links.
+4. **Columns.** The main column gets more room than branch columns (`2fr`,
+   minimum 520px; branch columns `1fr`, minimum 300px); the column head
+   gives the name a line of its own (truncated, full name in `title`) above
+   its meta and actions; on a phone, Columns shows one column at a time,
+   each the viewport's width, with horizontal scroll snapping.
+5. **Density pass** on the demo, a fork fixture and real projects
+   (`test/test_data/real_projects/`): rail dot alignment, gutter overflow,
+   wrapping metadata, light and dark.
+6. **Running lanes without a timeout** (added by the user during the
+   phase; revises P7b step 3). The 30-minute idle window is wrong: agents
+   wait on background processes, watchers or Monitor tasks that can run
+   silently for well over 30 minutes. A live-served page never decides by
+   elapsed time alone: an `open` lane (no merge, not `ended` by the
+   server's evidence, no TaskStop / failed / killed notification) shows as
+   running for as long as the page is served live, and its label says how
+   long it has been quiet instead (`running · quiet 42m`, from the lane's
+   last activity, updated on the 30 s re-check, no "quiet" under about a
+   minute). Static pages keep `· no result`. Any very long upper bound
+   (days) must be justified here. Replace the P7b tests that asserted the
+   30-minute behaviour (keep the coverage), mark the superseded rule in
+   the P7b note, update dev-docs § 8.
+
+**Acceptance & tests** (browser): spawn row (call + result) height bound
+and the prompt / acknowledgement / result link still reachable; fold-bar
+colour at rest vs hover / focus, contrast ≥ 3:1, the prompt's bar
+undimmed; fork box and nav fork group one line each; main column wider
+than every branch column; phone Columns one column per viewport with snap.
+Snapshots via `just update-snapshot`, checked at block level (classic
+blocks identical). Before/after screenshots (light + dark) of the demo
+(Main only, Interleaved, Columns), a fork fixture and a real project in
+`work/minimal-theme-dag-screenshots/p7c/`, < 900KB in all. Item 6: a lane
+quiet for more than 30 minutes still reads as running, with the duration.
+
+**As built (P7c landed):**
+- **Files.** `html/renderer.py` (`format_TaskInput` / `format_TaskOutput`
+  minimal branches), `html/tool_formatters.format_task_prompt_preview`,
+  `html/teammate_formatter.format_task_input_teammate_extras(include_run=)`,
+  `lanes.py` (TaskStop evidence), `transcript.html` (two minimal-only
+  inline additions on the fork-point box: the `.fork-point-preview` span
+  and branch-link `title`s), `components/minimal/` (`tokens.css` `--dim`,
+  `layout.css`, `components.css`, `dag.css`, `minimal.js`,
+  `minimal_dag.js`). Tests: new `test/test_minimal_polish_browser.py` (14,
+  marker `browser`), `test_minimal_theme.py::TestCompactSpawnRows` (4),
+  `test_lanes.py::test_a_stopped_background_agent_has_ended`; three
+  earlier browser tests updated to the intended changes (the lane tag now
+  sits on a pair's result half; the spawn's hidden acknowledgement in the
+  pair-adjacency test; `Result ↓` clicked in the control) and one P7b test
+  given a shorter viewport (the page it scrolls got shorter). As-built
+  reference: [`dev-docs/minimal-theme.md`](../dev-docs/minimal-theme.md)
+  § 8–9, `css-classes.md` § Minimal Theme, `agents.md`, and the user's
+  `docs/live-updates.md`.
+- **1. Spawn rows** — the demo's async spawn went from 135px (call, prompt,
+  `Run background`, control, launch line, `Result ↓` line) to 66px (call,
+  prompt, control). Server, minimal only: a prompt over two lines or 160
+  characters is the shared `<details>` preview of its first two non-blank
+  lines (no `...` line; the `+N lines` label sits beside the preview's
+  last line), the `Run background` row is dropped (`[async …]` in the call
+  line is shown exactly when `run_in_background` is set), and the async
+  acknowledgement is wrapped in `.mn-ack`. Engine: a result card holding
+  only `.mn-ack` + `.mn-async-jump` gets `dag-ack` (hidden), and the
+  control gains `Result ↓` (`.mn-bres`, to `data-lane-to`) and `launched ▸`
+  (`.mn-back`, `aria-expanded`), which shows the card. No JavaScript: as
+  before. **Beyond the brief** (same density pass): the spawn's teammate
+  fields, its result's agent metadata and an async notification's task
+  card read as one dim wrapped line of `key value` pairs (the notification
+  went from five rows to one). Sync agents' answers (the merge row) are
+  unchanged — they are content, and long ones already preview.
+- **2. Fold bars** — `--dim` at rest (light `#868d96`, 3.35:1 on white;
+  dark `#6b727c`, 3.73:1 on `#14161a` — tested ≥ 3:1 from computed
+  colours), `--muted` while the card is hovered or the bar has focus
+  (`:focus-within`), `--fg` on a hovered / `:focus-visible` section; the
+  bar under a main prompt (`.user`, not notification / teammate /
+  sidechain / steering) keeps `--muted`. Colour, not opacity, so the
+  contrast holds and touch keeps a readable bar. The classic sections are
+  click-only `<div>`s: `minimal.js` gives them `tabindex=0` /
+  `role=button` and Enter / Space (re-applied on rehydrate) rather than a
+  template change.
+- **3. Forks** — the fork-point box is one muted line (`⑂ Fork point` and
+  the branch links, each at most 44ch with an ellipsis and its preview in
+  `title`; the header's preview of the card just above hidden), no dashed
+  box. Merging it into the fork control was rejected: without JavaScript
+  the box is the only fork affordance, and it also marks a fork whose
+  slot was filtered (`fork_only`). Session navigation: a fork point and its
+  branches flow as one wrapped line of truncated links (fork label 24ch,
+  branches 44ch), sessions still start their own line; the classic
+  per-depth indent is dropped for these items.
+- **4. Columns** — tracks `minmax(520px, 2fr)` for main, `minmax(300px,
+  1fr)` per column; the head is two lines (46px): the name alone,
+  truncated with the full name in the head's `title` (picked over
+  wrapping: a fixed head height keeps row 1 and the sticky heads simple),
+  then meta and actions. Phone (≤ 640px): the engine writes every track
+  (main included) as the viewport's width minus the page padding
+  (`dag-panes` on the stage; a resize or a flip of the phone query
+  relayouts) and `<html>` gets `scroll-snap-type: x mandatory` with each
+  non-strip column's chrome as a snap point (`scroll-margin-left: 10px`),
+  so a swipe lands on one column; vertical scrolling is untouched and
+  strips are passed over. Strips by default on a phone was the
+  alternative; snapping keeps the same modes on every width.
+- **5. Density** — the real bug was in interleaved rows: a call half's
+  gutter (time, role) hangs into its result half's, and the lane tag — a
+  third line — collided with the result row's error pill or was squashed
+  to 0px by flex shrinking (it never showed on most tool rows). The tag
+  (and an error pill) now sits on the result half, one gutter line
+  (1.85em) down, so the lines never overlap (tested over every interleaved
+  row). Rail dots were already aligned in every fixture checked
+  (`-experiments-worktrees`, `-src-deep-manifest`,
+  `-src-experiments-claude_p`, the demo, `dag_within_fork.jsonl`).
+- **6. Running lanes** — client: an `open` lane is running on any
+  live-served page; `running · quiet 42m` / `2h 5m` / `2d 3h` from the
+  lane's last activity (its newest card, or a nested lane's; else its
+  spawn), omitted under a minute; the 30 s timer relayouts while a lane
+  runs, so the label keeps up. **One bound kept, justified:** a session
+  whose newest card is more than a week old (`RUNNING_MAX_QUIET_MS`) reads
+  as stopped — `serve` runs over whole archives, and an agent that died
+  with a session closed months ago is not running; a week is far beyond
+  any silent background wait. Per session, so a live session on a combined
+  page does not wake an old one (as in P7b). Server: a `TaskStop` of the
+  agent's id whose result reports it stopped now ends the lane (a stop
+  that found nothing proves nothing); killed / failed agents already merge
+  at their notification. Tests: `test_a_quiet_lane_keeps_running`
+  (45 minutes and 2 days: label, open end), `test_the_quiet_label_follows_the_clock`
+  (replaces `test_a_running_lane_times_out`),
+  `test_a_session_silent_for_a_week_shows_no_running_lane` (replaces the
+  2-day idle test); the combined-page test's old session moved to 8 days.
+  API: `quietMs(lane)`, `runningMaxQuietMs` (replacing `runningIdleMs`).
+- **Snapshots** (`just update-snapshot`, block level): none added or
+  removed; every classic block and the index identical; the three minimal
+  blocks `+482/-51` (CSS/JS text), the async block `+3/-3` more — exactly
+  the `Run background` row out and the `.mn-ack` wrapper in.
+- **Screenshots** in
+  [`work/minimal-theme-dag-screenshots/p7c/`](minimal-theme-dag-screenshots/p7c/)
+  (24-colour PNGs, 856KB in all): `before-*` / `after-*` of the demo in
+  Main only, Interleaved and Columns (1600px), `dag_within_fork.jsonl`, and
+  the real `-experiments-worktrees` project, light and dark; plus
+  `after-phone-columns-*` (390px).
+- **Left for P8 / later:** in Columns the main column's control line still
+  wraps its `⇤ Interleave` button below the stats at 1600px with four
+  columns; a column head's meta is truncated more often than the name;
+  very long sync-agent answers on the main line are shown as rendered (they
+  preview only past 20 lines).
 
 ### P8 — Docs, polish, parity sweep — M
 
@@ -2138,6 +2318,7 @@ tests from P3a–P7 green together.
 - [x] P6 DAG engine (main-only, interleaved, rail)
 - [x] P7 columns, overflow, teammates (+ async result at the merge row)
 - [x] P7b live/watch mode with branches (+ running lanes)
+- [x] P7c visual polish (spawn rows, fold bars, forks, columns, density; running lanes without a timeout)
 - [ ] P8 docs and polish
 
 ---

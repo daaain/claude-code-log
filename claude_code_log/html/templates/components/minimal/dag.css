@@ -190,6 +190,32 @@
     order: 2;
 }
 
+/* P7c: a call half's gutter (time, role) hangs into its result half's
+   (layout.css), so a third line there — the lane tag — ran into the result
+   row's own gutter (an error pill) or the next row's. The tag moves to the
+   result half's gutter instead, one gutter line down: time and role from
+   the call, then the tag (and an error pill) from the result, which grows
+   its row if it must rather than overlap the next. Wide layout only. */
+@media (min-width: 641px) {
+    .theme-minimal .mn-stage.dag-on #transcript .message.dag-in.pair_first:not(.dag-split) > .header > .header-info::after {
+        content: none;
+    }
+
+    .theme-minimal .mn-stage.dag-on #transcript .message.dag-in:is(.pair_middle, .pair_last):not(.dag-split) > .header > .header-info {
+        display: flex;
+        padding-top: 1.85em;
+    }
+
+    .theme-minimal .mn-stage.dag-on #transcript .message.dag-in:is(.pair_middle, .pair_last):not(.dag-split):not(.error) > .header > .header-info > *,
+    .theme-minimal .mn-stage.dag-on #transcript .message.dag-in.error:is(.pair_middle, .pair_last):not(.dag-split) > .header > .header-info > :not(.mn-role) {
+        display: none;
+    }
+}
+
+.theme-minimal .mn-stage.dag-on #transcript .message:is(.dag-in, .dag-colin) > .header > .header-info::after {
+    flex: none;
+}
+
 /* Branch headers in the stream: their text starts at the content column
    (the rail runs through the space before it, unmasked). */
 .theme-minimal .mn-stage.dag-on #transcript .message.branch-header {
@@ -402,6 +428,42 @@
     text-decoration: underline;
 }
 
+/* P7c compact spawn rows: an async spawn's result card that holds only the
+   launch acknowledgement folds into the spawn's branch control — hidden
+   (`dag-ack`, written by the engine) until the control's `launched ▸`
+   toggle shows it; the control's `Result ↓` links to the notification
+   (the merge row) instead of the card's line. The spawn then ends its own
+   row, so it takes back the bottom padding a pair's first half gives up. */
+.theme-minimal .mn-stage.dag-on #transcript .message.dag-ack {
+    display: none;
+}
+
+.theme-minimal .mn-stage.dag-on #transcript .message.pair_first:has(> .mn-bctls .mn-back[aria-expanded='false']) {
+    padding-bottom: 3px;
+}
+
+.theme-minimal #transcript .mn-bres {
+    font: 0.72em/1.7 var(--mono);
+    color: var(--note);
+    text-decoration: none;
+}
+
+.theme-minimal #transcript .mn-bres::after {
+    content: attr(data-label);
+}
+
+.theme-minimal #transcript .mn-bres:hover {
+    text-decoration: underline;
+}
+
+.theme-minimal #transcript .mn-bmini.mn-back {
+    min-height: 0;
+    padding: 2px 0;
+    border: 0;
+    background: none;
+    font: 0.68em/1.7 var(--mono);
+}
+
 /* An async spawn's result card: its answer is on the notification (the
    merge row); this line links there. */
 .theme-minimal #transcript .mn-async-jump {
@@ -420,12 +482,13 @@
 
 /* A lane in a column of its own (DagLanes.dc.html). The stage grid gains a
    track per column (`--dag-cols`, written by the engine: main
-   minmax(360px, 1fr), each column minmax(300px, 1fr), a strip 34px); row 1
+   minmax(520px, 2fr), each column minmax(300px, 1fr), a strip 34px; on a
+   phone every column the viewport's width, see the phone rules); row 1
    holds the heads, cards start at row 2. The page widens past its 960px
    column to at least the columns' minimum widths (`--dag-min`) and scrolls
    sideways; the page furniture keeps to the viewport (`--dag-view`). */
 .theme-minimal .mn-stage {
-    --dag-head-h: 30px;
+    --dag-head-h: 46px;
 }
 
 body.theme-minimal.dag-wide {
@@ -473,6 +536,25 @@ body.theme-minimal.dag-wide :is(.mn-top, .mn-toolbar, .filter-toolbar, #timeline
     white-space: nowrap;
     border-bottom: 1px solid var(--rule);
     background: linear-gradient(color-mix(in srgb, var(--lc) 5%, transparent), color-mix(in srgb, var(--lc) 5%, transparent)), var(--bg);
+}
+
+/* A column's head (P7c): the name on a line of its own (truncated, the
+   full name in the head's title), its meta and actions on the next. */
+.theme-minimal #transcript .dag-colhead:not(.dag-mainhead) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: auto auto;
+    align-content: center;
+    gap: 1px 8px;
+}
+
+.theme-minimal #transcript .dag-colhead:not(.dag-mainhead) > .dag-colname {
+    grid-column: 1 / -1;
+    white-space: nowrap;
+}
+
+.theme-minimal #transcript .dag-colhead:not(.dag-mainhead) .mn-bmini {
+    min-height: 20px;
 }
 
 .theme-minimal #transcript .dag-mainhead {
@@ -645,5 +727,18 @@ body.theme-minimal.dag-wide :is(.mn-top, .mn-toolbar, .filter-toolbar, #timeline
 
     .theme-minimal .mn-stage.dag-on #transcript .message.dag-col > .header > .header-info {
         padding-left: 0;
+    }
+
+    /* Columns on a phone (P7c): every column — main included — is the
+       viewport's width (`dag-panes`, tracks written by the engine), and the
+       page snaps sideways from one column to the next; vertical scrolling
+       is untouched. A strip is passed over. */
+    html:has(> body.theme-minimal.dag-wide .mn-stage.dag-panes) {
+        scroll-snap-type: x mandatory;
+    }
+
+    .theme-minimal .mn-stage.dag-panes #transcript > .dag-chrome:not(.dag-stripbg) {
+        scroll-snap-align: start;
+        scroll-margin-left: 10px;
     }
 }

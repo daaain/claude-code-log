@@ -28,6 +28,7 @@ from .utils import (
     render_collapsible_code,
     render_async_result_body,
     render_file_content_collapsible,
+    render_markdown,
     render_markdown_collapsible,
     render_markdown_inline,
     render_user_markdown,
@@ -831,6 +832,31 @@ def format_task_input(task_input: TaskInput) -> str:
     preview of the first few lines to keep the transcript vertically compact.
     """
     return render_markdown_collapsible(task_input.prompt, "task-prompt")
+
+
+# A prompt this short (in characters) on at most two lines reads in full on
+# the minimal theme's spawn row; anything longer becomes a preview.
+_SPAWN_PROMPT_INLINE_CHARS = 160
+
+
+def format_task_prompt_preview(prompt: str) -> str:
+    """The minimal theme's spawn prompt (P7c compact spawn rows).
+
+    A short prompt (at most two lines and ``_SPAWN_PROMPT_INLINE_CHARS``
+    characters) renders inline as ``format_task_input`` does; a longer one
+    always becomes the shared collapsible preview — its first two non-blank
+    lines in the ``<summary>`` (clipped to two lines by the theme's CSS; no
+    "..." line, the fade and the "+N lines" label say there is more), the
+    full prompt in the body.
+    """
+    lines = prompt.splitlines()
+    if len(lines) <= 2 and len(prompt) <= _SPAWN_PROMPT_INLINE_CHARS:
+        return render_markdown_collapsible(prompt, "task-prompt")
+    preview = "\n".join([line for line in lines if line.strip()][:2])
+    collapsible = render_collapsible_code(
+        render_markdown(preview), render_markdown(prompt), len(lines), is_markdown=True
+    )
+    return f'<div class="task-prompt">{collapsible}</div>'
 
 
 # -- WebFetch Tool ------------------------------------------------------------

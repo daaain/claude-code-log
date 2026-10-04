@@ -440,6 +440,14 @@ body.theme-minimal {
     display: none;
 }
 
+/* …one gutter line down, below the call's role, which hangs into this
+   row (layout.css; P7c — the pill used to cover it). */
+@media (min-width: 641px) {
+    .theme-minimal #transcript .message.tool_result.error:is(.pair_middle, .pair_last):not(.dag-split) > .header > .header-info {
+        padding-top: 1.85em;
+    }
+}
+
 /* -------------------------------------------------- collapse previews */
 
 /* The formatters' <details> (work/minimal-theme-dag.md § 1.4), restyled
@@ -924,14 +932,37 @@ body.theme-minimal {
 /* ------------------------------------------ forks, branches, nav */
 
 .theme-minimal #transcript .fork-point-header {
-    margin-bottom: 2px;
-    font: 500 0.85em var(--mono);
+    flex: none;
+    margin: 0;
+    font: inherit;
     color: var(--muted);
 }
 
+.theme-minimal #transcript .fork-point-header > .fork-point-preview {
+    display: none;
+}
+
 .theme-minimal #transcript .fork-point-branches {
-    gap: 0;
-    padding-left: 10px;
+    display: flex;
+    flex-direction: row;
+    flex: 1 1 0;
+    flex-wrap: wrap;
+    gap: 0 12px;
+    min-width: 0;
+    padding: 0;
+}
+
+.theme-minimal #transcript .fork-point-branch {
+    max-width: min(100%, 44ch);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-decoration: none;
+}
+
+.theme-minimal #transcript .fork-point > .mn-bctls {
+    flex: 1 1 100%;
+    font-size: calc(1em / 0.72);
 }
 
 .theme-minimal #transcript .fork-point-branch,
@@ -997,9 +1028,44 @@ body.theme-minimal {
     color: var(--fg);
 }
 
-.theme-minimal .session-fork-point,
-.theme-minimal .session-branch {
-    border-left: 1px dashed var(--l0);
+/* A fork point and its branches (P7c): one wrapped line of short links
+   instead of a line each — sessions still start a line of their own. */
+.theme-minimal .session-nav {
+    display: flex;
+    flex-wrap: wrap;
+    column-gap: 12px;
+}
+
+.theme-minimal .session-nav > .session-nav-item {
+    flex: 1 1 100%;
+    min-width: 0;
+}
+
+.theme-minimal .session-nav > :is(.session-fork-point, .session-branch) {
+    flex: 0 1 auto;
+    max-width: min(100%, 44ch);
+    margin-left: 0 !important;
+    padding: 0;
+    border: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font: 0.75em/1.7 var(--mono);
+}
+
+.theme-minimal .session-nav > :is(.session-fork-point, .session-branch) > a,
+.theme-minimal .session-nav > .session-fork-point > span {
+    display: inline;
+    padding: 0;
+    text-decoration: none;
+}
+
+.theme-minimal .session-nav > .session-fork-point > :is(a, span) {
+    color: var(--muted);
+}
+
+.theme-minimal .session-nav > .session-fork-point {
+    max-width: min(100%, 24ch);
 }
 
 .theme-minimal .session-compaction-point {
@@ -1245,4 +1311,61 @@ body.theme-minimal {
     color: var(--fg);
     box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
     font-family: var(--sans);
+}
+
+/* ------------------------------------------- compact spawn rows (P7c) */
+
+/* A Task / Agent spawn reads as its call line (description, subagent type,
+   `[async #id]`, model), the prompt as a 2-line preview and the branch
+   control (dag.css). The prompt is a touch smaller than prose; a long one
+   is the shared <details> preview (tool_formatters
+   .format_task_prompt_preview) with its "+N lines" beside the preview's
+   last line rather than on a line of its own. */
+.theme-minimal #transcript .message.tool_use > .content > .task-prompt {
+    font-size: 0.94em;
+}
+
+.theme-minimal #transcript .task-prompt > details.collapsible-code > summary {
+    flex-direction: row;
+    align-items: flex-end;
+    column-gap: 10px;
+}
+
+.theme-minimal #transcript .task-prompt > details.collapsible-code > summary > .preview-content {
+    flex: 1 1 0;
+    min-width: 0;
+}
+
+.theme-minimal #transcript .task-prompt > details.collapsible-code > summary::after,
+.theme-minimal #transcript .task-prompt > details.collapsible-code > summary > .line-count {
+    flex: none;
+    align-self: flex-end;
+}
+
+.theme-minimal #transcript .task-prompt .preview-content p {
+    margin: 0;
+}
+
+/* The spawn's teammate fields (name, team, mode), its result's agent
+   metadata (agent id, worktree, branch, usage) and an async notification's
+   task fields (id, status, tokens, tool uses, duration) as one dim wrapped
+   line of key value pairs instead of a card of rows. */
+.theme-minimal #transcript :is(.message:is(.tool_use, .tool_result) > .content > .teammate-spawn-card, .message.task-notification > .content > .task-notification-card) {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0 6px;
+    margin: 1px 0 0;
+    padding: 0;
+    border: 0;
+    font: 0.72em/1.7 var(--mono);
+    color: var(--muted);
+}
+
+.theme-minimal #transcript :is(.message:is(.tool_use, .tool_result) > .content > .teammate-spawn-card, .message.task-notification > .content > .task-notification-card) dt {
+    font-size: 1em;
+}
+
+.theme-minimal #transcript :is(.message:is(.tool_use, .tool_result) > .content > .teammate-spawn-card, .message.task-notification > .content > .task-notification-card) dd + dt {
+    margin-left: 8px;
 }

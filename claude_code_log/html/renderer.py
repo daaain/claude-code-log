@@ -184,6 +184,7 @@ from .tool_formatters import (
     format_read_input,
     format_read_output,
     format_task_input,
+    format_task_prompt_preview,
     format_task_output,
     format_taskstop_input,
     format_taskstop_output,
@@ -708,7 +709,20 @@ class HtmlRenderer(Renderer):
         return format_multiedit_input(input)
 
     def format_TaskInput(self, input: TaskInput, _: TemplateMessage) -> str:
-        """Format → prompt text, plus teammate-spawn extras when relevant."""
+        """Format → prompt text, plus teammate-spawn extras when relevant.
+
+        Minimal theme (P7c compact spawn rows): the prompt is a 2-line
+        preview whenever it is longer than that (the shared ``<details>``
+        preview, full text one click away), and the ``Run background`` row
+        is left out — the call line's ``[async …]`` already says so (the
+        title shows it exactly when ``run_in_background`` is set).
+        """
+        if normalize_theme(self.theme) == "minimal":
+            base = format_task_prompt_preview(input.prompt)
+            extras = format_task_input_teammate_extras(
+                input, self._colors_for(_), include_run=False
+            )
+            return base + extras if extras else base
         base = format_task_input(input)
         extras = format_task_input_teammate_extras(input, self._colors_for(_))
         return base + extras if extras else base
@@ -843,7 +857,12 @@ class HtmlRenderer(Renderer):
         on the notification as its Task ID, is dropped here.
         """
         if output.async_final_answer and normalize_theme(self.theme) == "minimal":
+            # The launch acknowledgement, marked so the DAG engine can fold
+            # it into the spawn's branch control (P7c); without JavaScript
+            # it reads as before.
             base = format_task_output(output, include_async_answer=False)
+            if base:
+                base = f"<div class='mn-ack'>{base}</div>"
             if output.async_notification_index is not None:
                 base += (
                     "<div class='mn-async-jump'><a href='#msg-d-"

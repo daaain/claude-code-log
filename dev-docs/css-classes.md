@@ -140,6 +140,7 @@ and again under `:root[data-theme="dark"]`; `color-scheme` follows
 |---|---|---|---|
 | `--bg` / `--fg` | `#ffffff` / `#1f2328` | `#14161a` / `#e4e6e9` | page, text |
 | `--muted` | `#5f6670` | `#969da7` | metadata, dim text |
+| `--dim` | `#868d96` | `#6b727c` | fold bars at rest (P7c; ≥ 3:1 on `--bg`) |
 | `--rule` / `--rule2` | `#e3e6ea` / `#1f2328` | `#2a2e35` / `#c9ccd1` | hairlines; turn and header rules |
 | `--code` | `#f3f4f6` | `#1d2025` | code and output boxes |
 | `--userbg` | `#fbf2e8` | `#2a2118` | user prompt tint |
@@ -194,7 +195,10 @@ output):
 | `.mn-stage` | wraps `#dag-rail` and `#transcript` | draws the rail's continuous hairline (`::before`); `dag-on` + `--dag-slots` from the DAG engine |
 | `#dag-rail` | first child of `.mn-stage` | the DAG engine's SVG rail (branch lanes, connectors) |
 | `.mn-seg.mn-branches`, `button[data-mn-branches=main\|interleaved]` | toolbar, after the depth segment | global Branches mode; `hidden` until the engine finds a branch |
-| `dag-*` classes, `.mn-bctls` / `.mn-bctl` / `.mn-bfold` / `.mn-bmini` | cards, containers, spawn cards | written by `minimal_dag.js` only — see [minimal-theme.md](minimal-theme.md) |
+| `dag-*` classes, `.mn-bctls` / `.mn-bctl` / `.mn-bfold` / `.mn-bmini` / `.mn-bres` / `.mn-back` | cards, containers, spawn cards | written by `minimal_dag.js` only — see [minimal-theme.md](minimal-theme.md) |
+| `.mn-ack` | an async spawn's result `.content` | wraps the launch acknowledgement (`HtmlRenderer.format_TaskOutput`, P7c); the engine folds the card into the spawn's control (`dag-ack`) |
+| `.fork-point-preview` | inside `.fork-point-header` | the header's ` • preview` (the card above's text), hidden — the box is one line (P7c) |
+| `.fold-bar-section[tabindex][role=button]` | fold bars | made keyboard-focusable by `minimal.js` (Enter / Space click) |
 | `.mn-seg.mn-depth`, `button[data-mn-depth=prompts\|steps\|all]` | toolbar, before `.mn-sp` | fold depth (dev-docs/message-hierarchy.md "Fold depth"); `.on` + `aria-pressed` mark the current choice, none after a manual override. Stored in `localStorage` `claude-code-log:fold-depth` |
 | `summary[data-more]` | the `<summary>` of `details.collapsible-code`, `.collapsible-details`, `.tool-param-collapsible` | the closed block's label (`+ N lines`, `+ N items` for a params table, `+ more`), written by `minimal.js` and drawn by `summary::after { content: attr(data-more) }` |
 | `button.mn-less` | last child of a long (≥ 12 lines/items) collapsible | trailing `− less` (label in CSS): closes the block and scrolls its top back under the toolbar |
@@ -230,7 +234,8 @@ built in [minimal-theme.md](minimal-theme.md).
 **Gutter error pill.** A failed `tool_result` (and a `system-error`) shows
 its role label as a lowercase `error` pill (`--err` on `--errbg`); a paired
 failed result keeps that pill in its gutter although paired halves
-otherwise drop the gutter.
+otherwise drop the gutter — one gutter line down (`padding-top: 1.85em`,
+wide layout), below the call's role, which hangs into that row (P7c).
 
 **Workflow groups.** The phases group and each phase's / agent's
 `.children` hang under the content column like a sub-agent group (one 2px
@@ -263,11 +268,27 @@ formatter-written `.line-count` as the label (`+ ` prefix), the others
 `+ more`. The classic 📋 open/close-all and every per-item toggle work as
 before: the styling keys on `[open]` only.
 
-**Fold bar.** One muted mono line; each section's classic glyph
+**Fold bar.** One mono line; each section's classic glyph
 (`.fold-icon`, rewritten by the fold state machine) is hidden and replaced
 by a chevron mask on `::before` (`--mn-chev`, double for
 `.fold-all-levels`), pointing right while the section is `.folded` and
-rotated down otherwise.
+rotated down otherwise. Dimmed at rest (`--dim`), `--muted` while the card
+is hovered or the bar has keyboard focus (`:focus-within`), `--fg` on the
+hovered / `:focus-visible` section; a main prompt's bar (`.message.user`,
+not a notification, teammate, sidechain or steering card) stays `--muted`
+(P7c).
+
+**Spawn rows** (P7c). A spawn's prompt is a two-line `.preview-content`
+whose `+N lines` label sits beside it (`.task-prompt > details > summary`
+in a row); teammate fields on a spawn (`.teammate-spawn-card`), agent
+metadata on its result and an async notification's
+`.task-notification-card` render as one dim wrapped line of `dt dd` pairs.
+
+**Forks and navigation** (P7c). `.fork-point` is one muted mono line
+(`⑂ Fork point` + truncated `.fork-point-branch` links, full text in
+`title`). In `.session-nav`, `.session-fork-point` and its `.session-branch`
+items flow side by side (flex, wrapped; each truncated), sessions start a
+line of their own.
 
 **Toolbar offsets.** `minimal.js` keeps `--mn-bar-h` (toolbar height) and
 `--mn-filter-h` (search & filter panel height, 0 when closed) on `<html>`;
