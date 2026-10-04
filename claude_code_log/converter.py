@@ -5074,6 +5074,11 @@ def _generate_individual_session_files(
             session_data = {s.session_id: s for s in project_cache.sessions.values()}
         # Get working directories for project title
         working_directories = cache_manager.get_working_directories()
+    else:
+        # No cache: derive session data from the messages themselves, so the
+        # no-cache path actually generates the requested session files
+        # instead of intersecting down to the empty set (issue #274).
+        session_data = _build_session_data_from_messages(messages)
 
     # Only generate HTML for sessions that are tracked in the sessions table
     # (filters out warmup-only and sessions without user messages)
@@ -6188,6 +6193,7 @@ def _plan_project(
     filter_path: Optional[str],
     write_combined: bool,
     page_size: int,
+    generate_individual_sessions: bool = True,
 ) -> Optional[_ProjectPlan]:
     """Resolve destination and staleness for one project (no rendering).
 
@@ -6240,6 +6246,9 @@ def _plan_project(
     # _generate_individual_session_files writes, or every
     # session reads as "not_cached" and the project takes the
     # slow path on every run.
+    # Combined-only runs generate no per-session files, so skip their
+    # staleness query entirely (CodeRabbit review on #297): the I/O is
+    # wasted, and the rows would otherwise inflate stats below.
     stale_sessions = (
         cache_manager.get_stale_sessions(
             valid_session_ids,
@@ -6250,7 +6259,7 @@ def _plan_project(
                 dest_dir, variant, combined_ext, write_combined
             ),
         )
-        if cache_manager
+        if cache_manager and generate_individual_sessions
         else []
     )
     # Count archived sessions (cached but JSONL deleted)
@@ -6263,46 +6272,65 @@ def _plan_project(
     # Check combined_stale using the appropriate cache:
     # - Paginated projects store data in html_pages table (via save_page_cache)
     # - Non-paginated projects store data in html_cache table (via update_html_cache)
-    if cache_manager is not None:
-        existing_page_count = cache_manager.get_page_count(variant)
-        if existing_page_count > 0:
-            # Paginated project: check page 1 staleness for the
-            # current --format/--detail/--compact variant, resolving
-            # the page file against dest_dir (--output) like the
-            # non-paginated branch below.
-            combined_stale = cache_manager.is_page_stale(
-                1, page_size, variant, output_dir=dest_dir
-            )[0]
-        else:
-            # Non-paginated project: check html_cache for the
-            # variant-specific filename (e.g.
-            # `combined_transcripts.low.compact.md`), not the
-            # default `combined_transcripts.html`.
-            combined_stale = cache_manager.is_transcript_stale(
-                output_path.name, None, output_dir=dest_dir
-            )[0]
-    else:
-        combined_stale = True
-
-    # Determine if we need to do any work. With
-    # `write_combined=False`, the combined-transcript file
-    # isn't produced — its staleness / on-disk presence is
-    # irrelevant; only modified sources / stale per-session
-    # files matter.
+    # Skip the combined-cache queries entirely when the combined output isn't
+    # requested: individual-only runs shouldn't do combined I/O or fail on
+    # unrelated combined-cache state.
+    combined_stale = False
     if write_combined:
-        needs_work = (
-            bool(modified_files)
-            or bool(stale_sessions)
-            or combined_stale
-            or not output_path.exists()
-        )
-    else:
-        needs_work = bool(modified_files) or bool(stale_sessions)
+        if cache_manager is not None:
+            existing_page_count = cache_manager.get_page_count(variant)
+            if existing_page_count > 0:
+                # Paginated project: check page 1 staleness for the
+                # current --format/--detail/--compact variant, resolving
+                # the page file against dest_dir (--output) like the
+                # non-paginated branch below.
+                combined_stale = cache_manager.is_page_stale(
+                    1, page_size, variant, output_dir=dest_dir
+                )[0]
+            else:
+                # Non-paginated project: check html_cache for the
+                # variant-specific filename (e.g.
+                # `combined_transcripts.low.compact.md`), not the
+                # default `combined_transcripts.html`.
+                combined_stale = cache_manager.is_transcript_stale(
+                    output_path.name, None, output_dir=dest_dir
+                )[0]
+        else:
+            combined_stale = True
+
+    # Determine if we need to do any work, gated on the artifacts that
+    # were actually requested. With `write_combined=False` the combined
+    # transcript isn't produced, so its staleness / on-disk presence is
+    # irrelevant; with `generate_individual_sessions=False` the
+    # per-session files aren't produced, so their staleness is too.
+    # Without a cache there is nothing that could have produced the
+    # requested outputs on an earlier run, so any request needs work —
+    # empty `modified_files` / `stale_sessions` must not read as
+    # "nothing to do" (that skipped every per-session file and left the
+    # index pointing at paths that were never written).
+    needs_work = bool(modified_files)
+    if generate_individual_sessions:
+        needs_work = needs_work or bool(stale_sessions) or cache_manager is None
+    if write_combined:
+        needs_work = needs_work or combined_stale or not output_path.exists()
 
     if needs_work:
-        stats.files_updated = len(modified_files) if modified_files else 0
-        stats.files_loaded_from_cache = len(jsonl_files) - stats.files_updated
-        stats.sessions_regenerated = len(stale_sessions)
+        if cache_manager is None:
+            # No cache: nothing could have been loaded from it, so report
+            # every source file as (re)processed rather than as a cache hit.
+            stats.files_updated = len(jsonl_files)
+            stats.files_loaded_from_cache = 0
+            # Without a cache every requested session output is (re)generated
+            # (stale_sessions is always empty when there is no cache), so
+            # report the corresponding sessions as regenerated rather than
+            # zero. valid_session_ids is the plan-time estimate: in real
+            # usage the JSONL file stems are the session IDs.
+            if generate_individual_sessions:
+                stats.sessions_regenerated = len(valid_session_ids)
+        else:
+            stats.files_updated = len(modified_files) if modified_files else 0
+            stats.files_loaded_from_cache = len(jsonl_files) - stats.files_updated
+            stats.sessions_regenerated = len(stale_sessions)
     else:
         # Fast path: nothing to do, just collect stats for index
         stats.files_loaded_from_cache = len(jsonl_files)
@@ -6587,6 +6615,7 @@ def _process_projects_hierarchy(
                 filter_path=filter_path,
                 write_combined=write_combined,
                 page_size=page_size,
+                generate_individual_sessions=generate_individual_sessions,
             )
         except Exception as e:
             stats = GenerationStats()
