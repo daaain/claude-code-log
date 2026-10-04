@@ -22,6 +22,7 @@ import pytest
 
 from claude_code_log import plugins
 from claude_code_log.converter import load_transcript
+from claude_code_log.html.utils import starts_with_emoji
 from claude_code_log.models import (
     MessageContent,
     MessageMeta,
@@ -166,3 +167,38 @@ def test_result_title_emoji_replaces_host_icon(
 ) -> None:
     headers = _result_headers(tmp_path, depth, is_error)
     assert headers == [f"🚨 {TITLE}" if is_error else TITLE]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "🟢 online",  # U+1F7E2, coloured circles/squares
+        "🟦 cyan",  # U+1F7E6
+        chr(0x1F7E0) + " first",
+        chr(0x1F7FF) + " last",
+        "🪝 hook",  # U+1FA9D, Pictographs Extended-A
+        "🩺 diagnostics",  # U+1FA7A
+        chr(0x1FA70) + " first",
+        chr(0x1FAFF) + " last",
+        "⭐ starred",  # U+2B50
+    ],
+)
+def test_starts_with_emoji_covers_extended_ranges(text: str) -> None:
+    assert starts_with_emoji(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "",
+        "Error",
+        "<span class='spawn-collapsed-marker'>",
+        "↩ return",  # U+21A9, Arrows: not in Misc Technical
+        chr(0x1F7DF) + " just below",
+        chr(0x1FA6F) + " just below",
+        chr(0x2B4F) + " just below",
+        chr(0x2B51) + " just above",
+    ],
+)
+def test_starts_with_emoji_rejects_non_emoji(text: str) -> None:
+    assert not starts_with_emoji(text)
