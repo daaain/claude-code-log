@@ -1,9 +1,10 @@
-"""A tool_result title that starts with an emoji replaces the host icon.
+"""A tool_result title that starts with an emoji replaces the host 🧰.
 
-The transcript template prefixes a result header with 🧰 (🚨 on error)
-unless the title already carries its own icon — the rule tool_use
-headers had for 🛠️. A plugin result titled ``📨 Mails …`` used to
-render ``🧰 📨 Mails …``: two icons, the host's first.
+The transcript template prefixes a result header with 🧰 unless the
+title already carries its own icon — the rule tool_use headers had for
+🛠️. A plugin result titled ``📨 Mails …`` used to render
+``🧰 📨 Mails …``: two icons, the host's first. The error 🚨 is the
+error signal, not decoration, so a title never suppresses it.
 
 Driven through ``HtmlRenderer.generate()`` so pairing, depth filtering
 and the real template header all run.
@@ -164,4 +165,4 @@ def test_result_title_emoji_replaces_host_icon(
     tmp_path: Path, depth: RenderingDepth, is_error: bool
 ) -> None:
     headers = _result_headers(tmp_path, depth, is_error)
-    assert headers == [TITLE]
+    assert headers == [f"🚨 {TITLE}" if is_error else TITLE]

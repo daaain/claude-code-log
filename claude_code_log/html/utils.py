@@ -934,9 +934,10 @@ def starts_with_emoji(text: str) -> bool:
     - Supplemental Symbols: U+1F900 - U+1F9FF
 
     Used by the transcript template to suppress the default ``🛠️``
-    (tool_use) or ``🧰``/``🚨`` (tool_result) emoji prefix when a tool
-    title already starts with its own icon — e.g. a plugin result
-    titled ``📨 Mails …``. No built-in result title starts with one.
+    (tool_use) or ``🧰`` (tool_result) emoji prefix when a tool title
+    already starts with its own icon — e.g. a plugin result titled
+    ``📨 Mails …``. The error ``🚨`` is never suppressed. No built-in
+    result title starts with an emoji.
     Misses here cause a redundant wrench to appear in front of an
     otherwise-iconified title (e.g. ``🛠️ ⏰ ScheduleWakeup ...``);
     Misc Technical (U+2300-U+23FF) is included because the alarm

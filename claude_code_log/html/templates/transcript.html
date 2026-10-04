@@ -221,7 +221,7 @@
             {% set msg_emoji = get_message_emoji(message) -%}
             <span{% if message.title_hint %} title="{{ message.title_hint }}"{% endif %}>{% if message_title %}{%
                 if message_title == 'Memory' %}💭 {%
-                elif msg_emoji and (message.type not in ('tool_use', 'tool_result') or not starts_with_emoji(message_title)) %}{{ msg_emoji }} {% endif %}{{ message_title | safe }}{% endif %}</span>
+                elif msg_emoji and (msg_emoji == '🚨' or message.type not in ('tool_use', 'tool_result') or not starts_with_emoji(message_title)) %}{{ msg_emoji }} {% endif %}{{ message_title | safe }}{% endif %}</span>
             <div class='header-info'>
                 <div class='timestamp-row'>
                     <span class='timestamp'{% if message.meta and message.meta.timestamp %} data-timestamp='{{ message.meta.timestamp }}'{% if message.pair_duration %} data-duration='{{ message.pair_duration }}'{% endif %}{% endif %}>{{ formatted_timestamp }}</span>
