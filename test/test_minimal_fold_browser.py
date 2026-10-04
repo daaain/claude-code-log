@@ -605,6 +605,8 @@ class TestFoldDepth:
         }
         # …and interleaving shows them whatever the depth.
         page.locator("[data-mn-branches='interleaved']").click()
+        # nsintr01 is the turn's fourth top-level lane: behind "+N more" (P7).
+        page.locator(".mn-bmore").click()
         page.locator("[data-lane-ref='agent-nsintr01'] .mn-bfold").click()
         page.locator("[data-mn-depth='steps']").click()
         assert set(page.evaluate(spawns_js)) == {False}

@@ -1961,6 +1961,11 @@ class TaskOutput:
     # sub-assistant from the sidechain rendering so the answer doesn't
     # appear twice.
     async_final_answer: Optional[str] = None
+    # The same pass records where that answer arrived: the message_index of
+    # the ``<task-notification>`` card. The minimal HTML theme shows the
+    # answer there (the branch's merge row) and links to it from the spawn;
+    # the classic theme ignores it.
+    async_notification_index: Optional[int] = None
 
 
 @dataclass

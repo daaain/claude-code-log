@@ -3408,9 +3408,12 @@ def _link_async_notifications(
     spawn_target_kept = depth not in (RenderingDepth.ASSISTANT, RenderingDepth.USER)
     # Index notifications by task_id so we can find them in O(1).
     notifications: dict[str, TaskNotificationMessage] = {}
+    notification_index: dict[str, Optional[int]] = {}
     for tm in _visible(ctx.messages):
         if isinstance(tm.content, TaskNotificationMessage) and tm.content.task_id:
-            notifications.setdefault(tm.content.task_id, tm.content)
+            if tm.content.task_id not in notifications:
+                notifications[tm.content.task_id] = tm.content
+                notification_index[tm.content.task_id] = tm.message_index
     if not notifications:
         return
 
@@ -3467,6 +3470,7 @@ def _link_async_notifications(
         # the notification body would silently lose the answer.
         if spawn_target_kept and isinstance(content.output, TaskOutput):
             content.output.async_final_answer = notification.result_text
+            content.output.async_notification_index = notification_index.get(agent_id)
             notification.result_is_duplicate = True
 
         # ---- Branch 2: sidechain-only dedup --------------------------

@@ -228,8 +228,9 @@
 
 /* ---------------------------------------------------- branch controls */
 
-/* On the spawn row (mockup .bctl): chevron + summary (+ "· interleaved"),
-   and the Column button P7 enables. Row 4 of the card grid (layout.css). */
+/* On the spawn row (mockup .bctl): chevron + summary (+ "· interleaved" /
+   "· in column →"), the Column ⇥ / ⇤ Interleave button and, on a turn's
+   third control, "+N more branches". Row 4 of the card grid (layout.css). */
 .theme-minimal #transcript .mn-bctls {
     grid-column: 3;
     grid-row: 4;
@@ -250,6 +251,11 @@
     align-items: center;
     gap: 4px 10px;
     margin-top: 2px;
+}
+
+/* A lane behind its turn's "+N more branches". */
+.theme-minimal #transcript .mn-bctl[hidden] {
+    display: none;
 }
 
 .theme-minimal #transcript .mn-bfold {
@@ -303,10 +309,224 @@
     cursor: default;
 }
 
+.theme-minimal #transcript .mn-bmini[data-label]::after {
+    content: attr(data-label);
+}
+
+.theme-minimal #transcript .mn-bmore {
+    border-style: dashed;
+}
+
+/* Same-page links (teammate anchors, html/minimal_theme.cross_links): a
+   muted line under the content, in row 4 of the card grid like the branch
+   controls (a card never has both). Rendered server-side, so they work
+   without JavaScript. */
+.theme-minimal #transcript .mn-xlinks {
+    grid-column: 3;
+    grid-row: 4;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 14px;
+    min-width: 0;
+    padding-left: 4px;
+    font: 0.72em/1.7 var(--mono);
+}
+
+.theme-minimal #transcript .mn-xlink {
+    color: var(--note);
+    text-decoration: none;
+}
+
+.theme-minimal #transcript .mn-xlink::after {
+    content: attr(data-label);
+}
+
+.theme-minimal #transcript .mn-xlink:hover {
+    text-decoration: underline;
+}
+
+/* An async spawn's result card: its answer is on the notification (the
+   merge row); this line links there. */
+.theme-minimal #transcript .mn-async-jump {
+    margin-top: 2px;
+    font: 0.72em/1.7 var(--mono);
+    color: var(--muted);
+}
+
 @media (prefers-reduced-motion: reduce) {
     .theme-minimal #transcript .mn-bfold svg {
         transition: none;
     }
+}
+
+/* ------------------------------------------------------------- columns */
+
+/* A lane in a column of its own (DagLanes.dc.html). The stage grid gains a
+   track per column (`--dag-cols`, written by the engine: main
+   minmax(360px, 1fr), each column minmax(300px, 1fr), a strip 34px); row 1
+   holds the heads, cards start at row 2. The page widens past its 960px
+   column to at least the columns' minimum widths (`--dag-min`) and scrolls
+   sideways; the page furniture keeps to the viewport (`--dag-view`). */
+.theme-minimal .mn-stage {
+    --dag-head-h: 30px;
+}
+
+body.theme-minimal.dag-wide {
+    max-width: none;
+    min-width: calc(var(--dag-min, 0px) + 32px);
+}
+
+body.theme-minimal.dag-wide :is(.mn-top, .mn-toolbar, .filter-toolbar, #timeline-container, .navigation, .page-navigation) {
+    position: sticky;
+    left: 16px;
+    max-width: calc(var(--dag-view, 100vw) - 32px);
+    box-sizing: border-box;
+}
+
+.theme-minimal .mn-stage.dag-on.dag-cols #transcript {
+    grid-template-columns: var(--dag-cols);
+    grid-template-rows: var(--dag-head-h);
+}
+
+/* Column chrome (engine-owned, first in #transcript so it paints under the
+   cards): a background per column spanning every row, holding a head that
+   sticks under the toolbar. */
+.theme-minimal #transcript > .dag-chrome {
+    position: relative;
+    min-width: 0;
+}
+
+.theme-minimal #transcript > .dag-colbg:not(.dag-mainbg) {
+    border-left: 2px solid var(--lc);
+    background: color-mix(in srgb, var(--lc) 5%, transparent);
+}
+
+.theme-minimal #transcript .dag-colhead {
+    position: sticky;
+    top: calc(var(--mn-bar-h, 44px) + var(--mn-filter-h, 0px));
+    z-index: 3;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    box-sizing: border-box;
+    height: var(--dag-head-h);
+    min-width: 0;
+    padding: 0 8px 0 10px;
+    overflow: hidden;
+    white-space: nowrap;
+    border-bottom: 1px solid var(--rule);
+    background: linear-gradient(color-mix(in srgb, var(--lc) 5%, transparent), color-mix(in srgb, var(--lc) 5%, transparent)), var(--bg);
+}
+
+.theme-minimal #transcript .dag-mainhead {
+    padding-left: 6px;
+    background: var(--bg);
+    font: 600 0.7em var(--mono);
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+.theme-minimal #transcript :is(.dag-mainhead, .dag-colname, .dag-colmeta)::after {
+    content: attr(data-label);
+}
+
+.theme-minimal #transcript .dag-colname {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 0.92em;
+    font-weight: 600;
+    color: var(--lc);
+}
+
+.theme-minimal #transcript .dag-colmeta {
+    flex: 1 1 0;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font: 0.66em var(--mono);
+    color: var(--muted);
+}
+
+.theme-minimal #transcript .dag-colacts {
+    display: flex;
+    flex: none;
+    gap: 4px;
+}
+
+/* A collapsed column: a 34px strip, the name set vertically. */
+.theme-minimal #transcript .dag-strip {
+    position: sticky;
+    top: calc(var(--mn-bar-h, 44px) + var(--mn-filter-h, 0px));
+    z-index: 3;
+    display: block;
+    width: 100%;
+    padding: 8px 0;
+    border: 0;
+    background: none;
+    font: 600 0.72em var(--mono);
+    color: var(--lc);
+    cursor: pointer;
+}
+
+.theme-minimal #transcript .dag-strip > span {
+    display: inline-block;
+    max-height: 50vh;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    writing-mode: vertical-rl;
+}
+
+.theme-minimal #transcript .dag-strip > span::after {
+    content: attr(data-label);
+}
+
+.theme-minimal #transcript .dag-strip:hover > span {
+    text-decoration: underline;
+}
+
+/* Cards in a column: the compact row (mockup .w-col) — gutter (time, role)
+   left-aligned, no rail and no dot. */
+.theme-minimal .mn-stage.dag-on #transcript .message.dag-col {
+    grid-template-columns: 46px 6px minmax(0, 1fr);
+    min-width: 0;
+    padding-right: 10px;
+    padding-left: 8px;
+}
+
+.theme-minimal .mn-stage.dag-on #transcript .message.dag-col::before {
+    display: none;
+}
+
+.theme-minimal .mn-stage.dag-on #transcript .message.dag-col > .header > .header-info {
+    align-items: flex-start;
+    text-align: left;
+}
+
+/* A row shared with a taller card in another column would leave a gap
+   between a tool call and its output: the call half sits at the bottom of
+   its row instead, on top of its output (the gap goes above the step). */
+.theme-minimal .mn-stage.dag-on.dag-cols #transcript .message:is(.pair_first, .pair_middle):not(.dag-split) {
+    align-self: end;
+}
+
+/* A lane interleaved inside a column: its tag in the gutter. */
+.theme-minimal .mn-stage.dag-on #transcript .message.dag-colin > .header > .header-info::after {
+    content: var(--dag-tag, none);
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--lc);
+    font-weight: 600;
+}
+
+.theme-minimal .mn-stage.dag-on #transcript .message.branch-header.dag-col {
+    padding-left: 10px;
+    border-top-color: var(--lc);
 }
 
 /* Toolbar: the Branches control shows once the page has a branch. */
@@ -347,8 +567,26 @@
         padding-left: calc(var(--dag-c3) + var(--dag-indent) + 4px);
     }
 
-    .theme-minimal #transcript .mn-bctls {
+    .theme-minimal #transcript .mn-bctls,
+    .theme-minimal #transcript .mn-xlinks {
         grid-column: 2;
         grid-row: 5;
+    }
+
+    body.theme-minimal.dag-wide {
+        min-width: calc(var(--dag-min, 0px) + 20px);
+    }
+
+    body.theme-minimal.dag-wide :is(.mn-top, .mn-toolbar, .filter-toolbar, #timeline-container, .navigation, .page-navigation) {
+        left: 10px;
+        max-width: calc(var(--dag-view, 100vw) - 20px);
+    }
+
+    .theme-minimal .mn-stage.dag-on #transcript .message.dag-col {
+        grid-template-columns: 0 minmax(0, 1fr);
+    }
+
+    .theme-minimal .mn-stage.dag-on #transcript .message.dag-col > .header > .header-info {
+        padding-left: 0;
     }
 }

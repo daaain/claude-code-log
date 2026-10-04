@@ -200,8 +200,10 @@ class TestMainOnly:
         # The nested lane's control is inside its folded parent: not shown.
         expect(page.locator(f"[data-lane-ref='{D}']")).to_have_count(1)
         assert not page.locator(f"[data-lane-ref='{D}']").is_visible()
-        # The Column button waits for P7.
-        assert page.locator(f"[data-lane-ref='{A}'] .mn-bcol").is_disabled()
+        # The Column button (P7) is live.
+        col = page.locator(f"[data-lane-ref='{A}'] .mn-bcol")
+        assert col.is_enabled()
+        assert col.get_attribute("data-label") == "Column ⇥"
 
     def test_folded_lanes_draw_dashed_from_spawn_to_merge(
         self, clean: Page, pages: dict[str, Path]
@@ -379,6 +381,9 @@ class TestPerTurnCap:
         for lane in first:
             _toggle(page, lane)
         assert [_mode(page, x) for x in first] == ["interleaved"] * 3
+        # The turn's fourth visible lane sits behind "+1 more branch" (P7).
+        expect(page.locator("[data-lane-ref='agent-nsintr01']")).to_be_hidden()
+        page.locator(".mn-bmore").click()
         _toggle(page, "agent-nsintr01")
         assert _mode(page, "agent-nsintr01") == "interleaved"
         assert _mode(page, "agent-nsmid001") == "folded"  # least recently selected

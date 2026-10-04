@@ -589,7 +589,7 @@ def format_taskstop_output(output: TaskStopOutput) -> str:
     return "".join(parts)
 
 
-def format_task_output(output: TaskOutput) -> str:
+def format_task_output(output: TaskOutput, include_async_answer: bool = True) -> str:
     """Format Task tool result as HTML with markdown rendering.
 
     For async-spawned Tasks (issue #90), ``output.result`` is just the
@@ -602,6 +602,8 @@ def format_task_output(output: TaskOutput) -> str:
 
     Args:
         output: Parsed TaskOutput with agent's response
+        include_async_answer: render the folded async answer (the minimal
+            theme shows it on the notification card instead)
 
     Returns:
         HTML string with markdown rendered in collapsible section
@@ -609,7 +611,7 @@ def format_task_output(output: TaskOutput) -> str:
     parts: list[str] = []
     if output.result:
         parts.append(render_markdown_collapsible(output.result, "task-result"))
-    if output.async_final_answer:
+    if output.async_final_answer and include_async_answer:
         parts.append(
             '<div class="task-async-answer-label">'
             "Result <small>(from async notification)</small>"

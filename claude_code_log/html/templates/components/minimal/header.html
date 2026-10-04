@@ -25,13 +25,11 @@
         </div>
         {#- Branches (minimal_dag.js): every sub-agent / fork lane at once.
             Hidden until the engine finds a branch on the page (and without
-            JavaScript, where branches render nested). P7 hook: the Columns
-            segment goes after Interleaved, as
-            `<button type='button' data-mn-branches='columns' …>Columns</button>`
-            (and 'columns' joins GLOBAL_MODES in minimal_dag.js). #}
+            JavaScript, where branches render nested). #}
         <div class='mn-seg mn-branches' role='group' aria-label='Branches' hidden>
             <button type='button' class='on' data-mn-branches='main' aria-pressed='true' title='Main only: every branch folded to its control on the spawning row'>Main only</button>
             <button type='button' data-mn-branches='interleaved' aria-pressed='false' title='Interleaved: the first 3 branches of each turn merged into the main line by time'>Interleaved</button>
+            <button type='button' data-mn-branches='columns' aria-pressed='false' title='Columns: every branch in a column of its own, time-aligned with the main line (the page scrolls sideways)'>Columns</button>
         </div>
         <span class='mn-sp'></span>
         <button class="filter-messages floating-btn mn-ibtn mn-i-search" id="filterMessages" title="Search & Filter (/)" aria-label="Search and filter">🔍</button>

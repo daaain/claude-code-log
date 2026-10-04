@@ -1,7 +1,9 @@
         // Minimal theme (--theme minimal): the DAG engine — branch lanes
         // (sub-agents at any depth, rewind forks) drawn as a git-graph rail
-        // beside the main line, each either folded ("Main only", the default)
-        // or interleaved with the main line at its real arrival times.
+        // beside the main line, each folded ("Main only", the default),
+        // interleaved with the main line at its real arrival times, or in a
+        // column of its own (a swimlane, time-aligned with the main line;
+        // collapsible to a narrow strip).
         // work/minimal-theme-dag.md § 1.6 and § 3.5; as built in
         // dev-docs/minimal-theme.md.
         //
@@ -16,9 +18,12 @@
         // filter, search and live updates all keep working on the nested DOM.
         //
         // Ownership (nothing else writes these, this writes nothing else):
-        // the `dag-*` classes, inline `grid-row` and `--dag-tag` on cards,
-        // the `.mn-bctls` branch controls, `--dag-slots` and the `dag-on`
-        // class on the stage, and everything in #dag-rail.
+        // the `dag-*` classes, inline `grid-row` / `grid-column` and
+        // `--dag-tag` on cards, the `.mn-bctls` branch controls, the column
+        // chrome (`.dag-chrome` elements at the head of #transcript),
+        // `--dag-slots` / `--dag-cols` and the `dag-on` / `dag-cols`
+        // classes on the stage, `dag-wide` / `--dag-min` / `--dag-view` on
+        // <body>, and everything in #dag-rail.
         //
         // A relayout is a pure function of (DOM, lane modes): it walks the
         // tree once, orders the visible lanes' cards by time, packs rows,
@@ -34,10 +39,14 @@
             if (!stage || !railHost) return;
 
             const BRANCHES_KEY = 'claude-code-log:branches';
-            // Global modes. P7 adds 'columns' (and the per-lane 'column' /
-            // 'strip' modes): see the marked hooks below and in header.html.
-            const GLOBAL_MODES = ['main', 'interleaved'];
-            const CAP = 3;              // interleaved lanes per user turn
+            // Global modes; per lane: 'folded' | 'interleaved' | 'column' |
+            // 'strip' (a column collapsed to a narrow strip).
+            const GLOBAL_MODES = ['main', 'interleaved', 'columns'];
+            const CAP = 3;              // interleaved lanes (and controls shown) per user turn
+            const MAIN_MIN = 360;       // px: the main column's minimum in column mode
+            const COL_MIN = 300;        // px: a column's minimum
+            const STRIP = 34;           // px: a collapsed column
+            const ROW0 = 2;             // grid row of the first card (row 1: column heads)
             const MAX_SLOTS = 6;        // rail slots beside the main line
             const RADIUS = 8;           // fork/merge connector corner
             const STUB = 12;            // a folded fork's stub below its row
@@ -48,8 +57,9 @@
 
             // ---- state ---------------------------------------------------
             let globalMode = readGlobal();
-            const modes = new Map();      // lane id -> 'folded' | 'interleaved'
+            const modes = new Map();      // lane id -> 'folded' | 'interleaved' | 'column' | 'strip'
             const recency = new Map();    // turn d-N -> interleaved lane ids, least recent first
+            const expanded = new Set();   // turns whose "+N more branches" are shown
             let lanes = new Map();        // lane id -> record (rebuilt each relayout)
             let started = false;
             let layout = null;            // last relayout's result, for redraws
@@ -114,38 +124,76 @@
                 return lane ? lane.turn || ('lane:' + id) : 'lane:' + id;
             }
             function defaultMode(lane, value) {
+                if (value === 'columns') return 'column';
                 return value === 'interleaved' && lane.rank <= CAP ? 'interleaved' : 'folded';
             }
+            function modeOf(id) {
+                return modes.get(id) || 'folded';
+            }
+            function inColumn(mode) {
+                return mode === 'column' || mode === 'strip';
+            }
+            function forget(id) {
+                const turn = turnOf(id);
+                recency.set(turn, (recency.get(turn) || []).filter(function (x) { return x !== id; }));
+            }
 
-            // Interleave a lane (and, first, the lanes it is nested in), most
-            // recent last; past the cap the least recently selected lane of the
-            // same turn folds — never one the new lane needs to be visible.
-            function select(id) {
+            // Interleave a lane (and, first, the folded lanes it is nested
+            // in), most recent last; past the cap the least recently selected
+            // lane of the same turn folds — never one the new lane needs to be
+            // visible. A reveal (search, a link, the timeline) passes
+            // `evict === false`: it never hides what the reader has open, so a
+            // turn can go past the cap until the next manual selection.
+            // An enclosing lane in a column stays there (the lane then shows
+            // interleaved in that column); a strip expands back to a column.
+            function select(id, evict) {
                 if (!lanes.has(id)) return;
-                const chain = ancestorsOf(id).concat([id]);
+                const keep = ancestorsOf(id).concat([id]);
                 const turn = turnOf(id);
                 let list = recency.get(turn) || [];
-                chain.forEach(function (lane) {
+                keep.forEach(function (lane) {
+                    const mode = modeOf(lane);
+                    if (mode === 'strip') modes.set(lane, 'column');
+                    if (inColumn(modeOf(lane)) && lane !== id) return;
                     modes.set(lane, 'interleaved');
                     list = list.filter(function (x) { return x !== lane; });
                     list.push(lane);
                 });
                 recency.set(turn, list);
+                if (evict === false) return;
                 while (list.length > CAP) {
-                    const victim = list.find(function (x) { return chain.indexOf(x) < 0; });
+                    const victim = list.find(function (x) { return keep.indexOf(x) < 0; });
                     if (!victim) break;
                     fold(victim);
                     list = recency.get(turn) || [];
                 }
             }
+            // Put a lane in a column of its own (and the folded lanes it is
+            // nested in: a column needs its parent shown). Columns are not
+            // capped.
+            function column(id) {
+                if (!lanes.has(id)) return;
+                ancestorsOf(id).forEach(function (lane) {
+                    const mode = modeOf(lane);
+                    if (mode === 'folded' || mode === 'strip') {
+                        modes.set(lane, 'column');
+                        forget(lane);
+                    }
+                });
+                modes.set(id, 'column');
+                forget(id);
+            }
+            function strip(id) {
+                if (!lanes.has(id)) return;
+                modes.set(id, 'strip');
+                forget(id);
+            }
             // Fold a lane and every lane nested in it.
             function fold(id) {
                 modes.set(id, 'folded');
-                const turn = turnOf(id);
-                const list = (recency.get(turn) || []).filter(function (x) { return x !== id; });
-                recency.set(turn, list);
+                forget(id);
                 lanes.forEach(function (lane, other) {
-                    if (other !== id && ancestorsOf(other).indexOf(id) >= 0 && modes.get(other) === 'interleaved') {
+                    if (other !== id && ancestorsOf(other).indexOf(id) >= 0 && modeOf(other) !== 'folded') {
                         fold(other);
                     }
                 });
@@ -154,7 +202,7 @@
                 recency.clear();
                 const byTurn = new Map();
                 lanes.forEach(function (lane) {
-                    modes.set(lane.id, 'folded');
+                    modes.set(lane.id, value === 'columns' ? 'column' : 'folded');
                     const list = byTurn.get(turnOf(lane.id)) || [];
                     list.push(lane);
                     byTurn.set(turnOf(lane.id), list);
@@ -173,19 +221,42 @@
                 lanes.forEach(function (lane, id) {
                     if (modes.has(id)) return;
                     modes.set(id, 'folded');
-                    if (defaultMode(lane, globalMode) !== 'interleaved') return;
+                    const mode = defaultMode(lane, globalMode);
+                    if (mode === 'column') {
+                        modes.set(id, 'column');
+                        return;
+                    }
+                    if (mode !== 'interleaved') return;
                     const list = recency.get(turnOf(id)) || [];
                     if (list.length < CAP) select(id);
                 });
             }
+            // Open = its cards are shown (interleaved, or in an expanded
+            // column), and so are its parent's.
             function isOpen(id, memo) {
                 if (id === 'main') return true;
                 if (memo.has(id)) return memo.get(id);
                 memo.set(id, false); // cycle guard
-                const parent = lanes.has(id) ? lanes.get(id).parent : 'main';
-                const open = modes.get(id) === 'interleaved' && (parent === 'main' || !lanes.has(parent) || isOpen(parent, memo));
+                const mode = modeOf(id);
+                const open = (mode === 'interleaved' || mode === 'column') && parentOpen(id, memo);
                 memo.set(id, open);
                 return open;
+            }
+            function parentOpen(id, memo) {
+                const parent = lanes.has(id) ? lanes.get(id).parent : 'main';
+                return parent === 'main' || !lanes.has(parent) || isOpen(parent, memo);
+            }
+            // The column a lane's cards are laid out in: its own when it is in
+            // a column (or a strip), else its parent's — so a lane interleaved
+            // inside a column lane shows in that column — else 'main'.
+            function columnKey(id, memo) {
+                if (!id || id === 'main' || !lanes.has(id)) return 'main';
+                const hit = memo.get(id);
+                if (hit !== undefined) return hit;
+                memo.set(id, 'main'); // cycle guard
+                const key = inColumn(modeOf(id)) ? id : columnKey(lanes.get(id).parent, memo);
+                memo.set(id, key);
+                return key;
             }
             // Which segment of the global control describes the current modes?
             function matchingGlobal() {
@@ -200,7 +271,7 @@
                 return match;
             }
 
-            // ---- reveal: links, deep links and search open folded lanes ---
+            // ---- reveal: links, deep links, search, timeline open lanes ----
             function laneOfElement(el) {
                 if (!el || !el.closest) return null;
                 const card = el.closest('[data-lane]');
@@ -217,8 +288,19 @@
                 }
                 if (!lanes.has(lane)) lanes = readLanes();
                 if (!lanes.has(lane) || isOpen(lane, new Map())) return false;
-                select(lane);
+                openForReveal(lane);
                 return true;
+            }
+            // A reveal opens the lane the way the page is being read: as a
+            // column under the global Columns choice (or when it, or a lane
+            // it is nested in, is a strip), interleaved otherwise — without
+            // evicting anything (select's `evict === false`): a search that
+            // hits more than three lanes of one turn shows every hit.
+            function openForReveal(id) {
+                const chain = ancestorsOf(id).concat([id]);
+                const stripped = chain.some(function (lane) { return modeOf(lane) === 'strip'; });
+                if (globalMode === 'columns' || stripped || inColumn(modeOf(id))) column(id);
+                else select(id, false);
             }
             // The classic page assigns these hooks inside its DOMContentLoaded
             // handler; intercepting the assignment wraps them whenever that
@@ -480,18 +562,20 @@
                 return item.kind === 'card' && (list.contains('pair_middle') || list.contains('pair_last'));
             }
 
-            // Rows — ported from DagRail.dc.html renderVals() "Pack rows":
-            // time order is kept top to bottom; a lane's first row is below its
-            // spawn, a merge row below the merged lane's last row. Without
-            // columns this is one item per row; P7 keys `nextFree` by column so
-            // cards in different columns can share a row.
-            function pack(sequence, model) {
-                const nextFree = {};
+            // Rows — ported from DagRail.dc.html / DagLanes.dc.html
+            // renderVals() "Pack rows": time order is kept top to bottom; a
+            // lane's first row is below its spawn, a merge row below the
+            // merged lane's last row. `nextFree` is kept per column (`keyOf`:
+            // a column lane's id, else 'main'), so cards in different columns
+            // may share a row; without columns it is one item per row.
+            function pack(sequence, model, keyOf) {
+                const nextFree = new Map();
                 const lastRowOf = new Map();
                 let prev = 0;
                 sequence.forEach(function (item) {
-                    const key = 'main'; // P7: the item's column lane when columned
-                    let r = Math.max(prev, nextFree[key] || 0);
+                    const key = keyOf(item.lane);
+                    item.key = key;
+                    let r = Math.max(prev, nextFree.get(key) || 0);
                     if (item.lane !== 'main') {
                         const spawn = model.spawns.get(item.lane);
                         if (spawn && spawn.row >= 0 && !lastRowOf.has(item.lane)) r = Math.max(r, spawn.row + 1);
@@ -504,7 +588,7 @@
                     }
                     item.row = r;
                     lastRowOf.set(item.lane, r);
-                    nextFree[key] = r + 1;
+                    nextFree.set(key, r + 1);
                     prev = r;
                 });
                 return { rows: prev + 1, lastRowOf: lastRowOf };
@@ -517,10 +601,14 @@
             // interleaved, the lane's last row; else its spawn row (a stub).
             // Interleaved lanes are placed first — their cards sit in their
             // slot — then folded ones while slots last.
-            function railLanes(model, open, packed) {
+            function railLanes(model, open, packed, skip) {
                 const memo = model.memo;
                 const plans = [];
                 lanes.forEach(function (lane, id) {
+                    // Columns have no rail (the mockup's `railed` = folded +
+                    // interleaved), nor do lanes inside one, nor the lanes
+                    // behind a turn's "+N more branches".
+                    if (skip(id)) return;
                     const opened = open.indexOf(id) >= 0;
                     const spawn = model.spawns.get(id);
                     const parentOpen = lane.parent === 'main' || !lanes.has(lane.parent) || isOpen(lane.parent, memo);
@@ -567,6 +655,7 @@
             const ENGINE_CLASSES = /(?:^|\s)(dag-[a-z0-9-]+)(?=\s|$)/g;
             let classed = new Set();
             const rowWritten = new WeakMap();
+            const colWritten = new WeakMap();
             const tagWritten = new WeakMap();
 
             function setEngineClasses(el, wanted) {
@@ -596,8 +685,13 @@
             // of the spawn card (grid row 4 of the card). Labels are generated
             // content (`data-label`), so search and the timeline never index
             // them. A live patch replaces the card and drops the container;
-            // the next relayout puts it back.
-            function ensureControls(item, colours, memo) {
+            // the next relayout puts it back. `overflow` hides the controls of
+            // a turn's lanes past the third (until "+N more branches") and
+            // says which control carries that toggle.
+            function setAttr(el, name, value) {
+                if (el.getAttribute(name) !== value) el.setAttribute(name, value);
+            }
+            function ensureControls(item, colours, memo, overflow) {
                 const ids = (item.el.getAttribute('data-spawns') || '').split(' ').filter(function (id) { return lanes.has(id); });
                 let box = item.el.querySelector(':scope > .mn-bctls');
                 if (!ids.length) {
@@ -618,22 +712,25 @@
                         ctl = document.createElement('div');
                         ctl.setAttribute('data-lane-ref', id);
                         ctl.innerHTML = "<button type='button' class='mn-bfold'>" + CHEVRON + "</button>"
-                            // P7: the per-lane Column ⇥ / ⇤ Interleave toggle.
-                            + "<button type='button' class='mn-bmini mn-bcol' disabled title='Show this branch in its own column (not available yet)'>Column ⇥</button>";
+                            + "<button type='button' class='mn-bmini mn-bcol'></button>";
                     }
                     if (box.children[i] !== ctl) box.insertBefore(ctl, box.children[i] || null);
+                    const mode = modeOf(id);
                     const opened = isOpen(id, memo);
+                    const columned = inColumn(mode) && parentOpen(id, memo);
+                    const interleaved = opened && !columned;
                     const colour = colours.get(id) || (lane.kind === 'fork' ? 'f' : 'a');
-                    const cls = 'mn-bctl dag-lc-' + colour + (opened ? ' is-open' : '');
+                    const cls = 'mn-bctl dag-lc-' + colour + (interleaved ? ' is-open' : '') + (columned ? ' is-col' : '');
                     if (ctl.className !== cls) ctl.className = cls;
+                    const hide = overflow.hidden.has(id);
+                    if (ctl.hidden !== hide) ctl.hidden = hide;
                     const fork = lane.kind === 'fork';
-                    const label = (fork ? '⑂ ' + lane.name + ' · ' : '') + (lane.stats || lane.name) + (opened ? ' · interleaved' : '');
+                    const label = (fork ? '⑂ ' + lane.name + ' · ' : '') + (lane.stats || lane.name)
+                        + (interleaved ? ' · interleaved' : columned ? ' · in column →' : '');
                     const btn = ctl.querySelector('.mn-bfold');
-                    if (btn.getAttribute('data-label') !== label) btn.setAttribute('data-label', label);
-                    const expanded = opened ? 'true' : 'false';
-                    if (btn.getAttribute('aria-expanded') !== expanded) btn.setAttribute('aria-expanded', expanded);
-                    const aria = (opened ? 'Fold branch: ' : 'Interleave branch: ') + lane.name + (lane.stats ? ' (' + lane.stats + ')' : '');
-                    if (btn.getAttribute('aria-label') !== aria) btn.setAttribute('aria-label', aria);
+                    setAttr(btn, 'data-label', label);
+                    setAttr(btn, 'aria-expanded', opened ? 'true' : 'false');
+                    setAttr(btn, 'aria-label', (mode === 'folded' ? 'Interleave branch: ' : 'Fold branch: ') + lane.name + (lane.stats ? ' (' + lane.stats + ')' : ''));
                     let title = lane.name + (lane.meta ? ' · ' + lane.meta : '');
                     if (fork) {
                         if (!forkTimes.has(lane.from)) forkTimes.set(lane.from, localTime(lane.from));
@@ -641,10 +738,71 @@
                         title = lane.name + ' · rewound' + (at ? ' to ' + at : '');
                     }
                     if (btn.title !== title) btn.title = title;
+                    const col = ctl.querySelector('.mn-bcol');
+                    if (col) {
+                        setAttr(col, 'data-label', inColumn(mode) ? '⇤ Interleave' : 'Column ⇥');
+                        setAttr(col, 'aria-label', (inColumn(mode) ? 'Interleave branch: ' : 'Show in its own column: ') + lane.name);
+                        const colTitle = inColumn(mode) ? 'Merge this branch back into the main line' : 'Show this branch in its own column';
+                        if (col.title !== colTitle) col.title = colTitle;
+                    }
+                    // "+N more branches" / "− fewer branches" on the turn's
+                    // third control.
+                    const more = overflow.anchors.get(id);
+                    let toggle = ctl.querySelector('.mn-bmore');
+                    if (more) {
+                        if (!toggle) {
+                            toggle = document.createElement('button');
+                            toggle.type = 'button';
+                            toggle.className = 'mn-bmini mn-bmore';
+                            ctl.appendChild(toggle);
+                        }
+                        setAttr(toggle, 'data-turn', more.turn);
+                        const text = more.expanded ? '− fewer branches' : '+' + more.count + ' more branch' + (more.count === 1 ? '' : 'es');
+                        setAttr(toggle, 'data-label', text);
+                        setAttr(toggle, 'aria-label', more.expanded ? 'Hide the extra branches of this turn' : 'Show ' + more.count + ' more branch' + (more.count === 1 ? '' : 'es') + ' of this turn');
+                        setAttr(toggle, 'aria-expanded', more.expanded ? 'true' : 'false');
+                    } else if (toggle) {
+                        toggle.remove();
+                    }
                 });
                 existing.forEach(function (el) {
                     if (ids.indexOf(el.getAttribute('data-lane-ref')) < 0) el.remove();
                 });
+            }
+
+            // Branch overflow (spec § 1.6.3, per user turn): of a turn's
+            // top-level lanes (spawned from the main line), the first three by
+            // rank keep a control (and a rail lane); the rest stay folded
+            // behind a "+N more branches" toggle on the third control, unless
+            // the turn is expanded or the lane is not folded (a lane the
+            // reader opened, or a reveal did, always shows its control).
+            // Nested lanes are left out: they only show once the reader opens
+            // their parent, and counting them would make opening one lane hide
+            // another's control.
+            function computeOverflow(model) {
+                const hidden = new Set();
+                const anchors = new Map();
+                const byTurn = new Map();
+                lanes.forEach(function (lane, id) {
+                    if (parentOf(id) || !model.spawns.has(id)) return;
+                    const turn = turnOf(id);
+                    const list = byTurn.get(turn) || [];
+                    list.push(lane);
+                    byTurn.set(turn, list);
+                });
+                byTurn.forEach(function (list, turn) {
+                    if (list.length <= CAP) return;
+                    list.sort(function (a, b) { return a.rank - b.rank; });
+                    const isExpanded = expanded.has(turn);
+                    let count = 0;
+                    list.slice(CAP).forEach(function (lane) {
+                        if (modeOf(lane.id) !== 'folded') return;
+                        count++;
+                        if (!isExpanded) hidden.add(lane.id);
+                    });
+                    if (isExpanded || count) anchors.set(list[CAP - 1].id, { turn: turn, count: count, expanded: isExpanded });
+                });
+                return { hidden: hidden, anchors: anchors };
             }
 
             function markToolbar() {
@@ -665,6 +823,118 @@
             let observed = null;
             let frame = 0;
 
+            // Column tracks: lanes in a column (or strip) whose parent is
+            // shown, ordered by spawn row, each nested lane right after its
+            // parent column's subtree (DagLanes.dc.html, generalised).
+            function columnTracks(model, memo) {
+                const tracks = [];
+                lanes.forEach(function (lane, id) {
+                    if (inColumn(modeOf(id)) && parentOpen(id, memo)) tracks.push(id);
+                });
+                if (!tracks.length) return tracks;
+                const set = new Set(tracks);
+                function spawnRow(id) {
+                    const spawn = model.spawns.get(id);
+                    if (spawn && spawn.row >= 0) return spawn.row;
+                    const seq = model.seqs.get(id);
+                    return seq && seq.length ? seq[0].row : Infinity;
+                }
+                const kids = new Map();
+                const roots = [];
+                tracks.forEach(function (id) {
+                    let up = parentOf(id);
+                    while (up && !set.has(up)) up = parentOf(up);
+                    if (up) {
+                        if (!kids.has(up)) kids.set(up, []);
+                        kids.get(up).push(id);
+                    } else {
+                        roots.push(id);
+                    }
+                });
+                const byRow = function (a, b) {
+                    return (spawnRow(a) - spawnRow(b)) || (lanes.get(a).rank - lanes.get(b).rank);
+                };
+                const out = [];
+                (function visit(list) {
+                    list.sort(byRow).forEach(function (id) {
+                        out.push(id);
+                        if (kids.has(id)) visit(kids.get(id));
+                    });
+                })(roots);
+                return out;
+            }
+
+            // Column chrome: per column a background spanning every row (the
+            // mockup's `colbg`: lane-colour edge + tint) holding its head — a
+            // name / meta line with "⇤ Interleave" and "Collapse", sticky under
+            // the toolbar — or, collapsed, a narrow strip with the name set
+            // vertically (click to expand); plus the main column's "Main
+            // session" head. They are engine-owned grid items at the head of
+            // #transcript: first in DOM order, so they paint under the cards.
+            // Nothing else reads them (live updates, search, the filter and
+            // the timeline all work on `.message-node` / `.message`), and a
+            // wholesale swap drops them until the next relayout.
+            const chrome = new Map(); // column key -> element
+            function syncChrome(transcript, tracks, colours, rows) {
+                const wanted = tracks.length ? ['main'].concat(tracks) : [];
+                chrome.forEach(function (el, key) {
+                    if (wanted.indexOf(key) < 0 || el.parentNode !== transcript) {
+                        el.remove();
+                        if (wanted.indexOf(key) < 0) chrome.delete(key);
+                    }
+                });
+                transcript.querySelectorAll(':scope > .dag-chrome').forEach(function (el) {
+                    if (wanted.indexOf(el.getAttribute('data-col')) < 0) el.remove();
+                });
+                wanted.forEach(function (key, i) {
+                    const main = key === 'main';
+                    const lane = main ? null : lanes.get(key);
+                    const isStrip = !main && modeOf(key) === 'strip';
+                    let el = chrome.get(key);
+                    const shape = main ? 'main' : isStrip ? 'strip' : 'col';
+                    if (!el || el.getAttribute('data-shape') !== shape) {
+                        if (el) el.remove();
+                        el = document.createElement('div');
+                        el.setAttribute('data-col', key);
+                        el.setAttribute('data-shape', shape);
+                        if (main) {
+                            el.innerHTML = "<div class='dag-colhead dag-mainhead' data-label='Main session'></div>";
+                        } else if (isStrip) {
+                            el.innerHTML = "<button type='button' class='dag-strip' data-col-act='expand'><span></span></button>";
+                        } else {
+                            el.innerHTML = "<div class='dag-colhead'><span class='dag-colname'></span><span class='dag-colmeta'></span>"
+                                + "<span class='dag-colacts'><button type='button' class='mn-bmini' data-col-act='interleave' data-label='⇤ Interleave'></button>"
+                                + "<button type='button' class='mn-bmini' data-col-act='collapse' data-label='Collapse'></button></span></div>";
+                        }
+                        chrome.set(key, el);
+                    }
+                    const cls = 'dag-chrome dag-colbg' + (main ? ' dag-mainbg' : ' dag-lc-' + (colours.get(key) || 'a')) + (isStrip ? ' dag-stripbg' : '');
+                    if (el.className !== cls) el.className = cls;
+                    el.style.gridColumn = String(i + 1);
+                    el.style.gridRow = '1 / span ' + Math.max(1, rows + ROW0 - 1);
+                    if (lane) {
+                        const meta = [lane.meta, lane.stats].filter(Boolean).join(' · ');
+                        if (isStrip) {
+                            const btn = el.querySelector('.dag-strip');
+                            setAttr(btn, 'aria-label', 'Expand column: ' + lane.name);
+                            btn.title = lane.name + (meta ? ' · ' + meta : '');
+                            setAttr(btn.firstChild, 'data-label', lane.name);
+                        } else {
+                            setAttr(el.querySelector('.dag-colname'), 'data-label', (lane.kind === 'fork' ? '⑂ ' : '') + lane.name);
+                            setAttr(el.querySelector('.dag-colmeta'), 'data-label', meta);
+                            const head = el.querySelector('.dag-colhead');
+                            const title = lane.name + (meta ? ' · ' + meta : '');
+                            if (head.title !== title) head.title = title;
+                            setAttr(el.querySelector("[data-col-act='interleave']"), 'aria-label', 'Interleave branch: ' + lane.name);
+                            setAttr(el.querySelector("[data-col-act='collapse']"), 'aria-label', 'Collapse column: ' + lane.name);
+                        }
+                    }
+                    if (el.parentNode !== transcript || el.previousSibling !== (i ? chrome.get(wanted[i - 1]) : null)) {
+                        transcript.insertBefore(el, i ? chrome.get(wanted[i - 1]).nextSibling : transcript.firstChild);
+                    }
+                });
+            }
+
             function relayout() {
                 if (!started) return;
                 const t0 = performance.now();
@@ -672,31 +942,65 @@
                 adoptNewLanes();
                 const model = buildModel();
                 const memo = model.memo;
+                const keyMemo = new Map();
+                const keyOf = function (id) { return columnKey(id, keyMemo); };
+                // Interleaved into the main column: rail slots, tint, tags.
                 const open = [];
                 lanes.forEach(function (lane, id) {
-                    if (isOpen(id, memo) && (model.seqs.get(id) || []).length) open.push(id);
+                    if (isOpen(id, memo) && keyOf(id) === 'main' && (model.seqs.get(id) || []).length) open.push(id);
                 });
                 const t1 = performance.now();
                 const sequence = order(model);
-                const packed = pack(sequence, model);
-                const openSet = new Set(open);
-                const rail = railLanes(model, open, packed);
+                const packed = pack(sequence, model, keyOf);
+                const tracks = columnTracks(model, memo);
+                const colIndex = new Map();
                 const colours = new Map();
+                tracks.forEach(function (id, i) {
+                    colIndex.set(id, i + 2);
+                    colours.set(id, lanes.get(id).kind === 'fork' ? 'f' : AGENT_COLOURS[i % AGENT_COLOURS.length]);
+                });
+                const overflow = computeOverflow(model);
+                const openSet = new Set(open);
+                const rail = railLanes(model, open, packed, function (id) {
+                    return keyOf(id) !== 'main' || overflow.hidden.has(id);
+                });
                 rail.plans.forEach(function (plan) { colours.set(plan.id, plan.colour); });
+                // A lane inside a column takes its column's colour.
+                lanes.forEach(function (lane, id) {
+                    const key = keyOf(id);
+                    if (key !== 'main' && key !== id && colours.has(key)) colours.set(id, colours.get(key));
+                });
                 const t2 = performance.now();
 
                 // Per-card engine state: interleaved rows carry their lane's
-                // slot, colour and gutter tag; a pair split by interleaved rows
-                // shows both halves in full.
+                // slot, colour and gutter tag; column rows their column's
+                // colour (and, for a lane interleaved inside a column, its
+                // tag); a pair split by other rows shows both halves in full.
                 const tags = new Map();
+                const want = function (el, cls) {
+                    const prev = model.cls.get(el);
+                    model.cls.set(el, prev ? prev + ' ' + cls : cls);
+                };
                 open.forEach(function (id) {
                     const slot = rail.slotOf.get(id) || 1;
                     const lane = lanes.get(id);
                     const cls = 'dag-in dag-s' + Math.min(slot, MAX_SLOTS) + ' dag-lc-' + (colours.get(id) || 'a');
                     (model.seqs.get(id) || []).forEach(function (item) {
-                        const prev = model.cls.get(item.el);
-                        model.cls.set(item.el, prev ? prev + ' ' + cls : cls);
+                        want(item.el, cls);
                         if (item.kind === 'card') tags.set(item.el, lane.tag || lane.kind);
+                    });
+                });
+                const shownLanes = new Set(openSet);
+                tracks.forEach(function (key) {
+                    if (modeOf(key) !== 'column') return;
+                    lanes.forEach(function (lane, id) {
+                        if (keyOf(id) !== key || !isOpen(id, memo)) return;
+                        shownLanes.add(id);
+                        const cls = 'dag-col dag-lc-' + (colours.get(key) || 'a') + (id !== key ? ' dag-colin' : '');
+                        (model.seqs.get(id) || []).forEach(function (item) {
+                            want(item.el, cls);
+                            if (id !== key && item.kind === 'card') tags.set(item.el, lane.tag || lane.kind);
+                        });
                     });
                 });
                 {
@@ -707,25 +1011,51 @@
                         return el.classList.contains(a) || el.classList.contains(b);
                     };
                     let shown = 0;
+                    let lastRow = -1;
                     sequence.forEach(function (item) {
-                        if (item.lane !== 'main' && !openSet.has(item.lane)) return;
-                        item.shown = shown++;
+                        if (item.lane !== 'main' && !shownLanes.has(item.lane)) return;
+                        // Rows shared across columns count once.
+                        if (item.row !== lastRow) shown++;
+                        lastRow = item.row;
+                        item.shown = shown;
                         const previous = lastOf.get(item.lane);
                         lastOf.set(item.lane, item);
                         if (!previous || item.shown === previous.shown + 1) return;
                         if (!isHalf(item.el, 'pair_middle', 'pair_last')) return;
                         if (!isHalf(previous.el, 'pair_first', 'pair_middle')) return;
-                        [previous.el, item.el].forEach(function (half) {
-                            const prev = model.cls.get(half);
-                            model.cls.set(half, prev ? prev + ' dag-split' : 'dag-split');
-                        });
+                        [previous.el, item.el].forEach(function (half) { want(half, 'dag-split'); });
                     });
                 }
 
+                // The one layout read before the writes (setView's width).
+                const view = tracks.length ? document.documentElement.clientWidth : 0;
                 if (observer) observer.disconnect();
                 if (!stage.classList.contains('dag-on')) stage.classList.add('dag-on');
                 const slotsValue = String(rail.slots);
                 if (stage.style.getPropertyValue('--dag-slots') !== slotsValue) stage.style.setProperty('--dag-slots', slotsValue);
+                // Columns: the stage grid gains one track per column and the
+                // page widens past the 960px column (body `dag-wide`), to at
+                // least the columns' minimum widths — the page then scrolls
+                // horizontally, and the toolbar stays put (dag.css).
+                const cols = tracks.length > 0;
+                stage.classList.toggle('dag-cols', cols);
+                document.body.classList.toggle('dag-wide', cols);
+                if (cols) {
+                    let min = MAIN_MIN;
+                    const gtc = ['minmax(' + MAIN_MIN + 'px, 1fr)'];
+                    tracks.forEach(function (id) {
+                        const isStrip = modeOf(id) === 'strip';
+                        gtc.push(isStrip ? STRIP + 'px' : 'minmax(' + COL_MIN + 'px, 1fr)');
+                        min += isStrip ? STRIP : COL_MIN;
+                    });
+                    const value = gtc.join(' ');
+                    if (stage.style.getPropertyValue('--dag-cols') !== value) stage.style.setProperty('--dag-cols', value);
+                    if (document.body.style.getPropertyValue('--dag-min') !== min + 'px') document.body.style.setProperty('--dag-min', min + 'px');
+                    setView(view);
+                } else {
+                    stage.style.removeProperty('--dag-cols');
+                    document.body.style.removeProperty('--dag-min');
+                }
                 const nextClassed = new Set();
                 model.cls.forEach(function (wanted, el) {
                     setEngineClasses(el, wanted);
@@ -736,10 +1066,18 @@
                 });
                 classed = nextClassed;
                 sequence.forEach(function (item) {
-                    const value = String(item.row + 1);
+                    const value = String(item.row + ROW0);
                     if (rowWritten.get(item.el) !== value) {
                         item.el.style.gridRow = value;
                         rowWritten.set(item.el, value);
+                    }
+                    // With columns every item needs its track: auto-placement
+                    // would put a definite-row item after the last placed one.
+                    const col = colIndex.get(item.key);
+                    const column = col ? String(col) : cols ? '1' : '';
+                    if ((colWritten.get(item.el) || '') !== column) {
+                        item.el.style.gridColumn = column;
+                        colWritten.set(item.el, column);
                     }
                 });
                 model.items.forEach(function (item) {
@@ -751,7 +1089,9 @@
                     else item.el.style.removeProperty('--dag-tag');
                     tagWritten.set(item.el, value);
                 });
-                model.spawnCards.forEach(function (item) { ensureControls(item, colours, memo); });
+                const transcript = document.getElementById('transcript');
+                if (transcript) syncChrome(transcript, tracks, colours, packed.rows);
+                model.spawnCards.forEach(function (item) { ensureControls(item, colours, memo, overflow); });
                 markToolbar();
                 if (observer && observed) observe(observed);
                 const t3 = performance.now();
@@ -762,8 +1102,15 @@
                 lastTiming = {
                     total: t4 - t0, model: t1 - t0, order: t2 - t1, write: t3 - t2, draw: t4 - t3,
                     items: model.items.length, rows: packed.rows, lanes: lanes.size, open: open.length,
+                    columns: tracks.length,
                 };
                 if (DEBUG) console.info('[dag] relayout ' + lastTiming.total.toFixed(1) + 'ms', lastTiming);
+            }
+            // The viewport's width without its scrollbar: the sticky toolbar
+            // keeps to it while a wide (columns) page scrolls sideways.
+            function setView(width) {
+                const view = (width || document.documentElement.clientWidth) + 'px';
+                if (document.body.style.getPropertyValue('--dag-view') !== view) document.body.style.setProperty('--dag-view', view);
             }
 
             function schedule() {
@@ -802,6 +1149,7 @@
 
             function draw() {
                 if (!layout) return;
+                if (stage.classList.contains('dag-cols')) setView();
                 const transcript = document.getElementById('transcript');
                 if (!transcript) return;
                 const stageBox = stage.getBoundingClientRect();
@@ -939,13 +1287,39 @@
             }
 
             document.addEventListener('click', function (event) {
-                const toggle = event.target.closest('.mn-bfold');
+                const target = event.target;
+                if (!target || !target.closest) return;
+                const toggle = target.closest('.mn-bfold, .mn-bcol, .mn-bmore');
                 if (toggle) {
+                    if (toggle.classList.contains('mn-bmore')) {
+                        const turn = toggle.getAttribute('data-turn');
+                        if (expanded.has(turn)) expanded.delete(turn);
+                        else expanded.add(turn);
+                        relayout();
+                        return;
+                    }
                     const ctl = toggle.closest('[data-lane-ref]');
                     const id = ctl ? ctl.getAttribute('data-lane-ref') : null;
                     if (!id || !lanes.has(id)) return;
-                    if (isOpen(id, new Map())) fold(id);
-                    else select(id);
+                    if (toggle.classList.contains('mn-bcol')) {
+                        if (inColumn(modeOf(id))) select(id);
+                        else column(id);
+                    } else if (modeOf(id) !== 'folded' && parentOpen(id, new Map())) {
+                        fold(id);
+                    } else {
+                        select(id);
+                    }
+                    relayout();
+                    return;
+                }
+                const act = target.closest('.dag-chrome [data-col-act]');
+                if (act) {
+                    const id = act.closest('.dag-chrome').getAttribute('data-col');
+                    if (!id || !lanes.has(id)) return;
+                    const what = act.getAttribute('data-col-act');
+                    if (what === 'interleave') select(id);
+                    else if (what === 'collapse') strip(id);
+                    else column(id);
                     relayout();
                     return;
                 }
@@ -977,7 +1351,7 @@
                 lanes.forEach(function (lane, id) { if (!modes.has(id)) modes.set(id, 'folded'); });
                 started = true;
                 pendingReveals.splice(0).forEach(function (lane) {
-                    if (lanes.has(lane) && !isOpen(lane, new Map())) select(lane);
+                    if (lanes.has(lane) && !isOpen(lane, new Map())) openForReveal(lane);
                 });
                 const hash = window.location.hash;
                 const hashTarget = hash && hash.indexOf('#msg-') === 0 ? document.getElementById(hash.slice(1)) : null;
@@ -991,7 +1365,14 @@
             window.claudeLogDag = {
                 relayout: function () { relayout(); return lastTiming; },
                 timing: function () { return lastTiming; },
-                mode: function (id) { return isOpen(id, new Map()) ? 'interleaved' : 'folded'; },
+                // 'folded' | 'interleaved' | 'column' | 'strip', as shown (a
+                // lane inside a folded one reads 'folded').
+                mode: function (id) {
+                    const memo = new Map();
+                    const mode = modeOf(id);
+                    if (!parentOpen(id, memo)) return 'folded';
+                    return mode;
+                },
             };
 
             if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);

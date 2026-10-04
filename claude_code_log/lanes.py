@@ -538,3 +538,104 @@ def annotate_lanes(roots: list["TemplateMessage"]) -> LaneModel:
     )
     model.lanes = {info.lane_id: info for info in ordered}
     return model
+
+
+# ---------------------------------------------------------------------------
+# Teammate anchors (§ 1.6.5, § 7 decision 4)
+# ---------------------------------------------------------------------------
+
+# The lead's name as teammates address it (``SendMessage`` recipient,
+# ``<teammate-message teammate_id=…>`` sender).
+TEAM_LEAD = "team-lead"
+
+# message_index → [(target message_index, link label)]
+CrossLinks = dict[int, list[tuple[int, str]]]
+
+
+def _norm_text(text: Optional[str]) -> str:
+    return " ".join((text or "").split())
+
+
+def teammate_links(roots: list["TemplateMessage"], model: LaneModel) -> CrossLinks:
+    """Same-page links between the two ends of each teammate exchange.
+
+    Teammate threads are not branches: they stay nested where the renderer
+    puts them (under the spawning result) and the minimal theme links them
+    up instead —
+
+    - the spawn card → the thread's first card (``→ <name>'s thread``);
+    - a ``SendMessage`` card → the ``<teammate-message>`` card that delivered
+      it in the recipient's thread (``→ received by <name>``), and that card
+      back → the ``SendMessage`` (``← sent by <name>``).
+
+    A message is matched on (sender, recipient, whitespace-normalised body),
+    first unused match in DOM order; anything unresolved gets no link rather
+    than a dead one. Thread identity comes from the card's
+    ``{trunk}#agent-<id>`` session line (a teammate's agent id → its name);
+    cards outside any agent thread are the lead's. Only called when the page
+    has teammates, so a page without them pays one model check.
+    """
+    from .models import SendMessageInput, TeammateMessage
+
+    teammates = model.teammates
+    links: CrossLinks = {}
+    if not teammates:
+        return links
+    name_of_agent = {t.agent_id: t.name for t in teammates if t.agent_id}
+    names = set(name_of_agent.values())
+
+    def add(index: Optional[int], target: Optional[int], label: str) -> None:
+        if index is None or target is None or index == target:
+            return
+        links.setdefault(index, []).append((target, label))
+
+    for t in teammates:
+        add(t.spawn_index, t.first_index, f"→ {t.name}'s thread")
+
+    def thread_of(node: "TemplateMessage") -> Optional[str]:
+        """The teammate name owning ``node``, ``TEAM_LEAD``, or None."""
+        sid = (node.meta.session_id if node.meta else None) or ""
+        if "#agent-" not in sid:
+            return TEAM_LEAD
+        return name_of_agent.get(sid.rsplit("#agent-", 1)[-1])
+
+    # (sender, recipient, body) → card indices, DOM order.
+    sent: dict[tuple[str, str, str], list[int]] = {}
+    received: dict[tuple[str, str, str], list[int]] = {}
+    stack = list(reversed(roots))
+    while stack:
+        node = stack.pop()
+        stack.extend(reversed(node.children))
+        if not node.should_render or node.message_index is None:
+            continue
+        content = node.content
+        if isinstance(content, ToolUseMessage) and isinstance(
+            content.input, SendMessageInput
+        ):
+            sender = thread_of(node)
+            recipient = content.input.recipient or ""
+            if sender is None or not recipient or recipient == "*":
+                continue
+            if recipient not in names:
+                recipient = TEAM_LEAD
+            key = (sender, recipient, _norm_text(content.input.content))
+            sent.setdefault(key, []).append(node.message_index)
+        elif isinstance(content, TeammateMessage):
+            owner = thread_of(node)
+            if owner is None:
+                continue
+            for block in content.blocks:
+                if block.is_system:
+                    continue
+                sender = block.teammate_id if block.teammate_id in names else TEAM_LEAD
+                key = (sender, owner, _norm_text(block.body))
+                if node.message_index not in received.get(key, []):
+                    received.setdefault(key, []).append(node.message_index)
+
+    for key, senders in sent.items():
+        targets = received.get(key, [])
+        sender, recipient, _body = key
+        for source, target in zip(senders, targets):
+            add(source, target, f"→ received by {recipient}")
+            add(target, source, f"← sent by {sender}")
+    return links

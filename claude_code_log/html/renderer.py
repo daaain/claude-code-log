@@ -106,7 +106,7 @@ from ..renderer import (
     prepare_projects_index,
     title_for_projects_index,
 )
-from ..lanes import annotate_lanes
+from ..lanes import CrossLinks, annotate_lanes, teammate_links
 from ..render_cache import markdown_cache, pygments_cache
 from ..renderer_timings import (
     DEBUG_TIMING,
@@ -637,6 +637,11 @@ class HtmlRenderer(Renderer):
         cascade that deleting the message would trigger (ancestry
         classes, backlinks, session nav anchors).
         """
+        if normalize_theme(self.theme) == "minimal":
+            # Minimal theme: the notification is the async branch's merge
+            # row, so the agent's answer is shown here — at the time it
+            # arrived — and the spawn only links to it (format_TaskOutput).
+            return _format_task_notification_content(content, include_duplicate=True)
         if self.depth == RenderingDepth.AGENT and content.result_is_duplicate:
             return ""
         return _format_task_notification_content(content)
@@ -829,7 +834,26 @@ class HtmlRenderer(Renderer):
         return format_bash_output(output)
 
     def format_TaskOutput(self, output: TaskOutput, _: TemplateMessage) -> str:
-        """Format → markdown of task result plus teammate-metadata extras."""
+        """Format → markdown of task result plus teammate-metadata extras.
+
+        Minimal theme, async agent whose ``<task-notification>`` was folded
+        onto this spawn: the answer stays on the notification card (the
+        branch's merge row, see ``format_TaskNotificationMessage``) and this
+        card keeps the launch line plus a link to it; the agent id, repeated
+        on the notification as its Task ID, is dropped here.
+        """
+        if output.async_final_answer and normalize_theme(self.theme) == "minimal":
+            base = format_task_output(output, include_async_answer=False)
+            if output.async_notification_index is not None:
+                base += (
+                    "<div class='mn-async-jump'><a href='#msg-d-"
+                    f"{output.async_notification_index}'>Result ↓</a>"
+                    " <span>with the async notification</span></div>"
+                )
+            extras = format_task_output_teammate_extras(
+                output, self._colors_for(_), include_agent_id=False
+            )
+            return base + extras if extras else base
         base = format_task_output(output)
         extras = format_task_output_teammate_extras(output, self._colors_for(_))
         return base + extras if extras else base
@@ -1806,9 +1830,12 @@ class HtmlRenderer(Renderer):
         # minimal branch only — classic pays nothing and its bytes stay put.
         theme = normalize_theme(self.theme)
         lane_attrs: Optional[LaneAttrs] = None
+        cross_links: Optional[CrossLinks] = None
         if theme == "minimal":
             with log_timing("Lane annotation", t_start):
-                lane_attrs = lane_attributes(annotate_lanes(render_roots))
+                lane_model = annotate_lanes(render_roots)
+                lane_attrs = lane_attributes(lane_model)
+                cross_links = teammate_links(render_roots, lane_model)
 
         # Resume button: only pages holding a single trunk session get
         # one — `claude -r <session-id>` is unambiguous there. Combined
@@ -1847,6 +1874,7 @@ class HtmlRenderer(Renderer):
                     archive_search_link=archive_search_link,
                     theme=theme,
                     lane_attrs=lane_attrs,
+                    cross_links=cross_links,
                 )
             )
 

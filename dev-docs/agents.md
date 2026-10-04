@@ -107,6 +107,15 @@ identification and tree building. For every Task tool_result whose
   the notification (not from the sidechain assistant) is what makes
   the fold survive at AGENT where sidechain entries are stripped
   pre-render.
+  The same pass records the notification's `message_index` on
+  `TaskOutput.async_notification_index`. The **minimal theme** shows the
+  answer the other way round: on the notification card (the async
+  branch's merge row, at the time the answer arrived — never ghosted,
+  at any depth), while the spawn's result keeps only the launch line and
+  a `Result ↓` link to it (`.mn-async-jump`; the Agent id row, repeated
+  as the notification's Task ID, is dropped). Classic and Markdown
+  output are unchanged. See
+  [minimal-theme.md § 7](minimal-theme.md#7-teammate-anchors-and-results-at-the-merge-row).
 - **Sidechain dedup (HOOK/TOOL only):** when the last sub-assistant
   text matches the notification's `result_text`, drops the duplicate
   from the sidechain tree. No-op at AGENT (sidechain already gone).
@@ -405,6 +414,9 @@ second half), tokens and duration from the notification's `<usage>`
 timestamps (`"6 steps · 48.4k tokens · 2m 13s"`).
 
 Rewind forks follow the same model; see
-[dag.md § Branch lanes](dag.md#branch-lanes-minimal-theme). Tests:
+[dag.md § Branch lanes](dag.md#branch-lanes-minimal-theme). Teammate
+exchanges are linked rather than laned: `lanes.teammate_links` pairs each
+`SendMessage` with the `<teammate-message>` that delivered it (see
+[teammates.md § 6.1](teammates.md#minimal-theme-anchors)). Tests:
 `test/test_lanes.py`.
 

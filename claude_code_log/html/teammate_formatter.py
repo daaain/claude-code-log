@@ -496,15 +496,18 @@ def format_task_input_teammate_extras(
 def format_task_output_teammate_extras(
     output: TaskOutput,
     teammate_colors: Optional[dict[str, str]] = None,
+    include_agent_id: bool = True,
 ) -> str:
     """Return a fragment for teammate metadata on a Task tool_result.
 
     Pulls fields from both ``output.metadata`` (parsed from the tail) and
-    the teammate-linkage fields on TaskOutput itself.
+    the teammate-linkage fields on TaskOutput itself. ``include_agent_id``
+    off drops the Agent row (the minimal theme's async spawn, whose
+    notification card shows the id as its Task ID).
     """
     rows: list[tuple[str, str]] = []
     meta = output.metadata
-    if meta and meta.agent_id:
+    if meta and meta.agent_id and include_agent_id:
         rows.append(("Agent", f"<code>{escape_html(meta.agent_id)}</code>"))
     if meta and meta.worktree_path:
         rows.append(("Worktree", f"<code>{escape_html(meta.worktree_path)}</code>"))

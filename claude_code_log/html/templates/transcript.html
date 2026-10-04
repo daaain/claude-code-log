@@ -241,7 +241,7 @@
             </div>
         </div>
         {% if message.meta %}<div class='debug-info'>{{ message.meta.uuid[:12] }}{% if message.meta.parent_uuid %} &rarr; {{ message.meta.parent_uuid[:12] }}{% endif %}</div>{% endif %}
-        <div class='content{% if markdown %} markdown{% endif %}'>{{ html_content | safe }}</div>
+        <div class='content{% if markdown %} markdown{% endif %}'>{{ html_content | safe }}</div>{% if minimal %}{{ mn_cross_links(message, cross_links) }}{% endif %}
         {% if message.has_children %}
         <div class='fold-bar' data-border-color='{{ msg_css_class }}'>
             {% if message.immediate_children_count == message.total_descendants_count %}

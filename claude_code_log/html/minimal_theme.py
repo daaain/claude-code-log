@@ -23,7 +23,7 @@ from markupsafe import Markup
 from ..utils import compact_count as compact_count
 
 if TYPE_CHECKING:
-    from ..lanes import LaneModel
+    from ..lanes import CrossLinks, LaneModel
     from ..renderer import TemplateMessage
 
 # Titles that say nothing the gutter's role label doesn't already say.
@@ -417,3 +417,26 @@ def lane_attrs(message: "TemplateMessage", attrs: Optional[LaneAttrs]) -> Markup
     return Markup(
         "".join(f' {name}="{html.escape(value, quote=True)}"' for name, value in parts)
     )
+
+
+def cross_links(message: "TemplateMessage", links: Optional["CrossLinks"]) -> Markup:
+    """Same-page links of a card (teammate anchors, ``lanes.teammate_links``).
+
+    One ``<a href='#msg-d-N'>`` per link in a ``.mn-xlinks`` row under the
+    content. The label is generated content (``data-label``) so search and
+    the timeline never index it; ``aria-label`` names the link. Works
+    without JavaScript (a plain anchor); with it, the page's hash handler
+    unfolds the target's ancestors and the DAG engine opens its lane.
+    """
+    if not links or message.message_index is None:
+        return Markup("")
+    found = links.get(message.message_index)
+    if not found:
+        return Markup("")
+    anchors = "".join(
+        f"<a class='mn-xlink' href='#msg-d-{target}'"
+        f' data-label="{html.escape(label, quote=True)}"'
+        f' aria-label="{html.escape(label.lstrip("→← "), quote=True)}"></a>'
+        for target, label in found
+    )
+    return Markup(f"<div class='mn-xlinks'>{anchors}</div>")

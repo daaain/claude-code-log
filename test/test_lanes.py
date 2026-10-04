@@ -32,9 +32,10 @@ from claude_code_log.converter import (
 )
 from claude_code_log.html.minimal_theme import lane_attributes
 from claude_code_log.html.renderer import HtmlRenderer, generate_html
-from claude_code_log.lanes import MAIN_LANE, LaneModel, annotate_lanes
+from claude_code_log.lanes import MAIN_LANE, LaneModel, annotate_lanes, teammate_links
 from claude_code_log.models import RenderingDepth
 from claude_code_log.renderer import TemplateMessage, generate_template_messages
+from test.dag_demo_fixture import write_team_demo
 
 TEST_DATA = Path(__file__).parent / "test_data"
 ASYNC = TEST_DATA / "async_agents"
@@ -728,6 +729,84 @@ class TestHtmlAttributes:
         assert before["d-2"]["data-lane-kind"] == "async-agent"  # run_in_background
         assert after["d-2"]["data-lane-to"] == "d-9"
         assert after["d-9"]["data-merges"] == "agent-cccc333"
+
+
+class TestTeammateLinks:
+    """``teammate_links``: same-page anchors between a teammate exchange's
+    two ends (P7, § 1.6.5), rendered by ``html/minimal_theme.cross_links``."""
+
+    @staticmethod
+    def _links(
+        path: Path,
+    ) -> tuple[dict[int, list[tuple[int, str]]], dict[int, TemplateMessage]]:
+        entries, tree = load_directory_transcripts(path, silent=True)
+        roots, _nav, _ctx = generate_template_messages(entries, session_tree=tree)
+        nodes: dict[int, TemplateMessage] = {}
+        stack = list(roots)
+        while stack:
+            node = stack.pop()
+            if node.message_index is not None:
+                nodes[node.message_index] = node
+            stack.extend(node.children)
+        return teammate_links(roots, annotate_lanes(roots)), nodes
+
+    def test_both_directions(self, tmp_path: Path) -> None:
+        links, nodes = self._links(write_team_demo(tmp_path / "team"))
+        by_label: dict[str, tuple[int, int]] = {}
+        for source, targets in links.items():
+            for target, label in targets:
+                by_label[label] = (source, target)
+        assert set(by_label) == {
+            "→ alice's thread",
+            "→ received by team-lead",
+            "← sent by alice",
+            "→ received by alice",
+            "← sent by team-lead",
+        }
+        # alice's SendMessage (her thread) ↔ the lead's <teammate-message>.
+        sent, got = by_label["→ received by team-lead"]
+        assert "#agent-" in (nodes[sent].meta.session_id or "")
+        assert "#agent-" not in (nodes[got].meta.session_id or "")
+        assert by_label["← sent by alice"] == (got, sent)
+        # The lead's SendMessage ↔ the copy in alice's thread.
+        sent, got = by_label["→ received by alice"]
+        assert "#agent-" not in (nodes[sent].meta.session_id or "")
+        assert "#agent-" in (nodes[got].meta.session_id or "")
+        assert by_label["← sent by team-lead"] == (got, sent)
+
+    def test_unmatched_messages_get_no_link(self) -> None:
+        # The fixture's messages have no counterpart in the other thread;
+        # only the spawn → thread links resolve.
+        links, _nodes = self._links(TEAMMATES)
+        labels = sorted(label for targets in links.values() for _t, label in targets)
+        assert labels == ["→ alice's thread", "→ bob's thread"]
+
+    def test_html(self, tmp_path: Path) -> None:
+        html = _minimal_html(write_team_demo(tmp_path / "team"))
+        assert html.count("class='mn-xlink'") == 5
+        assert 'data-label="→ received by alice"' in html
+        entries, tree = load_directory_transcripts(
+            write_team_demo(tmp_path / "c"), silent=True
+        )
+        classic = generate_html(entries, session_tree=tree)
+        assert "mn-xlink" not in classic
+
+
+class TestAsyncResultAtMerge:
+    """Minimal theme: an async agent's answer is shown on its
+    ``<task-notification>`` (the merge row), not on the spawn (P7)."""
+
+    def test_minimal_moves_the_answer(self) -> None:
+        html = _minimal_html(ASYNC)
+        assert '<div class="task-async-answer-label">' not in html
+        assert "mn-async-jump" in html
+        assert "task-notification-result" in html
+
+    def test_classic_keeps_it_on_the_spawn(self) -> None:
+        entries, tree = load_directory_transcripts(ASYNC, silent=True)
+        html = generate_html(entries, session_tree=tree)
+        assert '<div class="task-async-answer-label">' in html
+        assert "mn-async-jump" not in html
 
 
 # ---------------------------------------------------------------- paths

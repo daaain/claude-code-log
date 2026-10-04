@@ -212,9 +212,14 @@ def _sync_result(tool_id: str, text: str, agent: str) -> list[dict[str, Any]]:
 
 
 def _repetition(
-    w: _Writer, session_dir: Path, parent: Optional[str]
+    w: _Writer, session_dir: Path, parent: Optional[str], wide: int = 0
 ) -> tuple[list[dict[str, Any]], str]:
-    """One mockup-shaped stretch; returns (main entries, last main uuid)."""
+    """One mockup-shaped stretch; returns (main entries, last main uuid).
+
+    ``wide`` adds that many more background agents to the first turn (each
+    one step, its notification arriving between the two others'), so the
+    turn has ``3 + wide`` branches — the "+N more branches" overflow.
+    """
     n = w.turn
     main: list[dict[str, Any]] = []
     a_id, b_id, c_id, d_id = (
@@ -282,6 +287,54 @@ def _repetition(
     content, extra = _launch(tool_b, b_id, "Find dark Pygments styles")
     launch_b = w.entry("user", spawn_b["uuid"], 8.5, content, **extra)
     main += [spawn_a, launch_a, spawn_b, launch_b]
+    extras: list[tuple[str, str]] = []
+    for k in range(wide):
+        e_id = f"e{n:03d}x{k:02d}"
+        tool_e = f"toolu_{n:03d}spawnE{k:02d}"
+        description = f"Survey corner {k + 1}"
+        spawn_e = w.entry(
+            "assistant",
+            launch_b["uuid"] if not extras else extras[-1][1],
+            9 + k * 0.5,
+            _tool(
+                tool_e,
+                "Task",
+                {
+                    "description": description,
+                    "prompt": f"Look into corner {k + 1} of the stylesheets.",
+                    "subagent_type": "Explore",
+                    "run_in_background": True,
+                },
+            ),
+        )
+        content, extra = _launch(tool_e, e_id, description)
+        launch_e = w.entry("user", spawn_e["uuid"], 9.2 + k * 0.5, content, **extra)
+        main += [spawn_e, launch_e]
+        extras.append((e_id, launch_e["uuid"]))
+        _agent_file(
+            session_dir,
+            e_id,
+            tool_e,
+            description,
+            _agent_steps(
+                w,
+                e_id,
+                f"Look into corner {k + 1} of the stylesheets.",
+                10 + k,
+                [
+                    (
+                        12 + k,
+                        "Grep",
+                        {"pattern": f"corner-{k + 1}", "path": "components/"},
+                        f"{k + 2} matches",
+                        False,
+                    )
+                ],
+                (20 + k, f"Corner {k + 1} is clean."),
+            ),
+        )
+    if extras:
+        launch_b = {"uuid": extras[-1][1]}
 
     pair, last = _call(
         w,
@@ -413,6 +466,17 @@ def _repetition(
         "The file has been updated.",
     )
     main += pair
+    for k, (e_id, _uuid) in enumerate(extras):
+        note_e = w.entry(
+            "user",
+            last,
+            100 + k,
+            _notification(
+                e_id, f"Survey corner {k + 1}", f"Corner {k + 1} is clean.", 11000
+            ),
+        )
+        main.append(note_e)
+        last = note_e["uuid"]
     note_a = w.entry(
         "user",
         last,
@@ -583,21 +647,173 @@ def _repetition(
     return main, tail["uuid"]
 
 
-def write_dag_demo(directory: Path, turns: int = 1) -> Path:
+def write_dag_demo(directory: Path, turns: int = 1, wide: int = 0) -> Path:
     """Write the demo project into ``directory``; returns ``directory``.
 
     ``turns`` repeats the stretch (each 30 minutes after the previous), so a
     large page can be built for timing: every repetition adds ~40 cards and
-    five lanes.
+    five lanes. ``wide`` adds that many background agents to each first
+    turn (P7's branch overflow).
     """
     directory.mkdir(parents=True, exist_ok=True)
     session_dir = directory / SESSION
     entries: list[dict[str, Any]] = []
     parent: Optional[str] = None
     for n in range(turns):
-        main, parent = _repetition(_Writer(n), session_dir, parent)
+        main, parent = _repetition(_Writer(n), session_dir, parent, wide)
         entries += main
     (directory / f"{SESSION}.jsonl").write_text(
         "\n".join(json.dumps(e) for e in entries) + "\n", encoding="utf-8"
+    )
+    return directory
+
+
+TEAM_SESSION = "dade0000-0000-4000-8000-0000000000ee"
+
+
+def write_team_demo(directory: Path) -> Path:
+    """A lead and one teammate exchanging messages both ways (P7 anchors).
+
+    The lead spawns ``alice`` (a named teammate: ``team_name`` + ``name``),
+    alice reports back with ``SendMessage`` — delivered to the lead as a
+    ``<teammate-message>`` — and the lead answers with a ``SendMessage`` of
+    its own, which reaches alice's thread the same way. A third message has
+    no counterpart anywhere (it must get no link). Returns ``directory``.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    session_dir = directory / TEAM_SESSION
+    w = _Writer(0)
+    agent = "f00dfacecafe0001"
+    tool_spawn = "toolu_team_spawn_alice"
+    team = {"teamName": "styles"}
+
+    def lead(kind: str, parent: Optional[str], at: float, content: Any, **extra: Any):
+        entry = w.entry(kind, parent, at, content, **team, **extra)
+        entry["sessionId"] = TEAM_SESSION
+        return entry
+
+    def mate(kind: str, parent: Optional[str], at: float, content: Any):
+        entry = w.entry(kind, parent, at, content, agent=agent)
+        entry["sessionId"] = TEAM_SESSION
+        return entry
+
+    report = "Relay coverage is now 96%: ten tests for deliver_to_remote."
+    reply = "Thanks. Please cover calculate_next_retry as well."
+    u1 = lead("user", None, 0, "Start a styles team and send alice to the relay tests.")
+    spawn = lead(
+        "assistant",
+        u1["uuid"],
+        5,
+        _tool(
+            tool_spawn,
+            "Task",
+            {
+                "description": "Run alice's test work",
+                "subagent_type": "general-purpose",
+                "name": "alice",
+                "team_name": "styles",
+                "prompt": "You are alice. Add relay tests and report back.",
+            },
+        ),
+    )
+    result = lead(
+        "user",
+        spawn["uuid"],
+        6,
+        _result(
+            tool_spawn,
+            [
+                {"type": "text", "text": "Spawned alice."},
+                {
+                    "type": "text",
+                    "text": f"agentId: {agent} (use SendMessage with to: 'alice')",
+                },
+            ],
+        ),
+        toolUseResult={"status": "completed", "agentId": agent},
+    )
+    note = lead(
+        "user",
+        result["uuid"],
+        60,
+        f'<teammate-message teammate_id="alice" color="blue" summary="relay done">\n{report}\n</teammate-message>',
+    )
+    tool_reply = "toolu_team_reply"
+    send = lead(
+        "assistant",
+        note["uuid"],
+        70,
+        _tool(
+            tool_reply,
+            "SendMessage",
+            {"type": "message", "recipient": "alice", "content": reply},
+        ),
+    )
+    sent = lead(
+        "user",
+        send["uuid"],
+        71,
+        _result(tool_reply, '{"success": true, "message": "Message sent to alice"}'),
+    )
+    stray = lead(
+        "user",
+        sent["uuid"],
+        90,
+        '<teammate-message teammate_id="alice" color="blue">\nalice heartbeat: still here.\n</teammate-message>',
+    )
+    done = lead(
+        "assistant", stray["uuid"], 95, _text("alice is on the retry tests now.")
+    )
+    (directory / f"{TEAM_SESSION}.jsonl").write_text(
+        "\n".join(
+            json.dumps(e) for e in [u1, spawn, result, note, send, sent, stray, done]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    m1 = mate("user", None, 6, "You are alice. Add relay tests and report back.")
+    m2 = mate("assistant", m1["uuid"], 20, _text("Writing the relay tests."))
+    tool_report = "toolu_team_report"
+    m3 = mate(
+        "assistant",
+        m2["uuid"],
+        59,
+        _tool(
+            tool_report,
+            "SendMessage",
+            {"type": "message", "recipient": "team-lead", "content": report},
+        ),
+    )
+    m4 = mate(
+        "user",
+        m3["uuid"],
+        59.5,
+        _result(
+            tool_report, '{"success": true, "message": "Message sent to team-lead"}'
+        ),
+    )
+    m5 = mate(
+        "user",
+        m4["uuid"],
+        72,
+        f'<teammate-message teammate_id="team-lead" color="cyan">\n{reply}\n</teammate-message>',
+    )
+    m6 = mate("assistant", m5["uuid"], 80, _text("Adding calculate_next_retry tests."))
+    sub = session_dir / "subagents"
+    sub.mkdir(parents=True, exist_ok=True)
+    (sub / f"agent-{agent}.jsonl").write_text(
+        "\n".join(json.dumps(e) for e in [m1, m2, m3, m4, m5, m6]) + "\n",
+        encoding="utf-8",
+    )
+    (sub / f"agent-{agent}.meta.json").write_text(
+        json.dumps(
+            {
+                "agentType": "general-purpose",
+                "description": "Run alice's test work",
+                "toolUseId": tool_spawn,
+            }
+        ),
+        encoding="utf-8",
     )
     return directory

@@ -303,7 +303,11 @@
             if (selection.length > 0) {
                 const itemId = selection[0];
                 const messageEl = timelineIdToElement.get(itemId);
-                if (messageEl) {
+                if (messageEl) {{ '{' }}{% if minimal %}
+                    // Minimal theme: unfold the card's ancestors and open the
+                    // branch lane holding it (the DAG engine wraps this hook)
+                    // before measuring where to scroll.
+                    if (window.claudeLogRevealMessage) window.claudeLogRevealMessage(messageEl);{% endif %}
                     // Calculate timeline height for proper scroll positioning
                     const timelineContainer = document.getElementById('timeline-container');
                     const timelineHeight = timelineContainer ? timelineContainer.offsetHeight : 0;

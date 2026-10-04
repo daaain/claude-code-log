@@ -1,6 +1,6 @@
 # `--theme minimal`: a compact light/dark theme with a DAG layout
 
-Status: **spec + phased plan; P1, P2, P3a, P3b, P4, P5 and P6 landed (see § 6);
+Status: **spec + phased plan; P1–P6 and P7 landed (see § 6);
 § 7 decisions 1–5 taken.** Branch of origin:
 `claude/sweet-mccarthy-64a24r`.
 
@@ -1815,6 +1815,115 @@ controls + `+N more branches`, revealing the rest; teammate spawn link
 navigates to and reveals the teammate thread's first card; teammates
 never get a lane or column.
 
+**As built (P7 landed):**
+- **Files.** `minimal_dag.js` (column / strip modes, column chrome,
+  overflow, reveals), `dag.css` (columns, strips, overflow, `.mn-xlinks`,
+  `.mn-async-jump`), `header.html` (the *Columns* segment);
+  `lanes.teammate_links` + `html/minimal_theme.cross_links` (teammate
+  anchors, Jinja global `mn_cross_links`, one inline minimal-only call after
+  the card's content in `transcript.html`); `timeline.html` (one inline
+  minimal-only `claudeLogRevealMessage` call — classic bytes unchanged);
+  `models.TaskOutput.async_notification_index` (set by
+  `_link_async_notifications`), `HtmlRenderer.format_TaskOutput` /
+  `format_TaskNotificationMessage` (minimal branch), small keyword options on
+  `format_task_output`, `format_task_output_teammate_extras` and
+  `format_task_notification_content`. Fixtures: `write_dag_demo(dir, turns,
+  wide=N)` adds N background agents to each first turn (overflow);
+  `write_team_demo(dir)` — a lead and a teammate exchanging `SendMessage`s
+  both ways plus an unmatched message. Tests: new
+  `test/test_minimal_dag_columns_browser.py` (16), `test_lanes.py`
+  `TestTeammateLinks` / `TestAsyncResultAtMerge` (5); three earlier tests
+  updated for the changed behaviour (P6: the Column button is live, and the
+  cap test opens the overflow before selecting a fourth top-level lane; P4's
+  `test_steps_folds_sub_agents_and_all_opens_them` likewise). As-built reference:
+  [`dev-docs/minimal-theme.md`](../dev-docs/minimal-theme.md) § 1–7;
+  `agents.md` § 2.3 / § 6, `teammates.md` § 6.1 "Minimal theme: anchors".
+- **Columns** as planned (grid tracks `--dag-cols`: main `minmax(360px,
+  1fr)`, columns `minmax(300px, 1fr)`, strips 34px; `pack()` keyed per
+  column; columns left out of the rail). Choices made on the way:
+  - Row 1 always holds the heads and cards start at row 2, columns or not,
+    so entering column mode renumbers nothing by itself. While columns
+    exist **every** item gets an inline `grid-column` (main included):
+    auto-placement put definite-row main cards after the last column.
+  - **Chrome inside `#transcript`** (deviation from § 3.5 step 6's "header
+    layer outside #transcript"): per column a `.dag-chrome` background
+    spanning all rows, holding a **sticky** head (or the strip button) — so
+    the head follows the reader down a long column — plus a "Main session"
+    head. Engine-owned grid items placed first in `#transcript` so they
+    paint under the cards; `live_update.js` keys on `.message-node`, search,
+    filter and timeline on `.message`, so none of them sees the chrome; a
+    wholesale swap drops it until the next relayout (tested).
+  - **Page width**: `<body>` gets `dag-wide` (no 960px cap; `min-width`
+    = the columns' minimum, `--dag-min`), so the *page* scrolls sideways
+    (scrollbar at the viewport bottom, not under a tall stage) while the
+    header, toolbar, filter panel, timeline and session navigation stay in
+    view (`position: sticky; left`, width `--dag-view`).
+  - A lane **interleaved** inside a column lane shows in that column
+    (`dag-colin`, its tag in the column's gutter); put in a column it gets
+    its own, right after its parent's subtree (depth-first by spawn row).
+  - A tool call sharing its row with a taller card in another column sat
+    above a gap and then its output: in column mode an unsplit call half is
+    aligned to the bottom of its row (`align-self: end`), the gap goes
+    above the step.
+  - Per-lane controls: the spawn row's `Column ⇥` / `⇤ Interleave`, the
+    head's `⇤ Interleave` / `Collapse`, the strip expands; the chevron folds
+    from any mode. Global *Columns* = every lane a column, persisted as
+    `columns`.
+- **Overflow — deviation:** the cap of three counts a turn's **top-level**
+  lanes (by `data-lane-rank`), not every lane with rank > 3. Nested lanes
+  share their top-level turn's ranks (P5), so with the plain rule opening a
+  lane revealed a nested one that pushed a top-level control into the
+  overflow (in `nested_agents/` a rank-3 nested lane hid rank-4 `nschain1`).
+  A lane that is not folded always shows its control; `+N more branches` /
+  `− fewer branches` sits on the third control; the hidden lanes get no
+  rail lane. Global *Interleaved* still takes ranks ≤ 3 (unchanged).
+- **Reveals and the cap** (P6 left both open): a reveal (search, `#msg-`
+  and `?uuid=` links, and now **timeline clicks** — `timeline.html` calls
+  `claudeLogRevealMessage` before scrolling, minimal only) opens the lane
+  **without evicting**: a search hitting more than three lanes of a turn
+  shows every hit, past the cap, and the next manual selection trims the
+  turn back to three. Under global *Columns*, or when the lane (or an
+  ancestor) is a column or strip, a reveal opens it as a column.
+- **Teammate anchors** per § 1.6.5 / § 7 decision 4, server-side (work
+  without JavaScript): spawn → thread (`→ alice's thread`), `SendMessage` ↔
+  `<teammate-message>` (`→ received by alice` / `← sent by team-lead`),
+  matched on (sender, recipient, normalised body), unresolved → no link.
+  The `teammates/` fixture has no resolvable message pair (its messages
+  have no counterpart in the other thread); `write_team_demo` does.
+- **Async result at the merge row** (the lead's P6 review): in minimal the
+  agent's answer is on the `<task-notification>` card only (never ghosted,
+  at any depth); the spawn's result keeps "Async agent launched
+  successfully." plus `Result ↓ with the async notification` (a link) and
+  no Agent id row. Sync agents already show their answer on the merge row
+  (the paired result; split from the call when the lane is open). One copy
+  of the answer per page (tested). Formatter output now differs by theme for
+  these two cards — fine for the fragment store (one theme per conversion;
+  the index is a content field, so the digest covers it).
+- **Performance** (`write_dag_demo(dir, 60)`, 2,821 grid items, 300 lanes,
+  headless Chromium 1280px): one lane to a column or back ≈ 40–45 ms engine
+  JS, ≈ 350–370 ms with the browser's layout (rows are re-packed across the
+  page); global Columns (300 columns, a 90,424px-wide page, 2,162 rows)
+  ≈ 0.1 s JS / 0.95–1.2 s total; steady relayout with 300 columns 46–78 ms;
+  collapsing one column ≈ 530 ms; Columns → Main only ≈ 470 ms. A first cut
+  read `clientWidth` mid-write (forced layouts: 600 ms per column toggle);
+  the read now happens before the writes.
+- **Snapshots** (`just update-snapshot`, block level): none added or
+  removed; every classic block and the index identical; the three minimal
+  blocks change by the CSS/JS text, and the async block also by exactly the
+  moved answer (spawn: label + answer + Agent row out, `mn-async-jump` in;
+  notification: the answer in).
+- **Screenshots** in
+  [`work/minimal-theme-dag-screenshots/p7/`](minimal-theme-dag-screenshots/p7/)
+  (48-colour PNGs, light and dark): the demo in Columns at 1600px
+  (`async-agents-columns-*`), `dag_within_fork.jsonl` in Columns
+  (`fork-columns-*`), the `wide=4` demo's overflow folded and revealed
+  (`overflow-*`), and the teammate demo after following the spawn link
+  (`teammates-*`).
+- **For P8.** Columns on a phone work (horizontal scroll, compact rows) but
+  were not polished; the column head truncates long names (full text in
+  its `title`); search, the timeline and live updates were checked with
+  columns, the full filter × mode × timeline sweep is still P8's.
+
 ### P8 — Docs, polish, parity sweep — M
 
 **Goal:** user-facing docs, remaining parity, performance sanity.
@@ -1856,7 +1965,7 @@ tests from P3a–P7 green together.
 - [x] P4 collapse + fold depth
 - [x] P5 lane annotation
 - [x] P6 DAG engine (main-only, interleaved, rail)
-- [ ] P7 columns, overflow, teammates
+- [x] P7 columns, overflow, teammates (+ async result at the merge row)
 - [ ] P8 docs and polish
 
 ---

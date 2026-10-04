@@ -991,4 +991,5 @@ def get_template_environment() -> Environment:
     globals_dict["mn_call_title"] = minimal_theme.call_title
     globals_dict["mn_session_header"] = minimal_theme.session_header
     globals_dict["mn_lane_attrs"] = minimal_theme.lane_attrs
+    globals_dict["mn_cross_links"] = minimal_theme.cross_links
     return env
