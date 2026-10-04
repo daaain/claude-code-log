@@ -37,7 +37,9 @@ def _entry(**fields: Any) -> dict[str, Any]:
     return base
 
 
-def _render(tmp_path: Path, logical_parent: Optional[str]) -> str:
+def _render(
+    tmp_path: Path, logical_parent: Optional[str], theme: str = "classic"
+) -> str:
     boundary = _entry(
         type="system",
         subtype="compact_boundary",
@@ -86,7 +88,7 @@ def _render(tmp_path: Path, logical_parent: Optional[str]) -> str:
     ]
     path = tmp_path / "s1.jsonl"
     path.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
-    return generate_html(load_transcript(path), "compact")
+    return generate_html(load_transcript(path), "compact", theme=theme)
 
 
 def _debug_line(uuid: str, rest: str = "") -> str:
@@ -111,5 +113,18 @@ def test_boundary_without_logical_parent_shows_no_arrow(tmp_path: Path):
 def test_ordinary_messages_keep_the_solid_arrow(tmp_path: Path):
     html = _render(tmp_path, ASSISTANT_UUID)
     assert _debug_line(USER_UUID) in html
+    assert _debug_line(ASSISTANT_UUID, f" &rarr; {USER_UUID[:12]}") in html
+    assert _debug_line(SUMMARY_UUID, f" &rarr; {BOUNDARY_UUID[:12]}") in html
+
+
+def test_minimal_theme_boundary_shows_dashed_arrow(tmp_path: Path):
+    """The minimal theme shares the debug uuid line, arrow and tooltip."""
+    html = _render(tmp_path, ASSISTANT_UUID, theme="minimal")
+    assert "theme-minimal" in html
+    assert _debug_line(BOUNDARY_UUID, f" {DASHED} {ASSISTANT_UUID[:12]}") in html, (
+        "minimal boundary should point at its logical parent with the dashed arrow"
+    )
+    assert html.count(DASHED) == 1
+    # Ordinary messages keep the solid arrow.
     assert _debug_line(ASSISTANT_UUID, f" &rarr; {USER_UUID[:12]}") in html
     assert _debug_line(SUMMARY_UUID, f" &rarr; {BOUNDARY_UUID[:12]}") in html
