@@ -23066,6 +23066,12 @@
      data-theme="light|dark" on <html>, set by theme_init.js / minimal.js. */
   
   :root {
+      /* The sticky toolbar's height and the open filter panel's, kept up to
+         date by minimal.js. Declared at their usual desktop values so the
+         first measurement usually writes nothing: changing a custom property
+         on the root restyles every element of the page (P8). */
+      --mn-bar-h: 46px;
+      --mn-filter-h: 0px;
       --bg: #ffffff;
       --fg: #1f2328;
       --muted: #5f6670;
@@ -25730,32 +25736,42 @@
   /* A Task / Agent spawn reads as its call line (description, subagent type,
      `[async #id]`, model), the prompt as a 2-line preview and the branch
      control (dag.css). The prompt is a touch smaller than prose; a long one
-     is the shared <details> preview (tool_formatters
-     .format_task_prompt_preview) with its "+N lines" beside the preview's
-     last line rather than on a line of its own. */
+     is the shared <details> preview (utils.render_markdown_preview) with its
+     "+N lines" beside the preview's last line rather than on a line of its
+     own. The agent's answer on the merge row — a sync result, an async
+     notification — previews the same way once it is longer than three
+     lines (P8). */
   .theme-minimal #transcript .message.tool_use > .content > .task-prompt {
       font-size: 0.94em;
   }
   
-  .theme-minimal #transcript .task-prompt > details.collapsible-code > summary {
+  .theme-minimal #transcript :is(.task-prompt, .task-result, .task-notification-result) > details.collapsible-code > summary {
       flex-direction: row;
       align-items: flex-end;
       column-gap: 10px;
   }
   
-  .theme-minimal #transcript .task-prompt > details.collapsible-code > summary > .preview-content {
+  .theme-minimal #transcript :is(.task-prompt, .task-result, .task-notification-result) > details.collapsible-code > summary > .preview-content {
       flex: 1 1 0;
       min-width: 0;
   }
   
-  .theme-minimal #transcript .task-prompt > details.collapsible-code > summary::after,
-  .theme-minimal #transcript .task-prompt > details.collapsible-code > summary > .line-count {
+  .theme-minimal #transcript :is(.task-prompt, .task-result, .task-notification-result) > details.collapsible-code > summary::after,
+  .theme-minimal #transcript :is(.task-prompt, .task-result, .task-notification-result) > details.collapsible-code > summary > .line-count {
       flex: none;
       align-self: flex-end;
   }
   
-  .theme-minimal #transcript .task-prompt .preview-content p {
+  .theme-minimal #transcript :is(.task-prompt, .task-result, .task-notification-result) .preview-content :is(p, ul, ol, pre, blockquote, table) {
       margin: 0;
+  }
+  
+  /* A heading at the top of an agent's answer (`## Summary`) reads as a bold
+     line of the preview, not a title twice the size that fills the clip. */
+  .theme-minimal #transcript :is(.task-prompt, .task-result, .task-notification-result) .preview-content :is(h1, h2, h3, h4, h5, h6) {
+      margin: 0;
+      font-size: 1em;
+      line-height: inherit;
   }
   
   /* The spawn's teammate fields (name, team, mode), its result's agent
@@ -26229,7 +26245,7 @@
   /* ---------------------------------------------------- branch controls */
   
   /* On the spawn row (mockup .bctl): chevron + summary (+ "· interleaved" /
-     "· in column →"), the Column ⇥ / ⇤ Interleave button and, on a turn's
+     "· in column →", `data-mode`), the Column ⇥ / ⇤ Interleave button and, on a turn's
      third control, "+N more branches". Row 4 of the card grid (layout.css). */
   .theme-minimal #transcript .mn-bctls {
       grid-column: 3;
@@ -26253,6 +26269,34 @@
       margin-top: 2px;
   }
   
+  /* Wider than a phone, a control stays on one line (P8): in Columns the
+     main column is only ~470px of content, and the stats, `Result ↓`,
+     `launched ▸` and `⇤ Interleave` used to wrap the button onto a line of
+     its own. The stats give way instead (ellipsis; the full text is in the
+     chevron button's title and aria-label, and in the column head). A phone
+     keeps wrapping: there is no room to truncate into. */
+  @media (min-width: 641px) {
+      .theme-minimal #transcript .mn-bctl {
+          flex-wrap: nowrap;
+      }
+  
+      .theme-minimal #transcript .mn-bctl > * {
+          flex: none;
+      }
+  
+      .theme-minimal #transcript .mn-bctl > .mn-bfold {
+          flex: 0 1 auto;
+          min-width: 0;
+      }
+  
+      .theme-minimal #transcript .mn-bfold::after {
+          min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+      }
+  }
+  
   /* A lane behind its turn's "+N more branches". */
   .theme-minimal #transcript .mn-bctl[hidden] {
       display: none;
@@ -26273,6 +26317,16 @@
   
   .theme-minimal #transcript .mn-bfold::after {
       content: attr(data-label);
+  }
+  
+  /* "· interleaved" / "· in column →": after the label (flex `order`), never
+     truncated with it. */
+  .theme-minimal #transcript .mn-bfold[data-mode]::before {
+      content: attr(data-mode);
+      order: 2;
+      flex: none;
+      margin-left: -6px;
+      white-space: pre;
   }
   
   .theme-minimal #transcript .mn-bfold:hover {
@@ -26489,23 +26543,47 @@
       background: linear-gradient(color-mix(in srgb, var(--lc) 5%, transparent), color-mix(in srgb, var(--lc) 5%, transparent)), var(--bg);
   }
   
-  /* A column's head (P7c): the name on a line of its own (truncated, the
-     full name in the head's title), its meta and actions on the next. */
+  /* A column's head: the name and two compact actions (`⇤`, `−`; their
+     words come back once the head is 400px wide) on the first line, the
+     lane's stats on a line of their own below — steps, tokens, duration,
+     `running` first, so they are what a narrow column keeps; the agent type
+     and model follow and give way first (P8: the P7c head put the actions
+     beside the meta and truncated it in almost every column). Everything is
+     in the head's title. */
   .theme-minimal #transcript .dag-colhead:not(.dag-mainhead) {
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto;
       grid-template-rows: auto auto;
       align-content: center;
       gap: 1px 8px;
+      container-type: inline-size;
   }
   
   .theme-minimal #transcript .dag-colhead:not(.dag-mainhead) > .dag-colname {
-      grid-column: 1 / -1;
+      grid-column: 1;
+      grid-row: 1;
       white-space: nowrap;
   }
   
+  .theme-minimal #transcript .dag-colhead:not(.dag-mainhead) > .dag-colacts {
+      grid-column: 2;
+      grid-row: 1;
+  }
+  
+  .theme-minimal #transcript .dag-colhead:not(.dag-mainhead) > .dag-colmeta {
+      grid-column: 1 / -1;
+      grid-row: 2;
+  }
+  
   .theme-minimal #transcript .dag-colhead:not(.dag-mainhead) .mn-bmini {
+      min-width: 22px;
       min-height: 20px;
+  }
+  
+  @container (min-width: 400px) {
+      .theme-minimal #transcript .dag-colacts > .mn-bmini[data-long]::after {
+          content: attr(data-long);
+      }
   }
   
   .theme-minimal #transcript .dag-mainhead {
@@ -27700,14 +27778,22 @@
               </div>
           </div>
           <div class='debug-info'>11111111-000 &rarr; 11111111-000</div>
-          <div class='content'><dl class="teammate-tool-card task-notification-card"><dt>Task ID</dt><dd><a class='task-notification-backlink' href='#msg-d-2'><code>cccc333</code></a></dd><dt>Status</dt><dd><span class='task-status status-completed'>completed</span></dd><dt>Tokens</dt><dd><code>23,099</code></dd><dt>Tool uses</dt><dd><code>2</code></dd><dt>Duration</dt><dd><code>15.5s</code></dd><dt>Transcript</dt><dd><code>/tmp/claude-1000/synthetic/tasks/cccc333.output</code></dd></dl><div class="task-notification-result markdown"><p>Coverage analysis complete.</p>
+          <div class='content'><dl class="teammate-tool-card task-notification-card"><dt>Task ID</dt><dd><a class='task-notification-backlink' href='#msg-d-2'><code>cccc333</code></a></dd><dt>Status</dt><dd><span class='task-status status-completed'>completed</span></dd><dt>Tokens</dt><dd><code>23,099</code></dd><dt>Tool uses</dt><dd><code>2</code></dd><dt>Duration</dt><dd><code>15.5s</code></dd><dt>Transcript</dt><dd><code>/tmp/claude-1000/synthetic/tasks/cccc333.output</code></dd></dl><div class="task-notification-result"><details class='collapsible-code'>
+          <summary>
+              <span class='line-count'>8 lines</span>
+              <div class='preview-content markdown'><p>Coverage analysis complete.</p>
+  <h2>Summary</h2>
+  </div>
+          </summary>
+          <div class='code-full markdown'><p>Coverage analysis complete.</p>
   <h2>Summary</h2>
   <ul>
   <li><code>relay.py</code>: 15% → 96%</li>
   <li><code>server.py</code>: 22% → 88%</li>
   </ul>
   <p>All uncovered branches are now exercised.</p>
-  </div></div>
+  </div>
+      </details></div></div>
           
       </div>
       
@@ -29067,6 +29153,9 @@
   
               // Apply all filters on page load
               applyFilter();
+              // Minimal theme (P8): minimal.js re-applies the filter to the
+              // markup a live update brings (it carries no filtered-hidden).
+              window.claudeLogApplyFilter = applyFilter;
   
               // Fold/unfold functionality with horizontal fold bars.
               //
@@ -29875,7 +29964,7 @@
           // On transcript pages, search acts as a filter: non-matching messages
           // are hidden, matches are revealed (unfolded) and highlighted.
           if (!searchState.isIndexPage) {
-              applyTranscriptSearchFilter();
+              applyTranscriptSearchFilter(options.quiet);
           }
   
           updateSearchUI();
@@ -29888,7 +29977,7 @@
           // Navigate to the current match — the first one for a fresh query,
           // or the preserved one after an option/filter re-search (the layout
           // may have shifted, so re-scrolling to it keeps it in view).
-          if (searchState.matches.length > 0 && !searchState.isIndexPage) {
+          if (searchState.matches.length > 0 && !searchState.isIndexPage && !options.quiet) {
               navigateToMatch(searchState.currentMatchIndex);
           }
   
@@ -29901,7 +29990,7 @@
       //   .search-context — ancestor of a match ("Show context" mode only)
       //   .search-hidden  — everything else (display: none)
       // Session headers are never touched so the session structure stays visible.
-      function applyTranscriptSearchFilter() {
+      function applyTranscriptSearchFilter(quiet) {
           const matched = new Set(searchState.matches.map(m => m.element));
   
           // Ancestors of matches: visible-but-dimmed when "Show context" is on
@@ -29924,7 +30013,7 @@
   
           // Unfold ancestors so every match is actually visible (matches inside
           // folded subtrees would otherwise stay hidden by the fold state).
-          if (window.claudeLogRevealMessage) {
+          if (window.claudeLogRevealMessage && !quiet) {
               matched.forEach(el => window.claudeLogRevealMessage(el));
           }
   
@@ -29932,7 +30021,7 @@
           // code, structured params) stays invisible even after the message
           // itself is revealed — open every details on the path from each
           // highlight up to its message card.
-          matched.forEach(el => {
+          if (!quiet) matched.forEach(el => {
               el.querySelectorAll('.search-highlight').forEach(highlight => {
                   let details = highlight.closest('details');
                   while (details && el.contains(details)) {
@@ -30377,7 +30466,7 @@
                   isUpdatingFilters = true;
                   setTimeout(() => {
                       buildSearchIndex();
-                      performSearch(searchState.query, { preserveCurrent: true });
+                      performSearch(searchState.query, { preserveCurrent: true, quiet: quietRefresh });
                       isUpdatingFilters = false;
                   }, 100);
               }
@@ -30391,6 +30480,24 @@
               subtree: true
           });
       }
+  
+      // Minimal theme (P8): a live update brings new cards — or, on a
+      // wholesale swap, a whole new #transcript — that the index has never
+      // seen and that carry none of the search's classes. Re-index and
+      // re-run the query quietly: the matches, classes and count follow the
+      // page, but nothing scrolls, unfolds or opens under the reader.
+      // `filtered`: the filter was just re-applied too, so the filter
+      // observer above is about to re-run the search — quietly as well.
+      let quietRefresh = false;
+      window.claudeLogRefreshSearch = function (filtered) {
+          if (!searchState.query || searchState.isIndexPage) return;
+          buildSearchIndex();
+          performSearch(searchState.query, { preserveCurrent: true, quiet: true });
+          if (filtered) {
+              quietRefresh = true;
+              setTimeout(() => { quietRefresh = false; }, 300);
+          }
+      };
   
       // Initialize when DOM is ready
       if (document.readyState === 'loading') {
@@ -30514,7 +30621,11 @@
                   btn.textContent = open ? '− less' : '+ more';
                   btn.setAttribute('aria-expanded', open ? 'true' : 'false');
               });
-              decorateSessionSummaries(document);
+              // Measuring a clamp forces a layout. At parse time that would be a
+              // whole extra layout of a large page (≈ 0.6s on a 5MB one, P8),
+              // thrown away when the DAG engine turns the grid on; in the first
+              // frame it reuses the layout the page needs anyway.
+              requestAnimationFrame(function () { decorateSessionSummaries(document); });
               if (window.claudeLogOnRehydrate) window.claudeLogOnRehydrate(decorateSessionSummaries);
               window.addEventListener('resize', function () { decorateSessionSummaries(document); });
   
@@ -30523,18 +30634,34 @@
               // sit under the toolbar, whose height changes when it wraps.
               const toolbar = document.querySelector('.mn-toolbar');
               const filterPanel = document.querySelector('.filter-toolbar');
+              // Changing a custom property on the root restyles every element
+              // of the page (≈ 0.15–0.3s on a 5MB one, P8), so write only a
+              // real change — tokens.css declares the usual values — and
+              // measure both heights before writing either.
+              const offsets = {};
+              function setProp(name, value) {
+                  if (!(name in offsets)) offsets[name] = getComputedStyle(root).getPropertyValue(name).trim();
+                  if (offsets[name] === value) return;
+                  offsets[name] = value;
+                  root.style.setProperty(name, value);
+              }
               function updateOffsets() {
-                  if (toolbar) root.style.setProperty('--mn-bar-h', toolbar.offsetHeight + 'px');
+                  const barHeight = toolbar ? toolbar.offsetHeight : 0;
                   const filterHeight = filterPanel && getComputedStyle(filterPanel).display !== 'none'
                       ? filterPanel.offsetHeight : 0;
-                  root.style.setProperty('--mn-filter-h', filterHeight + 'px');
+                  if (toolbar) setProp('--mn-bar-h', barHeight + 'px');
+                  setProp('--mn-filter-h', filterHeight + 'px');
               }
-              updateOffsets();
+              // Not measured at parse time either: reading a height there forces
+              // a layout of the whole page. A ResizeObserver reports every
+              // observed element once after the first layout, before the first
+              // paint, so the offsets are right when the page first shows.
               if (window.ResizeObserver) {
                   const observer = new ResizeObserver(updateOffsets);
                   if (toolbar) observer.observe(toolbar);
                   if (filterPanel) observer.observe(filterPanel);
               } else {
+                  updateOffsets();
                   window.addEventListener('resize', updateOffsets);
               }
   
@@ -30804,6 +30931,34 @@
               });
               focusableFoldBars(document.getElementById('transcript'));
               if (window.claudeLogOnRehydrate) window.claudeLogOnRehydrate(focusableFoldBars);
+  
+              // ---- live updates keep the filter and the search (P8) ----------
+              // A patched card, or a swapped-in #transcript, is the server's
+              // markup: no `filtered-hidden`, no search classes, and cards the
+              // search index has never seen. Re-apply both once per update
+              // (the hooks run once per changed element), after the update's
+              // other hooks; the DAG engine's observer relayouts on the class
+              // changes. The search refresh is quiet: nothing scrolls, unfolds
+              // or opens. (Classic pages keep their old behaviour: their bytes
+              // may not change.)
+              let refreshQueued = false;
+              function refreshFilterAndSearch() {
+                  refreshQueued = false;
+                  const filtered = !!window.claudeLogApplyFilter
+                      && document.querySelector('.filter-toggle:not(.active)') !== null;
+                  if (filtered) window.claudeLogApplyFilter();
+                  if (window.claudeLogRefreshSearch) window.claudeLogRefreshSearch(filtered);
+                  // The timeline reads both classes off the cards.
+                  if (window.applyTimelineSearchFilter) window.applyTimelineSearchFilter();
+              }
+              if (window.claudeLogOnRehydrate) {
+                  window.claudeLogOnRehydrate(function () {
+                      if (refreshQueued) return;
+                      refreshQueued = true;
+                      if (window.queueMicrotask) window.queueMicrotask(refreshFilterAndSearch);
+                      else setTimeout(refreshFilterAndSearch, 0);
+                  });
+              }
   
               // ---- overflow menu ---------------------------------------------
               // A <details>: closes on a click outside it or on Escape. Clicks
@@ -31718,17 +31873,22 @@
                       // without one (or the page is a static copy).
                       const unfinished = !live && (lane.state === 'open' || lane.state === 'ended');
                       const label = (fork ? '⑂ ' + lane.name + ' · ' : '') + (lane.stats || lane.name)
-                          + (unfinished ? ' · no result' : '')
-                          + (interleaved ? ' · interleaved' : columned ? ' · in column →' : '');
+                          + (unfinished ? ' · no result' : '');
+                      // The mode is its own part (P8): on a narrow line the
+                      // label gives way (ellipsis), the mode stays readable.
+                      const modeText = interleaved ? ' · interleaved' : columned ? ' · in column →' : '';
                       const btn = ctl.querySelector('.mn-bfold');
                       setAttr(btn, 'data-label', label);
+                      if (modeText) setAttr(btn, 'data-mode', modeText);
+                      else if (btn.hasAttribute('data-mode')) btn.removeAttribute('data-mode');
                       setAttr(btn, 'aria-expanded', opened ? 'true' : 'false');
                       const runLabel = live ? runningText(running, id) : 'running';
                       const pill = ctl.querySelector('.mn-brun');
                       if (pill) setAttr(pill, 'data-label', runLabel);
                       setAttr(btn, 'aria-label', (mode === 'folded' ? 'Interleave branch: ' : 'Fold branch: ') + lane.name
                           + (lane.stats ? ' (' + lane.stats + (live ? ', ' + runLabel : unfinished ? ', no result' : '') + ')' : ''));
-                      let title = lane.name + (lane.meta ? ' · ' + lane.meta : '')
+                      // The stats too: a narrow control truncates its label (P8).
+                      let title = lane.name + (lane.meta ? ' · ' + lane.meta : '') + (lane.stats ? ' · ' + lane.stats : '')
                           + (live ? ' · still ' + runLabel : unfinished ? ' · ended without a result' : '');
                       if (fork) {
                           // Keyed by lane and card: a live swap can renumber d-N.
@@ -31929,8 +32089,10 @@
                               el.innerHTML = "<button type='button' class='dag-strip' data-col-act='expand'><span></span></button>";
                           } else {
                               el.innerHTML = "<div class='dag-colhead'><span class='dag-colname'></span><span class='dag-colmeta'></span>"
-                                  + "<span class='dag-colacts'><button type='button' class='mn-bmini' data-col-act='interleave' data-label='⇤ Interleave'></button>"
-                                  + "<button type='button' class='mn-bmini' data-col-act='collapse' data-label='Collapse'></button></span></div>";
+                                  + "<span class='dag-colacts'><button type='button' class='mn-bmini' data-col-act='interleave' data-label='⇤' data-long='⇤ Interleave'"
+                                  + " title='Merge this branch back into the main line'></button>"
+                                  + "<button type='button' class='mn-bmini' data-col-act='collapse' data-label='−' data-long='Collapse'"
+                                  + " title='Collapse this column to a narrow strip'></button></span></div>";
                           }
                           chrome.set(key, el);
                       }
@@ -31939,7 +32101,8 @@
                       el.style.gridColumn = String(i + 1);
                       el.style.gridRow = '1 / span ' + Math.max(1, rows + ROW0 - 1);
                       if (lane) {
-                          const meta = [lane.meta, lane.stats, running.has(key) ? runningText(running, key) : ''].filter(Boolean).join(' · ');
+                          // Stats first (P8): they are what a narrow head keeps.
+                          const meta = [lane.stats, running.has(key) ? runningText(running, key) : '', lane.meta].filter(Boolean).join(' · ');
                           if (isStrip) {
                               const btn = el.querySelector('.dag-strip');
                               setAttr(btn, 'aria-label', 'Expand column: ' + lane.name);
@@ -36914,6 +37077,12 @@
      data-theme="light|dark" on <html>, set by theme_init.js / minimal.js. */
   
   :root {
+      /* The sticky toolbar's height and the open filter panel's, kept up to
+         date by minimal.js. Declared at their usual desktop values so the
+         first measurement usually writes nothing: changing a custom property
+         on the root restyles every element of the page (P8). */
+      --mn-bar-h: 46px;
+      --mn-filter-h: 0px;
       --bg: #ffffff;
       --fg: #1f2328;
       --muted: #5f6670;
@@ -39578,32 +39747,42 @@
   /* A Task / Agent spawn reads as its call line (description, subagent type,
      `[async #id]`, model), the prompt as a 2-line preview and the branch
      control (dag.css). The prompt is a touch smaller than prose; a long one
-     is the shared <details> preview (tool_formatters
-     .format_task_prompt_preview) with its "+N lines" beside the preview's
-     last line rather than on a line of its own. */
+     is the shared <details> preview (utils.render_markdown_preview) with its
+     "+N lines" beside the preview's last line rather than on a line of its
+     own. The agent's answer on the merge row — a sync result, an async
+     notification — previews the same way once it is longer than three
+     lines (P8). */
   .theme-minimal #transcript .message.tool_use > .content > .task-prompt {
       font-size: 0.94em;
   }
   
-  .theme-minimal #transcript .task-prompt > details.collapsible-code > summary {
+  .theme-minimal #transcript :is(.task-prompt, .task-result, .task-notification-result) > details.collapsible-code > summary {
       flex-direction: row;
       align-items: flex-end;
       column-gap: 10px;
   }
   
-  .theme-minimal #transcript .task-prompt > details.collapsible-code > summary > .preview-content {
+  .theme-minimal #transcript :is(.task-prompt, .task-result, .task-notification-result) > details.collapsible-code > summary > .preview-content {
       flex: 1 1 0;
       min-width: 0;
   }
   
-  .theme-minimal #transcript .task-prompt > details.collapsible-code > summary::after,
-  .theme-minimal #transcript .task-prompt > details.collapsible-code > summary > .line-count {
+  .theme-minimal #transcript :is(.task-prompt, .task-result, .task-notification-result) > details.collapsible-code > summary::after,
+  .theme-minimal #transcript :is(.task-prompt, .task-result, .task-notification-result) > details.collapsible-code > summary > .line-count {
       flex: none;
       align-self: flex-end;
   }
   
-  .theme-minimal #transcript .task-prompt .preview-content p {
+  .theme-minimal #transcript :is(.task-prompt, .task-result, .task-notification-result) .preview-content :is(p, ul, ol, pre, blockquote, table) {
       margin: 0;
+  }
+  
+  /* A heading at the top of an agent's answer (`## Summary`) reads as a bold
+     line of the preview, not a title twice the size that fills the clip. */
+  .theme-minimal #transcript :is(.task-prompt, .task-result, .task-notification-result) .preview-content :is(h1, h2, h3, h4, h5, h6) {
+      margin: 0;
+      font-size: 1em;
+      line-height: inherit;
   }
   
   /* The spawn's teammate fields (name, team, mode), its result's agent
@@ -40077,7 +40256,7 @@
   /* ---------------------------------------------------- branch controls */
   
   /* On the spawn row (mockup .bctl): chevron + summary (+ "· interleaved" /
-     "· in column →"), the Column ⇥ / ⇤ Interleave button and, on a turn's
+     "· in column →", `data-mode`), the Column ⇥ / ⇤ Interleave button and, on a turn's
      third control, "+N more branches". Row 4 of the card grid (layout.css). */
   .theme-minimal #transcript .mn-bctls {
       grid-column: 3;
@@ -40101,6 +40280,34 @@
       margin-top: 2px;
   }
   
+  /* Wider than a phone, a control stays on one line (P8): in Columns the
+     main column is only ~470px of content, and the stats, `Result ↓`,
+     `launched ▸` and `⇤ Interleave` used to wrap the button onto a line of
+     its own. The stats give way instead (ellipsis; the full text is in the
+     chevron button's title and aria-label, and in the column head). A phone
+     keeps wrapping: there is no room to truncate into. */
+  @media (min-width: 641px) {
+      .theme-minimal #transcript .mn-bctl {
+          flex-wrap: nowrap;
+      }
+  
+      .theme-minimal #transcript .mn-bctl > * {
+          flex: none;
+      }
+  
+      .theme-minimal #transcript .mn-bctl > .mn-bfold {
+          flex: 0 1 auto;
+          min-width: 0;
+      }
+  
+      .theme-minimal #transcript .mn-bfold::after {
+          min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+      }
+  }
+  
   /* A lane behind its turn's "+N more branches". */
   .theme-minimal #transcript .mn-bctl[hidden] {
       display: none;
@@ -40121,6 +40328,16 @@
   
   .theme-minimal #transcript .mn-bfold::after {
       content: attr(data-label);
+  }
+  
+  /* "· interleaved" / "· in column →": after the label (flex `order`), never
+     truncated with it. */
+  .theme-minimal #transcript .mn-bfold[data-mode]::before {
+      content: attr(data-mode);
+      order: 2;
+      flex: none;
+      margin-left: -6px;
+      white-space: pre;
   }
   
   .theme-minimal #transcript .mn-bfold:hover {
@@ -40337,23 +40554,47 @@
       background: linear-gradient(color-mix(in srgb, var(--lc) 5%, transparent), color-mix(in srgb, var(--lc) 5%, transparent)), var(--bg);
   }
   
-  /* A column's head (P7c): the name on a line of its own (truncated, the
-     full name in the head's title), its meta and actions on the next. */
+  /* A column's head: the name and two compact actions (`⇤`, `−`; their
+     words come back once the head is 400px wide) on the first line, the
+     lane's stats on a line of their own below — steps, tokens, duration,
+     `running` first, so they are what a narrow column keeps; the agent type
+     and model follow and give way first (P8: the P7c head put the actions
+     beside the meta and truncated it in almost every column). Everything is
+     in the head's title. */
   .theme-minimal #transcript .dag-colhead:not(.dag-mainhead) {
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto;
       grid-template-rows: auto auto;
       align-content: center;
       gap: 1px 8px;
+      container-type: inline-size;
   }
   
   .theme-minimal #transcript .dag-colhead:not(.dag-mainhead) > .dag-colname {
-      grid-column: 1 / -1;
+      grid-column: 1;
+      grid-row: 1;
       white-space: nowrap;
   }
   
+  .theme-minimal #transcript .dag-colhead:not(.dag-mainhead) > .dag-colacts {
+      grid-column: 2;
+      grid-row: 1;
+  }
+  
+  .theme-minimal #transcript .dag-colhead:not(.dag-mainhead) > .dag-colmeta {
+      grid-column: 1 / -1;
+      grid-row: 2;
+  }
+  
   .theme-minimal #transcript .dag-colhead:not(.dag-mainhead) .mn-bmini {
+      min-width: 22px;
       min-height: 20px;
+  }
+  
+  @container (min-width: 400px) {
+      .theme-minimal #transcript .dag-colacts > .mn-bmini[data-long]::after {
+          content: attr(data-long);
+      }
   }
   
   .theme-minimal #transcript .dag-mainhead {
@@ -43490,6 +43731,9 @@
   
               // Apply all filters on page load
               applyFilter();
+              // Minimal theme (P8): minimal.js re-applies the filter to the
+              // markup a live update brings (it carries no filtered-hidden).
+              window.claudeLogApplyFilter = applyFilter;
   
               // Fold/unfold functionality with horizontal fold bars.
               //
@@ -44298,7 +44542,7 @@
           // On transcript pages, search acts as a filter: non-matching messages
           // are hidden, matches are revealed (unfolded) and highlighted.
           if (!searchState.isIndexPage) {
-              applyTranscriptSearchFilter();
+              applyTranscriptSearchFilter(options.quiet);
           }
   
           updateSearchUI();
@@ -44311,7 +44555,7 @@
           // Navigate to the current match — the first one for a fresh query,
           // or the preserved one after an option/filter re-search (the layout
           // may have shifted, so re-scrolling to it keeps it in view).
-          if (searchState.matches.length > 0 && !searchState.isIndexPage) {
+          if (searchState.matches.length > 0 && !searchState.isIndexPage && !options.quiet) {
               navigateToMatch(searchState.currentMatchIndex);
           }
   
@@ -44324,7 +44568,7 @@
       //   .search-context — ancestor of a match ("Show context" mode only)
       //   .search-hidden  — everything else (display: none)
       // Session headers are never touched so the session structure stays visible.
-      function applyTranscriptSearchFilter() {
+      function applyTranscriptSearchFilter(quiet) {
           const matched = new Set(searchState.matches.map(m => m.element));
   
           // Ancestors of matches: visible-but-dimmed when "Show context" is on
@@ -44347,7 +44591,7 @@
   
           // Unfold ancestors so every match is actually visible (matches inside
           // folded subtrees would otherwise stay hidden by the fold state).
-          if (window.claudeLogRevealMessage) {
+          if (window.claudeLogRevealMessage && !quiet) {
               matched.forEach(el => window.claudeLogRevealMessage(el));
           }
   
@@ -44355,7 +44599,7 @@
           // code, structured params) stays invisible even after the message
           // itself is revealed — open every details on the path from each
           // highlight up to its message card.
-          matched.forEach(el => {
+          if (!quiet) matched.forEach(el => {
               el.querySelectorAll('.search-highlight').forEach(highlight => {
                   let details = highlight.closest('details');
                   while (details && el.contains(details)) {
@@ -44800,7 +45044,7 @@
                   isUpdatingFilters = true;
                   setTimeout(() => {
                       buildSearchIndex();
-                      performSearch(searchState.query, { preserveCurrent: true });
+                      performSearch(searchState.query, { preserveCurrent: true, quiet: quietRefresh });
                       isUpdatingFilters = false;
                   }, 100);
               }
@@ -44814,6 +45058,24 @@
               subtree: true
           });
       }
+  
+      // Minimal theme (P8): a live update brings new cards — or, on a
+      // wholesale swap, a whole new #transcript — that the index has never
+      // seen and that carry none of the search's classes. Re-index and
+      // re-run the query quietly: the matches, classes and count follow the
+      // page, but nothing scrolls, unfolds or opens under the reader.
+      // `filtered`: the filter was just re-applied too, so the filter
+      // observer above is about to re-run the search — quietly as well.
+      let quietRefresh = false;
+      window.claudeLogRefreshSearch = function (filtered) {
+          if (!searchState.query || searchState.isIndexPage) return;
+          buildSearchIndex();
+          performSearch(searchState.query, { preserveCurrent: true, quiet: true });
+          if (filtered) {
+              quietRefresh = true;
+              setTimeout(() => { quietRefresh = false; }, 300);
+          }
+      };
   
       // Initialize when DOM is ready
       if (document.readyState === 'loading') {
@@ -44937,7 +45199,11 @@
                   btn.textContent = open ? '− less' : '+ more';
                   btn.setAttribute('aria-expanded', open ? 'true' : 'false');
               });
-              decorateSessionSummaries(document);
+              // Measuring a clamp forces a layout. At parse time that would be a
+              // whole extra layout of a large page (≈ 0.6s on a 5MB one, P8),
+              // thrown away when the DAG engine turns the grid on; in the first
+              // frame it reuses the layout the page needs anyway.
+              requestAnimationFrame(function () { decorateSessionSummaries(document); });
               if (window.claudeLogOnRehydrate) window.claudeLogOnRehydrate(decorateSessionSummaries);
               window.addEventListener('resize', function () { decorateSessionSummaries(document); });
   
@@ -44946,18 +45212,34 @@
               // sit under the toolbar, whose height changes when it wraps.
               const toolbar = document.querySelector('.mn-toolbar');
               const filterPanel = document.querySelector('.filter-toolbar');
+              // Changing a custom property on the root restyles every element
+              // of the page (≈ 0.15–0.3s on a 5MB one, P8), so write only a
+              // real change — tokens.css declares the usual values — and
+              // measure both heights before writing either.
+              const offsets = {};
+              function setProp(name, value) {
+                  if (!(name in offsets)) offsets[name] = getComputedStyle(root).getPropertyValue(name).trim();
+                  if (offsets[name] === value) return;
+                  offsets[name] = value;
+                  root.style.setProperty(name, value);
+              }
               function updateOffsets() {
-                  if (toolbar) root.style.setProperty('--mn-bar-h', toolbar.offsetHeight + 'px');
+                  const barHeight = toolbar ? toolbar.offsetHeight : 0;
                   const filterHeight = filterPanel && getComputedStyle(filterPanel).display !== 'none'
                       ? filterPanel.offsetHeight : 0;
-                  root.style.setProperty('--mn-filter-h', filterHeight + 'px');
+                  if (toolbar) setProp('--mn-bar-h', barHeight + 'px');
+                  setProp('--mn-filter-h', filterHeight + 'px');
               }
-              updateOffsets();
+              // Not measured at parse time either: reading a height there forces
+              // a layout of the whole page. A ResizeObserver reports every
+              // observed element once after the first layout, before the first
+              // paint, so the offsets are right when the page first shows.
               if (window.ResizeObserver) {
                   const observer = new ResizeObserver(updateOffsets);
                   if (toolbar) observer.observe(toolbar);
                   if (filterPanel) observer.observe(filterPanel);
               } else {
+                  updateOffsets();
                   window.addEventListener('resize', updateOffsets);
               }
   
@@ -45227,6 +45509,34 @@
               });
               focusableFoldBars(document.getElementById('transcript'));
               if (window.claudeLogOnRehydrate) window.claudeLogOnRehydrate(focusableFoldBars);
+  
+              // ---- live updates keep the filter and the search (P8) ----------
+              // A patched card, or a swapped-in #transcript, is the server's
+              // markup: no `filtered-hidden`, no search classes, and cards the
+              // search index has never seen. Re-apply both once per update
+              // (the hooks run once per changed element), after the update's
+              // other hooks; the DAG engine's observer relayouts on the class
+              // changes. The search refresh is quiet: nothing scrolls, unfolds
+              // or opens. (Classic pages keep their old behaviour: their bytes
+              // may not change.)
+              let refreshQueued = false;
+              function refreshFilterAndSearch() {
+                  refreshQueued = false;
+                  const filtered = !!window.claudeLogApplyFilter
+                      && document.querySelector('.filter-toggle:not(.active)') !== null;
+                  if (filtered) window.claudeLogApplyFilter();
+                  if (window.claudeLogRefreshSearch) window.claudeLogRefreshSearch(filtered);
+                  // The timeline reads both classes off the cards.
+                  if (window.applyTimelineSearchFilter) window.applyTimelineSearchFilter();
+              }
+              if (window.claudeLogOnRehydrate) {
+                  window.claudeLogOnRehydrate(function () {
+                      if (refreshQueued) return;
+                      refreshQueued = true;
+                      if (window.queueMicrotask) window.queueMicrotask(refreshFilterAndSearch);
+                      else setTimeout(refreshFilterAndSearch, 0);
+                  });
+              }
   
               // ---- overflow menu ---------------------------------------------
               // A <details>: closes on a click outside it or on Escape. Clicks
@@ -46141,17 +46451,22 @@
                       // without one (or the page is a static copy).
                       const unfinished = !live && (lane.state === 'open' || lane.state === 'ended');
                       const label = (fork ? '⑂ ' + lane.name + ' · ' : '') + (lane.stats || lane.name)
-                          + (unfinished ? ' · no result' : '')
-                          + (interleaved ? ' · interleaved' : columned ? ' · in column →' : '');
+                          + (unfinished ? ' · no result' : '');
+                      // The mode is its own part (P8): on a narrow line the
+                      // label gives way (ellipsis), the mode stays readable.
+                      const modeText = interleaved ? ' · interleaved' : columned ? ' · in column →' : '';
                       const btn = ctl.querySelector('.mn-bfold');
                       setAttr(btn, 'data-label', label);
+                      if (modeText) setAttr(btn, 'data-mode', modeText);
+                      else if (btn.hasAttribute('data-mode')) btn.removeAttribute('data-mode');
                       setAttr(btn, 'aria-expanded', opened ? 'true' : 'false');
                       const runLabel = live ? runningText(running, id) : 'running';
                       const pill = ctl.querySelector('.mn-brun');
                       if (pill) setAttr(pill, 'data-label', runLabel);
                       setAttr(btn, 'aria-label', (mode === 'folded' ? 'Interleave branch: ' : 'Fold branch: ') + lane.name
                           + (lane.stats ? ' (' + lane.stats + (live ? ', ' + runLabel : unfinished ? ', no result' : '') + ')' : ''));
-                      let title = lane.name + (lane.meta ? ' · ' + lane.meta : '')
+                      // The stats too: a narrow control truncates its label (P8).
+                      let title = lane.name + (lane.meta ? ' · ' + lane.meta : '') + (lane.stats ? ' · ' + lane.stats : '')
                           + (live ? ' · still ' + runLabel : unfinished ? ' · ended without a result' : '');
                       if (fork) {
                           // Keyed by lane and card: a live swap can renumber d-N.
@@ -46352,8 +46667,10 @@
                               el.innerHTML = "<button type='button' class='dag-strip' data-col-act='expand'><span></span></button>";
                           } else {
                               el.innerHTML = "<div class='dag-colhead'><span class='dag-colname'></span><span class='dag-colmeta'></span>"
-                                  + "<span class='dag-colacts'><button type='button' class='mn-bmini' data-col-act='interleave' data-label='⇤ Interleave'></button>"
-                                  + "<button type='button' class='mn-bmini' data-col-act='collapse' data-label='Collapse'></button></span></div>";
+                                  + "<span class='dag-colacts'><button type='button' class='mn-bmini' data-col-act='interleave' data-label='⇤' data-long='⇤ Interleave'"
+                                  + " title='Merge this branch back into the main line'></button>"
+                                  + "<button type='button' class='mn-bmini' data-col-act='collapse' data-label='−' data-long='Collapse'"
+                                  + " title='Collapse this column to a narrow strip'></button></span></div>";
                           }
                           chrome.set(key, el);
                       }
@@ -46362,7 +46679,8 @@
                       el.style.gridColumn = String(i + 1);
                       el.style.gridRow = '1 / span ' + Math.max(1, rows + ROW0 - 1);
                       if (lane) {
-                          const meta = [lane.meta, lane.stats, running.has(key) ? runningText(running, key) : ''].filter(Boolean).join(' · ');
+                          // Stats first (P8): they are what a narrow head keeps.
+                          const meta = [lane.stats, running.has(key) ? runningText(running, key) : '', lane.meta].filter(Boolean).join(' · ');
                           if (isStrip) {
                               const btn = el.querySelector('.dag-strip');
                               setAttr(btn, 'aria-label', 'Expand column: ' + lane.name);
@@ -51337,6 +51655,12 @@
      data-theme="light|dark" on <html>, set by theme_init.js / minimal.js. */
   
   :root {
+      /* The sticky toolbar's height and the open filter panel's, kept up to
+         date by minimal.js. Declared at their usual desktop values so the
+         first measurement usually writes nothing: changing a custom property
+         on the root restyles every element of the page (P8). */
+      --mn-bar-h: 46px;
+      --mn-filter-h: 0px;
       --bg: #ffffff;
       --fg: #1f2328;
       --muted: #5f6670;
@@ -54001,32 +54325,42 @@
   /* A Task / Agent spawn reads as its call line (description, subagent type,
      `[async #id]`, model), the prompt as a 2-line preview and the branch
      control (dag.css). The prompt is a touch smaller than prose; a long one
-     is the shared <details> preview (tool_formatters
-     .format_task_prompt_preview) with its "+N lines" beside the preview's
-     last line rather than on a line of its own. */
+     is the shared <details> preview (utils.render_markdown_preview) with its
+     "+N lines" beside the preview's last line rather than on a line of its
+     own. The agent's answer on the merge row — a sync result, an async
+     notification — previews the same way once it is longer than three
+     lines (P8). */
   .theme-minimal #transcript .message.tool_use > .content > .task-prompt {
       font-size: 0.94em;
   }
   
-  .theme-minimal #transcript .task-prompt > details.collapsible-code > summary {
+  .theme-minimal #transcript :is(.task-prompt, .task-result, .task-notification-result) > details.collapsible-code > summary {
       flex-direction: row;
       align-items: flex-end;
       column-gap: 10px;
   }
   
-  .theme-minimal #transcript .task-prompt > details.collapsible-code > summary > .preview-content {
+  .theme-minimal #transcript :is(.task-prompt, .task-result, .task-notification-result) > details.collapsible-code > summary > .preview-content {
       flex: 1 1 0;
       min-width: 0;
   }
   
-  .theme-minimal #transcript .task-prompt > details.collapsible-code > summary::after,
-  .theme-minimal #transcript .task-prompt > details.collapsible-code > summary > .line-count {
+  .theme-minimal #transcript :is(.task-prompt, .task-result, .task-notification-result) > details.collapsible-code > summary::after,
+  .theme-minimal #transcript :is(.task-prompt, .task-result, .task-notification-result) > details.collapsible-code > summary > .line-count {
       flex: none;
       align-self: flex-end;
   }
   
-  .theme-minimal #transcript .task-prompt .preview-content p {
+  .theme-minimal #transcript :is(.task-prompt, .task-result, .task-notification-result) .preview-content :is(p, ul, ol, pre, blockquote, table) {
       margin: 0;
+  }
+  
+  /* A heading at the top of an agent's answer (`## Summary`) reads as a bold
+     line of the preview, not a title twice the size that fills the clip. */
+  .theme-minimal #transcript :is(.task-prompt, .task-result, .task-notification-result) .preview-content :is(h1, h2, h3, h4, h5, h6) {
+      margin: 0;
+      font-size: 1em;
+      line-height: inherit;
   }
   
   /* The spawn's teammate fields (name, team, mode), its result's agent
@@ -54500,7 +54834,7 @@
   /* ---------------------------------------------------- branch controls */
   
   /* On the spawn row (mockup .bctl): chevron + summary (+ "· interleaved" /
-     "· in column →"), the Column ⇥ / ⇤ Interleave button and, on a turn's
+     "· in column →", `data-mode`), the Column ⇥ / ⇤ Interleave button and, on a turn's
      third control, "+N more branches". Row 4 of the card grid (layout.css). */
   .theme-minimal #transcript .mn-bctls {
       grid-column: 3;
@@ -54524,6 +54858,34 @@
       margin-top: 2px;
   }
   
+  /* Wider than a phone, a control stays on one line (P8): in Columns the
+     main column is only ~470px of content, and the stats, `Result ↓`,
+     `launched ▸` and `⇤ Interleave` used to wrap the button onto a line of
+     its own. The stats give way instead (ellipsis; the full text is in the
+     chevron button's title and aria-label, and in the column head). A phone
+     keeps wrapping: there is no room to truncate into. */
+  @media (min-width: 641px) {
+      .theme-minimal #transcript .mn-bctl {
+          flex-wrap: nowrap;
+      }
+  
+      .theme-minimal #transcript .mn-bctl > * {
+          flex: none;
+      }
+  
+      .theme-minimal #transcript .mn-bctl > .mn-bfold {
+          flex: 0 1 auto;
+          min-width: 0;
+      }
+  
+      .theme-minimal #transcript .mn-bfold::after {
+          min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+      }
+  }
+  
   /* A lane behind its turn's "+N more branches". */
   .theme-minimal #transcript .mn-bctl[hidden] {
       display: none;
@@ -54544,6 +54906,16 @@
   
   .theme-minimal #transcript .mn-bfold::after {
       content: attr(data-label);
+  }
+  
+  /* "· interleaved" / "· in column →": after the label (flex `order`), never
+     truncated with it. */
+  .theme-minimal #transcript .mn-bfold[data-mode]::before {
+      content: attr(data-mode);
+      order: 2;
+      flex: none;
+      margin-left: -6px;
+      white-space: pre;
   }
   
   .theme-minimal #transcript .mn-bfold:hover {
@@ -54760,23 +55132,47 @@
       background: linear-gradient(color-mix(in srgb, var(--lc) 5%, transparent), color-mix(in srgb, var(--lc) 5%, transparent)), var(--bg);
   }
   
-  /* A column's head (P7c): the name on a line of its own (truncated, the
-     full name in the head's title), its meta and actions on the next. */
+  /* A column's head: the name and two compact actions (`⇤`, `−`; their
+     words come back once the head is 400px wide) on the first line, the
+     lane's stats on a line of their own below — steps, tokens, duration,
+     `running` first, so they are what a narrow column keeps; the agent type
+     and model follow and give way first (P8: the P7c head put the actions
+     beside the meta and truncated it in almost every column). Everything is
+     in the head's title. */
   .theme-minimal #transcript .dag-colhead:not(.dag-mainhead) {
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto;
       grid-template-rows: auto auto;
       align-content: center;
       gap: 1px 8px;
+      container-type: inline-size;
   }
   
   .theme-minimal #transcript .dag-colhead:not(.dag-mainhead) > .dag-colname {
-      grid-column: 1 / -1;
+      grid-column: 1;
+      grid-row: 1;
       white-space: nowrap;
   }
   
+  .theme-minimal #transcript .dag-colhead:not(.dag-mainhead) > .dag-colacts {
+      grid-column: 2;
+      grid-row: 1;
+  }
+  
+  .theme-minimal #transcript .dag-colhead:not(.dag-mainhead) > .dag-colmeta {
+      grid-column: 1 / -1;
+      grid-row: 2;
+  }
+  
   .theme-minimal #transcript .dag-colhead:not(.dag-mainhead) .mn-bmini {
+      min-width: 22px;
       min-height: 20px;
+  }
+  
+  @container (min-width: 400px) {
+      .theme-minimal #transcript .dag-colacts > .mn-bmini[data-long]::after {
+          content: attr(data-long);
+      }
   }
   
   .theme-minimal #transcript .dag-mainhead {
@@ -55921,7 +56317,13 @@
               </div>
           </div>
           <div class='debug-info'>msg_004</div>
-          <div class='content'><div class='edit-tool-content'><div class='edit-diff'><div class='diff-line diff-added'><span class='diff-marker'>+</span>def repeat(times):</div><div class='diff-line diff-added'><span class='diff-marker'>+</span>    def decorator(func):</div><div class='diff-line diff-added'><span class='diff-marker'>+</span>        def wrapper(*args, **kwargs):</div><div class='diff-line diff-added'><span class='diff-marker'>+</span>            for _ in range(times):</div><div class='diff-line diff-added'><span class='diff-marker'>+</span>                result = func(*args, **kwargs)</div><div class='diff-line diff-added'><span class='diff-marker'>+</span>            return result</div><div class='diff-line diff-added'><span class='diff-marker'>+</span>        return wrapper</div><div class='diff-line diff-added'><span class='diff-marker'>+</span>    return decorator</div><div class='diff-line diff-added'><span class='diff-marker'>+</span></div><div class='diff-line diff-added'><span class='diff-marker'>+</span>@repeat(3)</div><div class='diff-line diff-added'><span class='diff-marker'>+</span>def greet(name):</div><div class='diff-line diff-added'><span class='diff-marker'>+</span>    print(f&quot;Hello, {name}!&quot;)</div><div class='diff-line diff-added'><span class='diff-marker'>+</span></div><div class='diff-line diff-added'><span class='diff-marker'>+</span>greet(&quot;Alice&quot;)</div></div></div></div>
+          <div class='content'><div class='edit-tool-content'><details class='collapsible-code'>
+          <summary>
+              <span class='line-count'>14 lines</span>
+              <div class='preview-content'><div class='edit-diff'><div class='diff-line diff-added'><span class='diff-marker'>+</span>def repeat(times):</div><div class='diff-line diff-added'><span class='diff-marker'>+</span>    def decorator(func):</div><div class='diff-line diff-added'><span class='diff-marker'>+</span>        def wrapper(*args, **kwargs):</div></div></div>
+          </summary>
+          <div class='code-full'><div class='edit-diff'><div class='diff-line diff-added'><span class='diff-marker'>+</span>def repeat(times):</div><div class='diff-line diff-added'><span class='diff-marker'>+</span>    def decorator(func):</div><div class='diff-line diff-added'><span class='diff-marker'>+</span>        def wrapper(*args, **kwargs):</div><div class='diff-line diff-added'><span class='diff-marker'>+</span>            for _ in range(times):</div><div class='diff-line diff-added'><span class='diff-marker'>+</span>                result = func(*args, **kwargs)</div><div class='diff-line diff-added'><span class='diff-marker'>+</span>            return result</div><div class='diff-line diff-added'><span class='diff-marker'>+</span>        return wrapper</div><div class='diff-line diff-added'><span class='diff-marker'>+</span>    return decorator</div><div class='diff-line diff-added'><span class='diff-marker'>+</span></div><div class='diff-line diff-added'><span class='diff-marker'>+</span>@repeat(3)</div><div class='diff-line diff-added'><span class='diff-marker'>+</span>def greet(name):</div><div class='diff-line diff-added'><span class='diff-marker'>+</span>    print(f&quot;Hello, {name}!&quot;)</div><div class='diff-line diff-added'><span class='diff-marker'>+</span></div><div class='diff-line diff-added'><span class='diff-marker'>+</span>greet(&quot;Alice&quot;)</div></div></div>
+      </details></div></div>
           
       </div>
       
@@ -57456,6 +57858,9 @@
   
               // Apply all filters on page load
               applyFilter();
+              // Minimal theme (P8): minimal.js re-applies the filter to the
+              // markup a live update brings (it carries no filtered-hidden).
+              window.claudeLogApplyFilter = applyFilter;
   
               // Fold/unfold functionality with horizontal fold bars.
               //
@@ -58264,7 +58669,7 @@
           // On transcript pages, search acts as a filter: non-matching messages
           // are hidden, matches are revealed (unfolded) and highlighted.
           if (!searchState.isIndexPage) {
-              applyTranscriptSearchFilter();
+              applyTranscriptSearchFilter(options.quiet);
           }
   
           updateSearchUI();
@@ -58277,7 +58682,7 @@
           // Navigate to the current match — the first one for a fresh query,
           // or the preserved one after an option/filter re-search (the layout
           // may have shifted, so re-scrolling to it keeps it in view).
-          if (searchState.matches.length > 0 && !searchState.isIndexPage) {
+          if (searchState.matches.length > 0 && !searchState.isIndexPage && !options.quiet) {
               navigateToMatch(searchState.currentMatchIndex);
           }
   
@@ -58290,7 +58695,7 @@
       //   .search-context — ancestor of a match ("Show context" mode only)
       //   .search-hidden  — everything else (display: none)
       // Session headers are never touched so the session structure stays visible.
-      function applyTranscriptSearchFilter() {
+      function applyTranscriptSearchFilter(quiet) {
           const matched = new Set(searchState.matches.map(m => m.element));
   
           // Ancestors of matches: visible-but-dimmed when "Show context" is on
@@ -58313,7 +58718,7 @@
   
           // Unfold ancestors so every match is actually visible (matches inside
           // folded subtrees would otherwise stay hidden by the fold state).
-          if (window.claudeLogRevealMessage) {
+          if (window.claudeLogRevealMessage && !quiet) {
               matched.forEach(el => window.claudeLogRevealMessage(el));
           }
   
@@ -58321,7 +58726,7 @@
           // code, structured params) stays invisible even after the message
           // itself is revealed — open every details on the path from each
           // highlight up to its message card.
-          matched.forEach(el => {
+          if (!quiet) matched.forEach(el => {
               el.querySelectorAll('.search-highlight').forEach(highlight => {
                   let details = highlight.closest('details');
                   while (details && el.contains(details)) {
@@ -58766,7 +59171,7 @@
                   isUpdatingFilters = true;
                   setTimeout(() => {
                       buildSearchIndex();
-                      performSearch(searchState.query, { preserveCurrent: true });
+                      performSearch(searchState.query, { preserveCurrent: true, quiet: quietRefresh });
                       isUpdatingFilters = false;
                   }, 100);
               }
@@ -58780,6 +59185,24 @@
               subtree: true
           });
       }
+  
+      // Minimal theme (P8): a live update brings new cards — or, on a
+      // wholesale swap, a whole new #transcript — that the index has never
+      // seen and that carry none of the search's classes. Re-index and
+      // re-run the query quietly: the matches, classes and count follow the
+      // page, but nothing scrolls, unfolds or opens under the reader.
+      // `filtered`: the filter was just re-applied too, so the filter
+      // observer above is about to re-run the search — quietly as well.
+      let quietRefresh = false;
+      window.claudeLogRefreshSearch = function (filtered) {
+          if (!searchState.query || searchState.isIndexPage) return;
+          buildSearchIndex();
+          performSearch(searchState.query, { preserveCurrent: true, quiet: true });
+          if (filtered) {
+              quietRefresh = true;
+              setTimeout(() => { quietRefresh = false; }, 300);
+          }
+      };
   
       // Initialize when DOM is ready
       if (document.readyState === 'loading') {
@@ -58903,7 +59326,11 @@
                   btn.textContent = open ? '− less' : '+ more';
                   btn.setAttribute('aria-expanded', open ? 'true' : 'false');
               });
-              decorateSessionSummaries(document);
+              // Measuring a clamp forces a layout. At parse time that would be a
+              // whole extra layout of a large page (≈ 0.6s on a 5MB one, P8),
+              // thrown away when the DAG engine turns the grid on; in the first
+              // frame it reuses the layout the page needs anyway.
+              requestAnimationFrame(function () { decorateSessionSummaries(document); });
               if (window.claudeLogOnRehydrate) window.claudeLogOnRehydrate(decorateSessionSummaries);
               window.addEventListener('resize', function () { decorateSessionSummaries(document); });
   
@@ -58912,18 +59339,34 @@
               // sit under the toolbar, whose height changes when it wraps.
               const toolbar = document.querySelector('.mn-toolbar');
               const filterPanel = document.querySelector('.filter-toolbar');
+              // Changing a custom property on the root restyles every element
+              // of the page (≈ 0.15–0.3s on a 5MB one, P8), so write only a
+              // real change — tokens.css declares the usual values — and
+              // measure both heights before writing either.
+              const offsets = {};
+              function setProp(name, value) {
+                  if (!(name in offsets)) offsets[name] = getComputedStyle(root).getPropertyValue(name).trim();
+                  if (offsets[name] === value) return;
+                  offsets[name] = value;
+                  root.style.setProperty(name, value);
+              }
               function updateOffsets() {
-                  if (toolbar) root.style.setProperty('--mn-bar-h', toolbar.offsetHeight + 'px');
+                  const barHeight = toolbar ? toolbar.offsetHeight : 0;
                   const filterHeight = filterPanel && getComputedStyle(filterPanel).display !== 'none'
                       ? filterPanel.offsetHeight : 0;
-                  root.style.setProperty('--mn-filter-h', filterHeight + 'px');
+                  if (toolbar) setProp('--mn-bar-h', barHeight + 'px');
+                  setProp('--mn-filter-h', filterHeight + 'px');
               }
-              updateOffsets();
+              // Not measured at parse time either: reading a height there forces
+              // a layout of the whole page. A ResizeObserver reports every
+              // observed element once after the first layout, before the first
+              // paint, so the offsets are right when the page first shows.
               if (window.ResizeObserver) {
                   const observer = new ResizeObserver(updateOffsets);
                   if (toolbar) observer.observe(toolbar);
                   if (filterPanel) observer.observe(filterPanel);
               } else {
+                  updateOffsets();
                   window.addEventListener('resize', updateOffsets);
               }
   
@@ -59193,6 +59636,34 @@
               });
               focusableFoldBars(document.getElementById('transcript'));
               if (window.claudeLogOnRehydrate) window.claudeLogOnRehydrate(focusableFoldBars);
+  
+              // ---- live updates keep the filter and the search (P8) ----------
+              // A patched card, or a swapped-in #transcript, is the server's
+              // markup: no `filtered-hidden`, no search classes, and cards the
+              // search index has never seen. Re-apply both once per update
+              // (the hooks run once per changed element), after the update's
+              // other hooks; the DAG engine's observer relayouts on the class
+              // changes. The search refresh is quiet: nothing scrolls, unfolds
+              // or opens. (Classic pages keep their old behaviour: their bytes
+              // may not change.)
+              let refreshQueued = false;
+              function refreshFilterAndSearch() {
+                  refreshQueued = false;
+                  const filtered = !!window.claudeLogApplyFilter
+                      && document.querySelector('.filter-toggle:not(.active)') !== null;
+                  if (filtered) window.claudeLogApplyFilter();
+                  if (window.claudeLogRefreshSearch) window.claudeLogRefreshSearch(filtered);
+                  // The timeline reads both classes off the cards.
+                  if (window.applyTimelineSearchFilter) window.applyTimelineSearchFilter();
+              }
+              if (window.claudeLogOnRehydrate) {
+                  window.claudeLogOnRehydrate(function () {
+                      if (refreshQueued) return;
+                      refreshQueued = true;
+                      if (window.queueMicrotask) window.queueMicrotask(refreshFilterAndSearch);
+                      else setTimeout(refreshFilterAndSearch, 0);
+                  });
+              }
   
               // ---- overflow menu ---------------------------------------------
               // A <details>: closes on a click outside it or on Escape. Clicks
@@ -60107,17 +60578,22 @@
                       // without one (or the page is a static copy).
                       const unfinished = !live && (lane.state === 'open' || lane.state === 'ended');
                       const label = (fork ? '⑂ ' + lane.name + ' · ' : '') + (lane.stats || lane.name)
-                          + (unfinished ? ' · no result' : '')
-                          + (interleaved ? ' · interleaved' : columned ? ' · in column →' : '');
+                          + (unfinished ? ' · no result' : '');
+                      // The mode is its own part (P8): on a narrow line the
+                      // label gives way (ellipsis), the mode stays readable.
+                      const modeText = interleaved ? ' · interleaved' : columned ? ' · in column →' : '';
                       const btn = ctl.querySelector('.mn-bfold');
                       setAttr(btn, 'data-label', label);
+                      if (modeText) setAttr(btn, 'data-mode', modeText);
+                      else if (btn.hasAttribute('data-mode')) btn.removeAttribute('data-mode');
                       setAttr(btn, 'aria-expanded', opened ? 'true' : 'false');
                       const runLabel = live ? runningText(running, id) : 'running';
                       const pill = ctl.querySelector('.mn-brun');
                       if (pill) setAttr(pill, 'data-label', runLabel);
                       setAttr(btn, 'aria-label', (mode === 'folded' ? 'Interleave branch: ' : 'Fold branch: ') + lane.name
                           + (lane.stats ? ' (' + lane.stats + (live ? ', ' + runLabel : unfinished ? ', no result' : '') + ')' : ''));
-                      let title = lane.name + (lane.meta ? ' · ' + lane.meta : '')
+                      // The stats too: a narrow control truncates its label (P8).
+                      let title = lane.name + (lane.meta ? ' · ' + lane.meta : '') + (lane.stats ? ' · ' + lane.stats : '')
                           + (live ? ' · still ' + runLabel : unfinished ? ' · ended without a result' : '');
                       if (fork) {
                           // Keyed by lane and card: a live swap can renumber d-N.
@@ -60318,8 +60794,10 @@
                               el.innerHTML = "<button type='button' class='dag-strip' data-col-act='expand'><span></span></button>";
                           } else {
                               el.innerHTML = "<div class='dag-colhead'><span class='dag-colname'></span><span class='dag-colmeta'></span>"
-                                  + "<span class='dag-colacts'><button type='button' class='mn-bmini' data-col-act='interleave' data-label='⇤ Interleave'></button>"
-                                  + "<button type='button' class='mn-bmini' data-col-act='collapse' data-label='Collapse'></button></span></div>";
+                                  + "<span class='dag-colacts'><button type='button' class='mn-bmini' data-col-act='interleave' data-label='⇤' data-long='⇤ Interleave'"
+                                  + " title='Merge this branch back into the main line'></button>"
+                                  + "<button type='button' class='mn-bmini' data-col-act='collapse' data-label='−' data-long='Collapse'"
+                                  + " title='Collapse this column to a narrow strip'></button></span></div>";
                           }
                           chrome.set(key, el);
                       }
@@ -60328,7 +60806,8 @@
                       el.style.gridColumn = String(i + 1);
                       el.style.gridRow = '1 / span ' + Math.max(1, rows + ROW0 - 1);
                       if (lane) {
-                          const meta = [lane.meta, lane.stats, running.has(key) ? runningText(running, key) : ''].filter(Boolean).join(' · ');
+                          // Stats first (P8): they are what a narrow head keeps.
+                          const meta = [lane.stats, running.has(key) ? runningText(running, key) : '', lane.meta].filter(Boolean).join(' · ');
                           if (isStrip) {
                               const btn = el.querySelector('.dag-strip');
                               setAttr(btn, 'aria-label', 'Expand column: ' + lane.name);

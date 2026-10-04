@@ -264,10 +264,10 @@ class TestInterleave:
             )
             == "true"
         )
+        # The mode is its own part of the label (P8: it never truncates).
         assert (
-            page.locator(f"[data-lane-ref='{A}'] .mn-bfold")
-            .get_attribute("data-label")
-            .endswith("· interleaved")
+            page.locator(f"[data-lane-ref='{A}'] .mn-bfold").get_attribute("data-mode")
+            == " · interleaved"
         )
         order = page.evaluate(VISUAL_ORDER)
         stamps = [ms for _lane, ms, _id in order]

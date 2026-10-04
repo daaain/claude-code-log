@@ -44,6 +44,7 @@ uvx claude-code-log@latest --open-browser
 - **Runtime Message Filtering**: JavaScript-powered filtering to show/hide message types (user, assistant, system, tool use, etc.)
 - **Chronological Ordering**: All messages sorted by timestamp across sessions
 - **Interactive timeline**: Generate an interactive, zoomable timeline grouped by message times to navigate conversations visually
+- **Themes**: `--theme minimal` gives a compact light/dark page where sub-agents and rewind forks are branches you can fold away, interleave with the main conversation or open side by side in columns (see [Choosing a Theme](#choosing-a-theme))
 - **Cross-Session Summary Matching**: Properly match async-generated summaries to their original sessions
 - **Date Range Filtering**: Filter messages by date range using natural language (e.g., "today", "yesterday", "last week")
 - **Rich Message Types**: Support for user/assistant messages, tool use/results, thinking content, images
@@ -190,8 +191,8 @@ Placeholders: `{host}`, `{path}`, `{sha}`. The template fires only when the stat
 
 HTML output comes in themes, selected with `--theme` (on the default command, `serve` and `watch`, and for the TUI's HTML exports) or the `CLAUDE_CODE_LOG_THEME` environment variable:
 
-- `classic` — the current look
-- `minimal` — a compact light/dark theme (in development: it currently renders like `classic`)
+- `classic` — the original look (the default)
+- `minimal` — a compact light/dark theme: dense rows on a time rail, long content folded to short previews, and sub-agents and rewind forks drawn as branches you can fold away, interleave with the main conversation or open side by side in columns
 - `default` — the built-in default, currently `classic`
 
 ```bash
@@ -202,7 +203,9 @@ export CLAUDE_CODE_LOG_THEME=minimal
 claude-code-log --theme classic   # still classic
 ```
 
-Themes write the same files (`combined_transcripts.html`, `session-*.html`, …) rather than separate ones, and each page records the theme it was rendered in, so switching theme regenerates the whole archive (and switching back regenerates it again). `--theme` is HTML-only; with `--format md` it is ignored with a warning. An unknown `CLAUDE_CODE_LOG_THEME` value is an error.
+Themes write the same files (`combined_transcripts.html`, `session-*.html`, …) rather than separate ones, and each page records the theme it was rendered in, so switching theme regenerates the whole archive (and switching back regenerates it again). `--theme` is HTML-only; with `--format md` it is ignored with a warning. An unknown `CLAUDE_CODE_LOG_THEME` value is an error. The [themes guide](https://daaain.github.io/claude-code-log/themes/) walks through the minimal theme's toolbar, branch modes and dark mode, with screenshots.
+
+![The minimal theme with two background agents folded to one line each](docs/assets/themes/main-light.png)
 
 ## Project Hierarchy Output
 
@@ -330,5 +333,5 @@ Cross-platform (macOS and Windows/MSYS).
 - wrap up CLI as Github Action to run after Cladue Github Action and process [output](https://github.com/anthropics/claude-code-base-action?tab=readme-ov-file#outputs)
 - feed the filtered user messages to headless claude CLI to distill the user intent from the session
 - filter message type on Python (CLI) side too, not just UI
-- add minimalist theme and make it light + dark; animate gradient background in fancy theme
+- animate gradient background in the classic theme
 - merge git worktree directories

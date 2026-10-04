@@ -564,7 +564,7 @@
         // On transcript pages, search acts as a filter: non-matching messages
         // are hidden, matches are revealed (unfolded) and highlighted.
         if (!searchState.isIndexPage) {
-            applyTranscriptSearchFilter();
+            applyTranscriptSearchFilter({% if minimal %}options.quiet{% endif %});
         }
 
         updateSearchUI();
@@ -577,7 +577,7 @@
         // Navigate to the current match — the first one for a fresh query,
         // or the preserved one after an option/filter re-search (the layout
         // may have shifted, so re-scrolling to it keeps it in view).
-        if (searchState.matches.length > 0 && !searchState.isIndexPage) {
+        if (searchState.matches.length > 0 && !searchState.isIndexPage{% if minimal %} && !options.quiet{% endif %}) {
             navigateToMatch(searchState.currentMatchIndex);
         }
 
@@ -590,7 +590,7 @@
     //   .search-context — ancestor of a match ("Show context" mode only)
     //   .search-hidden  — everything else (display: none)
     // Session headers are never touched so the session structure stays visible.
-    function applyTranscriptSearchFilter() {
+    function applyTranscriptSearchFilter({% if minimal %}quiet{% endif %}) {
         const matched = new Set(searchState.matches.map(m => m.element));
 
         // Ancestors of matches: visible-but-dimmed when "Show context" is on
@@ -613,7 +613,7 @@
 
         // Unfold ancestors so every match is actually visible (matches inside
         // folded subtrees would otherwise stay hidden by the fold state).
-        if (window.claudeLogRevealMessage) {
+        if (window.claudeLogRevealMessage{% if minimal %} && !quiet{% endif %}) {
             matched.forEach(el => window.claudeLogRevealMessage(el));
         }
 
@@ -621,7 +621,7 @@
         // code, structured params) stays invisible even after the message
         // itself is revealed — open every details on the path from each
         // highlight up to its message card.
-        matched.forEach(el => {
+        {% if minimal %}if (!quiet) {% endif %}matched.forEach(el => {
             el.querySelectorAll('.search-highlight').forEach(highlight => {
                 let details = highlight.closest('details');
                 while (details && el.contains(details)) {
@@ -1066,7 +1066,7 @@
                 isUpdatingFilters = true;
                 setTimeout(() => {
                     buildSearchIndex();
-                    performSearch(searchState.query, { preserveCurrent: true });
+                    performSearch(searchState.query, { preserveCurrent: true{% if minimal %}, quiet: quietRefresh{% endif %} });
                     isUpdatingFilters = false;
                 }, 100);
             }
@@ -1079,7 +1079,25 @@
             attributeOldValue: true,
             subtree: true
         });
-    }
+    }{% if minimal %}
+
+    // Minimal theme (P8): a live update brings new cards — or, on a
+    // wholesale swap, a whole new #transcript — that the index has never
+    // seen and that carry none of the search's classes. Re-index and
+    // re-run the query quietly: the matches, classes and count follow the
+    // page, but nothing scrolls, unfolds or opens under the reader.
+    // `filtered`: the filter was just re-applied too, so the filter
+    // observer above is about to re-run the search — quietly as well.
+    let quietRefresh = false;
+    window.claudeLogRefreshSearch = function (filtered) {
+        if (!searchState.query || searchState.isIndexPage) return;
+        buildSearchIndex();
+        performSearch(searchState.query, { preserveCurrent: true, quiet: true });
+        if (filtered) {
+            quietRefresh = true;
+            setTimeout(() => { quietRefresh = false; }, 300);
+        }
+    };{% endif %}
 
     // Initialize when DOM is ready
     if (document.readyState === 'loading') {

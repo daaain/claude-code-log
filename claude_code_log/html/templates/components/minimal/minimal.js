@@ -111,7 +111,11 @@
                 btn.textContent = open ? '− less' : '+ more';
                 btn.setAttribute('aria-expanded', open ? 'true' : 'false');
             });
-            decorateSessionSummaries(document);
+            // Measuring a clamp forces a layout. At parse time that would be a
+            // whole extra layout of a large page (≈ 0.6s on a 5MB one, P8),
+            // thrown away when the DAG engine turns the grid on; in the first
+            // frame it reuses the layout the page needs anyway.
+            requestAnimationFrame(function () { decorateSessionSummaries(document); });
             if (window.claudeLogOnRehydrate) window.claudeLogOnRehydrate(decorateSessionSummaries);
             window.addEventListener('resize', function () { decorateSessionSummaries(document); });
 
@@ -120,18 +124,34 @@
             // sit under the toolbar, whose height changes when it wraps.
             const toolbar = document.querySelector('.mn-toolbar');
             const filterPanel = document.querySelector('.filter-toolbar');
+            // Changing a custom property on the root restyles every element
+            // of the page (≈ 0.15–0.3s on a 5MB one, P8), so write only a
+            // real change — tokens.css declares the usual values — and
+            // measure both heights before writing either.
+            const offsets = {};
+            function setProp(name, value) {
+                if (!(name in offsets)) offsets[name] = getComputedStyle(root).getPropertyValue(name).trim();
+                if (offsets[name] === value) return;
+                offsets[name] = value;
+                root.style.setProperty(name, value);
+            }
             function updateOffsets() {
-                if (toolbar) root.style.setProperty('--mn-bar-h', toolbar.offsetHeight + 'px');
+                const barHeight = toolbar ? toolbar.offsetHeight : 0;
                 const filterHeight = filterPanel && getComputedStyle(filterPanel).display !== 'none'
                     ? filterPanel.offsetHeight : 0;
-                root.style.setProperty('--mn-filter-h', filterHeight + 'px');
+                if (toolbar) setProp('--mn-bar-h', barHeight + 'px');
+                setProp('--mn-filter-h', filterHeight + 'px');
             }
-            updateOffsets();
+            // Not measured at parse time either: reading a height there forces
+            // a layout of the whole page. A ResizeObserver reports every
+            // observed element once after the first layout, before the first
+            // paint, so the offsets are right when the page first shows.
             if (window.ResizeObserver) {
                 const observer = new ResizeObserver(updateOffsets);
                 if (toolbar) observer.observe(toolbar);
                 if (filterPanel) observer.observe(filterPanel);
             } else {
+                updateOffsets();
                 window.addEventListener('resize', updateOffsets);
             }
 
@@ -401,6 +421,34 @@
             });
             focusableFoldBars(document.getElementById('transcript'));
             if (window.claudeLogOnRehydrate) window.claudeLogOnRehydrate(focusableFoldBars);
+
+            // ---- live updates keep the filter and the search (P8) ----------
+            // A patched card, or a swapped-in #transcript, is the server's
+            // markup: no `filtered-hidden`, no search classes, and cards the
+            // search index has never seen. Re-apply both once per update
+            // (the hooks run once per changed element), after the update's
+            // other hooks; the DAG engine's observer relayouts on the class
+            // changes. The search refresh is quiet: nothing scrolls, unfolds
+            // or opens. (Classic pages keep their old behaviour: their bytes
+            // may not change.)
+            let refreshQueued = false;
+            function refreshFilterAndSearch() {
+                refreshQueued = false;
+                const filtered = !!window.claudeLogApplyFilter
+                    && document.querySelector('.filter-toggle:not(.active)') !== null;
+                if (filtered) window.claudeLogApplyFilter();
+                if (window.claudeLogRefreshSearch) window.claudeLogRefreshSearch(filtered);
+                // The timeline reads both classes off the cards.
+                if (window.applyTimelineSearchFilter) window.applyTimelineSearchFilter();
+            }
+            if (window.claudeLogOnRehydrate) {
+                window.claudeLogOnRehydrate(function () {
+                    if (refreshQueued) return;
+                    refreshQueued = true;
+                    if (window.queueMicrotask) window.queueMicrotask(refreshFilterAndSearch);
+                    else setTimeout(refreshFilterAndSearch, 0);
+                });
+            }
 
             // ---- overflow menu ---------------------------------------------
             // A <details>: closes on a click outside it or on Escape. Clicks

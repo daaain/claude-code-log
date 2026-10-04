@@ -926,7 +926,10 @@
             applyUrlFilters();
 
             // Apply all filters on page load
-            applyFilter();
+            applyFilter();{% if minimal %}
+            // Minimal theme (P8): minimal.js re-applies the filter to the
+            // markup a live update brings (it carries no filtered-hidden).
+            window.claudeLogApplyFilter = applyFilter;{% endif %}
 
             // Fold/unfold functionality with horizontal fold bars.
             //

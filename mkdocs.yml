@@ -74,6 +74,7 @@ nav:
   - Home: index.md
   - Example output: example.md
   - User Guide:
+      - Themes: themes.md
       - Searching the whole archive: archive-search.md
       - Watching a session as it runs: live-updates.md
       - Restoring archived sessions: restoring-archived-sessions.md
@@ -85,7 +86,7 @@ nav:
       - Rendering architecture: development/rendering-architecture.md
       - Messages: development/messages.md
       - Message hierarchy: development/message-hierarchy.md
-      - Minimal theme DAG: development/minimal-theme.md
+      - Minimal theme: development/minimal-theme.md
       - DAG: development/dag.md
       - Agents: development/agents.md
       - Teammates: development/teammates.md

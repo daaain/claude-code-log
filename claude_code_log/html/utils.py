@@ -813,6 +813,37 @@ def render_markdown_collapsible(
     )
 
 
+def render_markdown_preview(
+    text: str, css_class: str, inline_lines: int, inline_chars: int
+) -> str:
+    """The minimal theme's short preview of a long Markdown block.
+
+    Text of at most ``inline_lines`` lines and ``inline_chars`` characters
+    renders inline (as ``render_markdown_collapsible`` would); anything
+    longer always becomes the shared collapsible preview — its first two
+    non-blank lines in the ``<summary>`` (clipped to two lines by the
+    theme's CSS; no "..." line, the fade and the "+N lines" label say there
+    is more) and the full text in the body. Used for a sub-agent's prompt
+    on its spawn row (P7c) and for its answer on the merge row (P8), so a
+    long agent report reads as two lines in "Main only" like every other
+    long block.
+    """
+    lines = text.splitlines()
+    if len(lines) <= inline_lines and len(text) <= inline_chars:
+        return render_markdown_collapsible(text, css_class)
+    preview = "\n".join([line for line in lines if line.strip()][:2])
+    collapsible = render_collapsible_code(
+        render_markdown(preview), render_markdown(text), len(lines), is_markdown=True
+    )
+    return f'<div class="{css_class}">{collapsible}</div>'
+
+
+# The minimal theme's agent answers (sync results, async notifications): a
+# reply this short reads in full on the merge row; anything longer previews.
+ANSWER_INLINE_LINES = 3
+ANSWER_INLINE_CHARS = 320
+
+
 def render_user_markdown_collapsible(
     raw_content: str,
     css_class: str,
@@ -888,7 +919,7 @@ def render_file_content_collapsible(
     return "".join(html_parts)
 
 
-def render_async_result_body(text: str, css_class: str) -> str:
+def render_async_result_body(text: str, css_class: str, preview: bool = False) -> str:
     """Render an async-result body, JSON-aware (issue #174 D4).
 
     A JSON-shaped payload — ``lstrip()`` starts with ``{"`` per cboos's
@@ -900,6 +931,10 @@ def render_async_result_body(text: str, css_class: str) -> str:
     (Spilling to the full untruncated ``tool-results/<taskId>.txt`` is a
     separate enhancement — it needs the taskId plumbed to this layer — and
     is deferred to a follow-up.)
+
+    ``preview`` (minimal theme): a Markdown answer longer than a few lines
+    is the short two-line preview (``render_markdown_preview``) rather than
+    the 20-line threshold's five-line one.
     """
     stripped = (text or "").lstrip()
     if stripped.startswith('{"'):
@@ -914,6 +949,10 @@ def render_async_result_body(text: str, css_class: str) -> str:
             css_class,
             line_threshold=10,
             preview_line_count=6,
+        )
+    if preview:
+        return render_markdown_preview(
+            text, css_class, ANSWER_INLINE_LINES, ANSWER_INLINE_CHARS
         )
     return render_markdown_collapsible(text, css_class)
 

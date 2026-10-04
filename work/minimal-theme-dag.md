@@ -1,14 +1,46 @@
 # `--theme minimal`: a compact light/dark theme with a DAG layout
 
-Status: **spec + phased plan; P1–P7, P7b and P7c landed (see § 6);
-§ 7 decisions 1–5 taken.** Branch of origin:
+Status: **complete — every phase (P1–P8, with P7b and P7c) landed (§ 6).
+This file is now a historical record.** Branch of origin:
 `claude/sweet-mccarthy-64a24r`.
 
-This file is the single source of truth for the feature. Each phase in
-§ 5 is written to be executed by a fresh agent with no other context: read
-§ 1–4 once (they are short relative to the code they describe), then only
-your phase section. When a phase lands, tick it in § 6 and record anything
-that diverged from this plan **in this file**, in the same commit.
+> **Where the as-built reference lives.** The feature has graduated into
+> `dev-docs/` (CLAUDE.md's lifecycle): start at
+> [`dev-docs/minimal-theme.md`](../dev-docs/minimal-theme.md) — its § 0
+> maps every part of the theme to its code and deep-dive (the option and
+> staleness in `application_model.md` § 2.1, the template branches in
+> `rendering-architecture.md` § 8, the look in `css-classes.md`, fold depth
+> in `message-hierarchy.md`, lanes in `agents.md` § 6 / `dag.md`, the lane
+> attribute schema in its § 12). The user guide is
+> [`docs/themes.md`](../docs/themes.md). Where this file and those pages
+> disagree, they — and the code — are right; the phase notes below record
+> what was planned, what diverged and why, as of each phase.
+
+**Follow-ups** (deliberately not done in this feature):
+
+- **Index and archive search pages** (`index.html`, `search.html`) are not
+  themed (§ 7 decision 6).
+- **Workflow agents as lanes** (#174): workflow phases and agents stay
+  nested blocks, not DAG branches (§ 7 decision 6).
+- **Markdown (and JSON) output** has no themes and no notion of lanes or
+  of a running agent (P7b).
+- **Classic live updates don't re-apply the filter or search** to the
+  markup a live update brings (P8 found it; fixed for the minimal theme
+  only, because classic bytes may not change — port it when they may).
+- **Making `minimal` the default** is a one-line change of
+  `utils.DEFAULT_THEME` (§ 7 decision 7), not taken.
+- **Teammates in their own files**: the `session-<sid>.html?uuid=` fallback
+  for teammate anchors only matters if a later layout moves teammate
+  threads out of the page (§ 7 decision 4).
+- **Columns on a phone** snap one column per screen but were not polished
+  further (P7c); very wide pages in global Columns (hundreds of lanes) cost
+  about a second per switch (dev-docs/minimal-theme.md § 5).
+
+Each phase in § 5 was written to be executed by a fresh agent with no
+other context: read § 1–4 once (they are short relative to the code they
+describe), then only your phase section. When a phase landed, it was
+ticked in § 6 and anything that diverged from the plan recorded **in
+this file**, in the same commit.
 
 Mockups (interactive "Design Component" files agreed with the user) are
 committed next to this file in
@@ -2305,6 +2337,113 @@ minimal example page for the docs site), tests.
 **Acceptance:** `just ci` and `just docs-build` green; all browser
 tests from P3a–P7 green together.
 
+**Added to the scope by the lead** (P7c's leftovers and review): long
+sync-agent answers on the merge row (and async answers on notification
+rows) as the same 2–3 line preview as other long content; the main
+column's control line wrapping `⇤ Interleave` in Columns at 1600px; column
+heads whose meta truncates; README / CONTRIBUTING / docs / dev-docs
+pointers and a docs page with screenshots; this file marked complete with
+follow-ups; render-time / size deltas from `scripts/bench_render.py`; a
+headless click-through smoke test failing on any page error.
+
+**As built (P8 landed):**
+- **Previews (deviation from § 1.4's "no formatter changes").** CSS alone
+  cannot preview a block the formatters render whole, so long content the
+  classic formatters never fold is previewed **server-side, minimal only**
+  (`normalize_theme(self.theme) == "minimal"` in `HtmlRenderer`; classic
+  bytes unchanged): a sync agent's answer on its merge row
+  (`format_task_output(preview=True)`) and an async answer on its
+  notification (`render_async_result_body(preview=True)`) — inline up to 3
+  lines / 320 characters, else the first two non-blank lines with
+  `+ N lines`, through a new shared `utils.render_markdown_preview` (the
+  P7c spawn-prompt preview now uses it too); an `Edit` / `MultiEdit` diff
+  over 12 lines (`tool_formatters.collapse_long_diff`, first three diff
+  lines) and a `Bash` command over 12 lines (first three). Headings in a
+  preview are drawn at body size. Real project `-src-deep-manifest` in
+  Main only: tallest card 5,275px (a diff) → 522px (an assistant reply);
+  `-experiments-worktrees`' three teammate reports, a screen each, are two
+  lines each.
+- **Columns.** The control line no longer wraps wider than a phone: items
+  `flex: none`, only the stats label shrinks (ellipsis), and the mode
+  suffix moved to its own attribute, `data-mode` (drawn by `::before` with
+  `order: 2`), so `· in column →` never truncates; the stats went into the
+  button's `title`. Column head: name + compact `⇤` / `−` actions on line
+  1 (their words, via `data-long`, from a 400px head — container query),
+  stats → `running …` → meta on line 2, everything in `title`. Two
+  earlier browser assertions moved from `data-label` suffixes to
+  `data-mode` (the intended change).
+- **Parity sweep** (`test/test_minimal_parity_browser.py`, 16 tests,
+  marker `browser`): every visible filter toggle off/on × Prompts / Steps
+  / All × Main only / Interleaved / Columns with the timeline open, the
+  invariants checked each time (nothing filtered or searched is visible;
+  timeline item shown ⇔ card shown; every card has its grid row; filters
+  change no lane mode; toggling back restores the exact visible set); a
+  search into a folded lane per mode; a live swap with a filter and with a
+  search. It found one real gap: **a live update's markup was never
+  filtered or searched again** (both themes, pre-existing). Fixed for the
+  minimal theme: `transcript.html` exports `window.claudeLogApplyFilter`
+  and `search.html` `window.claudeLogRefreshSearch` (both minimal-gated,
+  glued inline), and `minimal.js` re-applies both once per update and
+  re-syncs the timeline; the search refresh is quiet (`performSearch(…,
+  {quiet: true})`: no navigation, reveal or `<details>` opening, and the
+  filter observer's follow-up re-search inherits it for 300ms) so a live
+  page never moves. Classic keeps the old behaviour (bytes) — a
+  follow-up. The search-in-a-folded-lane reveal (step 2) already existed
+  (P6/P7) and passes in every mode.
+- **Smoke test** (same file): the demo and three real projects, every
+  colour scheme × fold depth × branch mode, one lane through interleaved →
+  column → strip → column → interleaved from its own controls, the
+  timeline; fails on any page error or console error (a blocked unpkg
+  fetch excepted) and on the invariants.
+- **Performance** (numbers in dev-docs/minimal-theme.md § 5): on real
+  pages the browser's style and layout dominate (engine JS 20–45ms; a
+  global mode switch 0.5–0.65s with paint on a 10.5MB page). Profiling the
+  load found `minimal.js` forcing a layout at parse time and then changing
+  `--mn-bar-h` / `--mn-filter-h` on the root — a whole-document restyle
+  (≈ 0.3–0.4s on a 5MB page): it now measures from its ResizeObserver,
+  reads before writing and writes only a change (`tokens.css` declares the
+  usual 46px / 0px); session summaries are measured in the first frame.
+  Load to laid-out on the 5MB page ≈ 2.45–2.5s → 2.1–2.3s (classic ≈ 1.05–1.2s); the
+  remaining gap is the grid's own style + layout pass after the browser's
+  first, nested layout. `scripts/bench_render.py` gained `--theme` and an
+  output-size column: on the eight real projects minimal costs ≈ +6% CPU
+  and +23% output (≈ +250KB of CSS/JS per page).
+- **Docs.** New user guide `docs/themes.md` (in the mkdocs nav under User
+  Guide, five screenshots in `docs/assets/themes/`), the docs build also
+  publishes the example transcript in the minimal theme
+  (`examples/transcript-minimal.html`, `scripts/generate_example_output.py
+  [OUT] [THEME]`); README's theme section (the stale "in development" line
+  gone, a feature bullet, a screenshot), `docs/index.md`,
+  `docs/live-updates.md` (filter / search on live pages), CONTRIBUTING
+  (file map, a "Themes" section with the two rules: classic bytes, parity
+  sweep; the example page), `application_model.md` § 1 ("Themes" row; the
+  lane-attribute pointer now into dev-docs) and § 2.1,
+  `css-classes.md`, `agents.md`. **Graduation:** `dev-docs/minimal-theme.md`
+  is now the theme's as-built entry point — § 0 maps every part to its code
+  and deep-dive; new § 10 (previews), § 11 (parity, the live refresh, the
+  smoke test), § 12 (the lane attribute schema, moved from P5's note) — and
+  this file's status says it is historical, with the follow-ups at the top.
+  CLAUDE.md's deep-dive list does not name `minimal-theme.md` (left to the
+  maintainer: agents don't edit CLAUDE.md here).
+- **Snapshots** (`just update-snapshot`, block level): none added or
+  removed; every classic block and the index identical; the three minimal
+  blocks `+191/-30` (representative), `+184/-29` (nested), `+194/-31`
+  (async) — CSS/JS text, plus exactly the fixtures' one 14-line `Edit` diff
+  as a preview (representative, nested) and the async fixture's 8-line
+  notification answer as a preview.
+- **Screenshots**: `docs/assets/themes/` (Main only light + dark,
+  Interleaved, Columns at 1600px, a running lane in dark — the demo and the
+  live fixture), and in
+  [`work/minimal-theme-dag-screenshots/p8/`](minimal-theme-dag-screenshots/p8/)
+  the agent-answer previews on `-experiments-worktrees`, the diff preview
+  on `-src-deep-manifest` (light, dark) and Columns in dark (64-colour
+  PNGs, ≈ 430KB in all).
+- **Tests.** New: `test_minimal_parity_browser.py` (above),
+  `test_minimal_polish_browser.py::TestP8Polish` (one-line controls in
+  Columns, readable heads, answer previews on a real project),
+  `test_minimal_theme.py::TestAnswerPreviews` /
+  `TestLongDiffAndCommandPreviews` (markup, classic unchanged).
+
 ---
 
 ## 6. Progress
@@ -2319,14 +2458,15 @@ tests from P3a–P7 green together.
 - [x] P7 columns, overflow, teammates (+ async result at the merge row)
 - [x] P7b live/watch mode with branches (+ running lanes)
 - [x] P7c visual polish (spawn rows, fold bars, forks, columns, density; running lanes without a timeout)
-- [ ] P8 docs and polish
+- [x] P8 docs, polish, parity sweep (+ answer / diff / command previews, live filter and search refresh)
 
 ---
 
 ## 7. Decisions and risks
 
 Decisions 1–5 and 7–8 were taken by the user (1 implicitly by approving
-P1; the rest before P2) and are recorded as decided; 6 remains open.
+P1; the rest before P2) and are recorded as decided; 6 was left open and
+is a follow-up.
 
 1. **Groundwork changes default bytes (P1).** *Decided:* one explicit,
    reviewed regeneration in P1 (landed); classic byte-identity from P2
@@ -2353,7 +2493,7 @@ P1; the rest before P2) and are recorded as decided; 6 remains open.
    (§ 1.6.3).
 6. **Workflow sub-agents** (#174) are not lanes in this feature; the
    index page and `search.html` are not themed. Both could follow.
-   *(Open.)*
+   *(Left open: listed under the follow-ups at the top.)*
 7. **Theme names.** *Decided (with P2):* the existing look is `classic`;
    valid values are `classic`, `minimal` and `default`. `default` means
    "the built-in default theme" — `classic` today, possibly `minimal`

@@ -29,7 +29,8 @@ for user-facing operations docs see [`docs/`](../docs/).
 | Teammates (#91) | `renderer.py`, `factories/teammate_factory.py`, `html/teammate_formatter.py` | [teammates.md](teammates.md) |
 | Dynamic workflows (#174) | [`workflow.py`](../claude_code_log/workflow.py), `converter.py`, `renderer.py` | [workflows.md](workflows.md) |
 | Rendering pipeline | [`renderer.py`](../claude_code_log/renderer.py), `html/`, `markdown/`, `json/` | [rendering-architecture.md](rendering-architecture.md) |
-| Branch lanes (minimal theme's DAG data) | [`lanes.py`](../claude_code_log/lanes.py) (model), `html/minimal_theme.py` (`data-*` attributes) | [agents.md § 6](agents.md#6-branch-lanes-minimal-theme), [dag.md § Branch lanes](dag.md#branch-lanes-minimal-theme); attribute schema in [`work/minimal-theme-dag.md`](../work/minimal-theme-dag.md) (P5 "As built") |
+| Themes (`classic`, `minimal`) | `cli._resolve_theme`, `utils.DEFAULT_THEME`, `html/renderer.py` (`theme`, generator stamp), `html/minimal_theme.py`, `transcript.html` (`{% if minimal %}` branches), `html/templates/components/minimal/` | option and staleness below (§ 2.1); the minimal theme's as-built reference starts at [minimal-theme.md](minimal-theme.md) (map of its parts in § 0); user guide [`docs/themes.md`](../docs/themes.md) |
+| Branch lanes (minimal theme's DAG data) | [`lanes.py`](../claude_code_log/lanes.py) (model), `html/minimal_theme.py` (`data-*` attributes) | [agents.md § 6](agents.md#6-branch-lanes-minimal-theme), [dag.md § Branch lanes](dag.md#branch-lanes-minimal-theme); attribute schema in [minimal-theme.md § 12](minimal-theme.md#12-lane-attributes) |
 | Minimal theme's DAG engine (branch modes, rail) | `html/templates/components/minimal/minimal_dag.js`, `dag.css` | [minimal-theme.md](minimal-theme.md) |
 | Fold-bar / message hierarchy | `html/templates/components/`, JS in `transcript.html` | [message-hierarchy.md](message-hierarchy.md) |
 | CSS class taxonomy | `html/templates/components/*.css` | [css-classes.md](css-classes.md) |
@@ -99,8 +100,10 @@ single transcript or directory. Major flags:
   flag and render as before. The minimal page layers its own stylesheets
   and a sticky toolbar over the classic markup, with light/dark following
   `prefers-color-scheme` or an in-page toggle — see
-  [rendering-architecture.md § 8](rendering-architecture.md#theme-branches-in-transcripthtml)
-  and [css-classes.md § Minimal Theme](css-classes.md#minimal-theme-theme-minimal).
+  [rendering-architecture.md § 8](rendering-architecture.md#theme-branches-in-transcripthtml),
+  [css-classes.md § Minimal Theme](css-classes.md#minimal-theme-theme-minimal)
+  and [minimal-theme.md](minimal-theme.md) (the theme's entry point); the
+  user guide is [`docs/themes.md`](../docs/themes.md).
 
 CLI orchestration delegates to `converter.py` (which owns the
 high-level "load + render + write" flow) and never touches `renderer.py`

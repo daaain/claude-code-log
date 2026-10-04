@@ -55,8 +55,8 @@ is still served, just one that stopped growing.
 
 Sub-agents update while they run, not only when they finish: a
 synchronous agent's transcript grows in its own file while the session
-waits for it, and each tick picks that up. With `--theme minimal` the
-branch layout follows along — lanes you interleaved or put in a column
+waits for it, and each tick picks that up. With `--theme minimal` (see
+[Themes](themes.md)) the branch layout follows along — lanes you interleaved or put in a column
 stay that way across updates, a sub-agent that has not returned yet is
 drawn as **running** (its lane carries on to the newest message with an
 open end and a pulsing *running* label) and turns into an ordinary merge
@@ -67,7 +67,9 @@ been silent for a minute its label says for how long (*running · quiet
 42m*). "Running" needs a live page: a page opened from `file://` (or a
 session nothing has moved in for over a week) shows such an agent as
 having ended without a result instead, and so does one the session
-stopped with `TaskStop`.
+stopped with `TaskStop`. In the minimal theme a message-type filter or a
+search you have set also applies to messages as they arrive, without
+moving you to the newest match.
 
 To follow the **combined** page live as well, run `claude-code-log watch
 --combined yes` (with the same `--theme`) beside `serve`: the server

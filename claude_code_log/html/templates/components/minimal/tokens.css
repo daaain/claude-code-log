@@ -5,6 +5,12 @@
    data-theme="light|dark" on <html>, set by theme_init.js / minimal.js. */
 
 :root {
+    /* The sticky toolbar's height and the open filter panel's, kept up to
+       date by minimal.js. Declared at their usual desktop values so the
+       first measurement usually writes nothing: changing a custom property
+       on the root restyles every element of the page (P8). */
+    --mn-bar-h: 46px;
+    --mn-filter-h: 0px;
     --bg: #ffffff;
     --fg: #1f2328;
     --muted: #5f6670;

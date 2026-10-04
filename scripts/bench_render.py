@@ -47,6 +47,10 @@ rather than taking the machine into swap.
 Every configuration's output is hashed, so a run doubles as an
 equivalence check across far more real data than the test fixtures
 cover: all configurations must produce byte-identical HTML.
+
+``--theme`` renders every row in that HTML theme (it pins
+``CLAUDE_CODE_LOG_THEME``); run once per theme to compare their cost — the
+report's output column gives each configuration's total HTML size.
 """
 
 import argparse
@@ -67,7 +71,10 @@ from claude_code_log.render_pool import (  # noqa: E402
     available_memory_bytes,
     memory_capped_workers,
 )
-from claude_code_log.utils import project_transcript_bytes  # noqa: E402
+from claude_code_log.utils import (  # noqa: E402
+    THEME_CHOICES,
+    project_transcript_bytes,
+)
 
 
 # os.times() reports children_user / children_system as 0.0 on Windows —
@@ -81,6 +88,8 @@ CHILD_CPU_UNAVAILABLE = os.name == "nt"
 # bytes on macOS.
 RSS_UNAVAILABLE = os.name == "nt"
 _RSS_MARKER = "BENCH_MAX_RSS_BYTES="
+# The HTML theme every row renders in (--theme; CLAUDE_CODE_LOG_THEME).
+THEME = "default"
 _RSS_WRAPPER = f"""
 import resource, subprocess, sys
 rc = subprocess.call(sys.argv[1:])
@@ -100,6 +109,7 @@ class Result:
     rss: Optional[int]
     digest: str
     files: int
+    size: int
 
 
 def _cli_command() -> list[str]:
@@ -146,17 +156,23 @@ def _clear_outputs(target: Path, all_projects: bool) -> None:
                 path.unlink()
 
 
-def _digest_outputs(target: Path, all_projects: bool) -> tuple[str, int]:
-    """Hash every generated file so configurations can be compared."""
+def _digest_outputs(target: Path, all_projects: bool) -> tuple[str, int, int]:
+    """Hash every generated file so configurations can be compared.
+
+    Returns the digest, the file count and their total size in bytes.
+    """
     hasher = hashlib.sha256()
     count = 0
+    size = 0
     roots = [target, *(_project_dirs(target) if all_projects else [])]
     for root in roots:
         for path in sorted(root.glob("*.html")):
+            data = path.read_bytes()
             hasher.update(str(path.relative_to(target)).encode())
-            hasher.update(path.read_bytes())
+            hasher.update(data)
             count += 1
-    return hasher.hexdigest(), count
+            size += len(data)
+    return hasher.hexdigest(), count, size
 
 
 def _run(
@@ -198,6 +214,7 @@ def _run(
     env.pop("CLAUDE_CODE_LOG_RENDER_CACHE_MB", None)
     env.pop("CLAUDE_CODE_LOG_RENDER_JOBS", None)
     env.pop("CLAUDE_CODE_LOG_STREAMING", None)
+    env["CLAUDE_CODE_LOG_THEME"] = THEME
     env.update(env_overrides)
 
     command = [*_cli_command(), str(target)]
@@ -231,8 +248,8 @@ def _run(
         if line.startswith(_RSS_MARKER):
             rss = int(line[len(_RSS_MARKER) :])
 
-    digest, files = _digest_outputs(target, all_projects)
-    return Result(label, wall, cpu, rss, digest, files)
+    digest, files, size = _digest_outputs(target, all_projects)
+    return Result(label, wall, cpu, rss, digest, files, size)
 
 
 def _report(title: str, results: list[Result], baseline_label: str) -> set[str]:
@@ -240,14 +257,18 @@ def _report(title: str, results: list[Result], baseline_label: str) -> set[str]:
     print(f"\n{title}")
     print(
         f"{'configuration':<24} {'wall':>8} {'CPU':>8} {'peak RSS':>9} "
-        f"{'vs ' + baseline_label:>16}"
+        f"{'output':>9} {'vs ' + baseline_label:>16}"
     )
-    print("-" * 70)
+    print("-" * 80)
     for result in results:
         speedup = baseline.wall / result.wall if result.wall else 0.0
         cpu = f"{result.cpu:7.1f}s" if result.cpu is not None else "    n/a"
         rss = f"{result.rss / 1e6:6.0f}MB" if result.rss is not None else "     n/a"
-        print(f"{result.label:<24} {result.wall:7.1f}s {cpu} {rss} {speedup:15.2f}x")
+        size = f"{result.size / 1e6:7.1f}MB"
+        print(
+            f"{result.label:<24} {result.wall:7.1f}s {cpu} {rss} {size} "
+            f"{speedup:15.2f}x"
+        )
     fastest = min(results, key=lambda r: r.wall)
     print(
         f"fastest: {fastest.label} ({baseline.wall / fastest.wall:.2f}x over "
@@ -546,11 +567,19 @@ def main() -> None:
         "--keep", action="store_true", help="Keep the working copy afterwards"
     )
     parser.add_argument(
+        "--theme",
+        default="default",
+        choices=THEME_CHOICES,
+        help="HTML theme for every row (default: default)",
+    )
+    parser.add_argument(
         "--workers",
         default="",
         help="Single-project mode: worker counts to sweep (default: 2,4,CPU count)",
     )
     args = parser.parse_args()
+    global THEME
+    THEME = args.theme
 
     source: Path = args.path.expanduser().resolve()
     if not source.is_dir():
@@ -621,6 +650,7 @@ def main() -> None:
         print(f"Copy to: {holder}")
         print(f"Data:    {len(sources)} project(s), {total_mb:.0f}MB of transcripts")
         print(f"Cores:   {cpu_count}")
+        print(f"Theme:   {THEME}")
 
         # Show what the memory cap will actually allow, so a run that
         # reports "no speedup" isn't quietly a run that never fanned out.

@@ -115,11 +115,7 @@ class TestColumns:
         expect(page.locator(".dag-mainhead")).to_be_visible()
         # The spawn row's control says so, and its button switches back.
         ctl = page.locator(f"[data-lane-ref='{A}']")
-        assert (
-            ctl.locator(".mn-bfold")
-            .get_attribute("data-label")
-            .endswith("· in column →")
-        )
+        assert ctl.locator(".mn-bfold").get_attribute("data-mode") == " · in column →"
         assert ctl.locator(".mn-bcol").get_attribute("data-label") == "⇤ Interleave"
         # A column has no rail lane; the others keep theirs.
         assert _rail(page, A)["paths"] == []

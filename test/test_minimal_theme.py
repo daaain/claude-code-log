@@ -440,3 +440,136 @@ class TestCompactSpawnRows:
         assert "<dt>Run</dt>" in classic
         assert "<dt>Run</dt>" not in minimal
         assert "alice" in minimal  # the other teammate fields stay
+
+
+class TestAnswerPreviews:
+    """P8: an agent's answer on its merge row — a sync ``Task`` result, an
+    async ``<task-notification>`` — is the same two-line preview as a long
+    prompt once it is longer than three lines; classic keeps the 20-line
+    threshold."""
+
+    LONG = "## Findings\n\n" + "\n".join(f"- point {n}" for n in range(1, 9))
+
+    @staticmethod
+    def _preview(html: str) -> str:
+        return html.split("<div class='preview-content markdown'>", 1)[1].split(
+            "</div>", 1
+        )[0]
+
+    def _result(self, theme: str, text: str) -> str:
+        from claude_code_log.html.renderer import HtmlRenderer
+        from claude_code_log.models import TaskOutput
+
+        renderer = HtmlRenderer()
+        renderer.theme = theme
+        return renderer.format_TaskOutput(
+            TaskOutput(result=text), cast(Any, SimpleNamespace(meta=None))
+        )
+
+    def _notification(self, theme: str, text: str) -> str:
+        from claude_code_log.html.renderer import HtmlRenderer
+        from claude_code_log.models import MessageMeta, TaskNotificationMessage
+
+        renderer = HtmlRenderer()
+        renderer.theme = theme
+        content = TaskNotificationMessage(
+            MessageMeta.empty(), task_id="a1", status="completed", result_text=text
+        )
+        return renderer.format_TaskNotificationMessage(
+            content, cast(Any, SimpleNamespace(meta=None))
+        )
+
+    @pytest.mark.parametrize("kind", ["result", "notification"])
+    def test_a_long_answer_is_a_two_line_preview(self, kind: str) -> None:
+        render = self._result if kind == "result" else self._notification
+        minimal = render("minimal", self.LONG)
+        assert "<details class='collapsible-code'>" in minimal
+        preview = self._preview(minimal)
+        # The first two non-blank lines (the heading and the first point).
+        assert "Findings" in preview and "point 1" in preview
+        assert "point 2" not in preview and "..." not in preview
+        assert "point 8" in minimal.split("<div class='code-full markdown'>", 1)[1]
+        assert "<span class='line-count'>10 lines</span>" in minimal
+        # Classic: under its 20-line threshold, so shown in full.
+        assert "<details" not in render("classic", self.LONG)
+
+    @pytest.mark.parametrize("kind", ["result", "notification"])
+    def test_a_short_answer_stays_inline(self, kind: str) -> None:
+        render = self._result if kind == "result" else self._notification
+        html = render("minimal", "Done: 3 files changed.\nAll tests pass.")
+        assert "<details" not in html
+        assert "All tests pass." in html
+
+    def test_one_long_line_previews(self) -> None:
+        html = self._result("minimal", "word " * 80)
+        assert "<details class='collapsible-code'>" in html
+
+
+class TestLongDiffAndCommandPreviews:
+    """P8: a long Edit / MultiEdit diff and a long Bash command preview in
+    the minimal theme (first three lines, ``+N lines``); classic shows them
+    in full."""
+
+    OLD = "\n".join(f"line {n}" for n in range(30))
+    NEW = "\n".join(f"line {n}!" for n in range(30))
+
+    def _renderer(self, theme: str) -> Any:
+        from claude_code_log.html.renderer import HtmlRenderer
+
+        renderer = HtmlRenderer()
+        renderer.theme = theme
+        return renderer
+
+    def test_a_long_diff_previews(self) -> None:
+        from claude_code_log.models import EditInput
+
+        edit = EditInput(file_path="/a.py", old_string=self.OLD, new_string=self.NEW)
+        msg = cast(Any, SimpleNamespace(meta=None))
+        minimal = self._renderer("minimal").format_EditInput(edit, msg)
+        classic = self._renderer("classic").format_EditInput(edit, msg)
+        assert "<details" not in classic
+        assert "<details class='collapsible-code'>" in minimal
+        summary = minimal.split("<summary>", 1)[1].split("</summary>", 1)[0]
+        assert summary.count("<div class='diff-line") == 3
+        assert "<span class='line-count'>60 lines</span>" in summary
+        full = minimal.split("<div class='code-full'>", 1)[1]
+        assert full.count("<div class='diff-line") == 60
+        # The body is exactly classic's diff.
+        assert classic.split("<div class='edit-diff'>", 1)[1] in full
+
+    def test_a_short_diff_stays_whole(self) -> None:
+        from claude_code_log.models import EditInput
+
+        edit = EditInput(file_path="/a.py", old_string="a\nb", new_string="a\nc")
+        msg = cast(Any, SimpleNamespace(meta=None))
+        assert self._renderer("minimal").format_EditInput(edit, msg) == self._renderer(
+            "classic"
+        ).format_EditInput(edit, msg)
+
+    def test_multiedit_previews_each_long_diff(self) -> None:
+        from claude_code_log.models import EditItem, MultiEditInput
+
+        multi = MultiEditInput(
+            file_path="/a.py",
+            edits=[
+                EditItem(old_string=self.OLD, new_string=self.NEW),
+                EditItem(old_string="x", new_string="y"),
+            ],
+        )
+        msg = cast(Any, SimpleNamespace(meta=None))
+        html = self._renderer("minimal").format_MultiEditInput(multi, msg)
+        assert html.count("<details class='collapsible-code'>") == 1
+
+    def test_a_long_command_previews(self) -> None:
+        from claude_code_log.models import BashInput
+
+        script = "cat <<'EOF' > x.py\n" + "\n".join(f"print({n})" for n in range(20))
+        bash = BashInput(command=script)
+        msg = cast(Any, SimpleNamespace(meta=None))
+        minimal = self._renderer("minimal").format_BashInput(bash, msg)
+        assert "<details" not in self._renderer("classic").format_BashInput(bash, msg)
+        summary = minimal.split("<summary>", 1)[1].split("</summary>", 1)[0]
+        assert "print(1)" in summary and "print(2)" not in summary
+        assert "print(19)" in minimal.split("<div class='code-full'>", 1)[1]
+        short = BashInput(command="ls -la")
+        assert "<details" not in self._renderer("minimal").format_BashInput(short, msg)

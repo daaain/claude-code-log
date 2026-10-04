@@ -22,15 +22,17 @@ from collections.abc import Iterable
 from typing import Any, Optional, cast
 
 from .utils import (
+    ANSWER_INLINE_CHARS,
+    ANSWER_INLINE_LINES,
     escape_html,
     is_markdown_path,
     is_memory_path,
     render_collapsible_code,
     render_async_result_body,
     render_file_content_collapsible,
-    render_markdown,
     render_markdown_collapsible,
     render_markdown_inline,
+    render_markdown_preview,
     render_user_markdown,
     render_user_markdown_collapsible,
     resolve_memory_body_links,
@@ -590,7 +592,9 @@ def format_taskstop_output(output: TaskStopOutput) -> str:
     return "".join(parts)
 
 
-def format_task_output(output: TaskOutput, include_async_answer: bool = True) -> str:
+def format_task_output(
+    output: TaskOutput, include_async_answer: bool = True, preview: bool = False
+) -> str:
     """Format Task tool result as HTML with markdown rendering.
 
     For async-spawned Tasks (issue #90), ``output.result`` is just the
@@ -605,13 +609,26 @@ def format_task_output(output: TaskOutput, include_async_answer: bool = True) ->
         output: Parsed TaskOutput with agent's response
         include_async_answer: render the folded async answer (the minimal
             theme shows it on the notification card instead)
+        preview: the minimal theme's short preview for an answer longer
+            than a few lines (``utils.render_markdown_preview``, P8) instead
+            of the 20-line threshold
 
     Returns:
         HTML string with markdown rendered in collapsible section
     """
     parts: list[str] = []
     if output.result:
-        parts.append(render_markdown_collapsible(output.result, "task-result"))
+        if preview:
+            parts.append(
+                render_markdown_preview(
+                    output.result,
+                    "task-result",
+                    ANSWER_INLINE_LINES,
+                    ANSWER_INLINE_CHARS,
+                )
+            )
+        else:
+            parts.append(render_markdown_collapsible(output.result, "task-result"))
     if output.async_final_answer and include_async_answer:
         parts.append(
             '<div class="task-async-answer-label">'
@@ -746,11 +763,39 @@ def format_delete_input(_delete_input: DeleteInput) -> str:
 # -- Edit Tools (Edit/Multiedit) ----------------------------------------------
 
 
-def format_edit_input(edit_input: EditInput) -> str:
+# The minimal theme previews a diff longer than this many lines (P8), and
+# a Bash command longer than this many lines, like any other long block.
+_MINIMAL_LONG_LINES = 12
+_MINIMAL_PREVIEW_LINES = 3
+
+_DIFF_LINE = "<div class='diff-line"
+
+
+def collapse_long_diff(diff_html: str) -> str:
+    """The minimal theme's preview of a long diff (P8).
+
+    ``render_single_diff`` output with more than ``_MINIMAL_LONG_LINES``
+    lines becomes the shared ``<details>`` preview (``render_collapsible_code``)
+    — its first lines in the summary, clipped by the theme's CSS, and the
+    whole diff in the body; a shorter diff is returned unchanged. Classic
+    output never calls this: it shows every diff in full.
+    """
+    parts = diff_html.split(_DIFF_LINE)
+    count = len(parts) - 1
+    if count <= _MINIMAL_LONG_LINES:
+        return diff_html
+    preview = parts[0] + "".join(
+        _DIFF_LINE + part for part in parts[1 : 1 + _MINIMAL_PREVIEW_LINES]
+    )
+    return render_collapsible_code(preview + "</div>", diff_html, count)
+
+
+def format_edit_input(edit_input: EditInput, collapse: bool = False) -> str:
     """Format Edit tool use content as a diff view with intra-line highlighting.
 
     Args:
         edit_input: Typed EditInput with old_string, new_string, replace_all.
+        collapse: preview a long diff (the minimal theme, ``collapse_long_diff``)
     Note: File path is now shown in the header, so we skip it here.
     """
     html_parts = ["<div class='edit-tool-content'>"]
@@ -761,17 +806,21 @@ def format_edit_input(edit_input: EditInput) -> str:
         )
 
     # Use shared diff rendering helper
-    html_parts.append(render_single_diff(edit_input.old_string, edit_input.new_string))
+    diff = render_single_diff(edit_input.old_string, edit_input.new_string)
+    html_parts.append(collapse_long_diff(diff) if collapse else diff)
     html_parts.append("</div>")
 
     return "".join(html_parts)
 
 
-def format_multiedit_input(multiedit_input: MultiEditInput) -> str:
+def format_multiedit_input(
+    multiedit_input: MultiEditInput, collapse: bool = False
+) -> str:
     """Format Multiedit tool use content showing multiple diffs.
 
     Args:
         multiedit_input: Typed MultiEditInput with file_path and list of edits.
+        collapse: preview each long diff (the minimal theme)
     """
     escaped_path = escape_html(multiedit_input.file_path)
 
@@ -790,7 +839,8 @@ def format_multiedit_input(multiedit_input: MultiEditInput) -> str:
             f"<div class='multiedit-item'><div class='multiedit-item-header'>"
             f"Edit #{idx}{path}</div>"
         )
-        html_parts.append(render_single_diff(edit.old_string, edit.new_string))
+        diff = render_single_diff(edit.old_string, edit.new_string)
+        html_parts.append(collapse_long_diff(diff) if collapse else diff)
         html_parts.append("</div>")
 
     html_parts.append("</div>")
@@ -800,17 +850,30 @@ def format_multiedit_input(multiedit_input: MultiEditInput) -> str:
 # -- Bash Tool ----------------------------------------------------------------
 
 
-def format_bash_input(bash_input: BashInput) -> str:
+def format_bash_input(bash_input: BashInput, collapse: bool = False) -> str:
     """Format Bash tool use content in VS Code extension style.
 
     Args:
         bash_input: Typed BashInput with command, description, timeout, etc.
+        collapse: preview a command longer than ``_MINIMAL_LONG_LINES`` lines
+            (a heredoc, an inline script) — the minimal theme (P8)
     Note: Description is now shown in the header, so we skip it here.
     """
     escaped_command = escape_html(bash_input.command)
 
     html_parts = ["<div class='bash-tool-content'>"]
-    html_parts.append(f"<pre class='bash-tool-command'>{escaped_command}</pre>")
+    lines = bash_input.command.splitlines()
+    if collapse and len(lines) > _MINIMAL_LONG_LINES:
+        preview = escape_html("\n".join(lines[:_MINIMAL_PREVIEW_LINES]))
+        html_parts.append(
+            render_collapsible_code(
+                f"<pre class='bash-tool-command'>{preview}</pre>",
+                f"<pre class='bash-tool-command'>{escaped_command}</pre>",
+                len(lines),
+            )
+        )
+    else:
+        html_parts.append(f"<pre class='bash-tool-command'>{escaped_command}</pre>")
     html_parts.append("</div>")
 
     return "".join(html_parts)
@@ -844,19 +907,10 @@ def format_task_prompt_preview(prompt: str) -> str:
 
     A short prompt (at most two lines and ``_SPAWN_PROMPT_INLINE_CHARS``
     characters) renders inline as ``format_task_input`` does; a longer one
-    always becomes the shared collapsible preview — its first two non-blank
-    lines in the ``<summary>`` (clipped to two lines by the theme's CSS; no
-    "..." line, the fade and the "+N lines" label say there is more), the
-    full prompt in the body.
+    always becomes the shared collapsible preview of its first two
+    non-blank lines (``utils.render_markdown_preview``).
     """
-    lines = prompt.splitlines()
-    if len(lines) <= 2 and len(prompt) <= _SPAWN_PROMPT_INLINE_CHARS:
-        return render_markdown_collapsible(prompt, "task-prompt")
-    preview = "\n".join([line for line in lines if line.strip()][:2])
-    collapsible = render_collapsible_code(
-        render_markdown(preview), render_markdown(prompt), len(lines), is_markdown=True
-    )
-    return f'<div class="task-prompt">{collapsible}</div>'
+    return render_markdown_preview(prompt, "task-prompt", 2, _SPAWN_PROMPT_INLINE_CHARS)
 
 
 # -- WebFetch Tool ------------------------------------------------------------

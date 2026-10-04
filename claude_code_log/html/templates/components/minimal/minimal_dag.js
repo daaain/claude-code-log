@@ -894,17 +894,22 @@
                     // without one (or the page is a static copy).
                     const unfinished = !live && (lane.state === 'open' || lane.state === 'ended');
                     const label = (fork ? '⑂ ' + lane.name + ' · ' : '') + (lane.stats || lane.name)
-                        + (unfinished ? ' · no result' : '')
-                        + (interleaved ? ' · interleaved' : columned ? ' · in column →' : '');
+                        + (unfinished ? ' · no result' : '');
+                    // The mode is its own part (P8): on a narrow line the
+                    // label gives way (ellipsis), the mode stays readable.
+                    const modeText = interleaved ? ' · interleaved' : columned ? ' · in column →' : '';
                     const btn = ctl.querySelector('.mn-bfold');
                     setAttr(btn, 'data-label', label);
+                    if (modeText) setAttr(btn, 'data-mode', modeText);
+                    else if (btn.hasAttribute('data-mode')) btn.removeAttribute('data-mode');
                     setAttr(btn, 'aria-expanded', opened ? 'true' : 'false');
                     const runLabel = live ? runningText(running, id) : 'running';
                     const pill = ctl.querySelector('.mn-brun');
                     if (pill) setAttr(pill, 'data-label', runLabel);
                     setAttr(btn, 'aria-label', (mode === 'folded' ? 'Interleave branch: ' : 'Fold branch: ') + lane.name
                         + (lane.stats ? ' (' + lane.stats + (live ? ', ' + runLabel : unfinished ? ', no result' : '') + ')' : ''));
-                    let title = lane.name + (lane.meta ? ' · ' + lane.meta : '')
+                    // The stats too: a narrow control truncates its label (P8).
+                    let title = lane.name + (lane.meta ? ' · ' + lane.meta : '') + (lane.stats ? ' · ' + lane.stats : '')
                         + (live ? ' · still ' + runLabel : unfinished ? ' · ended without a result' : '');
                     if (fork) {
                         // Keyed by lane and card: a live swap can renumber d-N.
@@ -1105,8 +1110,10 @@
                             el.innerHTML = "<button type='button' class='dag-strip' data-col-act='expand'><span></span></button>";
                         } else {
                             el.innerHTML = "<div class='dag-colhead'><span class='dag-colname'></span><span class='dag-colmeta'></span>"
-                                + "<span class='dag-colacts'><button type='button' class='mn-bmini' data-col-act='interleave' data-label='⇤ Interleave'></button>"
-                                + "<button type='button' class='mn-bmini' data-col-act='collapse' data-label='Collapse'></button></span></div>";
+                                + "<span class='dag-colacts'><button type='button' class='mn-bmini' data-col-act='interleave' data-label='⇤' data-long='⇤ Interleave'"
+                                + " title='Merge this branch back into the main line'></button>"
+                                + "<button type='button' class='mn-bmini' data-col-act='collapse' data-label='−' data-long='Collapse'"
+                                + " title='Collapse this column to a narrow strip'></button></span></div>";
                         }
                         chrome.set(key, el);
                     }
@@ -1115,7 +1122,8 @@
                     el.style.gridColumn = String(i + 1);
                     el.style.gridRow = '1 / span ' + Math.max(1, rows + ROW0 - 1);
                     if (lane) {
-                        const meta = [lane.meta, lane.stats, running.has(key) ? runningText(running, key) : ''].filter(Boolean).join(' · ');
+                        // Stats first (P8): they are what a narrow head keeps.
+                        const meta = [lane.stats, running.has(key) ? runningText(running, key) : '', lane.meta].filter(Boolean).join(' · ');
                         if (isStrip) {
                             const btn = el.querySelector('.dag-strip');
                             setAttr(btn, 'aria-label', 'Expand column: ' + lane.name);

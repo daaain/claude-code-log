@@ -642,7 +642,11 @@ class HtmlRenderer(Renderer):
             # Minimal theme: the notification is the async branch's merge
             # row, so the agent's answer is shown here — at the time it
             # arrived — and the spawn only links to it (format_TaskOutput).
-            return _format_task_notification_content(content, include_duplicate=True)
+            # A long answer is a two-line preview, like the sync agent's on
+            # its merge row (format_TaskOutput, P8).
+            return _format_task_notification_content(
+                content, include_duplicate=True, preview=True
+            )
         if self.depth == RenderingDepth.AGENT and content.result_is_duplicate:
             return ""
         return _format_task_notification_content(content)
@@ -685,8 +689,10 @@ class HtmlRenderer(Renderer):
     # -------------------------------------------------------------------------
 
     def format_BashInput(self, input: BashInput, _: TemplateMessage) -> str:
-        """Format → <pre>$ command</pre>."""
-        return format_bash_input(input)
+        """Format → <pre>$ command</pre> (a long one previews in minimal, P8)."""
+        return format_bash_input(
+            input, collapse=normalize_theme(self.theme) == "minimal"
+        )
 
     def format_ReadInput(self, input: ReadInput, _: TemplateMessage) -> str:
         """Format → <table class='params'>file_path | ...</table>."""
@@ -701,12 +707,17 @@ class HtmlRenderer(Renderer):
         return format_delete_input(input)
 
     def format_EditInput(self, input: EditInput, _: TemplateMessage) -> str:
-        """Format → file path + diff of old_string/new_string."""
-        return format_edit_input(input)
+        """Format → file path + diff of old_string/new_string (a long diff
+        previews in the minimal theme, P8)."""
+        return format_edit_input(
+            input, collapse=normalize_theme(self.theme) == "minimal"
+        )
 
     def format_MultiEditInput(self, input: MultiEditInput, _: TemplateMessage) -> str:
         """Format → file path + multiple diffs."""
-        return format_multiedit_input(input)
+        return format_multiedit_input(
+            input, collapse=normalize_theme(self.theme) == "minimal"
+        )
 
     def format_TaskInput(self, input: TaskInput, _: TemplateMessage) -> str:
         """Format → prompt text, plus teammate-spawn extras when relevant.
@@ -873,7 +884,13 @@ class HtmlRenderer(Renderer):
                 output, self._colors_for(_), include_agent_id=False
             )
             return base + extras if extras else base
-        base = format_task_output(output)
+        if normalize_theme(self.theme) == "minimal":
+            # A synchronous agent's answer is its lane's merge row: a long
+            # one is a two-line preview with "+N lines", so a multi-screen
+            # report does not undo "Main only" (P8).
+            base = format_task_output(output, preview=True)
+        else:
+            base = format_task_output(output)
         extras = format_task_output_teammate_extras(output, self._colors_for(_))
         return base + extras if extras else base
 

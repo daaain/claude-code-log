@@ -117,7 +117,7 @@ identification and tree building. For every Task tool_result whose
   the spawn's branch control (P7c). Classic and Markdown
   output are unchanged. See
   [minimal-theme.md § 7](minimal-theme.md#7-teammate-anchors-and-results-at-the-merge-row)
-  and [§ 9](minimal-theme.md#9-compact-spawn-rows-and-other-polish-p7c).
+  and [§ 9](minimal-theme.md#9-compact-spawn-rows-and-other-polish-p7c-p8).
 - **Sidechain dedup (HOOK/TOOL only):** when the last sub-assistant
   text matches the notification's `result_text`, drops the duplicate
   from the sidechain tree. No-op at AGENT (sidechain already gone).

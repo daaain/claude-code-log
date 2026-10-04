@@ -278,7 +278,7 @@
 /* ---------------------------------------------------- branch controls */
 
 /* On the spawn row (mockup .bctl): chevron + summary (+ "· interleaved" /
-   "· in column →"), the Column ⇥ / ⇤ Interleave button and, on a turn's
+   "· in column →", `data-mode`), the Column ⇥ / ⇤ Interleave button and, on a turn's
    third control, "+N more branches". Row 4 of the card grid (layout.css). */
 .theme-minimal #transcript .mn-bctls {
     grid-column: 3;
@@ -302,6 +302,34 @@
     margin-top: 2px;
 }
 
+/* Wider than a phone, a control stays on one line (P8): in Columns the
+   main column is only ~470px of content, and the stats, `Result ↓`,
+   `launched ▸` and `⇤ Interleave` used to wrap the button onto a line of
+   its own. The stats give way instead (ellipsis; the full text is in the
+   chevron button's title and aria-label, and in the column head). A phone
+   keeps wrapping: there is no room to truncate into. */
+@media (min-width: 641px) {
+    .theme-minimal #transcript .mn-bctl {
+        flex-wrap: nowrap;
+    }
+
+    .theme-minimal #transcript .mn-bctl > * {
+        flex: none;
+    }
+
+    .theme-minimal #transcript .mn-bctl > .mn-bfold {
+        flex: 0 1 auto;
+        min-width: 0;
+    }
+
+    .theme-minimal #transcript .mn-bfold::after {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+}
+
 /* A lane behind its turn's "+N more branches". */
 .theme-minimal #transcript .mn-bctl[hidden] {
     display: none;
@@ -322,6 +350,16 @@
 
 .theme-minimal #transcript .mn-bfold::after {
     content: attr(data-label);
+}
+
+/* "· interleaved" / "· in column →": after the label (flex `order`), never
+   truncated with it. */
+.theme-minimal #transcript .mn-bfold[data-mode]::before {
+    content: attr(data-mode);
+    order: 2;
+    flex: none;
+    margin-left: -6px;
+    white-space: pre;
 }
 
 .theme-minimal #transcript .mn-bfold:hover {
@@ -538,23 +576,47 @@ body.theme-minimal.dag-wide :is(.mn-top, .mn-toolbar, .filter-toolbar, #timeline
     background: linear-gradient(color-mix(in srgb, var(--lc) 5%, transparent), color-mix(in srgb, var(--lc) 5%, transparent)), var(--bg);
 }
 
-/* A column's head (P7c): the name on a line of its own (truncated, the
-   full name in the head's title), its meta and actions on the next. */
+/* A column's head: the name and two compact actions (`⇤`, `−`; their
+   words come back once the head is 400px wide) on the first line, the
+   lane's stats on a line of their own below — steps, tokens, duration,
+   `running` first, so they are what a narrow column keeps; the agent type
+   and model follow and give way first (P8: the P7c head put the actions
+   beside the meta and truncated it in almost every column). Everything is
+   in the head's title. */
 .theme-minimal #transcript .dag-colhead:not(.dag-mainhead) {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     grid-template-rows: auto auto;
     align-content: center;
     gap: 1px 8px;
+    container-type: inline-size;
 }
 
 .theme-minimal #transcript .dag-colhead:not(.dag-mainhead) > .dag-colname {
-    grid-column: 1 / -1;
+    grid-column: 1;
+    grid-row: 1;
     white-space: nowrap;
 }
 
+.theme-minimal #transcript .dag-colhead:not(.dag-mainhead) > .dag-colacts {
+    grid-column: 2;
+    grid-row: 1;
+}
+
+.theme-minimal #transcript .dag-colhead:not(.dag-mainhead) > .dag-colmeta {
+    grid-column: 1 / -1;
+    grid-row: 2;
+}
+
 .theme-minimal #transcript .dag-colhead:not(.dag-mainhead) .mn-bmini {
+    min-width: 22px;
     min-height: 20px;
+}
+
+@container (min-width: 400px) {
+    .theme-minimal #transcript .dag-colacts > .mn-bmini[data-long]::after {
+        content: attr(data-long);
+    }
 }
 
 .theme-minimal #transcript .dag-mainhead {

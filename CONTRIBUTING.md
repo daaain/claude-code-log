@@ -33,8 +33,10 @@ claude_code_log/
 │   ├── assistant_factory.py
 │   ├── tool_factory.py
 │   └── system_factory.py
+├── lanes.py            # Branch lanes (sub-agents, forks) for the minimal theme
 ├── html/               # HTML-specific rendering
 │   ├── renderer.py
+│   ├── minimal_theme.py  # Minimal theme helpers (gutter, call line, lane attributes)
 │   ├── user_formatters.py
 │   ├── assistant_formatters.py
 │   ├── system_formatters.py
@@ -46,7 +48,8 @@ claude_code_log/
     ├── transcript.html
     ├── index.html
     └── components/
-        └── timeline.html
+        ├── timeline.html
+        └── minimal/    # The minimal theme's CSS and JS (incl. the DAG engine)
 
 scripts/                # Development utilities
 test/test_data/         # Representative JSONL samples
@@ -422,8 +425,9 @@ Key points:
   `BINDINGS` for the keybindings tables (`scripts/generate_tui_docs.py`) and
   captures SVG screenshots of the running TUI
   (`scripts/generate_tui_screenshots.py`). Both scripts are runnable standalone.
-- **Example output** (`example.md` + `examples/transcript.html`) is rendered at
-  build time from a bundled sample project
+- **Example output** (`example.md` + `examples/transcript.html`, and the same
+  transcript in the minimal theme as `examples/transcript-minimal.html`) is
+  rendered at build time from a bundled sample project
   (`scripts/generate_example_output.py`, also `just example`) — no private data
   or release asset involved. Generation is fault-tolerant so a render hiccup
   can't block the build.
@@ -442,6 +446,28 @@ Start with [dev-docs/application_model.md](dev-docs/application_model.md)
 for the system overview (subsystems, data lifecycle, glossary). For
 the rendering pipeline specifically, see
 [dev-docs/rendering-architecture.md](dev-docs/rendering-architecture.md).
+
+### Themes
+
+HTML output has two themes, `classic` (the default) and `minimal`,
+selected with `--theme` or `CLAUDE_CODE_LOG_THEME`; `default` resolves
+through `utils.DEFAULT_THEME`, so changing the default is a one-line
+change. The user guide is [docs/themes.md](docs/themes.md); the as-built
+reference for the minimal theme — where its parts live, the branch
+(DAG) engine, previews, live updates, performance — starts at
+[dev-docs/minimal-theme.md](dev-docs/minimal-theme.md). Two rules hold
+for every change:
+
+- **Classic output stays byte-identical.** Minimal-only template
+  additions are glued inline (`{% if minimal %}…{% endif %}`, no new
+  lines outside the conditional) and minimal-only formatter behaviour is
+  behind `normalize_theme(self.theme) == "minimal"`; the classic
+  snapshot blocks must not change (regenerate only with
+  `just update-snapshot`, then compare at block level).
+- **Timeline and filter parity in every branch mode.** The browser
+  sweep in `test/test_minimal_parity_browser.py` checks every filter
+  toggle × fold depth × branch mode with the timeline open, search and
+  live updates included; extend it when adding a message type.
 
 ### Data Flow Overview
 

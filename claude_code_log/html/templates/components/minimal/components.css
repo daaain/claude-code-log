@@ -1318,32 +1318,42 @@ body.theme-minimal {
 /* A Task / Agent spawn reads as its call line (description, subagent type,
    `[async #id]`, model), the prompt as a 2-line preview and the branch
    control (dag.css). The prompt is a touch smaller than prose; a long one
-   is the shared <details> preview (tool_formatters
-   .format_task_prompt_preview) with its "+N lines" beside the preview's
-   last line rather than on a line of its own. */
+   is the shared <details> preview (utils.render_markdown_preview) with its
+   "+N lines" beside the preview's last line rather than on a line of its
+   own. The agent's answer on the merge row — a sync result, an async
+   notification — previews the same way once it is longer than three
+   lines (P8). */
 .theme-minimal #transcript .message.tool_use > .content > .task-prompt {
     font-size: 0.94em;
 }
 
-.theme-minimal #transcript .task-prompt > details.collapsible-code > summary {
+.theme-minimal #transcript :is(.task-prompt, .task-result, .task-notification-result) > details.collapsible-code > summary {
     flex-direction: row;
     align-items: flex-end;
     column-gap: 10px;
 }
 
-.theme-minimal #transcript .task-prompt > details.collapsible-code > summary > .preview-content {
+.theme-minimal #transcript :is(.task-prompt, .task-result, .task-notification-result) > details.collapsible-code > summary > .preview-content {
     flex: 1 1 0;
     min-width: 0;
 }
 
-.theme-minimal #transcript .task-prompt > details.collapsible-code > summary::after,
-.theme-minimal #transcript .task-prompt > details.collapsible-code > summary > .line-count {
+.theme-minimal #transcript :is(.task-prompt, .task-result, .task-notification-result) > details.collapsible-code > summary::after,
+.theme-minimal #transcript :is(.task-prompt, .task-result, .task-notification-result) > details.collapsible-code > summary > .line-count {
     flex: none;
     align-self: flex-end;
 }
 
-.theme-minimal #transcript .task-prompt .preview-content p {
+.theme-minimal #transcript :is(.task-prompt, .task-result, .task-notification-result) .preview-content :is(p, ul, ol, pre, blockquote, table) {
     margin: 0;
+}
+
+/* A heading at the top of an agent's answer (`## Summary`) reads as a bold
+   line of the preview, not a title twice the size that fills the clip. */
+.theme-minimal #transcript :is(.task-prompt, .task-result, .task-notification-result) .preview-content :is(h1, h2, h3, h4, h5, h6) {
+    margin: 0;
+    font-size: 1em;
+    line-height: inherit;
 }
 
 /* The spawn's teammate fields (name, team, mode), its result's agent

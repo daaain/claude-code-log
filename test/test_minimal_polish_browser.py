@@ -460,3 +460,93 @@ class TestGutters:
                 overlap_x = min(a[4], b[4]) - max(a[2], b[2])
                 overlap_y = min(a[5], b[5]) - max(a[3], b[3])
                 assert not (overlap_x > 1 and overlap_y > 1), (a, b)
+
+
+# ------------------------------------------------------------------- P8
+
+
+class TestP8Polish:
+    """P8: the leftovers of P7c — a control line that stays on one line in
+    Columns, column heads whose stats stay readable, and agent answers on
+    their merge rows as two-line previews."""
+
+    def test_a_control_stays_on_one_line_in_columns(
+        self, clean: Page, pages: dict[str, Path]
+    ):
+        page = clean
+        page.set_viewport_size({"width": 1600, "height": 900})
+        _open(page, pages["demo"], branches="columns")
+        rows = page.evaluate(
+            """() => [...document.querySelectorAll('#transcript .mn-bctl')]
+                .filter(c => c.checkVisibility()).map(c => {
+                    const card = c.closest('.message').getBoundingClientRect();
+                    const kids = [...c.children].filter(k => k.checkVisibility())
+                        .map(k => k.getBoundingClientRect());
+                    return {id: c.getAttribute('data-lane-ref'), n: kids.length,
+                            tops: kids.map(r => r.top), bottoms: kids.map(r => r.bottom),
+                            right: Math.max(...kids.map(r => r.right)), cardRight: card.right,
+                            mode: c.querySelector('.mn-bfold').getAttribute('data-mode')}; })"""
+        )
+        columned = [r for r in rows if r["mode"] == " · in column →"]
+        assert len(columned) >= 4, rows  # main is at its narrowest
+        for row in rows:
+            # One line: every item overlaps every other vertically.
+            assert max(row["tops"]) < min(row["bottoms"]), row
+            assert row["right"] <= row["cardRight"] + 0.5, row
+        # The mode label is never truncated with the stats.
+        widths = page.evaluate(
+            """() => [...document.querySelectorAll('#transcript .mn-bctl.is-col .mn-bfold')]
+                .filter(b => b.checkVisibility())
+                .map(b => getComputedStyle(b, '::before').width)"""
+        )
+        assert widths and all(float(w.rstrip("px")) > 60 for w in widths), widths
+
+    def test_column_heads_keep_their_stats_readable(
+        self, clean: Page, pages: dict[str, Path]
+    ):
+        page = clean
+        page.set_viewport_size({"width": 1600, "height": 900})
+        _open(page, pages["demo"], branches="columns")
+        heads = page.evaluate(
+            """() => [...document.querySelectorAll('#transcript .dag-colhead:not(.dag-mainhead)')].map(h => {
+                const lane = h.closest('.dag-chrome').getAttribute('data-col');
+                const stats = document.querySelector(`[data-lane-id="${lane}"]`).getAttribute('data-lane-stats');
+                const meta = h.querySelector('.dag-colmeta');
+                const probe = document.createElement('span');
+                probe.style.font = getComputedStyle(meta).font;
+                probe.style.whiteSpace = 'nowrap';
+                probe.textContent = stats;
+                document.body.appendChild(probe);
+                const statsW = probe.getBoundingClientRect().width;
+                probe.remove();
+                const name = h.querySelector('.dag-colname').getBoundingClientRect();
+                const acts = h.querySelector('.dag-colacts').getBoundingClientRect();
+                return {lane, stats, label: meta.getAttribute('data-label'),
+                        statsW, metaW: meta.clientWidth, title: h.title,
+                        sameLine: Math.abs(name.top - acts.top) < name.height,
+                        actsInside: acts.right <= h.getBoundingClientRect().right + 0.5}; })"""
+        )
+        assert len(heads) >= 4
+        for head in heads:
+            assert head["label"].startswith(head["stats"]), head
+            assert head["statsW"] <= head["metaW"], head  # stats never cut
+            assert head["stats"] in head["title"], head
+            assert head["sameLine"] and head["actsInside"], head
+
+    def test_long_agent_answers_are_previews(self, clean: Page, pages: dict[str, Path]):
+        page = clean
+        _open(page, pages["real"])
+        answers = page.evaluate(
+            """() => [...document.querySelectorAll(
+                    '#transcript :is(.task-result, .task-notification-result) > details.collapsible-code')]
+                .filter(d => d.checkVisibility()).map(d => {
+                    const lh = parseFloat(getComputedStyle(d.querySelector('.preview-content')).lineHeight)
+                        || 1.5 * parseFloat(getComputedStyle(d).fontSize);
+                    return {h: d.getBoundingClientRect().height, lh, open: d.open,
+                            label: d.querySelector('summary').getAttribute('data-more')}; })"""
+        )
+        assert answers, "the worktrees project has long sync-agent answers"
+        for answer in answers:
+            assert not answer["open"]
+            assert answer["h"] <= 3.2 * answer["lh"], answer  # two lines + label
+            assert answer["label"].startswith("+ "), answer
