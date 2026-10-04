@@ -2307,7 +2307,7 @@ class MarkdownRenderer(Renderer):
             parts.append(content)
             content = None  # Don't output again below
 
-        # Heading with title (skip if empty)
+        # Heading with title (skip if empty; the body still renders below)
         title = self.title_content(msg)
         if title:
             # Track the *rendered* heading category, not `msg_type`: a
@@ -2348,9 +2348,14 @@ class MarkdownRenderer(Renderer):
                     if ts_line:
                         parts.append(ts_line)
 
-            # Format content (if not already output above)
-            if content:
-                parts.append(content)
+        # Format content (if not already output above). An empty title
+        # suppresses the heading, never the body: a non-error tool result
+        # titles itself ``""`` on purpose, and when it stands alone (orphan,
+        # or its tool_use ghosted by ``--depth``) the body is all there is.
+        # HTML keeps it too. Ghosted entries return ``""`` from both title
+        # and format, so they still elide.
+        if content:
+            parts.append(content)
 
         # Format paired message bodies (middle then last, when present).
         # Triples (slash-command META → CMD → OUT) deliver three bodies
