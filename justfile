@@ -258,6 +258,12 @@ release-push:
     #!/usr/bin/env bash
     set -euo pipefail
 
+    # It pushes the local main, so the release commit has to be on it.
+    if [[ "$(git branch --show-current)" != main ]]; then
+        echo "❌ Error: Release from main (on '$(git branch --show-current)')"
+        exit 1
+    fi
+
     TAG=$(git tag --sort=-version:refname | head -n 1)
     if [[ "$(git rev-parse HEAD)" != "$(git rev-parse "$TAG^{commit}")" ]]; then
         echo "❌ Error: HEAD is not the latest tag ($TAG) — run 'just release-prep' first"
