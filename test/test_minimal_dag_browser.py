@@ -539,7 +539,7 @@ class TestNestedAndForks:
         )
         assert "rewound" in marker
         label = page.locator(f"[data-lane-ref='{fork}'] .mn-bfold")
-        assert label.get_attribute("data-label").startswith(
+        assert (label.get_attribute("data-label") or "").startswith(
             "⑂ " + _head_attr(page, fork, "data-lane-name")
         )
         assert set(_rail(page, fork)["parts"]) == {"stub"}
