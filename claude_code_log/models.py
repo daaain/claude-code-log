@@ -579,6 +579,10 @@ class SystemMessage(MessageContent):
     # Surfaced in the nav landmark label for /compact points.
     compact_pre_tokens: Optional[int] = None
     compact_trigger: Optional[str] = None
+    # The boundary's ``logicalParentUuid``: it has no ``parentUuid``, so this
+    # names the message it continues. Display-only (the debug uuid line);
+    # kept out of ``meta.parent_uuid``, which drives lookup and pairing.
+    compact_logical_parent_uuid: Optional[str] = None
 
     @property
     def message_type(self) -> str:
