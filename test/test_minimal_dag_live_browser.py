@@ -234,8 +234,21 @@ def live(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[Any]:
 
 
 def _open(page: Page, url: str) -> list[str]:
+    """Open ``url`` and collect its errors. A failed load of the page's own
+    URL is not counted: it can only be a live-update poll, which
+    live_update.js catches and retries on the next tick, though Chromium
+    still logs a console error for it (seen on a Windows runner)."""
     errors: list[str] = []
-    page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
+
+    def on_console(message: Any) -> None:
+        if message.type != "error":
+            return
+        source = (message.location or {}).get("url", "")
+        if message.text.startswith("Failed to load resource") and source == url:
+            return
+        errors.append(f"{message.text} ({source})" if source else message.text)
+
+    page.on("console", on_console)
     page.on("pageerror", lambda e: errors.append(str(e)))
     page.goto(url)
     page.evaluate(f"localStorage.removeItem('{BRANCHES_KEY}')")

@@ -772,7 +772,28 @@ class TestLiveUpdateKeepsFilterAndSearch:
     unfolds or opens under the reader (dev-docs/minimal-theme.md § 11)."""
 
     def _open(self, page, base: str, project: Path) -> list[str]:
-        return TestLiveUpdate._open(TestLiveUpdate(), page, base, project)
+        """Like ``TestLiveUpdate._open``, but a failed load of the page's own
+        URL is not an error here: it can only be a live-update poll, which
+        live_update.js catches and retries on the next tick by design, yet
+        Chromium still logs a console error for it (seen as
+        ``net::ERR_CONNECTION_FAILED`` on a Windows runner). Script errors
+        and every other failed load still count."""
+        errors: list[str] = []
+        url = f"{base}/{project.name}/session-{SESSION_ID}.html"
+
+        def on_console(message) -> None:
+            if message.type != "error":
+                return
+            source = (message.location or {}).get("url", "")
+            if message.text.startswith("Failed to load resource") and source == url:
+                return
+            errors.append(f"{message.text} ({source})" if source else message.text)
+
+        page.on("console", on_console)
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(url)
+        page.wait_for_selector("#transcript")
+        return errors
 
     _TAG_CARDS = TestLiveUpdate._TAG_CARDS
     _COUNT_TAGGED = TestLiveUpdate._COUNT_TAGGED
