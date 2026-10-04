@@ -288,6 +288,16 @@ def _newest_bottom(page: Page) -> float:
     )
 
 
+def _lane_cards(page: Page, lane: str) -> list[str]:
+    """``d-N`` of the lane's visible cards."""
+    return page.evaluate(
+        """(lane) => [...document.querySelectorAll('#transcript .message')]
+            .filter(el => el.getAttribute('data-lane') === lane && el.checkVisibility())
+            .map(el => el.id.replace(/^msg-/, ''))""",
+        lane,
+    )
+
+
 def _click(page: Page, lane: str, what: str = ".mn-bfold") -> None:
     page.locator(f"[data-lane-ref='{lane}'] {what}").click()
 
@@ -353,6 +363,49 @@ def test_running_sync_agent_grows_then_merges(page: Page, live: Any) -> None:
     merge = _numbers(parts["merge"]["d"])
     assert merge[-2] == pytest.approx(_dot_y(page, c["to"]), abs=1.5)
     assert merge[-1] == pytest.approx(_main_x(page), abs=1.5)
+    assert errors == []
+
+
+@pytest.mark.parametrize("live", ["session"], indirect=True)
+def test_a_running_column_keeps_its_open_end(page: Page, live: Any) -> None:
+    """In a column, a running agent's lane (drawn on the column's own rail)
+    carries on to the newest row and ends in the open marker, with no end
+    pointer; when its result arrives it ends at the result row instead,
+    bending back towards the main column."""
+    page.set_viewport_size({"width": 1400, "height": 700})
+    harness = live("c_grows_more")
+    errors = _open(page, harness.url)
+    _click(page, LANE_C, ".mn-bcol")
+    _wait(page, "(lane) => window.claudeLogDag.mode(lane) === 'column'", LANE_C)
+    c = _lane(page, LANE_C)
+    assert c["running"] and c["visible"] == 6, c
+    meta = page.locator(f".dag-chrome[data-col='{LANE_C}'] .dag-colmeta")
+    assert "running" in (meta.get_attribute("data-label") or "")
+    parts = _parts(page, LANE_C)
+    assert set(parts) == {"col-in", "col", "end"}, parts
+    assert "dag-running" in page.evaluate(
+        """(lane) => document.querySelector(
+            `#dag-rail path[data-lane="${lane}"][data-part="col"]`).getAttribute('class')""",
+        LANE_C,
+    )
+    # At the newest row (the column's own last card here: the marker then
+    # clears its dot, so it may sit a few px lower than on the rail).
+    end_y = _numbers(parts["end"]["d"])[1]
+    newest = _newest_bottom(page)
+    last_dot = max(_dot_y(page, el) for el in _lane_cards(page, LANE_C))
+    assert newest - 9 <= end_y <= newest + 2, (end_y, newest)
+    assert end_y >= last_dot + 7 + 4
+    assert _numbers(parts["col"]["d"])[2] == pytest.approx(end_y - 3.5, abs=0.2)
+
+    harness.advance("c_merges")
+    _wait(page, f"() => !!({LANE})('{LANE_C}').to")
+    c = _lane(page, LANE_C)
+    assert not c["running"] and c["mode"] == "column", c
+    parts = _parts(page, LANE_C)
+    assert set(parts) == {"col-in", "col", "col-out"}, parts
+    out = _numbers(parts["col-out"]["d"])
+    assert out[-2] == pytest.approx(_dot_y(page, c["to"]), abs=1.5)
+    assert out[-1] < out[0] - 8  # towards the main column, to its left
     assert errors == []
 
 

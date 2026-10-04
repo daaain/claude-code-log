@@ -18,17 +18,23 @@ from pathlib import Path
 import pytest
 from playwright.sync_api import Page, expect
 
-from test.dag_demo_fixture import write_dag_demo, write_team_demo
+from test.dag_demo_fixture import write_dag_demo, write_team_demo, write_workflow_demo
 from test.test_minimal_dag_browser import (
     BRANCHES_KEY,
     DEPTH_KEY,
+    DOT_Y,
+    W_ENGINE,
+    W_LOADER,
+    W_RENDER,
     A,
     B,
     C,
     D,
+    _fork_lane,
     _head_attr,
     _lane_card_id,
     _mode,
+    _numbers,
     _open,
     _rail,
     _render,
@@ -49,6 +55,9 @@ def pages(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
         "demo": _render(write_dag_demo(tmp / "demo"), tmp / "demo.html", "Demo"),
         "wide": _render(write_dag_demo(tmp / "wide", 1, 4), tmp / "wide.html", "Wide"),
         "team": _render(write_team_demo(tmp / "team"), tmp / "team.html", "Team"),
+        "workflow": _render(
+            write_workflow_demo(tmp / "workflow"), tmp / "workflow.html", "Workflow"
+        ),
     }
 
 
@@ -117,9 +126,10 @@ class TestColumns:
         ctl = page.locator(f"[data-lane-ref='{A}']")
         assert ctl.locator(".mn-bfold").get_attribute("data-mode") == " · in column →"
         assert ctl.locator(".mn-bcol").get_attribute("data-label") == "⇤ Interleave"
-        # A column has no rail lane; the others keep theirs.
-        assert _rail(page, A)["paths"] == []
-        assert _rail(page, B)["paths"]
+        # A column draws its lane in the column (TestColumnLanes), not on
+        # the main line's rail; the others keep theirs.
+        assert set(_rail(page, A)["parts"]) == {"col-in", "col", "col-out"}
+        assert set(_rail(page, B)["parts"]) == {"fork", "lane", "merge"}
 
     def test_rows_are_time_aligned(self, clean: Page, pages: dict[str, Path]):
         page = clean
@@ -251,6 +261,208 @@ class TestColumns:
                 return heads[heads.length - 1].getBoundingClientRect().right; }"""
         )
         assert last <= 1280 + 1
+
+
+# ------------------------------------------------------------ column lanes
+
+# A column's shown cards (in its grid track), stage-relative: each card's
+# dot y (padding-top + .7em, as the engine measures it), whether its dot is
+# drawn, where the dot's centre is (the middle of the card's rail track)
+# and whether it is a step of its own (not a tool pair's result half).
+COLUMN_CARDS = """(lane) => {
+    const stage = document.querySelector('.mn-stage').getBoundingClientRect();
+    const chrome = document.querySelector(`.dag-chrome[data-col="${lane}"]`);
+    const track = getComputedStyle(chrome).gridColumnStart;
+    return [...document.querySelectorAll('#transcript .message')]
+        .filter(el => el.checkVisibility() && getComputedStyle(el).gridColumnStart === track)
+        .map(el => {
+            const cs = getComputedStyle(el);
+            const box = el.getBoundingClientRect();
+            const tracks = cs.gridTemplateColumns.split(' ').map(parseFloat);
+            const dot = getComputedStyle(el, '::before');
+            const half = el.matches('.pair_middle, .pair_last') && !el.matches('.dag-split');
+            return {
+                id: el.id,
+                y: box.top - stage.top + parseFloat(cs.paddingTop) + 0.7 * parseFloat(cs.fontSize),
+                dot: dot.display !== 'none' && dot.content !== 'none',
+                dotX: box.left - stage.left + parseFloat(cs.paddingLeft) + tracks[0] + tracks[1] / 2,
+                step: !half && !el.matches('.session-header'),
+            };
+        });
+}"""
+CHROME_LEFT = """(lane) => document.querySelector(`.dag-chrome[data-col="${lane}"]`)
+    .getBoundingClientRect().left - document.querySelector('.mn-stage').getBoundingClientRect().left"""
+
+
+def _col_parts(page: Page, lane: str) -> dict[str, list[float]]:
+    """The lane's column paths, by part, as their numbers."""
+    return {part: _numbers(p["d"]) for part, p in _rail(page, lane)["parts"].items()}
+
+
+def _dot_y(page: Page, card_id: str) -> float:
+    return page.evaluate(DOT_Y, card_id)
+
+
+def _assert_pointer(numbers: list[float], x: float) -> None:
+    """A pointer leaves the lane at ``x`` and ends to its left, fading."""
+    assert numbers[0] == pytest.approx(x, abs=0.2)
+    assert numbers[-1] < x - 8, numbers
+
+
+class TestColumnLanes:
+    """In Columns a branch column's lane is drawn as a graph lane on the
+    column's own rail, over the lane's active span only: no full-height
+    border, no join across to the main line, a fading pointer towards the
+    parent column at the start and, for a lane that merges, at the end."""
+
+    def test_lanes_span_only_their_active_rows(
+        self, clean: Page, pages: dict[str, Path]
+    ):
+        page = clean
+        page.set_viewport_size({"width": 2200, "height": 900})
+        _open(page, pages["demo"])
+        _columns(page)
+        _settle(page)
+        fork = _fork_lane(page)
+        # The column's background carries no lane-coloured border any more.
+        assert (
+            page.evaluate(
+                f"""getComputedStyle(document.querySelector('.dag-chrome[data-col="{A}"]'))
+                .borderLeftStyle"""
+            )
+            == "none"
+        )
+        for lane in (A, B, C, D, fork):
+            cards = page.evaluate(COLUMN_CARDS, lane)
+            assert cards, lane
+            parts = _col_parts(page, lane)
+            merges = lane != fork
+            assert set(parts) == (
+                {"col-in", "col", "col-out"} if merges else {"col-in", "col"}
+            ), (lane, parts)
+            x, top, bottom = parts["col"]
+            # On the column's rail: every dot sits on the lane.
+            for card in cards:
+                if card["dot"]:
+                    assert card["dotX"] == pytest.approx(x, abs=1), (lane, card)
+            # One dot per message shown in the column (a tool pair's two
+            # halves are one step, as on the main line).
+            dots = [c for c in cards if c["dot"]]
+            assert len(dots) == len([c for c in cards if c["step"]]) > 0, lane
+            # From the first shown row …
+            ys = [c["y"] for c in cards]
+            assert top == pytest.approx(min(ys), abs=1.5), lane
+            _assert_pointer(parts["col-in"], x)
+            assert parts["col-in"][1] == pytest.approx(top, abs=0.2)
+            pin = parts["col-in"]  # M x top V lead A … x' y' H tip
+            assert pin[9] < pin[2] < top, "the pointer leads up and away"
+            if merges:
+                # … down to the merge row (the result, the notification),
+                # below the lane's last row, where it bends back.
+                merge_y = _dot_y(page, _lane_card_id(page, lane, "data-lane-to"))
+                assert merge_y > max(ys) + 1, lane
+                out = parts["col-out"]
+                _assert_pointer(out, x)
+                assert out[1] == pytest.approx(bottom, abs=0.2)
+                assert out[-2] == pytest.approx(merge_y, abs=1.5), lane
+                assert bottom < merge_y
+            else:
+                # … to the last: a fork never merges.
+                assert bottom == pytest.approx(max(ys), abs=1.5), lane
+
+    def test_workflow_agents_merge_at_their_rows(
+        self, clean: Page, pages: dict[str, Path]
+    ):
+        page = clean
+        page.set_viewport_size({"width": 2200, "height": 900})
+        _open(page, pages["workflow"])
+        _columns(page)
+        _settle(page)
+        for lane in (W_LOADER, W_RENDER):
+            parts = _col_parts(page, lane)
+            assert set(parts) == {"col-in", "col", "col-out"}, (lane, parts)
+            # The agent's own row on the main line is its merge row.
+            merge_y = _dot_y(page, _lane_card_id(page, lane, "data-lane-to"))
+            assert parts["col-out"][-2] == pytest.approx(merge_y, abs=1.5)
+        # A failed agent without a result ends at its last row, unpointed.
+        parts = _col_parts(page, W_ENGINE)
+        assert set(parts) == {"col-in", "col"}, parts
+        ys = [c["y"] for c in page.evaluate(COLUMN_CARDS, W_ENGINE)]
+        assert parts["col"][2] == pytest.approx(max(ys), abs=1.5)
+
+    def test_a_strip_keeps_its_span_without_dots(
+        self, clean: Page, pages: dict[str, Path]
+    ):
+        page = clean
+        page.set_viewport_size({"width": 2200, "height": 900})
+        _open(page, pages["demo"])
+        _columns(page)
+        page.locator(f".dag-chrome[data-col='{A}'] [data-col-act='collapse']").click()
+        _settle(page)
+        assert _visible_count(page, A) == 0  # no cards, so no dots
+        parts = _col_parts(page, A)
+        assert set(parts) == {"col-in", "col", "col-out"}, parts
+        x, top, bottom = parts["col"]
+        # By the strip's left edge, clear of its vertical name.
+        assert x == pytest.approx(page.evaluate(CHROME_LEFT, A) + 6, abs=0.5)
+        spawn_y = _dot_y(page, _lane_card_id(page, A, "data-lane-from"))
+        merge_y = _dot_y(page, _lane_card_id(page, A, "data-lane-to"))
+        assert spawn_y < top < bottom < merge_y
+        assert parts["col-out"][-2] == pytest.approx(merge_y, abs=1.5)
+        # Expanded again: the column's own rail.
+        page.locator(f".dag-chrome[data-col='{A}'] .dag-strip").click()
+        _settle(page)
+        assert _col_parts(page, A)["col"][0] > page.evaluate(CHROME_LEFT, A) + 6 + 30
+
+    def test_pointers_fade_in_the_lane_colour_in_both_schemes(
+        self, clean: Page, pages: dict[str, Path]
+    ):
+        page = clean
+        _open(page, pages["demo"])
+        _columns(page)
+        for scheme in ("light", "dark"):
+            page.evaluate(
+                f"document.documentElement.setAttribute('data-theme', '{scheme}')"
+            )
+            page.evaluate("window.claudeLogDag.relayout()")
+            fade = page.evaluate(
+                """(lane) => {
+                    const path = part => document.querySelector(
+                        `#dag-rail path[data-lane="${lane}"][data-part="${part}"]`);
+                    const stroke = getComputedStyle(path('col-in')).stroke;
+                    const id = /url\\("?#([^")]+)"?\\)/.exec(stroke)[1];
+                    const stops = [...document.getElementById(id).querySelectorAll('stop')]
+                        .map(s => [getComputedStyle(s).stopColor, +getComputedStyle(s).stopOpacity]);
+                    return {line: getComputedStyle(path('col')).stroke, stops};
+                }""",
+                A,
+            )
+            colours = {c for c, _o in fade["stops"]}
+            assert colours == {fade["line"]}, (scheme, fade)
+            opacity = [o for _c, o in fade["stops"]]
+            assert opacity[0] == 1 and opacity[-1] == 0, (scheme, fade)
+        page.evaluate("document.documentElement.removeAttribute('data-theme')")
+
+    def test_redrawn_on_resize_and_gone_in_main_only(
+        self, clean: Page, pages: dict[str, Path]
+    ):
+        page = clean
+        page.set_viewport_size({"width": 1600, "height": 900})
+        _open(page, pages["demo"])
+        _columns(page)
+        _settle(page)
+        before = _col_parts(page, A)["col"]
+        page.set_viewport_size({"width": 2400, "height": 900})
+        _settle(page)
+        _settle(page)
+        after = _col_parts(page, A)["col"]
+        assert after[0] != pytest.approx(before[0], abs=1), "not redrawn"
+        cards = page.evaluate(COLUMN_CARDS, A)
+        assert all(
+            c["dotX"] == pytest.approx(after[0], abs=1) for c in cards if c["dot"]
+        )
+        page.locator("[data-mn-branches='main']").click()
+        assert not any(p["part"].startswith("col") for p in _rail(page, A)["paths"])
 
 
 # ---------------------------------------------------------------- overflow

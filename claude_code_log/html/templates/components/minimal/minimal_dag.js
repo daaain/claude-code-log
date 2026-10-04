@@ -57,6 +57,11 @@
             const RADIUS = 8;           // fork/merge connector corner
             const STUB = 12;            // a folded fork's stub below its row
             const END_R = 3.5;          // a running lane's open end marker
+            // A column lane's pointers: a few px of lane past the end dot
+            // (clear of the dot and its ring), the RADIUS curve, a short tail.
+            const POINTER_LEAD = 6;
+            const POINTER_TAIL = 3;
+            const STRIP_X = 6;          // px: a strip's lane, from its left edge (clear of its name)
             // An open lane (an agent with no result yet, P7b) reads as
             // *running* on a page served live (`serve`, live_update.js) —
             // however long it has been quiet (P7c: agents wait on background
@@ -1354,7 +1359,10 @@
                 if (observer && observed) observe(observed);
                 const t3 = performance.now();
 
-                layout = { model: model, rail: rail, packed: packed, sequence: sequence, newest: newest, activity: activity, running: running };
+                layout = {
+                    model: model, rail: rail, packed: packed, sequence: sequence, newest: newest, activity: activity, running: running,
+                    columns: columnLanes(sequence, tracks, colours, model, running),
+                };
                 draw();
                 const t4 = performance.now();
                 lastTiming = {
@@ -1363,6 +1371,30 @@
                     columns: tracks.length,
                 };
                 if (DEBUG) console.info('[dag] relayout ' + lastTiming.total.toFixed(1) + 'ms', lastTiming);
+            }
+            // Column lanes (drawn by draw()): per column or strip, its
+            // colour, its shown items in row order (a strip: the row range of
+            // its hidden ones), its merge row and whether it runs.
+            function columnLanes(sequence, tracks, colours, model, running) {
+                if (!tracks.length) return [];
+                const byKey = new Map();
+                const out = tracks.map(function (key) {
+                    const col = {
+                        key: key, colour: colours.get(key) || 'a', strip: modeOf(key) === 'strip',
+                        running: running.has(key), merge: model.merges.get(key) || null,
+                        items: [], first: -1, last: -1,
+                    };
+                    byKey.set(key, col);
+                    return col;
+                });
+                sequence.forEach(function (item) {
+                    const col = byKey.get(item.key);
+                    if (!col) return;
+                    if (col.first < 0) col.first = item.row;
+                    col.last = item.row;
+                    if (!item.hidden) col.items.push(item);
+                });
+                return out;
             }
             // The viewport's width without its scrollbar: the sticky toolbar
             // keeps to it while a wide (columns) page scrolls sideways.
@@ -1528,11 +1560,124 @@
                             + 'H' + round(xm), false);
                     }
                 });
+                const fades = drawColumns(stageBox, style, rowY, round, path, lastShownBottom);
                 const width = Math.ceil(stage.clientWidth);
                 const height = Math.ceil(stage.scrollHeight);
+                // One fading stroke per lane colour a pointer uses (the
+                // colour is the gradient's own --lc, so it follows the scheme).
+                let defs = '';
+                fades.forEach(function (colour) {
+                    defs += "<linearGradient id='dag-fade-" + colour + "' class='dag-lc-" + colour + "' x1='1' y1='0' x2='0' y2='0'>"
+                        + "<stop offset='0'></stop><stop offset='0.4'></stop><stop offset='1'></stop></linearGradient>";
+                });
                 railHost.innerHTML = paths.length
-                    ? "<svg xmlns='http://www.w3.org/2000/svg' width='" + width + "' height='" + height + "' viewBox='0 0 " + width + ' ' + height + "'>" + paths.join('') + '</svg>'
+                    ? "<svg xmlns='http://www.w3.org/2000/svg' width='" + width + "' height='" + height + "' viewBox='0 0 " + width + ' ' + height + "'>"
+                        + (defs ? '<defs>' + defs + '</defs>' : '') + paths.join('') + '</svg>'
                     : '';
+            }
+
+            // Column lanes: in Columns mode each column (or strip) draws its
+            // lane where the main line has its rail — between the column
+            // cards' gutter and content (`--dag-col-*`, dag.css), whose dots
+            // sit on it — over the lane's active span only: from its first
+            // shown row to its last, or down to its merge row (a sync result,
+            // an async notification, a workflow agent's row). No join is
+            // drawn across to the parent column: a short curve at the top
+            // bends left towards where the branch came from and fades out
+            // (`col-in`), and a merging lane ends in a matching one
+            // (`col-out`); a fork never merges, and a running lane carries on
+            // to the newest row and ends in the open marker, as on the rail.
+            // A strip (its cards hidden) draws the line alone over the rows
+            // its lane spans, at its left edge. Returns the colours whose
+            // fade the pointers use.
+            function drawColumns(stageBox, style, rowY, round, path, lastShownBottom) {
+                const fades = new Set();
+                const columns = layout.columns || [];
+                if (!columns.length) return fades;
+                const pad = parseFloat(style.getPropertyValue('--dag-col-pad')) || 0;
+                const gut = parseFloat(style.getPropertyValue('--dag-col-gut')) || 0;
+                const rail = parseFloat(style.getPropertyValue('--dag-col-rail')) || 16;
+                const offset = pad + gut + rail / 2;
+                const r = RADIUS;
+                const sequence = layout.sequence;
+                // A strip's rows are empty: the dot y of the nearest shown
+                // item at or after (dir 1) / at or before (dir -1) a row.
+                function nearRowY(row, dir) {
+                    let lo = 0;
+                    let hi = sequence.length;
+                    while (lo < hi) {
+                        const mid = (lo + hi) >> 1;
+                        if (dir > 0 ? sequence[mid].row < row : sequence[mid].row <= row) lo = mid + 1;
+                        else hi = mid;
+                    }
+                    for (let i = dir > 0 ? lo : lo - 1, n = 0; i >= 0 && i < sequence.length && n < 512; i += dir, n++) {
+                        if (visible(sequence[i])) return rowY(sequence[i]);
+                    }
+                    return NaN;
+                }
+                function pointer(id, part, colour, d) {
+                    fades.add(colour);
+                    path(id, part, colour, d, false, 'dag-fade');
+                }
+                columns.forEach(function (col) {
+                    const el = chrome.get(col.key);
+                    if (!el || !el.isConnected) return;
+                    const xk = el.getBoundingClientRect().left - stageBox.left + (col.strip ? STRIP_X : offset);
+                    let ys = NaN;
+                    let ye = NaN;
+                    let lastRow = col.last;
+                    if (col.strip) {
+                        if (col.first < 0) return;
+                        ys = nearRowY(col.first, 1);
+                        ye = nearRowY(col.last, -1);
+                    } else {
+                        let first = null;
+                        let last = null;
+                        for (let i = 0; i < col.items.length && !first; i++) if (visible(col.items[i])) first = col.items[i];
+                        for (let i = col.items.length - 1; i >= 0 && first && !last; i--) if (visible(col.items[i])) last = col.items[i];
+                        if (!first) return;
+                        ys = rowY(first);
+                        ye = rowY(last);
+                        lastRow = last.row;
+                    }
+                    if (isNaN(ys)) return;
+                    if (!(ye >= ys)) ye = ys;
+                    const id = col.key;
+                    const colour = col.colour;
+                    const lead = POINTER_LEAD;
+                    pointer(id, 'col-in', colour,
+                        'M' + round(xk) + ' ' + round(ys) + 'V' + round(ys - lead)
+                        + 'A' + r + ' ' + r + ' 0 0 0 ' + round(xk - r) + ' ' + round(ys - lead - r)
+                        + 'H' + round(xk - r - POINTER_TAIL));
+                    if (col.running) {
+                        // The open marker clears the last dot even when that
+                        // row is the newest (a short card).
+                        let bottom = lastShownBottom() - 2 * END_R;
+                        if (!(bottom >= ye + 2 * END_R + 4)) bottom = ye + 2 * END_R + 4;
+                        path(id, 'col', colour, 'M' + round(xk) + ' ' + round(ys) + 'V' + round(bottom - END_R), false, 'dag-running');
+                        path(id, 'end', colour,
+                            'M' + round(xk - END_R) + ' ' + round(bottom)
+                            + 'a' + END_R + ' ' + END_R + ' 0 1 0 ' + (2 * END_R) + ' 0'
+                            + 'a' + END_R + ' ' + END_R + ' 0 1 0 ' + (-2 * END_R) + ' 0', false, 'dag-end');
+                        return;
+                    }
+                    const merge = col.merge;
+                    const ym = merge && visible(merge) && merge.row > lastRow ? rowY(merge) : NaN;
+                    if (ym > ye) {
+                        // The merge row: the lane runs down to it and bends
+                        // back towards the parent column there.
+                        const rm = Math.min(r, Math.max(2, ym - ys));
+                        const split = Math.max(ys, ym - rm - lead);
+                        path(id, 'col', colour, 'M' + round(xk) + ' ' + round(ys) + 'V' + round(split), false);
+                        pointer(id, 'col-out', colour,
+                            'M' + round(xk) + ' ' + round(split) + 'V' + round(ym - rm)
+                            + 'A' + rm + ' ' + rm + ' 0 0 1 ' + round(xk - rm) + ' ' + round(ym)
+                            + 'H' + round(xk - rm - POINTER_TAIL));
+                        return;
+                    }
+                    path(id, 'col', colour, 'M' + round(xk) + ' ' + round(ys) + 'V' + round(ye), false);
+                });
+                return fades;
             }
 
             // ---- triggers ----------------------------------------------------

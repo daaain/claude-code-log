@@ -137,9 +137,12 @@ duration — and can be shown in one of four ways:
 - **In a column** — *Column ⇥* on the control. The branch moves into a
   column of its own to the right, its rows still aligned in time with the
   main line, so you can read both side by side; the page widens and
-  scrolls sideways. The column's head names the branch and gives its
-  stats; *⇤* puts it back into the main line and *−* collapses it to a
-  narrow strip (click the strip to open it again).
+  scrolls sideways. The column draws the branch's lane like the main
+  line's, a dot per message, but only from its first message to its last
+  — or down to the row where its result arrives — with a short curve at
+  each end pointing back towards the main line. The column's head names
+  the branch and gives its stats; *⇤* puts it back into the main line and
+  *−* collapses it to a narrow strip (click the strip to open it again).
 - **A strip** — a collapsed column.
 
 The toolbar's **Branches** buttons set every branch at once: *Main only*
@@ -154,8 +157,13 @@ the rest.
 </figure>
 
 <figure markdown>
-  ![The same page in "Columns" mode: the main session on the left and one column per branch](assets/themes/columns-light.png)
-  <figcaption><em>Columns</em>: one column per branch beside the main session, rows aligned in time.</figcaption>
+  ![The same page in "Columns" mode: the main session on the left and one column per branch, each with its own lane](assets/themes/columns-light.png)
+  <figcaption><em>Columns</em>: one column per branch beside the main session, rows aligned in time; each branch's lane runs only while it is active.</figcaption>
+</figure>
+
+<figure markdown>
+  ![The Columns mode in the dark scheme: two agents' lanes ending where their results arrive on the main line](assets/themes/columns-dark.png)
+  <figcaption>The same in the dark scheme: each lane ends where the agent's result arrives on the main line, curving back towards it.</figcaption>
 </figure>
 
 Search, the timeline and links find their way into branches: a search hit,

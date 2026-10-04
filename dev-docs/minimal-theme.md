@@ -53,9 +53,13 @@ Each branch is in one of four modes:
   and *Collapse* once the head is 400px wide — with its stats, then its
   meta, on a second line (§ 9); the spawn row's control reads
   `· in column →` and its button becomes *⇤ Interleave*. A column has no
-  rail lane. Unlimited columns; the page widens and scrolls sideways;
+  lane on the main line's rail: it draws its own, down its cards' dots,
+  over the lane's active span only, with a fading pointer towards the
+  parent column at each end (§ 2.1). Unlimited columns; the page widens and
+  scrolls sideways;
 - **strip**: a column collapsed to 34px, its name set vertically (click to
-  expand back to a column); its cards are hidden.
+  expand back to a column); its cards are hidden, its lane is a bare line
+  over the rows they span (§ 2.1).
 
 A sub-agent that has not returned yet is drawn **running** on a live page
 (§ 8): instead of a stub, its lane carries on to the newest row and ends in
@@ -191,9 +195,13 @@ so entering columns renumbers nothing by itself). Every item gets an inline
 `grid-column` while columns exist (auto-placement would otherwise put a
 definite-row item after the last placed one). Column cards (`dag-col`, plus
 `dag-colin` for a lane interleaved inside a column) use the compact row of
-the mockup's `.w-col`: gutter left-aligned, no rail, no dot. The column
-**chrome** — per column a background spanning every row (lane-colour edge,
-5% tint) holding its sticky head or strip button, plus the main column's
+the mockup's `.w-col` — gutter left-aligned — with a rail of their own:
+`--dag-col-pad` (8px) + `--dag-col-gut` (60px; 0 on a phone) +
+`--dag-col-rail` (16px), the dot in the middle of the rail, ringed in the
+column's tint (§ 2.1). The column
+**chrome** — per column a background spanning every row (5% tint, a
+neutral 1px hairline on its left edge) holding its sticky head or strip
+button, plus the main column's
 "Main session" head — is a set of engine-owned `.dag-chrome` grid items at
 the head of `#transcript`: first in DOM order, so they paint under the
 cards. Nothing else reads them (live updates key on `.message-node`, search,
@@ -203,6 +211,46 @@ until the next relayout. `<body>` gets `dag-wide` (no 960px cap, at least
 filter panel, timeline and session navigation keep to the viewport
 (`position: sticky; left`, `--dag-view` = the viewport width without its
 scrollbar).
+
+### 2.1 Column lanes
+
+A column's lane is drawn in the rail's SVG (`drawColumns`, part of § 3's
+draw step), in the rail's language — a 2px line in the lane colour, the
+cards' own role-coloured dots on it — but only over the lane's **active
+span**, not the page's height: above its first row and below its end the
+column shows no line.
+
+| Part (`data-part`) | Path | When |
+|---|---|---|
+| `col` | the line, at the column's left + `--dag-col-pad` + `--dag-col-gut` + `--dag-col-rail` / 2, from the first shown card's dot (`padding-top + .7em`) down to the last's — or to the merge | always |
+| `col-in` | from the first dot, 6px up, an 8px curve bending left (towards the parent column) and a 3px tail | always |
+| `col-out` | 6px above the merge row's dot y, the matching curve down and left, ending level with that dot | the lane merges (a sync result, an async `<task-notification>`, a workflow agent's own row) below its last shown row |
+| `end` | the open circle, as on the rail (`dag-end`), at the newest shown row's bottom − 7px (at least 11px below the last dot); `col` then carries `dag-running` | the lane is running (§ 8) |
+
+- **No join.** Nothing crosses to the parent column: the pointers only
+  hint where the branch came from and went back to. A fork never merges,
+  so its lane ends at its last row with no `col-out`; a lane that ended
+  without a result likewise.
+- **The fade** is a stroke gradient, not an opacity on the path: per lane
+  colour a pointer uses, one `<linearGradient id='dag-fade-<c>'>` in the
+  SVG's `<defs>` (objectBoundingBox, right to left; class `dag-lc-<c>`, so
+  its stops' `stop-color: var(--lc)` resolve to the lane colour in light
+  and dark alike), stops at opacity 1, .7 and 0 (`dag.css`); the pointer
+  paths take `dag-fade`, and `path.dag-fade.dag-lc-<c>` strokes with
+  `url(#dag-fade-<c>)`.
+- **What a column holds** is every shown item of its column key (§ 3,
+  step 4), so a lane interleaved inside it has its dots on the same line
+  and stretches the span if it outlives its parent; the merge row is the
+  column lane's own (`data-merges`), wherever it sits — usually on the
+  main line, at the same y the pointer ends.
+- **Strips** have no cards to put dots on: the lane is the line alone
+  (with its pointers), 6px from the strip's left edge (clear of its
+  vertical name), over the rows its hidden items occupy — the dot y of the
+  nearest shown item at or after its first row and at or before its last
+  (a binary search over the sequence: rows are packed in sequence order).
+- **Redraws** as the rail does (§ 4): every relayout, resize, phone flip and
+  live card landing. The positions are a handful of reads per column (its
+  chrome's left, its first and last shown item, its merge row).
 
 ## 3. The relayout
 
@@ -246,7 +294,8 @@ A pure function of (DOM, lane modes), in `relayout()`:
 7. **Draw** (`draw`): one batched read of the few rows the rail needs (spawn,
    merge, first / last shown row of each lane), then the SVG in `#dag-rail`
    is rebuilt. Paths carry `data-lane` and `data-part` (`fork`, `lane`,
-   `merge`, `stub`); a folded lane's `lane` part is dashed (`3 4`).
+   `merge`, `stub`, `end`; a column's `col-in`, `col`, `col-out`, § 2.1);
+   a folded lane's `lane` part is dashed (`3 4`).
    Connector radius 8px; dot centre = `padding-top + .7em` of the card.
 
 `dag-split` marks a tool pair whose halves are separated by interleaved rows
@@ -322,6 +371,27 @@ re-packs rows across the page, so the browser re-lays the whole grid.
 Global Columns on a page this size is the user's explicit choice ("the user
 decides when it's too squashed"); per-lane columns stay well under half a
 second.
+
+**Column lanes** (§ 2.1), same page with all 300 columns open, headless
+Chromium at 1280px on the 4-core VM, medians of seven page loads, before →
+after. Here "engine" is the relayout's own timing, which includes the
+layout its draw forces (unlike the P7 table above), and "with paint" ends
+after the next frame:
+
+| Operation | Engine | With paint |
+|---|---|---|
+| Global Columns | 880 → 905 ms | 1.11 → 1.15 s |
+| Steady relayout, 300 columns | 56 → 60 ms (its draw: 0.1 → 10 ms, 840 paths) | — |
+| Collapse one column to a strip | 590 → 690 ms | 765 → 890 ms |
+| Redraw only (a resize) | — | 25 → 73 ms |
+| Columns → Main only | 390 → 390 ms | 480 → 480 ms |
+
+Before, a page with every lane in a column had no rail at all; the cost is
+the rail's SVG coming back (840 paths: per column its line and one or two
+pointers) and the dots the column cards now draw. Drawing the paths is
+≈ 10ms; repainting a rail of any size costs the same ≈ 25ms per frame
+(a tenth of the paths, or a 1px SVG, measured the same), as it already does
+on any page with a rail. Runs vary by ±50ms on this VM.
 
 **Real projects (P8).** The demo's cards are tiny; real cards are not, and
 on a real page the browser's style and layout dominate. Headless Chromium,
@@ -499,7 +569,8 @@ solid while interleaved) to the bottom of the newest shown row, ending in
 an open circle (`data-part='end'`, `dag-end`, filled with `--bg`). Its
 control gets `is-running` and a `running` pill (`.mn-brun`, generated
 content, `running · quiet …` once quiet); a running column's head adds the
-same to its meta. Animations
+same to its meta, and its lane (§ 2.1) runs on to the newest row and ends
+in the same open circle. Animations
 stop under `prefers-reduced-motion`.
 
 **Server-side freshness.** A running agent appends to

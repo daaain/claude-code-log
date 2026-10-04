@@ -97,6 +97,28 @@
     to { stroke-dashoffset: -7; }
 }
 
+/* A column lane's pointers (`col-in`, `col-out`): a short curve towards the
+   parent column that fades out, stroked with the rail's per-colour gradient
+   (`dag-fade-<c>`, its stops in the lane colour: opaque at the lane, gone at
+   the tip), so it follows the scheme. */
+.theme-minimal #dag-rail stop {
+    stop-color: var(--lc);
+}
+
+.theme-minimal #dag-rail stop + stop {
+    stop-opacity: 0.7;
+}
+
+.theme-minimal #dag-rail stop:last-child {
+    stop-opacity: 0;
+}
+
+.theme-minimal #dag-rail path.dag-fade.dag-lc-a { stroke: url(#dag-fade-a); }
+.theme-minimal #dag-rail path.dag-fade.dag-lc-b { stroke: url(#dag-fade-b); }
+.theme-minimal #dag-rail path.dag-fade.dag-lc-f { stroke: url(#dag-fade-f); }
+.theme-minimal #dag-rail path.dag-fade.dag-lc-s { stroke: url(#dag-fade-s); }
+.theme-minimal #dag-rail path.dag-fade.dag-lc-p { stroke: url(#dag-fade-p); }
+
 @media (prefers-reduced-motion: reduce) {
     .theme-minimal #dag-rail path.dag-running.dag-dash,
     .theme-minimal #transcript .mn-bctl.is-running .mn-brun::before {
@@ -550,6 +572,12 @@
    sideways; the page furniture keeps to the viewport (`--dag-view`). */
 .theme-minimal .mn-stage {
     --dag-head-h: 46px;
+    /* A column card's row (the engine reads these to draw the column's
+       lane): its left padding, gutter and rail; the lane and the dots run
+       down the middle of the rail. */
+    --dag-col-pad: 8px;
+    --dag-col-gut: 60px;
+    --dag-col-rail: 16px;
 }
 
 body.theme-minimal.dag-wide {
@@ -571,15 +599,17 @@ body.theme-minimal.dag-wide :is(.mn-top, .mn-toolbar, .filter-toolbar, #timeline
 
 /* Column chrome (engine-owned, first in #transcript so it paints under the
    cards): a background per column spanning every row, holding a head that
-   sticks under the toolbar. */
+   sticks under the toolbar. The column's lane is not a border but drawn on
+   the rail, over the lane's active span only (minimal_dag.js
+   `drawColumns`); a hairline keeps the columns apart. */
 .theme-minimal #transcript > .dag-chrome {
     position: relative;
     min-width: 0;
 }
 
 .theme-minimal #transcript > .dag-colbg:not(.dag-mainbg) {
-    border-left: 2px solid var(--lc);
     background: color-mix(in srgb, var(--lc) 5%, transparent);
+    box-shadow: inset 1px 0 0 var(--rule);
 }
 
 .theme-minimal #transcript .dag-colhead {
@@ -713,16 +743,20 @@ body.theme-minimal.dag-wide :is(.mn-top, .mn-toolbar, .filter-toolbar, #timeline
 }
 
 /* Cards in a column: the compact row (mockup .w-col) — gutter (time, role)
-   left-aligned, no rail and no dot. */
+   left-aligned, then the column's rail: its lane (drawn by the engine) and
+   the cards' dots, as on the main line. */
 .theme-minimal .mn-stage.dag-on #transcript .message.dag-col {
-    grid-template-columns: 60px 6px minmax(0, 1fr);
+    grid-template-columns: var(--dag-col-gut) var(--dag-col-rail) minmax(0, 1fr);
     min-width: 0;
     padding-right: 10px;
-    padding-left: 8px;
+    padding-left: var(--dag-col-pad);
 }
 
 .theme-minimal .mn-stage.dag-on #transcript .message.dag-col::before {
-    display: none;
+    justify-self: center;
+    margin-left: 0;
+    transform: none;
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--lc) 5%, var(--bg));
 }
 
 .theme-minimal .mn-stage.dag-on #transcript .message.dag-col > .header > .header-info {
@@ -769,7 +803,7 @@ body.theme-minimal.dag-wide :is(.mn-top, .mn-toolbar, .filter-toolbar, #timeline
 }
 
 .theme-minimal .mn-stage.dag-on #transcript .message.branch-header.dag-col {
-    padding-left: 10px;
+    padding-left: calc(var(--dag-col-pad) + var(--dag-col-gut) + var(--dag-col-rail) + 4px);
     border-top-color: var(--lc);
 }
 
@@ -826,8 +860,12 @@ body.theme-minimal.dag-wide :is(.mn-top, .mn-toolbar, .filter-toolbar, #timeline
         max-width: calc(var(--dag-view, 100vw) - 20px);
     }
 
+    .theme-minimal .mn-stage {
+        --dag-col-gut: 0px;
+    }
+
     .theme-minimal .mn-stage.dag-on #transcript .message.dag-col {
-        grid-template-columns: 0 minmax(0, 1fr);
+        grid-template-columns: var(--dag-col-rail) minmax(0, 1fr);
     }
 
     .theme-minimal .mn-stage.dag-on #transcript .message.dag-col > .header > .header-info {
