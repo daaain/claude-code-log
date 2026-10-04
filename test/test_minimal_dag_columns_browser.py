@@ -514,3 +514,45 @@ class TestColumnsLiveUpdate:
             """() => [...document.getElementById('transcript').children]
                 .findIndex(el => !el.classList.contains('dag-chrome')) === 2"""
         )
+
+    def test_turn_choices_survive_a_renumbering_swap(
+        self, clean: Page, pages: dict[str, Path]
+    ):
+        """A live swap that renumbers the positional ``msg-d-N`` ids (an entry
+        landing mid-page) must not lose the per-turn state: the expanded
+        "+N more branches" and the cap's LRU follow the turn, not its id
+        (P7b: they were keyed by ``data-lane-turn``'s ``d-N``)."""
+        page = clean
+        _open(page, pages["wide"])
+        more = page.locator(f"[data-lane-ref='{EXTRA[0]}'] .mn-bmore")
+        more.click()
+        for lane in (A, B, EXTRA[3]):
+            _toggle(page, lane)
+        page.evaluate(
+            """() => {
+                const shift = (v) => v.replace(/\\bd-(\\d+)\\b/g, (m, n) => 'd-' + (+n + 1000));
+                const old = document.getElementById('transcript');
+                const next = old.cloneNode(true);
+                next.querySelectorAll('.mn-bctls, .dag-chrome').forEach(el => el.remove());
+                next.querySelectorAll('[id^="msg-d-"]').forEach(el => { el.id = shift(el.id); });
+                next.querySelectorAll('[data-lane-from], [data-lane-to], [data-lane-turn]').forEach(el => {
+                    ['data-lane-from', 'data-lane-to', 'data-lane-turn'].forEach(name => {
+                        if (el.hasAttribute(name)) el.setAttribute(name, shift(el.getAttribute(name)));
+                    });
+                });
+                old.replaceWith(next);
+                window.claudeLogRehydrate(next);
+            }"""
+        )
+        _settle(page)
+        assert page.evaluate(
+            "document.querySelector('[data-lane-turn]').getAttribute('data-lane-turn')"
+        ).startswith("d-100")
+        more = page.locator(f"[data-lane-ref='{EXTRA[0]}'] .mn-bmore")
+        assert more.get_attribute("data-label") == "− fewer branches"
+        for lane in EXTRA[1:]:
+            expect(page.locator(f"[data-lane-ref='{lane}']")).to_be_visible()
+        # The cap still counts the three opened before the swap.
+        _toggle(page, EXTRA[2])
+        assert _mode(page, A) == "folded"
+        assert [_mode(page, x) for x in (B, EXTRA[3], EXTRA[2])] == ["interleaved"] * 3

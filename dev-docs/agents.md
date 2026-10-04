@@ -413,6 +413,14 @@ second half), tokens and duration from the notification's `<usage>`
 (async) or the result tail (sync), else the span of the lane's
 timestamps (`"6 steps · 48.4k tokens · 2m 13s"`).
 
+An agent lane **without a merge row** also carries a `state`
+(`data-lane-state`): `ended` when the page proves the agent is over — a
+synchronous agent's parent line (same lane, same session) has a later
+model step or prompt, or the lane is nested in one that merged or ended —
+else `open`. The minimal theme draws an `open` lane as *running* only on a
+live, recently active page; see
+[minimal-theme.md § 8](minimal-theme.md#8-live-updates-and-running-lanes).
+
 Rewind forks follow the same model; see
 [dag.md § Branch lanes](dag.md#branch-lanes-minimal-theme). Teammate
 exchanges are linked rather than laned: `lanes.teammate_links` pairs each

@@ -352,7 +352,7 @@ def get_library_version() -> str:
 
 
 def subagents_fingerprint(jsonl_path: Path) -> str:
-    """Fingerprint of the sidecar inputs that feed spawn discovery (#213).
+    """Fingerprint of the sub-agent inputs a transcript's parse reads (#213).
 
     Parsing a transcript also reads ``agent-*.meta.json`` sidecars (see
     ``converter._subagent_meta_map``), so they must take part in cache
@@ -360,12 +360,23 @@ def subagents_fingerprint(jsonl_path: Path) -> str:
     (e.g. a still-running agent spawning a child without touching the
     trunk file) would otherwise go unnoticed by the mtime-only check.
 
+    The same parse splices the agents' own transcripts
+    (``agent-*.jsonl``) into the trunk's cached rows, so those count too:
+    a **running** sub-agent appends to its transcript while the trunk
+    sits idle on the spawning tool_use (a synchronous agent blocks it; an
+    async one runs beside it), and without them a watch kept serving the
+    cached trunk — the agent's lane did not grow until the trunk next
+    changed (work/minimal-theme-dag.md, P7b).
+
     The fingerprint is ``"<count>:<newest int mtime>"`` over the sidecars
     of the dirs where this transcript's children can live — the sibling
     ``<stem>/subagents/`` dir, plus the containing dir for agent files
-    (the flat layout puts children next to their parent). Sidecars are
-    written once at spawn time, so count+newest-mtime captures every
-    addition and removal. Empty string when there are none.
+    (the flat layout puts children next to their parent) — then, when
+    agent transcripts are present, ``"|<count>:<newest mtime_ns>:<total
+    bytes>"`` over them (size is exact where the mtime may tie inside a
+    second). Sidecars are written once at spawn time, so count + newest
+    mtime captures every addition and removal; transcripts only grow.
+    Empty string when there are none.
 
     Deliberately narrower than ``converter._subagent_meta_map``'s scan
     for TRUNK files: the parse also defensively checks the project dir
@@ -376,19 +387,54 @@ def subagents_fingerprint(jsonl_path: Path) -> str:
     candidates = [jsonl_path.parent / jsonl_path.stem / "subagents"]
     if jsonl_path.parent.name == "subagents":
         candidates.append(jsonl_path.parent)
-    metas: list[Path] = []
-    for directory in candidates:
-        if directory.is_dir():
-            metas.extend(directory.glob("agent-*.meta.json"))
-    if not metas:
-        return ""
+    meta_count = 0
+    meta_newest = 0
+    agent_count = 0
+    agent_newest = 0
+    agent_bytes = 0
     try:
-        newest = max(int(p.stat().st_mtime) for p in metas)
+        for directory in candidates:
+            if not directory.is_dir():
+                continue
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    name = entry.name
+                    if not name.startswith("agent-"):
+                        continue
+                    if name.endswith(".meta.json"):
+                        meta_count += 1
+                        meta_newest = max(meta_newest, int(entry.stat().st_mtime))
+                    elif name.endswith(".jsonl"):
+                        st = entry.stat()
+                        agent_count += 1
+                        agent_newest = max(agent_newest, st.st_mtime_ns)
+                        agent_bytes += st.st_size
     except OSError:
-        # A sidecar vanished mid-scan; treat as unstable so the next
-        # check re-reads (an always-mismatching fingerprint is safe).
-        return f"{len(metas)}:unstable"
-    return f"{len(metas)}:{newest}"
+        # A file vanished mid-scan; treat as unstable so the next check
+        # re-reads (an always-mismatching fingerprint is safe).
+        return f"{meta_count}:unstable"
+    if not meta_count and not agent_count:
+        return ""
+    fingerprint = f"{meta_count}:{meta_newest}" if meta_count else ""
+    if agent_count:
+        fingerprint += f"|{agent_count}:{agent_newest}:{agent_bytes}"
+    return fingerprint
+
+
+def _fingerprints_match(cached: str, current: str) -> bool:
+    """Compare a stored sub-agent fingerprint with today's.
+
+    Rows written before agent transcripts joined the fingerprint (no
+    ``|`` part) are compared on their sidecar part alone, so an upgrade
+    does not re-parse every cached session at once; such a row picks up
+    the full fingerprint the next time its file is parsed for any other
+    reason (any append to the trunk).
+    """
+    if cached == current:
+        return True
+    if "|" in cached or not cached:
+        return False
+    return current.split("|", 1)[0] == cached
 
 
 # Manual salt for content-shape changes the field names cannot see: a
@@ -522,7 +568,7 @@ def _cache_row_is_fresh(
     cached_fp = row["subagents_fingerprint"]
     if cached_fp is None:
         return current_fp() == ""
-    return cached_fp == current_fp()
+    return _fingerprints_match(cached_fp, current_fp())
 
 
 def get_cache_db_path(projects_dir: Path) -> Path:

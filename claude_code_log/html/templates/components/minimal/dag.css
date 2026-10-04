@@ -70,6 +70,29 @@
     stroke-dasharray: 3 4;
 }
 
+/* Running branch (P7b): an agent with no result yet carries on to the
+   newest row and ends in an open marker instead of merging; a folded one
+   keeps its dashes, which drift slowly towards the open end. */
+.theme-minimal #dag-rail path.dag-end {
+    fill: var(--bg);
+    stroke-width: 1.6;
+}
+
+.theme-minimal #dag-rail path.dag-running.dag-dash {
+    animation: dag-run 1.2s linear infinite;
+}
+
+@keyframes dag-run {
+    to { stroke-dashoffset: -7; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .theme-minimal #dag-rail path.dag-running.dag-dash,
+    .theme-minimal #transcript .mn-bctl.is-running .mn-brun::before {
+        animation: none;
+    }
+}
+
 /* --------------------------------------------------------- flattening */
 
 .theme-minimal .mn-stage.dag-on #transcript .message-node,
@@ -286,6 +309,40 @@
 
 .theme-minimal #transcript .mn-bctl.is-open .mn-bfold svg {
     transform: rotate(90deg);
+}
+
+/* "running" beside a running branch's stats (P7b): generated content, so
+   search and the timeline never index it. */
+.theme-minimal #transcript .mn-brun {
+    display: none;
+}
+
+.theme-minimal #transcript .mn-bctl.is-running .mn-brun {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0 6px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--lc) 12%, transparent);
+    font: 0.66em var(--mono);
+    color: var(--lc);
+}
+
+.theme-minimal #transcript .mn-brun::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+    animation: dag-pulse 1.6s ease-in-out infinite;
+}
+
+.theme-minimal #transcript .mn-brun::after {
+    content: attr(data-label);
+}
+
+@keyframes dag-pulse {
+    50% { opacity: 0.25; }
 }
 
 .theme-minimal #transcript .mn-bmini {

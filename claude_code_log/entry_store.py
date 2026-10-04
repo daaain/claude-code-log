@@ -30,7 +30,8 @@ Scope and lifetime are deliberately narrow — the same posture as
   pages would pin every one of them. What this holds is therefore bounded
   by *what changed*, not by the archive.
 - **Hits are verified against the file.** ``get`` re-stats and compares
-  ``(size, mtime_ns)`` against the stamp captured *before* the parse; any
+  ``(size, mtime_ns)`` — plus the fingerprint of the sub-agent transcripts
+  spliced into it — against the stamp captured *before* the parse; any
   mismatch declines to the cache. A stamp taken before the parse can only
   be older than the entries describe, so a file that grew mid-parse
   declines rather than serving a list that does not match its stamp.
@@ -61,8 +62,9 @@ from typing import TYPE_CHECKING, Any, Optional
 if TYPE_CHECKING:
     from .models import TranscriptEntry
 
-FileStamp = tuple[int, int]
-"""``(size, mtime_ns)`` — the identity a stored list is pinned to."""
+FileStamp = tuple[int, int, str]
+"""``(size, mtime_ns, sub-agent fingerprint)`` — the identity a stored list
+is pinned to (see :func:`stamp_file`)."""
 
 # Prefix hashing reads the file, so the digest is chosen for speed over
 # collision margin beyond what a local cache needs: 16 bytes of BLAKE2b
@@ -154,12 +156,24 @@ def entry_store_forced() -> bool:
 
 
 def stamp_file(path: Path) -> Optional[FileStamp]:
-    """``(size, mtime_ns)`` for ``path``, or None if it can't be stat'd."""
+    """``(size, mtime_ns, sub-agent fingerprint)`` for ``path``, or None.
+
+    The fingerprint (``cache.subagents_fingerprint``) is part of the
+    identity because a parsed trunk is not only its own lines: the parse
+    splices its sub-agents' transcripts in. A **running** sub-agent
+    appends to ``<stem>/subagents/agent-<id>.jsonl`` while the trunk sits
+    still, so a trunk-only stamp kept matching and a held list — kept
+    across ``watch`` / ``serve --watch`` ticks — served the agent's block
+    as it was one tick earlier, forever behind (work/minimal-theme-dag.md
+    P7b). None if the file can't be stat'd.
+    """
+    from .cache import subagents_fingerprint
+
     try:
         st = path.stat()
     except OSError:
         return None
-    return (st.st_size, st.st_mtime_ns)
+    return (st.st_size, st.st_mtime_ns, subagents_fingerprint(path))
 
 
 class ParsedEntryStore:
@@ -304,10 +318,11 @@ class ParsedEntryStore:
     def get(self, path: Path) -> Optional[list["TranscriptEntry"]]:
         """The stored entries for ``path``, or None to fall back to the cache.
 
-        Declines whenever the file's current ``(size, mtime_ns)`` differs
-        from the stamp the entries were pinned to — the file changed
-        under us, so the cache (which the refresh has just rewritten) is
-        the authority, not this.
+        Declines whenever the file's current stamp (size, mtime_ns and its
+        sub-agents' fingerprint) differs from the one the entries were
+        pinned to — the file or a sub-agent transcript spliced into it
+        changed under us, so the cache (which the refresh has just
+        rewritten) is the authority, not this.
         """
         held = self._held.get(str(path))
         if held is None:

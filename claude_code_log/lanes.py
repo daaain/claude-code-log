@@ -41,6 +41,18 @@ A lane exists only once it has a rendered card: a sub-agent whose
 transcript deduplicated into its spawn pair (#213), or was stripped at a
 reduced detail level, renders as an ordinary tool call.
 
+An agent lane **without a merge row** is either still running (a live
+session, P7b) or ended without one (a crash, a killed background agent).
+Only what is on the page decides, so the render stays a pure function of the
+transcript: ``state`` is ``"ended"`` when the page proves the agent is over —
+a *synchronous* agent's parent line moved on past its spawn (the parent
+blocks on a synchronous call, so a later model step or prompt there means the
+call is over), or the lane is nested in a lane that merged or ended — and
+``"open"`` otherwise. Merged lanes and forks have no state. Whether an open
+lane is shown as *running* is the client's call (served live and recently
+active; dev-docs/minimal-theme.md § 8), so a static page of a finished
+session never shows one running.
+
 Each branch lane also carries the **user turn** it belongs to — the
 top-level card of the conversation (a direct child of a session or branch
 header) that contains its spawn row — and its 1-based **rank** in that
@@ -55,11 +67,16 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
 from .models import (
+    AssistantTextMessage,
+    CompactedSummaryMessage,
     TaskInput,
     TaskNotificationMessage,
     TaskOutput,
+    ThinkingMessage,
     ToolResultMessage,
     ToolUseMessage,
+    UserSteeringMessage,
+    UserTextMessage,
 )
 from .utils import compact_count, format_duration, parse_timestamp
 
@@ -97,6 +114,9 @@ class LaneInfo:
     last_ts: Optional[str] = None
     agent_id: Optional[str] = None  # agents and teammates
     branch_session_id: Optional[str] = None  # forks
+    # Agents without a merge row: "open" (may still be running) or "ended"
+    # (the page proves it is over); "" for merged lanes, forks, teammates.
+    state: str = ""
 
     @property
     def is_branch(self) -> bool:
@@ -489,6 +509,9 @@ def annotate_lanes(roots: list["TemplateMessage"]) -> LaneModel:
             millis = int(span.total_seconds() * 1000)
             info.duration_ms = millis or None
 
+    # -- 6b. Unmerged agents: still open, or provably over?
+    _settle_open_lanes(lanes, order, spawns)
+
     # -- 7. Depth, turn and rank.
     def depth_of(lane: str, guard: int = 0) -> int:
         info = lanes.get(lane)
@@ -538,6 +561,94 @@ def annotate_lanes(roots: list["TemplateMessage"]) -> LaneModel:
     )
     model.lanes = {info.lane_id: info for info in ordered}
     return model
+
+
+def _proves_parent_moved_on(node: "TemplateMessage") -> bool:
+    """A card on a parent line that can only appear once a blocking call ended.
+
+    A new model step (text or thinking) or a new prompt: the parent of a
+    synchronous agent waits for its tool_result before either can happen.
+    Steering messages are typed *while* tools run, so they prove nothing;
+    neither do tool calls (a parallel batch), results, notifications or
+    hooks.
+    """
+    content = node.content
+    if isinstance(content, UserSteeringMessage):
+        return False
+    return isinstance(
+        content,
+        (
+            AssistantTextMessage,
+            ThinkingMessage,
+            UserTextMessage,
+            CompactedSummaryMessage,
+        ),
+    )
+
+
+def _settle_open_lanes(
+    lanes: dict[str, LaneInfo],
+    order: list[tuple["TemplateMessage", Optional["TemplateMessage"]]],
+    spawns: dict[str, _Spawn],
+) -> None:
+    """Set ``state`` on every agent lane that has no merge row (step 6b).
+
+    ``"ended"`` when the page proves the agent is over, else ``"open"`` —
+    see the module docstring. Deterministic: reads only the tree.
+    """
+    unmerged = [
+        info
+        for info in lanes.values()
+        if info.is_branch and info.kind != "fork" and info.merge_index is None
+    ]
+    if not unmerged:
+        return
+
+    # Latest "moved on" time per (lane, session), over the cards that can
+    # prove it. Per session: a combined page holds every session of the
+    # project in one "main" lane, and another session's activity says
+    # nothing about this one's call.
+    def line_of(node: Optional["TemplateMessage"]) -> tuple[str, str]:
+        if node is None:
+            return ("", "")
+        return (node.lane_id, (node.meta.session_id if node.meta else "") or "")
+
+    latest: dict[tuple[str, str], datetime] = {}
+    for node, _parent in order:
+        if not node.should_render or not _proves_parent_moved_on(node):
+            continue
+        parsed = parse_timestamp(node.meta.timestamp if node.meta else None)
+        if parsed is None:
+            continue
+        key = line_of(node)
+        seen = latest.get(key)
+        if seen is None or parsed > seen:
+            latest[key] = parsed
+    for info in unmerged:
+        info.state = "open"
+        if info.kind != "agent":
+            continue  # async: the parent never waits for it
+        rec = spawns.get(info.agent_id or "")
+        spawn = rec.spawn if rec is not None else None
+        spawned = parse_timestamp(
+            spawn.meta.timestamp if spawn is not None and spawn.meta else None
+        )
+        moved = latest.get(line_of(spawn))
+        if spawned is not None and moved is not None and moved > spawned:
+            info.state = "ended"
+
+    # A lane nested in one that merged or ended is over too.
+    def over(lane_id: str, guard: int = 0) -> bool:
+        info = lanes.get(lane_id)
+        if info is None or not info.is_branch or info.kind == "fork":
+            return False
+        if info.merge_index is not None or info.state == "ended":
+            return True
+        return guard <= len(lanes) and over(info.parent_lane, guard + 1)
+
+    for info in unmerged:
+        if info.state == "open" and over(info.parent_lane):
+            info.state = "ended"
 
 
 # ---------------------------------------------------------------------------

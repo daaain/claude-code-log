@@ -350,7 +350,13 @@ Freshness checks are batched too (issue #12): `get_modified_files()`
 fetches every cached row for the project in one query (one connection
 open, or zero extra inside a `batch()` scope) and rules out
 subagent-sidecar fingerprints with one scandir per parent directory,
-instead of a per-file query + `is_dir()` probes. This is what makes
+instead of a per-file query + `is_dir()` probes. The fingerprint covers
+the agents' transcripts (`agent-*.jsonl`: count, newest `mtime_ns`, total
+bytes) as well as their `agent-*.meta.json` sidecars, because a trunk's
+cached rows carry those transcripts spliced in and a running agent grows
+its file without touching the trunk. Rows written before transcripts
+joined it are compared on the sidecar part alone, so the upgrade does not
+re-parse every session at once. This is what makes
 TUI startup near-instant on multi-thousand-file archives.
 
 For the operations / recovery side (archived sessions, manual
@@ -1305,7 +1311,9 @@ swap, and over *only the elements it placed* after a patch. Passing the
 containing node instead is a live trap: the session header's fold bar
 counts its descendants, so it is replaced on every append, and its node
 is the entire page. Currently registered: timestamp localisation (scoped
-to a subtree) and the timeline rebuild. Delegated listeners and
+to a subtree), the timeline rebuild and, in the minimal theme, the DAG
+engine's relayout (one microtask per update, before the next paint —
+minimal-theme.md § 8). Delegated listeners and
 everything bound to the toolbar or floating buttons survive untouched
 and must **not** register. On the swap path only, fold state and
 `<details>` are captured and restored by the poller, keyed `data-uuid` →
@@ -1359,7 +1367,13 @@ reason it is a parameter rather than a memo:
   `(size, mtime_ns)` against the stamp captured *before* the parse. A
   stamp taken before the parse can only be older than the entries
   describe, so a file that grew mid-parse declines to the cache rather
-  than serving a list its stamp misdescribes.
+  than serving a list its stamp misdescribes. The stamp also carries the
+  file's **sub-agent fingerprint** (`cache.subagents_fingerprint`, which
+  covers the `agent-*.jsonl` transcripts as well as the sidecars): a held
+  trunk list includes its agents' spliced transcripts, and a running
+  agent grows its file while the trunk sits still — a trunk-only stamp
+  kept a `watch` / `serve --watch` store serving that block one tick
+  behind until the trunk next changed (minimal-theme.md § 8).
 - **Handouts are deep copies**, because the pipeline mutates entries in
   place: `_integrate_agent_entries` appends `#agent-{id}` to `sessionId`
   and is *not* idempotent, and dedup re-parents around dropped copies.

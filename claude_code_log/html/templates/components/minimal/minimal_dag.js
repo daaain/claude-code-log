@@ -50,6 +50,14 @@
             const MAX_SLOTS = 6;        // rail slots beside the main line
             const RADIUS = 8;           // fork/merge connector corner
             const STUB = 12;            // a folded fork's stub below its row
+            const END_R = 3.5;          // a running lane's open end marker
+            // An open lane (an agent with no result yet, P7b) reads as
+            // *running* only on a page served live (`serve`, live_update.js)
+            // whose newest activity is this recent; otherwise it is a lane
+            // that ended without a result (a crash, a killed agent, a
+            // static export). dev-docs/minimal-theme.md § 8.
+            const RUNNING_IDLE_MS = 30 * 60 * 1000;
+            const RUNNING_RECHECK_MS = 30 * 1000;
             // Forks are always --lF; agents cycle through the other lane colours.
             const AGENT_COLOURS = ['a', 'b', 's', 'p'];
             const DEBUG = /[?&]debug-dag(?:[=&]|$)/.test(window.location.search);
@@ -58,8 +66,11 @@
             // ---- state ---------------------------------------------------
             let globalMode = readGlobal();
             const modes = new Map();      // lane id -> 'folded' | 'interleaved' | 'column' | 'strip'
-            const recency = new Map();    // turn d-N -> interleaved lane ids, least recent first
-            const expanded = new Set();   // turns whose "+N more branches" are shown
+            // Turns are keyed by their card's data-uuid (lane.turnKey), not
+            // its positional d-N: a live swap renumbers the ids, and the
+            // per-turn cap and overflow must follow the turn, not the slot.
+            const recency = new Map();    // turn key -> interleaved lane ids, least recent first
+            const expanded = new Set();   // turn keys whose "+N more branches" are shown
             let lanes = new Map();        // lane id -> record (rebuilt each relayout)
             let started = false;
             let layout = null;            // last relayout's result, for redraws
@@ -89,6 +100,7 @@
                     const id = head.getAttribute('data-lane-id');
                     if (found.has(id)) return;
                     const ts = (head.getAttribute('data-lane-ts') || '').split(' ');
+                    const turn = head.getAttribute('data-lane-turn') || '';
                     found.set(id, {
                         id: id,
                         head: head,
@@ -98,13 +110,26 @@
                         meta: head.getAttribute('data-lane-meta') || '',
                         parent: head.getAttribute('data-lane-parent') || 'main',
                         from: head.getAttribute('data-lane-from') || '',
-                        turn: head.getAttribute('data-lane-turn') || '',
+                        turn: turn,
+                        turnKey: turnKeyOf(turn),
                         rank: parseInt(head.getAttribute('data-lane-rank') || '1', 10) || 1,
                         stats: head.getAttribute('data-lane-stats') || '',
+                        // Agents without a result: 'open' (may be running)
+                        // or 'ended' (the page proves it is over); '' when
+                        // merged, and for forks (lanes.py, P7b).
+                        state: head.getAttribute('data-lane-state') || '',
                         firstTs: ts[0] ? Date.parse(ts[0]) : NaN,
                     });
                 });
                 return found;
+            }
+            // A stable key for a turn: its card's data-uuid (or session id),
+            // falling back to the positional id.
+            function turnKeyOf(turn) {
+                if (!turn) return '';
+                const card = document.getElementById('msg-' + turn);
+                const stable = card && (card.getAttribute('data-uuid') || card.getAttribute('data-session-id'));
+                return stable ? 'u:' + stable : turn;
             }
             function parentOf(id) {
                 const lane = lanes.get(id);
@@ -121,7 +146,7 @@
             }
             function turnOf(id) {
                 const lane = lanes.get(id);
-                return lane ? lane.turn || ('lane:' + id) : 'lane:' + id;
+                return lane ? lane.turnKey || ('lane:' + id) : 'lane:' + id;
             }
             function defaultMode(lane, value) {
                 if (value === 'columns') return 'column';
@@ -271,6 +296,49 @@
                 return match;
             }
 
+            // ---- running lanes (P7b) -------------------------------------
+            // The server marks an agent lane without a result 'open' unless
+            // the page proves it is over ('ended'); it cannot know whether
+            // the session is still being written, so the page decides: an
+            // open lane is *running* while the page is served live and its
+            // session's newest activity (any card, in any lane) is recent. A
+            // static page — file://, an export, a finished session served
+            // later — never shows one running.
+            // Newest activity per session (top-level node): on a combined
+            // page a live session must not make another session's crashed
+            // agent read as running. Lane id -> its session's newest time.
+            function newestTimes(model, sequence) {
+                const bySession = new Map();
+                sequence.forEach(function (item) {
+                    if (isNaN(item.ts)) return;
+                    const seen = bySession.get(item.session);
+                    if (seen === undefined || item.ts > seen) bySession.set(item.session, item.ts);
+                });
+                const byLane = new Map();
+                lanes.forEach(function (lane, id) {
+                    if (lane.state !== 'open') return;
+                    const anchor = model.spawns.get(id) || (model.seqs.get(id) || [])[0];
+                    const newest = anchor ? bySession.get(anchor.session) : undefined;
+                    if (newest !== undefined) byLane.set(id, newest);
+                });
+                return byLane;
+            }
+            function runningLanes(newest) {
+                const out = new Set();
+                if (!window.claudeLogLiveUpdate) return out;
+                const now = Date.now();
+                newest.forEach(function (ts, id) {
+                    if (now - ts <= RUNNING_IDLE_MS && lanes.has(id) && lanes.get(id).state === 'open') out.add(id);
+                });
+                return out;
+            }
+            function sameSet(a, b) {
+                if (a.size !== b.size) return false;
+                let same = true;
+                a.forEach(function (x) { if (!b.has(x)) same = false; });
+                return same;
+            }
+
             // ---- reveal: links, deep links, search, timeline open lanes ----
             function laneOfElement(el) {
                 if (!el || !el.closest) return null;
@@ -385,7 +453,7 @@
                     const item = {
                         el: el, lane: lane, kind: kind,
                         hidden: hidden || el.classList.contains('filtered-hidden') || el.classList.contains('search-hidden'),
-                        row: -1, ts: NaN,
+                        row: -1, ts: NaN, session: session,
                     };
                     model.items.push(item);
                     let seq = model.seqs.get(lane);
@@ -450,7 +518,16 @@
                         }
                     }
                 }
-                walkContainer(transcript, 'main', false);
+                // Top-level nodes are sessions (a combined page holds many):
+                // each item records which, for the running-lane rule.
+                let session = 0;
+                const tops = transcript.children;
+                for (let i = 0; i < tops.length; i++) {
+                    session = i;
+                    const child = tops[i];
+                    if (child.classList.contains('message-node')) walkNode(child, 'main', false);
+                    else if (child.classList.contains('fork-point')) addItem(child, child.getAttribute('data-lane') || 'main', 'box', false);
+                }
                 model.memo = memo;
                 return model;
             }
@@ -601,7 +678,7 @@
             // interleaved, the lane's last row; else its spawn row (a stub).
             // Interleaved lanes are placed first — their cards sit in their
             // slot — then folded ones while slots last.
-            function railLanes(model, open, packed, skip) {
+            function railLanes(model, open, packed, skip, running) {
                 const memo = model.memo;
                 const plans = [];
                 lanes.forEach(function (lane, id) {
@@ -620,9 +697,11 @@
                     const last = seq.length ? packed.lastRowOf.get(id) : -1;
                     const start = spawn && spawn.row >= 0 ? spawn.row : first;
                     let end = start;
+                    const live = running.has(id);
                     if (merge && merge.row >= 0) end = merge.row;
+                    else if (live) end = packed.rows - 1; // runs on to the newest row
                     else if (opened && last >= 0) end = last;
-                    plans.push({ id: id, lane: lane, open: opened, spawn: spawn, merge: merge, seq: seq, start: start, end: Math.max(start, end) });
+                    plans.push({ id: id, lane: lane, open: opened, running: live, spawn: spawn, merge: merge, seq: seq, start: start, end: Math.max(start, end) });
                 });
                 plans.sort(function (a, b) {
                     if (a.open !== b.open) return a.open ? -1 : 1;
@@ -691,7 +770,7 @@
             function setAttr(el, name, value) {
                 if (el.getAttribute(name) !== value) el.setAttribute(name, value);
             }
-            function ensureControls(item, colours, memo, overflow) {
+            function ensureControls(item, colours, memo, overflow, running) {
                 const ids = (item.el.getAttribute('data-spawns') || '').split(' ').filter(function (id) { return lanes.has(id); });
                 let box = item.el.querySelector(':scope > .mn-bctls');
                 if (!ids.length) {
@@ -712,6 +791,7 @@
                         ctl = document.createElement('div');
                         ctl.setAttribute('data-lane-ref', id);
                         ctl.innerHTML = "<button type='button' class='mn-bfold'>" + CHEVRON + "</button>"
+                            + "<span class='mn-brun' data-label='running'></span>"
                             + "<button type='button' class='mn-bmini mn-bcol'></button>";
                     }
                     if (box.children[i] !== ctl) box.insertBefore(ctl, box.children[i] || null);
@@ -720,21 +800,31 @@
                     const columned = inColumn(mode) && parentOpen(id, memo);
                     const interleaved = opened && !columned;
                     const colour = colours.get(id) || (lane.kind === 'fork' ? 'f' : 'a');
-                    const cls = 'mn-bctl dag-lc-' + colour + (interleaved ? ' is-open' : '') + (columned ? ' is-col' : '');
+                    const live = running.has(id);
+                    const cls = 'mn-bctl dag-lc-' + colour + (interleaved ? ' is-open' : '') + (columned ? ' is-col' : '')
+                        + (live ? ' is-running' : '');
                     if (ctl.className !== cls) ctl.className = cls;
                     const hide = overflow.hidden.has(id);
                     if (ctl.hidden !== hide) ctl.hidden = hide;
                     const fork = lane.kind === 'fork';
+                    // An agent without a result that is not running ended
+                    // without one (or the page is a static copy).
+                    const unfinished = !live && (lane.state === 'open' || lane.state === 'ended');
                     const label = (fork ? '⑂ ' + lane.name + ' · ' : '') + (lane.stats || lane.name)
+                        + (unfinished ? ' · no result' : '')
                         + (interleaved ? ' · interleaved' : columned ? ' · in column →' : '');
                     const btn = ctl.querySelector('.mn-bfold');
                     setAttr(btn, 'data-label', label);
                     setAttr(btn, 'aria-expanded', opened ? 'true' : 'false');
-                    setAttr(btn, 'aria-label', (mode === 'folded' ? 'Interleave branch: ' : 'Fold branch: ') + lane.name + (lane.stats ? ' (' + lane.stats + ')' : ''));
-                    let title = lane.name + (lane.meta ? ' · ' + lane.meta : '');
+                    setAttr(btn, 'aria-label', (mode === 'folded' ? 'Interleave branch: ' : 'Fold branch: ') + lane.name
+                        + (lane.stats ? ' (' + lane.stats + (live ? ', running' : unfinished ? ', no result' : '') + ')' : ''));
+                    let title = lane.name + (lane.meta ? ' · ' + lane.meta : '')
+                        + (live ? ' · still running' : unfinished ? ' · ended without a result' : '');
                     if (fork) {
-                        if (!forkTimes.has(lane.from)) forkTimes.set(lane.from, localTime(lane.from));
-                        const at = forkTimes.get(lane.from);
+                        // Keyed by lane and card: a live swap can renumber d-N.
+                        const key = id + '|' + lane.from;
+                        if (!forkTimes.has(key)) forkTimes.set(key, localTime(lane.from));
+                        const at = forkTimes.get(key);
                         title = lane.name + ' · rewound' + (at ? ' to ' + at : '');
                     }
                     if (btn.title !== title) btn.title = title;
@@ -875,7 +965,7 @@
             // the timeline all work on `.message-node` / `.message`), and a
             // wholesale swap drops them until the next relayout.
             const chrome = new Map(); // column key -> element
-            function syncChrome(transcript, tracks, colours, rows) {
+            function syncChrome(transcript, tracks, colours, rows, running) {
                 const wanted = tracks.length ? ['main'].concat(tracks) : [];
                 chrome.forEach(function (el, key) {
                     if (wanted.indexOf(key) < 0 || el.parentNode !== transcript) {
@@ -913,7 +1003,7 @@
                     el.style.gridColumn = String(i + 1);
                     el.style.gridRow = '1 / span ' + Math.max(1, rows + ROW0 - 1);
                     if (lane) {
-                        const meta = [lane.meta, lane.stats].filter(Boolean).join(' · ');
+                        const meta = [lane.meta, lane.stats, running.has(key) ? 'running' : ''].filter(Boolean).join(' · ');
                         if (isStrip) {
                             const btn = el.querySelector('.dag-strip');
                             setAttr(btn, 'aria-label', 'Expand column: ' + lane.name);
@@ -952,6 +1042,8 @@
                 const t1 = performance.now();
                 const sequence = order(model);
                 const packed = pack(sequence, model, keyOf);
+                const newest = newestTimes(model, sequence);
+                const running = runningLanes(newest);
                 const tracks = columnTracks(model, memo);
                 const colIndex = new Map();
                 const colours = new Map();
@@ -963,7 +1055,7 @@
                 const openSet = new Set(open);
                 const rail = railLanes(model, open, packed, function (id) {
                     return keyOf(id) !== 'main' || overflow.hidden.has(id);
-                });
+                }, running);
                 rail.plans.forEach(function (plan) { colours.set(plan.id, plan.colour); });
                 // A lane inside a column takes its column's colour.
                 lanes.forEach(function (lane, id) {
@@ -1090,13 +1182,13 @@
                     tagWritten.set(item.el, value);
                 });
                 const transcript = document.getElementById('transcript');
-                if (transcript) syncChrome(transcript, tracks, colours, packed.rows);
-                model.spawnCards.forEach(function (item) { ensureControls(item, colours, memo, overflow); });
+                if (transcript) syncChrome(transcript, tracks, colours, packed.rows, running);
+                model.spawnCards.forEach(function (item) { ensureControls(item, colours, memo, overflow, running); });
                 markToolbar();
                 if (observer && observed) observe(observed);
                 const t3 = performance.now();
 
-                layout = { model: model, rail: rail, packed: packed, sequence: sequence };
+                layout = { model: model, rail: rail, packed: packed, sequence: sequence, newest: newest, running: running };
                 draw();
                 const t4 = performance.now();
                 lastTiming = {
@@ -1176,8 +1268,23 @@
                 }
                 function round(v) { return Math.round(v * 10) / 10; }
                 const paths = [];
-                function path(lane, part, colour, d, dashed) {
-                    paths.push("<path class='dag-lc-" + colour + (dashed ? ' dag-dash' : '') + "' data-lane='" + lane.replace(/'/g, '') + "' data-part='" + part + "' d='" + d + "'></path>");
+                function path(lane, part, colour, d, dashed, extra) {
+                    paths.push("<path class='dag-lc-" + colour + (dashed ? ' dag-dash' : '') + (extra ? ' ' + extra : '')
+                        + "' data-lane='" + lane.replace(/'/g, '') + "' data-part='" + part + "' d='" + d + "'></path>");
+                }
+                // The bottom of the newest shown row: where a running lane
+                // ends (it carries on beside everything that happens).
+                let newestBottom = null;
+                function lastShownBottom() {
+                    if (newestBottom !== null) return newestBottom;
+                    newestBottom = NaN;
+                    for (let i = layout.sequence.length - 1; i >= 0; i--) {
+                        const item = layout.sequence[i];
+                        if (!visible(item)) continue;
+                        newestBottom = item.el.getBoundingClientRect().bottom - stageBox.top;
+                        break;
+                    }
+                    return newestBottom;
                 }
                 layout.rail.plans.forEach(function (plan) {
                     const xs = x(slotOf.get(plan.lane.parent) || 0);
@@ -1193,6 +1300,31 @@
                     const spawnShown = visible(plan.spawn);
                     if (!spawnShown && !(plan.open && seen.length)) return;
                     const ys = spawnShown ? rowY(plan.spawn) : rowY(seen[0]);
+                    if (plan.running) {
+                        // Running (P7b): no merge yet and not a fork's stub —
+                        // the lane carries on to the bottom of the newest row
+                        // and ends in an open marker; when its result arrives
+                        // the next relayout draws the ordinary merge.
+                        const r = RADIUS;
+                        let bottom = lastShownBottom() - 2 * END_R;
+                        if (plan.open && seen.length) bottom = Math.max(bottom, rowY(seen[seen.length - 1]));
+                        const tail = (spawnShown ? ys + r : ys) + 2 * r;
+                        if (!(bottom >= tail)) bottom = tail;
+                        let top = ys;
+                        if (spawnShown) {
+                            const dir = xk >= xs ? 1 : -1;
+                            path(plan.id, 'fork', plan.colour,
+                                'M' + round(xs) + ' ' + round(ys) + 'H' + round(xk - dir * r)
+                                + 'A' + r + ' ' + r + ' 0 0 ' + (dir > 0 ? 1 : 0) + ' ' + round(xk) + ' ' + round(ys + r), false);
+                            top = ys + r;
+                        }
+                        path(plan.id, 'lane', plan.colour, 'M' + round(xk) + ' ' + round(top) + 'V' + round(bottom - END_R), !plan.open, 'dag-running');
+                        path(plan.id, 'end', plan.colour,
+                            'M' + round(xk - END_R) + ' ' + round(bottom)
+                            + 'a' + END_R + ' ' + END_R + ' 0 1 0 ' + (2 * END_R) + ' 0'
+                            + 'a' + END_R + ' ' + END_R + ' 0 1 0 ' + (-2 * END_R) + ' 0', false, 'dag-end');
+                        return;
+                    }
                     const mergeShown = plan.merge && visible(plan.merge) && plan.merge.row > (plan.spawn ? plan.spawn.row : -1);
                     let ye;
                     if (mergeShown) ye = rowY(plan.merge);
@@ -1280,6 +1412,12 @@
             }
             const resizer = window.ResizeObserver ? new ResizeObserver(scheduleDraw) : null;
             window.addEventListener('resize', scheduleDraw);
+            // A card a live update adds fades in from a few px below
+            // (`live-new-in`, a transform): the rail measured it mid-way, and
+            // a transform resizes nothing, so redraw once it has landed.
+            document.addEventListener('animationend', function (event) {
+                if (event.animationName === 'live-new-in') scheduleDraw();
+            });
             if (phone) {
                 const onPhone = function () { scheduleDraw(); };
                 if (phone.addEventListener) phone.addEventListener('change', onPhone);
@@ -1336,12 +1474,37 @@
             });
             window.addEventListener('hashchange', function () { revealHash(true); });
 
+            // A live update (patch or swap) relayouts before the browser
+            // gets to lay out or paint the new markup — a swapped-in
+            // #transcript has none of the engine's rows or classes, and an
+            // intermediate layout with every lane unfolded would move the
+            // reader's scroll position (P7b). Rehydrate is called once per
+            // changed element, so the relayout is coalesced to one
+            // microtask after the update's synchronous work.
+            let rehydrateQueued = false;
             if (window.claudeLogOnRehydrate) {
                 window.claudeLogOnRehydrate(function (scope) {
                     if (scope && scope.id === 'transcript') observe(scope);
-                    schedule();
+                    if (rehydrateQueued) return;
+                    rehydrateQueued = true;
+                    const run = function () {
+                        rehydrateQueued = false;
+                        if (document.hidden) {
+                            hiddenDirty = true;
+                            return;
+                        }
+                        relayout();
+                    };
+                    if (window.queueMicrotask) window.queueMicrotask(run);
+                    else Promise.resolve().then(run);
                 });
             }
+            // A running lane stops reading as running once the session has
+            // been quiet for RUNNING_IDLE_MS, with or without an update.
+            setInterval(function () {
+                if (!started || !layout || document.hidden || !window.claudeLogLiveUpdate) return;
+                if (!sameSet(runningLanes(layout.newest), layout.running)) relayout();
+            }, RUNNING_RECHECK_MS);
 
             function start() {
                 const transcript = document.getElementById('transcript');
@@ -1373,6 +1536,11 @@
                     if (!parentOpen(id, memo)) return 'folded';
                     return mode;
                 },
+                // True while the lane is drawn as running (P7b).
+                running: function (id) {
+                    return !!(layout && layout.running.has(id));
+                },
+                runningIdleMs: RUNNING_IDLE_MS,
             };
 
             if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);

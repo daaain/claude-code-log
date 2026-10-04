@@ -3,7 +3,7 @@
 As-built reference for the branch layout of the minimal HTML theme
 (`--theme minimal`). Design and phase history:
 [`work/minimal-theme-dag.md`](../work/minimal-theme-dag.md) (§ 1.6, § 3.5,
-P6 and P7 "As built"). The look, toolbar and fold depth are covered in
+P6, P7 and P7b "As built"). The look, toolbar and fold depth are covered in
 [css-classes.md § Minimal Theme](css-classes.md#minimal-theme-theme-minimal)
 and [message-hierarchy.md § Fold depth](message-hierarchy.md#fold-depth-minimal-theme);
 the lane data the engine reads in [agents.md § 6](agents.md#6-branch-lanes-minimal-theme).
@@ -34,6 +34,11 @@ Each branch is in one of four modes:
   rail lane. Unlimited columns; the page widens and scrolls sideways;
 - **strip**: a column collapsed to 34px, its name set vertically (click to
   expand back to a column); its cards are hidden.
+
+A sub-agent that has not returned yet is drawn **running** on a live page
+(§ 8): instead of a stub, its lane carries on to the newest row and ends in
+an open marker, and its control shows a pulsing `running` label; when the
+result or notification arrives it becomes the ordinary merge.
 
 A lane nested in a column lane that is *interleaved* shows inside that
 column (tinted, its tag in the column's gutter); put in a column itself, it
@@ -152,8 +157,8 @@ A pure function of (DOM, lane modes), in `relayout()`:
    (greedy interval colouring; a nested lane starts right of its parent).
    Lanes laid out in a column (and lanes behind a turn's overflow) get no
    rail.
-   End = merge row, else the lane's last row when interleaved, else the spawn
-   row. Interleaved lanes are placed first, folded ones while slots last
+   End = merge row, else the page's last row for a running lane (§ 8), else
+   the lane's last row when interleaved, else the spawn row. Interleaved lanes are placed first, folded ones while slots last
    (6). Colours: forks `--lF`, agents by slot `--lA`, `--lB`, `--sys`,
    `--asst`.
 6. **Write** (MutationObserver disconnected; the only layout read,
@@ -188,18 +193,27 @@ inline `display`; filter and search own their classes.
 | Trigger | Action |
 |---|---|
 | MutationObserver on `#transcript` (structure; `style` on `.children`; a card's hidden classes changing) | relayout in the next frame |
-| `claudeLogOnRehydrate` (live swap or patch) | re-observe a swapped `#transcript`; relayout in the next frame (a patched card's control and classes come back) |
+| `claudeLogOnRehydrate` (live swap or patch) | re-observe a swapped `#transcript`; relayout in a microtask, coalesced over the update's rehydrate calls — before the browser lays out or paints the new markup (a patched card's control and classes come back) |
 | ResizeObserver on `#transcript`, `resize`, the phone media query | redraw only |
+| `animationend` of `live-new-in` (a live card's fade-in, a transform) | redraw only: the rail measured the card mid-way |
+| a 30 s timer, on a live page with an open lane | relayout if a lane stopped (or started) reading as running |
 | branch control / column head / toolbar click, a reveal that opens a lane | relayout now |
 | hidden page | deferred until `visibilitychange` |
 
 Labels (control text, gutter tag) are generated content (`attr(data-label)`,
 `var(--dag-tag)`), so search and the timeline never index them.
 
-`window.claudeLogDag` exposes `relayout()`, `timing()` and `mode(laneId)`
+`window.claudeLogDag` exposes `relayout()`, `timing()`, `mode(laneId)`
 (`folded` | `interleaved` | `column` | `strip`, as shown: a lane inside a
-folded one reads `folded`) for tests; `?debug-dag` logs each relayout's
-timing to the console.
+folded one reads `folded`), `running(laneId)` and `runningIdleMs` for
+tests; `?debug-dag` logs each relayout's timing to the console.
+
+Engine state that outlives a relayout — per-lane modes, the per-turn LRU of
+interleaved lanes, the turns whose `+N more branches` are shown — is keyed
+by what a live update cannot renumber: lane ids (`agent-<id>`,
+`branch-<sid>`) and, for turns, the turn card's `data-uuid` (the
+positional `d-N` in `data-lane-turn` shifts whenever an entry lands
+mid-page and the update swaps).
 
 ## 5. Performance
 
@@ -263,3 +277,62 @@ Server-side, minimal theme only (classic and Markdown output unchanged):
   agent's answer already is its merge row (the paired tool result). The
   page holds one copy of the answer either way
   ([agents.md § 2.3](agents.md#23-the-fold-phase-3)).
+
+## 8. Live updates and running lanes
+
+Under `serve` (`live_update.js`, [application_model.md § 2.15](application_model.md#215-watch-mode-and-live-page-updates))
+a page patches changed cards in place, or swaps `#transcript` wholesale
+when ids renumber — which a sub-agent growing mid-page always does (its
+block sits under its spawn, not at the end). Either way the engine
+relayouts before the next paint (§ 4) from the same state: lane modes,
+columns, the cap's LRU and the overflow survive, the fold machine and
+`live_update.js` keep fold state, `<details>` and scroll position, and
+`ensureControls` / `syncChrome` diff against what is there, so a patch or a
+swap never leaves a second control or column head. Tested end to end
+against a real `serve --watch` (session page) and the `watch --combined
+yes` conversion (combined page) in `test/test_minimal_dag_live_browser.py`,
+on a session that grows on disk like a live one
+(`test/dag_live_fixture.py`).
+
+**Running lanes.** An agent lane with no merge row is either still running
+or ended without one (a crash, a killed background agent, a session that
+stopped). The rule is split so the HTML stays a pure function of the
+transcript:
+
+- **Server** (`lanes.py`, `data-lane-state` on the lane head): `ended`
+  when the page proves it — a *synchronous* agent's parent line (same lane,
+  same session) has a later model step or prompt (the parent blocks on a
+  synchronous call; steering, tool calls, results, notifications and hooks
+  prove nothing), or the lane is nested in a lane that merged or ended —
+  else `open`. Merged lanes and forks carry no state. An async agent is
+  never ended by its parent moving on: the parent does not wait for it.
+- **Client** (`minimal_dag.js`): an `open` lane reads as **running** only
+  on a page served live (`window.claudeLogLiveUpdate` — never from
+  `file://`) whose session's newest card (any lane; per session, so one
+  live session on a combined page does not wake another's) is at most
+  30 minutes old (`RUNNING_IDLE_MS`) by the viewer's clock. A timer
+  re-checks every 30 s, so a session that goes quiet stops showing it
+  without an update.
+
+Everything else — `ended`, or `open` but not running — reads as **ended
+without a result**: the control says `· no result`, and the rail draws it
+as before (a stub while folded, to its last row while interleaved).
+
+A running lane, folded or interleaved, takes a rail slot over `[spawn row,
+last row]`, so it runs beside everything after its spawn: fork connector,
+then a lane (dashed while folded, the dashes drifting towards the open end;
+solid while interleaved) to the bottom of the newest shown row, ending in
+an open circle (`data-part='end'`, `dag-end`, filled with `--bg`). Its
+control gets `is-running` and a `running` pill (`.mn-brun`, generated
+content); a running column's head adds `running` to its meta. Animations
+stop under `prefers-reduced-motion`.
+
+**Server-side freshness.** A running agent appends to
+`<sid>/subagents/agent-<id>.jsonl` while the trunk sits still (a
+synchronous spawn blocks it). The trunk's cached rows and the entry
+store's held list both carry the agents' spliced transcripts, so both are
+pinned to the agent transcripts too: the cache's sub-agent fingerprint
+covers `agent-*.jsonl` (count, newest `mtime_ns`, total bytes) as well as
+the sidecars, and the entry store's stamp includes that fingerprint.
+Before P7b a watch served the agent's block as it was at the last trunk
+change (`test_lanes.py::TestLiveGrowth`).

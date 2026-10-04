@@ -53,6 +53,23 @@ tracking the live session until you restart. Their "View All Sessions"
 back-link keeps working throughout — it points at a page that exists and
 is still served, just one that stopped growing.
 
+Sub-agents update while they run, not only when they finish: a
+synchronous agent's transcript grows in its own file while the session
+waits for it, and each tick picks that up. With `--theme minimal` the
+branch layout follows along — lanes you interleaved or put in a column
+stay that way across updates, a sub-agent that has not returned yet is
+drawn as **running** (its lane carries on to the newest message with an
+open end and a pulsing *running* label) and turns into an ordinary merge
+when its result arrives, and a rewind adds its fork lane without moving
+the main line. "Running" needs a live page: a page opened from `file://`,
+or a session that has been quiet for half an hour, shows such an agent as
+having ended without a result instead.
+
+To follow the **combined** page live as well, run `claude-code-log watch
+--combined yes` (with the same `--theme`) beside `serve`: the server
+serves whatever is on disk, and that watch keeps the combined page
+current.
+
 This works only over the server. A page opened from `file://` cannot
 fetch anything at all — not even itself — so it stays static, exactly as
 before. Nothing about the generated HTML changes.

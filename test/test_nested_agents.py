@@ -458,6 +458,48 @@ class TestNestedVisualLayer:
         # And the refreshed cache entry is valid again.
         assert cm.is_file_cached(trunk)
 
+    def test_growing_agent_transcript_invalidates_cached_trunk(
+        self, tmp_path: Path
+    ) -> None:
+        """The trunk's cached rows carry its agents' spliced transcripts,
+        so a running agent appending to its own file (the trunk untouched:
+        a synchronous spawn blocks it) must invalidate the trunk's parse —
+        not only a new sidecar (minimal-theme-dag.md P7b)."""
+        import shutil
+
+        from claude_code_log.cache import CacheManager
+
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        trunk = proj / TRUNK.name
+        shutil.copy(TRUNK, trunk)
+        shutil.copytree(TRUNK.parent / TRUNK_SID, proj / TRUNK_SID)
+
+        cm = CacheManager(proj, "0.0.0-test", db_path=tmp_path / "cache.db")
+        load_transcript(trunk, cache_manager=cm, silent=True)
+        assert cm.is_file_cached(trunk)
+        assert cm.get_modified_files([trunk]) == []
+
+        agent = next((proj / TRUNK_SID / "subagents").glob("agent-*.jsonl"))
+        with agent.open("a", encoding="utf-8") as f:
+            f.write("\n")  # one byte: same second, different size
+        assert not cm.is_file_cached(trunk)
+        assert cm.get_modified_files([trunk]) == [trunk]
+
+    def test_pre_transcript_fingerprints_do_not_mass_invalidate(
+        self, tmp_path: Path
+    ) -> None:
+        """Rows stored before agent transcripts joined the fingerprint (no
+        ``|`` part) are compared on their sidecar part, so upgrading does not
+        re-parse every cached session at once."""
+        from claude_code_log.cache import _fingerprints_match
+
+        assert _fingerprints_match("3:100", "3:100|3:5:900")
+        assert not _fingerprints_match("2:100", "3:100|3:5:900")
+        assert not _fingerprints_match("3:100|3:5:900", "3:100|3:6:901")
+        assert not _fingerprints_match("", "|1:5:10")
+        assert _fingerprints_match("", "")
+
     def test_sidecar_landing_mid_parse_invalidates_next_read(
         self, tmp_path: Path
     ) -> None:

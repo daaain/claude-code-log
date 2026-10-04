@@ -391,6 +391,8 @@ def lane_attributes(model: "LaneModel") -> LaneAttrs:
             add(head, "data-lane-turn", f"d-{lane.turn_index}")
         add(head, "data-lane-rank", str(lane.rank))
         add(head, "data-lane-stats", lane.stats)
+        if lane.state:
+            add(head, "data-lane-state", lane.state)
         if lane.first_ts:
             add(
                 head, "data-lane-ts", f"{lane.first_ts} {lane.last_ts or lane.first_ts}"

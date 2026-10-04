@@ -914,3 +914,295 @@ class TestRenderPaths:
             page.unlink()
         self._convert(scoped, render_jobs=1, write_combined=False)
         assert _lane_view(scoped) == expected
+
+
+# ------------------------------------------------- live sessions (P7b)
+
+from test.dag_live_fixture import (  # noqa: E402
+    AGENT_C,
+    LANE_A,
+    LANE_C,
+    LIVE_SESSION,
+    STAGES,
+    LiveDagScript,
+)
+
+LIVE_PAGES = (f"session-{LIVE_SESSION}.html", "combined_transcripts.html")
+
+
+def _heads(html: str) -> dict[str, dict[str, str]]:
+    """Lane id → its head card's attributes."""
+    return {
+        a["data-lane-id"]: a for a in _card_attrs(html).values() if "data-lane-id" in a
+    }
+
+
+class TestLaneState:
+    """An agent lane without a merge row is ``open`` (may still be running)
+    unless the page proves it is over (``ended``); the client decides
+    whether an open lane reads as running (dev-docs/minimal-theme.md § 8)."""
+
+    def _render(self, script: LiveDagScript) -> dict[str, dict[str, str]]:
+        convert_jsonl_to("html", script.project, silent=True, theme="minimal")
+        return _heads((script.project / LIVE_PAGES[0]).read_text(encoding="utf-8"))
+
+    def test_running_agents_are_open_until_they_merge(self, tmp_path: Path) -> None:
+        script = LiveDagScript(tmp_path / "p")
+        script.run_to("start")
+        heads = self._render(script)
+        assert heads[LANE_A]["data-lane-state"] == "open"
+        assert heads[LANE_C]["data-lane-state"] == "open"
+        assert "data-lane-to" not in heads[LANE_C]
+        script.run_to("c_merges")
+        heads = self._render(script)
+        assert "data-lane-state" not in heads[LANE_C]  # merged: no state
+        assert heads[LANE_A]["data-lane-state"] == "open"
+        script.run_to("a_merges")
+        heads = self._render(script)
+        assert not any("data-lane-state" in head for head in heads.values())
+
+    def test_a_sync_agent_whose_parent_moved_on_has_ended(self, tmp_path: Path) -> None:
+        """The parent blocks on a synchronous call: a later model step there
+        means the call is over, result or not (a crash, a lost result)."""
+        script = LiveDagScript(tmp_path / "p")
+        script.run_to("start")
+        script._append(
+            script.trunk,
+            [
+                script._entry(
+                    "assistant",
+                    script.last["main"],
+                    30,
+                    _text_block("The check never came back; moving on."),
+                )
+            ],
+        )
+        heads = self._render(script)
+        assert heads[LANE_C]["data-lane-state"] == "ended"
+        # The async agent is not waited on: still open.
+        assert heads[LANE_A]["data-lane-state"] == "open"
+
+    def test_another_sessions_activity_proves_nothing(self, tmp_path: Path) -> None:
+        """A combined page holds every session in one main lane: a second
+        session moving on later must not end the first one's running call."""
+        from datetime import timedelta
+
+        from test.dag_demo_fixture import BASE
+
+        script = LiveDagScript(tmp_path / "p")
+        script.run_to("start")
+        other = LiveDagScript(
+            script.project,
+            base=BASE + timedelta(hours=1),
+            session="dade0000-0000-4000-8000-0000000000c2",
+            suffix="two",
+            uid_space=5,
+        )
+        other.run_to("c_merges")
+        convert_jsonl_to("html", script.project, silent=True, theme="minimal")
+        heads = _heads(
+            (script.project / "combined_transcripts.html").read_text(encoding="utf-8")
+        )
+        assert heads[LANE_C]["data-lane-state"] == "open"
+        assert "data-lane-state" not in heads[LANE_C + "two"]
+
+    def test_steering_does_not_end_a_running_agent(self, tmp_path: Path) -> None:
+        """A message the user types while tools run is steering, not a new
+        turn: the agent is still running."""
+        script = LiveDagScript(tmp_path / "p")
+        script.run_to("start")
+        steer = {
+            "type": "attachment",
+            "uuid": "steer-0001",
+            "parentUuid": script.last["main"],
+            "isSidechain": False,
+            "userType": "external",
+            "cwd": "/home/synthetic/theme",
+            "sessionId": LIVE_SESSION,
+            "version": "2.1.180",
+            "timestamp": script.time(8),
+            "attachment": {
+                "type": "queued_command",
+                "commandMode": "prompt",
+                "origin": {"kind": "human"},
+                "timestamp": script.time(8),
+                "prompt": "Also look at the legend colours.",
+            },
+        }
+        script._append(script.trunk, [steer])
+        convert_jsonl_to("html", script.project, silent=True, theme="minimal")
+        html = (script.project / LIVE_PAGES[0]).read_text(encoding="utf-8")
+        assert "Also look at the legend colours." in html
+        assert _heads(html)[LANE_C]["data-lane-state"] == "open"
+
+    def test_a_lane_nested_in_a_finished_one_has_ended(self, tmp_path: Path) -> None:
+        """C spawns D; D never returns, then C answers and merges: D can't
+        still be running inside a finished agent."""
+        script = LiveDagScript(tmp_path / "p")
+        script.run_to("start")
+        nested, tool = "d0live0nest", "toolu_live_nestD"
+        spawn = script._entry(
+            "assistant",
+            script.last[AGENT_C],
+            8,
+            [
+                {
+                    "type": "tool_use",
+                    "id": tool,
+                    "name": "Task",
+                    "input": {
+                        "description": "Read the legend",
+                        "prompt": "Read the legend.",
+                        "subagent_type": "Explore",
+                    },
+                }
+            ],
+            agent=AGENT_C,
+        )
+        script._agent(AGENT_C, [spawn])
+        script._meta(nested, tool, "Read the legend")
+        script._agent(
+            nested, [script._entry("user", None, 8.5, "Read the legend.", agent=nested)]
+        )
+        script._agent(
+            nested,
+            script._calls(nested, [(9, "Read", {"file_path": "legend.css"}, "ok")]),
+        )
+        heads = self._render(script)
+        assert heads[f"agent-{nested}"]["data-lane-parent"] == LANE_C
+        assert heads[f"agent-{nested}"]["data-lane-state"] == "open"
+        script.run_to("c_merges")
+        heads = self._render(script)
+        assert "data-lane-state" not in heads[LANE_C]
+        assert heads[f"agent-{nested}"]["data-lane-state"] == "ended"
+
+    def test_classic_carries_no_state(self, tmp_path: Path) -> None:
+        script = LiveDagScript(tmp_path / "p")
+        script.run_to("start")
+        convert_jsonl_to("html", script.project, silent=True, theme="classic")
+        html = (script.project / LIVE_PAGES[0]).read_text(encoding="utf-8")
+        assert "data-lane" not in html
+
+
+def _text_block(text: str) -> list[dict[str, Any]]:
+    return [{"type": "text", "text": text}]
+
+
+class TestLiveGrowth:
+    """A session growing on disk the way a live one does — a running agent's
+    transcript growing while the trunk sits still, results arriving, a
+    rewind — re-converted incrementally after every stage, the way
+    ``serve --watch`` (session files: session-scoped regeneration, an entry
+    store held across ticks) and ``watch --combined yes`` (both pages, a
+    store) do, must carry exactly the lane data a cold conversion of the
+    same files produces. Before P7b neither path saw a running agent grow:
+    the trunk's cache row and held entries were pinned to the trunk file
+    alone, so the agent's block stayed one tick behind until the trunk
+    changed."""
+
+    @staticmethod
+    def _fresh(tmp_path: Path, stage: str) -> dict[str, dict[str, dict[str, str]]]:
+        script = LiveDagScript(tmp_path / f"fresh-{stage}" / "projects" / "-tmp-live")
+        script.run_to(stage)
+        convert_jsonl_to("html", script.project, silent=True, theme="minimal")
+        return {
+            name: _card_attrs((script.project / name).read_text(encoding="utf-8"))
+            for name in LIVE_PAGES
+        }
+
+    @pytest.mark.parametrize("store", [True, False], ids=["store", "no-store"])
+    def test_serve_watch_session_pages(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, store: bool
+    ) -> None:
+        from claude_code_log import converter
+        from claude_code_log.converter import process_projects_hierarchy
+        from claude_code_log.entry_store import ParsedEntryStore
+
+        used: dict[str, int] = {"scoped": 0, "refresh": 0}
+        scoped = converter._load_stale_session_transcripts
+        refresh = converter._incremental_cache_refresh
+
+        def spy_scoped(*args: Any, **kwargs: Any) -> Any:
+            result = scoped(*args, **kwargs)
+            used["scoped"] += result is not None
+            return result
+
+        def spy_refresh(*args: Any, **kwargs: Any) -> Any:
+            result = refresh(*args, **kwargs)
+            used["refresh"] += bool(result)
+            return result
+
+        monkeypatch.setattr(converter, "_load_stale_session_transcripts", spy_scoped)
+        monkeypatch.setattr(converter, "_incremental_cache_refresh", spy_refresh)
+
+        projects = tmp_path / "live" / "projects"
+        script = LiveDagScript(projects / "-tmp-live")
+        script.run_to("start")
+        process_projects_hierarchy(projects, silent=True, theme="minimal")
+        held = ParsedEntryStore() if store else None
+        for stage in STAGES[1:]:
+            script.advance(stage)
+            # cli.serve's `reconvert`, verbatim.
+            process_projects_hierarchy(
+                projects,
+                silent=True,
+                write_combined=False,
+                entry_store=held,
+                theme="minimal",
+            )
+            page = LIVE_PAGES[0]
+            got = _card_attrs((script.project / page).read_text(encoding="utf-8"))
+            assert got == self._fresh(tmp_path, stage)[page], stage
+        assert used["scoped"] and used["refresh"], used
+        if held is not None:
+            assert held.prefix_hits, "the trunk's parse never resumed"
+
+    def test_watch_combined_pages(self, tmp_path: Path) -> None:
+        from claude_code_log.entry_store import ParsedEntryStore
+
+        script = LiveDagScript(tmp_path / "live" / "projects" / "-tmp-live")
+        script.run_to("start")
+        held = ParsedEntryStore()
+        convert_jsonl_to(
+            "html", script.project, silent=True, entry_store=held, theme="minimal"
+        )
+        for stage in STAGES[1:]:
+            script.advance(stage)
+            # cli.watch's `convert` for `--combined yes`.
+            convert_jsonl_to(
+                "html",
+                script.project,
+                silent=True,
+                write_combined=True,
+                generate_individual_sessions=True,
+                entry_store=held,
+                theme="minimal",
+            )
+            fresh = self._fresh(tmp_path, stage)
+            for page in LIVE_PAGES:
+                got = _card_attrs((script.project / page).read_text(encoding="utf-8"))
+                assert got == fresh[page], (stage, page)
+
+    def test_the_running_agent_grows_on_the_page(self, tmp_path: Path) -> None:
+        """The case the equality above exists for, spelled out."""
+        from claude_code_log.converter import process_projects_hierarchy
+        from claude_code_log.entry_store import ParsedEntryStore
+
+        projects = tmp_path / "projects"
+        script = LiveDagScript(projects / "-tmp-live")
+        script.run_to("start")
+        process_projects_hierarchy(projects, silent=True, theme="minimal")
+        held = ParsedEntryStore()
+        steps = []
+        for stage in ("c_grows", "c_grows_more", "c_merges"):
+            script.advance(stage)
+            process_projects_hierarchy(
+                projects,
+                silent=True,
+                write_combined=False,
+                entry_store=held,
+                theme="minimal",
+            )
+            html = (script.project / LIVE_PAGES[0]).read_text(encoding="utf-8")
+            steps.append(_heads(html)[LANE_C]["data-lane-stats"].split(" · ")[0])
+        assert steps == ["2 steps", "3 steps", "3 steps"]

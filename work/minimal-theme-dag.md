@@ -1,6 +1,6 @@
 # `--theme minimal`: a compact light/dark theme with a DAG layout
 
-Status: **spec + phased plan; P1–P6 and P7 landed (see § 6);
+Status: **spec + phased plan; P1–P7 and P7b landed (see § 6);
 § 7 decisions 1–5 taken.** Branch of origin:
 `claude/sweet-mccarthy-64a24r`.
 
@@ -1924,6 +1924,177 @@ never get a lane or column.
   its `title`); search, the timeline and live updates were checked with
   columns, the full filter × mode × timeline sweep is still P8's.
 
+### P7b — Live/watch mode with branches — M
+
+**Goal:** the user asked "make sure the session page updates in watch mode
+work … will the branches render and update nicely?" Until now the DAG's
+live behaviour was only simulated in-page (`test_live_update_relayouts`,
+`test_a_wholesale_swap_rebuilds_the_columns`: a cloned `#transcript` handed
+to `claudeLogRehydrate`); the real end-to-end live tests
+(`test/test_live_update.py`, `live_archive`) are classic-only and contain
+no sub-agents. This phase drives the real thing and fixes what it finds,
+then gives a sub-agent that is **still running** a look of its own.
+
+**Files:** new `test/dag_live_fixture.py` (a session that grows on disk
+stage by stage, the way Claude Code writes one), new
+`test/test_minimal_dag_live_browser.py` (marker `browser`),
+`test/test_lanes.py` (lane data across incremental paths, lane state);
+whatever the tests expose (expected: `lanes.py`, `minimal_dag.js`,
+`dag.css`, possibly the cache / entry store / `live_update.js`); docs:
+`dev-docs/minimal-theme.md`, `dev-docs/agents.md` § 6,
+`dev-docs/application_model.md` § 2.15–2.16, `docs/live-updates.md`.
+
+**Steps:**
+1. **End to end, both pages.** Playwright against a real
+   `claude-code-log serve --watch --theme minimal` (subprocess) for the
+   **session page**, and against the `watch --combined yes --theme minimal`
+   conversion (`serve --watch` deliberately leaves combined pages as they
+   were at startup, docs/live-updates.md) served by `ArchiveServer` for the
+   **combined page**; the JSONL — trunk and `subagents/agent-*.jsonl` —
+   grows on disk. Cover: (a) a synchronous sub-agent still running whose
+   sidechain grows mid-sequence (the swap path) — its lane appears, grows,
+   then merges at its tool_result; (b) an async agent whose lane is open
+   when its `<task-notification>` arrives — the merge connector and the
+   answer appear at the arrival row; (c) a rewind while watching — the
+   earliest branch stays main, the new fork lane appears without disturbing
+   main; (d) a reader who interleaved one lane and put another in a column
+   keeps both through patches **and** swaps; fold state and scroll position
+   survive; no duplicate engine controls or column heads; the rail redraws;
+   stats (steps / tokens / duration) update. Poll with explicit waits,
+   never sleeps.
+2. **Server-side equivalence.** For each growing stage, the incremental
+   paths a watch takes — `serve --watch` (session-scoped regeneration, an
+   entry store held across ticks, prefix resume) and `watch --combined yes`
+   — must emit exactly the lane attributes a cold conversion of the same
+   files does (unit level, `test_lanes.py`).
+3. **Running lanes.** A sub-agent lane with no merge yet must not be drawn
+   like a fork's stub: it runs on to the newest row, ends in an open
+   marker, and its control carries a small "running" label; when the result
+   or notification arrives it becomes the ordinary curved merge. A lane
+   that ended without a result (a crash, a killed background agent, a
+   finished session) must not read as running forever on a static page —
+   pick the rule (server vs client), document it.
+4. Fix whatever the tests expose; classic output byte-identical; minimal
+   snapshots regenerated only with `just update-snapshot`, checked at block
+   level.
+
+**Acceptance & tests:** the e2e tests above on both pages; unit tests for
+the lane state rule and for the incremental paths; `just ci` green;
+screenshots of a running lane and the moment after it merges, light and
+dark, in `work/minimal-theme-dag-screenshots/p7b/`.
+
+**As built (P7b landed):**
+- **Harness.** `test/dag_live_fixture.py` — `LiveDagScript(project, base,
+  session, suffix, uid_space)` writes a session and grows it stage by stage
+  exactly as Claude Code does: `start` (a background agent A launched; a
+  synchronous agent C spawned and still running, no tool_result), `c_grows`
+  / `c_grows_more` (C's `subagents/agent-*.jsonl` grows, the trunk does
+  not), `c_merges` (C's result), `a_merges` (A's notification, a second
+  prompt), `rewind`, `fork_grows` (a pure append). `base` defaults to the
+  demo's fixed time; the live tests pass "a minute ago".
+  `test/test_minimal_dag_live_browser.py` (13 tests, marker `browser`)
+  drives a real `claude-code-log serve --watch --theme minimal` subprocess
+  for the session page and the `watch --combined yes` conversion (in-process
+  `WatchEngine` + `convert_jsonl_to` with its own entry store, as
+  `cli.watch` calls it) behind `ArchiveServer` for the combined page — the
+  scope's (a)–(d) on both, plus the running-lane rule. Waits are explicit
+  (`wait_for_function`, then for `live-new-in` fade-ins to finish); no
+  sleeps.
+- **What the end-to-end tests found, and the fixes:**
+  1. **A running sub-agent never grew on the page** (both pages, every
+     watch path). A trunk's cached rows carry its agents' transcripts
+     spliced in, but the trunk's freshness was its own `(mtime, size)` plus
+     a fingerprint of the `agent-*.meta.json` sidecars only; a synchronous
+     agent appends to its own file while the trunk waits, so the watch
+     re-served the cached trunk ("cached") until the trunk next changed —
+     i.e. the lane jumped from its first step to its result. Fix:
+     `cache.subagents_fingerprint` also covers the `agent-*.jsonl`
+     transcripts (`|count:newest mtime_ns:total bytes`); rows written
+     before (no `|` part) are compared on the sidecar part alone
+     (`_fingerprints_match`), so upgrading does not re-parse every session.
+  2. **…and with the entry store, it stayed one tick behind.** The store
+     held across `watch` / `serve --watch` ticks pinned a trunk's
+     whole-file list to the trunk's own `(size, mtime_ns)`, so the next
+     refresh's `load_transcript` was served the previous tick's splice.
+     Fix: `entry_store.stamp_file` includes the sub-agent fingerprint.
+     (Prefix resume was already sound: it holds pre-splice products.)
+  3. **The rail was drawn up to 6px off new cards.** A live card fades in
+     from `translateY(6px)` (`live-new-in`); the relayout measured it at the
+     start of the animation and a transform resizes nothing, so nothing
+     redrew. Fix: redraw on `animationend` of `live-new-in`.
+  4. **Engine state keyed by positional ids.** The per-turn LRU (the cap
+     of three) and the expanded `+N more branches` were keyed by
+     `data-lane-turn`'s `d-N`, which a swap renumbers whenever an entry
+     lands mid-page — the cap then counted from zero (a fourth lane stayed
+     open) and the overflow collapsed. Now keyed by the turn card's
+     `data-uuid` (`lane.turnKey`); the fork-time title cache by lane id +
+     card. Test: `test_turn_choices_survive_a_renumbering_swap`.
+  5. **Relayout timing.** Rehydrate used to schedule the relayout in the
+     next animation frame; a swapped-in `#transcript` (no rows, no
+     `dag-hidden`) could be laid out in between with every lane unfolded.
+     Now one microtask per update, before layout or paint.
+  Everything else held: lane modes (keyed by lane id), columns and their
+  chrome, `ensureControls` (one control per lane, re-created on a patched
+  spawn card), fold state and scroll position (the poller's), stats and
+  the column head's meta, on both the patch and the swap path (the test
+  asserts both occurred). Rewinds keep main as is: the earliest branch
+  continues it (§ 7 decision 3), the new fork lane arrives folded with its
+  stub.
+- **Server-side equivalence** (`test_lanes.py::TestLiveGrowth`): after every
+  stage, `serve --watch`'s re-conversion (`process_projects_hierarchy(...,
+  write_combined=False, entry_store=…)`, verbatim; with and without a
+  store; session-scoped regeneration and the incremental refresh asserted
+  to have run, and the prefix resume to have hit) and `watch --combined
+  yes` (both pages) emit exactly the card attributes of a cold conversion.
+  Fails without fix 1 (no store) or fix 2 (store). Unit tests for both
+  fixes in `test_nested_agents.py` / `test_entry_store.py`.
+- **Running lanes — the rule (decided).** Split so the HTML stays a pure
+  function of the transcript:
+  - *server* (`lanes._settle_open_lanes`, `data-lane-state` on the head of
+    an agent lane with no merge row): `ended` when the page proves it — a
+    **synchronous** agent whose parent line (same lane, **same session**:
+    a combined page has every session in one main lane) shows a later model
+    step (text, thinking) or prompt (user text, compact summary; *not*
+    steering, tool calls, results, notifications, hooks), or a lane nested
+    in one that merged or ended; otherwise `open`. Async agents are never
+    ended by their parent moving on. Merged lanes and forks: no attribute.
+  - *client*: an `open` lane is **running** only on a page served live
+    (`window.claudeLogLiveUpdate`; never `file://`) whose session's newest
+    card is at most 30 minutes old by the viewer's clock
+    (`RUNNING_IDLE_MS`; per session, so a live session does not wake an
+    old one on a combined page), re-checked every 30 s. Anything else reads
+    as ended without a result: `· no result` on the control, drawn as
+    before (stub folded / to its last row interleaved) — so a crashed agent
+    in a finished session, a static export or an idle served page never
+    shows "running".
+  - *drawing*: a running lane takes a rail slot over `[spawn, last row]`,
+    forks off the spawn, runs (dashed and drifting when folded, solid when
+    interleaved) to the bottom of the newest shown row and ends in an open
+    circle (`data-part='end'`); the control gets `is-running` and a
+    pulsing `running` pill (`.mn-brun`), a running column's head `running`
+    in its meta; no animation under `prefers-reduced-motion`. When the
+    result / notification arrives the head gains `data-lane-to` (a patch or
+    swap) and the next relayout draws the ordinary merge.
+- **Classic** unchanged: no lane code runs, and the cache / store changes
+  affect freshness only (more conversions when an agent grows, never
+  different bytes). **Snapshots** (`just update-snapshot`, block level):
+  none added or removed; every classic block and the index identical; the
+  three minimal blocks `+248/-23` each, all CSS/JS text (no card markup
+  changed — the fixtures' agents all merged, so no `data-lane-state`).
+- **Screenshots** in
+  [`work/minimal-theme-dag-screenshots/p7b/`](minimal-theme-dag-screenshots/p7b/)
+  (64-colour PNGs, ≈ 20–25KB): `running-*` — the live session page with
+  the synchronous agent interleaved and still running (solid lane, open end,
+  `running` pill) beside the background agent folded and running (dashed);
+  `merged-*` — a moment later, the result arrived: C's curved merge at the
+  result row, A still running to the new newest row. Light and dark.
+- **Left for P8 / later:** the 30-minute idle window is a heuristic (a
+  sub-agent busy in one tool call for longer, with nothing else written,
+  reads as ended until its next line); Markdown output has no notion of
+  running; `serve --watch` still leaves combined pages as they were at
+  startup by design (documented in docs/live-updates.md with the `watch
+  --combined yes` recipe).
+
 ### P8 — Docs, polish, parity sweep — M
 
 **Goal:** user-facing docs, remaining parity, performance sanity.
@@ -1966,6 +2137,7 @@ tests from P3a–P7 green together.
 - [x] P5 lane annotation
 - [x] P6 DAG engine (main-only, interleaved, rail)
 - [x] P7 columns, overflow, teammates (+ async result at the merge row)
+- [x] P7b live/watch mode with branches (+ running lanes)
 - [ ] P8 docs and polish
 
 ---
