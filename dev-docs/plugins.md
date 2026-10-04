@@ -253,7 +253,7 @@ Signature contract for each method:
 |---|---|---|---|
 | `format_markdown` | `(self, renderer, message) -> str` | Markdown source string. | Define this whenever your class produces meaningful Markdown. Drives both Markdown output AND HTML output (via wenmode) unless `format_html` is also defined. **Escape transcript-derived interpolation** ([§4.2](#42-security-conscious-rendering)): the Markdown-output path emits this verbatim. |
 | `format_html` | `(self, renderer, message) -> str` | Raw HTML string (real string — no None sentinel). | Define this ONLY when you need HTML different from wenmode-of-`format_markdown`. The dispatcher synthesizes that fallback automatically when `format_html` is absent. **You own escaping** — the return is injected as live DOM; `escape_html` every transcript-derived interpolation ([§4.2](#42-security-conscious-rendering)). |
-| `title` | `(self, renderer, message) -> Optional[str]` | Heading text or `None`. | Return `None` for "headless" (inline) messages. Return `""` (empty string, not None) to suppress the heading explicitly — the dispatcher distinguishes the two. An empty title suppresses the heading, never the body: HTML and Markdown both still render `format`'s output. **`escape_html` transcript-derived interpolation** — the title is emitted via `\| safe` with no core escaping ([§4.2](#42-security-conscious-rendering)). |
+| `title` | `(self, renderer, message) -> Optional[str]` | Heading text or `None`. | Return `None` for "headless" (inline) messages. Return `""` (empty string, not None) to suppress the heading explicitly — the dispatcher distinguishes the two. An empty title suppresses the heading, never the body: HTML and Markdown both still render `format`'s output. In HTML, a `ToolUseMessage`/`ToolResultMessage` title that starts with an emoji replaces the host's default icon (🛠️, 🧰) instead of following it; the error 🚨 always stays. **`escape_html` transcript-derived interpolation** — the title is emitted via `\| safe` with no core escaping ([§4.2](#42-security-conscious-rendering)). |
 
 **`format_html` is opt-in.** If your plugin class defines only
 `format_markdown`, the HtmlRenderer dispatcher automatically
@@ -277,7 +277,8 @@ subclass replacement to inherit the host's standard error chrome
 (🚨 emoji, red `.tool_result.error` CSS class). The mechanism is
 wired in `html/utils.py`: `isinstance(content, ToolResultMessage)
 and content.is_error` triggers both. Bash errors use the same
-primitive — no custom plugin styling needed.
+primitive — no custom plugin styling needed. A `title` cannot suppress
+the 🚨, even one starting with its own emoji (`🚨 📨 …`).
 
 The dispatcher looks up these methods on each MRO node's `__dict__`
 explicitly (not via `getattr`/inheritance). That means: **a class
