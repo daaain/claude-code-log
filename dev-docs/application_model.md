@@ -1314,9 +1314,13 @@ swap, and over *only the elements it placed* after a patch. Passing the
 containing node instead is a live trap: the session header's fold bar
 counts its descendants, so it is replaced on every append, and its node
 is the entire page. Currently registered: timestamp localisation (scoped
-to a subtree), the timeline rebuild and, in the minimal theme, the DAG
-engine's relayout (one microtask per update, before the next paint —
-minimal-theme.md § 8). Delegated listeners and
+to a subtree), the timeline rebuild, the filter and search refresh (one
+microtask per update: the active type filter is re-applied and an active
+search re-run *quietly* — nothing scrolls, unfolds or opens; registered
+in `transcript.html` between the timeline and the engine so it runs after
+the one and before the other, minimal-theme.md § 11) and, in the minimal
+theme, the DAG engine's relayout (one microtask per update, before the
+next paint — minimal-theme.md § 8). Delegated listeners and
 everything bound to the toolbar or floating buttons survive untouched
 and must **not** register. On the swap path only, fold state and
 `<details>` are captured and restored by the poller, keyed `data-uuid` →

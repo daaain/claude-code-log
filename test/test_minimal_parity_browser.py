@@ -244,8 +244,9 @@ class TestParitySweep:
         self, clean: Page, pages: dict[str, Path], mode: str
     ):
         """A wholesale swap brings the server's markup — no ``filtered-hidden``
-        anywhere. The page must filter it again (P8 fix: classic re-applies
-        nothing; the minimal theme does, on rehydrate)."""
+        anywhere. The page must filter it again (on rehydrate, a shared path
+        in transcript.html; classic is covered against a live server in
+        test_live_update.py)."""
         page = clean
         page.set_viewport_size({"width": 1600, "height": 900})
         _open(page, pages["demo"], branches=mode)

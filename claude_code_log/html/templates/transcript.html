@@ -321,6 +321,35 @@
     <a class="scroll-top floating-btn" title="Scroll to top" href="#title">🔝</a>{% endif %}
 
     <script>
+        // ---- live updates keep the filter and the search -------------------
+        // A patched card, or a swapped-in #transcript, is the server's
+        // markup: no `filtered-hidden`, no search classes, and cards the
+        // search index has never seen. Re-apply both once per update (the
+        // rehydrate hooks run once per changed element), in a microtask
+        // after the update's synchronous work: after the timeline's rebuild
+        // (registered earlier, in timeline.html) and before the minimal
+        // theme's relayout (registered later, in minimal_dag.js), which then
+        // lays out the filtered page. The search refresh is quiet: nothing
+        // scrolls, unfolds or opens under the reader.
+        (function () {
+            let queued = false;
+            function refresh() {
+                queued = false;
+                const filtered = !!window.claudeLogApplyFilter
+                    && document.querySelector('.filter-toggle:not(.active)') !== null;
+                if (filtered) window.claudeLogApplyFilter();
+                if (window.claudeLogRefreshSearch) window.claudeLogRefreshSearch(filtered);
+                // The timeline reads both classes off the cards.
+                if (window.applyTimelineSearchFilter) window.applyTimelineSearchFilter();
+            }
+            window.claudeLogOnRehydrate(function () {
+                if (queued) return;
+                queued = true;
+                if (window.queueMicrotask) window.queueMicrotask(refresh);
+                else setTimeout(refresh, 0);
+            });
+        })();
+
         document.addEventListener('DOMContentLoaded', function () {
             const toggleButton = document.getElementById('toggleDetails');
             const timelineButton = document.getElementById('toggleTimeline');
@@ -926,10 +955,10 @@
             applyUrlFilters();
 
             // Apply all filters on page load
-            applyFilter();{% if minimal %}
-            // Minimal theme (P8): minimal.js re-applies the filter to the
-            // markup a live update brings (it carries no filtered-hidden).
-            window.claudeLogApplyFilter = applyFilter;{% endif %}
+            applyFilter();
+            // The live-update refresh above re-applies the filter to the
+            // markup an update brings (it carries no filtered-hidden).
+            window.claudeLogApplyFilter = applyFilter;
 
             // Fold/unfold functionality with horizontal fold bars.
             //

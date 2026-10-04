@@ -24,9 +24,12 @@ This file is now a historical record.** Branch of origin:
   nested blocks, not DAG branches (§ 7 decision 6).
 - **Markdown (and JSON) output** has no themes and no notion of lanes or
   of a running agent (P7b).
-- **Classic live updates don't re-apply the filter or search** to the
-  markup a live update brings (P8 found it; fixed for the minimal theme
-  only, because classic bytes may not change — port it when they may).
+- ~~**Classic live updates don't re-apply the filter or search** to the
+  markup a live update brings~~ — **done** (follow-up after P8): the
+  refresh moved from `minimal.js` into `transcript.html` / `search.html`,
+  one path for both themes, quiet as before; the filter observer reacts to
+  `filtered-hidden` only and the current match survives a swap
+  (dev-docs/minimal-theme.md § 11).
 - **Making `minimal` the default** is a one-line change of
   `utils.DEFAULT_THEME` (§ 7 decision 7), not taken.
 - **Teammates in their own files**: the `session-<sid>.html?uuid=` fallback

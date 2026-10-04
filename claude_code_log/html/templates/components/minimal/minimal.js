@@ -422,34 +422,6 @@
             focusableFoldBars(document.getElementById('transcript'));
             if (window.claudeLogOnRehydrate) window.claudeLogOnRehydrate(focusableFoldBars);
 
-            // ---- live updates keep the filter and the search (P8) ----------
-            // A patched card, or a swapped-in #transcript, is the server's
-            // markup: no `filtered-hidden`, no search classes, and cards the
-            // search index has never seen. Re-apply both once per update
-            // (the hooks run once per changed element), after the update's
-            // other hooks; the DAG engine's observer relayouts on the class
-            // changes. The search refresh is quiet: nothing scrolls, unfolds
-            // or opens. (Classic pages keep their old behaviour: their bytes
-            // may not change.)
-            let refreshQueued = false;
-            function refreshFilterAndSearch() {
-                refreshQueued = false;
-                const filtered = !!window.claudeLogApplyFilter
-                    && document.querySelector('.filter-toggle:not(.active)') !== null;
-                if (filtered) window.claudeLogApplyFilter();
-                if (window.claudeLogRefreshSearch) window.claudeLogRefreshSearch(filtered);
-                // The timeline reads both classes off the cards.
-                if (window.applyTimelineSearchFilter) window.applyTimelineSearchFilter();
-            }
-            if (window.claudeLogOnRehydrate) {
-                window.claudeLogOnRehydrate(function () {
-                    if (refreshQueued) return;
-                    refreshQueued = true;
-                    if (window.queueMicrotask) window.queueMicrotask(refreshFilterAndSearch);
-                    else setTimeout(refreshFilterAndSearch, 0);
-                });
-            }
-
             // ---- overflow menu ---------------------------------------------
             // A <details>: closes on a click outside it or on Escape. Clicks
             // on its items keep it open, so a state change stays visible.

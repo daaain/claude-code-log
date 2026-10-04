@@ -17,7 +17,7 @@ record now; where it and this page disagree, this page (and the code) win.
 | Look: tokens, row grid, components, light/dark, dark Pygments | `components/minimal/` `tokens.css`, `layout.css`, `components.css`, `pygments_dark.css` (generated), `theme_init.js` | [css-classes.md § Minimal Theme](css-classes.md#minimal-theme-theme-minimal) |
 | Server helpers: gutter, call line, session header, page meta, cross links, lane attributes | `html/minimal_theme.py` | css-classes.md (table), § 7, § 12 |
 | Minimal-only formatter output: compact spawn rows, answers on merge rows, previews of long answers, diffs and commands | `HtmlRenderer.format_TaskInput` / `format_TaskOutput` / `format_TaskNotificationMessage` / `format_EditInput` / `format_MultiEditInput` / `format_BashInput`, `utils.render_markdown_preview`, `tool_formatters.collapse_long_diff` | § 7, § 9, § 10 |
-| Collapse labels, fold depth, colour-scheme toggle, keyboard fold bars, live filter / search refresh | `components/minimal/minimal.js` | [message-hierarchy.md § Fold depth](message-hierarchy.md#fold-depth-minimal-theme), § 9, § 11 |
+| Collapse labels, fold depth, colour-scheme toggle, keyboard fold bars | `components/minimal/minimal.js` (the live filter / search refresh is shared: `transcript.html`, `search.html`) | [message-hierarchy.md § Fold depth](message-hierarchy.md#fold-depth-minimal-theme), § 9, § 11 |
 | Lane model (which cards form a branch, spawn / merge rows, turn, rank, stats, running state) | `lanes.py` | [agents.md § 6](agents.md#6-branch-lanes-minimal-theme), [dag.md § Branch lanes](dag.md#branch-lanes-minimal-theme), § 12 |
 | DAG engine: branch modes, rail, columns, live relayout | `components/minimal/minimal_dag.js`, `dag.css` | § 1–8 |
 | Teammate anchors | `lanes.teammate_links`, `minimal_theme.cross_links` | § 7, [teammates.md](teammates.md#minimal-theme-anchors) |
@@ -515,18 +515,40 @@ server's markup — a patched card, or on a swap a whole new `#transcript` —
 with no `filtered-hidden` and none of the search's classes, and the
 transcript's filter and search never looked at it again: a page with the
 Tool toggle off showed every tool card of the new markup (both themes;
-pre-existing). The minimal theme now re-applies both, once per update:
-`minimal.js` registers a rehydrate hook that queues one microtask, calls
-`window.claudeLogApplyFilter` (the transcript's `applyFilter`, exported
-by a `{% if minimal %}` line) when any toggle is off, then
-`window.claudeLogRefreshSearch` (`search.html`, minimal-gated), and
-re-syncs the timeline's per-item state. The search refresh is **quiet**:
-it re-indexes and re-runs the query (`performSearch(…, {quiet: true})`)
-without navigating to the current match, revealing matches or opening
-`<details>`, so a live page never moves under the reader; the filter
-observer's own re-search after the refreshed filter is quiet too
-(`quietRefresh`, a 300ms window). Classic pages keep the old behaviour —
-their bytes may not change — and are a follow-up.
+pre-existing). P8 fixed it for this theme only (classic bytes could not
+change then); the follow-up moved the fix into the shared templates, so
+both themes take one path:
+
+- **The refresh** (`transcript.html`, a rehydrate hook registered at parse
+  time between the timeline's and the DAG engine's): once per update it
+  queues one microtask that calls `window.claudeLogApplyFilter` (the
+  transcript's `applyFilter`) when any toggle is off, then
+  `window.claudeLogRefreshSearch` (`search.html`), then re-syncs the
+  timeline's per-item state. Registration order puts it after the
+  timeline's rebuild and before the engine's relayout, which therefore
+  lays out the already-filtered page.
+- **Quiet.** The search refresh re-indexes and re-runs the query
+  (`performSearch(…, {quiet: true})`) without navigating to the current
+  match, revealing matches or opening `<details>`, so a live page never
+  moves under the reader; the filter observer's own re-search after the
+  refreshed filter is quiet too (`quietRefresh`, a 300ms window).
+- **The current match survives.** `preserveCurrent` matched the current
+  match by element identity, which a live update breaks (a patch replaces
+  a changed card, a swap every card): a current match that left the page
+  is found again by its `data-uuid` and its position among the cards
+  sharing it (`cardKey`), so *4 of 4* becomes *4 of 5*, not *1 of 5*.
+- **The filter observer reacts to `filtered-hidden` only.** It used to
+  re-run the search on any class change of a card except search's own,
+  and not quietly — so a live update's `live-new` tag (and the engine's
+  `dag-*` classes) re-ran the search and scrolled to the current match.
+  Nothing else on a card changes what the search reads.
+
+`test/test_live_update.py::TestLiveUpdateKeepsFilterAndSearch` covers it
+against a real `serve --watch`, in both themes, on a patch and on the
+swap: a type filter hides the answers an update brings (and the toggle's
+count follows), and an active search marks the new matching card,
+hides the rest, keeps the current match and leaves the scroll position
+alone.
 
 The smoke test in the same file renders the demo and three real projects
 (`-experiments-worktrees`, `…coderabbit-review-helper`, `-experiments-ideas`)

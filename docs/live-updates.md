@@ -67,9 +67,11 @@ been silent for a minute its label says for how long (*running · quiet
 42m*). "Running" needs a live page: a page opened from `file://` (or a
 session nothing has moved in for over a week) shows such an agent as
 having ended without a result instead, and so does one the session
-stopped with `TaskStop`. In the minimal theme a message-type filter or a
-search you have set also applies to messages as they arrive, without
-moving you to the newest match.
+stopped with `TaskStop`.
+
+In either theme, a message-type filter or a search you have set also
+applies to messages as they arrive, without moving you to the newest
+match.
 
 To follow the **combined** page live as well, run `claude-code-log watch
 --combined yes` (with the same `--theme`) beside `serve`: the server

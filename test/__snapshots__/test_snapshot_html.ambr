@@ -5402,6 +5402,35 @@
       <a class="scroll-top floating-btn" title="Scroll to top" href="#title">🔝</a>
   
       <script>
+          // ---- live updates keep the filter and the search -------------------
+          // A patched card, or a swapped-in #transcript, is the server's
+          // markup: no `filtered-hidden`, no search classes, and cards the
+          // search index has never seen. Re-apply both once per update (the
+          // rehydrate hooks run once per changed element), in a microtask
+          // after the update's synchronous work: after the timeline's rebuild
+          // (registered earlier, in timeline.html) and before the minimal
+          // theme's relayout (registered later, in minimal_dag.js), which then
+          // lays out the filtered page. The search refresh is quiet: nothing
+          // scrolls, unfolds or opens under the reader.
+          (function () {
+              let queued = false;
+              function refresh() {
+                  queued = false;
+                  const filtered = !!window.claudeLogApplyFilter
+                      && document.querySelector('.filter-toggle:not(.active)') !== null;
+                  if (filtered) window.claudeLogApplyFilter();
+                  if (window.claudeLogRefreshSearch) window.claudeLogRefreshSearch(filtered);
+                  // The timeline reads both classes off the cards.
+                  if (window.applyTimelineSearchFilter) window.applyTimelineSearchFilter();
+              }
+              window.claudeLogOnRehydrate(function () {
+                  if (queued) return;
+                  queued = true;
+                  if (window.queueMicrotask) window.queueMicrotask(refresh);
+                  else setTimeout(refresh, 0);
+              });
+          })();
+  
           document.addEventListener('DOMContentLoaded', function () {
               const toggleButton = document.getElementById('toggleDetails');
               const timelineButton = document.getElementById('toggleTimeline');
@@ -6720,6 +6749,9 @@
   
               // Apply all filters on page load
               applyFilter();
+              // The live-update refresh above re-applies the filter to the
+              // markup an update brings (it carries no filtered-hidden).
+              window.claudeLogApplyFilter = applyFilter;
   
               // Fold/unfold functionality with horizontal fold bars.
               //
@@ -7401,10 +7433,21 @@
       // Perform search. options.preserveCurrent keeps the current match instead
       // of resetting to the first match — used when re-running the same query
       // after an option/filter change so the view stays put instead of jumping
-      // back to match 1. Matching is by element identity: message cards are
-      // never recreated within a page load (re-search only re-queries the same
-      // DOM nodes), and data-uuid is NOT unique per card — cards split from one
-      // transcript entry (text + tool_use) share the entry's UUID.
+      // back to match 1. Matching is by element identity: an option or filter
+      // re-search only re-queries the same DOM nodes, and data-uuid is NOT
+      // unique per card — cards split from one transcript entry (text +
+      // tool_use) share the entry's UUID. A live update is the exception: it
+      // replaces cards (a patched card, or every card on a wholesale swap), so
+      // a current match that left the page is found again by its data-uuid
+      // and its position among the cards sharing it (cardKey).
+      function cardKey(el) {
+          const uuid = el.getAttribute('data-uuid');
+          if (!uuid) return '#' + el.id;
+          const root = el.closest('#transcript') || document;
+          const twins = Array.from(root.querySelectorAll(
+              '.message[data-uuid="' + ((window.CSS && CSS.escape) ? CSS.escape(uuid) : uuid) + '"]'));
+          return uuid + '/' + Math.max(0, twins.indexOf(el));
+      }
       let isSearching = false;
       function performSearch(query, options = {}) {
           // Prevent concurrent searches
@@ -7504,9 +7547,13 @@
   
           searchState.currentMatchIndex = searchState.matches.length > 0 ? 0 : -1;
           if (preserveElement && searchState.currentMatchIndex === 0) {
-              const preservedIndex = searchState.matches.findIndex(
+              let preservedIndex = searchState.matches.findIndex(
                   m => m.element === preserveElement
               );
+              if (preservedIndex < 0 && !preserveElement.isConnected) {
+                  const key = cardKey(preserveElement);
+                  preservedIndex = searchState.matches.findIndex(m => cardKey(m.element) === key);
+              }
               if (preservedIndex >= 0) {
                   searchState.currentMatchIndex = preservedIndex;
               }
@@ -7515,7 +7562,7 @@
           // On transcript pages, search acts as a filter: non-matching messages
           // are hidden, matches are revealed (unfolded) and highlighted.
           if (!searchState.isIndexPage) {
-              applyTranscriptSearchFilter();
+              applyTranscriptSearchFilter(options.quiet);
           }
   
           updateSearchUI();
@@ -7528,7 +7575,7 @@
           // Navigate to the current match — the first one for a fresh query,
           // or the preserved one after an option/filter re-search (the layout
           // may have shifted, so re-scrolling to it keeps it in view).
-          if (searchState.matches.length > 0 && !searchState.isIndexPage) {
+          if (searchState.matches.length > 0 && !searchState.isIndexPage && !options.quiet) {
               navigateToMatch(searchState.currentMatchIndex);
           }
   
@@ -7541,7 +7588,7 @@
       //   .search-context — ancestor of a match ("Show context" mode only)
       //   .search-hidden  — everything else (display: none)
       // Session headers are never touched so the session structure stays visible.
-      function applyTranscriptSearchFilter() {
+      function applyTranscriptSearchFilter(quiet) {
           const matched = new Set(searchState.matches.map(m => m.element));
   
           // Ancestors of matches: visible-but-dimmed when "Show context" is on
@@ -7564,7 +7611,7 @@
   
           // Unfold ancestors so every match is actually visible (matches inside
           // folded subtrees would otherwise stay hidden by the fold state).
-          if (window.claudeLogRevealMessage) {
+          if (window.claudeLogRevealMessage && !quiet) {
               matched.forEach(el => window.claudeLogRevealMessage(el));
           }
   
@@ -7572,7 +7619,7 @@
           // code, structured params) stays invisible even after the message
           // itself is revealed — open every details on the path from each
           // highlight up to its message card.
-          matched.forEach(el => {
+          if (!quiet) matched.forEach(el => {
               el.querySelectorAll('.search-highlight').forEach(highlight => {
                   let details = highlight.closest('details');
                   while (details && el.contains(details)) {
@@ -7984,14 +8031,13 @@
           }
       }
   
-      // Class list minus search-* classes, normalised for comparison — used to
-      // tell "the type filter changed" apart from our own search-* mutations.
-      function classSetWithoutSearch(classString) {
-          return (classString || '')
-              .split(/\s+/)
-              .filter(cls => cls && !cls.startsWith('search-'))
-              .sort()
-              .join(' ');
+      // Whether a class string carries the type filter's class. The observer
+      // below reacts to that alone: search's own search-* writes would loop,
+      // and other classes on a card (a live update's `live-new`, the minimal
+      // theme's engine classes) change nothing the search reads — reacting
+      // to them re-ran the search un-quietly and scrolled a live page.
+      function isFilteredOut(classString) {
+          return /(^|\s)filtered-hidden(\s|$)/.test(classString || '');
       }
   
       // Re-index when filters change (for transcript pages)
@@ -7999,16 +8045,17 @@
           let isUpdatingFilters = false;
           const observer = new MutationObserver((mutations) => {
               // Only react to genuine filter changes on message elements —
-              // search's own search-hidden/search-match/search-context class
-              // writes must not re-trigger a search (feedback loop).
+              // `filtered-hidden` coming or going (isFilteredOut); search's own
+              // search-hidden/search-match/search-context class writes must
+              // not re-trigger a search (feedback loop).
               const hasFilterChange = mutations.some(mutation => {
                   if (mutation.type === 'attributes' && mutation.attributeName === 'class') {
                       const target = mutation.target;
                       if (!target.classList || !target.classList.contains('message')) {
                           return false;
                       }
-                      return classSetWithoutSearch(mutation.oldValue) !==
-                          classSetWithoutSearch(target.getAttribute('class'));
+                      return isFilteredOut(mutation.oldValue) !==
+                          isFilteredOut(target.getAttribute('class'));
                   }
                   return false;
               });
@@ -8017,7 +8064,7 @@
                   isUpdatingFilters = true;
                   setTimeout(() => {
                       buildSearchIndex();
-                      performSearch(searchState.query, { preserveCurrent: true });
+                      performSearch(searchState.query, { preserveCurrent: true, quiet: quietRefresh });
                       isUpdatingFilters = false;
                   }, 100);
               }
@@ -8031,6 +8078,25 @@
               subtree: true
           });
       }
+  
+      // A live update brings new cards — or, on a wholesale swap, a whole new
+      // #transcript — that the index has never seen and that carry none of
+      // the search's classes (transcript.html calls this once per update).
+      // Re-index and re-run the query quietly: the matches, classes and
+      // count follow the page, but nothing scrolls, unfolds or opens under
+      // the reader. `filtered`: the filter was just re-applied too, so the
+      // filter observer above is about to re-run the search — quietly as
+      // well.
+      let quietRefresh = false;
+      window.claudeLogRefreshSearch = function (filtered) {
+          if (!searchState.query || searchState.isIndexPage) return;
+          buildSearchIndex();
+          performSearch(searchState.query, { preserveCurrent: true, quiet: true });
+          if (filtered) {
+              quietRefresh = true;
+              setTimeout(() => { quietRefresh = false; }, 300);
+          }
+      };
   
       // Initialize when DOM is ready
       if (document.readyState === 'loading') {
@@ -13342,6 +13408,35 @@
       <a class="scroll-top floating-btn" title="Scroll to top" href="#title">🔝</a>
   
       <script>
+          // ---- live updates keep the filter and the search -------------------
+          // A patched card, or a swapped-in #transcript, is the server's
+          // markup: no `filtered-hidden`, no search classes, and cards the
+          // search index has never seen. Re-apply both once per update (the
+          // rehydrate hooks run once per changed element), in a microtask
+          // after the update's synchronous work: after the timeline's rebuild
+          // (registered earlier, in timeline.html) and before the minimal
+          // theme's relayout (registered later, in minimal_dag.js), which then
+          // lays out the filtered page. The search refresh is quiet: nothing
+          // scrolls, unfolds or opens under the reader.
+          (function () {
+              let queued = false;
+              function refresh() {
+                  queued = false;
+                  const filtered = !!window.claudeLogApplyFilter
+                      && document.querySelector('.filter-toggle:not(.active)') !== null;
+                  if (filtered) window.claudeLogApplyFilter();
+                  if (window.claudeLogRefreshSearch) window.claudeLogRefreshSearch(filtered);
+                  // The timeline reads both classes off the cards.
+                  if (window.applyTimelineSearchFilter) window.applyTimelineSearchFilter();
+              }
+              window.claudeLogOnRehydrate(function () {
+                  if (queued) return;
+                  queued = true;
+                  if (window.queueMicrotask) window.queueMicrotask(refresh);
+                  else setTimeout(refresh, 0);
+              });
+          })();
+  
           document.addEventListener('DOMContentLoaded', function () {
               const toggleButton = document.getElementById('toggleDetails');
               const timelineButton = document.getElementById('toggleTimeline');
@@ -14660,6 +14755,9 @@
   
               // Apply all filters on page load
               applyFilter();
+              // The live-update refresh above re-applies the filter to the
+              // markup an update brings (it carries no filtered-hidden).
+              window.claudeLogApplyFilter = applyFilter;
   
               // Fold/unfold functionality with horizontal fold bars.
               //
@@ -15341,10 +15439,21 @@
       // Perform search. options.preserveCurrent keeps the current match instead
       // of resetting to the first match — used when re-running the same query
       // after an option/filter change so the view stays put instead of jumping
-      // back to match 1. Matching is by element identity: message cards are
-      // never recreated within a page load (re-search only re-queries the same
-      // DOM nodes), and data-uuid is NOT unique per card — cards split from one
-      // transcript entry (text + tool_use) share the entry's UUID.
+      // back to match 1. Matching is by element identity: an option or filter
+      // re-search only re-queries the same DOM nodes, and data-uuid is NOT
+      // unique per card — cards split from one transcript entry (text +
+      // tool_use) share the entry's UUID. A live update is the exception: it
+      // replaces cards (a patched card, or every card on a wholesale swap), so
+      // a current match that left the page is found again by its data-uuid
+      // and its position among the cards sharing it (cardKey).
+      function cardKey(el) {
+          const uuid = el.getAttribute('data-uuid');
+          if (!uuid) return '#' + el.id;
+          const root = el.closest('#transcript') || document;
+          const twins = Array.from(root.querySelectorAll(
+              '.message[data-uuid="' + ((window.CSS && CSS.escape) ? CSS.escape(uuid) : uuid) + '"]'));
+          return uuid + '/' + Math.max(0, twins.indexOf(el));
+      }
       let isSearching = false;
       function performSearch(query, options = {}) {
           // Prevent concurrent searches
@@ -15444,9 +15553,13 @@
   
           searchState.currentMatchIndex = searchState.matches.length > 0 ? 0 : -1;
           if (preserveElement && searchState.currentMatchIndex === 0) {
-              const preservedIndex = searchState.matches.findIndex(
+              let preservedIndex = searchState.matches.findIndex(
                   m => m.element === preserveElement
               );
+              if (preservedIndex < 0 && !preserveElement.isConnected) {
+                  const key = cardKey(preserveElement);
+                  preservedIndex = searchState.matches.findIndex(m => cardKey(m.element) === key);
+              }
               if (preservedIndex >= 0) {
                   searchState.currentMatchIndex = preservedIndex;
               }
@@ -15455,7 +15568,7 @@
           // On transcript pages, search acts as a filter: non-matching messages
           // are hidden, matches are revealed (unfolded) and highlighted.
           if (!searchState.isIndexPage) {
-              applyTranscriptSearchFilter();
+              applyTranscriptSearchFilter(options.quiet);
           }
   
           updateSearchUI();
@@ -15468,7 +15581,7 @@
           // Navigate to the current match — the first one for a fresh query,
           // or the preserved one after an option/filter re-search (the layout
           // may have shifted, so re-scrolling to it keeps it in view).
-          if (searchState.matches.length > 0 && !searchState.isIndexPage) {
+          if (searchState.matches.length > 0 && !searchState.isIndexPage && !options.quiet) {
               navigateToMatch(searchState.currentMatchIndex);
           }
   
@@ -15481,7 +15594,7 @@
       //   .search-context — ancestor of a match ("Show context" mode only)
       //   .search-hidden  — everything else (display: none)
       // Session headers are never touched so the session structure stays visible.
-      function applyTranscriptSearchFilter() {
+      function applyTranscriptSearchFilter(quiet) {
           const matched = new Set(searchState.matches.map(m => m.element));
   
           // Ancestors of matches: visible-but-dimmed when "Show context" is on
@@ -15504,7 +15617,7 @@
   
           // Unfold ancestors so every match is actually visible (matches inside
           // folded subtrees would otherwise stay hidden by the fold state).
-          if (window.claudeLogRevealMessage) {
+          if (window.claudeLogRevealMessage && !quiet) {
               matched.forEach(el => window.claudeLogRevealMessage(el));
           }
   
@@ -15512,7 +15625,7 @@
           // code, structured params) stays invisible even after the message
           // itself is revealed — open every details on the path from each
           // highlight up to its message card.
-          matched.forEach(el => {
+          if (!quiet) matched.forEach(el => {
               el.querySelectorAll('.search-highlight').forEach(highlight => {
                   let details = highlight.closest('details');
                   while (details && el.contains(details)) {
@@ -15924,14 +16037,13 @@
           }
       }
   
-      // Class list minus search-* classes, normalised for comparison — used to
-      // tell "the type filter changed" apart from our own search-* mutations.
-      function classSetWithoutSearch(classString) {
-          return (classString || '')
-              .split(/\s+/)
-              .filter(cls => cls && !cls.startsWith('search-'))
-              .sort()
-              .join(' ');
+      // Whether a class string carries the type filter's class. The observer
+      // below reacts to that alone: search's own search-* writes would loop,
+      // and other classes on a card (a live update's `live-new`, the minimal
+      // theme's engine classes) change nothing the search reads — reacting
+      // to them re-ran the search un-quietly and scrolled a live page.
+      function isFilteredOut(classString) {
+          return /(^|\s)filtered-hidden(\s|$)/.test(classString || '');
       }
   
       // Re-index when filters change (for transcript pages)
@@ -15939,16 +16051,17 @@
           let isUpdatingFilters = false;
           const observer = new MutationObserver((mutations) => {
               // Only react to genuine filter changes on message elements —
-              // search's own search-hidden/search-match/search-context class
-              // writes must not re-trigger a search (feedback loop).
+              // `filtered-hidden` coming or going (isFilteredOut); search's own
+              // search-hidden/search-match/search-context class writes must
+              // not re-trigger a search (feedback loop).
               const hasFilterChange = mutations.some(mutation => {
                   if (mutation.type === 'attributes' && mutation.attributeName === 'class') {
                       const target = mutation.target;
                       if (!target.classList || !target.classList.contains('message')) {
                           return false;
                       }
-                      return classSetWithoutSearch(mutation.oldValue) !==
-                          classSetWithoutSearch(target.getAttribute('class'));
+                      return isFilteredOut(mutation.oldValue) !==
+                          isFilteredOut(target.getAttribute('class'));
                   }
                   return false;
               });
@@ -15957,7 +16070,7 @@
                   isUpdatingFilters = true;
                   setTimeout(() => {
                       buildSearchIndex();
-                      performSearch(searchState.query, { preserveCurrent: true });
+                      performSearch(searchState.query, { preserveCurrent: true, quiet: quietRefresh });
                       isUpdatingFilters = false;
                   }, 100);
               }
@@ -15971,6 +16084,25 @@
               subtree: true
           });
       }
+  
+      // A live update brings new cards — or, on a wholesale swap, a whole new
+      // #transcript — that the index has never seen and that carry none of
+      // the search's classes (transcript.html calls this once per update).
+      // Re-index and re-run the query quietly: the matches, classes and
+      // count follow the page, but nothing scrolls, unfolds or opens under
+      // the reader. `filtered`: the filter was just re-applied too, so the
+      // filter observer above is about to re-run the search — quietly as
+      // well.
+      let quietRefresh = false;
+      window.claudeLogRefreshSearch = function (filtered) {
+          if (!searchState.query || searchState.isIndexPage) return;
+          buildSearchIndex();
+          performSearch(searchState.query, { preserveCurrent: true, quiet: true });
+          if (filtered) {
+              quietRefresh = true;
+              setTimeout(() => { quietRefresh = false; }, 300);
+          }
+      };
   
       // Initialize when DOM is ready
       if (document.readyState === 'loading') {
@@ -17730,10 +17862,21 @@
       // Perform search. options.preserveCurrent keeps the current match instead
       // of resetting to the first match — used when re-running the same query
       // after an option/filter change so the view stays put instead of jumping
-      // back to match 1. Matching is by element identity: message cards are
-      // never recreated within a page load (re-search only re-queries the same
-      // DOM nodes), and data-uuid is NOT unique per card — cards split from one
-      // transcript entry (text + tool_use) share the entry's UUID.
+      // back to match 1. Matching is by element identity: an option or filter
+      // re-search only re-queries the same DOM nodes, and data-uuid is NOT
+      // unique per card — cards split from one transcript entry (text +
+      // tool_use) share the entry's UUID. A live update is the exception: it
+      // replaces cards (a patched card, or every card on a wholesale swap), so
+      // a current match that left the page is found again by its data-uuid
+      // and its position among the cards sharing it (cardKey).
+      function cardKey(el) {
+          const uuid = el.getAttribute('data-uuid');
+          if (!uuid) return '#' + el.id;
+          const root = el.closest('#transcript') || document;
+          const twins = Array.from(root.querySelectorAll(
+              '.message[data-uuid="' + ((window.CSS && CSS.escape) ? CSS.escape(uuid) : uuid) + '"]'));
+          return uuid + '/' + Math.max(0, twins.indexOf(el));
+      }
       let isSearching = false;
       function performSearch(query, options = {}) {
           // Prevent concurrent searches
@@ -17833,9 +17976,13 @@
   
           searchState.currentMatchIndex = searchState.matches.length > 0 ? 0 : -1;
           if (preserveElement && searchState.currentMatchIndex === 0) {
-              const preservedIndex = searchState.matches.findIndex(
+              let preservedIndex = searchState.matches.findIndex(
                   m => m.element === preserveElement
               );
+              if (preservedIndex < 0 && !preserveElement.isConnected) {
+                  const key = cardKey(preserveElement);
+                  preservedIndex = searchState.matches.findIndex(m => cardKey(m.element) === key);
+              }
               if (preservedIndex >= 0) {
                   searchState.currentMatchIndex = preservedIndex;
               }
@@ -17844,7 +17991,7 @@
           // On transcript pages, search acts as a filter: non-matching messages
           // are hidden, matches are revealed (unfolded) and highlighted.
           if (!searchState.isIndexPage) {
-              applyTranscriptSearchFilter();
+              applyTranscriptSearchFilter(options.quiet);
           }
   
           updateSearchUI();
@@ -17857,7 +18004,7 @@
           // Navigate to the current match — the first one for a fresh query,
           // or the preserved one after an option/filter re-search (the layout
           // may have shifted, so re-scrolling to it keeps it in view).
-          if (searchState.matches.length > 0 && !searchState.isIndexPage) {
+          if (searchState.matches.length > 0 && !searchState.isIndexPage && !options.quiet) {
               navigateToMatch(searchState.currentMatchIndex);
           }
   
@@ -17870,7 +18017,7 @@
       //   .search-context — ancestor of a match ("Show context" mode only)
       //   .search-hidden  — everything else (display: none)
       // Session headers are never touched so the session structure stays visible.
-      function applyTranscriptSearchFilter() {
+      function applyTranscriptSearchFilter(quiet) {
           const matched = new Set(searchState.matches.map(m => m.element));
   
           // Ancestors of matches: visible-but-dimmed when "Show context" is on
@@ -17893,7 +18040,7 @@
   
           // Unfold ancestors so every match is actually visible (matches inside
           // folded subtrees would otherwise stay hidden by the fold state).
-          if (window.claudeLogRevealMessage) {
+          if (window.claudeLogRevealMessage && !quiet) {
               matched.forEach(el => window.claudeLogRevealMessage(el));
           }
   
@@ -17901,7 +18048,7 @@
           // code, structured params) stays invisible even after the message
           // itself is revealed — open every details on the path from each
           // highlight up to its message card.
-          matched.forEach(el => {
+          if (!quiet) matched.forEach(el => {
               el.querySelectorAll('.search-highlight').forEach(highlight => {
                   let details = highlight.closest('details');
                   while (details && el.contains(details)) {
@@ -18313,14 +18460,13 @@
           }
       }
   
-      // Class list minus search-* classes, normalised for comparison — used to
-      // tell "the type filter changed" apart from our own search-* mutations.
-      function classSetWithoutSearch(classString) {
-          return (classString || '')
-              .split(/\s+/)
-              .filter(cls => cls && !cls.startsWith('search-'))
-              .sort()
-              .join(' ');
+      // Whether a class string carries the type filter's class. The observer
+      // below reacts to that alone: search's own search-* writes would loop,
+      // and other classes on a card (a live update's `live-new`, the minimal
+      // theme's engine classes) change nothing the search reads — reacting
+      // to them re-ran the search un-quietly and scrolled a live page.
+      function isFilteredOut(classString) {
+          return /(^|\s)filtered-hidden(\s|$)/.test(classString || '');
       }
   
       // Re-index when filters change (for transcript pages)
@@ -18328,16 +18474,17 @@
           let isUpdatingFilters = false;
           const observer = new MutationObserver((mutations) => {
               // Only react to genuine filter changes on message elements —
-              // search's own search-hidden/search-match/search-context class
-              // writes must not re-trigger a search (feedback loop).
+              // `filtered-hidden` coming or going (isFilteredOut); search's own
+              // search-hidden/search-match/search-context class writes must
+              // not re-trigger a search (feedback loop).
               const hasFilterChange = mutations.some(mutation => {
                   if (mutation.type === 'attributes' && mutation.attributeName === 'class') {
                       const target = mutation.target;
                       if (!target.classList || !target.classList.contains('message')) {
                           return false;
                       }
-                      return classSetWithoutSearch(mutation.oldValue) !==
-                          classSetWithoutSearch(target.getAttribute('class'));
+                      return isFilteredOut(mutation.oldValue) !==
+                          isFilteredOut(target.getAttribute('class'));
                   }
                   return false;
               });
@@ -18346,7 +18493,7 @@
                   isUpdatingFilters = true;
                   setTimeout(() => {
                       buildSearchIndex();
-                      performSearch(searchState.query, { preserveCurrent: true });
+                      performSearch(searchState.query, { preserveCurrent: true, quiet: quietRefresh });
                       isUpdatingFilters = false;
                   }, 100);
               }
@@ -18360,6 +18507,25 @@
               subtree: true
           });
       }
+  
+      // A live update brings new cards — or, on a wholesale swap, a whole new
+      // #transcript — that the index has never seen and that carry none of
+      // the search's classes (transcript.html calls this once per update).
+      // Re-index and re-run the query quietly: the matches, classes and
+      // count follow the page, but nothing scrolls, unfolds or opens under
+      // the reader. `filtered`: the filter was just re-applied too, so the
+      // filter observer above is about to re-run the search — quietly as
+      // well.
+      let quietRefresh = false;
+      window.claudeLogRefreshSearch = function (filtered) {
+          if (!searchState.query || searchState.isIndexPage) return;
+          buildSearchIndex();
+          performSearch(searchState.query, { preserveCurrent: true, quiet: true });
+          if (filtered) {
+              quietRefresh = true;
+              setTimeout(() => { quietRefresh = false; }, 300);
+          }
+      };
   
       // Initialize when DOM is ready
       if (document.readyState === 'loading') {
@@ -27835,6 +28001,35 @@
       </div></div>
   
       <script>
+          // ---- live updates keep the filter and the search -------------------
+          // A patched card, or a swapped-in #transcript, is the server's
+          // markup: no `filtered-hidden`, no search classes, and cards the
+          // search index has never seen. Re-apply both once per update (the
+          // rehydrate hooks run once per changed element), in a microtask
+          // after the update's synchronous work: after the timeline's rebuild
+          // (registered earlier, in timeline.html) and before the minimal
+          // theme's relayout (registered later, in minimal_dag.js), which then
+          // lays out the filtered page. The search refresh is quiet: nothing
+          // scrolls, unfolds or opens under the reader.
+          (function () {
+              let queued = false;
+              function refresh() {
+                  queued = false;
+                  const filtered = !!window.claudeLogApplyFilter
+                      && document.querySelector('.filter-toggle:not(.active)') !== null;
+                  if (filtered) window.claudeLogApplyFilter();
+                  if (window.claudeLogRefreshSearch) window.claudeLogRefreshSearch(filtered);
+                  // The timeline reads both classes off the cards.
+                  if (window.applyTimelineSearchFilter) window.applyTimelineSearchFilter();
+              }
+              window.claudeLogOnRehydrate(function () {
+                  if (queued) return;
+                  queued = true;
+                  if (window.queueMicrotask) window.queueMicrotask(refresh);
+                  else setTimeout(refresh, 0);
+              });
+          })();
+  
           document.addEventListener('DOMContentLoaded', function () {
               const toggleButton = document.getElementById('toggleDetails');
               const timelineButton = document.getElementById('toggleTimeline');
@@ -29153,8 +29348,8 @@
   
               // Apply all filters on page load
               applyFilter();
-              // Minimal theme (P8): minimal.js re-applies the filter to the
-              // markup a live update brings (it carries no filtered-hidden).
+              // The live-update refresh above re-applies the filter to the
+              // markup an update brings (it carries no filtered-hidden).
               window.claudeLogApplyFilter = applyFilter;
   
               // Fold/unfold functionality with horizontal fold bars.
@@ -29850,10 +30045,21 @@
       // Perform search. options.preserveCurrent keeps the current match instead
       // of resetting to the first match — used when re-running the same query
       // after an option/filter change so the view stays put instead of jumping
-      // back to match 1. Matching is by element identity: message cards are
-      // never recreated within a page load (re-search only re-queries the same
-      // DOM nodes), and data-uuid is NOT unique per card — cards split from one
-      // transcript entry (text + tool_use) share the entry's UUID.
+      // back to match 1. Matching is by element identity: an option or filter
+      // re-search only re-queries the same DOM nodes, and data-uuid is NOT
+      // unique per card — cards split from one transcript entry (text +
+      // tool_use) share the entry's UUID. A live update is the exception: it
+      // replaces cards (a patched card, or every card on a wholesale swap), so
+      // a current match that left the page is found again by its data-uuid
+      // and its position among the cards sharing it (cardKey).
+      function cardKey(el) {
+          const uuid = el.getAttribute('data-uuid');
+          if (!uuid) return '#' + el.id;
+          const root = el.closest('#transcript') || document;
+          const twins = Array.from(root.querySelectorAll(
+              '.message[data-uuid="' + ((window.CSS && CSS.escape) ? CSS.escape(uuid) : uuid) + '"]'));
+          return uuid + '/' + Math.max(0, twins.indexOf(el));
+      }
       let isSearching = false;
       function performSearch(query, options = {}) {
           // Prevent concurrent searches
@@ -29953,9 +30159,13 @@
   
           searchState.currentMatchIndex = searchState.matches.length > 0 ? 0 : -1;
           if (preserveElement && searchState.currentMatchIndex === 0) {
-              const preservedIndex = searchState.matches.findIndex(
+              let preservedIndex = searchState.matches.findIndex(
                   m => m.element === preserveElement
               );
+              if (preservedIndex < 0 && !preserveElement.isConnected) {
+                  const key = cardKey(preserveElement);
+                  preservedIndex = searchState.matches.findIndex(m => cardKey(m.element) === key);
+              }
               if (preservedIndex >= 0) {
                   searchState.currentMatchIndex = preservedIndex;
               }
@@ -30433,14 +30643,13 @@
           }
       }
   
-      // Class list minus search-* classes, normalised for comparison — used to
-      // tell "the type filter changed" apart from our own search-* mutations.
-      function classSetWithoutSearch(classString) {
-          return (classString || '')
-              .split(/\s+/)
-              .filter(cls => cls && !cls.startsWith('search-'))
-              .sort()
-              .join(' ');
+      // Whether a class string carries the type filter's class. The observer
+      // below reacts to that alone: search's own search-* writes would loop,
+      // and other classes on a card (a live update's `live-new`, the minimal
+      // theme's engine classes) change nothing the search reads — reacting
+      // to them re-ran the search un-quietly and scrolled a live page.
+      function isFilteredOut(classString) {
+          return /(^|\s)filtered-hidden(\s|$)/.test(classString || '');
       }
   
       // Re-index when filters change (for transcript pages)
@@ -30448,16 +30657,17 @@
           let isUpdatingFilters = false;
           const observer = new MutationObserver((mutations) => {
               // Only react to genuine filter changes on message elements —
-              // search's own search-hidden/search-match/search-context class
-              // writes must not re-trigger a search (feedback loop).
+              // `filtered-hidden` coming or going (isFilteredOut); search's own
+              // search-hidden/search-match/search-context class writes must
+              // not re-trigger a search (feedback loop).
               const hasFilterChange = mutations.some(mutation => {
                   if (mutation.type === 'attributes' && mutation.attributeName === 'class') {
                       const target = mutation.target;
                       if (!target.classList || !target.classList.contains('message')) {
                           return false;
                       }
-                      return classSetWithoutSearch(mutation.oldValue) !==
-                          classSetWithoutSearch(target.getAttribute('class'));
+                      return isFilteredOut(mutation.oldValue) !==
+                          isFilteredOut(target.getAttribute('class'));
                   }
                   return false;
               });
@@ -30481,13 +30691,14 @@
           });
       }
   
-      // Minimal theme (P8): a live update brings new cards — or, on a
-      // wholesale swap, a whole new #transcript — that the index has never
-      // seen and that carry none of the search's classes. Re-index and
-      // re-run the query quietly: the matches, classes and count follow the
-      // page, but nothing scrolls, unfolds or opens under the reader.
-      // `filtered`: the filter was just re-applied too, so the filter
-      // observer above is about to re-run the search — quietly as well.
+      // A live update brings new cards — or, on a wholesale swap, a whole new
+      // #transcript — that the index has never seen and that carry none of
+      // the search's classes (transcript.html calls this once per update).
+      // Re-index and re-run the query quietly: the matches, classes and
+      // count follow the page, but nothing scrolls, unfolds or opens under
+      // the reader. `filtered`: the filter was just re-applied too, so the
+      // filter observer above is about to re-run the search — quietly as
+      // well.
       let quietRefresh = false;
       window.claudeLogRefreshSearch = function (filtered) {
           if (!searchState.query || searchState.isIndexPage) return;
@@ -30931,34 +31142,6 @@
               });
               focusableFoldBars(document.getElementById('transcript'));
               if (window.claudeLogOnRehydrate) window.claudeLogOnRehydrate(focusableFoldBars);
-  
-              // ---- live updates keep the filter and the search (P8) ----------
-              // A patched card, or a swapped-in #transcript, is the server's
-              // markup: no `filtered-hidden`, no search classes, and cards the
-              // search index has never seen. Re-apply both once per update
-              // (the hooks run once per changed element), after the update's
-              // other hooks; the DAG engine's observer relayouts on the class
-              // changes. The search refresh is quiet: nothing scrolls, unfolds
-              // or opens. (Classic pages keep their old behaviour: their bytes
-              // may not change.)
-              let refreshQueued = false;
-              function refreshFilterAndSearch() {
-                  refreshQueued = false;
-                  const filtered = !!window.claudeLogApplyFilter
-                      && document.querySelector('.filter-toggle:not(.active)') !== null;
-                  if (filtered) window.claudeLogApplyFilter();
-                  if (window.claudeLogRefreshSearch) window.claudeLogRefreshSearch(filtered);
-                  // The timeline reads both classes off the cards.
-                  if (window.applyTimelineSearchFilter) window.applyTimelineSearchFilter();
-              }
-              if (window.claudeLogOnRehydrate) {
-                  window.claudeLogOnRehydrate(function () {
-                      if (refreshQueued) return;
-                      refreshQueued = true;
-                      if (window.queueMicrotask) window.queueMicrotask(refreshFilterAndSearch);
-                      else setTimeout(refreshFilterAndSearch, 0);
-                  });
-              }
   
               // ---- overflow menu ---------------------------------------------
               // A <details>: closes on a click outside it or on Escape. Clicks
@@ -42413,6 +42596,35 @@
       </div></div>
   
       <script>
+          // ---- live updates keep the filter and the search -------------------
+          // A patched card, or a swapped-in #transcript, is the server's
+          // markup: no `filtered-hidden`, no search classes, and cards the
+          // search index has never seen. Re-apply both once per update (the
+          // rehydrate hooks run once per changed element), in a microtask
+          // after the update's synchronous work: after the timeline's rebuild
+          // (registered earlier, in timeline.html) and before the minimal
+          // theme's relayout (registered later, in minimal_dag.js), which then
+          // lays out the filtered page. The search refresh is quiet: nothing
+          // scrolls, unfolds or opens under the reader.
+          (function () {
+              let queued = false;
+              function refresh() {
+                  queued = false;
+                  const filtered = !!window.claudeLogApplyFilter
+                      && document.querySelector('.filter-toggle:not(.active)') !== null;
+                  if (filtered) window.claudeLogApplyFilter();
+                  if (window.claudeLogRefreshSearch) window.claudeLogRefreshSearch(filtered);
+                  // The timeline reads both classes off the cards.
+                  if (window.applyTimelineSearchFilter) window.applyTimelineSearchFilter();
+              }
+              window.claudeLogOnRehydrate(function () {
+                  if (queued) return;
+                  queued = true;
+                  if (window.queueMicrotask) window.queueMicrotask(refresh);
+                  else setTimeout(refresh, 0);
+              });
+          })();
+  
           document.addEventListener('DOMContentLoaded', function () {
               const toggleButton = document.getElementById('toggleDetails');
               const timelineButton = document.getElementById('toggleTimeline');
@@ -43731,8 +43943,8 @@
   
               // Apply all filters on page load
               applyFilter();
-              // Minimal theme (P8): minimal.js re-applies the filter to the
-              // markup a live update brings (it carries no filtered-hidden).
+              // The live-update refresh above re-applies the filter to the
+              // markup an update brings (it carries no filtered-hidden).
               window.claudeLogApplyFilter = applyFilter;
   
               // Fold/unfold functionality with horizontal fold bars.
@@ -44428,10 +44640,21 @@
       // Perform search. options.preserveCurrent keeps the current match instead
       // of resetting to the first match — used when re-running the same query
       // after an option/filter change so the view stays put instead of jumping
-      // back to match 1. Matching is by element identity: message cards are
-      // never recreated within a page load (re-search only re-queries the same
-      // DOM nodes), and data-uuid is NOT unique per card — cards split from one
-      // transcript entry (text + tool_use) share the entry's UUID.
+      // back to match 1. Matching is by element identity: an option or filter
+      // re-search only re-queries the same DOM nodes, and data-uuid is NOT
+      // unique per card — cards split from one transcript entry (text +
+      // tool_use) share the entry's UUID. A live update is the exception: it
+      // replaces cards (a patched card, or every card on a wholesale swap), so
+      // a current match that left the page is found again by its data-uuid
+      // and its position among the cards sharing it (cardKey).
+      function cardKey(el) {
+          const uuid = el.getAttribute('data-uuid');
+          if (!uuid) return '#' + el.id;
+          const root = el.closest('#transcript') || document;
+          const twins = Array.from(root.querySelectorAll(
+              '.message[data-uuid="' + ((window.CSS && CSS.escape) ? CSS.escape(uuid) : uuid) + '"]'));
+          return uuid + '/' + Math.max(0, twins.indexOf(el));
+      }
       let isSearching = false;
       function performSearch(query, options = {}) {
           // Prevent concurrent searches
@@ -44531,9 +44754,13 @@
   
           searchState.currentMatchIndex = searchState.matches.length > 0 ? 0 : -1;
           if (preserveElement && searchState.currentMatchIndex === 0) {
-              const preservedIndex = searchState.matches.findIndex(
+              let preservedIndex = searchState.matches.findIndex(
                   m => m.element === preserveElement
               );
+              if (preservedIndex < 0 && !preserveElement.isConnected) {
+                  const key = cardKey(preserveElement);
+                  preservedIndex = searchState.matches.findIndex(m => cardKey(m.element) === key);
+              }
               if (preservedIndex >= 0) {
                   searchState.currentMatchIndex = preservedIndex;
               }
@@ -45011,14 +45238,13 @@
           }
       }
   
-      // Class list minus search-* classes, normalised for comparison — used to
-      // tell "the type filter changed" apart from our own search-* mutations.
-      function classSetWithoutSearch(classString) {
-          return (classString || '')
-              .split(/\s+/)
-              .filter(cls => cls && !cls.startsWith('search-'))
-              .sort()
-              .join(' ');
+      // Whether a class string carries the type filter's class. The observer
+      // below reacts to that alone: search's own search-* writes would loop,
+      // and other classes on a card (a live update's `live-new`, the minimal
+      // theme's engine classes) change nothing the search reads — reacting
+      // to them re-ran the search un-quietly and scrolled a live page.
+      function isFilteredOut(classString) {
+          return /(^|\s)filtered-hidden(\s|$)/.test(classString || '');
       }
   
       // Re-index when filters change (for transcript pages)
@@ -45026,16 +45252,17 @@
           let isUpdatingFilters = false;
           const observer = new MutationObserver((mutations) => {
               // Only react to genuine filter changes on message elements —
-              // search's own search-hidden/search-match/search-context class
-              // writes must not re-trigger a search (feedback loop).
+              // `filtered-hidden` coming or going (isFilteredOut); search's own
+              // search-hidden/search-match/search-context class writes must
+              // not re-trigger a search (feedback loop).
               const hasFilterChange = mutations.some(mutation => {
                   if (mutation.type === 'attributes' && mutation.attributeName === 'class') {
                       const target = mutation.target;
                       if (!target.classList || !target.classList.contains('message')) {
                           return false;
                       }
-                      return classSetWithoutSearch(mutation.oldValue) !==
-                          classSetWithoutSearch(target.getAttribute('class'));
+                      return isFilteredOut(mutation.oldValue) !==
+                          isFilteredOut(target.getAttribute('class'));
                   }
                   return false;
               });
@@ -45059,13 +45286,14 @@
           });
       }
   
-      // Minimal theme (P8): a live update brings new cards — or, on a
-      // wholesale swap, a whole new #transcript — that the index has never
-      // seen and that carry none of the search's classes. Re-index and
-      // re-run the query quietly: the matches, classes and count follow the
-      // page, but nothing scrolls, unfolds or opens under the reader.
-      // `filtered`: the filter was just re-applied too, so the filter
-      // observer above is about to re-run the search — quietly as well.
+      // A live update brings new cards — or, on a wholesale swap, a whole new
+      // #transcript — that the index has never seen and that carry none of
+      // the search's classes (transcript.html calls this once per update).
+      // Re-index and re-run the query quietly: the matches, classes and
+      // count follow the page, but nothing scrolls, unfolds or opens under
+      // the reader. `filtered`: the filter was just re-applied too, so the
+      // filter observer above is about to re-run the search — quietly as
+      // well.
       let quietRefresh = false;
       window.claudeLogRefreshSearch = function (filtered) {
           if (!searchState.query || searchState.isIndexPage) return;
@@ -45509,34 +45737,6 @@
               });
               focusableFoldBars(document.getElementById('transcript'));
               if (window.claudeLogOnRehydrate) window.claudeLogOnRehydrate(focusableFoldBars);
-  
-              // ---- live updates keep the filter and the search (P8) ----------
-              // A patched card, or a swapped-in #transcript, is the server's
-              // markup: no `filtered-hidden`, no search classes, and cards the
-              // search index has never seen. Re-apply both once per update
-              // (the hooks run once per changed element), after the update's
-              // other hooks; the DAG engine's observer relayouts on the class
-              // changes. The search refresh is quiet: nothing scrolls, unfolds
-              // or opens. (Classic pages keep their old behaviour: their bytes
-              // may not change.)
-              let refreshQueued = false;
-              function refreshFilterAndSearch() {
-                  refreshQueued = false;
-                  const filtered = !!window.claudeLogApplyFilter
-                      && document.querySelector('.filter-toggle:not(.active)') !== null;
-                  if (filtered) window.claudeLogApplyFilter();
-                  if (window.claudeLogRefreshSearch) window.claudeLogRefreshSearch(filtered);
-                  // The timeline reads both classes off the cards.
-                  if (window.applyTimelineSearchFilter) window.applyTimelineSearchFilter();
-              }
-              if (window.claudeLogOnRehydrate) {
-                  window.claudeLogOnRehydrate(function () {
-                      if (refreshQueued) return;
-                      refreshQueued = true;
-                      if (window.queueMicrotask) window.queueMicrotask(refreshFilterAndSearch);
-                      else setTimeout(refreshFilterAndSearch, 0);
-                  });
-              }
   
               // ---- overflow menu ---------------------------------------------
               // A <details>: closes on a click outside it or on Escape. Clicks
@@ -56540,6 +56740,35 @@
       </div></div>
   
       <script>
+          // ---- live updates keep the filter and the search -------------------
+          // A patched card, or a swapped-in #transcript, is the server's
+          // markup: no `filtered-hidden`, no search classes, and cards the
+          // search index has never seen. Re-apply both once per update (the
+          // rehydrate hooks run once per changed element), in a microtask
+          // after the update's synchronous work: after the timeline's rebuild
+          // (registered earlier, in timeline.html) and before the minimal
+          // theme's relayout (registered later, in minimal_dag.js), which then
+          // lays out the filtered page. The search refresh is quiet: nothing
+          // scrolls, unfolds or opens under the reader.
+          (function () {
+              let queued = false;
+              function refresh() {
+                  queued = false;
+                  const filtered = !!window.claudeLogApplyFilter
+                      && document.querySelector('.filter-toggle:not(.active)') !== null;
+                  if (filtered) window.claudeLogApplyFilter();
+                  if (window.claudeLogRefreshSearch) window.claudeLogRefreshSearch(filtered);
+                  // The timeline reads both classes off the cards.
+                  if (window.applyTimelineSearchFilter) window.applyTimelineSearchFilter();
+              }
+              window.claudeLogOnRehydrate(function () {
+                  if (queued) return;
+                  queued = true;
+                  if (window.queueMicrotask) window.queueMicrotask(refresh);
+                  else setTimeout(refresh, 0);
+              });
+          })();
+  
           document.addEventListener('DOMContentLoaded', function () {
               const toggleButton = document.getElementById('toggleDetails');
               const timelineButton = document.getElementById('toggleTimeline');
@@ -57858,8 +58087,8 @@
   
               // Apply all filters on page load
               applyFilter();
-              // Minimal theme (P8): minimal.js re-applies the filter to the
-              // markup a live update brings (it carries no filtered-hidden).
+              // The live-update refresh above re-applies the filter to the
+              // markup an update brings (it carries no filtered-hidden).
               window.claudeLogApplyFilter = applyFilter;
   
               // Fold/unfold functionality with horizontal fold bars.
@@ -58555,10 +58784,21 @@
       // Perform search. options.preserveCurrent keeps the current match instead
       // of resetting to the first match — used when re-running the same query
       // after an option/filter change so the view stays put instead of jumping
-      // back to match 1. Matching is by element identity: message cards are
-      // never recreated within a page load (re-search only re-queries the same
-      // DOM nodes), and data-uuid is NOT unique per card — cards split from one
-      // transcript entry (text + tool_use) share the entry's UUID.
+      // back to match 1. Matching is by element identity: an option or filter
+      // re-search only re-queries the same DOM nodes, and data-uuid is NOT
+      // unique per card — cards split from one transcript entry (text +
+      // tool_use) share the entry's UUID. A live update is the exception: it
+      // replaces cards (a patched card, or every card on a wholesale swap), so
+      // a current match that left the page is found again by its data-uuid
+      // and its position among the cards sharing it (cardKey).
+      function cardKey(el) {
+          const uuid = el.getAttribute('data-uuid');
+          if (!uuid) return '#' + el.id;
+          const root = el.closest('#transcript') || document;
+          const twins = Array.from(root.querySelectorAll(
+              '.message[data-uuid="' + ((window.CSS && CSS.escape) ? CSS.escape(uuid) : uuid) + '"]'));
+          return uuid + '/' + Math.max(0, twins.indexOf(el));
+      }
       let isSearching = false;
       function performSearch(query, options = {}) {
           // Prevent concurrent searches
@@ -58658,9 +58898,13 @@
   
           searchState.currentMatchIndex = searchState.matches.length > 0 ? 0 : -1;
           if (preserveElement && searchState.currentMatchIndex === 0) {
-              const preservedIndex = searchState.matches.findIndex(
+              let preservedIndex = searchState.matches.findIndex(
                   m => m.element === preserveElement
               );
+              if (preservedIndex < 0 && !preserveElement.isConnected) {
+                  const key = cardKey(preserveElement);
+                  preservedIndex = searchState.matches.findIndex(m => cardKey(m.element) === key);
+              }
               if (preservedIndex >= 0) {
                   searchState.currentMatchIndex = preservedIndex;
               }
@@ -59138,14 +59382,13 @@
           }
       }
   
-      // Class list minus search-* classes, normalised for comparison — used to
-      // tell "the type filter changed" apart from our own search-* mutations.
-      function classSetWithoutSearch(classString) {
-          return (classString || '')
-              .split(/\s+/)
-              .filter(cls => cls && !cls.startsWith('search-'))
-              .sort()
-              .join(' ');
+      // Whether a class string carries the type filter's class. The observer
+      // below reacts to that alone: search's own search-* writes would loop,
+      // and other classes on a card (a live update's `live-new`, the minimal
+      // theme's engine classes) change nothing the search reads — reacting
+      // to them re-ran the search un-quietly and scrolled a live page.
+      function isFilteredOut(classString) {
+          return /(^|\s)filtered-hidden(\s|$)/.test(classString || '');
       }
   
       // Re-index when filters change (for transcript pages)
@@ -59153,16 +59396,17 @@
           let isUpdatingFilters = false;
           const observer = new MutationObserver((mutations) => {
               // Only react to genuine filter changes on message elements —
-              // search's own search-hidden/search-match/search-context class
-              // writes must not re-trigger a search (feedback loop).
+              // `filtered-hidden` coming or going (isFilteredOut); search's own
+              // search-hidden/search-match/search-context class writes must
+              // not re-trigger a search (feedback loop).
               const hasFilterChange = mutations.some(mutation => {
                   if (mutation.type === 'attributes' && mutation.attributeName === 'class') {
                       const target = mutation.target;
                       if (!target.classList || !target.classList.contains('message')) {
                           return false;
                       }
-                      return classSetWithoutSearch(mutation.oldValue) !==
-                          classSetWithoutSearch(target.getAttribute('class'));
+                      return isFilteredOut(mutation.oldValue) !==
+                          isFilteredOut(target.getAttribute('class'));
                   }
                   return false;
               });
@@ -59186,13 +59430,14 @@
           });
       }
   
-      // Minimal theme (P8): a live update brings new cards — or, on a
-      // wholesale swap, a whole new #transcript — that the index has never
-      // seen and that carry none of the search's classes. Re-index and
-      // re-run the query quietly: the matches, classes and count follow the
-      // page, but nothing scrolls, unfolds or opens under the reader.
-      // `filtered`: the filter was just re-applied too, so the filter
-      // observer above is about to re-run the search — quietly as well.
+      // A live update brings new cards — or, on a wholesale swap, a whole new
+      // #transcript — that the index has never seen and that carry none of
+      // the search's classes (transcript.html calls this once per update).
+      // Re-index and re-run the query quietly: the matches, classes and
+      // count follow the page, but nothing scrolls, unfolds or opens under
+      // the reader. `filtered`: the filter was just re-applied too, so the
+      // filter observer above is about to re-run the search — quietly as
+      // well.
       let quietRefresh = false;
       window.claudeLogRefreshSearch = function (filtered) {
           if (!searchState.query || searchState.isIndexPage) return;
@@ -59636,34 +59881,6 @@
               });
               focusableFoldBars(document.getElementById('transcript'));
               if (window.claudeLogOnRehydrate) window.claudeLogOnRehydrate(focusableFoldBars);
-  
-              // ---- live updates keep the filter and the search (P8) ----------
-              // A patched card, or a swapped-in #transcript, is the server's
-              // markup: no `filtered-hidden`, no search classes, and cards the
-              // search index has never seen. Re-apply both once per update
-              // (the hooks run once per changed element), after the update's
-              // other hooks; the DAG engine's observer relayouts on the class
-              // changes. The search refresh is quiet: nothing scrolls, unfolds
-              // or opens. (Classic pages keep their old behaviour: their bytes
-              // may not change.)
-              let refreshQueued = false;
-              function refreshFilterAndSearch() {
-                  refreshQueued = false;
-                  const filtered = !!window.claudeLogApplyFilter
-                      && document.querySelector('.filter-toggle:not(.active)') !== null;
-                  if (filtered) window.claudeLogApplyFilter();
-                  if (window.claudeLogRefreshSearch) window.claudeLogRefreshSearch(filtered);
-                  // The timeline reads both classes off the cards.
-                  if (window.applyTimelineSearchFilter) window.applyTimelineSearchFilter();
-              }
-              if (window.claudeLogOnRehydrate) {
-                  window.claudeLogOnRehydrate(function () {
-                      if (refreshQueued) return;
-                      refreshQueued = true;
-                      if (window.queueMicrotask) window.queueMicrotask(refreshFilterAndSearch);
-                      else setTimeout(refreshFilterAndSearch, 0);
-                  });
-              }
   
               // ---- overflow menu ---------------------------------------------
               // A <details>: closes on a click outside it or on Escape. Clicks
@@ -66908,6 +67125,35 @@
       <a class="scroll-top floating-btn" title="Scroll to top" href="#title">🔝</a>
   
       <script>
+          // ---- live updates keep the filter and the search -------------------
+          // A patched card, or a swapped-in #transcript, is the server's
+          // markup: no `filtered-hidden`, no search classes, and cards the
+          // search index has never seen. Re-apply both once per update (the
+          // rehydrate hooks run once per changed element), in a microtask
+          // after the update's synchronous work: after the timeline's rebuild
+          // (registered earlier, in timeline.html) and before the minimal
+          // theme's relayout (registered later, in minimal_dag.js), which then
+          // lays out the filtered page. The search refresh is quiet: nothing
+          // scrolls, unfolds or opens under the reader.
+          (function () {
+              let queued = false;
+              function refresh() {
+                  queued = false;
+                  const filtered = !!window.claudeLogApplyFilter
+                      && document.querySelector('.filter-toggle:not(.active)') !== null;
+                  if (filtered) window.claudeLogApplyFilter();
+                  if (window.claudeLogRefreshSearch) window.claudeLogRefreshSearch(filtered);
+                  // The timeline reads both classes off the cards.
+                  if (window.applyTimelineSearchFilter) window.applyTimelineSearchFilter();
+              }
+              window.claudeLogOnRehydrate(function () {
+                  if (queued) return;
+                  queued = true;
+                  if (window.queueMicrotask) window.queueMicrotask(refresh);
+                  else setTimeout(refresh, 0);
+              });
+          })();
+  
           document.addEventListener('DOMContentLoaded', function () {
               const toggleButton = document.getElementById('toggleDetails');
               const timelineButton = document.getElementById('toggleTimeline');
@@ -68226,6 +68472,9 @@
   
               // Apply all filters on page load
               applyFilter();
+              // The live-update refresh above re-applies the filter to the
+              // markup an update brings (it carries no filtered-hidden).
+              window.claudeLogApplyFilter = applyFilter;
   
               // Fold/unfold functionality with horizontal fold bars.
               //
@@ -68907,10 +69156,21 @@
       // Perform search. options.preserveCurrent keeps the current match instead
       // of resetting to the first match — used when re-running the same query
       // after an option/filter change so the view stays put instead of jumping
-      // back to match 1. Matching is by element identity: message cards are
-      // never recreated within a page load (re-search only re-queries the same
-      // DOM nodes), and data-uuid is NOT unique per card — cards split from one
-      // transcript entry (text + tool_use) share the entry's UUID.
+      // back to match 1. Matching is by element identity: an option or filter
+      // re-search only re-queries the same DOM nodes, and data-uuid is NOT
+      // unique per card — cards split from one transcript entry (text +
+      // tool_use) share the entry's UUID. A live update is the exception: it
+      // replaces cards (a patched card, or every card on a wholesale swap), so
+      // a current match that left the page is found again by its data-uuid
+      // and its position among the cards sharing it (cardKey).
+      function cardKey(el) {
+          const uuid = el.getAttribute('data-uuid');
+          if (!uuid) return '#' + el.id;
+          const root = el.closest('#transcript') || document;
+          const twins = Array.from(root.querySelectorAll(
+              '.message[data-uuid="' + ((window.CSS && CSS.escape) ? CSS.escape(uuid) : uuid) + '"]'));
+          return uuid + '/' + Math.max(0, twins.indexOf(el));
+      }
       let isSearching = false;
       function performSearch(query, options = {}) {
           // Prevent concurrent searches
@@ -69010,9 +69270,13 @@
   
           searchState.currentMatchIndex = searchState.matches.length > 0 ? 0 : -1;
           if (preserveElement && searchState.currentMatchIndex === 0) {
-              const preservedIndex = searchState.matches.findIndex(
+              let preservedIndex = searchState.matches.findIndex(
                   m => m.element === preserveElement
               );
+              if (preservedIndex < 0 && !preserveElement.isConnected) {
+                  const key = cardKey(preserveElement);
+                  preservedIndex = searchState.matches.findIndex(m => cardKey(m.element) === key);
+              }
               if (preservedIndex >= 0) {
                   searchState.currentMatchIndex = preservedIndex;
               }
@@ -69021,7 +69285,7 @@
           // On transcript pages, search acts as a filter: non-matching messages
           // are hidden, matches are revealed (unfolded) and highlighted.
           if (!searchState.isIndexPage) {
-              applyTranscriptSearchFilter();
+              applyTranscriptSearchFilter(options.quiet);
           }
   
           updateSearchUI();
@@ -69034,7 +69298,7 @@
           // Navigate to the current match — the first one for a fresh query,
           // or the preserved one after an option/filter re-search (the layout
           // may have shifted, so re-scrolling to it keeps it in view).
-          if (searchState.matches.length > 0 && !searchState.isIndexPage) {
+          if (searchState.matches.length > 0 && !searchState.isIndexPage && !options.quiet) {
               navigateToMatch(searchState.currentMatchIndex);
           }
   
@@ -69047,7 +69311,7 @@
       //   .search-context — ancestor of a match ("Show context" mode only)
       //   .search-hidden  — everything else (display: none)
       // Session headers are never touched so the session structure stays visible.
-      function applyTranscriptSearchFilter() {
+      function applyTranscriptSearchFilter(quiet) {
           const matched = new Set(searchState.matches.map(m => m.element));
   
           // Ancestors of matches: visible-but-dimmed when "Show context" is on
@@ -69070,7 +69334,7 @@
   
           // Unfold ancestors so every match is actually visible (matches inside
           // folded subtrees would otherwise stay hidden by the fold state).
-          if (window.claudeLogRevealMessage) {
+          if (window.claudeLogRevealMessage && !quiet) {
               matched.forEach(el => window.claudeLogRevealMessage(el));
           }
   
@@ -69078,7 +69342,7 @@
           // code, structured params) stays invisible even after the message
           // itself is revealed — open every details on the path from each
           // highlight up to its message card.
-          matched.forEach(el => {
+          if (!quiet) matched.forEach(el => {
               el.querySelectorAll('.search-highlight').forEach(highlight => {
                   let details = highlight.closest('details');
                   while (details && el.contains(details)) {
@@ -69490,14 +69754,13 @@
           }
       }
   
-      // Class list minus search-* classes, normalised for comparison — used to
-      // tell "the type filter changed" apart from our own search-* mutations.
-      function classSetWithoutSearch(classString) {
-          return (classString || '')
-              .split(/\s+/)
-              .filter(cls => cls && !cls.startsWith('search-'))
-              .sort()
-              .join(' ');
+      // Whether a class string carries the type filter's class. The observer
+      // below reacts to that alone: search's own search-* writes would loop,
+      // and other classes on a card (a live update's `live-new`, the minimal
+      // theme's engine classes) change nothing the search reads — reacting
+      // to them re-ran the search un-quietly and scrolled a live page.
+      function isFilteredOut(classString) {
+          return /(^|\s)filtered-hidden(\s|$)/.test(classString || '');
       }
   
       // Re-index when filters change (for transcript pages)
@@ -69505,16 +69768,17 @@
           let isUpdatingFilters = false;
           const observer = new MutationObserver((mutations) => {
               // Only react to genuine filter changes on message elements —
-              // search's own search-hidden/search-match/search-context class
-              // writes must not re-trigger a search (feedback loop).
+              // `filtered-hidden` coming or going (isFilteredOut); search's own
+              // search-hidden/search-match/search-context class writes must
+              // not re-trigger a search (feedback loop).
               const hasFilterChange = mutations.some(mutation => {
                   if (mutation.type === 'attributes' && mutation.attributeName === 'class') {
                       const target = mutation.target;
                       if (!target.classList || !target.classList.contains('message')) {
                           return false;
                       }
-                      return classSetWithoutSearch(mutation.oldValue) !==
-                          classSetWithoutSearch(target.getAttribute('class'));
+                      return isFilteredOut(mutation.oldValue) !==
+                          isFilteredOut(target.getAttribute('class'));
                   }
                   return false;
               });
@@ -69523,7 +69787,7 @@
                   isUpdatingFilters = true;
                   setTimeout(() => {
                       buildSearchIndex();
-                      performSearch(searchState.query, { preserveCurrent: true });
+                      performSearch(searchState.query, { preserveCurrent: true, quiet: quietRefresh });
                       isUpdatingFilters = false;
                   }, 100);
               }
@@ -69537,6 +69801,25 @@
               subtree: true
           });
       }
+  
+      // A live update brings new cards — or, on a wholesale swap, a whole new
+      // #transcript — that the index has never seen and that carry none of
+      // the search's classes (transcript.html calls this once per update).
+      // Re-index and re-run the query quietly: the matches, classes and
+      // count follow the page, but nothing scrolls, unfolds or opens under
+      // the reader. `filtered`: the filter was just re-applied too, so the
+      // filter observer above is about to re-run the search — quietly as
+      // well.
+      let quietRefresh = false;
+      window.claudeLogRefreshSearch = function (filtered) {
+          if (!searchState.query || searchState.isIndexPage) return;
+          buildSearchIndex();
+          performSearch(searchState.query, { preserveCurrent: true, quiet: true });
+          if (filtered) {
+              quietRefresh = true;
+              setTimeout(() => { quietRefresh = false; }, 300);
+          }
+      };
   
       // Initialize when DOM is ready
       if (document.readyState === 'loading') {
@@ -75351,6 +75634,35 @@
       <a class="scroll-top floating-btn" title="Scroll to top" href="#title">🔝</a>
   
       <script>
+          // ---- live updates keep the filter and the search -------------------
+          // A patched card, or a swapped-in #transcript, is the server's
+          // markup: no `filtered-hidden`, no search classes, and cards the
+          // search index has never seen. Re-apply both once per update (the
+          // rehydrate hooks run once per changed element), in a microtask
+          // after the update's synchronous work: after the timeline's rebuild
+          // (registered earlier, in timeline.html) and before the minimal
+          // theme's relayout (registered later, in minimal_dag.js), which then
+          // lays out the filtered page. The search refresh is quiet: nothing
+          // scrolls, unfolds or opens under the reader.
+          (function () {
+              let queued = false;
+              function refresh() {
+                  queued = false;
+                  const filtered = !!window.claudeLogApplyFilter
+                      && document.querySelector('.filter-toggle:not(.active)') !== null;
+                  if (filtered) window.claudeLogApplyFilter();
+                  if (window.claudeLogRefreshSearch) window.claudeLogRefreshSearch(filtered);
+                  // The timeline reads both classes off the cards.
+                  if (window.applyTimelineSearchFilter) window.applyTimelineSearchFilter();
+              }
+              window.claudeLogOnRehydrate(function () {
+                  if (queued) return;
+                  queued = true;
+                  if (window.queueMicrotask) window.queueMicrotask(refresh);
+                  else setTimeout(refresh, 0);
+              });
+          })();
+  
           document.addEventListener('DOMContentLoaded', function () {
               const toggleButton = document.getElementById('toggleDetails');
               const timelineButton = document.getElementById('toggleTimeline');
@@ -76669,6 +76981,9 @@
   
               // Apply all filters on page load
               applyFilter();
+              // The live-update refresh above re-applies the filter to the
+              // markup an update brings (it carries no filtered-hidden).
+              window.claudeLogApplyFilter = applyFilter;
   
               // Fold/unfold functionality with horizontal fold bars.
               //
@@ -77350,10 +77665,21 @@
       // Perform search. options.preserveCurrent keeps the current match instead
       // of resetting to the first match — used when re-running the same query
       // after an option/filter change so the view stays put instead of jumping
-      // back to match 1. Matching is by element identity: message cards are
-      // never recreated within a page load (re-search only re-queries the same
-      // DOM nodes), and data-uuid is NOT unique per card — cards split from one
-      // transcript entry (text + tool_use) share the entry's UUID.
+      // back to match 1. Matching is by element identity: an option or filter
+      // re-search only re-queries the same DOM nodes, and data-uuid is NOT
+      // unique per card — cards split from one transcript entry (text +
+      // tool_use) share the entry's UUID. A live update is the exception: it
+      // replaces cards (a patched card, or every card on a wholesale swap), so
+      // a current match that left the page is found again by its data-uuid
+      // and its position among the cards sharing it (cardKey).
+      function cardKey(el) {
+          const uuid = el.getAttribute('data-uuid');
+          if (!uuid) return '#' + el.id;
+          const root = el.closest('#transcript') || document;
+          const twins = Array.from(root.querySelectorAll(
+              '.message[data-uuid="' + ((window.CSS && CSS.escape) ? CSS.escape(uuid) : uuid) + '"]'));
+          return uuid + '/' + Math.max(0, twins.indexOf(el));
+      }
       let isSearching = false;
       function performSearch(query, options = {}) {
           // Prevent concurrent searches
@@ -77453,9 +77779,13 @@
   
           searchState.currentMatchIndex = searchState.matches.length > 0 ? 0 : -1;
           if (preserveElement && searchState.currentMatchIndex === 0) {
-              const preservedIndex = searchState.matches.findIndex(
+              let preservedIndex = searchState.matches.findIndex(
                   m => m.element === preserveElement
               );
+              if (preservedIndex < 0 && !preserveElement.isConnected) {
+                  const key = cardKey(preserveElement);
+                  preservedIndex = searchState.matches.findIndex(m => cardKey(m.element) === key);
+              }
               if (preservedIndex >= 0) {
                   searchState.currentMatchIndex = preservedIndex;
               }
@@ -77464,7 +77794,7 @@
           // On transcript pages, search acts as a filter: non-matching messages
           // are hidden, matches are revealed (unfolded) and highlighted.
           if (!searchState.isIndexPage) {
-              applyTranscriptSearchFilter();
+              applyTranscriptSearchFilter(options.quiet);
           }
   
           updateSearchUI();
@@ -77477,7 +77807,7 @@
           // Navigate to the current match — the first one for a fresh query,
           // or the preserved one after an option/filter re-search (the layout
           // may have shifted, so re-scrolling to it keeps it in view).
-          if (searchState.matches.length > 0 && !searchState.isIndexPage) {
+          if (searchState.matches.length > 0 && !searchState.isIndexPage && !options.quiet) {
               navigateToMatch(searchState.currentMatchIndex);
           }
   
@@ -77490,7 +77820,7 @@
       //   .search-context — ancestor of a match ("Show context" mode only)
       //   .search-hidden  — everything else (display: none)
       // Session headers are never touched so the session structure stays visible.
-      function applyTranscriptSearchFilter() {
+      function applyTranscriptSearchFilter(quiet) {
           const matched = new Set(searchState.matches.map(m => m.element));
   
           // Ancestors of matches: visible-but-dimmed when "Show context" is on
@@ -77513,7 +77843,7 @@
   
           // Unfold ancestors so every match is actually visible (matches inside
           // folded subtrees would otherwise stay hidden by the fold state).
-          if (window.claudeLogRevealMessage) {
+          if (window.claudeLogRevealMessage && !quiet) {
               matched.forEach(el => window.claudeLogRevealMessage(el));
           }
   
@@ -77521,7 +77851,7 @@
           // code, structured params) stays invisible even after the message
           // itself is revealed — open every details on the path from each
           // highlight up to its message card.
-          matched.forEach(el => {
+          if (!quiet) matched.forEach(el => {
               el.querySelectorAll('.search-highlight').forEach(highlight => {
                   let details = highlight.closest('details');
                   while (details && el.contains(details)) {
@@ -77933,14 +78263,13 @@
           }
       }
   
-      // Class list minus search-* classes, normalised for comparison — used to
-      // tell "the type filter changed" apart from our own search-* mutations.
-      function classSetWithoutSearch(classString) {
-          return (classString || '')
-              .split(/\s+/)
-              .filter(cls => cls && !cls.startsWith('search-'))
-              .sort()
-              .join(' ');
+      // Whether a class string carries the type filter's class. The observer
+      // below reacts to that alone: search's own search-* writes would loop,
+      // and other classes on a card (a live update's `live-new`, the minimal
+      // theme's engine classes) change nothing the search reads — reacting
+      // to them re-ran the search un-quietly and scrolled a live page.
+      function isFilteredOut(classString) {
+          return /(^|\s)filtered-hidden(\s|$)/.test(classString || '');
       }
   
       // Re-index when filters change (for transcript pages)
@@ -77948,16 +78277,17 @@
           let isUpdatingFilters = false;
           const observer = new MutationObserver((mutations) => {
               // Only react to genuine filter changes on message elements —
-              // search's own search-hidden/search-match/search-context class
-              // writes must not re-trigger a search (feedback loop).
+              // `filtered-hidden` coming or going (isFilteredOut); search's own
+              // search-hidden/search-match/search-context class writes must
+              // not re-trigger a search (feedback loop).
               const hasFilterChange = mutations.some(mutation => {
                   if (mutation.type === 'attributes' && mutation.attributeName === 'class') {
                       const target = mutation.target;
                       if (!target.classList || !target.classList.contains('message')) {
                           return false;
                       }
-                      return classSetWithoutSearch(mutation.oldValue) !==
-                          classSetWithoutSearch(target.getAttribute('class'));
+                      return isFilteredOut(mutation.oldValue) !==
+                          isFilteredOut(target.getAttribute('class'));
                   }
                   return false;
               });
@@ -77966,7 +78296,7 @@
                   isUpdatingFilters = true;
                   setTimeout(() => {
                       buildSearchIndex();
-                      performSearch(searchState.query, { preserveCurrent: true });
+                      performSearch(searchState.query, { preserveCurrent: true, quiet: quietRefresh });
                       isUpdatingFilters = false;
                   }, 100);
               }
@@ -77980,6 +78310,25 @@
               subtree: true
           });
       }
+  
+      // A live update brings new cards — or, on a wholesale swap, a whole new
+      // #transcript — that the index has never seen and that carry none of
+      // the search's classes (transcript.html calls this once per update).
+      // Re-index and re-run the query quietly: the matches, classes and
+      // count follow the page, but nothing scrolls, unfolds or opens under
+      // the reader. `filtered`: the filter was just re-applied too, so the
+      // filter observer above is about to re-run the search — quietly as
+      // well.
+      let quietRefresh = false;
+      window.claudeLogRefreshSearch = function (filtered) {
+          if (!searchState.query || searchState.isIndexPage) return;
+          buildSearchIndex();
+          performSearch(searchState.query, { preserveCurrent: true, quiet: true });
+          if (filtered) {
+              quietRefresh = true;
+              setTimeout(() => { quietRefresh = false; }, 300);
+          }
+      };
   
       // Initialize when DOM is ready
       if (document.readyState === 'loading') {
@@ -83741,6 +84090,35 @@
       <a class="scroll-top floating-btn" title="Scroll to top" href="#title">🔝</a>
   
       <script>
+          // ---- live updates keep the filter and the search -------------------
+          // A patched card, or a swapped-in #transcript, is the server's
+          // markup: no `filtered-hidden`, no search classes, and cards the
+          // search index has never seen. Re-apply both once per update (the
+          // rehydrate hooks run once per changed element), in a microtask
+          // after the update's synchronous work: after the timeline's rebuild
+          // (registered earlier, in timeline.html) and before the minimal
+          // theme's relayout (registered later, in minimal_dag.js), which then
+          // lays out the filtered page. The search refresh is quiet: nothing
+          // scrolls, unfolds or opens under the reader.
+          (function () {
+              let queued = false;
+              function refresh() {
+                  queued = false;
+                  const filtered = !!window.claudeLogApplyFilter
+                      && document.querySelector('.filter-toggle:not(.active)') !== null;
+                  if (filtered) window.claudeLogApplyFilter();
+                  if (window.claudeLogRefreshSearch) window.claudeLogRefreshSearch(filtered);
+                  // The timeline reads both classes off the cards.
+                  if (window.applyTimelineSearchFilter) window.applyTimelineSearchFilter();
+              }
+              window.claudeLogOnRehydrate(function () {
+                  if (queued) return;
+                  queued = true;
+                  if (window.queueMicrotask) window.queueMicrotask(refresh);
+                  else setTimeout(refresh, 0);
+              });
+          })();
+  
           document.addEventListener('DOMContentLoaded', function () {
               const toggleButton = document.getElementById('toggleDetails');
               const timelineButton = document.getElementById('toggleTimeline');
@@ -85059,6 +85437,9 @@
   
               // Apply all filters on page load
               applyFilter();
+              // The live-update refresh above re-applies the filter to the
+              // markup an update brings (it carries no filtered-hidden).
+              window.claudeLogApplyFilter = applyFilter;
   
               // Fold/unfold functionality with horizontal fold bars.
               //
@@ -85740,10 +86121,21 @@
       // Perform search. options.preserveCurrent keeps the current match instead
       // of resetting to the first match — used when re-running the same query
       // after an option/filter change so the view stays put instead of jumping
-      // back to match 1. Matching is by element identity: message cards are
-      // never recreated within a page load (re-search only re-queries the same
-      // DOM nodes), and data-uuid is NOT unique per card — cards split from one
-      // transcript entry (text + tool_use) share the entry's UUID.
+      // back to match 1. Matching is by element identity: an option or filter
+      // re-search only re-queries the same DOM nodes, and data-uuid is NOT
+      // unique per card — cards split from one transcript entry (text +
+      // tool_use) share the entry's UUID. A live update is the exception: it
+      // replaces cards (a patched card, or every card on a wholesale swap), so
+      // a current match that left the page is found again by its data-uuid
+      // and its position among the cards sharing it (cardKey).
+      function cardKey(el) {
+          const uuid = el.getAttribute('data-uuid');
+          if (!uuid) return '#' + el.id;
+          const root = el.closest('#transcript') || document;
+          const twins = Array.from(root.querySelectorAll(
+              '.message[data-uuid="' + ((window.CSS && CSS.escape) ? CSS.escape(uuid) : uuid) + '"]'));
+          return uuid + '/' + Math.max(0, twins.indexOf(el));
+      }
       let isSearching = false;
       function performSearch(query, options = {}) {
           // Prevent concurrent searches
@@ -85843,9 +86235,13 @@
   
           searchState.currentMatchIndex = searchState.matches.length > 0 ? 0 : -1;
           if (preserveElement && searchState.currentMatchIndex === 0) {
-              const preservedIndex = searchState.matches.findIndex(
+              let preservedIndex = searchState.matches.findIndex(
                   m => m.element === preserveElement
               );
+              if (preservedIndex < 0 && !preserveElement.isConnected) {
+                  const key = cardKey(preserveElement);
+                  preservedIndex = searchState.matches.findIndex(m => cardKey(m.element) === key);
+              }
               if (preservedIndex >= 0) {
                   searchState.currentMatchIndex = preservedIndex;
               }
@@ -85854,7 +86250,7 @@
           // On transcript pages, search acts as a filter: non-matching messages
           // are hidden, matches are revealed (unfolded) and highlighted.
           if (!searchState.isIndexPage) {
-              applyTranscriptSearchFilter();
+              applyTranscriptSearchFilter(options.quiet);
           }
   
           updateSearchUI();
@@ -85867,7 +86263,7 @@
           // Navigate to the current match — the first one for a fresh query,
           // or the preserved one after an option/filter re-search (the layout
           // may have shifted, so re-scrolling to it keeps it in view).
-          if (searchState.matches.length > 0 && !searchState.isIndexPage) {
+          if (searchState.matches.length > 0 && !searchState.isIndexPage && !options.quiet) {
               navigateToMatch(searchState.currentMatchIndex);
           }
   
@@ -85880,7 +86276,7 @@
       //   .search-context — ancestor of a match ("Show context" mode only)
       //   .search-hidden  — everything else (display: none)
       // Session headers are never touched so the session structure stays visible.
-      function applyTranscriptSearchFilter() {
+      function applyTranscriptSearchFilter(quiet) {
           const matched = new Set(searchState.matches.map(m => m.element));
   
           // Ancestors of matches: visible-but-dimmed when "Show context" is on
@@ -85903,7 +86299,7 @@
   
           // Unfold ancestors so every match is actually visible (matches inside
           // folded subtrees would otherwise stay hidden by the fold state).
-          if (window.claudeLogRevealMessage) {
+          if (window.claudeLogRevealMessage && !quiet) {
               matched.forEach(el => window.claudeLogRevealMessage(el));
           }
   
@@ -85911,7 +86307,7 @@
           // code, structured params) stays invisible even after the message
           // itself is revealed — open every details on the path from each
           // highlight up to its message card.
-          matched.forEach(el => {
+          if (!quiet) matched.forEach(el => {
               el.querySelectorAll('.search-highlight').forEach(highlight => {
                   let details = highlight.closest('details');
                   while (details && el.contains(details)) {
@@ -86323,14 +86719,13 @@
           }
       }
   
-      // Class list minus search-* classes, normalised for comparison — used to
-      // tell "the type filter changed" apart from our own search-* mutations.
-      function classSetWithoutSearch(classString) {
-          return (classString || '')
-              .split(/\s+/)
-              .filter(cls => cls && !cls.startsWith('search-'))
-              .sort()
-              .join(' ');
+      // Whether a class string carries the type filter's class. The observer
+      // below reacts to that alone: search's own search-* writes would loop,
+      // and other classes on a card (a live update's `live-new`, the minimal
+      // theme's engine classes) change nothing the search reads — reacting
+      // to them re-ran the search un-quietly and scrolled a live page.
+      function isFilteredOut(classString) {
+          return /(^|\s)filtered-hidden(\s|$)/.test(classString || '');
       }
   
       // Re-index when filters change (for transcript pages)
@@ -86338,16 +86733,17 @@
           let isUpdatingFilters = false;
           const observer = new MutationObserver((mutations) => {
               // Only react to genuine filter changes on message elements —
-              // search's own search-hidden/search-match/search-context class
-              // writes must not re-trigger a search (feedback loop).
+              // `filtered-hidden` coming or going (isFilteredOut); search's own
+              // search-hidden/search-match/search-context class writes must
+              // not re-trigger a search (feedback loop).
               const hasFilterChange = mutations.some(mutation => {
                   if (mutation.type === 'attributes' && mutation.attributeName === 'class') {
                       const target = mutation.target;
                       if (!target.classList || !target.classList.contains('message')) {
                           return false;
                       }
-                      return classSetWithoutSearch(mutation.oldValue) !==
-                          classSetWithoutSearch(target.getAttribute('class'));
+                      return isFilteredOut(mutation.oldValue) !==
+                          isFilteredOut(target.getAttribute('class'));
                   }
                   return false;
               });
@@ -86356,7 +86752,7 @@
                   isUpdatingFilters = true;
                   setTimeout(() => {
                       buildSearchIndex();
-                      performSearch(searchState.query, { preserveCurrent: true });
+                      performSearch(searchState.query, { preserveCurrent: true, quiet: quietRefresh });
                       isUpdatingFilters = false;
                   }, 100);
               }
@@ -86370,6 +86766,25 @@
               subtree: true
           });
       }
+  
+      // A live update brings new cards — or, on a wholesale swap, a whole new
+      // #transcript — that the index has never seen and that carry none of
+      // the search's classes (transcript.html calls this once per update).
+      // Re-index and re-run the query quietly: the matches, classes and
+      // count follow the page, but nothing scrolls, unfolds or opens under
+      // the reader. `filtered`: the filter was just re-applied too, so the
+      // filter observer above is about to re-run the search — quietly as
+      // well.
+      let quietRefresh = false;
+      window.claudeLogRefreshSearch = function (filtered) {
+          if (!searchState.query || searchState.isIndexPage) return;
+          buildSearchIndex();
+          performSearch(searchState.query, { preserveCurrent: true, quiet: true });
+          if (filtered) {
+              quietRefresh = true;
+              setTimeout(() => { quietRefresh = false; }, 300);
+          }
+      };
   
       // Initialize when DOM is ready
       if (document.readyState === 'loading') {
@@ -92076,6 +92491,35 @@
       <a class="scroll-top floating-btn" title="Scroll to top" href="#title">🔝</a>
   
       <script>
+          // ---- live updates keep the filter and the search -------------------
+          // A patched card, or a swapped-in #transcript, is the server's
+          // markup: no `filtered-hidden`, no search classes, and cards the
+          // search index has never seen. Re-apply both once per update (the
+          // rehydrate hooks run once per changed element), in a microtask
+          // after the update's synchronous work: after the timeline's rebuild
+          // (registered earlier, in timeline.html) and before the minimal
+          // theme's relayout (registered later, in minimal_dag.js), which then
+          // lays out the filtered page. The search refresh is quiet: nothing
+          // scrolls, unfolds or opens under the reader.
+          (function () {
+              let queued = false;
+              function refresh() {
+                  queued = false;
+                  const filtered = !!window.claudeLogApplyFilter
+                      && document.querySelector('.filter-toggle:not(.active)') !== null;
+                  if (filtered) window.claudeLogApplyFilter();
+                  if (window.claudeLogRefreshSearch) window.claudeLogRefreshSearch(filtered);
+                  // The timeline reads both classes off the cards.
+                  if (window.applyTimelineSearchFilter) window.applyTimelineSearchFilter();
+              }
+              window.claudeLogOnRehydrate(function () {
+                  if (queued) return;
+                  queued = true;
+                  if (window.queueMicrotask) window.queueMicrotask(refresh);
+                  else setTimeout(refresh, 0);
+              });
+          })();
+  
           document.addEventListener('DOMContentLoaded', function () {
               const toggleButton = document.getElementById('toggleDetails');
               const timelineButton = document.getElementById('toggleTimeline');
@@ -93394,6 +93838,9 @@
   
               // Apply all filters on page load
               applyFilter();
+              // The live-update refresh above re-applies the filter to the
+              // markup an update brings (it carries no filtered-hidden).
+              window.claudeLogApplyFilter = applyFilter;
   
               // Fold/unfold functionality with horizontal fold bars.
               //
@@ -94075,10 +94522,21 @@
       // Perform search. options.preserveCurrent keeps the current match instead
       // of resetting to the first match — used when re-running the same query
       // after an option/filter change so the view stays put instead of jumping
-      // back to match 1. Matching is by element identity: message cards are
-      // never recreated within a page load (re-search only re-queries the same
-      // DOM nodes), and data-uuid is NOT unique per card — cards split from one
-      // transcript entry (text + tool_use) share the entry's UUID.
+      // back to match 1. Matching is by element identity: an option or filter
+      // re-search only re-queries the same DOM nodes, and data-uuid is NOT
+      // unique per card — cards split from one transcript entry (text +
+      // tool_use) share the entry's UUID. A live update is the exception: it
+      // replaces cards (a patched card, or every card on a wholesale swap), so
+      // a current match that left the page is found again by its data-uuid
+      // and its position among the cards sharing it (cardKey).
+      function cardKey(el) {
+          const uuid = el.getAttribute('data-uuid');
+          if (!uuid) return '#' + el.id;
+          const root = el.closest('#transcript') || document;
+          const twins = Array.from(root.querySelectorAll(
+              '.message[data-uuid="' + ((window.CSS && CSS.escape) ? CSS.escape(uuid) : uuid) + '"]'));
+          return uuid + '/' + Math.max(0, twins.indexOf(el));
+      }
       let isSearching = false;
       function performSearch(query, options = {}) {
           // Prevent concurrent searches
@@ -94178,9 +94636,13 @@
   
           searchState.currentMatchIndex = searchState.matches.length > 0 ? 0 : -1;
           if (preserveElement && searchState.currentMatchIndex === 0) {
-              const preservedIndex = searchState.matches.findIndex(
+              let preservedIndex = searchState.matches.findIndex(
                   m => m.element === preserveElement
               );
+              if (preservedIndex < 0 && !preserveElement.isConnected) {
+                  const key = cardKey(preserveElement);
+                  preservedIndex = searchState.matches.findIndex(m => cardKey(m.element) === key);
+              }
               if (preservedIndex >= 0) {
                   searchState.currentMatchIndex = preservedIndex;
               }
@@ -94189,7 +94651,7 @@
           // On transcript pages, search acts as a filter: non-matching messages
           // are hidden, matches are revealed (unfolded) and highlighted.
           if (!searchState.isIndexPage) {
-              applyTranscriptSearchFilter();
+              applyTranscriptSearchFilter(options.quiet);
           }
   
           updateSearchUI();
@@ -94202,7 +94664,7 @@
           // Navigate to the current match — the first one for a fresh query,
           // or the preserved one after an option/filter re-search (the layout
           // may have shifted, so re-scrolling to it keeps it in view).
-          if (searchState.matches.length > 0 && !searchState.isIndexPage) {
+          if (searchState.matches.length > 0 && !searchState.isIndexPage && !options.quiet) {
               navigateToMatch(searchState.currentMatchIndex);
           }
   
@@ -94215,7 +94677,7 @@
       //   .search-context — ancestor of a match ("Show context" mode only)
       //   .search-hidden  — everything else (display: none)
       // Session headers are never touched so the session structure stays visible.
-      function applyTranscriptSearchFilter() {
+      function applyTranscriptSearchFilter(quiet) {
           const matched = new Set(searchState.matches.map(m => m.element));
   
           // Ancestors of matches: visible-but-dimmed when "Show context" is on
@@ -94238,7 +94700,7 @@
   
           // Unfold ancestors so every match is actually visible (matches inside
           // folded subtrees would otherwise stay hidden by the fold state).
-          if (window.claudeLogRevealMessage) {
+          if (window.claudeLogRevealMessage && !quiet) {
               matched.forEach(el => window.claudeLogRevealMessage(el));
           }
   
@@ -94246,7 +94708,7 @@
           // code, structured params) stays invisible even after the message
           // itself is revealed — open every details on the path from each
           // highlight up to its message card.
-          matched.forEach(el => {
+          if (!quiet) matched.forEach(el => {
               el.querySelectorAll('.search-highlight').forEach(highlight => {
                   let details = highlight.closest('details');
                   while (details && el.contains(details)) {
@@ -94658,14 +95120,13 @@
           }
       }
   
-      // Class list minus search-* classes, normalised for comparison — used to
-      // tell "the type filter changed" apart from our own search-* mutations.
-      function classSetWithoutSearch(classString) {
-          return (classString || '')
-              .split(/\s+/)
-              .filter(cls => cls && !cls.startsWith('search-'))
-              .sort()
-              .join(' ');
+      // Whether a class string carries the type filter's class. The observer
+      // below reacts to that alone: search's own search-* writes would loop,
+      // and other classes on a card (a live update's `live-new`, the minimal
+      // theme's engine classes) change nothing the search reads — reacting
+      // to them re-ran the search un-quietly and scrolled a live page.
+      function isFilteredOut(classString) {
+          return /(^|\s)filtered-hidden(\s|$)/.test(classString || '');
       }
   
       // Re-index when filters change (for transcript pages)
@@ -94673,16 +95134,17 @@
           let isUpdatingFilters = false;
           const observer = new MutationObserver((mutations) => {
               // Only react to genuine filter changes on message elements —
-              // search's own search-hidden/search-match/search-context class
-              // writes must not re-trigger a search (feedback loop).
+              // `filtered-hidden` coming or going (isFilteredOut); search's own
+              // search-hidden/search-match/search-context class writes must
+              // not re-trigger a search (feedback loop).
               const hasFilterChange = mutations.some(mutation => {
                   if (mutation.type === 'attributes' && mutation.attributeName === 'class') {
                       const target = mutation.target;
                       if (!target.classList || !target.classList.contains('message')) {
                           return false;
                       }
-                      return classSetWithoutSearch(mutation.oldValue) !==
-                          classSetWithoutSearch(target.getAttribute('class'));
+                      return isFilteredOut(mutation.oldValue) !==
+                          isFilteredOut(target.getAttribute('class'));
                   }
                   return false;
               });
@@ -94691,7 +95153,7 @@
                   isUpdatingFilters = true;
                   setTimeout(() => {
                       buildSearchIndex();
-                      performSearch(searchState.query, { preserveCurrent: true });
+                      performSearch(searchState.query, { preserveCurrent: true, quiet: quietRefresh });
                       isUpdatingFilters = false;
                   }, 100);
               }
@@ -94705,6 +95167,25 @@
               subtree: true
           });
       }
+  
+      // A live update brings new cards — or, on a wholesale swap, a whole new
+      // #transcript — that the index has never seen and that carry none of
+      // the search's classes (transcript.html calls this once per update).
+      // Re-index and re-run the query quietly: the matches, classes and
+      // count follow the page, but nothing scrolls, unfolds or opens under
+      // the reader. `filtered`: the filter was just re-applied too, so the
+      // filter observer above is about to re-run the search — quietly as
+      // well.
+      let quietRefresh = false;
+      window.claudeLogRefreshSearch = function (filtered) {
+          if (!searchState.query || searchState.isIndexPage) return;
+          buildSearchIndex();
+          performSearch(searchState.query, { preserveCurrent: true, quiet: true });
+          if (filtered) {
+              quietRefresh = true;
+              setTimeout(() => { quietRefresh = false; }, 300);
+          }
+      };
   
       // Initialize when DOM is ready
       if (document.readyState === 'loading') {
@@ -100239,6 +100720,35 @@
       <a class="scroll-top floating-btn" title="Scroll to top" href="#title">🔝</a>
   
       <script>
+          // ---- live updates keep the filter and the search -------------------
+          // A patched card, or a swapped-in #transcript, is the server's
+          // markup: no `filtered-hidden`, no search classes, and cards the
+          // search index has never seen. Re-apply both once per update (the
+          // rehydrate hooks run once per changed element), in a microtask
+          // after the update's synchronous work: after the timeline's rebuild
+          // (registered earlier, in timeline.html) and before the minimal
+          // theme's relayout (registered later, in minimal_dag.js), which then
+          // lays out the filtered page. The search refresh is quiet: nothing
+          // scrolls, unfolds or opens under the reader.
+          (function () {
+              let queued = false;
+              function refresh() {
+                  queued = false;
+                  const filtered = !!window.claudeLogApplyFilter
+                      && document.querySelector('.filter-toggle:not(.active)') !== null;
+                  if (filtered) window.claudeLogApplyFilter();
+                  if (window.claudeLogRefreshSearch) window.claudeLogRefreshSearch(filtered);
+                  // The timeline reads both classes off the cards.
+                  if (window.applyTimelineSearchFilter) window.applyTimelineSearchFilter();
+              }
+              window.claudeLogOnRehydrate(function () {
+                  if (queued) return;
+                  queued = true;
+                  if (window.queueMicrotask) window.queueMicrotask(refresh);
+                  else setTimeout(refresh, 0);
+              });
+          })();
+  
           document.addEventListener('DOMContentLoaded', function () {
               const toggleButton = document.getElementById('toggleDetails');
               const timelineButton = document.getElementById('toggleTimeline');
@@ -101557,6 +102067,9 @@
   
               // Apply all filters on page load
               applyFilter();
+              // The live-update refresh above re-applies the filter to the
+              // markup an update brings (it carries no filtered-hidden).
+              window.claudeLogApplyFilter = applyFilter;
   
               // Fold/unfold functionality with horizontal fold bars.
               //
@@ -102238,10 +102751,21 @@
       // Perform search. options.preserveCurrent keeps the current match instead
       // of resetting to the first match — used when re-running the same query
       // after an option/filter change so the view stays put instead of jumping
-      // back to match 1. Matching is by element identity: message cards are
-      // never recreated within a page load (re-search only re-queries the same
-      // DOM nodes), and data-uuid is NOT unique per card — cards split from one
-      // transcript entry (text + tool_use) share the entry's UUID.
+      // back to match 1. Matching is by element identity: an option or filter
+      // re-search only re-queries the same DOM nodes, and data-uuid is NOT
+      // unique per card — cards split from one transcript entry (text +
+      // tool_use) share the entry's UUID. A live update is the exception: it
+      // replaces cards (a patched card, or every card on a wholesale swap), so
+      // a current match that left the page is found again by its data-uuid
+      // and its position among the cards sharing it (cardKey).
+      function cardKey(el) {
+          const uuid = el.getAttribute('data-uuid');
+          if (!uuid) return '#' + el.id;
+          const root = el.closest('#transcript') || document;
+          const twins = Array.from(root.querySelectorAll(
+              '.message[data-uuid="' + ((window.CSS && CSS.escape) ? CSS.escape(uuid) : uuid) + '"]'));
+          return uuid + '/' + Math.max(0, twins.indexOf(el));
+      }
       let isSearching = false;
       function performSearch(query, options = {}) {
           // Prevent concurrent searches
@@ -102341,9 +102865,13 @@
   
           searchState.currentMatchIndex = searchState.matches.length > 0 ? 0 : -1;
           if (preserveElement && searchState.currentMatchIndex === 0) {
-              const preservedIndex = searchState.matches.findIndex(
+              let preservedIndex = searchState.matches.findIndex(
                   m => m.element === preserveElement
               );
+              if (preservedIndex < 0 && !preserveElement.isConnected) {
+                  const key = cardKey(preserveElement);
+                  preservedIndex = searchState.matches.findIndex(m => cardKey(m.element) === key);
+              }
               if (preservedIndex >= 0) {
                   searchState.currentMatchIndex = preservedIndex;
               }
@@ -102352,7 +102880,7 @@
           // On transcript pages, search acts as a filter: non-matching messages
           // are hidden, matches are revealed (unfolded) and highlighted.
           if (!searchState.isIndexPage) {
-              applyTranscriptSearchFilter();
+              applyTranscriptSearchFilter(options.quiet);
           }
   
           updateSearchUI();
@@ -102365,7 +102893,7 @@
           // Navigate to the current match — the first one for a fresh query,
           // or the preserved one after an option/filter re-search (the layout
           // may have shifted, so re-scrolling to it keeps it in view).
-          if (searchState.matches.length > 0 && !searchState.isIndexPage) {
+          if (searchState.matches.length > 0 && !searchState.isIndexPage && !options.quiet) {
               navigateToMatch(searchState.currentMatchIndex);
           }
   
@@ -102378,7 +102906,7 @@
       //   .search-context — ancestor of a match ("Show context" mode only)
       //   .search-hidden  — everything else (display: none)
       // Session headers are never touched so the session structure stays visible.
-      function applyTranscriptSearchFilter() {
+      function applyTranscriptSearchFilter(quiet) {
           const matched = new Set(searchState.matches.map(m => m.element));
   
           // Ancestors of matches: visible-but-dimmed when "Show context" is on
@@ -102401,7 +102929,7 @@
   
           // Unfold ancestors so every match is actually visible (matches inside
           // folded subtrees would otherwise stay hidden by the fold state).
-          if (window.claudeLogRevealMessage) {
+          if (window.claudeLogRevealMessage && !quiet) {
               matched.forEach(el => window.claudeLogRevealMessage(el));
           }
   
@@ -102409,7 +102937,7 @@
           // code, structured params) stays invisible even after the message
           // itself is revealed — open every details on the path from each
           // highlight up to its message card.
-          matched.forEach(el => {
+          if (!quiet) matched.forEach(el => {
               el.querySelectorAll('.search-highlight').forEach(highlight => {
                   let details = highlight.closest('details');
                   while (details && el.contains(details)) {
@@ -102821,14 +103349,13 @@
           }
       }
   
-      // Class list minus search-* classes, normalised for comparison — used to
-      // tell "the type filter changed" apart from our own search-* mutations.
-      function classSetWithoutSearch(classString) {
-          return (classString || '')
-              .split(/\s+/)
-              .filter(cls => cls && !cls.startsWith('search-'))
-              .sort()
-              .join(' ');
+      // Whether a class string carries the type filter's class. The observer
+      // below reacts to that alone: search's own search-* writes would loop,
+      // and other classes on a card (a live update's `live-new`, the minimal
+      // theme's engine classes) change nothing the search reads — reacting
+      // to them re-ran the search un-quietly and scrolled a live page.
+      function isFilteredOut(classString) {
+          return /(^|\s)filtered-hidden(\s|$)/.test(classString || '');
       }
   
       // Re-index when filters change (for transcript pages)
@@ -102836,16 +103363,17 @@
           let isUpdatingFilters = false;
           const observer = new MutationObserver((mutations) => {
               // Only react to genuine filter changes on message elements —
-              // search's own search-hidden/search-match/search-context class
-              // writes must not re-trigger a search (feedback loop).
+              // `filtered-hidden` coming or going (isFilteredOut); search's own
+              // search-hidden/search-match/search-context class writes must
+              // not re-trigger a search (feedback loop).
               const hasFilterChange = mutations.some(mutation => {
                   if (mutation.type === 'attributes' && mutation.attributeName === 'class') {
                       const target = mutation.target;
                       if (!target.classList || !target.classList.contains('message')) {
                           return false;
                       }
-                      return classSetWithoutSearch(mutation.oldValue) !==
-                          classSetWithoutSearch(target.getAttribute('class'));
+                      return isFilteredOut(mutation.oldValue) !==
+                          isFilteredOut(target.getAttribute('class'));
                   }
                   return false;
               });
@@ -102854,7 +103382,7 @@
                   isUpdatingFilters = true;
                   setTimeout(() => {
                       buildSearchIndex();
-                      performSearch(searchState.query, { preserveCurrent: true });
+                      performSearch(searchState.query, { preserveCurrent: true, quiet: quietRefresh });
                       isUpdatingFilters = false;
                   }, 100);
               }
@@ -102868,6 +103396,25 @@
               subtree: true
           });
       }
+  
+      // A live update brings new cards — or, on a wholesale swap, a whole new
+      // #transcript — that the index has never seen and that carry none of
+      // the search's classes (transcript.html calls this once per update).
+      // Re-index and re-run the query quietly: the matches, classes and
+      // count follow the page, but nothing scrolls, unfolds or opens under
+      // the reader. `filtered`: the filter was just re-applied too, so the
+      // filter observer above is about to re-run the search — quietly as
+      // well.
+      let quietRefresh = false;
+      window.claudeLogRefreshSearch = function (filtered) {
+          if (!searchState.query || searchState.isIndexPage) return;
+          buildSearchIndex();
+          performSearch(searchState.query, { preserveCurrent: true, quiet: true });
+          if (filtered) {
+              quietRefresh = true;
+              setTimeout(() => { quietRefresh = false; }, 300);
+          }
+      };
   
       // Initialize when DOM is ready
       if (document.readyState === 'loading') {
@@ -108207,6 +108754,35 @@
       <a class="scroll-top floating-btn" title="Scroll to top" href="#title">🔝</a>
   
       <script>
+          // ---- live updates keep the filter and the search -------------------
+          // A patched card, or a swapped-in #transcript, is the server's
+          // markup: no `filtered-hidden`, no search classes, and cards the
+          // search index has never seen. Re-apply both once per update (the
+          // rehydrate hooks run once per changed element), in a microtask
+          // after the update's synchronous work: after the timeline's rebuild
+          // (registered earlier, in timeline.html) and before the minimal
+          // theme's relayout (registered later, in minimal_dag.js), which then
+          // lays out the filtered page. The search refresh is quiet: nothing
+          // scrolls, unfolds or opens under the reader.
+          (function () {
+              let queued = false;
+              function refresh() {
+                  queued = false;
+                  const filtered = !!window.claudeLogApplyFilter
+                      && document.querySelector('.filter-toggle:not(.active)') !== null;
+                  if (filtered) window.claudeLogApplyFilter();
+                  if (window.claudeLogRefreshSearch) window.claudeLogRefreshSearch(filtered);
+                  // The timeline reads both classes off the cards.
+                  if (window.applyTimelineSearchFilter) window.applyTimelineSearchFilter();
+              }
+              window.claudeLogOnRehydrate(function () {
+                  if (queued) return;
+                  queued = true;
+                  if (window.queueMicrotask) window.queueMicrotask(refresh);
+                  else setTimeout(refresh, 0);
+              });
+          })();
+  
           document.addEventListener('DOMContentLoaded', function () {
               const toggleButton = document.getElementById('toggleDetails');
               const timelineButton = document.getElementById('toggleTimeline');
@@ -109525,6 +110101,9 @@
   
               // Apply all filters on page load
               applyFilter();
+              // The live-update refresh above re-applies the filter to the
+              // markup an update brings (it carries no filtered-hidden).
+              window.claudeLogApplyFilter = applyFilter;
   
               // Fold/unfold functionality with horizontal fold bars.
               //
@@ -110206,10 +110785,21 @@
       // Perform search. options.preserveCurrent keeps the current match instead
       // of resetting to the first match — used when re-running the same query
       // after an option/filter change so the view stays put instead of jumping
-      // back to match 1. Matching is by element identity: message cards are
-      // never recreated within a page load (re-search only re-queries the same
-      // DOM nodes), and data-uuid is NOT unique per card — cards split from one
-      // transcript entry (text + tool_use) share the entry's UUID.
+      // back to match 1. Matching is by element identity: an option or filter
+      // re-search only re-queries the same DOM nodes, and data-uuid is NOT
+      // unique per card — cards split from one transcript entry (text +
+      // tool_use) share the entry's UUID. A live update is the exception: it
+      // replaces cards (a patched card, or every card on a wholesale swap), so
+      // a current match that left the page is found again by its data-uuid
+      // and its position among the cards sharing it (cardKey).
+      function cardKey(el) {
+          const uuid = el.getAttribute('data-uuid');
+          if (!uuid) return '#' + el.id;
+          const root = el.closest('#transcript') || document;
+          const twins = Array.from(root.querySelectorAll(
+              '.message[data-uuid="' + ((window.CSS && CSS.escape) ? CSS.escape(uuid) : uuid) + '"]'));
+          return uuid + '/' + Math.max(0, twins.indexOf(el));
+      }
       let isSearching = false;
       function performSearch(query, options = {}) {
           // Prevent concurrent searches
@@ -110309,9 +110899,13 @@
   
           searchState.currentMatchIndex = searchState.matches.length > 0 ? 0 : -1;
           if (preserveElement && searchState.currentMatchIndex === 0) {
-              const preservedIndex = searchState.matches.findIndex(
+              let preservedIndex = searchState.matches.findIndex(
                   m => m.element === preserveElement
               );
+              if (preservedIndex < 0 && !preserveElement.isConnected) {
+                  const key = cardKey(preserveElement);
+                  preservedIndex = searchState.matches.findIndex(m => cardKey(m.element) === key);
+              }
               if (preservedIndex >= 0) {
                   searchState.currentMatchIndex = preservedIndex;
               }
@@ -110320,7 +110914,7 @@
           // On transcript pages, search acts as a filter: non-matching messages
           // are hidden, matches are revealed (unfolded) and highlighted.
           if (!searchState.isIndexPage) {
-              applyTranscriptSearchFilter();
+              applyTranscriptSearchFilter(options.quiet);
           }
   
           updateSearchUI();
@@ -110333,7 +110927,7 @@
           // Navigate to the current match — the first one for a fresh query,
           // or the preserved one after an option/filter re-search (the layout
           // may have shifted, so re-scrolling to it keeps it in view).
-          if (searchState.matches.length > 0 && !searchState.isIndexPage) {
+          if (searchState.matches.length > 0 && !searchState.isIndexPage && !options.quiet) {
               navigateToMatch(searchState.currentMatchIndex);
           }
   
@@ -110346,7 +110940,7 @@
       //   .search-context — ancestor of a match ("Show context" mode only)
       //   .search-hidden  — everything else (display: none)
       // Session headers are never touched so the session structure stays visible.
-      function applyTranscriptSearchFilter() {
+      function applyTranscriptSearchFilter(quiet) {
           const matched = new Set(searchState.matches.map(m => m.element));
   
           // Ancestors of matches: visible-but-dimmed when "Show context" is on
@@ -110369,7 +110963,7 @@
   
           // Unfold ancestors so every match is actually visible (matches inside
           // folded subtrees would otherwise stay hidden by the fold state).
-          if (window.claudeLogRevealMessage) {
+          if (window.claudeLogRevealMessage && !quiet) {
               matched.forEach(el => window.claudeLogRevealMessage(el));
           }
   
@@ -110377,7 +110971,7 @@
           // code, structured params) stays invisible even after the message
           // itself is revealed — open every details on the path from each
           // highlight up to its message card.
-          matched.forEach(el => {
+          if (!quiet) matched.forEach(el => {
               el.querySelectorAll('.search-highlight').forEach(highlight => {
                   let details = highlight.closest('details');
                   while (details && el.contains(details)) {
@@ -110789,14 +111383,13 @@
           }
       }
   
-      // Class list minus search-* classes, normalised for comparison — used to
-      // tell "the type filter changed" apart from our own search-* mutations.
-      function classSetWithoutSearch(classString) {
-          return (classString || '')
-              .split(/\s+/)
-              .filter(cls => cls && !cls.startsWith('search-'))
-              .sort()
-              .join(' ');
+      // Whether a class string carries the type filter's class. The observer
+      // below reacts to that alone: search's own search-* writes would loop,
+      // and other classes on a card (a live update's `live-new`, the minimal
+      // theme's engine classes) change nothing the search reads — reacting
+      // to them re-ran the search un-quietly and scrolled a live page.
+      function isFilteredOut(classString) {
+          return /(^|\s)filtered-hidden(\s|$)/.test(classString || '');
       }
   
       // Re-index when filters change (for transcript pages)
@@ -110804,16 +111397,17 @@
           let isUpdatingFilters = false;
           const observer = new MutationObserver((mutations) => {
               // Only react to genuine filter changes on message elements —
-              // search's own search-hidden/search-match/search-context class
-              // writes must not re-trigger a search (feedback loop).
+              // `filtered-hidden` coming or going (isFilteredOut); search's own
+              // search-hidden/search-match/search-context class writes must
+              // not re-trigger a search (feedback loop).
               const hasFilterChange = mutations.some(mutation => {
                   if (mutation.type === 'attributes' && mutation.attributeName === 'class') {
                       const target = mutation.target;
                       if (!target.classList || !target.classList.contains('message')) {
                           return false;
                       }
-                      return classSetWithoutSearch(mutation.oldValue) !==
-                          classSetWithoutSearch(target.getAttribute('class'));
+                      return isFilteredOut(mutation.oldValue) !==
+                          isFilteredOut(target.getAttribute('class'));
                   }
                   return false;
               });
@@ -110822,7 +111416,7 @@
                   isUpdatingFilters = true;
                   setTimeout(() => {
                       buildSearchIndex();
-                      performSearch(searchState.query, { preserveCurrent: true });
+                      performSearch(searchState.query, { preserveCurrent: true, quiet: quietRefresh });
                       isUpdatingFilters = false;
                   }, 100);
               }
@@ -110836,6 +111430,25 @@
               subtree: true
           });
       }
+  
+      // A live update brings new cards — or, on a wholesale swap, a whole new
+      // #transcript — that the index has never seen and that carry none of
+      // the search's classes (transcript.html calls this once per update).
+      // Re-index and re-run the query quietly: the matches, classes and
+      // count follow the page, but nothing scrolls, unfolds or opens under
+      // the reader. `filtered`: the filter was just re-applied too, so the
+      // filter observer above is about to re-run the search — quietly as
+      // well.
+      let quietRefresh = false;
+      window.claudeLogRefreshSearch = function (filtered) {
+          if (!searchState.query || searchState.isIndexPage) return;
+          buildSearchIndex();
+          performSearch(searchState.query, { preserveCurrent: true, quiet: true });
+          if (filtered) {
+              quietRefresh = true;
+              setTimeout(() => { quietRefresh = false; }, 300);
+          }
+      };
   
       // Initialize when DOM is ready
       if (document.readyState === 'loading') {
@@ -116124,6 +116737,35 @@
       <a class="scroll-top floating-btn" title="Scroll to top" href="#title">🔝</a>
   
       <script>
+          // ---- live updates keep the filter and the search -------------------
+          // A patched card, or a swapped-in #transcript, is the server's
+          // markup: no `filtered-hidden`, no search classes, and cards the
+          // search index has never seen. Re-apply both once per update (the
+          // rehydrate hooks run once per changed element), in a microtask
+          // after the update's synchronous work: after the timeline's rebuild
+          // (registered earlier, in timeline.html) and before the minimal
+          // theme's relayout (registered later, in minimal_dag.js), which then
+          // lays out the filtered page. The search refresh is quiet: nothing
+          // scrolls, unfolds or opens under the reader.
+          (function () {
+              let queued = false;
+              function refresh() {
+                  queued = false;
+                  const filtered = !!window.claudeLogApplyFilter
+                      && document.querySelector('.filter-toggle:not(.active)') !== null;
+                  if (filtered) window.claudeLogApplyFilter();
+                  if (window.claudeLogRefreshSearch) window.claudeLogRefreshSearch(filtered);
+                  // The timeline reads both classes off the cards.
+                  if (window.applyTimelineSearchFilter) window.applyTimelineSearchFilter();
+              }
+              window.claudeLogOnRehydrate(function () {
+                  if (queued) return;
+                  queued = true;
+                  if (window.queueMicrotask) window.queueMicrotask(refresh);
+                  else setTimeout(refresh, 0);
+              });
+          })();
+  
           document.addEventListener('DOMContentLoaded', function () {
               const toggleButton = document.getElementById('toggleDetails');
               const timelineButton = document.getElementById('toggleTimeline');
@@ -117442,6 +118084,9 @@
   
               // Apply all filters on page load
               applyFilter();
+              // The live-update refresh above re-applies the filter to the
+              // markup an update brings (it carries no filtered-hidden).
+              window.claudeLogApplyFilter = applyFilter;
   
               // Fold/unfold functionality with horizontal fold bars.
               //
@@ -118123,10 +118768,21 @@
       // Perform search. options.preserveCurrent keeps the current match instead
       // of resetting to the first match — used when re-running the same query
       // after an option/filter change so the view stays put instead of jumping
-      // back to match 1. Matching is by element identity: message cards are
-      // never recreated within a page load (re-search only re-queries the same
-      // DOM nodes), and data-uuid is NOT unique per card — cards split from one
-      // transcript entry (text + tool_use) share the entry's UUID.
+      // back to match 1. Matching is by element identity: an option or filter
+      // re-search only re-queries the same DOM nodes, and data-uuid is NOT
+      // unique per card — cards split from one transcript entry (text +
+      // tool_use) share the entry's UUID. A live update is the exception: it
+      // replaces cards (a patched card, or every card on a wholesale swap), so
+      // a current match that left the page is found again by its data-uuid
+      // and its position among the cards sharing it (cardKey).
+      function cardKey(el) {
+          const uuid = el.getAttribute('data-uuid');
+          if (!uuid) return '#' + el.id;
+          const root = el.closest('#transcript') || document;
+          const twins = Array.from(root.querySelectorAll(
+              '.message[data-uuid="' + ((window.CSS && CSS.escape) ? CSS.escape(uuid) : uuid) + '"]'));
+          return uuid + '/' + Math.max(0, twins.indexOf(el));
+      }
       let isSearching = false;
       function performSearch(query, options = {}) {
           // Prevent concurrent searches
@@ -118226,9 +118882,13 @@
   
           searchState.currentMatchIndex = searchState.matches.length > 0 ? 0 : -1;
           if (preserveElement && searchState.currentMatchIndex === 0) {
-              const preservedIndex = searchState.matches.findIndex(
+              let preservedIndex = searchState.matches.findIndex(
                   m => m.element === preserveElement
               );
+              if (preservedIndex < 0 && !preserveElement.isConnected) {
+                  const key = cardKey(preserveElement);
+                  preservedIndex = searchState.matches.findIndex(m => cardKey(m.element) === key);
+              }
               if (preservedIndex >= 0) {
                   searchState.currentMatchIndex = preservedIndex;
               }
@@ -118237,7 +118897,7 @@
           // On transcript pages, search acts as a filter: non-matching messages
           // are hidden, matches are revealed (unfolded) and highlighted.
           if (!searchState.isIndexPage) {
-              applyTranscriptSearchFilter();
+              applyTranscriptSearchFilter(options.quiet);
           }
   
           updateSearchUI();
@@ -118250,7 +118910,7 @@
           // Navigate to the current match — the first one for a fresh query,
           // or the preserved one after an option/filter re-search (the layout
           // may have shifted, so re-scrolling to it keeps it in view).
-          if (searchState.matches.length > 0 && !searchState.isIndexPage) {
+          if (searchState.matches.length > 0 && !searchState.isIndexPage && !options.quiet) {
               navigateToMatch(searchState.currentMatchIndex);
           }
   
@@ -118263,7 +118923,7 @@
       //   .search-context — ancestor of a match ("Show context" mode only)
       //   .search-hidden  — everything else (display: none)
       // Session headers are never touched so the session structure stays visible.
-      function applyTranscriptSearchFilter() {
+      function applyTranscriptSearchFilter(quiet) {
           const matched = new Set(searchState.matches.map(m => m.element));
   
           // Ancestors of matches: visible-but-dimmed when "Show context" is on
@@ -118286,7 +118946,7 @@
   
           // Unfold ancestors so every match is actually visible (matches inside
           // folded subtrees would otherwise stay hidden by the fold state).
-          if (window.claudeLogRevealMessage) {
+          if (window.claudeLogRevealMessage && !quiet) {
               matched.forEach(el => window.claudeLogRevealMessage(el));
           }
   
@@ -118294,7 +118954,7 @@
           // code, structured params) stays invisible even after the message
           // itself is revealed — open every details on the path from each
           // highlight up to its message card.
-          matched.forEach(el => {
+          if (!quiet) matched.forEach(el => {
               el.querySelectorAll('.search-highlight').forEach(highlight => {
                   let details = highlight.closest('details');
                   while (details && el.contains(details)) {
@@ -118706,14 +119366,13 @@
           }
       }
   
-      // Class list minus search-* classes, normalised for comparison — used to
-      // tell "the type filter changed" apart from our own search-* mutations.
-      function classSetWithoutSearch(classString) {
-          return (classString || '')
-              .split(/\s+/)
-              .filter(cls => cls && !cls.startsWith('search-'))
-              .sort()
-              .join(' ');
+      // Whether a class string carries the type filter's class. The observer
+      // below reacts to that alone: search's own search-* writes would loop,
+      // and other classes on a card (a live update's `live-new`, the minimal
+      // theme's engine classes) change nothing the search reads — reacting
+      // to them re-ran the search un-quietly and scrolled a live page.
+      function isFilteredOut(classString) {
+          return /(^|\s)filtered-hidden(\s|$)/.test(classString || '');
       }
   
       // Re-index when filters change (for transcript pages)
@@ -118721,16 +119380,17 @@
           let isUpdatingFilters = false;
           const observer = new MutationObserver((mutations) => {
               // Only react to genuine filter changes on message elements —
-              // search's own search-hidden/search-match/search-context class
-              // writes must not re-trigger a search (feedback loop).
+              // `filtered-hidden` coming or going (isFilteredOut); search's own
+              // search-hidden/search-match/search-context class writes must
+              // not re-trigger a search (feedback loop).
               const hasFilterChange = mutations.some(mutation => {
                   if (mutation.type === 'attributes' && mutation.attributeName === 'class') {
                       const target = mutation.target;
                       if (!target.classList || !target.classList.contains('message')) {
                           return false;
                       }
-                      return classSetWithoutSearch(mutation.oldValue) !==
-                          classSetWithoutSearch(target.getAttribute('class'));
+                      return isFilteredOut(mutation.oldValue) !==
+                          isFilteredOut(target.getAttribute('class'));
                   }
                   return false;
               });
@@ -118739,7 +119399,7 @@
                   isUpdatingFilters = true;
                   setTimeout(() => {
                       buildSearchIndex();
-                      performSearch(searchState.query, { preserveCurrent: true });
+                      performSearch(searchState.query, { preserveCurrent: true, quiet: quietRefresh });
                       isUpdatingFilters = false;
                   }, 100);
               }
@@ -118753,6 +119413,25 @@
               subtree: true
           });
       }
+  
+      // A live update brings new cards — or, on a wholesale swap, a whole new
+      // #transcript — that the index has never seen and that carry none of
+      // the search's classes (transcript.html calls this once per update).
+      // Re-index and re-run the query quietly: the matches, classes and
+      // count follow the page, but nothing scrolls, unfolds or opens under
+      // the reader. `filtered`: the filter was just re-applied too, so the
+      // filter observer above is about to re-run the search — quietly as
+      // well.
+      let quietRefresh = false;
+      window.claudeLogRefreshSearch = function (filtered) {
+          if (!searchState.query || searchState.isIndexPage) return;
+          buildSearchIndex();
+          performSearch(searchState.query, { preserveCurrent: true, quiet: true });
+          if (filtered) {
+              quietRefresh = true;
+              setTimeout(() => { quietRefresh = false; }, 300);
+          }
+      };
   
       // Initialize when DOM is ready
       if (document.readyState === 'loading') {
