@@ -246,11 +246,20 @@ column shows no line.
 - **Strips** have no cards to put dots on: the lane is the line alone
   (with its pointers), 6px from the strip's left edge (clear of its
   vertical name), over the rows its hidden items occupy — the dot y of the
-  nearest shown item at or after its first row and at or before its last
-  (a binary search over the sequence: rows are packed in sequence order).
+  nearest shown item at or after its first row and at or before its last.
+  The walk to it goes by the grid's row heights (the resolved
+  `grid-template-rows`, which lists every track, implicit ones included):
+  an empty row has no height, so it is passed over without a read however
+  many there are — a long synchronous agent's hundreds of hidden rows — and
+  only a row with a height is looked into (a binary search over the
+  sequence: rows are packed in sequence order). A strip whose rows are the
+  last shown (a session that ended mid-branch, or a running agent) has no
+  shown row after them: it starts level with the shown row they follow,
+  and a running one carries on from there to its open marker.
 - **Redraws** as the rail does (§ 4): every relayout, resize, phone flip and
   live card landing. The positions are a handful of reads per column (its
-  chrome's left, its first and last shown item, its merge row).
+  chrome's left, its first and last shown item, its merge row), plus, when
+  a strip is shown, one read of the grid's row heights per draw.
 
 ## 3. The relayout
 

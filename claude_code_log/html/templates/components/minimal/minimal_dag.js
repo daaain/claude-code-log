@@ -1560,7 +1560,7 @@
                             + 'H' + round(xm), false);
                     }
                 });
-                const fades = drawColumns(stageBox, style, rowY, round, path, lastShownBottom);
+                const fades = drawColumns(transcript, stageBox, style, rowY, round, path, lastShownBottom);
                 const width = Math.ceil(stage.clientWidth);
                 const height = Math.ceil(stage.scrollHeight);
                 // One fading stroke per lane colour a pointer uses (the
@@ -1590,7 +1590,7 @@
             // A strip (its cards hidden) draws the line alone over the rows
             // its lane spans, at its left edge. Returns the colours whose
             // fade the pointers use.
-            function drawColumns(stageBox, style, rowY, round, path, lastShownBottom) {
+            function drawColumns(transcript, stageBox, style, rowY, round, path, lastShownBottom) {
                 const fades = new Set();
                 const columns = layout.columns || [];
                 if (!columns.length) return fades;
@@ -1600,18 +1600,41 @@
                 const offset = pad + gut + rail / 2;
                 const r = RADIUS;
                 const sequence = layout.sequence;
-                // A strip's rows are empty: the dot y of the nearest shown
-                // item at or after (dir 1) / at or before (dir -1) a row.
-                function nearRowY(row, dir) {
+                const lastRow = sequence.length ? sequence[sequence.length - 1].row : -1;
+                // The grid's row heights, read once per draw and only for a
+                // strip: the resolved grid-template-rows lists every track,
+                // implicit ones included, and the layout is already clean.
+                let heights = null;
+                function rowHeights() {
+                    if (!heights) heights = getComputedStyle(transcript).gridTemplateRows.split(' ').map(parseFloat);
+                    return heights;
+                }
+                // The dot y of the first shown item in a row (NaN: none).
+                function shownIn(row) {
                     let lo = 0;
                     let hi = sequence.length;
                     while (lo < hi) {
                         const mid = (lo + hi) >> 1;
-                        if (dir > 0 ? sequence[mid].row < row : sequence[mid].row <= row) lo = mid + 1;
+                        if (sequence[mid].row < row) lo = mid + 1;
                         else hi = mid;
                     }
-                    for (let i = dir > 0 ? lo : lo - 1, n = 0; i >= 0 && i < sequence.length && n < 512; i += dir, n++) {
+                    for (let i = lo; i < sequence.length && sequence[i].row === row; i++) {
                         if (visible(sequence[i])) return rowY(sequence[i]);
+                    }
+                    return NaN;
+                }
+                // A strip's rows are empty: the dot y of the nearest shown
+                // item at or after (dir 1) / at or before (dir -1) a row. An
+                // empty row has no height, so the walk passes over those on
+                // the measured heights alone, however many there are (no
+                // per-item visibility read): only a row with a height is
+                // looked into (rows are packed in sequence order).
+                function nearRowY(row, dir) {
+                    const sizes = rowHeights();
+                    for (let k = row; k >= 0 && k <= lastRow; k += dir) {
+                        if (sizes[k + ROW0 - 1] === 0) continue;
+                        const y = shownIn(k);
+                        if (!isNaN(y)) return y;
                     }
                     return NaN;
                 }
@@ -1629,6 +1652,10 @@
                     if (col.strip) {
                         if (col.first < 0) return;
                         ys = nearRowY(col.first, 1);
+                        // Its rows are the last shown (a session that ended
+                        // mid-branch, or a running one): it starts level with
+                        // the shown row they follow.
+                        if (isNaN(ys)) ys = nearRowY(col.first, -1);
                         ye = nearRowY(col.last, -1);
                     } else {
                         let first = null;

@@ -647,13 +647,78 @@ def _repetition(
     return main, tail["uuid"]
 
 
-def write_dag_demo(directory: Path, turns: int = 1, wide: int = 0) -> Path:
+def _trailing_agent(
+    w: _Writer, session_dir: Path, parent: Optional[str], steps: int, follow: bool
+) -> list[dict[str, Any]]:
+    """A last prompt that runs a synchronous agent of ``steps`` tool pairs.
+
+    Without ``follow`` the session ends while the agent works (no result),
+    so the agent's rows are the transcript's last; with it, the agent's
+    result follows them on the main line.
+    """
+    agent = f"t{w.turn:03d}tail"
+    tool = f"toolu_{w.turn:03d}spawnT"
+    description = "Sweep the remaining stylesheets"
+    u1 = w.entry("user", parent, 0, "Sweep whatever stylesheets are left, please.")
+    spawn = w.entry(
+        "assistant",
+        u1["uuid"],
+        3,
+        _tool(
+            tool,
+            "Task",
+            {
+                "description": description,
+                "prompt": description + ".",
+                "subagent_type": "Explore",
+            },
+        ),
+    )
+    _agent_file(
+        session_dir,
+        agent,
+        tool,
+        description,
+        _agent_steps(
+            w,
+            agent,
+            description + ".",
+            5,
+            [
+                (6 + 2 * k, "Grep", {"pattern": f"sheet-{k}"}, f"{k} matches", False)
+                for k in range(steps)
+            ],
+            (7 + 2 * steps, "Swept them all."),
+        ),
+    )
+    main = [u1, spawn]
+    if follow:
+        main.append(
+            w.entry(
+                "user",
+                spawn["uuid"],
+                10 + 2 * steps,
+                _sync_result(tool, "Swept them all.", agent),
+            )
+        )
+    return main
+
+
+def write_dag_demo(
+    directory: Path,
+    turns: int = 1,
+    wide: int = 0,
+    tail: int = 0,
+    follow: bool = False,
+) -> Path:
     """Write the demo project into ``directory``; returns ``directory``.
 
     ``turns`` repeats the stretch (each 30 minutes after the previous), so a
     large page can be built for timing: every repetition adds ~40 cards and
     five lanes. ``wide`` adds that many background agents to each first
-    turn (P7's branch overflow).
+    turn (P7's branch overflow). ``tail`` ends the session with a
+    synchronous agent of that many steps whose rows are the transcript's
+    last (``_trailing_agent``; ``follow`` puts its result after them).
     """
     directory.mkdir(parents=True, exist_ok=True)
     session_dir = directory / SESSION
@@ -662,6 +727,8 @@ def write_dag_demo(directory: Path, turns: int = 1, wide: int = 0) -> Path:
     for n in range(turns):
         main, parent = _repetition(_Writer(n), session_dir, parent, wide)
         entries += main
+    if tail:
+        entries += _trailing_agent(_Writer(turns), session_dir, parent, tail, follow)
     (directory / f"{SESSION}.jsonl").write_text(
         "\n".join(json.dumps(e) for e in entries) + "\n", encoding="utf-8"
     )

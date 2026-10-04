@@ -46,6 +46,7 @@ from test.test_minimal_dag_browser import (
 pytestmark = pytest.mark.browser
 
 EXTRA = [f"agent-e000x0{k}" for k in range(4)]  # wide=4: ranks 3–6 in turn 1
+TAIL = "agent-t001tail"  # tail=N: the trailing synchronous agent
 
 
 @pytest.fixture(scope="module")
@@ -57,6 +58,16 @@ def pages(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
         "team": _render(write_team_demo(tmp / "team"), tmp / "team.html", "Team"),
         "workflow": _render(
             write_workflow_demo(tmp / "workflow"), tmp / "workflow.html", "Workflow"
+        ),
+        # A synchronous agent whose rows are the transcript's last …
+        "tail": _render(
+            write_dag_demo(tmp / "tail", tail=3), tmp / "tail.html", "Tail"
+        ),
+        # … and one of 300 steps, its result after them.
+        "long": _render(
+            write_dag_demo(tmp / "long", tail=300, follow=True),
+            tmp / "long.html",
+            "Long",
         ),
     }
 
@@ -413,6 +424,58 @@ class TestColumnLanes:
         page.locator(f".dag-chrome[data-col='{A}'] .dag-strip").click()
         _settle(page)
         assert _col_parts(page, A)["col"][0] > page.evaluate(CHROME_LEFT, A) + 6 + 30
+
+    def _strip(self, page: Page, lane: str) -> tuple[dict[str, list[float]], str]:
+        """Columns, ``lane`` collapsed to a strip: its paths and the id of
+        the last shown card."""
+        page.set_viewport_size({"width": 2200, "height": 900})
+        _columns(page)
+        page.locator(
+            f".dag-chrome[data-col='{lane}'] [data-col-act='collapse']"
+        ).click()
+        _settle(page)
+        assert _mode(page, lane) == "strip"
+        assert _visible_count(page, lane) == 0
+        last = page.evaluate(
+            """() => [...document.querySelectorAll('#transcript .message')]
+                .filter(el => el.checkVisibility())
+                .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)
+                .pop().id"""
+        )
+        return _col_parts(page, lane), last
+
+    def test_a_strip_at_the_end_keeps_its_lane(
+        self, clean: Page, pages: dict[str, Path]
+    ):
+        """A strip whose rows are the transcript's last has no shown row at
+        or after them: it starts (and, not merging, ends) level with the
+        last shown row before them instead of losing its lane."""
+        page = clean
+        _open(page, pages["tail"])
+        parts, last = self._strip(page, TAIL)
+        assert set(parts) == {"col-in", "col"}, parts
+        x, top, bottom = parts["col"]
+        assert x == pytest.approx(page.evaluate(CHROME_LEFT, TAIL) + 6, abs=0.5)
+        assert top == pytest.approx(_dot_y(page, last), abs=1.5)
+        assert bottom == pytest.approx(top, abs=0.2)
+        _assert_pointer(parts["col-in"], x)
+
+    def test_a_long_strip_finds_the_row_after_it(
+        self, clean: Page, pages: dict[str, Path]
+    ):
+        """A strip of hundreds of hidden rows (a long synchronous agent)
+        still reaches the shown row after them, its result: no scan over
+        the hidden items gives up first."""
+        page = clean
+        _open(page, pages["long"])
+        hidden = page.locator(f"#transcript .message[data-lane='{TAIL}']").count()
+        assert hidden > 512  # past where a per-item scan used to give up
+        parts, last = self._strip(page, TAIL)
+        assert set(parts) == {"col-in", "col"}, parts
+        x, top, _bottom = parts["col"]
+        assert x == pytest.approx(page.evaluate(CHROME_LEFT, TAIL) + 6, abs=0.5)
+        # The result: the first shown row at or after the strip's.
+        assert top == pytest.approx(_dot_y(page, last), abs=1.5)
 
     def test_pointers_fade_in_the_lane_colour_in_both_schemes(
         self, clean: Page, pages: dict[str, Path]
