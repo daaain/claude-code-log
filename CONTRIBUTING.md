@@ -506,8 +506,9 @@ Until the push, `git tag -d X.Y.Z && git reset --hard HEAD~1` undoes it.
 
 ### What the workflow does
 
-1. **ci** — waits for the CI run (`ci.yml`) that the same push started on the
-   release commit, and fails the release if it fails. Nothing is re-run.
+1. **ci** — refuses a tag whose commit isn't on `main`, then waits for the CI
+   run (`ci.yml`) that the same push started on the release commit, and fails
+   the release if it fails. Nothing is re-run.
 2. **build** — in parallel, checks that the tag, `[project].version`,
    `uv.lock`'s own `claude-code-log` entry and a `## [X.Y.Z]` CHANGELOG
    section all agree, then runs `uv build` and extracts the release notes
@@ -525,6 +526,15 @@ botched release is fixed by releasing the next number.
 
 `just publish` is the manual escape hatch for when GitHub is down; it needs
 PyPI credentials (e.g. `UV_PUBLISH_TOKEN`) locally.
+
+### Who can release
+
+Pushing a tag needs write access, and on this personally-owned repo every
+collaborator has it — so collaborators *are* the maintainers who can start a
+release. Publishing additionally needs one of the `pypi` environment's
+required reviewers to approve. Before adding a collaborator who shouldn't
+release, note that write access is all-or-nothing here: per-role tag
+restrictions need an organisation-owned repo.
 
 ### One-time setup
 

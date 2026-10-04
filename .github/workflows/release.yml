@@ -37,7 +37,25 @@ jobs:
     timeout-minutes: 90
     permissions:
       actions: read
+      contents: read
     steps:
+      # A tag cut on a branch (or a commit squash-merged away) would release
+      # code main never had. CI only runs on pushes to main, so the wait below
+      # would refuse it too — but slowly, and only while ci.yml's trigger stays
+      # main-only. This says so directly. Tag rulesets can't express it: they
+      # govern who may push a tag, not which commit it names.
+      - name: The tagged commit must be on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Comparing main...SHA: `identical` or `behind` means main contains it.
+          status="$(gh api "repos/$GITHUB_REPOSITORY/compare/main...$GITHUB_SHA" --jq .status)"
+          case "$status" in
+            identical|behind) echo "✓ $GITHUB_SHA is on main" ;;
+            *) echo "✗ tag $GITHUB_REF_NAME names $GITHUB_SHA, which is not on main ($status)"
+               exit 1 ;;
+          esac
       - name: Wait for CI on the tagged commit to pass
         env:
           GH_TOKEN: ${{ github.token }}
