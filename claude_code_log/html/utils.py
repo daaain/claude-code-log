@@ -1031,4 +1031,11 @@ def get_template_environment() -> Environment:
     globals_dict["mn_session_header"] = minimal_theme.session_header
     globals_dict["mn_lane_attrs"] = minimal_theme.lane_attrs
     globals_dict["mn_cross_links"] = minimal_theme.cross_links
+    # The project index and archive search pages (minimal only).
+    globals_dict["mn_when"] = minimal_theme.when
+    globals_dict["mn_project_when"] = minimal_theme.project_when
+    globals_dict["mn_index_summary_meta"] = minimal_theme.index_summary_meta
+    globals_dict["mn_project_meta"] = minimal_theme.project_meta
+    globals_dict["mn_project_tooltip"] = minimal_theme.project_tooltip
+    globals_dict["mn_index_sessions"] = minimal_theme.index_sessions
     return env

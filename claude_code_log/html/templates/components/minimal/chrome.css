@@ -1,0 +1,215 @@
+{# Minimal theme: page, header and toolbar chrome shared by every page
+   (transcript, project index, archive search). Included from layout.css
+   for transcripts and directly by index.html / archive_search.html. -#}
+/* ---------------------------------------------------------------- page */
+
+body.theme-minimal {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 0 16px 40px;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 1.4;
+}
+
+.theme-minimal a {
+    color: var(--note);
+}
+
+.theme-minimal a:hover {
+    color: var(--fg);
+}
+
+.theme-minimal .mn-top {
+    padding: 12px 0 8px;
+}
+
+.theme-minimal .mn-title-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    column-gap: 10px;
+    row-gap: 2px;
+}
+
+.theme-minimal .mn-top h1 {
+    margin: 0;
+    font-size: 1.16em;
+    font-weight: 700;
+    text-align: left;
+    color: var(--fg);
+    overflow-wrap: anywhere;
+}
+
+.theme-minimal .mn-smeta {
+    font: 0.72em var(--mono);
+    color: var(--muted);
+}
+
+.theme-minimal .mn-pill {
+    display: inline-block;
+    font: 500 0.7em/1.6 var(--mono);
+    padding: 0 6px;
+    border-radius: 999px;
+    border: 1px solid var(--rule);
+    color: var(--muted);
+}
+
+/* ------------------------------------------------------------- toolbar */
+
+.theme-minimal .mn-toolbar {
+    position: sticky;
+    top: 0;
+    z-index: 200;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 10px;
+    padding: 6px 0;
+    background: var(--bg);
+    border-top: 1px solid var(--rule2);
+    border-bottom: 1px solid var(--rule);
+}
+
+.theme-minimal .mn-sp {
+    flex: 1;
+}
+
+/* The classic floating buttons, moved into the toolbar: same elements,
+   same ids, same classes (scripts and state hooks such as
+   `.follow-updates.live-active` keep working); only their placement and
+   chrome change. `display` is left to the classic rules, which is what
+   keeps the follow button hidden until live_update.js activates it. */
+.theme-minimal .mn-toolbar .floating-btn {
+    position: relative;
+    right: auto;
+    bottom: auto;
+    width: 32px;
+    height: 30px;
+    padding: 0;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--muted);
+    box-shadow: none;
+    transform: none;
+    transition: none;
+    z-index: auto;
+    /* The text is whatever the page's scripts last wrote (emoji, "md");
+       hide it — the icon is a mask on ::before, which no script touches. */
+    font-size: 0;
+}
+
+.theme-minimal .mn-toolbar .floating-btn:hover,
+.theme-minimal .mn-toolbar .floating-btn:visited:hover {
+    background: transparent;
+    color: var(--fg);
+    transform: none;
+}
+
+.theme-minimal .mn-toolbar .floating-btn:visited {
+    color: var(--muted);
+}
+
+.theme-minimal .mn-toolbar .floating-btn.active,
+.theme-minimal .mn-toolbar .follow-updates.floating-btn.following {
+    background: var(--code);
+    color: var(--fg);
+}
+
+/* Icon buttons: a single-colour SVG as a mask, painted in currentColor. */
+/* `display` is not set here: the classic `.floating-btn` rules own it
+   (the follow button must stay hidden until live updates start). */
+.theme-minimal .mn-ibtn {
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 30px;
+    border-radius: 6px;
+    color: var(--muted);
+    cursor: pointer;
+    text-decoration: none;
+}
+
+.theme-minimal .mn-ibtn::before {
+    content: "";
+    width: 15px;
+    height: 15px;
+    background-color: currentColor;
+    -webkit-mask: var(--mn-icon) center / 15px 15px no-repeat;
+    mask: var(--mn-icon) center / 15px 15px no-repeat;
+}
+
+.theme-minimal .mn-ibtn:hover {
+    color: var(--fg);
+}
+
+.theme-minimal .mn-i-search {
+    --mn-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round'%3E%3Ccircle cx='7' cy='7' r='4.5'/%3E%3Cpath d='M10.5 10.5 14 14'/%3E%3C/svg%3E");
+}
+
+.theme-minimal .mn-i-timeline {
+    --mn-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round'%3E%3Cpath d='M2 4h7M5 8h9M2 12h6'/%3E%3C/svg%3E");
+}
+
+.theme-minimal .mn-i-follow {
+    --mn-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 2v9M4 7.5 8 11.5l4-4M3 14h10'/%3E%3C/svg%3E");
+}
+
+.theme-minimal .mn-i-resume {
+    --mn-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='black'%3E%3Cpath d='M5 3.2v9.6L12.5 8z'/%3E%3C/svg%3E");
+}
+
+.theme-minimal .mn-i-more {
+    --mn-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='black'%3E%3Ccircle cx='3' cy='8' r='1.4'/%3E%3Ccircle cx='8' cy='8' r='1.4'/%3E%3Ccircle cx='13' cy='8' r='1.4'/%3E%3C/svg%3E");
+}
+
+.theme-minimal .mn-i-top {
+    --mn-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 14V5M4 8.5 8 4.5l4 4M3 2h10'/%3E%3C/svg%3E");
+}
+
+/* Segmented control (mockup .seg / .seg.icons). */
+.theme-minimal .mn-seg {
+    display: inline-flex;
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.theme-minimal .mn-seg button {
+    font: inherit;
+    font-size: 0.82em;
+    color: var(--muted);
+    background: transparent;
+    border: 0;
+    min-height: 30px;
+    padding: 0 10px;
+    cursor: pointer;
+}
+
+.theme-minimal .mn-seg button + button {
+    border-left: 1px solid var(--rule);
+}
+
+.theme-minimal .mn-seg button.on {
+    background: var(--fg);
+    color: var(--bg);
+}
+
+.theme-minimal .mn-seg button:not(.on):hover {
+    color: var(--fg);
+}
+
+.theme-minimal .mn-seg-icons button {
+    width: 32px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.theme-minimal .mn-seg svg {
+    display: block;
+}

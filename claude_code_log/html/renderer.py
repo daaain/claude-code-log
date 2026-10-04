@@ -2005,6 +2005,10 @@ class HtmlRenderer(Renderer):
                 project_tree=project_tree,
                 summary=template_summary,
                 library_version=get_library_version(),
+                # Rewritten on every run, so it carries no staleness
+                # decision; the stamp names a non-classic theme like the
+                # transcript pages' does (classic bytes unchanged).
+                theme=normalize_theme(self.theme),
             )
         )
 
@@ -2077,21 +2081,27 @@ def generate_projects_index_html(
     project_summaries: list[dict[str, Any]],
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
+    theme: str = DEFAULT_THEME,
 ) -> str:
     """Generate an index HTML page listing all projects using Jinja2 templates.
 
     This is a convenience function that delegates to HtmlRenderer.generate_projects_index.
     """
-    return HtmlRenderer().generate_projects_index(project_summaries, from_date, to_date)
+    renderer = HtmlRenderer()
+    renderer.theme = normalize_theme(theme)
+    return renderer.generate_projects_index(project_summaries, from_date, to_date)
 
 
-def generate_archive_search_html() -> str:
+def generate_archive_search_html(theme: str = DEFAULT_THEME) -> str:
     """Render the archive-wide search page.
 
     Written on every HTML run, including for people who never start the
     server, so the link from the index page can't 404. Without the API the
     page renders setup instructions rather than a search box — which also
     makes the feature discoverable to someone who just finds the file.
+
+    ``theme`` is the run's HTML theme (``utils.THEMES``): like the index,
+    the page is rewritten on every run, so it always follows the run.
     """
     from ..search import SEARCH_FIELD_HINTS, SEARCH_FIELD_LABELS, SEARCH_FIELDS
 
@@ -2099,6 +2109,7 @@ def generate_archive_search_html() -> str:
     return str(
         env.get_template("archive_search.html").render(
             library_version=get_library_version(),
+            theme=normalize_theme(theme),
             # The field toggles are rendered from the canonical list, so a
             # new group appears in the UI without anyone remembering to add
             # it. Which of them start out *checked* is deliberately not

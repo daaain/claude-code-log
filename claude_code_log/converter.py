@@ -6055,7 +6055,9 @@ def render_provider_wholesale(
             }
         )
 
-    renderer = get_renderer(output_format, image_export_mode)
+    # The theme reaches the index too: it is rewritten on every run, so it
+    # always matches the pages it links to.
+    renderer = get_renderer(output_format, image_export_mode, theme=theme)
     # HTML/Markdown accept title/tree kwargs; JSON keeps a flat structured list
     # and accepts neither. Under --expand-paths (Obsidian mode) the index renders
     # as a nested folder tree mirroring the projected hierarchy; the provider
@@ -7286,7 +7288,9 @@ def _process_projects_hierarchy(
     # `project_summaries` in memory (one template pass + one write),
     # so unconditional regeneration is cheap.
     index_path = index_root / get_index_filename(output_format)
-    renderer = get_renderer(output_format, image_export_mode)
+    # The index and the search page are rewritten on every run (no
+    # generator-stamp check), so they always take this run's theme.
+    renderer = get_renderer(output_format, image_export_mode, theme=theme)
     # Under `--expand-paths` (Obsidian mode), both Markdown and HTML
     # render the index as a nested directory hierarchy that mirrors
     # the projected folder tree. JSON keeps a flat list (structured
@@ -7312,7 +7316,7 @@ def _process_projects_hierarchy(
         from .html.renderer import generate_archive_search_html
 
         atomic_write_text(
-            index_path.parent / "search.html", generate_archive_search_html()
+            index_path.parent / "search.html", generate_archive_search_html(theme)
         )
 
     # Count total sessions from project summaries

@@ -3,7 +3,7 @@
 As-built reference for the minimal HTML theme (`--theme minimal`): where
 its parts live (§ 0), its branch layout — the DAG engine (§ 1–8) — and the
 polish, previews, parity guarantees and lane attributes it rests on
-(§ 9–12). The user guide is [`docs/themes.md`](../docs/themes.md). The
+(§ 9–12), and the project index and archive search page (§ 13). The user guide is [`docs/themes.md`](../docs/themes.md). The
 feature's design and phase-by-phase history is
 [`work/minimal-theme-dag.md`](../work/minimal-theme-dag.md) — a historical
 record now; where it and this page disagree, this page (and the code) win.
@@ -14,14 +14,15 @@ record now; where it and this page disagree, this page (and the code) win.
 |---|---|---|
 | `--theme` / `CLAUDE_CODE_LOG_THEME`, `default` → `utils.DEFAULT_THEME`, same filenames, the generator stamp that makes a page from the other theme stale | `cli._resolve_theme`, `utils.normalize_theme`, `html/renderer.html_generator_stamp` | [application_model.md § 2.1](application_model.md#21-cli) |
 | Template branches (`{% if minimal %}`, glued inline so classic bytes never change), header and toolbar | `transcript.html`, `components/minimal/header.html` | [rendering-architecture.md § 8](rendering-architecture.md#theme-branches-in-transcripthtml) |
-| Look: tokens, row grid, components, light/dark, dark Pygments | `components/minimal/` `tokens.css`, `layout.css`, `components.css`, `pygments_dark.css` (generated), `theme_init.js` | [css-classes.md § Minimal Theme](css-classes.md#minimal-theme-theme-minimal) |
+| Look: tokens, row grid, components, light/dark, dark Pygments | `components/minimal/` `tokens.css`, `layout.css` (includes `chrome.css`: page, header, toolbar), `components.css`, `pygments_dark.css` (generated), `theme_init.js` (includes `scheme_init.js`) | [css-classes.md § Minimal Theme](css-classes.md#minimal-theme-theme-minimal) |
 | Server helpers: gutter, call line, session header, page meta, cross links, lane attributes | `html/minimal_theme.py` | css-classes.md (table), § 7, § 12 |
 | Minimal-only formatter output: compact spawn rows, answers on merge rows, previews of long answers, diffs and commands | `HtmlRenderer.format_TaskInput` / `format_TaskOutput` / `format_TaskNotificationMessage` / `format_EditInput` / `format_MultiEditInput` / `format_BashInput`, `utils.render_markdown_preview`, `tool_formatters.collapse_long_diff` | § 7, § 9, § 10 |
-| Collapse labels, fold depth, colour-scheme toggle, keyboard fold bars | `components/minimal/minimal.js` (the live filter / search refresh is shared: `transcript.html`, `search.html`) | [message-hierarchy.md § Fold depth](message-hierarchy.md#fold-depth-minimal-theme), § 9, § 11 |
+| Collapse labels, fold depth, colour-scheme toggle, keyboard fold bars | `components/minimal/minimal.js` (the toggle's code and markup are shared with § 13: `scheme.js`, `scheme_toggle.html`; the live filter / search refresh is shared: `transcript.html`, `search.html`) | [message-hierarchy.md § Fold depth](message-hierarchy.md#fold-depth-minimal-theme), § 9, § 11 |
 | Lane model (which cards form a branch, spawn / merge rows, turn, rank, stats, running state) | `lanes.py` | [agents.md § 6](agents.md#6-branch-lanes-minimal-theme), [dag.md § Branch lanes](dag.md#branch-lanes-minimal-theme), § 12 |
 | DAG engine: branch modes, rail, columns, live relayout | `components/minimal/minimal_dag.js`, `dag.css` | § 1–8 |
 | Teammate anchors | `lanes.teammate_links`, `minimal_theme.cross_links` | § 7, [teammates.md](teammates.md#minimal-theme-anchors) |
-| Tests | `test_minimal_theme.py`, `test_lanes.py`, `test_theme_option.py`, `test_minimal_*_browser.py` (look, components, folds, DAG, columns, live, polish, parity sweep and smoke test), `TestMinimalThemeHTMLSnapshots`; fixtures `test/dag_demo_fixture.py`, `test/dag_live_fixture.py` | § 11 |
+| Project index and archive search page | `index.html`, `archive_search.html`; `components/minimal/` `index_rows.html`, `search_rows.js`, `pages.css`, `pages.js`; `minimal_theme.index_sessions` / `project_meta` / `project_when` … | § 13 |
+| Tests | `test_minimal_pages.py`, `test_minimal_pages_browser.py`, `test_minimal_theme.py`, `test_lanes.py`, `test_theme_option.py`, `test_minimal_*_browser.py` (look, components, folds, DAG, columns, live, polish, parity sweep and smoke test), `TestMinimalThemeHTMLSnapshots`; fixtures `test/dag_demo_fixture.py`, `test/dag_live_fixture.py` | § 11 |
 
 ## 1. What it does
 
@@ -636,3 +637,70 @@ a merge arriving adds `data-lane-to`). Every render path (single page,
 paginated, streaming, render pool, session-scoped) goes through
 `HtmlRenderer.generate`, so lanes are computed per page or session file
 (`test_lanes.py::TestRenderPaths`).
+
+## 13. Project index and archive search
+
+The two pages outside a project, themed like the transcripts. Both are
+rewritten on every run (no stamp decides anything), so they only need the
+theme passed in: `_process_projects_hierarchy` hands the run's theme to
+`get_renderer(…, theme=)` for the index and to
+`generate_archive_search_html(theme)`, and `render_provider_wholesale`
+does the same for a provider's index. Every caller of those — the
+all-projects run, `serve` (start-up conversion and each `--watch` tick),
+`watch --all-projects` — already resolved `--theme` /
+`CLAUDE_CODE_LOG_THEME`; the TUI exports session files only and writes
+neither page. Before this, both pages were classic whatever the run's
+theme. Both carry the generator stamp (`theme=minimal`) like the other
+pages. `test_minimal_pages.py` drives each path.
+
+**Shared with the transcripts**, not copied: the colour-scheme toggle's
+markup (`scheme_toggle.html`, included by `header.html`), its code
+(`scheme.js`, included by `minimal.js` and `pages.js`) and the pre-paint
+read of the stored choice (`scheme_init.js`, included by `theme_init.js`,
+which keeps the transcript-only `mn-parsing` step), and the page /
+header / toolbar CSS (`chrome.css`, included by `layout.css`). The
+includes reproduce the transcript pages byte for byte. One key,
+`claude-code-log:theme`, so a choice made on any page holds on every
+other of the same origin.
+
+**Index** (`index_rows.html`, `mn_project_row`). One row per project
+instead of a card: the name (a link to the combined transcript) and dim
+mono metadata — sessions (else files), messages, tokens in / out
+(`token_totals`, the transcript header's split), the date range
+(`project_when`; the files' last modification without one). The full
+classic figures are the metadata's `title`. A project with sessions is a
+`<details>` whose summary is the row; opening it lists the sessions newest
+first (`index_sessions`) in the transcript's row language: a gutter with
+the first message's date and time, a user-coloured dot on a rail (each
+row's background draws its piece of the hairline), then title, first
+prompt and `id · msgs`. The header's meta line sums the archive the same
+way; the classic summary cards are not rendered. The session finder
+(`components/search.html`, unchanged) keeps working because the rows keep
+its hooks (`.project-card`, `.project-name a`, `.project-stats`,
+`.session-link` with `.session-preview` / `.session-link-meta`); it sits
+in a sticky bar with the *Search all transcripts* link, and its results
+open under the bar, scrolling inside it. *Search only visible* (a
+transcript filter option) is hidden. `--expand-paths` keeps its folder
+tree, one hairline per level.
+
+**Search page.** The header carries the toggle (the query form is hidden
+until the server answers, and the setup panel shown from `file://` needs
+the toggle too); the query form is styled as a toolbar. Results go through
+`mnRenderGroups` (`search_rows.js`, included inside the page's script next
+to the classic `renderGroups` it replaces, so it shares `escapeHtml`,
+`highlight` and `resultsEl`): a header line per project, then one row per
+hit — gutter with the local date, time and role (`Tool` / `Result` for the
+`tool_input` / `tool_result` field groups, `Thinking`, `Attach`, `Meta`,
+else the entry type), a dot in the role's colour, the short session id and
+field above a three-line snippet. The row is still `.search-result-item >
+a`, the deep link.
+
+**Dates.** The server writes UTC dates (readable without JavaScript);
+`pages.js` rewrites every `[data-mn-from]` (a range, `data-mn-to`) and
+`[data-mn-ts]` (a session gutter) in the viewer's time zone, with the full
+local date and time as the tooltip — the compact counterpart of
+`timezone_converter.js`, which still runs and finds nothing to do.
+
+**Phone.** As on a transcript, under 640px a row's gutter becomes a line of
+its own above the text, and a project's metadata wraps under its name;
+neither page scrolls sideways (`test_minimal_pages_browser.py`).

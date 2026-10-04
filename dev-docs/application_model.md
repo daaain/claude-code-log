@@ -129,7 +129,12 @@ all-projects plan, `watch`/`serve`. Cache rows (`html_cache`,
 promotion keeps archives single-themed: a `--combined no` run whose
 combined output carries the other theme rewrites it once
 (`converter.combined_theme_mismatch`), because its session pages link
-back to it.
+back to it. The project index and the archive search page are rewritten
+on every run and decide nothing from their stamp; they are rendered in
+the run's theme on every path that writes them (the all-projects run and
+so `serve`, its `--watch` ticks and `watch --all-projects`, and the
+provider hierarchy; the TUI writes neither) and stamped like the other
+pages ([minimal-theme.md § 13](minimal-theme.md#13-project-index-and-archive-search)).
 
 For the all-projects invocation, `process_projects_hierarchy` runs in
 three phases: **plan** (sequential, cheap — per-project staleness via

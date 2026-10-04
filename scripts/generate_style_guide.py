@@ -13,9 +13,10 @@ Usage:
     uv run python scripts/generate_style_guide.py
     uv run python scripts/generate_style_guide.py --theme minimal [--output-dir DIR]
 
-With ``--theme minimal`` only the transcript guide is rendered (the index
-page isn't themed), into ``--output-dir`` — by default a scratch directory,
-so the committed classic guide in ``style_guide_output/`` is left alone.
+With ``--theme minimal`` the transcript and index guides are rendered in
+that theme (no Markdown, no landing page) into ``--output-dir`` — by
+default a scratch directory, so the committed classic guide in
+``style_guide_output/`` is left alone.
 Open it and switch the page's Auto / Light / Dark toggle to check both
 schemes.
 """
@@ -656,7 +657,7 @@ def create_sample_messages_session() -> list[dict]:
 
 
 def generate_themed_transcript_guide(theme: str, output_dir: Path) -> Path:
-    """Render only the transcript style guide with a non-classic theme."""
+    """Render the transcript and index style guides with a non-classic theme."""
     output_dir.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as temp_dir:
         jsonl_file = Path(temp_dir) / "style_guide.jsonl"
@@ -670,6 +671,17 @@ def generate_themed_transcript_guide(theme: str, output_dir: Path) -> Path:
             theme=theme,
         )
     print(f"✅ Transcript style guide ({theme} theme) saved to: {result}")
+    index_file = output_dir / "index_style_guide.html"
+    index_file.write_text(
+        generate_projects_index_html(
+            create_index_style_guide_data(),
+            from_date="last week",
+            to_date="today",
+            theme=theme,
+        ),
+        encoding="utf-8",
+    )
+    print(f"✅ Index style guide ({theme} theme) saved to: {index_file}")
     return result
 
 
@@ -874,7 +886,7 @@ if __name__ == "__main__":
         "--theme",
         choices=["classic", "minimal"],
         default="classic",
-        help="HTML theme for the transcript guide (default: classic)",
+        help="HTML theme for the transcript and index guides (default: classic)",
     )
     parser.add_argument(
         "--output-dir",

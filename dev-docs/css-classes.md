@@ -131,6 +131,19 @@ two specificity tiers on purpose:
 `!important` is used only against inline styles: the branch-header indent
 and the timeline container's scripted `top`.
 
+**Other pages.** The project index and the archive search page take
+`tokens.css`, `chrome.css` (the page, header, toolbar and segmented-control
+rules, which `layout.css` includes for transcripts) and `pages.css`, scoped
+under `body.mn-page` (`mn-index` / `mn-search`). Their rows reuse the
+transcript row's grid and role colours (`--rc`) under their own classes —
+`.mn-prow` (a project), `.mn-srow` (a session: `.mn-sgut` gutter,
+`.mn-sbody`), `.mn-hit` with `.mn-k-<role>` (a search hit: `.mn-hgut`,
+`.mn-hbody`) — and keep the classic hooks the scripts read
+(`.project-card`, `.project-name a`, `.project-stats`, `.session-link`,
+`.session-preview`, `.session-link-meta`, `.search-result-item a`,
+`.search-result-excerpt`). See
+[minimal-theme.md § 13](minimal-theme.md#13-project-index-and-archive-search).
+
 **Tokens** (`tokens.css`). Light values on `:root`; dark values under
 `@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) }`
 and again under `:root[data-theme="dark"]`; `color-scheme` follows

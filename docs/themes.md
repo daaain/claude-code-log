@@ -59,7 +59,9 @@ regenerates them again; an archive is never left half in one theme and half
 in the other. Later runs are incremental as usual.
 
 The project index (`index.html`) and the archive search page
-(`search.html`) look the same in both themes.
+(`search.html`) are written on every run, so they always take the run's
+theme too — whether the run is a plain `claude-code-log`, `serve`
+(and each `serve --watch` refresh) or `watch --all-projects`.
 
 ## The minimal theme
 
@@ -94,7 +96,8 @@ The toolbar sticks to the top of the page:
 | ⋯ | Open or close all details, show user prompts as raw text, show message ids |
 
 The page remembers the fold depth, the branch mode and the colour scheme
-in your browser's local storage. Browsers keep that per origin: every page
+in your browser's local storage (the colour scheme is shared with the
+project index and the archive search page). Browsers keep that per origin: every page
 opened from disk shares one set of choices, and the pages a
 `claude-code-log serve` serves share another. If storage is blocked the
 page still works, with the defaults.
@@ -187,6 +190,48 @@ teammate colours.
   <figcaption>The same page in the dark scheme.</figcaption>
 </figure>
 
+### The project index and archive search
+
+The index lists one project per line — its name, then its sessions,
+messages, tokens and date range in small grey type — instead of a card per
+project. Click a project's line (anywhere but its name, which opens the
+combined transcript) to list its sessions, newest first, each as a row
+like a transcript's: the date and time it started, a dot on a rail, its
+title and first prompt. The search box above the list finds sessions by
+title and first prompt, as before; *Search all transcripts* opens the
+archive search.
+
+<figure markdown>
+  ![The project index in the minimal theme: one line per project with dim metadata, one project opened to its sessions](assets/themes/index-light.png)
+  <figcaption>The project index, one project opened to its sessions.</figcaption>
+</figure>
+
+<figure markdown>
+  ![The same index in the dark scheme](assets/themes/index-dark.png)
+  <figcaption>The same index in the dark scheme.</figcaption>
+</figure>
+
+The archive search page (served by `claude-code-log serve`) shows each hit
+as a transcript row: the date and time in the gutter with the role —
+*User*, *Assistant*, *Tool*, *Result* … — in its colour, a dot of the same
+colour on the rail, then the session and the part of the message it
+matched in, above the snippet. Hits are grouped by project.
+
+<figure markdown>
+  ![Archive search results in the minimal theme: rows with a date and role gutter, grouped by project](assets/themes/search-light.png)
+  <figcaption>Archive search: each hit a row, its role in the gutter.</figcaption>
+</figure>
+
+<figure markdown>
+  ![The same search in the dark scheme](assets/themes/search-dark.png)
+  <figcaption>The same search in the dark scheme.</figcaption>
+</figure>
+
+Both pages have the same *Auto · Light · Dark* buttons as a transcript and
+share its stored choice: pick *Dark* on the index and the transcripts you
+open from it are dark too (and the other way round). Dates are shown in
+your time zone; hover one for the full date and time.
+
 ### Offline, and without JavaScript
 
 The theme uses your system's fonts and loads nothing from the network. The
@@ -200,6 +245,5 @@ toolbar's controls need JavaScript.
 
 ### Not themed (yet)
 
-- The project index and the archive search page keep the classic look.
 - Markdown and JSON output have no themes.
 - Workflow agents are shown nested, not as branches.

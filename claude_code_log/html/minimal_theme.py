@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import html
 import re
+from datetime import datetime, timezone
 import unicodedata
 from typing import TYPE_CHECKING, Any, Iterable, Optional, cast
 
@@ -442,3 +443,169 @@ def cross_links(message: "TemplateMessage", links: Optional["CrossLinks"]) -> Ma
         for target, label in found
     )
     return Markup(f"<div class='mn-xlinks'>{anchors}</div>")
+
+
+# -- Project index and archive search pages -----------------------------------
+#
+# ``index.html`` and ``archive_search.html`` in the minimal theme: a compact
+# list of projects with dim mono metadata, each project's sessions as rows
+# in the transcript's row language (time gutter, rail dot, content). The
+# dates rendered here are UTC, correct without JavaScript; ``pages.js``
+# localises every element carrying ``data-mn-from`` / ``data-mn-ts``.
+
+_ISO_DATE = re.compile(r"^(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}:\d{2}))?")
+
+
+def _iso_parts(timestamp: Any) -> tuple[str, str]:
+    """``2025-01-15T10:00:00Z`` → (``2025-01-15``, ``10:00``) — UTC, no JS."""
+    match = _ISO_DATE.match(str(timestamp or "").strip())
+    if not match:
+        return "", ""
+    return match.group(1), match.group(2) or ""
+
+
+def date_span(earliest: Any, latest: Any) -> str:
+    """``2025-01-01 – 2025-01-15`` (one date when both fall on the same day)."""
+    first, _ = _iso_parts(earliest)
+    last, _ = _iso_parts(latest)
+    if first and last and first != last:
+        return f"{first} – {last}"
+    return last or first
+
+
+def when(earliest: Any, latest: Any) -> Optional[dict[str, str]]:
+    """A date range as the template renders it: ``start`` / ``end`` (raw
+    timestamps for ``data-mn-from`` / ``data-mn-to``; ``end`` empty for a
+    single moment) and ``text``, the UTC ``date_span``."""
+    start = str(earliest or latest or "")
+    end = str(latest or "")
+    if not start:
+        return None
+    return {
+        "start": start,
+        "end": end if end and end != start else "",
+        "text": date_span(start, end or start),
+    }
+
+
+def project_when(project: Any) -> Optional[dict[str, str]]:
+    """A project's date range; its files' last modification without one
+    (the classic card's fallback, there in local time)."""
+    found = when(project.earliest_timestamp, project.latest_timestamp)
+    if found is None and project.last_modified:
+        modified = datetime.fromtimestamp(float(project.last_modified), tz=timezone.utc)
+        found = when(modified.strftime("%Y-%m-%dT%H:%M:%SZ"), None)
+    return found
+
+
+def token_totals(
+    input_tokens: int, output_tokens: int, cache_creation: int, cache_read: int
+) -> list[str]:
+    """``["1.2M in", "48k out"]``: context consumed (input + cache) and output,
+    as the transcript header's meta line counts them (``page_meta``)."""
+    total_in = int(input_tokens or 0) + int(cache_creation or 0) + int(cache_read or 0)
+    parts: list[str] = []
+    if total_in:
+        parts.append(f"{compact_count(total_in)} in")
+    if output_tokens:
+        parts.append(f"{compact_count(int(output_tokens))} out")
+    return parts
+
+
+def _plural(count: int, word: str) -> str:
+    return f"{count:,} {word}{'' if count == 1 else 's'}"
+
+
+def index_summary_meta(summary: Any) -> list[str]:
+    """The index header's meta line: projects, files, messages, tokens."""
+    parts = [
+        _plural(int(summary.total_projects), "project"),
+        _plural(int(summary.total_jsonl), "file"),
+        f"{int(summary.total_messages):,} msgs",
+    ]
+    parts.extend(
+        token_totals(
+            summary.total_input_tokens,
+            summary.total_output_tokens,
+            summary.total_cache_creation_tokens,
+            summary.total_cache_read_tokens,
+        )
+    )
+    return parts
+
+
+def project_meta(project: Any) -> list[str]:
+    """A project row's dim metadata: sessions (else files), messages, tokens.
+
+    The date range is not in here: the template renders it as its own
+    element so ``pages.js`` can localise it.
+    """
+    sessions = len(project.sessions or [])
+    parts = [
+        _plural(sessions, "session")
+        if sessions
+        else _plural(int(project.jsonl_count), "file"),
+        f"{int(project.message_count):,} msgs",
+    ]
+    parts.extend(
+        token_totals(
+            project.total_input_tokens,
+            project.total_output_tokens,
+            project.total_cache_creation_tokens,
+            project.total_cache_read_tokens,
+        )
+    )
+    return parts
+
+
+def project_tooltip(project: Any) -> str:
+    """The classic card's full figures, for the row's ``title``."""
+    parts = [
+        _plural(int(project.jsonl_count), "transcript file"),
+        _plural(int(project.message_count), "message"),
+    ]
+    if project.token_summary:
+        parts.append(str(project.token_summary))
+    if project.formatted_time_range:
+        parts.append(f"{project.formatted_time_range} (UTC)")
+    return " · ".join(parts)
+
+
+def index_sessions(project: Any) -> list[dict[str, Any]]:
+    """A project's sessions as index rows, newest first.
+
+    Each row: ``href`` (the same link the classic session navigation
+    builds), ``title`` (summary, may be empty), ``preview`` (first prompt),
+    ``short_id``, ``meta`` parts, and the UTC ``date`` / ``time`` of its
+    first message with the raw ``timestamp`` for ``pages.js``.
+    """
+    rows: list[dict[str, Any]] = []
+    for entry in _real_sessions(project.sessions):
+        session_id = str(entry.get("id") or "")
+        first = entry.get("first_timestamp") or ""
+        last = entry.get("last_timestamp") or ""
+        date, time = _iso_parts(first)
+        meta = [session_id[:8]] if session_id else []
+        count = entry.get("message_count")
+        if count:
+            meta.append(_plural(int(count), "msg"))
+        tokens = compact_token_usage(entry.get("token_summary"))
+        if tokens:
+            meta.append(tokens)
+        rows.append(
+            {
+                "href": entry.get("file")
+                or f"{project.name}/session-{session_id}.html",
+                "title": str(entry.get("summary") or ""),
+                "preview": str(entry.get("first_user_message") or ""),
+                "short_id": session_id[:8],
+                "meta": meta,
+                "timestamp": str(first),
+                "timestamp_end": str(last) if last and last != first else "",
+                "range": str(entry.get("timestamp_range") or ""),
+                "date": date,
+                "time": time,
+            }
+        )
+    rows.sort(key=lambda row: row["timestamp"], reverse=True)
+    return rows

@@ -1,15 +1,4 @@
-        // Minimal theme: apply the stored colour scheme before first paint.
-        // `claude-code-log:theme` holds 'auto' | 'light' | 'dark'; only an
-        // explicit choice sets <html data-theme>, so 'auto' (and a missing,
-        // blocked or unreadable store) follows prefers-color-scheme.
-        (function () {
-            try {
-                var mode = window.localStorage.getItem('claude-code-log:theme');
-                if (mode === 'light' || mode === 'dark') {
-                    document.documentElement.setAttribute('data-theme', mode);
-                }
-            } catch (err) { /* storage unavailable: follow the system */ }
-        })();
+{% include 'components/minimal/scheme_init.js' %}
         // Lay the transcript out once: hide the stage while the page parses
         // (dag.css, `mn-parsing`), so the first layout it gets is the DAG
         // engine's grid at DOMContentLoaded, not a nested page laid out

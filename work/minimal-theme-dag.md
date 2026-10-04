@@ -18,8 +18,14 @@ This file is now a historical record.** Branch of origin:
 
 **Follow-ups** (deliberately not done in this feature):
 
-- **Index and archive search pages** (`index.html`, `search.html`) are not
-  themed (§ 7 decision 6).
+- ~~**Index and archive search pages** (`index.html`, `search.html`) are not
+  themed (§ 7 decision 6)~~ — **done** (follow-up after P8): compact project
+  rows with dim mono metadata and sessions as time-gutter rows on the
+  index, search hits as transcript rows; the toggle, its code, its stored
+  choice and the page chrome are shared with the transcripts (included, not
+  copied — transcript bytes unchanged); the theme reaches both pages on
+  every path that writes them (they were classic whatever the run's
+  theme). dev-docs/minimal-theme.md § 13.
 - **Workflow agents as lanes** (#174): workflow phases and agents stay
   nested blocks, not DAG branches (§ 7 decision 6).
 - **Markdown (and JSON) output** has no themes and no notion of lanes or
@@ -2502,7 +2508,8 @@ is a follow-up.
    (§ 1.6.3).
 6. **Workflow sub-agents** (#174) are not lanes in this feature; the
    index page and `search.html` are not themed. Both could follow.
-   *(Left open: listed under the follow-ups at the top.)*
+   *(Left open: listed under the follow-ups at the top. The index and
+   search pages have since been themed; workflow lanes remain open.)*
 7. **Theme names.** *Decided (with P2):* the existing look is `classic`;
    valid values are `classic`, `minimal` and `default`. `default` means
    "the built-in default theme" — `classic` today, possibly `minimal`

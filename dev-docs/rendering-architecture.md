@@ -393,6 +393,19 @@ the gutter strings come from template-only helpers in
 registered as `mn_*` Jinja globals. CSS classes and token reference:
 [css-classes.md § Minimal Theme](css-classes.md#minimal-theme-theme-minimal).
 
+`index.html` and `archive_search.html` branch the same way (both receive
+`theme` — `HtmlRenderer.generate_projects_index`,
+`generate_archive_search_html(theme)` — and set `minimal` on line 1):
+minimal styles and `scheme_init.js` in a second `<style>` / `<script>`
+after the classic ones, the `<body>` class, a header carrying the shared
+colour-scheme toggle, and `pages.js` at the end. The index swaps whole
+regions with `{% if not minimal %}…{% endif %}` (the summary cards) or an
+inline `{% if minimal %}…{% else %}…{% endif %}` (each project:
+`components/minimal/index_rows.html`'s `mn_project_row` instead of
+`render_project_card`); the search page swaps its result renderer
+(`mnRenderGroups`, `components/minimal/search_rows.js`, included inside
+the page's script). [minimal-theme.md § 13](minimal-theme.md#13-project-index-and-archive-search).
+
 ---
 
 ## 9. CSS Class Derivation
