@@ -600,6 +600,39 @@ class TestAsyncAgentsRenderingDepths:
             assert renderer.format_TaskNotificationMessage(notif, tm_notif) == ""
             assert renderer.title_TaskNotificationMessage(notif, tm_notif) == ""
 
+    def test_duplicate_notification_titled_at_low_in_minimal(self) -> None:
+        """The minimal theme keeps every notification's body — it is the
+        async branch's merge row — so at LOW a duplicate-flagged one keeps
+        its title too, rather than showing an unlabelled answer card.
+        Classic still ghosts both."""
+        from claude_code_log.html.renderer import HtmlRenderer
+
+        _roots, _nav, ctx = self._render_at(RenderingDepth.AGENT)
+        notif = self._notification(ctx)
+        assert notif is not None
+        assert notif.result_is_duplicate is True
+        tm_notif = next(
+            tm
+            for tm in ctx.messages
+            if tm is not None
+            and isinstance(tm.content, TaskNotificationMessage)
+            and tm.content.task_id == ASYNC_AGENT_ID
+        )
+
+        minimal = HtmlRenderer()
+        minimal.depth = RenderingDepth.AGENT
+        minimal.theme = "minimal"
+        assert minimal.format_TaskNotificationMessage(notif, tm_notif) != ""
+        assert minimal.title_TaskNotificationMessage(notif, tm_notif).startswith(
+            "🔄 Async result"
+        )
+
+        classic = HtmlRenderer()
+        classic.depth = RenderingDepth.AGENT
+        classic.theme = "classic"
+        assert classic.format_TaskNotificationMessage(notif, tm_notif) == ""
+        assert classic.title_TaskNotificationMessage(notif, tm_notif) == ""
+
     @pytest.mark.parametrize(
         "depth",
         [RenderingDepth.ASSISTANT, RenderingDepth.USER],

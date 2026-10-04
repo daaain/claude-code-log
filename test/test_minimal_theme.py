@@ -224,6 +224,50 @@ class TestPygmentsDark:
         )
 
 
+class TestDarkTokens:
+    """tokens.css states the dark palette twice: once for the system's dark
+    scheme, once for the in-page toggle's explicit ``data-theme="dark"``.
+    A token missing from either block silently falls back to its light
+    value in that mode, so the two must declare the same tokens, the same
+    values, each exactly once."""
+
+    @staticmethod
+    def _declarations(block: str) -> list[tuple[str, str]]:
+        import re
+
+        block = re.sub(r"/\*.*?\*/", "", block, flags=re.DOTALL)
+        return re.findall(r"(--[\w-]+)\s*:\s*([^;]+);", block)
+
+    @staticmethod
+    def _block(sheet: str, selector: str) -> str:
+        start = sheet.index("{", sheet.index(selector)) + 1
+        return sheet[start : sheet.index("}", start)]
+
+    def test_both_dark_blocks_define_the_same_tokens(self) -> None:
+        sheet = (
+            Path(str(minimal_theme.__file__)).parent
+            / "templates"
+            / "components"
+            / "minimal"
+            / "tokens.css"
+        ).read_text(encoding="utf-8")
+        media = sheet[sheet.index("@media (prefers-color-scheme: dark)") :]
+        system = self._declarations(
+            self._block(media, ':root:not([data-theme="light"])')
+        )
+        forced = self._declarations(self._block(sheet, ':root[data-theme="dark"]'))
+        assert system and forced
+        for declarations in (system, forced):
+            names = [name for name, _ in declarations]
+            assert len(names) == len(set(names)), "a token is declared twice"
+        assert dict(system) == dict(forced)
+        # Every dark token but the teammate colours (whose light values
+        # live with the classic stylesheets) overrides one in :root, so a
+        # misspelt name cannot hide in both blocks at once.
+        light = dict(self._declarations(self._block(sheet, ":root {")))
+        assert {n for n, _ in forced if not n.startswith("--cc-")} <= set(light)
+
+
 class TestCompactNumbers:
     @pytest.mark.parametrize(
         ("value", "text"),

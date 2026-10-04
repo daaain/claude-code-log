@@ -19934,7 +19934,6 @@
           --bg: #14161a;
           --fg: #e4e6e9;
           --muted: #969da7;
-      --dim: #6b727c;
           --dim: #6b727c;
           --rule: #2a2e35;
           --rule2: #c9ccd1;
@@ -19977,6 +19976,7 @@
       --bg: #14161a;
       --fg: #e4e6e9;
       --muted: #969da7;
+      --dim: #6b727c;
       --rule: #2a2e35;
       --rule2: #c9ccd1;
       --code: #1d2025;
@@ -26221,7 +26221,6 @@
           --bg: #14161a;
           --fg: #e4e6e9;
           --muted: #969da7;
-      --dim: #6b727c;
           --dim: #6b727c;
           --rule: #2a2e35;
           --rule2: #c9ccd1;
@@ -26264,6 +26263,7 @@
       --bg: #14161a;
       --fg: #e4e6e9;
       --muted: #969da7;
+      --dim: #6b727c;
       --rule: #2a2e35;
       --rule2: #c9ccd1;
       --code: #1d2025;
@@ -40321,7 +40321,6 @@
           --bg: #14161a;
           --fg: #e4e6e9;
           --muted: #969da7;
-      --dim: #6b727c;
           --dim: #6b727c;
           --rule: #2a2e35;
           --rule2: #c9ccd1;
@@ -40364,6 +40363,7 @@
       --bg: #14161a;
       --fg: #e4e6e9;
       --muted: #969da7;
+      --dim: #6b727c;
       --rule: #2a2e35;
       --rule2: #c9ccd1;
       --code: #1d2025;
@@ -51885,7 +51885,6 @@
           --bg: #14161a;
           --fg: #e4e6e9;
           --muted: #969da7;
-      --dim: #6b727c;
           --dim: #6b727c;
           --rule: #2a2e35;
           --rule2: #c9ccd1;
@@ -51928,6 +51927,7 @@
       --bg: #14161a;
       --fg: #e4e6e9;
       --muted: #969da7;
+      --dim: #6b727c;
       --rule: #2a2e35;
       --rule2: #c9ccd1;
       --code: #1d2025;
@@ -55762,7 +55762,6 @@
           --bg: #14161a;
           --fg: #e4e6e9;
           --muted: #969da7;
-      --dim: #6b727c;
           --dim: #6b727c;
           --rule: #2a2e35;
           --rule2: #c9ccd1;
@@ -55805,6 +55804,7 @@
       --bg: #14161a;
       --fg: #e4e6e9;
       --muted: #969da7;
+      --dim: #6b727c;
       --rule: #2a2e35;
       --rule2: #c9ccd1;
       --code: #1d2025;
@@ -62774,7 +62774,6 @@
           --bg: #14161a;
           --fg: #e4e6e9;
           --muted: #969da7;
-      --dim: #6b727c;
           --dim: #6b727c;
           --rule: #2a2e35;
           --rule2: #c9ccd1;
@@ -62817,6 +62816,7 @@
       --bg: #14161a;
       --fg: #e4e6e9;
       --muted: #969da7;
+      --dim: #6b727c;
       --rule: #2a2e35;
       --rule2: #c9ccd1;
       --code: #1d2025;

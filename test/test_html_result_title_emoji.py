@@ -169,6 +169,44 @@ def test_result_title_emoji_replaces_host_icon(
     assert headers == [f"🚨 {TITLE}" if is_error else TITLE]
 
 
+# The minimal theme's title span: the hidden prefix (``.mn-tn``) holds the
+# pictographs the call line drops, so the span's text — which search and
+# the timeline read — stays the full title, as classic renders it.
+_MINIMAL_RESULT_TITLE = re.compile(
+    r"<div class='message tool_result[^']*'[^>]*>\s*"
+    r"<div class='header'>\s*<span class='mn-title[^']*'"
+    r" title=\"([^\"]*)\"><span class='mn-tn'>([^<]*)</span>",
+    re.DOTALL,
+)
+
+
+@pytest.mark.parametrize(
+    "depth",
+    [
+        pytest.param(RenderingDepth.AGENT, id="standalone"),
+        pytest.param(RenderingDepth.TOOL, id="paired"),
+    ],
+)
+@pytest.mark.parametrize("is_error", [False, True], ids=["ok", "error"])
+def test_minimal_result_title_follows_the_same_rule(
+    tmp_path: Path, depth: RenderingDepth, is_error: bool
+) -> None:
+    path = tmp_path / "t.jsonl"
+    path.write_text(
+        "\n".join(json.dumps(e) for e in _entries(is_error)) + "\n", encoding="utf-8"
+    )
+    html = get_renderer("html", depth=depth, theme="minimal").generate(
+        load_transcript(path)
+    )
+    assert html is not None
+    expected = f"🚨 {TITLE}" if is_error else TITLE
+    found = _MINIMAL_RESULT_TITLE.findall(html)
+    assert len(found) == 1
+    tooltip, prefix = found[0]
+    assert tooltip.startswith(f"{expected} · ")
+    assert prefix == ("🚨 📨 " if is_error else "📨 ")
+
+
 @pytest.mark.parametrize(
     "text",
     [

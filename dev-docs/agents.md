@@ -126,7 +126,8 @@ At `RenderingDepth.AGENT` the format-specific renderers honor the flag
 by **ghosting** the duplicate notification — `format_TaskNotificationMessage`
 and `title_TaskNotificationMessage` (in both `HtmlRenderer` and
 `MarkdownRenderer`) return `""` when `self.detail == AGENT and
-content.result_is_duplicate`. The rendering loop's existing
+content.result_is_duplicate` (in `HtmlRenderer`, classic theme only:
+the minimal theme keeps both, as above). The rendering loop's existing
 "skip empty messages" elision (HTML's
 `if title or html or msg.children:` and Markdown's
 `_render_message` returning `""` for no-title-no-content) drops the
@@ -168,7 +169,8 @@ notification card retains its body as the surviving copy.
   TaskOutput poll card HTML.
 - `html/renderer.py::HtmlRenderer.format_TaskNotificationMessage` /
   `title_TaskNotificationMessage` — return `""` at AGENT for
-  duplicate-flagged notifications (ghost mechanism).
+  duplicate-flagged notifications (ghost mechanism); in the minimal
+  theme both keep the notification, title and body.
 - `html/tool_formatters.py::format_task_output` — renders
   `async_final_answer` as a collapsible below the launch stub.
 - `markdown/renderer.py::MarkdownRenderer.format_TaskNotificationMessage` /

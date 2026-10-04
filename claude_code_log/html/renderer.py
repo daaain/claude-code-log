@@ -1579,9 +1579,15 @@ class HtmlRenderer(Renderer):
         Empty at ``RenderingDepth.AGENT`` for duplicate-flagged
         notifications — pairs with ``format_TaskNotificationMessage``
         to "ghost" the card while keeping the message in
-        ``ctx.messages``.
+        ``ctx.messages``. Not in the minimal theme, whose formatter keeps
+        every notification's body (the async branch's merge row): the
+        title stays with it, so the row never shows an unlabelled answer.
         """
-        if self.depth == RenderingDepth.AGENT and content.result_is_duplicate:
+        if (
+            normalize_theme(self.theme) != "minimal"
+            and self.depth == RenderingDepth.AGENT
+            and content.result_is_duplicate
+        ):
             return ""
         if content.summary:
             return (
