@@ -130,8 +130,9 @@ engine runs (`minimal_dag.js`, [minimal-theme.md](minimal-theme.md)) a
 **sub-agent lane's** container is shown or hidden by the toolbar's
 **Branches** mode instead, at every depth (spec § 1.5: sub-agent subtrees
 follow the Branches mode, not the fold depth) — the engine forces it with
-`dag-entry` / `dag-hidden` and hides that card's fold bar. Containers that
-are not lanes (teammate threads, workflow phases) keep following the
+`dag-entry` / `dag-hidden` and hides that card's fold bar. A workflow agent
+card's transcript is a lane too (minimal-theme.md § 1.1). Containers that
+are not lanes (teammate threads, workflow phase groups) keep following the
 depth. Without JavaScript nothing folds at all.
 
 - **When.** The stored depth (`localStorage` `claude-code-log:fold-depth`,

@@ -1,7 +1,8 @@
 """The branch-lane model (``claude_code_log/lanes.py``, minimal theme P5).
 
 ``annotate_lanes`` assigns every render-tree node to a lane — ``main``, a
-sub-agent (``agent-<id>``) or a rewind fork (``branch-<sid>``) — and
+sub-agent (``agent-<id>``), a workflow agent (``wfagent-<id>``) or a rewind
+fork (``branch-<sid>``) — and
 describes each lane (spawn and merge rows, user turn, rank, stats). The
 minimal theme emits it as ``data-*`` attributes for the DAG engine
 (work/minimal-theme-dag.md, P5 "As built"); classic output never sees it.
@@ -35,7 +36,7 @@ from claude_code_log.html.renderer import HtmlRenderer, generate_html
 from claude_code_log.lanes import MAIN_LANE, LaneModel, annotate_lanes, teammate_links
 from claude_code_log.models import RenderingDepth
 from claude_code_log.renderer import TemplateMessage, generate_template_messages
-from test.dag_demo_fixture import write_team_demo
+from test.dag_demo_fixture import write_team_demo, write_workflow_demo
 
 TEST_DATA = Path(__file__).parent / "test_data"
 ASYNC = TEST_DATA / "async_agents"
@@ -337,11 +338,133 @@ class TestTeammates:
 
 
 class TestWorkflow:
-    def test_workflow_agents_are_not_lanes(self) -> None:
+    """Workflow agents (#174) as lanes: one per agent card whose side-channel
+    transcript rendered, spawned at its phase card, merging at the agent
+    card, ranked and capped per phase (``data-lane-group``)."""
+
+    def test_each_agent_with_a_transcript_is_a_lane(self) -> None:
         model, nodes = _model(WORKFLOW)
-        assert model.lanes == {}
-        grafted = [n for n in nodes.values() if n.in_workflow_sidechannel]
-        assert grafted and {n.lane_id for n in nodes.values()} == {MAIN_LANE}
+        lanes = _branch_lanes(model)
+        assert list(lanes) == [
+            "wfagent-ag000001",
+            "wfagent-ag000002",
+            "wfagent-ag000003",
+        ]
+        for lane_id, lane in lanes.items():
+            spawn = nodes[lane.spawn_index]
+            head = nodes[lane.head_index]
+            assert lane.kind == "workflow-agent" and lane.parent_lane == MAIN_LANE
+            assert spawn.type == "workflow_phase" and spawn.lane_id == MAIN_LANE
+            assert head.type == "workflow_agent" and head.lane_id == MAIN_LANE
+            assert lane.merge_index == lane.head_index and lane.state == ""
+            # The agent card's transcript is the lane, all of it.
+            stack = list(head.children)
+            assert stack
+            while stack:
+                node = stack.pop()
+                assert node.in_workflow_sidechannel and node.lane_id == lane_id
+                stack.extend(node.children)
+        loader = lanes["wfagent-ag000001"]
+        assert (loader.name, loader.tag) == ("review:loader", "loader")
+        assert loader.meta == "Map · claude-sonnet-4-6"
+        assert loader.stats == "4 steps · 100 tokens · 1.0s"
+        # Phases are groups: ranks restart in each, the turn is shared.
+        assert [(lane.group, lane.rank) for lane in lanes.values()] == [
+            ("wf_demo01/0", 1),
+            ("wf_demo01/0", 2),
+            ("wf_demo01/1", 1),
+        ]
+        assert {lane.turn_index for lane in lanes.values()} == {1}
+        assert (
+            lanes["wfagent-ag000001"].spawn_index
+            == lanes["wfagent-ag000002"].spawn_index
+        )
+
+    def test_demo_groups_rows_and_states(self, tmp_path: Path) -> None:
+        model, nodes = _model(write_workflow_demo(tmp_path / "wf"))
+        lanes = _branch_lanes(model)
+        map_lanes = [lane for lane in lanes.values() if lane.group == "wf_theme01/0"]
+        assert [lane.name for lane in map_lanes] == [
+            "map:loader",
+            "map:renderer",
+            "map:lanes",
+            "map:engine",
+            "map:styles",
+        ]
+        # Ranked by when each agent started.
+        assert [lane.rank for lane in map_lanes] == [1, 2, 3, 4, 5]
+        # The agent with no transcript is a plain row, not a lane.
+        docs = [
+            n
+            for n in nodes.values()
+            if n.type == "workflow_agent" and "docs" in str(getattr(n.content, "label"))
+        ]
+        assert len(docs) == 1 and docs[0].lane_id == MAIN_LANE
+        assert not any("docs" in lane.lane_id for lane in lanes.values())
+        # A failed agent without a result: no merge row, ended.
+        engine = lanes["wfagent-wa04engine"]
+        assert engine.merge_index is None and engine.state == "ended"
+        assert engine.meta == "Map · claude-haiku-4-5 · failed"
+        # The turn's own sub-agent ranks first in the turn, unaffected.
+        task = lanes["agent-c900check"]
+        assert task.kind == "agent" and task.rank == 1 and task.group == ""
+        assert task.turn_index == map_lanes[0].turn_index
+
+    def test_a_run_without_phases_spawns_at_the_call_and_stays_open(self) -> None:
+        """A run with no snapshot hangs its agents off the Workflow call's
+        result; an agent without a result there may still be running."""
+        entries, tree = load_directory_transcripts(WORKFLOW, silent=True)
+        assert tree is not None
+        for run in tree.workflow_runs.values():
+            run.has_snapshot = False
+            for agent in run.agents:
+                if agent.agent_id == "ag000003":
+                    agent.result, agent.result_preview, agent.state = None, "", ""
+        roots, _nav, _ctx = generate_template_messages(
+            entries, session_tree=tree, depth=RenderingDepth.HOOK
+        )
+        model = annotate_lanes(roots)
+        lanes = _branch_lanes(model)
+        assert len(lanes) == 3
+        spawns = {lane.spawn_index for lane in lanes.values()}
+        assert len(spawns) == 1
+        assert {lane.group for lane in lanes.values()} == {"wf_demo01"}
+        open_lane = lanes["wfagent-ag000003"]
+        assert open_lane.merge_index is None and open_lane.state == "open"
+        attrs = lane_attributes(model)
+        spawn_index = spawns.pop()
+        assert spawn_index is not None
+        spawn = dict(attrs[spawn_index])
+        assert spawn["data-spawns"].split() == list(lanes)
+
+    def test_html_attributes(self) -> None:
+        attrs = _card_attrs(_minimal_html(WORKFLOW))
+        assert attrs["d-5"]["data-spawns"] == "wfagent-ag000001 wfagent-ag000002"
+        head = attrs["d-6"]
+        assert head == {
+            "data-lane": "main",
+            "data-merges": "wfagent-ag000001",
+            "data-lane-id": "wfagent-ag000001",
+            "data-lane-kind": "workflow-agent",
+            "data-lane-name": "review:loader",
+            "data-lane-tag": "loader",
+            "data-lane-meta": "Map · claude-sonnet-4-6",
+            "data-lane-parent": "main",
+            "data-lane-depth": "1",
+            "data-lane-from": "d-5",
+            "data-lane-to": "d-6",
+            "data-lane-turn": "d-1",
+            "data-lane-group": "wf_demo01/0",
+            "data-lane-rank": "1",
+            "data-lane-stats": "4 steps · 100 tokens · 1.0s",
+            "data-lane-ts": "2026-06-04T10:00:00.000Z 2026-06-04T10:00:00.000Z",
+        }
+        assert attrs["d-7"] == {"data-lane": "wfagent-ag000001"}
+
+    def test_classic_carries_no_lane_data(self) -> None:
+        entries, tree = load_directory_transcripts(WORKFLOW, silent=True)
+        classic = generate_html(entries, "T", session_tree=tree)
+        assert "data-lane" not in classic and "wfagent-" not in classic
 
 
 class TestForkFixtures:

@@ -256,7 +256,10 @@ wide layout), below the call's role, which hangs into that row (P7c).
 **Workflow groups.** The phases group and each phase's / agent's
 `.children` hang under the content column like a sub-agent group (one 2px
 line per level — phase `--tool`, agent `--l0` — and the nested
-gutter/rail) instead of the classic 2em-per-level indents.
+gutter/rail) instead of the classic 2em-per-level indents. That is the
+look without JavaScript; with the DAG engine (`dag-on`) phase and agent
+cards are rows on the main gutter and each agent's transcript is a branch
+lane (`dag.css` resets the nested gutter; minimal-theme.md § 1.1).
 
 **Search & filter panel.** The classic `.filter-toggle` buttons render as
 the mockup's chips: a dot in the type's role colour (filled when active),

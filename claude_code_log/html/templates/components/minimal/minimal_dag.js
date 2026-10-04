@@ -1,5 +1,5 @@
         // Minimal theme (--theme minimal): the DAG engine — branch lanes
-        // (sub-agents at any depth, rewind forks) drawn as a git-graph rail
+        // (sub-agents at any depth, workflow agents, rewind forks) drawn as a git-graph rail
         // beside the main line, each folded ("Main only", the default),
         // interleaved with the main line at its real arrival times, or in a
         // column of its own (a swimlane, time-aligned with the main line;
@@ -42,7 +42,7 @@
             // Global modes; per lane: 'folded' | 'interleaved' | 'column' |
             // 'strip' (a column collapsed to a narrow strip).
             const GLOBAL_MODES = ['main', 'interleaved', 'columns'];
-            const CAP = 3;              // interleaved lanes (and controls shown) per user turn
+            const CAP = 3;              // interleaved lanes (and controls shown) per user turn / workflow group
             // Column mode (P7c): the main column takes twice a branch column's
             // share of the spare width, and never less than MAIN_MIN; on a
             // phone every column (main too) is the viewport's width, one at a
@@ -80,8 +80,12 @@
             // Turns are keyed by their card's data-uuid (lane.turnKey), not
             // its positional d-N: a live swap renumbers the ids, and the
             // per-turn cap and overflow must follow the turn, not the slot.
-            const recency = new Map();    // turn key -> interleaved lane ids, least recent first
-            const expanded = new Set();   // turn keys whose "+N more branches" are shown
+            // A workflow's agents are capped per group instead (their phase,
+            // or a run without phases: data-lane-group, `g:<runId>/<n>`), so
+            // a fan-out of many agents never pushes the turn's other
+            // branches out, and gets its own "+N more agents".
+            const recency = new Map();    // turn / group key -> interleaved lane ids, least recent first
+            const expanded = new Set();   // turn / group keys whose "+N more" are shown
             const acksShown = new Set();  // lane ids whose launch acknowledgement is shown (P7c)
             let lanes = new Map();        // lane id -> record (rebuilt each relayout)
             let started = false;
@@ -125,6 +129,8 @@
                         to: head.getAttribute('data-lane-to') || '',
                         turn: turn,
                         turnKey: turnKeyOf(turn),
+                        // Workflow agents: the phase (run) they belong to.
+                        group: head.getAttribute('data-lane-group') || '',
                         rank: parseInt(head.getAttribute('data-lane-rank') || '1', 10) || 1,
                         stats: head.getAttribute('data-lane-stats') || '',
                         // Agents without a result: 'open' (may be running)
@@ -157,8 +163,10 @@
                 }
                 return chain;
             }
+            // The cap's unit: the user turn, or a workflow agent's group.
             function turnOf(id) {
                 const lane = lanes.get(id);
+                if (lane && lane.group) return 'g:' + lane.group;
                 return lane ? lane.turnKey || ('lane:' + id) : 'lane:' + id;
             }
             function defaultMode(lane, value) {
@@ -480,12 +488,14 @@
                 return card.classList.contains('sidechain') ? 1 : 0;
             }
             // A nested group that is not a lane keeps its nested look as one
-            // block: teammate threads (spec § 1.6.5), workflow phases (§ 7),
-            // old-style sidechains without an agent transcript.
+            // block: teammate threads (spec § 1.6.5), old-style sidechains
+            // without an agent transcript. (Workflow phase and agent cards
+            // are rows: each agent's transcript is a lane of its own.)
             function isBlockGroup(owner, kid) {
-                if (kid.classList.contains('workflow_phase') || kid.classList.contains('workflow_agent')) return true;
                 return !!owner && kid.classList.contains('sidechain') && agentDepth(kid) > agentDepth(owner);
             }
+            // A sub-agent's or a workflow agent's transcript (not a fork).
+            const AGENT_LANE = /^(?:agent|wfagent)-/;
 
             function buildModel() {
                 const transcript = document.getElementById('transcript');
@@ -554,7 +564,7 @@
                             const folded = el.style.display === 'none';
                             const first = el.querySelector(':scope > .message-node > .message');
                             const kidLane = first ? (first.getAttribute('data-lane') || cardLane) : cardLane;
-                            if (first && kidLane !== cardLane && kidLane.indexOf('agent-') === 0) {
+                            if (first && kidLane !== cardLane && AGENT_LANE.test(kidLane)) {
                                 // A sub-agent's transcript: the lane decides.
                                 if (card) want(card, 'dag-owner');
                                 // Folded, it is still walked (hidden): rows are
@@ -890,10 +900,14 @@
                     const hide = overflow.hidden.has(id);
                     if (ctl.hidden !== hide) ctl.hidden = hide;
                     const fork = lane.kind === 'fork';
+                    // A phase spawns several workflow agents: each control
+                    // names its agent (a Task's spawn row is its own name).
+                    const named = fork || lane.kind === 'workflow-agent';
                     // An agent without a result that is not running ended
                     // without one (or the page is a static copy).
                     const unfinished = !live && (lane.state === 'open' || lane.state === 'ended');
-                    const label = (fork ? '⑂ ' + lane.name + ' · ' : '') + (lane.stats || lane.name)
+                    const label = (fork ? '⑂ ' : '') + (named ? lane.name + (lane.stats ? ' · ' : '') : '')
+                        + (named ? lane.stats : (lane.stats || lane.name))
                         + (unfinished ? ' · no result' : '');
                     // The mode is its own part (P8): on a narrow line the
                     // label gives way (ellipsis), the mode stays readable.
@@ -964,9 +978,12 @@
                             ctl.appendChild(toggle);
                         }
                         setAttr(toggle, 'data-turn', more.turn);
-                        const text = more.expanded ? '− fewer branches' : '+' + more.count + ' more branch' + (more.count === 1 ? '' : 'es');
-                        setAttr(toggle, 'data-label', text);
-                        setAttr(toggle, 'aria-label', more.expanded ? 'Hide the extra branches of this turn' : 'Show ' + more.count + ' more branch' + (more.count === 1 ? '' : 'es') + ' of this turn');
+                        const agents = more.noun === 'agent';
+                        const plural = agents ? 'agents' : 'branches';
+                        const counted = more.count + ' more ' + (more.count === 1 ? more.noun : plural);
+                        const scope = agents ? 'this workflow phase' : 'this turn';
+                        setAttr(toggle, 'data-label', more.expanded ? '− fewer ' + plural : '+' + counted);
+                        setAttr(toggle, 'aria-label', more.expanded ? 'Hide the extra ' + plural + ' of ' + scope : 'Show ' + counted + ' of ' + scope);
                         setAttr(toggle, 'aria-expanded', more.expanded ? 'true' : 'false');
                     } else if (toggle) {
                         toggle.remove();
@@ -985,13 +1002,14 @@
             // reader opened, or a reveal did, always shows its control).
             // Nested lanes are left out: they only show once the reader opens
             // their parent, and counting them would make opening one lane hide
-            // another's control.
+            // another's control. A workflow group ("+N more agents") counts
+            // at any depth: its lanes share one spawn row, so one parent.
             function computeOverflow(model) {
                 const hidden = new Set();
                 const anchors = new Map();
                 const byTurn = new Map();
                 lanes.forEach(function (lane, id) {
-                    if (parentOf(id) || !model.spawns.has(id)) return;
+                    if ((parentOf(id) && !lane.group) || !model.spawns.has(id)) return;
                     const turn = turnOf(id);
                     const list = byTurn.get(turn) || [];
                     list.push(lane);
@@ -1007,7 +1025,8 @@
                         count++;
                         if (!isExpanded) hidden.add(lane.id);
                     });
-                    if (isExpanded || count) anchors.set(list[CAP - 1].id, { turn: turn, count: count, expanded: isExpanded });
+                    const noun = list[CAP - 1].group ? 'agent' : 'branch';
+                    if (isExpanded || count) anchors.set(list[CAP - 1].id, { turn: turn, count: count, expanded: isExpanded, noun: noun });
                 });
                 return { hidden: hidden, anchors: anchors };
             }

@@ -105,7 +105,8 @@ page still works, with the defaults.
 ### Branches
 
 A **branch** is a sub-agent's transcript — synchronous, background
-(`run_in_background`) or nested inside another agent, to any depth — or a
+(`run_in_background`) or nested inside another agent, to any depth —, a
+workflow agent's transcript (see *Workflows* below), or a
 **rewind fork** (a conversation that was rewound and continued
 differently; the earliest continuation stays the main line). Each branch
 has a control on the row that spawned it — its step count, tokens and
@@ -154,7 +155,27 @@ whichever way the branches are shown.
 **Teammates** (agent teams) are not branches: a teammate's thread stays
 folded under the message that spawned it, and the spawn, each
 `SendMessage` and each delivered `<teammate-message>` link to one another.
-Workflow agents stay nested too.
+
+**Workflows** (the `Workflow` tool) show their phases and agents as rows
+under the call: each phase, then one row per agent with its result. Every
+agent that left a transcript is a branch of its own, spawned at its phase
+and merging back at its agent row — folded, interleaved or in a column like
+any other. A phase is a group of its own: its first three agents get a
+control and *Interleaved* opens those three, the rest wait behind
+*+N more agents* on the phase row, and a busy phase never pushes the
+turn's other branches (or another phase's agents) out. An agent that
+failed without a result says *no result*; one without a transcript stays a
+plain row.
+
+<figure markdown>
+  ![A workflow phase with three of its agents interleaved: their steps woven together by time, each agent merging back at its own row](assets/themes/workflow-interleaved-light.png)
+  <figcaption>A workflow in <em>Interleaved</em>: three agents of the <em>Map</em> phase, the rest behind <em>+2 more agents</em>.</figcaption>
+</figure>
+
+<figure markdown>
+  ![The same phase in columns: one column per agent beside the main session, the agents' rows still on the main line](assets/themes/workflow-columns-light.png)
+  <figcaption>The same agents in <em>Columns</em>: one column each, their result rows on the main line.</figcaption>
+</figure>
 
 On a phone, *Columns* shows one column at a time, the width of the screen:
 swipe sideways from one to the next.
@@ -246,4 +267,3 @@ toolbar's controls need JavaScript.
 ### Not themed (yet)
 
 - Markdown and JSON output have no themes.
-- Workflow agents are shown nested, not as branches.

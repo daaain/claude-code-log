@@ -18,17 +18,18 @@ record now; where it and this page disagree, this page (and the code) win.
 | Server helpers: gutter, call line, session header, page meta, cross links, lane attributes | `html/minimal_theme.py` | css-classes.md (table), § 7, § 12 |
 | Minimal-only formatter output: compact spawn rows, answers on merge rows, previews of long answers, diffs and commands | `HtmlRenderer.format_TaskInput` / `format_TaskOutput` / `format_TaskNotificationMessage` / `format_EditInput` / `format_MultiEditInput` / `format_BashInput`, `utils.render_markdown_preview`, `tool_formatters.collapse_long_diff` | § 7, § 9, § 10 |
 | Collapse labels, fold depth, colour-scheme toggle, keyboard fold bars | `components/minimal/minimal.js` (the toggle's code and markup are shared with § 13: `scheme.js`, `scheme_toggle.html`; the live filter / search refresh is shared: `transcript.html`, `search.html`) | [message-hierarchy.md § Fold depth](message-hierarchy.md#fold-depth-minimal-theme), § 9, § 11 |
-| Lane model (which cards form a branch, spawn / merge rows, turn, rank, stats, running state) | `lanes.py` | [agents.md § 6](agents.md#6-branch-lanes-minimal-theme), [dag.md § Branch lanes](dag.md#branch-lanes-minimal-theme), § 12 |
+| Lane model (which cards form a branch — sub-agents, workflow agents, forks —, spawn / merge rows, turn or workflow group, rank, stats, running state) | `lanes.py` | [agents.md § 6](agents.md#6-branch-lanes-minimal-theme), [dag.md § Branch lanes](dag.md#branch-lanes-minimal-theme), § 12 |
 | DAG engine: branch modes, rail, columns, live relayout | `components/minimal/minimal_dag.js`, `dag.css` | § 1–8 |
 | Teammate anchors | `lanes.teammate_links`, `minimal_theme.cross_links` | § 7, [teammates.md](teammates.md#minimal-theme-anchors) |
 | Project index and archive search page | `index.html`, `archive_search.html`; `components/minimal/` `index_rows.html`, `search_rows.js`, `pages.css`, `pages.js`; `minimal_theme.index_sessions` / `project_meta` / `project_when` … | § 13 |
-| Tests | `test_minimal_pages.py`, `test_minimal_pages_browser.py`, `test_minimal_theme.py`, `test_lanes.py`, `test_theme_option.py`, `test_minimal_*_browser.py` (look, components, folds, DAG, columns, live, polish, parity sweep and smoke test), `TestMinimalThemeHTMLSnapshots`; fixtures `test/dag_demo_fixture.py`, `test/dag_live_fixture.py` | § 11 |
+| Tests | `test_minimal_pages.py`, `test_minimal_pages_browser.py`, `test_minimal_theme.py`, `test_lanes.py`, `test_theme_option.py`, `test_minimal_*_browser.py` (look, components, folds, DAG, columns, live, polish, parity sweep and smoke test), `TestMinimalThemeHTMLSnapshots`; fixtures `test/dag_demo_fixture.py` (`write_dag_demo`, `write_team_demo`, `write_workflow_demo`), `test/dag_live_fixture.py` | § 11 |
 
 ## 1. What it does
 
-**Branches** are sub-agent transcripts (sync, async, nested to any depth)
-and rewind forks — every lane P5 annotates (`data-lane-id` heads). Teammate
-threads and workflow phases are not branches: they stay nested blocks.
+**Branches** are sub-agent transcripts (sync, async, nested to any depth),
+workflow agents' transcripts (§ 1.1) and rewind forks — every lane P5
+annotates (`data-lane-id` heads). Teammate threads are not branches: they
+stay nested blocks.
 
 Each branch is in one of four modes:
 
@@ -66,7 +67,8 @@ column (tinted, its tag in the column's gutter); put in a column itself, it
 gets its own column, placed right after its parent's (columns are ordered by
 spawn row, depth first).
 
-At most **3 lanes per user turn** are interleaved; selecting a 4th folds the
+At most **3 lanes per user turn** (per workflow group for workflow agents,
+§ 1.1) are interleaved; selecting a 4th folds the
 least recently selected lane of that turn (never one the new lane is nested
 in). Interleaving a nested lane interleaves its folded parents first (a
 parent in a column stays there); putting one in a column puts its folded
@@ -101,6 +103,47 @@ otherwise — **without evicting anything**: a search that hits more than
 three lanes of one turn shows every hit, past the cap. The next manual
 selection in that turn trims it back to three.
 
+### 1.1 Workflow agents
+
+A `Workflow` run is spliced under its call as phase cards with agent cards
+under them ([workflows.md § 5](workflows.md#5-the-splice-_splice_workflow_runs)).
+With the engine on these are ordinary rows of the call's lane (no longer one
+nested block), and each agent card whose side-channel transcript rendered
+owns a lane `wfagent-<agentId>` (`data-lane-kind="workflow-agent"`):
+
+- **Spawn row**: the agent's phase card — every agent of the phase hangs
+  off it, so it carries one control per agent (in rank order), each
+  naming its agent (`map:loader · 3 steps · 1.5k tokens · 22.0s`; a Task's
+  control needs no name: its spawn row is the call). A run without phase
+  grouping spawns from the Workflow call's result (its attach card).
+- **Merge row**: the agent card itself, which reports the result (the
+  `data-merges` card, the lane container's `dag-owner`). In the stream the
+  card waits until its lane is exhausted, so in every mode an agent's rows
+  sit between its phase row and its own row, and the next phase's agents
+  start after this phase's agent cards — phases stay sequential. Rows of
+  the main line after the run follow the whole run (its tree is nested
+  under the call's result), as the classic page reads.
+- **No result** (the agent failed, or a run without its snapshot): no
+  merge row; `ended` when the run's snapshot exists or the agent's state is
+  terminal, else `open` (§ 8) — a static page shows `· no result` and a
+  stub.
+- **No transcript**: no lane — the agent card is a plain row.
+- **Groups.** A workflow's agents are ranked, capped and overflowed per
+  **group** — their phase, or the whole run without phases
+  (`data-lane-group`, `<runId>/<phase ordinal>` / `<runId>`) — not per
+  user turn: the engine's turn key for such a lane is `g:<group>`. So a
+  phase of twelve parallel agents shows three controls and
+  `+9 more agents` (`− fewer agents`) on its phase row, *Interleaved*
+  opens its first three, and neither another phase nor the turn's own
+  sub-agents are folded to make room. A group counts its lanes whatever
+  their depth (they share one spawn row, so one parent).
+
+The nested workflow gutter (`components.css`) is reset to the grid's under
+`dag-on` (`dag.css`), so phase, agent and transcript rows share the main
+gutter. Everything else — tints, tags (the label's last `:` part:
+`map:loader` → `loader`), columns, reveals, filter and search, live
+relayout — is the sub-agent machinery unchanged.
+
 ## 2. Layout without moving nodes
 
 The server renders cards where it always has: nested
@@ -124,10 +167,11 @@ Containers the engine classifies on each walk:
 
 | Container | Class | Display (with `dag-on`) |
 |---|---|---|
-| A sub-agent lane's transcript (first child card's lane ≠ the owner card's, `agent-…`), interleaved | `dag-entry` | `contents !important` — whatever the fold depth did |
+| A sub-agent's or workflow agent's transcript (first child card's lane ≠ the owner card's, `agent-…` / `wfagent-…`), interleaved | `dag-entry` | `contents !important` — whatever the fold depth did |
 | …folded | `dag-hidden` | `none !important` |
 | A fork lane's node (its head is the branch header), folded | `dag-hidden` on the `.message-node` | `none !important` |
-| Teammate thread / workflow phases / old-style sidechain (deeper `.sidechain` in the same lane, or `workflow_*`) | `dag-block` | `block`, nested look kept, one grid item |
+| Teammate thread / old-style sidechain (deeper `.sidechain` in the same lane) | `dag-block` | `block`, nested look kept, one grid item |
+| Workflow phases and agents (§ 1.1) | — | `contents`: rows |
 | Anything else | — | `contents` |
 
 The card that owns a lane container gets `dag-owner` (its fold bar is hidden
@@ -239,9 +283,10 @@ running lane has been quiet, else `null`) and `runningMaxQuietMs` for tests; `?d
 Engine state that outlives a relayout — per-lane modes, the per-turn LRU of
 interleaved lanes, the turns whose `+N more branches` are shown — is keyed
 by what a live update cannot renumber: lane ids (`agent-<id>`,
-`branch-<sid>`) and, for turns, the turn card's `data-uuid` (the
+`wfagent-<id>`, `branch-<sid>`), for turns the turn card's `data-uuid` (the
 positional `d-N` in `data-lane-turn` shifts whenever an entry lands
-mid-page and the update swaps).
+mid-page and the update swaps) and for workflow groups `data-lane-group`
+(run id and phase ordinal).
 
 ## 5. Performance
 
@@ -418,7 +463,13 @@ transcript:
   nested in a lane that merged or ended — else `open`. Merged lanes and
   forks carry no state; a killed or failed background agent still gets its
   `<task-notification>`, which is its merge row. An async agent is never
-  ended by its parent moving on: the parent does not wait for it.
+  ended by its parent moving on: the parent does not wait for it. A
+  workflow agent without a result is `ended` once its run's snapshot
+  exists (the run is over) or its own state is terminal (`failed` …), else
+  `open` (§ 1.1). In practice a run is spliced only once that snapshot
+  links it to its call ([workflows.md § 3](workflows.md#3-linking-a-run-to-its-tool_use)),
+  so a workflow agent reads as *running* only where a run is linked
+  without one.
 - **Client** (`minimal_dag.js`, rule revised in P7c): an `open` lane reads
   as **running** on a page served live (`window.claudeLogLiveUpdate` —
   never from `file://`), **however long it has been quiet**: agents wait on
@@ -539,7 +590,8 @@ reply, which is content and is not previewed).
 Whatever the filter hides in the transcript it hides in the timeline, in
 every branch mode and at every fold depth, and neither the filter nor the
 search changes a lane's mode. `test/test_minimal_parity_browser.py` checks
-it exhaustively on the demo, with the timeline open: every visible filter
+it exhaustively on the demo and on the workflow demo (workflow agent
+lanes, § 1.1), with the timeline open: every visible filter
 toggle off and on again × Prompts / Steps / All × Main only / Interleaved /
 Columns, each time asserting that no card the filter or search hides is
 visible, that every timeline item is shown exactly when its card is (group
@@ -605,21 +657,22 @@ minimal theme only; `d-N` is a card id without the `msg-` prefix:
 
 | On | Attribute | Value |
 |---|---|---|
-| every `.message` card, and a fork-only `.fork-point[id]` box | `data-lane` | `main` \| `agent-<agentId>` \| `branch-<branch sid>` |
-| spawn card (agent tool_use; fork-point card or fork-only box) | `data-spawns` | space-separated lane ids it opens |
-| merge card (sync tool_result; async `<task-notification>`) | `data-merges` | space-separated lane ids it closes |
-| lane head (agent: the spawn tool_use; fork: its branch header) | `data-lane-id` | lane id |
-| | `data-lane-kind` | `agent` \| `async-agent` \| `fork` |
-| | `data-lane-name` | Task description / branch preview (fallback `Branch <uuid8>`) |
-| | `data-lane-tag` | first word of the name, lower-case, ≤ 12 chars (`fork` for forks) — the gutter tag |
-| | `data-lane-meta` | agents: `subagent_type · model · async` (the parts present); forks: `rewind` |
+| every `.message` card, and a fork-only `.fork-point[id]` box | `data-lane` | `main` \| `agent-<agentId>` \| `wfagent-<agentId>` \| `branch-<branch sid>` |
+| spawn card (agent tool_use; workflow phase card, or the Workflow result without phases; fork-point card or fork-only box) | `data-spawns` | space-separated lane ids it opens |
+| merge card (sync tool_result; async `<task-notification>`; workflow agent card) | `data-merges` | space-separated lane ids it closes |
+| lane head (agent: the spawn tool_use; workflow agent: its agent card; fork: its branch header) | `data-lane-id` | lane id |
+| | `data-lane-kind` | `agent` \| `async-agent` \| `workflow-agent` \| `fork` |
+| | `data-lane-name` | Task description / workflow agent label / branch preview (fallback `Branch <uuid8>`) |
+| | `data-lane-tag` | first word of the name (of a workflow label, its last `:` part), lower-case, ≤ 12 chars (`fork` for forks) — the gutter tag |
+| | `data-lane-meta` | agents: `subagent_type · model · async`; workflow agents: `phase · model · state` (state unless done); forks: `rewind` (the parts present) |
 | | `data-lane-parent` | `main` or the enclosing lane id |
 | | `data-lane-depth` | `1` from main, +1 per enclosing lane |
 | | `data-lane-from` | `d-N` of the spawn card (absent if unresolvable) |
 | | `data-lane-to` | `d-N` of the merge card (absent for forks and agents without a result) |
 | | `data-lane-state` | agents without a merge row only: `open` \| `ended` (§ 8) |
 | | `data-lane-turn` | `d-N` of the user turn (branch group) |
-| | `data-lane-rank` | 1-based rank in that turn (> 3 → `+N more branches`) |
+| | `data-lane-group` | workflow agents only: `<runId>/<phase ordinal>` (or `<runId>` without phases) — the cap's unit instead of the turn |
+| | `data-lane-rank` | 1-based rank in that turn, or group by first activity (> 3 → `+N more branches` / `+N more agents`) |
 | | `data-lane-stats` | `6 steps · 48.4k tokens · 2m 13s` |
 | | `data-lane-ts` | `<first ISO> <last ISO>` of the lane's cards |
 | branch header that continues its fork point's lane | `data-lane-continues` | the lane it continues (its `data-lane` too) |

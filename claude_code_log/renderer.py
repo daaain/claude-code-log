@@ -3144,7 +3144,9 @@ def _splice_one_workflow_run(
 
     spliced_top: list[TemplateMessage] = []
     phase_anchor_indices: list[int] = []
-    for phase, agents in groups:
+    run_id = getattr(run, "run_id", "") or ""
+    run_finished = bool(getattr(run, "has_snapshot", False))
+    for ordinal, (phase, agents) in enumerate(groups):
         if phase is not None:
             phase_tm = _new_synthetic_node(
                 ctx,
@@ -3177,6 +3179,12 @@ def _splice_one_workflow_run(
                     tool_calls=agent.tool_calls,
                     result=agent.result,
                     result_preview=agent.result_preview,
+                    agent_id=agent.agent_id,
+                    run_id=run_id,
+                    phase_ordinal=ordinal if phase is not None else None,
+                    phase_title=phase.title if phase is not None else "",
+                    duration_ms=agent.duration_ms,
+                    run_finished=run_finished,
                 ),
                 parent=base,
             )

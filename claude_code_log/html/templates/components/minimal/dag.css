@@ -124,8 +124,9 @@
     display: none !important;
 }
 
-/* Nested groups that are not branches (teammate threads, workflow phases)
-   stay one nested block, with their framed look and narrower gutter. */
+/* Nested groups that are not branches (teammate threads, old-style
+   sidechains) stay one nested block, with their framed look and narrower
+   gutter. */
 .theme-minimal .mn-stage.dag-on #transcript .children.dag-block,
 .theme-minimal .mn-stage.dag-on #transcript .dag-block .message-node,
 .theme-minimal .mn-stage.dag-on #transcript .dag-block .children {
@@ -147,6 +148,16 @@
 .theme-minimal .mn-stage.dag-on #transcript .dag-block .message-node {
     --gut: var(--gut-nest);
     --rail: var(--rail-nest);
+}
+
+/* Workflow phase and agent cards, and the agents' transcripts (lanes), are
+   rows of the grid too: the nested workflow gutter (components.css) only
+   applies without the engine, or inside a block. */
+.theme-minimal .mn-stage.dag-on #transcript .children:has(> .message-node > .message.workflow_phase) > .message-node:not(.dag-block *),
+.theme-minimal .mn-stage.dag-on #transcript .message-node:has(> .message.workflow_phase) > .children > .message-node:not(.dag-block *),
+.theme-minimal .mn-stage.dag-on #transcript .message-node:has(> .message.workflow_agent) > .children > .message-node:not(.dag-block *) {
+    --gut: var(--dag-gut);
+    --rail: var(--dag-rail);
 }
 
 /* The spawning result's fold bar would fold the same transcript the branch

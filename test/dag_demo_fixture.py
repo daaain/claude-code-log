@@ -817,3 +817,362 @@ def write_team_demo(directory: Path) -> Path:
         encoding="utf-8",
     )
     return directory
+
+
+WORKFLOW_SESSION = "dade0000-0000-4000-8000-0000000000f1"
+WORKFLOW_RUN = "wf_theme01"
+WORKFLOW_TASK = "task_wftheme01"
+
+# (agent id, label, phase, model, start, [(at, tool, input, output)], end,
+#  answer or None, state, transcript?)
+_WF_AGENTS: list[tuple[Any, ...]] = [
+    (
+        "wa01loader",
+        "map:loader",
+        "Map",
+        "claude-haiku-4-5",
+        9,
+        [
+            (
+                12,
+                "Grep",
+                {"pattern": "load_transcript", "path": "claude_code_log"},
+                "7 matches",
+            )
+        ],
+        31,
+        {"area": "loader", "summary": "Workflow runs load per session directory."},
+        "done",
+        True,
+    ),
+    (
+        "wa02render",
+        "map:renderer",
+        "Map",
+        "claude-haiku-4-5",
+        9.5,
+        [
+            (
+                14,
+                "Read",
+                {"file_path": "claude_code_log/renderer.py"},
+                "3087  def _splice_workflow_runs",
+            ),
+            (27, "Grep", {"pattern": "in_workflow_sidechannel"}, "4 matches"),
+        ],
+        44,
+        {
+            "area": "renderer",
+            "summary": "The splice runs last and re-registers every node.",
+        },
+        "done",
+        True,
+    ),
+    (
+        "wa03lanes",
+        "map:lanes",
+        "Map",
+        "claude-haiku-4-5",
+        10,
+        [
+            (
+                18,
+                "Read",
+                {"file_path": "claude_code_log/lanes.py"},
+                "annotate_lanes(roots)",
+            )
+        ],
+        36,
+        {"area": "lanes", "summary": "Lanes come from the render tree alone."},
+        "done",
+        True,
+    ),
+    (
+        "wa04engine",
+        "map:engine",
+        "Map",
+        "claude-haiku-4-5",
+        10.5,
+        [(21, "Bash", {"command": "rg -c relayout minimal_dag.js"}, "31")],
+        25,
+        None,  # failed: no result
+        "failed",
+        True,
+    ),
+    (
+        "wa05styles",
+        "map:styles",
+        "Map",
+        "claude-haiku-4-5",
+        11,
+        [
+            (
+                16,
+                "Grep",
+                {"pattern": "workflow", "path": "components/minimal"},
+                "12 matches",
+            )
+        ],
+        40,
+        {"area": "styles", "summary": "Workflow groups indent like sub-agents."},
+        "done",
+        True,
+    ),
+    (
+        "wa06docs",
+        "map:docs",
+        "Map",
+        "claude-haiku-4-5",
+        11.5,
+        [],
+        20,
+        {"area": "docs", "summary": "workflows.md covers the splice."},
+        "done",
+        False,  # no transcript on disk: a plain row
+    ),
+    (
+        "wa07synth",
+        "synthesize",
+        "Synthesize",
+        "claude-opus-4-7",
+        50,
+        [(58, "Read", {"file_path": "dev-docs/workflows.md"}, "## 5. The splice")],
+        75,
+        "## Plan\n\nMake each workflow agent a lane, spawned at its phase.",
+        "done",
+        True,
+    ),
+]
+
+
+def write_workflow_demo(directory: Path) -> Path:
+    """A Workflow run fanning out to many parallel agents (workflow lanes).
+
+    One turn: a prompt, a ``Workflow`` call whose run has two phases —
+    *Map* with six agents (five with a side-channel transcript, one of which
+    failed without a result, and one with no transcript at all: a plain
+    row) and *Synthesize* with one — then, in the same turn, a synchronous
+    ``Task`` agent and an answer. Every agent's steps carry real times, so
+    the Map agents interleave with each other. Returns ``directory``.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    session_dir = directory / WORKFLOW_SESSION
+    run_dir = session_dir / "subagents" / "workflows" / WORKFLOW_RUN
+    run_dir.mkdir(parents=True, exist_ok=True)
+    w = _Writer(0)
+
+    def main(kind: str, parent: Optional[str], at: float, content: Any, **extra: Any):
+        entry = w.entry(kind, parent, at, content, **extra)
+        entry["sessionId"] = WORKFLOW_SESSION
+        return entry
+
+    script = (
+        "export const meta = {\n"
+        "  name: 'theme-map',\n"
+        "  description: 'Map the theme code, one agent per area',\n"
+        "  phases: [{ title: 'Map' }, { title: 'Synthesize' }],\n"
+        "}\n"
+        "phase('Map')\n"
+        "const areas = await parallel(AREAS.map(a => () => agent(a.prompt)))\n"
+        "phase('Synthesize')\n"
+        "return await agent('Merge: ' + JSON.stringify(areas))\n"
+    )
+    u1 = main(
+        "user",
+        None,
+        0,
+        "Map how workflows are rendered: one agent per area, then a synthesis.",
+    )
+    a1 = main(
+        "assistant",
+        u1["uuid"],
+        4,
+        _text("I'll fan a mapping workflow out over the six areas."),
+    )
+    use = main(
+        "assistant",
+        a1["uuid"],
+        6,
+        _tool("toolu_wfdemo", "Workflow", {"script": script}),
+    )
+    res = main(
+        "user",
+        use["uuid"],
+        7,
+        _result(
+            "toolu_wfdemo",
+            f"Workflow launched in background. Task ID: {WORKFLOW_TASK}\n"
+            "Summary: Map the theme code, one agent per area.",
+        ),
+        toolUseResult={
+            "isAsync": True,
+            "status": "async_launched",
+            "runId": WORKFLOW_RUN,
+            "taskId": WORKFLOW_TASK,
+        },
+    )
+    entries = [u1, a1, use, res]
+    tool_c = "toolu_wfdemo_task"
+    spawn = main(
+        "assistant",
+        res["uuid"],
+        80,
+        _tool(
+            tool_c,
+            "Task",
+            {
+                "description": "Check the lane styles",
+                "prompt": "Do workflow rows need styles of their own?",
+                "subagent_type": "Explore",
+            },
+        ),
+    )
+    result = main(
+        "user",
+        spawn["uuid"],
+        96,
+        _sync_result(tool_c, "No: they reuse the row styles.", "c900check"),
+    )
+    answer = main(
+        "assistant",
+        result["uuid"],
+        100,
+        _text("Each workflow agent becomes a lane spawned at its phase."),
+    )
+    entries += [spawn, result, answer]
+    (directory / f"{WORKFLOW_SESSION}.jsonl").write_text(
+        "\n".join(json.dumps(e) for e in entries) + "\n", encoding="utf-8"
+    )
+    task_entries = _agent_steps(
+        w,
+        "c900check",
+        "Do workflow rows need styles of their own?",
+        81,
+        [
+            (
+                85,
+                "Grep",
+                {"pattern": "workflow_agent", "path": "components/minimal"},
+                "3 matches",
+                False,
+            )
+        ],
+        (94, "No: they reuse the row styles."),
+    )
+    for entry in task_entries:
+        entry["sessionId"] = WORKFLOW_SESSION
+    _agent_file(session_dir, "c900check", tool_c, "Check the lane styles", task_entries)
+
+    journal: list[dict[str, Any]] = []
+    progress: list[dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
+    for index, (
+        agent_id,
+        label,
+        phase,
+        model,
+        start,
+        steps,
+        end,
+        answer_value,
+        state,
+        transcript,
+    ) in enumerate(_WF_AGENTS):
+        journal.append(
+            {"type": "started", "key": f"v2:{agent_id}", "agentId": agent_id}
+        )
+        if answer_value is not None:
+            results.append(
+                {
+                    "type": "result",
+                    "key": f"v2:{agent_id}",
+                    "agentId": agent_id,
+                    "result": answer_value,
+                }
+            )
+        phase_index = 1 if phase == "Map" else 2
+        progress.append(
+            {
+                "type": "workflow_agent",
+                "index": index,
+                "label": label,
+                "phaseIndex": phase_index,
+                "phaseTitle": phase,
+                "agentId": agent_id,
+                "model": model,
+                "state": state,
+                "attempt": 1,
+                "tokens": 1500 + 200 * index,
+                "toolCalls": len(steps) + 1,
+                "durationMs": int((end - start) * 1000),
+                "resultPreview": ""
+                if answer_value is None
+                else json.dumps(answer_value)[:60],
+            }
+        )
+        if not transcript:
+            continue
+        sid = f"{WORKFLOW_SESSION}#agent-{agent_id}"
+        rows = [
+            w.entry("user", None, start, f"You map the {label} area.", agent=agent_id)
+        ]
+        parent = rows[0]["uuid"]
+        for at, name, inp, output in steps:
+            pair, parent = _call(w, parent, at, name, inp, output, agent=agent_id)
+            rows.extend(pair)
+        if answer_value is not None:
+            rows.append(
+                w.entry(
+                    "assistant",
+                    parent,
+                    end,
+                    _text(
+                        answer_value
+                        if isinstance(answer_value, str)
+                        else json.dumps(answer_value)
+                    ),
+                    agent=agent_id,
+                )
+            )
+        for row in rows:
+            row["sessionId"] = sid
+            if row["type"] == "assistant":
+                row["message"]["model"] = model
+        (run_dir / f"agent-{agent_id}.jsonl").write_text(
+            "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8"
+        )
+        (run_dir / f"agent-{agent_id}.meta.json").write_text(
+            json.dumps({"agentType": "workflow-subagent"}), encoding="utf-8"
+        )
+    (run_dir / "journal.jsonl").write_text(
+        "\n".join(json.dumps(r) for r in journal + results) + "\n", encoding="utf-8"
+    )
+    snapshot = {
+        "runId": WORKFLOW_RUN,
+        "taskId": WORKFLOW_TASK,
+        "status": "completed",
+        "workflowName": "theme-map",
+        "timestamp": _iso(6),
+        "durationMs": 70000,
+        "agentCount": 6,
+        "totalTokens": sum(p["tokens"] for p in progress),
+        "totalToolCalls": sum(p["toolCalls"] for p in progress),
+        "defaultModel": "claude-haiku-4-5",
+        "script": script,
+        "phases": [
+            {"title": "Map", "detail": "one agent per area"},
+            {"title": "Synthesize", "detail": "merge the areas"},
+        ],
+        "workflowProgress": [
+            {"type": "workflow_phase", "index": 1, "title": "Map"},
+            {"type": "workflow_phase", "index": 2, "title": "Synthesize"},
+        ]
+        + progress,
+        "result": {"plan": "Workflow agents as lanes."},
+    }
+    snap_dir = session_dir / "workflows"
+    snap_dir.mkdir(parents=True, exist_ok=True)
+    (snap_dir / f"{WORKFLOW_RUN}.json").write_text(
+        json.dumps(snapshot, indent=1), encoding="utf-8"
+    )
+    return directory

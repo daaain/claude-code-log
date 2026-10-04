@@ -28,8 +28,15 @@ Lane rules (§ 3.3 of the plan, as built):
 - **Teammates** are *not* branches (§ 7 decision 4): a teammate thread stays
   in its spawner's lane. The model still records it (``kind="teammate"``)
   so the spawn card can link to the thread's first card.
-- **Workflow** sub-agents (#174) are not lanes either (§ 7 decision 6):
-  everything grafted under a Workflow tool_use inherits its lane.
+- **Workflow agents** (#174) — the phase and agent cards spliced under a
+  Workflow call stay in the call's lane, as rows. Each agent card whose
+  side-channel transcript rendered owns lane ``wfagent-<agentId>``
+  (``kind="workflow-agent"``): its transcript's cards. The lane is spawned
+  at the agent card's parent — its phase card, or the Workflow call's
+  result when the run has no phase grouping — and merges at the agent card
+  itself, which reports the agent's result. An agent without a transcript
+  stays a plain row. Everything inside a workflow agent's transcript stays
+  in its lane (no nested lanes there).
 - **Forks** — at a rewind every child becomes a branch pseudo-session
   (dev-docs/dag.md § 7). The **earliest** branch continues its fork point's
   lane (§ 7 decision 3; its header is recorded in ``continuations``); every
@@ -60,6 +67,10 @@ top-level card of the conversation (a direct child of a session or branch
 header) that contains its spawn row — and its 1-based **rank** in that
 turn by spawn time. The client caps interleaving at three per turn and
 puts the rest behind "+N more branches" (§ 1.6.3, § 7 decision 5).
+Workflow agent lanes are ranked in their **group** instead — the phase
+(or the phase-less run) that spawns them, ``<runId>/<phase ordinal>`` — so
+a workflow fanning out to many agents gets its own cap and "+N more
+agents", and never pushes the turn's other branches out.
 """
 
 from __future__ import annotations
@@ -81,6 +92,7 @@ from .models import (
     ToolUseMessage,
     UserSteeringMessage,
     UserTextMessage,
+    WorkflowAgentMessage,
 )
 from .utils import compact_count, format_duration, parse_timestamp
 
@@ -89,17 +101,26 @@ if TYPE_CHECKING:
 
 MAIN_LANE = "main"
 
-# Node types grafted under a Workflow tool_use (#174) — never lanes.
+# Node types grafted under a Workflow tool_use (#174): rows of their
+# parent's lane (an agent card owns its transcript's lane).
 _WORKFLOW_TYPES = frozenset({"workflow_phase", "workflow_agent"})
+WORKFLOW_AGENT_KIND = "workflow-agent"
+WORKFLOW_LANE_PREFIX = "wfagent-"
+# Workflow agent states that say it is no longer running.
+_WORKFLOW_RUNNING_STATES = frozenset(
+    {"", "running", "pending", "started", "queued", "in_progress", "launched"}
+)
 
 
 @dataclass
 class LaneInfo:
     """One branch lane (or, for ``kind="teammate"``, one teammate thread)."""
 
-    lane_id: str  # "agent-<agentId>" | "branch-<branch sid>"
-    kind: str  # "agent" | "async-agent" | "fork" | "teammate"
-    name: str  # Task description / teammate name / branch preview
+    lane_id: str  # "agent-<agentId>" | "wfagent-<agentId>" | "branch-<branch sid>"
+    kind: str  # "agent" | "async-agent" | "workflow-agent" | "fork" | "teammate"
+    name: (
+        str  # Task description / workflow agent label / teammate name / branch preview
+    )
     parent_lane: str = MAIN_LANE  # enclosing lane ("main" or a lane id)
     depth: int = 1  # 1 = opened from main; +1 per enclosing lane
     tag: str = ""  # one short word for the gutter of interleaved rows
@@ -109,7 +130,10 @@ class LaneInfo:
     head_index: Optional[int] = None  # card carrying the lane's description
     first_index: Optional[int] = None  # the lane's first rendered card
     turn_index: Optional[int] = None  # user turn the spawn row belongs to
-    rank: int = 0  # 1-based spawn-time order within the turn (0: teammates)
+    # Workflow agents: "<runId>/<phase ordinal>" (or "<runId>"), the group
+    # they are capped and ranked in instead of the turn; "" otherwise.
+    group: str = ""
+    rank: int = 0  # 1-based order within the turn / group (0: teammates)
     cards: int = 0  # rendered cards in the lane
     steps: int = 0  # rendered cards, the second half of each pair excluded
     total_tokens: Optional[int] = None
@@ -219,9 +243,20 @@ def annotate_lanes(roots: list["TemplateMessage"]) -> LaneModel:
     turn_of: dict[int, Optional["TemplateMessage"]] = {}
     header_of: dict[int, Optional["TemplateMessage"]] = {}
     in_workflow: dict[int, bool] = {}
+    parent_of: dict[int, Optional["TemplateMessage"]] = {}
+    # The workflow agent card whose transcript holds a node (None outside
+    # one; an agent card itself is a row of its parent's lane).
+    wf_owner: dict[int, Optional["TemplateMessage"]] = {}
     for pos, (node, parent) in enumerate(order):
         key = id(node)
         position[key] = pos
+        parent_of[key] = parent
+        if parent is None:
+            wf_owner[key] = None
+        elif isinstance(parent.content, WorkflowAgentMessage):
+            wf_owner[key] = parent
+        else:
+            wf_owner[key] = wf_owner[id(parent)]
         if node.message_index is not None:
             by_index[node.message_index] = node
         if node.is_session_header:
@@ -311,6 +346,7 @@ def annotate_lanes(roots: list["TemplateMessage"]) -> LaneModel:
     lanes = model.lanes
     lane_of: dict[int, str] = {}
     branch_lane_of_sid: dict[str, str] = {}
+    wf_lane_of: dict[int, str] = {}  # id(agent card) -> its lane
     teammate_ids: set[str] = set()
     for agent_id, rec in spawns.items():
         task = _task_input(rec.spawn)
@@ -360,7 +396,16 @@ def annotate_lanes(roots: list["TemplateMessage"]) -> LaneModel:
         elif node.is_session_header:
             lane = MAIN_LANE
         elif in_workflow[id(node)]:
-            lane = inherited
+            owner = wf_owner[id(node)]
+            if owner is None:
+                lane = inherited
+            elif id(owner) in wf_lane_of:
+                lane = wf_lane_of[id(owner)]
+            else:
+                lane = _new_workflow_lane(
+                    owner, parent_of.get(id(owner)), lane_of, lanes
+                )
+                wf_lane_of[id(owner)] = lane
         elif node.is_sidechain and "#agent-" in (node.meta.session_id or ""):
             agent_id = node.meta.session_id.rsplit("#agent-", 1)[-1]
             rec = spawns.get(agent_id)
@@ -451,7 +496,9 @@ def annotate_lanes(roots: list["TemplateMessage"]) -> LaneModel:
 
     # -- 6. Merge rows, kinds, names and accounting.
     for info in lanes.values():
-        if info.kind != "fork":
+        if info.kind == WORKFLOW_AGENT_KIND:
+            _describe_workflow_lane(info, by_index)
+        elif info.kind != "fork":
             rec = spawns.get(info.agent_id or "")
             spawn = rec.spawn if rec is not None else None
             result = rec.result if rec is not None else None
@@ -531,6 +578,7 @@ def annotate_lanes(roots: list["TemplateMessage"]) -> LaneModel:
         return None
 
     groups_by_turn: dict[Optional[int], list[LaneInfo]] = {}
+    workflow_groups: dict[str, list[LaneInfo]] = {}
     for info in lanes.values():
         node = anchor(info)
         turn = turn_of.get(id(node)) if node is not None else None
@@ -538,7 +586,12 @@ def annotate_lanes(roots: list["TemplateMessage"]) -> LaneModel:
         if not info.is_branch:
             continue
         info.depth = depth_of(info.lane_id)
-        groups_by_turn.setdefault(info.turn_index, []).append(info)
+        if info.kind == WORKFLOW_AGENT_KIND:
+            if not info.group:
+                info.group = f"d-{info.spawn_index}"
+            workflow_groups.setdefault(info.group, []).append(info)
+        else:
+            groups_by_turn.setdefault(info.turn_index, []).append(info)
 
     def rank_key(info: LaneInfo) -> tuple[float, int, float]:
         node = anchor(info)
@@ -553,6 +606,19 @@ def annotate_lanes(roots: list["TemplateMessage"]) -> LaneModel:
         for rank, info in enumerate(sorted(members, key=rank_key), start=1):
             info.rank = rank
 
+    # A workflow's agents share their spawn row: rank by when each started,
+    # then by the agent card's place (journal order).
+    def group_key(info: LaneInfo) -> tuple[float, int]:
+        head = by_index.get(info.head_index) if info.head_index is not None else None
+        return (
+            _ts_sort_key(info.first_ts),
+            position.get(id(head), len(order)) if head is not None else len(order),
+        )
+
+    for members in workflow_groups.values():
+        for rank, info in enumerate(sorted(members, key=group_key), start=1):
+            info.rank = rank
+
     # Spawn (DOM) order for the returned mapping.
     ordered = sorted(
         lanes.values(),
@@ -565,6 +631,89 @@ def annotate_lanes(roots: list["TemplateMessage"]) -> LaneModel:
     )
     model.lanes = {info.lane_id: info for info in ordered}
     return model
+
+
+def _new_workflow_lane(
+    owner: "TemplateMessage",
+    spawn: Optional["TemplateMessage"],
+    lane_of: dict[int, str],
+    lanes: dict[str, LaneInfo],
+) -> str:
+    """Open the lane of a workflow agent card's transcript; returns its id.
+
+    The spawn row is the card's parent (its phase card, or the Workflow
+    call's result for a run without phases); the card itself is the lane's
+    head and, once the agent reported, its merge row (step 6).
+    """
+    content = owner.content
+    agent_id = (
+        content.agent_id if isinstance(content, WorkflowAgentMessage) else ""
+    ) or (str(owner.message_index) if owner.message_index is not None else "x")
+    lane = f"{WORKFLOW_LANE_PREFIX}{agent_id}"
+    suffix = 2
+    while lane in lanes:  # a resumed run may list an agent id again
+        lane = f"{WORKFLOW_LANE_PREFIX}{agent_id}-{suffix}"
+        suffix += 1
+    lanes[lane] = LaneInfo(
+        lane_id=lane,
+        kind=WORKFLOW_AGENT_KIND,
+        name=agent_id,
+        parent_lane=lane_of.get(id(owner), MAIN_LANE),
+        spawn_index=spawn.message_index if spawn is not None else None,
+        head_index=owner.message_index,
+        agent_id=agent_id,
+    )
+    return lane
+
+
+def _describe_workflow_lane(
+    info: LaneInfo, by_index: dict[int, "TemplateMessage"]
+) -> None:
+    """Step 6 for a workflow agent lane: name, tag, meta, group, merge row,
+    accounting and — without a result — whether it is still open."""
+    owner = by_index.get(info.head_index) if info.head_index is not None else None
+    content = owner.content if owner is not None else None
+    if not isinstance(content, WorkflowAgentMessage):
+        return
+    label = content.label or info.agent_id or info.name
+    info.name = label
+    # "review:loader" → "loader": the part that tells a phase's agents apart.
+    info.tag = _short_tag(label.rsplit(":", 1)[-1], "agent")
+    meta_parts = [
+        part
+        for part in (
+            content.phase_title,
+            content.model,
+            content.state if content.state not in ("", "done", "completed") else "",
+        )
+        if part
+    ]
+    info.meta = " · ".join(meta_parts)
+    if content.run_id:
+        info.group = (
+            f"{content.run_id}/{content.phase_ordinal}"
+            if content.phase_ordinal is not None
+            else content.run_id
+        )
+    reported = (
+        content.result is not None
+        or bool(content.result_preview)
+        or content.state in ("done", "completed")
+    )
+    if reported and owner is not None and owner.should_render:
+        info.merge_index = owner.message_index
+    else:
+        info.merge_index = None
+        # A finished run (its snapshot exists) or an agent in a terminal
+        # state proves the agent is over; else it may still be running.
+        over = content.run_finished or (
+            content.state.lower() not in _WORKFLOW_RUNNING_STATES
+        )
+        info.state = "ended" if over else "open"
+    if content.tokens:
+        info.total_tokens = content.tokens
+    if content.duration_ms:
+        info.duration_ms = content.duration_ms
 
 
 def _proves_parent_moved_on(node: "TemplateMessage") -> bool:
@@ -648,6 +797,8 @@ def _settle_open_lanes(
                 stopped.add(target)
 
     for info in unmerged:
+        if info.kind == WORKFLOW_AGENT_KIND:
+            continue  # decided from the run (_describe_workflow_lane)
         info.state = "open"
         if info.agent_id and info.agent_id in stopped:
             info.state = "ended"

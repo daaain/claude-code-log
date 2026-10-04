@@ -283,6 +283,13 @@ Two `MessageContent` subclasses in [`models.py`](../claude_code_log/models.py):
   have no filter toggle, so they're always visible in the timeline.
 - **Fold labels**: `_format_type_counts` maps the types to
   "phase(s)" / "agent(s)" so fold bars read "2 phases", "3 agents".
+- **Minimal theme lanes**: the splice also stamps each
+  `WorkflowAgentMessage` with `agent_id`, `run_id`, `phase_ordinal`,
+  `phase_title`, `duration_ms` and `run_finished` (the run has its
+  snapshot). No formatter renders them (classic and Markdown output are
+  unchanged); `lanes.py` uses them to make each agent with a transcript a
+  branch lane, spawned at its phase card and merging at its agent card,
+  grouped per phase — [minimal-theme.md § 1.1](minimal-theme.md#11-workflow-agents).
 
 ## 7. Detail levels
 

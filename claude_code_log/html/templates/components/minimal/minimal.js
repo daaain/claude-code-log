@@ -264,8 +264,9 @@
             // spawning tool_result (or a workflow agent card). Steps keeps
             // these folded; for a sub-agent LANE the DAG engine
             // (minimal_dag.js) then shows or hides the container by the
-            // Branches mode regardless (dag-entry / dag-hidden), so only
-            // teammate threads and workflow groups follow the depth here.
+            // Branches mode regardless (dag-entry / dag-hidden; a workflow
+            // agent's transcript is a lane too), so only teammate threads
+            // follow the depth here.
             function opensBranch(card, children) {
                 const own = agentDepth(card);
                 return Array.from(children.querySelectorAll(':scope > .message-node > .message.sidechain'))

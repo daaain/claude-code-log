@@ -7,8 +7,11 @@ their real times, drawn on an SVG rail beside it.
 
 Fixtures: the mockup-shaped demo project (``test/dag_demo_fixture.py``: two
 background agents, a synchronous agent with a nested one, a rewound prompt),
-``nested_agents/`` (six lanes in one turn, for the per-turn cap) and
-``dag_within_fork.jsonl``.
+``nested_agents/`` (six lanes in one turn, for the per-turn cap),
+``dag_within_fork.jsonl`` and the workflow demo (``write_workflow_demo``: a
+Workflow run whose Map phase fans out to six agents — five lanes, one of
+them failed without a result, and a plain row — a Synthesize phase, and a
+sub-agent in the same turn).
 
 The browser context is shared by every browser test (persistent, for the HTTP
 cache), and so is ``file://`` localStorage: tests clear the stored Branches
@@ -26,7 +29,7 @@ from playwright.sync_api import Page, expect
 
 from claude_code_log.converter import load_directory_transcripts, load_transcript
 from claude_code_log.html.renderer import HtmlRenderer
-from test.dag_demo_fixture import write_dag_demo
+from test.dag_demo_fixture import write_dag_demo, write_workflow_demo
 
 pytestmark = pytest.mark.browser
 
@@ -60,6 +63,9 @@ def pages(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
         "demo": _render(write_dag_demo(tmp / "demo"), tmp / "demo.html", "Demo"),
         "nested": _render(TEST_DATA / "nested_agents", tmp / "nested.html", "Nested"),
         "fork": _render(TEST_DATA / "dag_within_fork.jsonl", tmp / "fork.html", "Fork"),
+        "workflow": _render(
+            write_workflow_demo(tmp / "workflow"), tmp / "workflow.html", "Workflow"
+        ),
     }
 
 
@@ -714,6 +720,238 @@ class TestParity:
             page.locator(f"#{spawn} > .mn-bctls [data-lane-ref='{A}']")
         ).to_have_count(1)
         assert page.locator(f"#{spawn}").evaluate("el => el.style.gridRow") != ""
+
+
+# ------------------------------------------------------- workflow lanes
+
+W_LOADER = "wfagent-wa01loader"
+W_RENDER = "wfagent-wa02render"
+W_LANES = "wfagent-wa03lanes"
+W_ENGINE = "wfagent-wa04engine"  # failed: no result
+W_STYLES = "wfagent-wa05styles"
+W_SYNTH = "wfagent-wa07synth"  # the Synthesize phase
+W_MAP = (W_LOADER, W_RENDER, W_LANES, W_ENGINE, W_STYLES)
+W_TASK = "agent-c900check"  # an ordinary sub-agent of the same turn
+
+
+def _ctl_hidden(page: Page, lane: str) -> bool:
+    return page.locator(f"[data-lane-ref='{lane}']").evaluate("el => el.hidden")
+
+
+class TestWorkflowLanes:
+    def test_folded_on_the_phase_row_with_more_agents(
+        self, clean: Page, pages: dict[str, Path]
+    ):
+        page = clean
+        _open(page, pages["workflow"])
+        lanes = (*W_MAP, W_SYNTH, W_TASK)
+        assert all(_mode(page, lane) == "folded" for lane in lanes)
+        assert all(_visible_count(page, lane) == 0 for lane in lanes)
+        # Every Map agent hangs off the phase card; the agent cards are rows.
+        phase = _lane_card_id(page, W_LOADER, "data-lane-from")
+        assert "workflow_phase" in (
+            page.locator(f"#{phase}").get_attribute("class") or ""
+        )
+        refs = page.evaluate(
+            "(id) => [...document.querySelectorAll(`#${id} > .mn-bctls [data-lane-ref]`)]"
+            ".map(el => el.getAttribute('data-lane-ref'))",
+            phase,
+        )
+        assert refs == list(W_MAP)
+        # A control names its agent; the cap of three is per phase.
+        label = page.locator(f"[data-lane-ref='{W_LOADER}'] .mn-bfold")
+        assert label.get_attribute("data-label") == "map:loader · " + _head_attr(
+            page, W_LOADER, "data-lane-stats"
+        )
+        assert [_ctl_hidden(page, lane) for lane in W_MAP] == [False] * 3 + [True] * 2
+        more = page.locator(f"#{phase} .mn-bmore")
+        assert more.get_attribute("data-label") == "+2 more agents"
+        # The other phase and the turn's sub-agent are not counted with it.
+        assert not _ctl_hidden(page, W_SYNTH) and not _ctl_hidden(page, W_TASK)
+        assert page.locator(".mn-bmore").count() == 1
+        more.click()
+        _settle(page)
+        assert not any(_ctl_hidden(page, lane) for lane in W_MAP)
+        assert more.get_attribute("data-label") == "− fewer agents"
+        engine = page.locator(f"[data-lane-ref='{W_ENGINE}'] .mn-bfold")
+        assert (engine.get_attribute("data-label") or "").endswith(" · no result")
+        # The agent without a transcript is a plain row with no control.
+        docs = page.evaluate(
+            """() => [...document.querySelectorAll('#transcript .message.workflow_agent')]
+                .filter(el => el.textContent.includes('map:docs'))
+                .map(el => [el.getAttribute('data-lane'), el.hasAttribute('data-lane-id'),
+                            el.checkVisibility()])"""
+        )
+        assert docs == [["main", False, True]]
+        # Folded: dashed from the phase row to the agent card (its merge).
+        for lane in (W_LOADER, W_RENDER, W_SYNTH):
+            rail = _rail(page, lane)
+            assert set(rail["parts"]) == {"fork", "lane", "merge"}, rail
+            assert rail["parts"]["lane"]["dashed"]
+            spawn_y = page.evaluate(DOT_Y, _lane_card_id(page, lane, "data-lane-from"))
+            merge_y = page.evaluate(DOT_Y, _lane_card_id(page, lane, "data-lane-to"))
+            assert _numbers(rail["parts"]["fork"]["d"])[1] == pytest.approx(
+                spawn_y, abs=1.5
+            )
+            assert _numbers(rail["parts"]["merge"]["d"])[-2] == pytest.approx(
+                merge_y, abs=1.5
+            )
+        # Without a merge row the failed agent stops at a stub.
+        assert set(_rail(page, W_ENGINE)["parts"]) == {"stub"}
+
+    def test_interleaved_agents_merge_at_their_cards(
+        self, clean: Page, pages: dict[str, Path]
+    ):
+        page = clean
+        _open(page, pages["workflow"])
+        for lane in (W_LOADER, W_RENDER):
+            _toggle(page, lane)
+        _settle(page)
+        assert _mode(page, W_LOADER) == _mode(page, W_RENDER) == "interleaved"
+        order = page.evaluate(VISUAL_ORDER)
+        stamps = [ms for _lane, ms, _id in order]
+        assert stamps == sorted(stamps), order
+        lanes = [lane for lane, _ms, _id in order]
+        # Parallel agents interleave with each other by time.
+        first, last = (
+            lanes.index(W_LOADER),
+            len(lanes) - 1 - lanes[::-1].index(W_LOADER),
+        )
+        assert W_RENDER in lanes[first:last]
+        tops = page.evaluate(
+            """(lanes) => lanes.map(lane => {
+                const head = document.querySelector(`[data-lane-id="${lane}"]`);
+                const cards = [...document.querySelectorAll(`#transcript .message[data-lane="${lane}"]`)];
+                const spawn = document.getElementById('msg-' + head.dataset.laneFrom);
+                return [spawn.getBoundingClientRect().top,
+                        Math.min(...cards.map(c => c.getBoundingClientRect().top)),
+                        Math.max(...cards.map(c => c.getBoundingClientRect().top)),
+                        head.getBoundingClientRect().top]; })""",
+            [W_LOADER, W_RENDER],
+        )
+        for spawn, first_top, last_top, merge in tops:
+            assert spawn < first_top <= last_top < merge
+        tag = page.evaluate(
+            """(lane) => getComputedStyle(document.querySelector(
+                `#transcript .message.user[data-lane="${lane}"] .header-info`), '::after').content""",
+            W_LOADER,
+        )
+        assert tag == '"loader"'
+        rail = _rail(page, W_LOADER)
+        assert set(rail["parts"]) == {"fork", "lane", "merge"}
+        assert not rail["parts"]["lane"]["dashed"]
+
+    def test_the_cap_is_per_phase(self, clean: Page, pages: dict[str, Path]):
+        page = clean
+        _open(page, pages["workflow"])
+        _toggle(page, W_TASK)
+        _toggle(page, W_SYNTH)
+        for lane in (W_LOADER, W_RENDER, W_LANES):
+            _toggle(page, lane)
+        page.locator(".mn-bmore").click()
+        _toggle(page, W_STYLES)
+        _settle(page)
+        # The fourth Map agent folds the least recently selected Map agent —
+        # never the other phase's agent or the turn's sub-agent.
+        assert _mode(page, W_LOADER) == "folded"
+        assert all(
+            _mode(page, lane) == "interleaved"
+            for lane in (W_RENDER, W_LANES, W_STYLES, W_SYNTH, W_TASK)
+        )
+
+    def test_global_modes(self, clean: Page, pages: dict[str, Path]):
+        page = clean
+        _open(page, pages["workflow"])
+        page.locator("[data-mn-branches='interleaved']").click()
+        _settle(page)
+        modes = {lane: _mode(page, lane) for lane in (*W_MAP, W_SYNTH, W_TASK)}
+        assert modes == {
+            W_LOADER: "interleaved",
+            W_RENDER: "interleaved",
+            W_LANES: "interleaved",
+            W_ENGINE: "folded",
+            W_STYLES: "folded",
+            W_SYNTH: "interleaved",
+            W_TASK: "interleaved",
+        }
+        page.locator("[data-mn-branches='columns']").click()
+        _settle(page)
+        assert all(_mode(page, lane) == "column" for lane in modes)
+        cols = page.evaluate(
+            """(lanes) => lanes.map(lane => [...document.querySelectorAll(
+                `#transcript .message[data-lane="${lane}"]`)].map(el => el.style.gridColumn))""",
+            list(modes),
+        )
+        assert all(col and len(set(col)) == 1 and col[0] != "1" for col in cols)
+        assert len({col[0] for col in cols}) == len(modes)  # one column each
+        heads = page.evaluate(
+            "[...document.querySelectorAll('.dag-chrome .dag-colname')].map(el => el.dataset.label)"
+        )
+        assert "map:loader" in heads and "synthesize" in heads
+        page.locator("[data-mn-branches='main']").click()
+        _settle(page)
+        assert all(_mode(page, lane) == "folded" for lane in modes)
+
+    def test_reveals_open_an_agent_lane(self, clean: Page, pages: dict[str, Path]):
+        page = clean
+        _open(page, pages["workflow"])
+        # A search into an agent behind "+2 more agents".
+        page.locator("#filterMessages").click()
+        page.locator("#searchInput").fill("12 matches")
+        page.wait_for_function(
+            f"window.claudeLogDag.mode('{W_STYLES}') === 'interleaved'"
+        )
+        expect(
+            page.locator(
+                f"#transcript .message.search-match[data-lane='{W_STYLES}']"
+            ).first
+        ).to_be_visible()
+        # Opened, it leaves the overflow (the phase card itself is hidden by
+        # the search: it does not match).
+        assert not _ctl_hidden(page, W_STYLES)
+        page.locator("#searchInput").fill("")
+        # A hash link into another folded agent.
+        target = page.evaluate(
+            f"document.querySelector('#transcript .message[data-lane=\"{W_SYNTH}\"]').id"
+        )
+        page.evaluate(f"location.hash = '#{target}'")
+        page.wait_for_function(
+            f"window.claudeLogDag.mode('{W_SYNTH}') === 'interleaved'"
+        )
+        expect(page.locator(f"#{target}")).to_be_visible()
+
+    def test_a_live_swap_keeps_agent_lanes(self, clean: Page, pages: dict[str, Path]):
+        page = clean
+        _open(page, pages["workflow"])
+        _toggle(page, W_RENDER)
+        page.locator(".mn-bmore").click()
+        _settle(page)
+        page.evaluate(
+            """() => {
+                const old = document.getElementById('transcript');
+                const next = old.cloneNode(true);
+                next.querySelectorAll('.mn-bctls, .dag-chrome').forEach(el => el.remove());
+                next.querySelectorAll('[style]').forEach(el => {
+                    el.style.removeProperty('grid-row'); el.style.removeProperty('grid-column');
+                    el.style.removeProperty('--dag-tag');
+                });
+                next.querySelectorAll('*').forEach(el => [...el.classList]
+                    .filter(c => c.startsWith('dag-')).forEach(c => el.classList.remove(c)));
+                old.replaceWith(next);
+                window.claudeLogRehydrate(next);
+            }"""
+        )
+        _settle(page)
+        assert (
+            _mode(page, W_RENDER) == "interleaved"
+            and _visible_count(page, W_RENDER) > 0
+        )
+        # The phase's "+N more agents" stays expanded (keyed by run and phase).
+        assert not _ctl_hidden(page, W_STYLES)
+        missing = page.evaluate(
+            "[...document.querySelectorAll('#transcript .message')].filter(el => !el.style.gridRow).map(el => el.id)"
+        )
+        assert missing == []
 
 
 class TestLayout:

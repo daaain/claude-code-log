@@ -223,7 +223,8 @@ its `workflow_agent` card.
 
 See [workflows.md](workflows.md) for the full as-built reference
 (on-disk layout, parse model, taskId linkage, splice mechanics,
-depth behaviour).
+depth behaviour). In the minimal theme each agent with a transcript is a
+branch lane of its own (§ 6).
 
 ## 5. Nested agent hierarchies (#213)
 
@@ -397,7 +398,7 @@ attributes on the cards (classic output never carries them).
 | Async agent | `agent-<agentId>` | the tool_use | the `<task-notification>` card (`task_id` = agent id, else `spawning_task_message_index`) | `async-agent` |
 | Nested agent (§ 5) | `agent-<agentId>`, `parent_lane` = the spawning agent's lane | the tool_use inside the parent lane | its tool_result inside the parent lane | as above |
 | Teammate (§ 3) | none — the thread stays in its spawner's lane | — | — | recorded as `teammate` so the spawn card can link to the thread's first card |
-| Workflow agent (§ 4) | none — everything under the Workflow tool_use inherits its lane | — | — | — |
+| Workflow agent (§ 4) | `wfagent-<agentId>` for an agent card whose side-channel transcript rendered (else none: a plain row); phase and agent cards stay in the Workflow call's lane | the agent's phase card (no phases: the Workflow call's result) | the agent card, once it reports a result | `workflow-agent` |
 
 Membership is the card's own session line: a sidechain card with a
 `{trunk}#agent-<id>` session id is in `agent-<id>`. The spawn anchor
@@ -423,6 +424,17 @@ is nested in one that merged or ended — else `open`. The minimal theme
 draws an `open` lane as *running* on a live-served page, with how long it
 has been quiet (a session silent for over a week reads as stopped); see
 [minimal-theme.md § 8](minimal-theme.md#8-live-updates-and-running-lanes).
+
+A **workflow agent** lane's membership is its agent card's subtree (the
+grafted side-channel, `in_workflow_sidechannel`); its stats take the
+snapshot's tokens and duration (`WorkflowAgentMessage.tokens` /
+`.duration_ms`), its name the agent's label. It is ranked and capped in its
+**group** — `<runId>/<phase ordinal>` (`data-lane-group`), the whole run
+without phases — instead of the user turn, so a phase fanning out to many
+agents gets its own `+N more agents` and leaves the turn's other branches
+alone. Without a result it is `ended` once the run's snapshot exists or
+its state is terminal, else `open`. See
+[minimal-theme.md § 1.1](minimal-theme.md#11-workflow-agents).
 
 Rewind forks follow the same model; see
 [dag.md § Branch lanes](dag.md#branch-lanes-minimal-theme). Teammate

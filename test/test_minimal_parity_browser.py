@@ -14,7 +14,9 @@ with the timeline open, and checks the same invariants each time:
 - turning the toggle back on restores exactly the cards shown before.
 
 Then a search into a folded lane (it opens, per branch mode) and a live
-update with a filter set (the swapped-in markup is filtered too).
+update with a filter set (the swapped-in markup is filtered too). Each runs
+on the DAG demo (sub-agents, forks) and on the workflow demo (workflow
+agent lanes: a phase fanning out past the cap, a failed agent, a plain row).
 
 The smoke test renders real projects, clicks through every branch mode,
 fold depth and colour scheme, opens a lane each way and fails on any page
@@ -32,7 +34,7 @@ from typing import Any
 import pytest
 from playwright.sync_api import Page
 
-from test.dag_demo_fixture import write_dag_demo
+from test.dag_demo_fixture import write_dag_demo, write_workflow_demo
 from test.test_minimal_dag_browser import _render
 
 pytestmark = pytest.mark.browser
@@ -45,6 +47,14 @@ KEYS = (
     "claude-code-log:theme",
 )
 MODES = ("main", "interleaved", "columns")
+SWEPT = ("demo", "workflow")  # the sweep's pages
+# Per swept page: a folded lane, a text only that lane holds, and a word for
+# an active search across lanes.
+REVEAL = {
+    "demo": ("agent-a000audit", "96 matches in 9 files", "palette"),
+    # Behind the Map phase's "+2 more agents".
+    "workflow": ("wfagent-wa05styles", "12 matches", "splice"),
+}
 DEPTHS = ("prompts", "steps", "all")
 
 # The invariants above, evaluated in the page; returns a list of problems.
@@ -109,6 +119,9 @@ def pages(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
     tmp = tmp_path_factory.mktemp("parity")
     return {
         "demo": _render(write_dag_demo(tmp / "demo"), tmp / "demo.html", "Demo"),
+        "workflow": _render(
+            write_workflow_demo(tmp / "workflow"), tmp / "workflow.html", "Workflow"
+        ),
         "worktrees": _render(
             REAL / "-experiments-worktrees", tmp / "worktrees.html", "Worktrees"
         ),
@@ -176,50 +189,52 @@ def _depth(page: Page, depth: str) -> None:
 
 
 class TestParitySweep:
+    @pytest.mark.parametrize("name", SWEPT)
     @pytest.mark.parametrize("mode", MODES)
     def test_filter_x_depth_x_timeline(
-        self, clean: Page, pages: dict[str, Path], mode: str
+        self, clean: Page, pages: dict[str, Path], mode: str, name: str
     ):
         page = clean
         page.set_viewport_size({"width": 1600, "height": 900})
-        _open(page, pages["demo"], branches=mode)
+        _open(page, pages[name], branches=mode)
         _open_timeline(page)
         page.locator("#filterMessages").click()
         _settle(page)
-        _check(page, (mode, "initial"))
+        _check(page, (name, mode, "initial"))
         lanes = page.evaluate(MODES_OF)
         toggles = _toggles(page)
         assert {"user", "assistant", "tool", "sidechain"} <= set(toggles)
         for depth in DEPTHS:
             _depth(page, depth)
-            _check(page, (mode, depth))
+            _check(page, (name, mode, depth))
             baseline = page.evaluate(SHOWN)
             for toggle in toggles:
                 button = page.locator(f'.filter-toggle[data-type="{toggle}"]')
                 button.click()
                 _settle(page)
-                _check(page, (mode, depth, "off", toggle))
+                _check(page, (name, mode, depth, "off", toggle))
                 # Filters write classes, never lane modes.
                 assert page.evaluate(MODES_OF) == lanes, (mode, depth, toggle)
                 button.click()
                 _settle(page)
-                _check(page, (mode, depth, "on", toggle))
+                _check(page, (name, mode, depth, "on", toggle))
                 assert page.evaluate(SHOWN) == baseline, (mode, depth, toggle)
         # And with several toggles off at once, across the depths.
         for toggle in ("sidechain", "tool"):
             page.locator(f'.filter-toggle[data-type="{toggle}"]').click()
         for depth in DEPTHS:
             _depth(page, depth)
-            _check(page, (mode, depth, "two off"))
+            _check(page, (name, mode, depth, "two off"))
 
+    @pytest.mark.parametrize("name", SWEPT)
     @pytest.mark.parametrize("mode", MODES)
     def test_search_reveals_a_match_in_a_folded_lane(
-        self, clean: Page, pages: dict[str, Path], mode: str
+        self, clean: Page, pages: dict[str, Path], mode: str, name: str
     ):
         page = clean
         page.set_viewport_size({"width": 1600, "height": 900})
-        _open(page, pages["demo"], branches=mode)
-        lane = "agent-a000audit"
+        _open(page, pages[name], branches=mode)
+        lane, text, _word = REVEAL[name]
         if mode != "main":
             # Fold it by hand first: a search must open it again.
             page.locator("[data-mn-branches='main']").click()
@@ -227,21 +242,22 @@ class TestParitySweep:
         assert page.evaluate(f"window.claudeLogDag.mode('{lane}')") == "folded"
         _open_timeline(page)
         page.locator("#filterMessages").click()
-        page.locator("#searchInput").fill("96 matches in 9 files")
+        page.locator("#searchInput").fill(text)
         page.wait_for_function(
             f"window.claudeLogDag.mode('{lane}') !== 'folded'", timeout=10000
         )
         _settle(page)
         match = page.locator(f"#transcript .message.search-match[data-lane='{lane}']")
         assert match.first.evaluate("el => el.checkVisibility()")
-        _check(page, (mode, "search"))
+        _check(page, (name, mode, "search"))
         page.locator("#searchInput").fill("")
         _settle(page)
-        _check(page, (mode, "search cleared"))
+        _check(page, (name, mode, "search cleared"))
 
+    @pytest.mark.parametrize("name", SWEPT)
     @pytest.mark.parametrize("mode", MODES)
     def test_a_live_update_keeps_the_filter(
-        self, clean: Page, pages: dict[str, Path], mode: str
+        self, clean: Page, pages: dict[str, Path], mode: str, name: str
     ):
         """A wholesale swap brings the server's markup — no ``filtered-hidden``
         anywhere. The page must filter it again (on rehydrate, a shared path
@@ -249,39 +265,40 @@ class TestParitySweep:
         test_live_update.py)."""
         page = clean
         page.set_viewport_size({"width": 1600, "height": 900})
-        _open(page, pages["demo"], branches=mode)
+        _open(page, pages[name], branches=mode)
         _open_timeline(page)
         page.locator("#filterMessages").click()
         page.locator('.filter-toggle[data-type="tool"]').click()
         _settle(page)
-        _check(page, (mode, "before"))
+        _check(page, (name, mode, "before"))
         page.evaluate(SWAP)
         page.wait_for_function(
             "() => document.querySelector('.message.tool_use.filtered-hidden') !== null"
         )
         _settle(page)
-        _check(page, (mode, "after a swap"))
+        _check(page, (name, mode, "after a swap"))
 
+    @pytest.mark.parametrize("name", SWEPT)
     @pytest.mark.parametrize("mode", MODES)
     def test_a_live_update_keeps_the_search_quietly(
-        self, clean: Page, pages: dict[str, Path], mode: str
+        self, clean: Page, pages: dict[str, Path], mode: str, name: str
     ):
         """An active search is re-run on the swapped-in markup — the same
         matches, the rest hidden again — without scrolling the reader away,
         also with a filter set (whose re-application re-runs the search)."""
         page = clean
         page.set_viewport_size({"width": 1600, "height": 900})
-        _open(page, pages["demo"], branches=mode)
+        _open(page, pages[name], branches=mode)
         _open_timeline(page)
         page.locator("#filterMessages").click()
         page.locator('.filter-toggle[data-type="tool"]').click()
-        page.locator("#searchInput").fill("palette")
+        page.locator("#searchInput").fill(REVEAL[name][2])
         page.wait_for_function(
             "() => document.querySelectorAll('.message.search-match').length > 0"
         )
         page.wait_for_timeout(400)  # the filter observer's re-search settles
         _settle(page)
-        _check(page, (mode, "searched"))
+        _check(page, (name, mode, "searched"))
         matches = page.evaluate(
             "[...document.querySelectorAll('.message.search-match')].map(el => el.id)"
         )
@@ -293,7 +310,7 @@ class TestParitySweep:
         )
         page.wait_for_timeout(400)
         _settle(page)
-        _check(page, (mode, "after a swap"))
+        _check(page, (name, mode, "after a swap"))
         assert (
             page.evaluate(
                 "[...document.querySelectorAll('.message.search-match')].map(el => el.id)"
@@ -309,7 +326,9 @@ BENIGN = ("unpkg.com", "net::ERR_", "Failed to load resource")
 
 
 class TestSmoke:
-    @pytest.mark.parametrize("name", ["worktrees", "coderabbit", "ideas", "demo"])
+    @pytest.mark.parametrize(
+        "name", ["worktrees", "coderabbit", "ideas", "demo", "workflow"]
+    )
     def test_click_through_without_errors(
         self, clean: Page, pages: dict[str, Path], name: str
     ):

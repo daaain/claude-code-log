@@ -26,8 +26,14 @@ This file is now a historical record.** Branch of origin:
   copied — transcript bytes unchanged); the theme reaches both pages on
   every path that writes them (they were classic whatever the run's
   theme). dev-docs/minimal-theme.md § 13.
-- **Workflow agents as lanes** (#174): workflow phases and agents stay
-  nested blocks, not DAG branches (§ 7 decision 6).
+- ~~**Workflow agents as lanes** (#174): workflow phases and agents stay
+  nested blocks, not DAG branches (§ 7 decision 6)~~ — **done** (follow-up
+  after P8): phase and agent cards are rows; each agent with a transcript
+  is a `workflow-agent` lane (`wfagent-<id>`) spawned at its phase card and
+  merging at its agent card; a phase is a lane group with its own cap of
+  three and `+N more agents`, apart from the turn's other branches; an
+  agent without a transcript stays a plain row.
+  dev-docs/minimal-theme.md § 1.1.
 - **Markdown (and JSON) output** has no themes and no notion of lanes or
   of a running agent (P7b).
 - ~~**Classic live updates don't re-apply the filter or search** to the
@@ -2508,8 +2514,10 @@ is a follow-up.
    (§ 1.6.3).
 6. **Workflow sub-agents** (#174) are not lanes in this feature; the
    index page and `search.html` are not themed. Both could follow.
-   *(Left open: listed under the follow-ups at the top. The index and
-   search pages have since been themed; workflow lanes remain open.)*
+   *(Left open: listed under the follow-ups at the top. Both have since
+   followed: the index and search pages are themed, and workflow agents
+   are lanes grouped per phase — dev-docs/minimal-theme.md § 1.1 and
+   § 13.)*
 7. **Theme names.** *Decided (with P2):* the existing look is `classic`;
    valid values are `classic`, `minimal` and `default`. `default` means
    "the built-in default theme" — `classic` today, possibly `minimal`

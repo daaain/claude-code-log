@@ -390,6 +390,8 @@ def lane_attributes(model: "LaneModel") -> LaneAttrs:
             add(head, "data-lane-to", f"d-{lane.merge_index}")
         if lane.turn_index is not None:
             add(head, "data-lane-turn", f"d-{lane.turn_index}")
+        if lane.group:
+            add(head, "data-lane-group", lane.group)
         add(head, "data-lane-rank", str(lane.rank))
         add(head, "data-lane-stats", lane.stats)
         if lane.state:
