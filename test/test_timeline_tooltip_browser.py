@@ -83,7 +83,9 @@ def _tool_result(
     )
 
 
-def _open_timeline(page: Page, tmp_path: Path, user_view: Optional[str]) -> Page:
+def _open_timeline(
+    page: Page, tmp_path: Path, user_view: Optional[str], before_build: str = ""
+) -> Page:
     entries = [
         _entry(
             "u1",
@@ -111,6 +113,8 @@ def _open_timeline(page: Page, tmp_path: Path, user_view: Optional[str]) -> Page
             "v => localStorage.setItem('claude-code-log:user-view', v)", user_view
         )
     page.reload()
+    if before_build:
+        page.evaluate(before_build)
     page.click("#toggleTimeline")
     # 30s timeout handles CDN cold loads (first load per xdist worker)
     page.wait_for_selector(".vis-item.vis-box", timeout=30000)
@@ -177,3 +181,23 @@ def test_user_message_tooltip_follows_the_raw_view(page: Page, tmp_path: Path) -
     raw_page = _open_timeline(page, tmp_path, user_view="raw")
     tooltip = _hover_tooltip(raw_page, USER_ITEM)
     assert tooltip == USER_TEXT
+
+
+# One <pre> text node of 200k lines (~4 MB), set in the DOM so the browser's
+# parser doesn't split it: collection must stop at the tooltip's cap rather
+# than read (and re-scan) the whole node — that took minutes before.
+HUGE_PRE = """() => {
+    const pre = document.querySelectorAll('.message.tool_result .details-content pre')[0];
+    const lines = [];
+    for (let i = 0; i < 200000; i++) lines.push('huge line ' + i + ': output');
+    pre.textContent = lines.join('\\n');
+}"""
+
+
+@pytest.mark.browser
+def test_huge_pre_text_node_stays_capped(page: Page, tmp_path: Path) -> None:
+    huge_page = _open_timeline(page, tmp_path, user_view=None, before_build=HUGE_PRE)
+    lines = _hover_tooltip(huge_page, TEXT_RESULT_ITEM).splitlines()
+    assert lines[0] == "huge line 0: output"
+    assert len(lines) == 25
+    assert lines[-1] == "huge line 24: output …"

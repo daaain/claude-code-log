@@ -4382,7 +4382,9 @@
               // "▶ Details" stub — and any new button would do it again. So the
               // rules are structural, not a list of known chrome:
               //   - controls contribute nothing, except a disclosure button
-              //     (aria-expanded), whose text names the content it folds;
+              //     (aria-expanded), whose text names the content it folds — so
+              //     a text-bearing aria-expanded button inside .content adds its
+              //     text by design (today only the JSON param-key toggles);
               //   - display:none subtrees are skipped (e.g. the inactive view
               //     of a user message's Markdown/raw pair);
               //   - <details> count as open: inside a closed one, the fold (not
@@ -4390,7 +4392,9 @@
               //     the <summary> is a preview of that body, so it is dropped;
               //   - blocks and table rows become lines, nested tables indent,
               //     <pre> keeps its whitespace.
-              // Collection stops at `limit` characters.
+              // Collection stops at `limit` characters: emit() caps every
+              // write, a <pre> text node is read line by line only up to the
+              // cap, and no step re-scans what was already collected.
               const BLOCK_TAGS = new Set([
                   'ADDRESS', 'ARTICLE', 'ASIDE', 'BLOCKQUOTE', 'DD', 'DETAILS', 'DIV', 'DL', 'DT',
                   'FIELDSET', 'FIGCAPTION', 'FIGURE', 'FOOTER', 'FORM', 'H1', 'H2', 'H3', 'H4', 'H5',
@@ -4405,34 +4409,46 @@
                   let out = '';
                   let lineStart = true;
                   let indent = 0;
+                  // Drop trailing spaces by looking at the tail only
+                  const trimTrailingSpaces = () => {
+                      let end = out.length;
+                      while (end > 0 && out[end - 1] === ' ') end--;
+                      if (end < out.length) out = out.substring(0, end);
+                  };
+                  const newLine = () => {
+                      trimTrailingSpaces();
+                      out += '\n';
+                      lineStart = true;
+                  };
                   const breakLine = () => {
-                      if (!lineStart) {
-                          out = out.replace(/ +$/, '') + '\n';
-                          lineStart = true;
-                      }
+                      if (!lineStart) newLine();
                   };
                   const emit = (text) => {
-                      if (!text) return;
+                      if (!text || out.length >= limit) return;
                       if (lineStart) {
                           out += '  '.repeat(indent);
                           lineStart = false;
                       }
-                      out += text;
+                      out += text.length > limit - out.length ? text.substring(0, limit - out.length) : text;
                   };
                   const walk = (node, inPre, inClosedFold) => {
                       if (out.length >= limit) return;
                       if (node.nodeType === Node.TEXT_NODE) {
+                          const value = node.nodeValue;
                           if (inPre) {
-                              // Every newline counts in a <pre>, blank lines included
-                              node.nodeValue.split('\n').forEach((part, i) => {
-                                  if (i) {
-                                      out = out.replace(/ +$/, '') + '\n';
-                                      lineStart = true;
-                                  }
-                                  emit(part);
-                              });
+                              // Every newline counts in a <pre>, blank lines
+                              // included; stop at the cap, not at the node's end.
+                              let start = 0;
+                              while (out.length < limit) {
+                                  const nl = value.indexOf('\n', start);
+                                  const end = nl === -1 ? value.length : nl;
+                                  emit(value.substring(start, Math.min(end, start + limit)));
+                                  if (nl === -1) break;
+                                  newLine();
+                                  start = nl + 1;
+                              }
                           } else {
-                              let text = node.nodeValue.replace(/\s+/g, ' ');
+                              let text = value.replace(/\s+/g, ' ');
                               if (lineStart || out.endsWith(' ')) text = text.replace(/^ /, '');
                               emit(text);
                           }
@@ -4458,7 +4474,8 @@
                       if (nestedTable) indent++;
                       if (tag === 'LI') emit('• ');
                       if ((tag === 'TD' || tag === 'TH') && node.previousElementSibling && !lineStart) {
-                          out = out.replace(/ +$/, '') + '  ';
+                          trimTrailingSpaces();
+                          out += '  ';
                       }
                       const closedFold = inClosedFold || (tag === 'DETAILS' && !node.open);
                       node.childNodes.forEach(child => walk(child, inPre || tag === 'PRE', closedFold));
@@ -12397,7 +12414,9 @@
               // "▶ Details" stub — and any new button would do it again. So the
               // rules are structural, not a list of known chrome:
               //   - controls contribute nothing, except a disclosure button
-              //     (aria-expanded), whose text names the content it folds;
+              //     (aria-expanded), whose text names the content it folds — so
+              //     a text-bearing aria-expanded button inside .content adds its
+              //     text by design (today only the JSON param-key toggles);
               //   - display:none subtrees are skipped (e.g. the inactive view
               //     of a user message's Markdown/raw pair);
               //   - <details> count as open: inside a closed one, the fold (not
@@ -12405,7 +12424,9 @@
               //     the <summary> is a preview of that body, so it is dropped;
               //   - blocks and table rows become lines, nested tables indent,
               //     <pre> keeps its whitespace.
-              // Collection stops at `limit` characters.
+              // Collection stops at `limit` characters: emit() caps every
+              // write, a <pre> text node is read line by line only up to the
+              // cap, and no step re-scans what was already collected.
               const BLOCK_TAGS = new Set([
                   'ADDRESS', 'ARTICLE', 'ASIDE', 'BLOCKQUOTE', 'DD', 'DETAILS', 'DIV', 'DL', 'DT',
                   'FIELDSET', 'FIGCAPTION', 'FIGURE', 'FOOTER', 'FORM', 'H1', 'H2', 'H3', 'H4', 'H5',
@@ -12420,34 +12441,46 @@
                   let out = '';
                   let lineStart = true;
                   let indent = 0;
+                  // Drop trailing spaces by looking at the tail only
+                  const trimTrailingSpaces = () => {
+                      let end = out.length;
+                      while (end > 0 && out[end - 1] === ' ') end--;
+                      if (end < out.length) out = out.substring(0, end);
+                  };
+                  const newLine = () => {
+                      trimTrailingSpaces();
+                      out += '\n';
+                      lineStart = true;
+                  };
                   const breakLine = () => {
-                      if (!lineStart) {
-                          out = out.replace(/ +$/, '') + '\n';
-                          lineStart = true;
-                      }
+                      if (!lineStart) newLine();
                   };
                   const emit = (text) => {
-                      if (!text) return;
+                      if (!text || out.length >= limit) return;
                       if (lineStart) {
                           out += '  '.repeat(indent);
                           lineStart = false;
                       }
-                      out += text;
+                      out += text.length > limit - out.length ? text.substring(0, limit - out.length) : text;
                   };
                   const walk = (node, inPre, inClosedFold) => {
                       if (out.length >= limit) return;
                       if (node.nodeType === Node.TEXT_NODE) {
+                          const value = node.nodeValue;
                           if (inPre) {
-                              // Every newline counts in a <pre>, blank lines included
-                              node.nodeValue.split('\n').forEach((part, i) => {
-                                  if (i) {
-                                      out = out.replace(/ +$/, '') + '\n';
-                                      lineStart = true;
-                                  }
-                                  emit(part);
-                              });
+                              // Every newline counts in a <pre>, blank lines
+                              // included; stop at the cap, not at the node's end.
+                              let start = 0;
+                              while (out.length < limit) {
+                                  const nl = value.indexOf('\n', start);
+                                  const end = nl === -1 ? value.length : nl;
+                                  emit(value.substring(start, Math.min(end, start + limit)));
+                                  if (nl === -1) break;
+                                  newLine();
+                                  start = nl + 1;
+                              }
                           } else {
-                              let text = node.nodeValue.replace(/\s+/g, ' ');
+                              let text = value.replace(/\s+/g, ' ');
                               if (lineStart || out.endsWith(' ')) text = text.replace(/^ /, '');
                               emit(text);
                           }
@@ -12473,7 +12506,8 @@
                       if (nestedTable) indent++;
                       if (tag === 'LI') emit('• ');
                       if ((tag === 'TD' || tag === 'TH') && node.previousElementSibling && !lineStart) {
-                          out = out.replace(/ +$/, '') + '  ';
+                          trimTrailingSpaces();
+                          out += '  ';
                       }
                       const closedFold = inClosedFold || (tag === 'DETAILS' && !node.open);
                       node.childNodes.forEach(child => walk(child, inPre || tag === 'PRE', closedFold));
@@ -22972,7 +23006,9 @@
               // "▶ Details" stub — and any new button would do it again. So the
               // rules are structural, not a list of known chrome:
               //   - controls contribute nothing, except a disclosure button
-              //     (aria-expanded), whose text names the content it folds;
+              //     (aria-expanded), whose text names the content it folds — so
+              //     a text-bearing aria-expanded button inside .content adds its
+              //     text by design (today only the JSON param-key toggles);
               //   - display:none subtrees are skipped (e.g. the inactive view
               //     of a user message's Markdown/raw pair);
               //   - <details> count as open: inside a closed one, the fold (not
@@ -22980,7 +23016,9 @@
               //     the <summary> is a preview of that body, so it is dropped;
               //   - blocks and table rows become lines, nested tables indent,
               //     <pre> keeps its whitespace.
-              // Collection stops at `limit` characters.
+              // Collection stops at `limit` characters: emit() caps every
+              // write, a <pre> text node is read line by line only up to the
+              // cap, and no step re-scans what was already collected.
               const BLOCK_TAGS = new Set([
                   'ADDRESS', 'ARTICLE', 'ASIDE', 'BLOCKQUOTE', 'DD', 'DETAILS', 'DIV', 'DL', 'DT',
                   'FIELDSET', 'FIGCAPTION', 'FIGURE', 'FOOTER', 'FORM', 'H1', 'H2', 'H3', 'H4', 'H5',
@@ -22995,34 +23033,46 @@
                   let out = '';
                   let lineStart = true;
                   let indent = 0;
+                  // Drop trailing spaces by looking at the tail only
+                  const trimTrailingSpaces = () => {
+                      let end = out.length;
+                      while (end > 0 && out[end - 1] === ' ') end--;
+                      if (end < out.length) out = out.substring(0, end);
+                  };
+                  const newLine = () => {
+                      trimTrailingSpaces();
+                      out += '\n';
+                      lineStart = true;
+                  };
                   const breakLine = () => {
-                      if (!lineStart) {
-                          out = out.replace(/ +$/, '') + '\n';
-                          lineStart = true;
-                      }
+                      if (!lineStart) newLine();
                   };
                   const emit = (text) => {
-                      if (!text) return;
+                      if (!text || out.length >= limit) return;
                       if (lineStart) {
                           out += '  '.repeat(indent);
                           lineStart = false;
                       }
-                      out += text;
+                      out += text.length > limit - out.length ? text.substring(0, limit - out.length) : text;
                   };
                   const walk = (node, inPre, inClosedFold) => {
                       if (out.length >= limit) return;
                       if (node.nodeType === Node.TEXT_NODE) {
+                          const value = node.nodeValue;
                           if (inPre) {
-                              // Every newline counts in a <pre>, blank lines included
-                              node.nodeValue.split('\n').forEach((part, i) => {
-                                  if (i) {
-                                      out = out.replace(/ +$/, '') + '\n';
-                                      lineStart = true;
-                                  }
-                                  emit(part);
-                              });
+                              // Every newline counts in a <pre>, blank lines
+                              // included; stop at the cap, not at the node's end.
+                              let start = 0;
+                              while (out.length < limit) {
+                                  const nl = value.indexOf('\n', start);
+                                  const end = nl === -1 ? value.length : nl;
+                                  emit(value.substring(start, Math.min(end, start + limit)));
+                                  if (nl === -1) break;
+                                  newLine();
+                                  start = nl + 1;
+                              }
                           } else {
-                              let text = node.nodeValue.replace(/\s+/g, ' ');
+                              let text = value.replace(/\s+/g, ' ');
                               if (lineStart || out.endsWith(' ')) text = text.replace(/^ /, '');
                               emit(text);
                           }
@@ -23048,7 +23098,8 @@
                       if (nestedTable) indent++;
                       if (tag === 'LI') emit('• ');
                       if ((tag === 'TD' || tag === 'TH') && node.previousElementSibling && !lineStart) {
-                          out = out.replace(/ +$/, '') + '  ';
+                          trimTrailingSpaces();
+                          out += '  ';
                       }
                       const closedFold = inClosedFold || (tag === 'DETAILS' && !node.open);
                       node.childNodes.forEach(child => walk(child, inPre || tag === 'PRE', closedFold));
@@ -31105,7 +31156,9 @@
               // "▶ Details" stub — and any new button would do it again. So the
               // rules are structural, not a list of known chrome:
               //   - controls contribute nothing, except a disclosure button
-              //     (aria-expanded), whose text names the content it folds;
+              //     (aria-expanded), whose text names the content it folds — so
+              //     a text-bearing aria-expanded button inside .content adds its
+              //     text by design (today only the JSON param-key toggles);
               //   - display:none subtrees are skipped (e.g. the inactive view
               //     of a user message's Markdown/raw pair);
               //   - <details> count as open: inside a closed one, the fold (not
@@ -31113,7 +31166,9 @@
               //     the <summary> is a preview of that body, so it is dropped;
               //   - blocks and table rows become lines, nested tables indent,
               //     <pre> keeps its whitespace.
-              // Collection stops at `limit` characters.
+              // Collection stops at `limit` characters: emit() caps every
+              // write, a <pre> text node is read line by line only up to the
+              // cap, and no step re-scans what was already collected.
               const BLOCK_TAGS = new Set([
                   'ADDRESS', 'ARTICLE', 'ASIDE', 'BLOCKQUOTE', 'DD', 'DETAILS', 'DIV', 'DL', 'DT',
                   'FIELDSET', 'FIGCAPTION', 'FIGURE', 'FOOTER', 'FORM', 'H1', 'H2', 'H3', 'H4', 'H5',
@@ -31128,34 +31183,46 @@
                   let out = '';
                   let lineStart = true;
                   let indent = 0;
+                  // Drop trailing spaces by looking at the tail only
+                  const trimTrailingSpaces = () => {
+                      let end = out.length;
+                      while (end > 0 && out[end - 1] === ' ') end--;
+                      if (end < out.length) out = out.substring(0, end);
+                  };
+                  const newLine = () => {
+                      trimTrailingSpaces();
+                      out += '\n';
+                      lineStart = true;
+                  };
                   const breakLine = () => {
-                      if (!lineStart) {
-                          out = out.replace(/ +$/, '') + '\n';
-                          lineStart = true;
-                      }
+                      if (!lineStart) newLine();
                   };
                   const emit = (text) => {
-                      if (!text) return;
+                      if (!text || out.length >= limit) return;
                       if (lineStart) {
                           out += '  '.repeat(indent);
                           lineStart = false;
                       }
-                      out += text;
+                      out += text.length > limit - out.length ? text.substring(0, limit - out.length) : text;
                   };
                   const walk = (node, inPre, inClosedFold) => {
                       if (out.length >= limit) return;
                       if (node.nodeType === Node.TEXT_NODE) {
+                          const value = node.nodeValue;
                           if (inPre) {
-                              // Every newline counts in a <pre>, blank lines included
-                              node.nodeValue.split('\n').forEach((part, i) => {
-                                  if (i) {
-                                      out = out.replace(/ +$/, '') + '\n';
-                                      lineStart = true;
-                                  }
-                                  emit(part);
-                              });
+                              // Every newline counts in a <pre>, blank lines
+                              // included; stop at the cap, not at the node's end.
+                              let start = 0;
+                              while (out.length < limit) {
+                                  const nl = value.indexOf('\n', start);
+                                  const end = nl === -1 ? value.length : nl;
+                                  emit(value.substring(start, Math.min(end, start + limit)));
+                                  if (nl === -1) break;
+                                  newLine();
+                                  start = nl + 1;
+                              }
                           } else {
-                              let text = node.nodeValue.replace(/\s+/g, ' ');
+                              let text = value.replace(/\s+/g, ' ');
                               if (lineStart || out.endsWith(' ')) text = text.replace(/^ /, '');
                               emit(text);
                           }
@@ -31181,7 +31248,8 @@
                       if (nestedTable) indent++;
                       if (tag === 'LI') emit('• ');
                       if ((tag === 'TD' || tag === 'TH') && node.previousElementSibling && !lineStart) {
-                          out = out.replace(/ +$/, '') + '  ';
+                          trimTrailingSpaces();
+                          out += '  ';
                       }
                       const closedFold = inClosedFold || (tag === 'DETAILS' && !node.open);
                       node.childNodes.forEach(child => walk(child, inPre || tag === 'PRE', closedFold));
@@ -39518,7 +39586,9 @@
               // "▶ Details" stub — and any new button would do it again. So the
               // rules are structural, not a list of known chrome:
               //   - controls contribute nothing, except a disclosure button
-              //     (aria-expanded), whose text names the content it folds;
+              //     (aria-expanded), whose text names the content it folds — so
+              //     a text-bearing aria-expanded button inside .content adds its
+              //     text by design (today only the JSON param-key toggles);
               //   - display:none subtrees are skipped (e.g. the inactive view
               //     of a user message's Markdown/raw pair);
               //   - <details> count as open: inside a closed one, the fold (not
@@ -39526,7 +39596,9 @@
               //     the <summary> is a preview of that body, so it is dropped;
               //   - blocks and table rows become lines, nested tables indent,
               //     <pre> keeps its whitespace.
-              // Collection stops at `limit` characters.
+              // Collection stops at `limit` characters: emit() caps every
+              // write, a <pre> text node is read line by line only up to the
+              // cap, and no step re-scans what was already collected.
               const BLOCK_TAGS = new Set([
                   'ADDRESS', 'ARTICLE', 'ASIDE', 'BLOCKQUOTE', 'DD', 'DETAILS', 'DIV', 'DL', 'DT',
                   'FIELDSET', 'FIGCAPTION', 'FIGURE', 'FOOTER', 'FORM', 'H1', 'H2', 'H3', 'H4', 'H5',
@@ -39541,34 +39613,46 @@
                   let out = '';
                   let lineStart = true;
                   let indent = 0;
+                  // Drop trailing spaces by looking at the tail only
+                  const trimTrailingSpaces = () => {
+                      let end = out.length;
+                      while (end > 0 && out[end - 1] === ' ') end--;
+                      if (end < out.length) out = out.substring(0, end);
+                  };
+                  const newLine = () => {
+                      trimTrailingSpaces();
+                      out += '\n';
+                      lineStart = true;
+                  };
                   const breakLine = () => {
-                      if (!lineStart) {
-                          out = out.replace(/ +$/, '') + '\n';
-                          lineStart = true;
-                      }
+                      if (!lineStart) newLine();
                   };
                   const emit = (text) => {
-                      if (!text) return;
+                      if (!text || out.length >= limit) return;
                       if (lineStart) {
                           out += '  '.repeat(indent);
                           lineStart = false;
                       }
-                      out += text;
+                      out += text.length > limit - out.length ? text.substring(0, limit - out.length) : text;
                   };
                   const walk = (node, inPre, inClosedFold) => {
                       if (out.length >= limit) return;
                       if (node.nodeType === Node.TEXT_NODE) {
+                          const value = node.nodeValue;
                           if (inPre) {
-                              // Every newline counts in a <pre>, blank lines included
-                              node.nodeValue.split('\n').forEach((part, i) => {
-                                  if (i) {
-                                      out = out.replace(/ +$/, '') + '\n';
-                                      lineStart = true;
-                                  }
-                                  emit(part);
-                              });
+                              // Every newline counts in a <pre>, blank lines
+                              // included; stop at the cap, not at the node's end.
+                              let start = 0;
+                              while (out.length < limit) {
+                                  const nl = value.indexOf('\n', start);
+                                  const end = nl === -1 ? value.length : nl;
+                                  emit(value.substring(start, Math.min(end, start + limit)));
+                                  if (nl === -1) break;
+                                  newLine();
+                                  start = nl + 1;
+                              }
                           } else {
-                              let text = node.nodeValue.replace(/\s+/g, ' ');
+                              let text = value.replace(/\s+/g, ' ');
                               if (lineStart || out.endsWith(' ')) text = text.replace(/^ /, '');
                               emit(text);
                           }
@@ -39594,7 +39678,8 @@
                       if (nestedTable) indent++;
                       if (tag === 'LI') emit('• ');
                       if ((tag === 'TD' || tag === 'TH') && node.previousElementSibling && !lineStart) {
-                          out = out.replace(/ +$/, '') + '  ';
+                          trimTrailingSpaces();
+                          out += '  ';
                       }
                       const closedFold = inClosedFold || (tag === 'DETAILS' && !node.open);
                       node.childNodes.forEach(child => walk(child, inPre || tag === 'PRE', closedFold));
@@ -47878,7 +47963,9 @@
               // "▶ Details" stub — and any new button would do it again. So the
               // rules are structural, not a list of known chrome:
               //   - controls contribute nothing, except a disclosure button
-              //     (aria-expanded), whose text names the content it folds;
+              //     (aria-expanded), whose text names the content it folds — so
+              //     a text-bearing aria-expanded button inside .content adds its
+              //     text by design (today only the JSON param-key toggles);
               //   - display:none subtrees are skipped (e.g. the inactive view
               //     of a user message's Markdown/raw pair);
               //   - <details> count as open: inside a closed one, the fold (not
@@ -47886,7 +47973,9 @@
               //     the <summary> is a preview of that body, so it is dropped;
               //   - blocks and table rows become lines, nested tables indent,
               //     <pre> keeps its whitespace.
-              // Collection stops at `limit` characters.
+              // Collection stops at `limit` characters: emit() caps every
+              // write, a <pre> text node is read line by line only up to the
+              // cap, and no step re-scans what was already collected.
               const BLOCK_TAGS = new Set([
                   'ADDRESS', 'ARTICLE', 'ASIDE', 'BLOCKQUOTE', 'DD', 'DETAILS', 'DIV', 'DL', 'DT',
                   'FIELDSET', 'FIGCAPTION', 'FIGURE', 'FOOTER', 'FORM', 'H1', 'H2', 'H3', 'H4', 'H5',
@@ -47901,34 +47990,46 @@
                   let out = '';
                   let lineStart = true;
                   let indent = 0;
+                  // Drop trailing spaces by looking at the tail only
+                  const trimTrailingSpaces = () => {
+                      let end = out.length;
+                      while (end > 0 && out[end - 1] === ' ') end--;
+                      if (end < out.length) out = out.substring(0, end);
+                  };
+                  const newLine = () => {
+                      trimTrailingSpaces();
+                      out += '\n';
+                      lineStart = true;
+                  };
                   const breakLine = () => {
-                      if (!lineStart) {
-                          out = out.replace(/ +$/, '') + '\n';
-                          lineStart = true;
-                      }
+                      if (!lineStart) newLine();
                   };
                   const emit = (text) => {
-                      if (!text) return;
+                      if (!text || out.length >= limit) return;
                       if (lineStart) {
                           out += '  '.repeat(indent);
                           lineStart = false;
                       }
-                      out += text;
+                      out += text.length > limit - out.length ? text.substring(0, limit - out.length) : text;
                   };
                   const walk = (node, inPre, inClosedFold) => {
                       if (out.length >= limit) return;
                       if (node.nodeType === Node.TEXT_NODE) {
+                          const value = node.nodeValue;
                           if (inPre) {
-                              // Every newline counts in a <pre>, blank lines included
-                              node.nodeValue.split('\n').forEach((part, i) => {
-                                  if (i) {
-                                      out = out.replace(/ +$/, '') + '\n';
-                                      lineStart = true;
-                                  }
-                                  emit(part);
-                              });
+                              // Every newline counts in a <pre>, blank lines
+                              // included; stop at the cap, not at the node's end.
+                              let start = 0;
+                              while (out.length < limit) {
+                                  const nl = value.indexOf('\n', start);
+                                  const end = nl === -1 ? value.length : nl;
+                                  emit(value.substring(start, Math.min(end, start + limit)));
+                                  if (nl === -1) break;
+                                  newLine();
+                                  start = nl + 1;
+                              }
                           } else {
-                              let text = node.nodeValue.replace(/\s+/g, ' ');
+                              let text = value.replace(/\s+/g, ' ');
                               if (lineStart || out.endsWith(' ')) text = text.replace(/^ /, '');
                               emit(text);
                           }
@@ -47954,7 +48055,8 @@
                       if (nestedTable) indent++;
                       if (tag === 'LI') emit('• ');
                       if ((tag === 'TD' || tag === 'TH') && node.previousElementSibling && !lineStart) {
-                          out = out.replace(/ +$/, '') + '  ';
+                          trimTrailingSpaces();
+                          out += '  ';
                       }
                       const closedFold = inClosedFold || (tag === 'DETAILS' && !node.open);
                       node.childNodes.forEach(child => walk(child, inPre || tag === 'PRE', closedFold));
@@ -56183,7 +56285,9 @@
               // "▶ Details" stub — and any new button would do it again. So the
               // rules are structural, not a list of known chrome:
               //   - controls contribute nothing, except a disclosure button
-              //     (aria-expanded), whose text names the content it folds;
+              //     (aria-expanded), whose text names the content it folds — so
+              //     a text-bearing aria-expanded button inside .content adds its
+              //     text by design (today only the JSON param-key toggles);
               //   - display:none subtrees are skipped (e.g. the inactive view
               //     of a user message's Markdown/raw pair);
               //   - <details> count as open: inside a closed one, the fold (not
@@ -56191,7 +56295,9 @@
               //     the <summary> is a preview of that body, so it is dropped;
               //   - blocks and table rows become lines, nested tables indent,
               //     <pre> keeps its whitespace.
-              // Collection stops at `limit` characters.
+              // Collection stops at `limit` characters: emit() caps every
+              // write, a <pre> text node is read line by line only up to the
+              // cap, and no step re-scans what was already collected.
               const BLOCK_TAGS = new Set([
                   'ADDRESS', 'ARTICLE', 'ASIDE', 'BLOCKQUOTE', 'DD', 'DETAILS', 'DIV', 'DL', 'DT',
                   'FIELDSET', 'FIGCAPTION', 'FIGURE', 'FOOTER', 'FORM', 'H1', 'H2', 'H3', 'H4', 'H5',
@@ -56206,34 +56312,46 @@
                   let out = '';
                   let lineStart = true;
                   let indent = 0;
+                  // Drop trailing spaces by looking at the tail only
+                  const trimTrailingSpaces = () => {
+                      let end = out.length;
+                      while (end > 0 && out[end - 1] === ' ') end--;
+                      if (end < out.length) out = out.substring(0, end);
+                  };
+                  const newLine = () => {
+                      trimTrailingSpaces();
+                      out += '\n';
+                      lineStart = true;
+                  };
                   const breakLine = () => {
-                      if (!lineStart) {
-                          out = out.replace(/ +$/, '') + '\n';
-                          lineStart = true;
-                      }
+                      if (!lineStart) newLine();
                   };
                   const emit = (text) => {
-                      if (!text) return;
+                      if (!text || out.length >= limit) return;
                       if (lineStart) {
                           out += '  '.repeat(indent);
                           lineStart = false;
                       }
-                      out += text;
+                      out += text.length > limit - out.length ? text.substring(0, limit - out.length) : text;
                   };
                   const walk = (node, inPre, inClosedFold) => {
                       if (out.length >= limit) return;
                       if (node.nodeType === Node.TEXT_NODE) {
+                          const value = node.nodeValue;
                           if (inPre) {
-                              // Every newline counts in a <pre>, blank lines included
-                              node.nodeValue.split('\n').forEach((part, i) => {
-                                  if (i) {
-                                      out = out.replace(/ +$/, '') + '\n';
-                                      lineStart = true;
-                                  }
-                                  emit(part);
-                              });
+                              // Every newline counts in a <pre>, blank lines
+                              // included; stop at the cap, not at the node's end.
+                              let start = 0;
+                              while (out.length < limit) {
+                                  const nl = value.indexOf('\n', start);
+                                  const end = nl === -1 ? value.length : nl;
+                                  emit(value.substring(start, Math.min(end, start + limit)));
+                                  if (nl === -1) break;
+                                  newLine();
+                                  start = nl + 1;
+                              }
                           } else {
-                              let text = node.nodeValue.replace(/\s+/g, ' ');
+                              let text = value.replace(/\s+/g, ' ');
                               if (lineStart || out.endsWith(' ')) text = text.replace(/^ /, '');
                               emit(text);
                           }
@@ -56259,7 +56377,8 @@
                       if (nestedTable) indent++;
                       if (tag === 'LI') emit('• ');
                       if ((tag === 'TD' || tag === 'TH') && node.previousElementSibling && !lineStart) {
-                          out = out.replace(/ +$/, '') + '  ';
+                          trimTrailingSpaces();
+                          out += '  ';
                       }
                       const closedFold = inClosedFold || (tag === 'DETAILS' && !node.open);
                       node.childNodes.forEach(child => walk(child, inPre || tag === 'PRE', closedFold));
@@ -64316,7 +64435,9 @@
               // "▶ Details" stub — and any new button would do it again. So the
               // rules are structural, not a list of known chrome:
               //   - controls contribute nothing, except a disclosure button
-              //     (aria-expanded), whose text names the content it folds;
+              //     (aria-expanded), whose text names the content it folds — so
+              //     a text-bearing aria-expanded button inside .content adds its
+              //     text by design (today only the JSON param-key toggles);
               //   - display:none subtrees are skipped (e.g. the inactive view
               //     of a user message's Markdown/raw pair);
               //   - <details> count as open: inside a closed one, the fold (not
@@ -64324,7 +64445,9 @@
               //     the <summary> is a preview of that body, so it is dropped;
               //   - blocks and table rows become lines, nested tables indent,
               //     <pre> keeps its whitespace.
-              // Collection stops at `limit` characters.
+              // Collection stops at `limit` characters: emit() caps every
+              // write, a <pre> text node is read line by line only up to the
+              // cap, and no step re-scans what was already collected.
               const BLOCK_TAGS = new Set([
                   'ADDRESS', 'ARTICLE', 'ASIDE', 'BLOCKQUOTE', 'DD', 'DETAILS', 'DIV', 'DL', 'DT',
                   'FIELDSET', 'FIGCAPTION', 'FIGURE', 'FOOTER', 'FORM', 'H1', 'H2', 'H3', 'H4', 'H5',
@@ -64339,34 +64462,46 @@
                   let out = '';
                   let lineStart = true;
                   let indent = 0;
+                  // Drop trailing spaces by looking at the tail only
+                  const trimTrailingSpaces = () => {
+                      let end = out.length;
+                      while (end > 0 && out[end - 1] === ' ') end--;
+                      if (end < out.length) out = out.substring(0, end);
+                  };
+                  const newLine = () => {
+                      trimTrailingSpaces();
+                      out += '\n';
+                      lineStart = true;
+                  };
                   const breakLine = () => {
-                      if (!lineStart) {
-                          out = out.replace(/ +$/, '') + '\n';
-                          lineStart = true;
-                      }
+                      if (!lineStart) newLine();
                   };
                   const emit = (text) => {
-                      if (!text) return;
+                      if (!text || out.length >= limit) return;
                       if (lineStart) {
                           out += '  '.repeat(indent);
                           lineStart = false;
                       }
-                      out += text;
+                      out += text.length > limit - out.length ? text.substring(0, limit - out.length) : text;
                   };
                   const walk = (node, inPre, inClosedFold) => {
                       if (out.length >= limit) return;
                       if (node.nodeType === Node.TEXT_NODE) {
+                          const value = node.nodeValue;
                           if (inPre) {
-                              // Every newline counts in a <pre>, blank lines included
-                              node.nodeValue.split('\n').forEach((part, i) => {
-                                  if (i) {
-                                      out = out.replace(/ +$/, '') + '\n';
-                                      lineStart = true;
-                                  }
-                                  emit(part);
-                              });
+                              // Every newline counts in a <pre>, blank lines
+                              // included; stop at the cap, not at the node's end.
+                              let start = 0;
+                              while (out.length < limit) {
+                                  const nl = value.indexOf('\n', start);
+                                  const end = nl === -1 ? value.length : nl;
+                                  emit(value.substring(start, Math.min(end, start + limit)));
+                                  if (nl === -1) break;
+                                  newLine();
+                                  start = nl + 1;
+                              }
                           } else {
-                              let text = node.nodeValue.replace(/\s+/g, ' ');
+                              let text = value.replace(/\s+/g, ' ');
                               if (lineStart || out.endsWith(' ')) text = text.replace(/^ /, '');
                               emit(text);
                           }
@@ -64392,7 +64527,8 @@
                       if (nestedTable) indent++;
                       if (tag === 'LI') emit('• ');
                       if ((tag === 'TD' || tag === 'TH') && node.previousElementSibling && !lineStart) {
-                          out = out.replace(/ +$/, '') + '  ';
+                          trimTrailingSpaces();
+                          out += '  ';
                       }
                       const closedFold = inClosedFold || (tag === 'DETAILS' && !node.open);
                       node.childNodes.forEach(child => walk(child, inPre || tag === 'PRE', closedFold));
@@ -72254,7 +72390,9 @@
               // "▶ Details" stub — and any new button would do it again. So the
               // rules are structural, not a list of known chrome:
               //   - controls contribute nothing, except a disclosure button
-              //     (aria-expanded), whose text names the content it folds;
+              //     (aria-expanded), whose text names the content it folds — so
+              //     a text-bearing aria-expanded button inside .content adds its
+              //     text by design (today only the JSON param-key toggles);
               //   - display:none subtrees are skipped (e.g. the inactive view
               //     of a user message's Markdown/raw pair);
               //   - <details> count as open: inside a closed one, the fold (not
@@ -72262,7 +72400,9 @@
               //     the <summary> is a preview of that body, so it is dropped;
               //   - blocks and table rows become lines, nested tables indent,
               //     <pre> keeps its whitespace.
-              // Collection stops at `limit` characters.
+              // Collection stops at `limit` characters: emit() caps every
+              // write, a <pre> text node is read line by line only up to the
+              // cap, and no step re-scans what was already collected.
               const BLOCK_TAGS = new Set([
                   'ADDRESS', 'ARTICLE', 'ASIDE', 'BLOCKQUOTE', 'DD', 'DETAILS', 'DIV', 'DL', 'DT',
                   'FIELDSET', 'FIGCAPTION', 'FIGURE', 'FOOTER', 'FORM', 'H1', 'H2', 'H3', 'H4', 'H5',
@@ -72277,34 +72417,46 @@
                   let out = '';
                   let lineStart = true;
                   let indent = 0;
+                  // Drop trailing spaces by looking at the tail only
+                  const trimTrailingSpaces = () => {
+                      let end = out.length;
+                      while (end > 0 && out[end - 1] === ' ') end--;
+                      if (end < out.length) out = out.substring(0, end);
+                  };
+                  const newLine = () => {
+                      trimTrailingSpaces();
+                      out += '\n';
+                      lineStart = true;
+                  };
                   const breakLine = () => {
-                      if (!lineStart) {
-                          out = out.replace(/ +$/, '') + '\n';
-                          lineStart = true;
-                      }
+                      if (!lineStart) newLine();
                   };
                   const emit = (text) => {
-                      if (!text) return;
+                      if (!text || out.length >= limit) return;
                       if (lineStart) {
                           out += '  '.repeat(indent);
                           lineStart = false;
                       }
-                      out += text;
+                      out += text.length > limit - out.length ? text.substring(0, limit - out.length) : text;
                   };
                   const walk = (node, inPre, inClosedFold) => {
                       if (out.length >= limit) return;
                       if (node.nodeType === Node.TEXT_NODE) {
+                          const value = node.nodeValue;
                           if (inPre) {
-                              // Every newline counts in a <pre>, blank lines included
-                              node.nodeValue.split('\n').forEach((part, i) => {
-                                  if (i) {
-                                      out = out.replace(/ +$/, '') + '\n';
-                                      lineStart = true;
-                                  }
-                                  emit(part);
-                              });
+                              // Every newline counts in a <pre>, blank lines
+                              // included; stop at the cap, not at the node's end.
+                              let start = 0;
+                              while (out.length < limit) {
+                                  const nl = value.indexOf('\n', start);
+                                  const end = nl === -1 ? value.length : nl;
+                                  emit(value.substring(start, Math.min(end, start + limit)));
+                                  if (nl === -1) break;
+                                  newLine();
+                                  start = nl + 1;
+                              }
                           } else {
-                              let text = node.nodeValue.replace(/\s+/g, ' ');
+                              let text = value.replace(/\s+/g, ' ');
                               if (lineStart || out.endsWith(' ')) text = text.replace(/^ /, '');
                               emit(text);
                           }
@@ -72330,7 +72482,8 @@
                       if (nestedTable) indent++;
                       if (tag === 'LI') emit('• ');
                       if ((tag === 'TD' || tag === 'TH') && node.previousElementSibling && !lineStart) {
-                          out = out.replace(/ +$/, '') + '  ';
+                          trimTrailingSpaces();
+                          out += '  ';
                       }
                       const closedFold = inClosedFold || (tag === 'DETAILS' && !node.open);
                       node.childNodes.forEach(child => walk(child, inPre || tag === 'PRE', closedFold));
