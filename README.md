@@ -4,7 +4,7 @@ A Python CLI tool that converts Claude Code transcript JSONL files into readable
 
 Quick demo:
 
-[Supercut](docs/assets/demos/supercut.mp4)
+[Supercut](https://github.com/user-attachments/assets/cc8d08ab-227b-4e18-8812-a398628cd68c)
 
 ▶️ **[Feature walkthrough](https://daaain.github.io/claude-code-log/demos/)**: six short chapters on the archive index and search, reading a session, folding and filtering, agents and forks, and live sessions.
 
