@@ -319,7 +319,9 @@ class TestSearchBrowser:
             "id => document.getElementById(id).getBoundingClientRect().top", current
         )
         assert abs(after - before) <= 2, (before, after)
-        assert 0 <= after < page.viewport_size["height"]
+        viewport = page.viewport_size
+        assert viewport is not None
+        assert 0 <= after < viewport["height"]
 
     @pytest.mark.browser
     def test_match_navigation(self, page: Page):
