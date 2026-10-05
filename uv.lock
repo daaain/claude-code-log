@@ -142,7 +142,7 @@ wheels = [
 
 [[package]]
 name = "claude-code-log"
-version = "1.6.0"
+version = "1.7.0"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
@@ -193,7 +193,7 @@ requires-dist = [
     { name = "quickjs-ng", specifier = ">=0.15.1.1,<0.16" },
     { name = "textual", specifier = ">=6.5.0" },
     { name = "toml", specifier = ">=0.10.2" },
-    { name = "wenmode", specifier = ">=0.15.1,<0.16" },
+    { name = "wenmode", specifier = ">=0.15.2,<0.16" },
 ]
 
 [package.metadata.requires-dev]
@@ -1708,9 +1708,9 @@ wheels = [
 
 [[package]]
 name = "wenmode"
-version = "0.15.1"
+version = "0.15.2"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/c4/36/6d1cbb77bdb255ae5c29cff5aa6ed1a87e406d821c1f5247bb4de949574b/wenmode-0.15.1.tar.gz", hash = "sha256:c541c32aa0294d2e0984af5ac2ec796ba9ad9a1a93fbd2334b760106c4e15488", size = 92189, upload-time = "2026-09-11T06:18:50.706Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/04/12/b9ce5efaa95ef04873b0823f6e439b872014ec912f46b38271ef44e73714/wenmode-0.15.2.tar.gz", hash = "sha256:8623f00f0a05f5031c1d6d47f3680f354a7331ee9a768f4e483b162a4802dc1a", size = 94606, upload-time = "2026-10-01T15:58:52.699Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/05/69/e56107a3b99f72b0eef6e5acbab4f1fe86aed29feeb6bbe0bf4538b8455f/wenmode-0.15.1-py3-none-any.whl", hash = "sha256:d25b2adc75ff897640c1e28178f647631da0e03084e498a765f007844a3c340d", size = 139257, upload-time = "2026-09-11T06:18:48.903Z" },
+    { url = "https://files.pythonhosted.org/packages/dd/0a/16f88f576840269478136c0d53215974f6f18be31a23e5b42ced303ce2fd/wenmode-0.15.2-py3-none-any.whl", hash = "sha256:a1be9a2d91ef7f5020148daf615edca0c9a4a6d54d074a808e6d5e9de95726f6", size = 141868, upload-time = "2026-10-01T15:58:51.209Z" },
 ]
