@@ -8,6 +8,7 @@ from claude_code_log.models import (
     UsageInfo,
 )
 from claude_code_log.html.renderer import generate_html
+from test.html_markup import rendered_markup
 
 
 class TestToggleFunctionality:
@@ -188,11 +189,9 @@ class TestToggleFunctionality:
         html = generate_html([message], "Test Multiple")
 
         # Should have multiple collapsible tool params (only count actual HTML elements, not in JS)
-        import re
-
-        # Remove script tags and their content to avoid counting strings in JavaScript
-        html_without_scripts = re.sub(r"<script.*?</script>", "", html, flags=re.DOTALL)
-        collapsible_count = html_without_scripts.count("class='tool-param-collapsible'")
+        collapsible_count = rendered_markup(html).count(
+            "class='tool-param-collapsible'"
+        )
         # Each tool has 2 params (content and index), so 3 tools = 6 params, but only content is long enough to be collapsible
         assert collapsible_count == 3, (
             f"Should have 3 collapsible tool params, got {collapsible_count}"
@@ -201,8 +200,13 @@ class TestToggleFunctionality:
         # Toggle logic should handle multiple elements
         assert "allDetails.forEach" in html, "Should iterate over all details elements"
 
-    def test_thinking_content_collapsible(self):
-        """Test that thinking content is also collapsible when long."""
+    def test_long_thinking_content_renders_in_full(self):
+        """Long thinking renders as Markdown in full, not folded.
+
+        This test used to assert a ``collapsible-details`` fold, and passed
+        only because the timeline script contained that class name in a
+        regex; no thinking card has carried the fold since.
+        """
         long_thinking = "This is a very long thinking process " * 20
         thinking_content = {
             "type": "thinking",
@@ -212,12 +216,12 @@ class TestToggleFunctionality:
         message = self._create_assistant_message([thinking_content])
 
         html = generate_html([message], "Test Thinking")
+        markup = rendered_markup(html)
 
-        # Thinking content should also be collapsible
-        assert 'class="collapsible-details"' in html, (
-            "Thinking content should be collapsible"
-        )
-        assert "💭 Thinking" in html, "Should show thinking icon"
+        assert '<div class="thinking-content markdown">' in markup
+        assert long_thinking.strip() in markup
+        assert "collapsible-details" not in markup
+        assert "💭 Thinking" in markup, "Should show thinking icon"
 
     def test_tool_result_collapsible(self):
         """Test that tool results are also collapsible when long."""

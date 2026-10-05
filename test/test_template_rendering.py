@@ -9,6 +9,7 @@ from claude_code_log.converter import convert_jsonl_to_html
 from claude_code_log.html.renderer import generate_projects_index_html
 from claude_code_log.converter import load_transcript
 from claude_code_log.html.renderer import generate_html
+from test.html_markup import rendered_markup
 
 
 class TestTemplateRendering:
@@ -169,22 +170,18 @@ class TestTemplateRendering:
 
         messages = load_transcript(test_data_path)
         html_content = generate_html(messages)
+        # Assert on the rendered markup only: the page's own scripts and
+        # styles mention most class names, so a bare `in html_content`
+        # passes whether or not any card carries them.
+        markup = rendered_markup(html_content)
 
-        # Check tool use formatting
-        assert "Tool Use:" in html_content
-        assert "Edit" in html_content
-        assert "tool-use" in html_content
+        # Tool use card: specialized Edit header
+        assert "class='message tool_use" in markup
+        assert "📝 Edit" in markup
 
-        # Check tool result formatting
-        assert "Tool Result" in html_content  # Changed: no colon for non-error results
-        assert "File created successfully" in html_content
-        assert "tool-result" in html_content
-
-        # Check tool input details
-        assert 'class="collapsible-details"' in html_content
-        assert "<summary>" in html_content
-        assert "Input:" in html_content
-        assert "details-content" in html_content
+        # Tool result card, paired with it
+        assert "class='message tool_result" in markup
+        assert "File created successfully" in markup
 
     def test_timestamp_formatting(self):
         """Test that timestamps are formatted correctly."""
