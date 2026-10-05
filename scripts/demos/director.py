@@ -17,6 +17,7 @@ encoded with their own timestamps and resampled to a constant 30 fps.
 from __future__ import annotations
 
 import base64
+import importlib
 import json
 import re
 import shutil
@@ -163,13 +164,15 @@ def ffmpeg() -> str:
     found = shutil.which("ffmpeg")
     if found:
         return found
+    # Imported by name: the demos group is optional, so a static import
+    # would be unresolved for the type checkers in a plain `uv sync`.
     try:
-        import imageio_ffmpeg
+        imageio_ffmpeg = importlib.import_module("imageio_ffmpeg")
     except ImportError as exc:  # pragma: no cover - environment
         raise SystemExit(
             "ffmpeg not found: install it, or `uv sync --group demos`"
         ) from exc
-    return imageio_ffmpeg.get_ffmpeg_exe()
+    return str(imageio_ffmpeg.get_ffmpeg_exe())
 
 
 def duration(video: Path) -> float:
