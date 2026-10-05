@@ -36030,6 +36030,11 @@
                       }
                   });
                   const fades = drawColumns(transcript, stageBox, style, rowY, round, path, lastShownBottom);
+                  // Measure without the previous drawing: an absolute SVG taller
+                  // than the stage counts in its scrollHeight, so a rail drawn
+                  // for a taller layout (a lane in a column) would never shrink
+                  // and would leave empty scroll space under the transcript.
+                  railHost.textContent = '';
                   const width = Math.ceil(stage.clientWidth);
                   const height = Math.ceil(stage.scrollHeight);
                   // One fading stroke per lane colour a pointer uses (the
@@ -51086,6 +51091,11 @@
                       }
                   });
                   const fades = drawColumns(transcript, stageBox, style, rowY, round, path, lastShownBottom);
+                  // Measure without the previous drawing: an absolute SVG taller
+                  // than the stage counts in its scrollHeight, so a rail drawn
+                  // for a taller layout (a lane in a column) would never shrink
+                  // and would leave empty scroll space under the transcript.
+                  railHost.textContent = '';
                   const width = Math.ceil(stage.clientWidth);
                   const height = Math.ceil(stage.scrollHeight);
                   // One fading stroke per lane colour a pointer uses (the
@@ -73585,6 +73595,11 @@
                       }
                   });
                   const fades = drawColumns(transcript, stageBox, style, rowY, round, path, lastShownBottom);
+                  // Measure without the previous drawing: an absolute SVG taller
+                  // than the stage counts in its scrollHeight, so a rail drawn
+                  // for a taller layout (a lane in a column) would never shrink
+                  // and would leave empty scroll space under the transcript.
+                  railHost.textContent = '';
                   const width = Math.ceil(stage.clientWidth);
                   const height = Math.ceil(stage.scrollHeight);
                   // One fading stroke per lane colour a pointer uses (the

@@ -244,6 +244,25 @@ class TestColumns:
         _toggle(page, B)
         assert _mode(page, B) == "folded"
 
+    def test_back_to_interleave_leaves_no_empty_space(
+        self, clean: Page, pages: dict[str, Path]
+    ):
+        # C's column is taller than the page with C interleaved; the rail
+        # SVG drawn for it must not keep the page that tall afterwards.
+        page = clean
+        _open(page, pages["demo"])
+        height = "() => document.documentElement.scrollHeight"
+        _toggle(page, C)
+        _settle(page)
+        interleaved = page.evaluate(height)
+        page.locator(f"[data-lane-ref='{C}'] .mn-bcol").click()
+        _settle(page)
+        assert page.evaluate(height) > interleaved
+        page.locator(f".dag-chrome[data-col='{C}'] [data-col-act='interleave']").click()
+        _settle(page)
+        assert _mode(page, C) == "interleaved"
+        assert page.evaluate(height) == interleaved
+
     def test_page_scrolls_sideways_and_the_toolbar_stays(
         self, clean: Page, pages: dict[str, Path]
     ):
