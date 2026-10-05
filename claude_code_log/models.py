@@ -1295,6 +1295,19 @@ class WorkflowAgentMessage(MessageContent):
     tool_calls: Optional[int] = None
     result: Any = None
     result_preview: str = ""
+    # Identity and accounting for the minimal theme's branch lanes
+    # (``lanes.py``: one lane per agent with a transcript). Not rendered by
+    # any formatter, so classic and Markdown output are unchanged.
+    agent_id: str = ""
+    run_id: str = ""
+    # 0-based position of the agent's phase in the run (None: the run has
+    # no phase grouping, so its agents hang off the Workflow call).
+    phase_ordinal: Optional[int] = None
+    phase_title: str = ""
+    duration_ms: Optional[int] = None
+    # The run's terminal snapshot exists, i.e. the run is over — an agent
+    # without a result then ended without one.
+    run_finished: bool = False
 
     @property
     def message_type(self) -> str:
@@ -1965,6 +1978,11 @@ class TaskOutput:
     # sub-assistant from the sidechain rendering so the answer doesn't
     # appear twice.
     async_final_answer: Optional[str] = None
+    # The same pass records where that answer arrived: the message_index of
+    # the ``<task-notification>`` card. The minimal HTML theme shows the
+    # answer there (the branch's merge row) and links to it from the spawn;
+    # the classic theme ignores it.
+    async_notification_index: Optional[int] = None
 
 
 @dataclass

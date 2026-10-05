@@ -211,3 +211,5 @@ claude-code-log-cache.db
 .dev-mode.json
 **/foldyard.local.toml
 # <<< foldyard (managed) <<<
+# Demo video recordings (scripts/demos/record.py)
+/.demos/

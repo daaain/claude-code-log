@@ -2,11 +2,11 @@
 <!-- vis-timeline integration for transcript visualization -->
 
 <div id="timeline-container"
-    style="display: none; position: sticky; top: 0; z-index: 100; background: white; border-bottom: 1px solid #ddd; width: 100vw; margin-left: calc(-50vw + 50%); overflow: hidden; min-height: 150px; max-height: 80vh;">
+    style="display: none; position: sticky; top: 0; z-index: 100; width: 100vw; margin-left: calc(-50vw + 50%); overflow: hidden; min-height: 150px; max-height: 80vh;">
     <div id="timeline-visualization" style="height: calc(100% - 8px); width: 100%;"></div>
     <div id="timeline-resize-handle"
-        style="position: absolute; bottom: 0; left: 0; right: 0; height: 8px; background: linear-gradient(to bottom, transparent, #ddd); cursor: ns-resize; display: flex; align-items: center; justify-content: center;">
-        <div style="width: 40px; height: 3px; background: #999; border-radius: 2px;"></div>
+        style="position: absolute; bottom: 0; left: 0; right: 0; height: 8px; cursor: ns-resize; display: flex; align-items: center; justify-content: center;">
+        <div style="width: 40px; height: 3px; border-radius: 2px;"></div>
     </div>
 </div>
 
@@ -23,23 +23,23 @@
 
         // Message type to group mapping
         const messageTypeGroups = {
-            'user': { id: 'user', content: '🤷 User', style: 'background-color: #e3f2fd;' },
-            'assistant': { id: 'assistant', content: '🤖 Assistant', style: 'background-color: #f3e5f5;' },
-            'tool_use': { id: 'tool_use', content: '🛠️ Tool Use', style: 'background-color: #fff3e0;' },
-            'tool_result': { id: 'tool_result', content: '🧰 Tool Result', style: 'background-color: #e8f5e8;' },
-            'thinking': { id: 'thinking', content: '💭 Thinking', style: 'background-color: #fce4ec;' },
-            'system': { id: 'system', content: '⚙️ System', style: 'background-color: #ffeee1;' },
-            'image': { id: 'image', content: '🖼️ Image', style: 'background-color: #e1f5fe;' },
-            'sidechain': { id: 'sidechain', content: '🔗 Sub-assistant', style: 'background-color: #f5f5f5;' },
-            'memory': { id: 'memory', content: '🧠 Memory', style: 'background-color: #ede7f6;' },
-            'slash-command': { id: 'slash-command', content: '⌨️ Slash Command', style: 'background-color: #e8eaf6;' },
-            'command-output': { id: 'command-output', content: '📋 Command Output', style: 'background-color: #efebe9;' },
-            'bash-input': { id: 'bash-input', content: '💻 Bash Input', style: 'background-color: #e8eaf6;' },
-            'bash-output': { id: 'bash-output', content: '📄 Bash Output', style: 'background-color: #efebe9;' },
-            'teammate': { id: 'teammate', content: '👥 Teammate', style: 'background-color: #e8f2fd;' },
-            'task-notification': { id: 'task-notification', content: '🔄 Async result', style: 'background-color: #e8f2fd;' },
-            'workflow_phase': { id: 'workflow_phase', content: '🧩 Workflow Phase', style: 'background-color: #fff8e1;' },
-            'workflow_agent': { id: 'workflow_agent', content: '🤖 Workflow Agent', style: 'background-color: #f3e5f5;' }
+            'user': { id: 'user', content: '🤷 User', className: 'timeline-group-user' },
+            'assistant': { id: 'assistant', content: '🤖 Assistant', className: 'timeline-group-assistant' },
+            'tool_use': { id: 'tool_use', content: '🛠️ Tool Use', className: 'timeline-group-tool_use' },
+            'tool_result': { id: 'tool_result', content: '🧰 Tool Result', className: 'timeline-group-tool_result' },
+            'thinking': { id: 'thinking', content: '💭 Thinking', className: 'timeline-group-thinking' },
+            'system': { id: 'system', content: '⚙️ System', className: 'timeline-group-system' },
+            'image': { id: 'image', content: '🖼️ Image', className: 'timeline-group-image' },
+            'sidechain': { id: 'sidechain', content: '🔗 Sub-assistant', className: 'timeline-group-sidechain' },
+            'memory': { id: 'memory', content: '🧠 Memory', className: 'timeline-group-memory' },
+            'slash-command': { id: 'slash-command', content: '⌨️ Slash Command', className: 'timeline-group-slash-command' },
+            'command-output': { id: 'command-output', content: '📋 Command Output', className: 'timeline-group-command-output' },
+            'bash-input': { id: 'bash-input', content: '💻 Bash Input', className: 'timeline-group-bash-input' },
+            'bash-output': { id: 'bash-output', content: '📄 Bash Output', className: 'timeline-group-bash-output' },
+            'teammate': { id: 'teammate', content: '👥 Teammate', className: 'timeline-group-teammate' },
+            'task-notification': { id: 'task-notification', content: '🔄 Async result', className: 'timeline-group-task-notification' },
+            'workflow_phase': { id: 'workflow_phase', content: '🧩 Workflow Phase', className: 'timeline-group-workflow_phase' },
+            'workflow_agent': { id: 'workflow_agent', content: '🤖 Workflow Agent', className: 'timeline-group-workflow_agent' }
         };
 
         // Build timeline data from messages
@@ -348,33 +348,49 @@
             return { timelineItems, timelineGroups, timelineEnd, timelineStart };
         }
 
+        // The timeline groups a filter toggle governs. Mirrors the toggle
+        // expansion in the transcript's applyFilter: the single "Tool" toggle
+        // stands for both tool groups, and "User" also covers the
+        // user-initiated bash lines. Every other toggle governs the group of
+        // its own name.
+        const TOGGLE_GROUPS = {
+            'tool': ['tool_use', 'tool_result'],
+            'user': ['user', 'bash-input', 'bash-output']
+        };
+        function groupsOfToggle(type) {
+            return TOGGLE_GROUPS[type] || [type];
+        }
+
         // Filter timeline items based on current message filters
         function applyFilters() {
             if (!timeline || !groups) return;
 
-            // Get active filter types from filter toggles
-            const activeTypes = Array.from(document.querySelectorAll('.filter-toggle.active'))
-                .map(toggle => toggle.dataset.type);
-
-            // Get all filter toggle types (to know which groups have filter controls)
-            const allFilterTypes = Array.from(document.querySelectorAll('.filter-toggle'))
-                .map(toggle => toggle.dataset.type);
+            // Groups each active toggle shows, and every group some toggle governs
+            const activeGroups = Array.from(document.querySelectorAll('.filter-toggle.active'))
+                .flatMap(toggle => groupsOfToggle(toggle.dataset.type));
+            const governedGroups = Array.from(document.querySelectorAll('.filter-toggle'))
+                .flatMap(toggle => groupsOfToggle(toggle.dataset.type));
 
             // Update groups visibility based on filter states
             // Groups with filter toggles follow toggle state; groups without toggles stay visible
             const updatedGroups = groups.map(group => ({
                 ...group,
-                visible: allFilterTypes.includes(group.id) ? activeTypes.includes(group.id) : true
+                visible: governedGroups.includes(group.id) ? activeGroups.includes(group.id) : true
             }));
 
             // Update timeline groups
             timeline.setGroups(updatedGroups);
+            // A group a toggle doesn't govern on its own (async results,
+            // teammates, a sub-assistant's tool calls…) can still hold items
+            // whose card the filter hid: hide those items one by one.
+            applySearchFilter();
         }
 
-        // Hide/show individual timeline items to mirror the search filter.
-        // The search component tags non-matching messages with .search-hidden;
-        // group-level type filtering above can't express per-item state, so
-        // this toggles the timeline-filtered-hidden class on each item.
+        // Hide/show individual timeline items to mirror the transcript: the
+        // search component tags non-matching messages with .search-hidden and
+        // the filter tags hidden types with .filtered-hidden. Group-level
+        // type filtering above can't express per-item state, so this toggles
+        // the timeline-filtered-hidden class on each item.
         function applySearchFilter() {
             if (!timeline || !itemsDataSet) return;
 
@@ -383,7 +399,8 @@
                 const item = itemsDataSet.get(id);
                 if (!item) return;
 
-                const hidden = messageEl.classList.contains('search-hidden');
+                const hidden = messageEl.classList.contains('search-hidden')
+                    || messageEl.classList.contains('filtered-hidden');
                 const baseClassName = (item.className || '')
                     .split(/\s+/)
                     .filter(cls => cls && cls !== 'timeline-filtered-hidden')
@@ -408,13 +425,17 @@
             if (selection.length > 0) {
                 const itemId = selection[0];
                 const messageEl = timelineIdToElement.get(itemId);
-                if (messageEl) {
+                if (messageEl) {{ '{' }}{% if minimal %}
+                    // Minimal theme: unfold the card's ancestors and open the
+                    // branch lane holding it (the DAG engine wraps this hook)
+                    // before measuring where to scroll.
+                    if (window.claudeLogRevealMessage) window.claudeLogRevealMessage(messageEl);{% endif %}
                     // Calculate timeline height for proper scroll positioning
                     const timelineContainer = document.getElementById('timeline-container');
                     const timelineHeight = timelineContainer ? timelineContainer.offsetHeight : 0;
 
                     // Scroll so message top aligns with timeline bottom
-                    const elementTop = messageEl.offsetTop;
+                    const elementTop = messageEl.getBoundingClientRect().top + window.scrollY;
                     const scrollPosition = elementTop - timelineHeight - 10; // 10px padding
 
                     window.scrollTo({
@@ -423,9 +444,9 @@
                     });
 
                     // Highlight the message briefly
-                    messageEl.style.backgroundColor = '#fff3cd';
+                    messageEl.classList.add('timeline-flash');
                     setTimeout(() => {
-                        messageEl.style.backgroundColor = '';
+                        messageEl.classList.remove('timeline-flash');
                     }, 2000);
                 }
             }

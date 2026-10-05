@@ -38,6 +38,8 @@ uvx claude-code-log@latest --tui
 - **Token usage tracking** — per-message and per-session totals
 - **Runtime message filtering** — show/hide message types in the browser
 - **Interactive timeline** — zoomable, click-to-scroll conversation navigation
+- **Themes** — `--theme minimal` for a compact light/dark page with sub-agents
+  and forks as foldable branches ([themes guide](themes.md))
 - **Date range filtering** — natural language (`"today"`, `"last week"`)
 - **Detail levels & compact mode** — `--detail` and `--compact` for LLM-friendly Markdown
 - **Server-side Markdown** — syntax-highlighted rendering via wenmode
@@ -48,6 +50,7 @@ uvx claude-code-log@latest --tui
 
 ## Where to go next
 
+- **[Themes](themes.md)** — the classic and minimal looks, and the minimal theme's branch layout
 - **[CLI reference](reference/cli.md)** — every command-line option, generated from the source
 - **[TUI keybindings](reference/tui.md)** — every keyboard shortcut and screenshots of the interface
 - **[Restoring archived sessions](restoring-archived-sessions.md)** — recover sessions whose JSONL was deleted

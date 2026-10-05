@@ -51,7 +51,7 @@
 
 /* Child session hierarchy */
 .session-nav-item.session-child {
-    border-left: 3px solid var(--accent-color, #6c757d);
+    border-left: 3px solid var(--accent-color);
     padding-left: 8px;
 }
 

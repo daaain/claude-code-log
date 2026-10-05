@@ -495,6 +495,79 @@ class TestTimelineBrowser:
         )
 
     @pytest.mark.browser
+    def test_timeline_group_label_colours_come_from_css(self, page: Page):
+        """Group labels are coloured by `timeline-group-<id>` CSS rules that
+        read `--timeline-<id>-bg`, not by inline styles set from JS."""
+        representative_file = Path("test/test_data/representative_messages.jsonl")
+        messages = load_transcript(representative_file)
+        temp_file = self._create_temp_html(messages, "Timeline Group Colour Test")
+
+        page.goto(f"file://{temp_file}")
+        page.locator("#toggleTimeline").click()
+        self._wait_for_timeline_loaded(page)
+
+        label = page.locator(".vis-labelset .vis-label.timeline-group-user").first
+        label.wait_for(state="attached", timeout=5000)
+        assert label.get_attribute("style") in (None, "") or (
+            "background" not in (label.get_attribute("style") or "")
+        ), "group colour must not be an inline style"
+
+        def label_bg() -> str:
+            return label.evaluate("el => getComputedStyle(el).backgroundColor")
+
+        assert label_bg() == "rgb(227, 242, 253)"
+
+        # A theme recolours the group by defining the custom property alone.
+        page.evaluate(
+            "document.documentElement.style.setProperty("
+            "'--timeline-user-bg', 'rgb(1, 2, 3)')"
+        )
+        assert label_bg() == "rgb(1, 2, 3)"
+
+        # The class also lands on the group's row; it must stay uncoloured
+        # there, as it was when the colour was an inline label style.
+        row = page.locator(".vis-foreground .vis-group.timeline-group-user").first
+        if row.count():
+            assert (
+                row.evaluate("el => getComputedStyle(el).backgroundColor")
+                == "rgba(0, 0, 0, 0)"
+            )
+
+        # Container colours moved from inline styles to CSS too.
+        container = page.locator("#timeline-container")
+        assert "background" not in (container.get_attribute("style") or "")
+        assert (
+            container.evaluate("el => getComputedStyle(el).backgroundColor")
+            == "rgb(255, 255, 255)"
+        )
+
+    @pytest.mark.browser
+    def test_timeline_select_flashes_message_via_class(self, page: Page):
+        """Selecting a timeline item highlights its message with the
+        `timeline-flash` class (coloured in CSS) and scrolls it under the
+        timeline."""
+        representative_file = Path("test/test_data/representative_messages.jsonl")
+        messages = load_transcript(representative_file)
+        temp_file = self._create_temp_html(messages, "Timeline Flash Test")
+
+        page.set_viewport_size({"width": 1200, "height": 600})
+        page.goto(f"file://{temp_file}")
+        page.locator("#toggleTimeline").click()
+        self._wait_for_timeline_loaded(page)
+
+        page.locator(".vis-item").last.click(force=True)
+
+        flashed = page.locator(".message.timeline-flash")
+        expect(flashed).to_have_count(1, timeout=5000)
+        assert (
+            flashed.evaluate("el => getComputedStyle(el).backgroundColor")
+            == "rgb(255, 243, 205)"
+        )
+        assert "background" not in (flashed.get_attribute("style") or "")
+        # The class is removed again after the 2s flash.
+        expect(page.locator(".message.timeline-flash")).to_have_count(0, timeout=5000)
+
+    @pytest.mark.browser
     def test_timeline_filtering_integration(self, page: Page):
         """Test that timeline filters work with message filters."""
         sidechain_file = Path("test/test_data/sidechain.jsonl")
@@ -705,6 +778,65 @@ class TestTimelineBrowser:
         # Timeline should have items again
         all_timeline_count = page.locator(".vis-item").count()
         assert all_timeline_count > 0, "Timeline should show items with 'Select All'"
+
+    @pytest.mark.browser
+    @pytest.mark.parametrize("theme", ["classic", "minimal"])
+    def test_tool_filter_removes_tool_items_from_timeline(self, page: Page, theme: str):
+        """The "Tool" toggle hides tool items in the timeline too (parity).
+
+        The toggle's type is ``tool`` while the timeline's groups are
+        ``tool_use`` / ``tool_result``, so the groups used to stay on screen.
+        A sub-assistant's tool call lives in the sidechain group, which the
+        toggle doesn't govern: its item must be hidden one by one, like its
+        card.
+        """
+        messages = load_transcript(Path("test/test_data/sidechain.jsonl"))
+        html = generate_html(messages, "Timeline Tool Filter", theme=theme)
+        with tempfile.NamedTemporaryFile(suffix=".html", delete=False) as f:
+            temp_file = Path(f.name)
+        temp_file.write_text(html, encoding="utf-8")
+        self.temp_files.append(temp_file)
+
+        page.goto(f"file://{temp_file}")
+        page.locator("#toggleTimeline").click()
+        self._wait_for_timeline_loaded(page)
+
+        count_items = """(kind) => Array.from(document.querySelectorAll('.vis-item.vis-box'))
+            .filter(i => i.className.split(/\\s+/).some(c => kind.includes(c)))
+            .filter(i => !i.classList.contains('timeline-filtered-hidden')).length"""
+        tool_kinds = ["timeline-item-tool_use", "timeline-item-tool_result"]
+        side_kinds = ["timeline-item-sidechain"]
+        tools_before = page.evaluate(count_items, tool_kinds)
+        side_before = page.evaluate(count_items, side_kinds)
+        side_tool_cards = page.locator(
+            "#transcript .message.sidechain:is(.tool_use, .tool_result)"
+        ).count()
+        assert tools_before > 0 and side_tool_cards > 0
+
+        page.locator("#filterMessages").click()
+        page.locator('.filter-toggle[data-type="tool"]').click()
+        page.wait_for_timeout(300)
+
+        assert page.evaluate(count_items, tool_kinds) == 0
+        assert (
+            page.locator(
+                ".vis-label.timeline-group-tool_use, .vis-label.timeline-group-tool_result"
+            ).count()
+            == 0
+        )
+        side_after = page.evaluate(count_items, side_kinds)
+        assert side_after == side_before - side_tool_cards
+        # The transcript agrees: every tool card is hidden.
+        tool_cards = page.evaluate(
+            "Array.from(document.querySelectorAll('#transcript .message:is(.tool_use, .tool_result)'))"
+            ".map(m => getComputedStyle(m).display)"
+        )
+        assert tool_cards and set(tool_cards) == {"none"}
+
+        page.locator('.filter-toggle[data-type="tool"]').click()
+        page.wait_for_timeout(300)
+        assert page.evaluate(count_items, tool_kinds) == tools_before
+        assert page.evaluate(count_items, side_kinds) == side_before
 
     @pytest.mark.browser
     def test_timeline_filter_individual_message_types(self, page: Page):

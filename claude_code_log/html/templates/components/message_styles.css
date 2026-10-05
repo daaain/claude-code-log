@@ -278,7 +278,7 @@
 /* Model id surfaced on sub-agent message headers (issue #246) */
 .message-model {
     font-size: 0.75em;
-    font-family: var(--font-mono, 'SFMono-Regular', Consolas, monospace);
+    font-family: var(--font-monospace);
     color: var(--text-secondary, #888);
 }
 
@@ -403,7 +403,7 @@ div.system-hook .header {
 }
 
 .hook-attachment-meta {
-    color: var(--secondary-text);
+    color: var(--text-secondary);
     font-size: 0.85em;
 }
 
@@ -413,7 +413,7 @@ div.system-hook .header {
 
 .hook-attachment-stream-label {
     font-size: 0.75em;
-    color: var(--secondary-text);
+    color: var(--text-secondary);
     margin-bottom: 0.2em;
     text-transform: uppercase;
     letter-spacing: 0.05em;
@@ -423,7 +423,7 @@ div.system-hook .header {
 .hook-attachment-content {
     margin: 0;
     padding: 0.5em;
-    background-color: var(--code-bg);
+    background-color: var(--code-bg-color);
     border-radius: 4px;
     font-size: 0.85em;
     white-space: pre-wrap;
@@ -463,7 +463,7 @@ div.system-hook .header {
 .hook-details {
     margin-top: 0.5em;
     padding: 0.5em;
-    background-color: var(--code-bg);
+    background-color: var(--code-bg-color);
     border-radius: 4px;
 }
 
@@ -1793,7 +1793,7 @@ a.workflow-phase-pill:hover {
 }
 
 .workflow-agent-model {
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-monospace);
     color: var(--text-secondary);
 }
 

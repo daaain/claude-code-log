@@ -91,6 +91,7 @@ def build_render_pool(
     archive_search_link: Optional[str],
     render_jobs: Optional[int],
     session_tree: Optional["SessionTree"],
+    theme: str = "default",
 ) -> Optional[RenderPool]:
     """Build a render pool for this conversion, or None to render inline.
 
@@ -160,6 +161,7 @@ def build_render_pool(
         archive_search_link=archive_search_link,
         library_version=get_library_version(),
         max_workers=max_workers,
+        theme=theme,
     )
 
 

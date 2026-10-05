@@ -1,0 +1,55 @@
+{#- Minimal theme: the rest of the page header and the sticky toolbar.
+    Included right after `<h1 id="title">` inside the minimal-only
+    `<header class='mn-top'><div class='mn-title-row'>` opened in
+    transcript.html. Never rendered for the classic theme.
+
+    The toolbar carries the SAME buttons, with the SAME ids and classes, as
+    the classic floating stack (which the minimal branch doesn't render):
+    the page's scripts bind them by id, and live_update.js / the timeline /
+    the filter rewrite their text, title and classes as before. Their
+    look comes from layout.css (icons are CSS masks on ::before, so a
+    script replacing a button's text never removes its icon). -#}
+{%- set mn_first = roots[0] if roots else none -%}
+{%- set mn_meta = mn_page_meta(sessions, page_stats) -%}
+{%- if mn_first is not none and is_session_header(mn_first) and mn_first.display_model %}<span class='mn-pill' title='Main agent model'>{{ mn_first.display_model }}</span>{% endif -%}
+{%- if mn_meta %}<span class='mn-smeta'>{{ mn_meta | join(' · ') }}</span>{% endif %}</div>
+    </header>
+    <nav class='mn-toolbar' aria-label='Transcript tools'>
+        {#- Fold depth (minimal.js drives the classic fold state machine).
+            Steps is the default depth; the script corrects `on` from the
+            stored choice. #}
+        <div class='mn-seg mn-depth' role='group' aria-label='Fold depth'>
+            <button type='button' data-mn-depth='prompts' aria-pressed='false' title='Prompts only: fold every turn to its prompt'>Prompts</button>
+            <button type='button' class='on' data-mn-depth='steps' aria-pressed='true' title='Steps: every turn open, long blocks as previews, sub-agents folded'>Steps</button>
+            <button type='button' data-mn-depth='all' aria-pressed='false' title='All: everything open, every block in full'>All</button>
+        </div>
+        {#- Branches (minimal_dag.js): every sub-agent / fork lane at once.
+            Hidden until the engine finds a branch on the page (and without
+            JavaScript, where branches render nested). #}
+        <div class='mn-seg mn-branches' role='group' aria-label='Branches' hidden>
+            <button type='button' class='on' data-mn-branches='main' aria-pressed='true' title='Main only: every branch folded to its control on the spawning row'>Main only</button>
+            <button type='button' data-mn-branches='interleaved' aria-pressed='false' title='Interleaved: the first 3 branches of each turn merged into the main line by time'>Interleaved</button>
+            <button type='button' data-mn-branches='columns' aria-pressed='false' title='Columns: every branch in a column of its own, time-aligned with the main line (the page scrolls sideways)'>Columns</button>
+        </div>
+        <span class='mn-sp'></span>
+        <button class="filter-messages floating-btn mn-ibtn mn-i-search" id="filterMessages" title="Search & Filter (/)" aria-label="Search and filter">🔍</button>
+        <button class="timeline-toggle floating-btn mn-ibtn mn-i-timeline" id="toggleTimeline" title="Show timeline" aria-label="Timeline">📆</button>
+        <button class="follow-updates floating-btn mn-ibtn mn-i-follow" id="followUpdates" data-unseen="0"
+            title="Follow new messages as they arrive" aria-label="Follow new messages"
+            aria-pressed="false">⏬</button>
+        {% if resume_command %}
+        <button class="resume-session floating-btn mn-ibtn mn-i-resume" id="resumeSession" data-command="{{ resume_command }}"
+            title="Resume session: copy the command that resumes this session in Claude Code"
+            aria-label="Resume session">▶️</button>
+        {% endif %}
+        {% include 'components/minimal/scheme_toggle.html' %}
+        <details class='mn-more'>
+            <summary class='mn-ibtn mn-i-more' title='More tools' aria-label='More tools'></summary>
+            <div class='mn-menu' role='group' aria-label='More tools'>
+                <button class="toggle-details floating-btn mn-mi" id="toggleDetails" title="Toggle all details">📋</button>
+                <button class="user-view-global floating-btn mn-mi" id="toggleUserView" title="Show user messages as raw text">md</button>
+                <button class="debug-toggle floating-btn mn-mi" id="toggleDebug" title="Show UUIDs">uuid</button>
+            </div>
+        </details>
+        <a class="scroll-top floating-btn mn-ibtn mn-i-top" title="Scroll to top" aria-label="Scroll to top" href="#title">🔝</a>
+    </nav>

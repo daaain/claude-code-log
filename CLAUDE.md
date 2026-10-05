@@ -106,6 +106,7 @@ with pointers to the deep-dive docs:
 - [dev-docs/agents.md](dev-docs/agents.md) - Sync/async/teammate agent integration
 - [dev-docs/teammates.md](dev-docs/teammates.md) - Teammates feature deep-dive
 - [dev-docs/message-hierarchy.md](dev-docs/message-hierarchy.md) - Fold/unfold state machine
+- [dev-docs/minimal-theme.md](dev-docs/minimal-theme.md) - Minimal theme's DAG engine (branch lanes, rail)
 - [dev-docs/implementing-a-tool-renderer.md](dev-docs/implementing-a-tool-renderer.md) - How-to: add a new tool
 - [dev-docs/tools-coverage.md](dev-docs/tools-coverage.md) - Claude renderer and Codex provider/tool coverage vs. upstream references
 - [dev-docs/plugins.md](dev-docs/plugins.md) - Plugin system reference + author guide

@@ -640,6 +640,33 @@ Teammate messages use **left-aligned** styling (not right like normal
 user messages) — they're not from the human user and the WhatsApp-style
 right alignment would be misleading. This was an explicit ask in #91.
 
+#### Minimal theme: anchors
+
+In the minimal theme (`--theme minimal`) a teammate thread is not a DAG
+branch (work/minimal-theme-dag.md § 7 decision 4): it stays nested
+under the spawning result, collapsed by default, and the two ends of
+each exchange are linked on the same page instead.
+`lanes.teammate_links(roots, model)` (format-neutral) resolves:
+
+- the spawn card → the thread's first card (`→ alice's thread`);
+- a `SendMessage` card → the `<teammate-message>` card that delivered
+  it in the recipient's thread (`→ received by alice`), and back
+  (`← sent by team-lead`).
+
+A card's thread is its `{trunk}#agent-<id>` session line (a teammate's
+agent id → its name); cards outside any agent thread are the lead's
+(`team-lead`, the name teammates address it by). Messages pair on
+(sender, recipient, whitespace-normalised body), first unused match in
+DOM order; `system` blocks and broadcasts (`*`) are skipped, and an
+unresolved message gets no link rather than a dead one.
+`html/minimal_theme.cross_links` renders them as plain `#msg-d-N`
+anchors in a `.mn-xlinks` row under the card's content (labels are
+generated content, so search and the timeline never index them). They
+work without JavaScript; with it, the page's hash handler unfolds the
+target's ancestors. Classic output carries none of this. Tests:
+`test/test_lanes.py::TestTeammateLinks`,
+`test/test_minimal_dag_columns_browser.py::TestTeammateAnchors`.
+
 #### Timeline integration
 
 `CSS_CLASS_REGISTRY` in

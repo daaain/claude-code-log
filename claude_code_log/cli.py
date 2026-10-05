@@ -49,6 +49,56 @@ from .search import (
     ENV_SEARCH_FIELDS,
     SEARCH_FIELDS,
 )
+from .utils import (
+    DEFAULT_THEME,
+    THEME_CHOICES,
+    THEME_ENV_VAR,
+    normalize_theme,
+)
+
+
+# `--theme` is shared by `convert`, `serve` and `watch`. No Click default and
+# no Click `envvar`: `_resolve_theme` applies the precedence itself (flag >
+# $CLAUDE_CODE_LOG_THEME > built-in default) so a bad environment value gets
+# an error that names the variable rather than a confusing "--theme" one.
+THEME_HELP = (
+    "HTML theme: classic (current look), minimal, or default (the built-in "
+    f"default, currently {DEFAULT_THEME}). Overrides ${THEME_ENV_VAR}. "
+    "HTML-only. Themes write the same filenames, so switching theme "
+    "regenerates every output."
+)
+
+
+def _theme_option(func: Any) -> Any:
+    return click.option(
+        "--theme",
+        type=click.Choice(THEME_CHOICES, case_sensitive=False),
+        default=None,
+        help=THEME_HELP,
+    )(func)
+
+
+def _resolve_theme(theme: Optional[str]) -> str:
+    """Resolve the HTML theme: ``--theme`` > ``$CLAUDE_CODE_LOG_THEME`` > default.
+
+    Returns a resolved name (``classic``/``minimal``, never ``default``).
+    An explicit ``--theme`` (``default`` included) always wins over the
+    environment; an unknown environment value is an error, not a silent
+    fallback. An empty variable counts as unset.
+    """
+    if theme is not None:
+        return normalize_theme(theme)
+    raw = os.environ.get(THEME_ENV_VAR, "")
+    if not raw.strip():
+        return DEFAULT_THEME
+    try:
+        return normalize_theme(raw)
+    except ValueError:
+        raise click.UsageError(
+            f"{THEME_ENV_VAR}={raw!r} is not a valid theme; choose one of: "
+            f"classic (current look), minimal, or default (the built-in "
+            f"default, currently {DEFAULT_THEME})."
+        ) from None
 
 
 # Output values that mean "stream the rendered document to stdout" (issue
@@ -119,6 +169,7 @@ def _render_provider_input_file(
     no_timestamps: bool,
     no_recaps: bool,
     open_browser: bool,
+    theme: str = DEFAULT_THEME,
 ) -> None:
     """Render a single provider session file handed in as an INPUT_PATH.
 
@@ -160,6 +211,7 @@ def _render_provider_input_file(
             compact,
             no_timestamps,
             no_recaps,
+            theme=theme,
         )
 
     extension = get_file_extension(output_format)
@@ -231,6 +283,7 @@ def _run_provider_wholesale(
     open_browser: bool,
     expand_paths: bool,
     filter_path: "Optional[str]",
+    theme: str = DEFAULT_THEME,
 ) -> None:
     """Render a whole provider sessions tree into a project hierarchy.
 
@@ -267,6 +320,7 @@ def _run_provider_wholesale(
         compact=compact,
         no_timestamps=no_timestamps,
         no_recaps=no_recaps,
+        theme=theme,
         write_combined=write_combined,
         write_individual=write_individual,
         use_cache=not no_cache,
@@ -375,7 +429,7 @@ def _discover_projects(
 
 
 def _launch_tui_with_cache_check(
-    project_path: Path, is_archived: bool = False
+    project_path: Path, is_archived: bool = False, theme: str = DEFAULT_THEME
 ) -> Optional[str]:
     """Launch TUI with proper cache checking and user feedback."""
     click.echo("Checking cache and loading session data...")
@@ -425,7 +479,7 @@ def _launch_tui_with_cache_check(
 
     from .tui import run_session_browser
 
-    result = run_session_browser(project_path, is_archived=is_archived)
+    result = run_session_browser(project_path, is_archived=is_archived, theme=theme)
     return result
 
 
@@ -1121,6 +1175,7 @@ def main() -> None:
         "redundancy at --depth assistant."
     ),
 )
+@_theme_option
 @click.option(
     "--debug",
     is_flag=True,
@@ -1157,6 +1212,7 @@ def convert(
     git_link: Optional[str],
     no_timestamps: bool,
     no_recaps: bool,
+    theme: Optional[str],
     debug: bool,
 ) -> None:
     """Convert Claude transcript JSONL files to HTML or Markdown.
@@ -1178,6 +1234,10 @@ def convert(
 
     # Configure logging to show warnings and above
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
+
+    # Flag > $CLAUDE_CODE_LOG_THEME > built-in default; a bad env value is a
+    # usage error here, before any work starts.
+    resolved_theme = _resolve_theme(theme)
 
     # Provider mode has three sub-modes:
     #   * export     — `--session-id <id>`: render one session by id
@@ -1423,6 +1483,13 @@ def convert(
             f"--format {output_format}.",
             err=True,
         )
+    # `--theme` is HTML-only. Only an explicit flag warns: the environment
+    # variable is a standing preference and shouldn't nag Markdown runs.
+    if theme is not None and output_format != "html":
+        click.echo(
+            f"Warning: --theme is HTML-only; ignoring under --format {output_format}.",
+            err=True,
+        )
 
     from .models import DEFAULT_DEPTH, DETAIL_ALIASES, RenderingDepth
 
@@ -1482,6 +1549,7 @@ def convert(
                     open_browser,
                     expand_paths,
                     filter_path,
+                    theme=resolved_theme,
                 )
                 return
 
@@ -1500,6 +1568,7 @@ def convert(
                     no_timestamps,
                     no_recaps,
                     open_browser,
+                    theme=resolved_theme,
                 )
                 return
 
@@ -1557,6 +1626,7 @@ def convert(
                     compact,
                     no_timestamps,
                     no_recaps,
+                    theme=resolved_theme,
                 )
 
             if _is_stdout_target(output):
@@ -1610,7 +1680,9 @@ def convert(
 
                 if len(project_dirs) == 1 and not archived_projects:
                     # Only one project, open it directly
-                    result = _launch_tui_with_cache_check(project_dirs[0])
+                    result = _launch_tui_with_cache_check(
+                        project_dirs[0], theme=resolved_theme
+                    )
                     if result == "back_to_projects":
                         # User wants to see project selector even though there's only one project
                         from .tui import run_project_selector
@@ -1629,7 +1701,9 @@ def convert(
 
                             is_archived = selected_project in archived_projects
                             result = _launch_tui_with_cache_check(
-                                selected_project, is_archived=is_archived
+                                selected_project,
+                                is_archived=is_archived,
+                                theme=resolved_theme,
                             )
                             if result != "back_to_projects":
                                 # User quit normally
@@ -1640,7 +1714,9 @@ def convert(
                     click.echo(
                         f"Found project matching current directory: {matching_projects[0].name}"
                     )
-                    result = _launch_tui_with_cache_check(matching_projects[0])
+                    result = _launch_tui_with_cache_check(
+                        matching_projects[0], theme=resolved_theme
+                    )
                     if result == "back_to_projects":
                         # User wants to see project selector
                         from .tui import run_project_selector
@@ -1659,7 +1735,9 @@ def convert(
 
                             is_archived = selected_project in archived_projects
                             result = _launch_tui_with_cache_check(
-                                selected_project, is_archived=is_archived
+                                selected_project,
+                                is_archived=is_archived,
+                                theme=resolved_theme,
                             )
                             if result != "back_to_projects":
                                 # User quit normally
@@ -1681,14 +1759,16 @@ def convert(
 
                         is_archived = selected_project in archived_projects
                         result = _launch_tui_with_cache_check(
-                            selected_project, is_archived=is_archived
+                            selected_project,
+                            is_archived=is_archived,
+                            theme=resolved_theme,
                         )
                         if result != "back_to_projects":
                             # User quit normally
                             return
             else:
                 # Single project directory
-                _launch_tui_with_cache_check(input_path)
+                _launch_tui_with_cache_check(input_path, theme=resolved_theme)
                 return
 
         # Handle --session-id: export a single session by ID
@@ -1747,6 +1827,7 @@ def convert(
                         compact=compact,
                         no_timestamps=no_timestamps,
                         no_recaps=no_recaps,
+                        theme=resolved_theme,
                     ),
                 )
                 return
@@ -1762,6 +1843,7 @@ def convert(
                 compact=compact,
                 no_timestamps=no_timestamps,
                 no_recaps=no_recaps,
+                theme=resolved_theme,
             )
             click.echo(f"Successfully exported session to {output_path}")
             if open_browser:
@@ -1823,6 +1905,7 @@ def convert(
                 write_combined=write_combined,
                 no_timestamps=no_timestamps,
                 no_recaps=no_recaps,
+                theme=resolved_theme,
                 jobs=jobs,
             )
 
@@ -1873,6 +1956,7 @@ def convert(
                         open_browser,
                         expand_paths,
                         filter_path,
+                        theme=resolved_theme,
                     )
                     return
                 _render_provider_input_file(
@@ -1886,6 +1970,7 @@ def convert(
                     no_timestamps,
                     no_recaps,
                     open_browser,
+                    theme=resolved_theme,
                 )
                 return
 
@@ -1942,6 +2027,7 @@ def convert(
                     write_combined=True,
                     no_timestamps=no_timestamps,
                     no_recaps=no_recaps,
+                    theme=resolved_theme,
                     force_regenerate=True,
                 ),
             )
@@ -1971,6 +2057,7 @@ def convert(
             write_combined=write_combined,
             no_timestamps=no_timestamps,
             no_recaps=no_recaps,
+            theme=resolved_theme,
             # An explicit `-o` *file* always regenerates: the version-marker
             # skip only knows the embedded version, not which source produced
             # the file, so it would keep stale content at a user-chosen path
@@ -2124,6 +2211,7 @@ def convert(
         "changes, in the background. Reload a page to see new messages."
     ),
 )
+@_theme_option
 def serve(
     port: int,
     projects_dir: Optional[Path],
@@ -2134,6 +2222,7 @@ def serve(
     reindex: bool,
     no_index: bool,
     watch_sources: bool,
+    theme: Optional[str],
 ) -> None:
     """Serve the projects directory over loopback, with full-archive search.
 
@@ -2150,6 +2239,7 @@ def serve(
     )
     from .server import ArchiveServer
 
+    resolved_theme = _resolve_theme(theme)
     projects_path = projects_dir or get_default_projects_dir()
     if not projects_path.exists():
         click.echo(f"Error: projects directory not found: {projects_path}", err=True)
@@ -2165,7 +2255,7 @@ def serve(
         # Same conversion the default command runs, so the pages being served
         # are current. --no-convert skips it for a fast start.
         click.echo(f"Refreshing {projects_path}...")
-        process_projects_hierarchy(projects_path, silent=True)
+        process_projects_hierarchy(projects_path, silent=True, theme=resolved_theme)
 
     db_path = get_cache_db_path(projects_path)
     if not no_index:
@@ -2223,6 +2313,7 @@ def serve(
                 silent=True,
                 write_combined=False,
                 entry_store=serve_store,
+                theme=resolved_theme,
             )
 
         def report(exc: BaseException) -> None:
@@ -2431,6 +2522,7 @@ def _build_search_index(
         "still surfaces instead of starving behind the quiet period."
     ),
 )
+@_theme_option
 @click.option("--debug", is_flag=True, default=False, help="Show full tracebacks.")
 def watch(
     input_path: Optional[Path],
@@ -2442,6 +2534,7 @@ def watch(
     interval: float,
     quiet_period: float,
     max_latency: float,
+    theme: Optional[str],
     debug: bool,
 ) -> None:
     """Re-convert transcripts as they change, until interrupted.
@@ -2458,6 +2551,12 @@ def watch(
     """
     from .watch import WatchEngine
 
+    resolved_theme = _resolve_theme(theme)
+    if theme is not None and output_format != "html":
+        click.echo(
+            f"Warning: --theme is HTML-only; ignoring under --format {output_format}.",
+            err=True,
+        )
     projects_path = projects_dir or get_default_projects_dir()
     root = _resolve_watch_root(input_path, projects_path, all_projects)
     if root is None:
@@ -2489,6 +2588,7 @@ def watch(
                 output_dir=output,
                 write_combined=write_combined,
                 generate_individual_sessions=individual,
+                theme=resolved_theme,
             )
         else:
             convert_jsonl_to(
@@ -2502,6 +2602,7 @@ def watch(
                 write_combined=write_combined,
                 generate_individual_sessions=individual,
                 entry_store=store,
+                theme=resolved_theme,
             )
         click.echo(
             f"  {time.strftime('%H:%M:%S')}  converted in "

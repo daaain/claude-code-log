@@ -167,6 +167,28 @@ class TestStoreContract:
         assert store.get(path) is None
         assert store.misses == 1
 
+    def test_declines_when_a_spliced_agent_transcript_grew(
+        self, tmp_path: Path, entries: list[Any]
+    ) -> None:
+        """A trunk's parse splices in its sub-agents' transcripts, so a
+        running agent appending to ``<stem>/subagents/agent-*.jsonl`` while
+        the trunk sits still changes what the held list should be — the
+        stamp covers it (minimal-theme-dag.md P7b: a watch otherwise kept
+        serving the agent's block one tick behind, for good)."""
+        path = tmp_path / "s1.jsonl"
+        path.write_text("x", encoding="utf-8")
+        agents = tmp_path / "s1" / "subagents"
+        agents.mkdir(parents=True)
+        agent = agents / "agent-a1.jsonl"
+        agent.write_text("{}\n", encoding="utf-8")
+        store = ParsedEntryStore()
+        store.put(path, stamp_file(path), entries)
+        assert store.get(path) is not None
+
+        with agent.open("a", encoding="utf-8") as f:
+            f.write("{}\n")
+        assert store.get(path) is None
+
     def test_declines_a_stale_stamp_taken_before_a_mid_parse_append(
         self, tmp_path: Path, entries: list[Any]
     ) -> None:

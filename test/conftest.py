@@ -1,7 +1,7 @@
 """Pytest configuration and shared fixtures."""
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Generator, Optional
+from typing import TYPE_CHECKING, Any, Generator, Optional
 
 import pytest
 
@@ -318,3 +318,30 @@ def assert_regenerated(path: "Path", previous_mtime: float) -> None:
     assert path.stat().st_mtime != previous_mtime, (
         f"{path.name} was not regenerated (mtime unchanged)"
     )
+
+
+def collect_page_errors(page: Any, url: str) -> list[str]:
+    """Collect ``page``'s console errors and uncaught exceptions into a list.
+
+    For live-update tests: a dropped connection on a poll of the page's own
+    ``url`` is skipped, since live_update.js catches and retries it on the
+    next tick by design, yet Chromium still logs it as a console error (seen
+    as ``net::ERR_CONNECTION_FAILED`` on a Windows runner). Only ``net::``
+    failures are skipped — an HTTP error answer to the poll logs as
+    ``Failed to load resource: the server responded with a status of …``
+    and still counts, as do script errors and every other failed load.
+    Attach before navigating.
+    """
+    errors: list[str] = []
+
+    def on_console(message: Any) -> None:
+        if message.type != "error":
+            return
+        source = (message.location or {}).get("url", "")
+        if message.text.startswith("Failed to load resource: net::") and source == url:
+            return
+        errors.append(f"{message.text} ({source})" if source else message.text)
+
+    page.on("console", on_console)
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    return errors

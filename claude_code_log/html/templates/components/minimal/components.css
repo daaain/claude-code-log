@@ -1,0 +1,1405 @@
+/* Minimal theme (--theme minimal): every remaining classic component,
+   flattened onto the tokens so it reads right in light and dark.
+   Included after tokens.css and layout.css; scoped under .theme-minimal
+   like them (see layout.css for the two specificity tiers).
+
+   Two techniques, cheapest first:
+   1. classic rules that read a custom property follow the scheme once the
+      property points at a token (the block below, and tokens.css);
+   2. rules with a colour literal get a .theme-minimal override, grouped
+      by component below. ANSI colours (html/ansi_colors.py) are left as
+      they are: they are the program's own output colours.
+   Plan: work/minimal-theme-dag.md P3b. */
+
+/* ------------------------------------------------- classic variables */
+
+body.theme-minimal {
+    /* The translucent tints the classic cards layer over the gradient. */
+    --highlight-dimmed: transparent;
+    --highlight-semi: transparent;
+    --neutral-semi: transparent;
+    --thinking-dimmed: transparent;
+    --tool-result-dimmed: transparent;
+    --tool-input-dimmed: transparent;
+    --ide-notification-dimmed: var(--code);
+    --error-semi: var(--errbg);
+    --error-dimmed: color-mix(in srgb, var(--err) 45%, transparent);
+    --info-dimmed: color-mix(in srgb, var(--note) 45%, transparent);
+    --warning-dimmed: color-mix(in srgb, var(--warn) 45%, transparent);
+    --success-dimmed: color-mix(in srgb, var(--tool) 45%, transparent);
+    --assistant-dimmed: color-mix(in srgb, var(--asst) 45%, transparent);
+    --user-dimmed: color-mix(in srgb, var(--user) 45%, transparent);
+    --tool-param-sep-color: var(--rule);
+
+    /* Code palette used by pygments_styles.css (Read/Write/MultiEdit paths). */
+    --color-blue: var(--note);
+    --color-green: var(--tool);
+    --color-purple: var(--asst);
+
+    /* Nested-agent depth ramp (#213): ring 1 is --ring (tokens.css); the
+       others take lane / role tokens so every depth has a dark value. */
+    --agent-ring-2: var(--lB);
+    --agent-ring-3: var(--asst);
+    --agent-ring-4: var(--user);
+    --agent-ring-5: var(--lF);
+
+    /* Workflow run tree (#174): phase line = tool colour, agent line = lane grey. */
+    --workflow-phase-color: var(--tool);
+    --workflow-agent-color: var(--l0);
+
+    /* Todo / plan / question palette. */
+    --priority-high: var(--asst);
+    --priority-medium: color-mix(in srgb, var(--asst) 55%, var(--bg));
+    --priority-low: color-mix(in srgb, var(--asst) 30%, var(--bg));
+    --status-in-progress: transparent;
+    --status-completed: transparent;
+    --todo-accent: var(--rule);
+    --plan-accent: var(--asst);
+    --question-accent: var(--warn);
+    --question-bg: transparent;
+    --answer-accent: var(--tool);
+    --answer-bg: var(--userbg);
+
+    /* Teammate palette (teammate_styles.css). The classic tints switch on
+       prefers-color-scheme only, so with the in-page toggle forcing the
+       other scheme they came out wrong. Deriving them from each colour and
+       --bg makes them follow whichever scheme is in effect. The colours
+       themselves get dark values in tokens.css. */
+    --cc-blue-bg: color-mix(in srgb, var(--cc-blue) 13%, var(--bg));
+    --cc-cyan-bg: color-mix(in srgb, var(--cc-cyan) 13%, var(--bg));
+    --cc-green-bg: color-mix(in srgb, var(--cc-green) 13%, var(--bg));
+    --cc-yellow-bg: color-mix(in srgb, var(--cc-yellow) 13%, var(--bg));
+    --cc-orange-bg: color-mix(in srgb, var(--cc-orange) 13%, var(--bg));
+    --cc-red-bg: color-mix(in srgb, var(--cc-red) 13%, var(--bg));
+    --cc-pink-bg: color-mix(in srgb, var(--cc-pink) 13%, var(--bg));
+    --cc-purple-bg: color-mix(in srgb, var(--cc-purple) 13%, var(--bg));
+    --cc-gray-bg: color-mix(in srgb, var(--cc-gray) 13%, var(--bg));
+    --cc-system-bg: var(--code);
+
+    /* Timeline (P1 moved its colours into these properties; the classic
+       theme leaves them undefined and uses the fallbacks). */
+    --timeline-bg: var(--bg);
+    --timeline-border: var(--rule);
+    --timeline-handle-bg: var(--rule);
+    --timeline-handle-hover-bg: var(--l0);
+    --timeline-handle-active-bg: var(--muted);
+    --timeline-grip: var(--l0);
+    --timeline-grip-hover: var(--muted);
+    --timeline-grip-active: var(--fg);
+    --timeline-flash-bg: color-mix(in srgb, var(--warn) 22%, var(--bg));
+    --timeline-user-bg: color-mix(in srgb, var(--user) 14%, var(--bg));
+    --timeline-assistant-bg: color-mix(in srgb, var(--asst) 14%, var(--bg));
+    --timeline-tool_use-bg: color-mix(in srgb, var(--tool) 14%, var(--bg));
+    --timeline-tool_result-bg: color-mix(in srgb, var(--tool) 8%, var(--bg));
+    --timeline-thinking-bg: var(--code);
+    --timeline-system-bg: color-mix(in srgb, var(--sys) 14%, var(--bg));
+    --timeline-image-bg: color-mix(in srgb, var(--note) 10%, var(--bg));
+    --timeline-sidechain-bg: color-mix(in srgb, var(--ring) 10%, var(--bg));
+    --timeline-memory-bg: color-mix(in srgb, var(--asst) 8%, var(--bg));
+    --timeline-slash-command-bg: color-mix(in srgb, var(--user) 8%, var(--bg));
+    --timeline-command-output-bg: var(--code);
+    --timeline-bash-input-bg: color-mix(in srgb, var(--user) 8%, var(--bg));
+    --timeline-bash-output-bg: var(--code);
+    --timeline-teammate-bg: color-mix(in srgb, var(--note) 10%, var(--bg));
+    --timeline-task-notification-bg: color-mix(in srgb, var(--note) 14%, var(--bg));
+    --timeline-workflow_phase-bg: color-mix(in srgb, var(--tool) 10%, var(--bg));
+    --timeline-workflow_agent-bg: var(--code);
+    --timeline-item-user-bg: color-mix(in srgb, var(--user) 16%, var(--bg));
+    --timeline-item-user-border: var(--user);
+    --timeline-item-assistant-bg: color-mix(in srgb, var(--asst) 16%, var(--bg));
+    --timeline-item-assistant-border: var(--asst);
+    --timeline-item-tool_use-bg: color-mix(in srgb, var(--tool) 16%, var(--bg));
+    --timeline-item-tool_use-border: var(--tool);
+    --timeline-item-tool_result-bg: color-mix(in srgb, var(--tool) 8%, var(--bg));
+    --timeline-item-tool_result-border: color-mix(in srgb, var(--tool) 60%, var(--bg));
+    --timeline-item-thinking-bg: var(--code);
+    --timeline-item-thinking-border: var(--muted);
+    --timeline-item-system-bg: color-mix(in srgb, var(--sys) 16%, var(--bg));
+    --timeline-item-system-border: var(--sys);
+    --timeline-item-image-bg: color-mix(in srgb, var(--note) 14%, var(--bg));
+    --timeline-item-image-border: var(--note);
+    --timeline-item-sidechain-bg: color-mix(in srgb, var(--ring) 10%, var(--bg));
+    --timeline-item-sidechain-border: var(--ring);
+}
+
+/* ------------------------------------------------------- shared bits */
+
+.theme-minimal #transcript .content blockquote,
+.theme-minimal #transcript .user-md blockquote,
+.theme-minimal #transcript .markdown blockquote {
+    margin-left: 0;
+    padding-left: 10px;
+    border-left: 2px solid var(--rule);
+    color: var(--muted);
+}
+
+.theme-minimal #transcript .markdown td,
+.theme-minimal #transcript .markdown th {
+    padding: 2px 10px 2px 0;
+    text-align: left;
+}
+
+.theme-minimal #transcript .markdown td {
+    border-top: 1px solid var(--rule);
+}
+
+.theme-minimal #transcript .markdown th {
+    border-bottom: 1px solid var(--muted);
+}
+
+.theme-minimal #transcript img.tool-result-image,
+.theme-minimal #transcript img.uploaded-image {
+    margin: 4px 0;
+    border-color: var(--rule);
+}
+
+/* Per-message md/raw toggle on user prompts. */
+.theme-minimal .user-content .user-view-toggle {
+    font-family: var(--mono);
+    border-color: var(--rule);
+    color: var(--muted);
+    background: var(--bg);
+}
+
+.theme-minimal .user-content .user-view-toggle:hover {
+    background: var(--code);
+    color: var(--fg);
+}
+
+/* Boxed panels that classic draws as translucent cards: flat, no shadow. */
+.theme-minimal #transcript .tool-content,
+.theme-minimal #transcript .tool-input,
+.theme-minimal #transcript .session-summary {
+    margin: 2px 0;
+    padding: 4px 8px;
+    border: 0;
+    border-radius: 4px;
+    background: var(--code);
+    box-shadow: none;
+}
+
+.theme-minimal #transcript .session-summary {
+    border-left: 2px solid var(--rule);
+    border-radius: 0 4px 4px 0;
+}
+
+/* Inner tool-use / tool-result blocks (not the cards). */
+.theme-minimal #transcript .tool-use,
+.theme-minimal #transcript .tool-result {
+    background: transparent;
+    border-left: 2px solid var(--rule);
+}
+
+.theme-minimal #transcript .sidechain .sidechain-indicator {
+    background: var(--code);
+    color: var(--muted);
+    font: 0.72em var(--mono);
+}
+
+.theme-minimal #transcript .thinking-text {
+    color: var(--muted);
+}
+
+.theme-minimal #transcript .ide-notification {
+    margin: 2px 0;
+    padding: 2px 8px;
+    border-left: 2px solid var(--asst);
+    background: transparent;
+    color: var(--muted);
+}
+
+.theme-minimal #transcript .ide-selection-content {
+    border: 0;
+    background: var(--code);
+    color: var(--fg);
+}
+
+/* System reminders inside user prompts and Read results. */
+.theme-minimal #transcript .system-reminder {
+    margin-top: 4px;
+    padding: 2px 8px;
+    border-left: 2px solid var(--rule);
+    border-radius: 0;
+    background: transparent;
+    color: var(--muted);
+}
+
+/* ----------------------------------------------------- the call line */
+
+/* Read / Write / MultiEdit file paths and counts inside the content. */
+.theme-minimal #transcript .read-tool-content,
+.theme-minimal #transcript .write-file-path,
+.theme-minimal #transcript .multiedit-file-path {
+    margin: 0 0 2px;
+    padding-left: 0;
+    font: 0.8em/1.6 var(--mono);
+    font-weight: 400;
+    color: var(--fg);
+}
+
+.theme-minimal #transcript .multiedit-count,
+.theme-minimal #transcript .multiedit-item-header,
+.theme-minimal #transcript .edit-file-path,
+.theme-minimal #transcript .edit-replace-all {
+    margin-bottom: 2px;
+    font: 0.72em var(--mono);
+    color: var(--muted);
+}
+
+.theme-minimal #transcript .multiedit-item {
+    margin-bottom: 4px;
+    padding-left: 8px;
+    border-left: 2px solid var(--rule);
+}
+
+/* ---------------------------------------------------- output boxes */
+
+/* Command / system / Bash output: the --code box (mockup pre). */
+.theme-minimal #transcript .content pre.command-output-content,
+.theme-minimal #transcript .content pre.system-content,
+.theme-minimal #transcript .command-output-content {
+    margin-top: 2px;
+    padding: 4px 8px;
+    border: 0;
+    border-radius: 4px;
+    background: var(--code);
+    color: var(--fg);
+    font: 0.78em/1.55 var(--mono);
+}
+
+.theme-minimal #transcript .command-output-content td {
+    border-left-color: var(--rule);
+}
+
+.theme-minimal #transcript .bash-output pre.bash-stdout,
+.theme-minimal #transcript .bash-output pre.bash-stderr {
+    margin: 2px 0;
+    padding: 4px 8px;
+    border: 0;
+    font: 0.78em/1.55 var(--mono);
+}
+
+.theme-minimal #transcript .bash-output pre.bash-stdout {
+    background: var(--code);
+    color: var(--fg);
+}
+
+.theme-minimal #transcript .bash-output pre.bash-stderr {
+    background: var(--errbg);
+    color: var(--err);
+}
+
+.theme-minimal #transcript .bash-empty {
+    font: 0.78em var(--mono);
+    color: var(--muted);
+}
+
+/* User `!command` (bash-input card). */
+.theme-minimal #transcript .bash-prompt {
+    font: 600 0.8em var(--mono);
+    color: var(--user);
+}
+
+.theme-minimal #transcript .bash-command {
+    padding: 0;
+    background: none;
+    color: var(--fg);
+    font: 0.8em var(--mono);
+}
+
+/* Bash tool: the command as a `$ …` box under the description. */
+.theme-minimal #transcript .bash-tool-content {
+    margin: 0;
+}
+
+.theme-minimal #transcript .bash-tool-description {
+    margin-bottom: 2px;
+    font-size: 0.9em;
+    color: var(--muted);
+}
+
+.theme-minimal #transcript .content pre.bash-tool-command {
+    margin: 0;
+    padding: 4px 8px;
+    border: 0;
+    border-radius: 4px;
+    background: var(--code);
+    color: var(--fg);
+    font: 0.78em/1.55 var(--mono);
+}
+
+.theme-minimal #transcript .content pre.bash-tool-command::before {
+    content: "$ ";
+    color: var(--muted);
+    user-select: none;
+}
+
+/* CronList table and other structured tool output. */
+.theme-minimal #transcript .cronlist-output-table {
+    margin-top: 2px;
+    border: 1px solid var(--rule);
+    background: transparent;
+    font: 0.78em/1.55 var(--mono);
+}
+
+.theme-minimal #transcript .cronlist-output-table th,
+.theme-minimal #transcript .cronlist-output-table td {
+    padding: 2px 10px;
+    border-bottom-color: var(--rule);
+}
+
+.theme-minimal #transcript .cronlist-output-table th {
+    background: var(--code);
+    color: var(--muted);
+    font-weight: 500;
+}
+
+/* Status pills: TaskStop, WebFetch, workflow status (mockup .pill .ok/.bad). */
+.theme-minimal #transcript .taskstop-badge,
+.theme-minimal #transcript .webfetch-status,
+.theme-minimal #transcript .workflow-status {
+    padding: 0 6px;
+    border: 1px solid var(--rule);
+    border-radius: 999px;
+    background: transparent;
+    font: 500 0.72em/1.6 var(--mono);
+    color: var(--muted);
+}
+
+.theme-minimal #transcript .taskstop-badge.taskstop-ok,
+.theme-minimal #transcript .webfetch-status-success {
+    border-color: transparent;
+    background: var(--okbg);
+    color: var(--ok);
+}
+
+.theme-minimal #transcript .taskstop-badge.taskstop-err,
+.theme-minimal #transcript .webfetch-status-error,
+.theme-minimal #transcript .workflow-status {
+    border-color: transparent;
+    background: var(--errbg);
+    color: var(--err);
+}
+
+.theme-minimal #transcript .webfetch-meta {
+    margin-bottom: 2px;
+    align-items: baseline;
+    font-family: var(--mono);
+}
+
+.theme-minimal #transcript .webfetch-prompt {
+    margin-bottom: 2px;
+    color: var(--muted);
+}
+
+/* Hooks: details and error output. */
+.theme-minimal #transcript .hook-details,
+.theme-minimal #transcript .hook-attachment-output,
+.theme-minimal #transcript .hook-attachment-content {
+    background: var(--code);
+    color: var(--fg);
+    font-family: var(--mono);
+}
+
+.theme-minimal #transcript .hook-error {
+    border-left: 2px solid var(--err);
+    background: var(--errbg);
+    color: var(--err);
+    font-family: var(--mono);
+}
+
+.theme-minimal #transcript .hook-attachment-stderr {
+    border-left: 2px solid var(--warn);
+}
+
+.theme-minimal #transcript div.system-hook,
+.theme-minimal #transcript div.system-hook-attachment {
+    opacity: 1;
+    font-size: 0.9em;
+}
+
+/* Error pill in the gutter (mockup: `error` pill under the time). A paired
+   tool_result drops its gutter (layout.css); an error one keeps the role
+   label alone, as a pill, so the failure is visible in the gutter column. */
+.theme-minimal #transcript .message.tool_result.error .mn-role,
+.theme-minimal #transcript .message.system-error .mn-role {
+    margin-top: 1px;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: var(--errbg);
+    color: var(--err);
+    line-height: 1.6;
+    text-transform: lowercase;
+}
+
+.theme-minimal #transcript .message.tool_result.error .mn-role,
+.theme-minimal #transcript .message.system-error .mn-role {
+    padding-right: calc(5px + var(--ic) + var(--ic-gap));
+}
+
+.theme-minimal #transcript .message.tool_result.error .mn-role > .mn-ic,
+.theme-minimal #transcript .message.system-error .mn-role > .mn-ic {
+    right: 5px;
+}
+
+@media (max-width: 640px) {
+    .theme-minimal #transcript .message.tool_result.error .mn-role,
+    .theme-minimal #transcript .message.system-error .mn-role {
+        padding-right: 5px;
+        padding-left: calc(5px + var(--ic) + var(--ic-gap));
+    }
+
+    .theme-minimal #transcript .message.tool_result.error .mn-role > .mn-ic,
+    .theme-minimal #transcript .message.system-error .mn-role > .mn-ic {
+        right: auto;
+        left: 5px;
+    }
+}
+
+.theme-minimal #transcript .message.tool_result.error:is(.pair_middle, .pair_last) > .header > .header-info {
+    display: flex;
+}
+
+.theme-minimal #transcript .message.tool_result.error:is(.pair_middle, .pair_last) > .header > .header-info > :not(.mn-role) {
+    display: none;
+}
+
+/* …one gutter line down, below the call's role, which hangs into this
+   row (layout.css; P7c — the pill used to cover it). */
+@media (min-width: 641px) {
+    .theme-minimal #transcript .message.tool_result.error:is(.pair_middle, .pair_last):not(.dag-split) > .header > .header-info {
+        padding-top: 1.85em;
+    }
+}
+
+/* -------------------------------------------------- collapse previews */
+
+/* The formatters' <details> (work/minimal-theme-dag.md § 1.4), restyled
+   as the mockup's .clip: closed, the summary's preview is clipped to --pv
+   with a fade and followed by a "+N lines" line; open, the summary is a
+   single "− less" line above the full body. The label is `data-more` on
+   the <summary>, written by minimal.js (from `.line-count`, the body's
+   lines or a params table's rows); without JS the `.line-count` stands in
+   for it, or a plain "+ more". Generated content, so search and the
+   timeline never see it.
+   --pv: 4.4em for code and output, 2.8em for prose and params (mockup). */
+.theme-minimal #transcript :is(details.collapsible-code, details.collapsible-details) {
+    --pv: 4.4em;
+    margin: 2px 0 0;
+}
+
+.theme-minimal #transcript details.collapsible-code:has(> summary > .preview-content.markdown),
+.theme-minimal #transcript details.tool-param-collapsible {
+    --pv: 2.8em;
+}
+
+.theme-minimal #transcript :is(details.collapsible-code, details.collapsible-details, details.tool-param-collapsible) > summary {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    margin: 0;
+    padding: 0;
+    border-radius: 0;
+    background: none;
+    color: inherit;
+    list-style: none;
+    cursor: pointer;
+}
+
+.theme-minimal #transcript :is(details.collapsible-code, details.collapsible-details, details.tool-param-collapsible) > summary::-webkit-details-marker {
+    display: none;
+}
+
+.theme-minimal #transcript :is(details.collapsible-code, details.collapsible-details) > summary:hover {
+    background: none;
+}
+
+/* The preview, clipped. The fade is measured in --pv, not in the box, so
+   a preview shorter than the clip fades only at its foot. */
+.theme-minimal #transcript details:not([open]) > summary > :is(.preview-content, .tool-param-preview) {
+    display: block;
+    max-height: var(--pv);
+    margin: 0;
+    overflow: hidden;
+    opacity: 1;
+    -webkit-mask-image: linear-gradient(#000 calc(var(--pv) * 0.45), transparent var(--pv));
+    mask-image: linear-gradient(#000 calc(var(--pv) * 0.45), transparent var(--pv));
+}
+
+/* The "+N lines" / "− less" line (mockup .more). */
+.theme-minimal #transcript :is(details.collapsible-code, details.collapsible-details, details.tool-param-collapsible) > summary::after,
+.theme-minimal #transcript details.collapsible-code > summary > .line-count,
+.theme-minimal #transcript .mn-less {
+    order: 2;
+    align-self: flex-start;
+    margin: 0;
+    padding: 2px 0;
+    border: 0;
+    background: none;
+    font: 0.7rem/1.4 var(--mono);
+    font-style: normal;
+    font-weight: 400;
+    color: var(--muted);
+}
+
+.theme-minimal #transcript :is(details.collapsible-code, details.collapsible-details, details.tool-param-collapsible) > summary::after {
+    content: "+ more";
+}
+
+.theme-minimal #transcript :is(details.collapsible-code, details.collapsible-details, details.tool-param-collapsible) > summary[data-more]::after {
+    content: attr(data-more);
+}
+
+/* No JS: the formatter's line count is the label. */
+.theme-minimal #transcript details.collapsible-code > summary:not([data-more])::after {
+    content: none;
+}
+
+.theme-minimal #transcript details.collapsible-code > summary > .line-count::before {
+    content: "+ ";
+}
+
+.theme-minimal #transcript details.collapsible-code > summary[data-more] > .line-count,
+.theme-minimal #transcript details.collapsible-code[open] > summary > .line-count {
+    display: none;
+}
+
+.theme-minimal #transcript details[open] > summary > :is(.preview-content, .tool-param-preview) {
+    display: none;
+}
+
+.theme-minimal #transcript :is(details.collapsible-code, details.collapsible-details, details.tool-param-collapsible)[open] > summary::after {
+    content: "− less";
+}
+
+.theme-minimal #transcript :is(details.collapsible-code, details.collapsible-details, details.tool-param-collapsible) > summary:hover::after,
+.theme-minimal #transcript details.collapsible-code > summary:hover > .line-count,
+.theme-minimal #transcript .mn-less:hover {
+    color: var(--fg);
+}
+
+/* The trailing "− less" of a long open block (minimal.js). */
+.theme-minimal #transcript .mn-less {
+    display: block;
+    cursor: pointer;
+}
+
+.theme-minimal #transcript .mn-less::before {
+    content: "− less";
+}
+
+/* The open body follows the "− less" line without a gap of its own. */
+.theme-minimal #transcript :is(details.collapsible-code > .code-full, details.collapsible-details > .details-content) {
+    margin-top: 0;
+}
+
+/* Params: the label sits beside the preview (a folded table row stays
+   one line where it fits), and a keyed row's open fold keeps the classic
+   look — its key's ⏷ closes it, so the summary stays hidden. */
+.theme-minimal #transcript details.tool-param-collapsible > summary {
+    flex-flow: row wrap;
+    align-items: baseline;
+    column-gap: 8px;
+    color: var(--muted);
+}
+
+.theme-minimal #transcript details.tool-param-collapsible > summary > .tool-param-preview {
+    flex: 0 1 auto;
+    min-width: 0;
+}
+
+.theme-minimal #transcript details.tool-param-collapsible > summary::after {
+    flex: none;
+    font-style: normal;
+}
+
+.theme-minimal #transcript .tool-param-row-fold > .tool-param-value > details[open] > summary {
+    display: none;
+}
+
+/* --------------------------------------------- tool parameter tables */
+
+.theme-minimal #transcript .tool-params-table {
+    width: auto;
+    max-width: 100%;
+    font: 0.8em/1.55 var(--mono);
+}
+
+.theme-minimal #transcript .tool-params-table tr,
+.theme-minimal #transcript .tool-execution-results tr {
+    border-bottom: 1px solid var(--rule);
+}
+
+.theme-minimal #transcript .tool-params-table tr:last-child {
+    border-bottom: 0;
+}
+
+.theme-minimal #transcript .tool-param-key,
+.theme-minimal #transcript .tool-execution-result-label {
+    padding: 1px 12px 1px 0;
+    font-weight: 400;
+    color: var(--muted);
+    white-space: nowrap;
+}
+
+.theme-minimal #transcript .tool-param-value,
+.theme-minimal #transcript .tool-execution-result-value {
+    padding: 1px 0;
+    color: var(--fg);
+}
+
+/* Nested tables are already mono and small: don't compound the size. */
+.theme-minimal #transcript .tool-params-table .tool-params-table {
+    font-size: 1em;
+}
+
+.theme-minimal #transcript .tool-param-structured {
+    padding: 2px 6px;
+    background: var(--code);
+    font: inherit;
+}
+
+.theme-minimal #transcript .tool-param-value .tool-param-markdown {
+    font-family: var(--sans);
+}
+
+.theme-minimal #transcript .tool-param-collapsible summary,
+.theme-minimal #transcript .tool-param-rows-toggle,
+.theme-minimal #transcript .tool-params-expand-all,
+.theme-minimal #transcript .tool-params-empty {
+    color: var(--muted);
+    font-style: normal;
+}
+
+.theme-minimal #transcript .tool-params-expand-all {
+    font: 0.72em var(--mono);
+}
+
+/* -------------------------------------------------------------- todo */
+
+/* TodoWrite (mockup .todo): a plain list, a mono status glyph, done items
+   muted and struck through, the one in progress in the assistant colour. */
+.theme-minimal #transcript .todo-write {
+    border: 0;
+    background: transparent;
+}
+
+.theme-minimal #transcript .todo-list {
+    margin: 2px 0 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+}
+
+.theme-minimal #transcript .todo-item {
+    gap: 8px;
+    align-items: baseline;
+    padding: 0;
+    border: 0;
+    background: transparent;
+}
+
+.theme-minimal #transcript .todo-item:hover {
+    background: transparent;
+}
+
+/* The status emoji stays in the DOM (search, copy); a glyph replaces it. */
+.theme-minimal #transcript .todo-status {
+    flex: 0 0 14px;
+    width: 14px;
+    font-size: 0;
+    line-height: 1;
+    text-align: center;
+}
+
+.theme-minimal #transcript .todo-status::before {
+    content: "○";
+    font: 13px var(--mono);
+    color: var(--muted);
+}
+
+.theme-minimal #transcript .todo-item.in_progress .todo-status::before {
+    content: "◐";
+    color: var(--asst);
+}
+
+.theme-minimal #transcript .todo-item.completed .todo-status::before {
+    content: "✓";
+}
+
+.theme-minimal #transcript .todo-content {
+    font-size: 0.95em;
+    font-weight: 400;
+    color: var(--fg);
+}
+
+.theme-minimal #transcript .todo-item.in_progress .todo-content {
+    color: var(--fg);
+    font-weight: 500;
+}
+
+.theme-minimal #transcript .todo-item.completed .todo-content {
+    color: var(--muted);
+    opacity: 1;
+}
+
+.theme-minimal #transcript .todo-id {
+    font: 0.72em var(--mono);
+    color: var(--muted);
+}
+
+/* Priority: a small mark before the id instead of a coloured left bar. */
+.theme-minimal #transcript .todo-item.high .todo-id::before {
+    content: "!";
+    margin-right: 4px;
+    color: var(--priority-high);
+    font-weight: 700;
+}
+
+/* ------------------------------- AskUserQuestion / ExitPlanMode / plan */
+
+.theme-minimal #transcript .askuserquestion-content {
+    padding: 0;
+}
+
+.theme-minimal #transcript .question-block {
+    margin-bottom: 6px;
+    padding: 2px 0 2px 10px;
+    border-left: 2px solid var(--asst);
+    border-radius: 0;
+    background: transparent;
+}
+
+.theme-minimal #transcript .question-block.answered {
+    border-left-color: var(--user);
+    background: transparent;
+}
+
+.theme-minimal #transcript .question-header {
+    font: 0.68em var(--mono);
+    letter-spacing: 0.06em;
+    color: var(--muted);
+}
+
+.theme-minimal #transcript .question-text,
+.theme-minimal #transcript .answer-text {
+    font-size: 1em;
+    margin-bottom: 2px;
+}
+
+.theme-minimal #transcript .question-option {
+    margin: 2px 0;
+    padding: 2px 8px;
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    background: transparent;
+}
+
+.theme-minimal #transcript .question-option.selected {
+    border-color: var(--user);
+    border-left-width: 1px;
+    background: var(--userbg);
+}
+
+.theme-minimal #transcript .plan-content.markdown {
+    padding: 4px 8px;
+    border-left: 2px solid var(--asst);
+    border-radius: 0;
+    background: transparent;
+}
+
+/* --------------------------------------------------------- teammates */
+
+/* Badge text on the teammate colour: the page background reads on the
+   colour in both schemes (dark values are lighter, see tokens.css). */
+.theme-minimal .teammate-badge,
+.theme-minimal #transcript .agent-depth-badge {
+    color: var(--bg);
+}
+
+.theme-minimal #transcript .teammate-message {
+    margin: 2px 0;
+    padding: 2px 8px;
+    border-left-width: 2px;
+}
+
+.theme-minimal #transcript .teammate-message-header {
+    font-size: 0.8em;
+}
+
+.theme-minimal #transcript .teammate-tool-card:empty {
+    display: none;
+}
+
+.theme-minimal #transcript .teammate-tool-card {
+    margin: 2px 0;
+    padding: 2px 8px;
+    border: 0;
+    border-left: 2px solid var(--cc-color, var(--rule));
+    border-radius: 0;
+    font-size: 0.85em;
+}
+
+.theme-minimal #transcript .teammate-tool-card dt,
+.theme-minimal #transcript .teammate-body .teammate-json dt {
+    font: 400 0.92em/1.7 var(--mono);
+    color: var(--muted);
+    opacity: 1;
+}
+
+.theme-minimal #transcript .task-list {
+    font-size: 0.85em;
+}
+
+.theme-minimal #transcript .task-list th,
+.theme-minimal #transcript .task-list td {
+    padding: 1px 12px 1px 0;
+    border-bottom-color: var(--rule);
+}
+
+.theme-minimal #transcript .task-list th {
+    font: 400 0.9em var(--mono);
+    color: var(--muted);
+    opacity: 1;
+}
+
+.theme-minimal #transcript .task-list .task-id,
+.theme-minimal #transcript .task-action {
+    font-family: var(--mono);
+    color: var(--muted);
+}
+
+.theme-minimal #transcript .session-team-badge {
+    margin-left: 0;
+    font: 500 0.72em/1.6 var(--mono);
+}
+
+/* ---------------------------------------------------------- workflow */
+
+.theme-minimal #transcript .workflow-meta,
+.theme-minimal #transcript .workflow-invocation {
+    margin-bottom: 2px;
+    gap: 2px 8px;
+}
+
+.theme-minimal #transcript .workflow-name {
+    font: 600 0.8em/1.6 var(--mono);
+    color: var(--fg);
+}
+
+.theme-minimal #transcript .workflow-description,
+.theme-minimal #transcript .workflow-phase-meta,
+.theme-minimal #transcript .workflow-agent-meta,
+.theme-minimal #transcript .workflow-agent-result-preview {
+    font-size: 0.85em;
+    color: var(--muted);
+}
+
+.theme-minimal #transcript .workflow-phase-pill {
+    padding: 0 6px;
+    border: 1px solid var(--rule);
+    border-radius: 999px;
+    background: transparent;
+    font: 500 0.72em/1.6 var(--mono);
+    color: var(--muted);
+}
+
+.theme-minimal #transcript a.workflow-phase-pill:hover {
+    border-color: var(--tool);
+    color: var(--tool);
+}
+
+.theme-minimal #transcript .workflow-agent-model {
+    font-family: var(--mono);
+    color: var(--muted);
+}
+
+.theme-minimal #transcript .workflow-error > pre {
+    border-left: 2px solid var(--err);
+    background: var(--errbg);
+    color: var(--err);
+}
+
+/* Workflow groups hang under the content column like a sub-agent group
+   (layout.css .nest rule): one 2px line per level, the nested gutter. The
+   classic rules indent by 2em at every level (and the phases group by 2em
+   with no line). */
+.theme-minimal #transcript .children:has(> .message-node > .message.workflow_phase) {
+    margin: 2px 0 2px calc(var(--gut) + var(--rail));
+    padding-left: 0;
+    border-left: 0;
+}
+
+.theme-minimal #transcript .message-node:has(> .message.workflow_phase) > .children,
+.theme-minimal #transcript .message-node:has(> .message.workflow_agent) > .children {
+    margin: 2px 0 4px calc(var(--gut) + var(--rail));
+    padding-left: 8px;
+}
+
+.theme-minimal #transcript .children:has(> .message-node > .message.workflow_phase) > .message-node,
+.theme-minimal #transcript .message-node:has(> .message.workflow_phase) > .children > .message-node,
+.theme-minimal #transcript .message-node:has(> .message.workflow_agent) > .children > .message-node {
+    --gut: var(--gut-nest);
+    --rail: var(--rail-nest);
+}
+
+.theme-minimal #transcript .message.workflow_phase {
+    --rc: var(--tool);
+}
+
+.theme-minimal #transcript .message.workflow_agent {
+    --rc: var(--l0);
+}
+
+/* ------------------------------------------ forks, branches, nav */
+
+.theme-minimal #transcript .fork-point-header {
+    flex: none;
+    margin: 0;
+    font: inherit;
+    color: var(--muted);
+}
+
+.theme-minimal #transcript .fork-point-header > .fork-point-preview {
+    display: none;
+}
+
+.theme-minimal #transcript .fork-point-branches {
+    display: flex;
+    flex-direction: row;
+    flex: 1 1 0;
+    flex-wrap: wrap;
+    gap: 0 12px;
+    min-width: 0;
+    padding: 0;
+}
+
+.theme-minimal #transcript .fork-point-branch {
+    max-width: min(100%, 44ch);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-decoration: none;
+}
+
+.theme-minimal #transcript .fork-point > .mn-bctls {
+    flex: 1 1 100%;
+    font-size: calc(1em / 0.72);
+}
+
+.theme-minimal #transcript .fork-point-branch,
+.theme-minimal #transcript .branch-backlink,
+.theme-minimal #transcript .session-backlink {
+    padding: 0;
+    color: var(--note);
+}
+
+.theme-minimal #transcript .fork-point-branch:hover,
+.theme-minimal #transcript .branch-backlink:hover,
+.theme-minimal #transcript .session-backlink:hover {
+    color: var(--fg);
+}
+
+.theme-minimal #transcript .branch-from {
+    margin-top: 0;
+    font: 400 0.8em var(--mono);
+    color: var(--muted);
+}
+
+.theme-minimal #transcript .branch-session {
+    font: 400 0.8em var(--mono);
+    color: var(--muted);
+}
+
+/* Session table of contents (session_nav). */
+.theme-minimal .navigation h2 {
+    margin-bottom: 4px;
+    font-size: 0.9em;
+}
+
+.theme-minimal .session-nav {
+    margin-top: 4px;
+    gap: 2px;
+}
+
+.theme-minimal .session-link {
+    padding: 4px 8px;
+    color: var(--fg);
+}
+
+.theme-minimal .session-link-meta,
+.theme-minimal .session-backlink,
+.theme-minimal .nav-hint {
+    font-family: var(--mono);
+    color: var(--muted);
+}
+
+.theme-minimal .project-sessions {
+    border-top-color: var(--rule);
+}
+
+.theme-minimal .combined-transcript-link {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--note);
+}
+
+.theme-minimal .combined-transcript-link:hover {
+    background: transparent;
+    color: var(--fg);
+}
+
+/* A fork point and its branches (P7c): one wrapped line of short links
+   instead of a line each — sessions still start a line of their own. */
+.theme-minimal .session-nav {
+    display: flex;
+    flex-wrap: wrap;
+    column-gap: 12px;
+}
+
+.theme-minimal .session-nav > .session-nav-item {
+    flex: 1 1 100%;
+    min-width: 0;
+}
+
+.theme-minimal .session-nav > :is(.session-fork-point, .session-branch) {
+    flex: 0 1 auto;
+    max-width: min(100%, 44ch);
+    margin-left: 0 !important;
+    padding: 0;
+    border: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font: 0.75em/1.7 var(--mono);
+}
+
+.theme-minimal .session-nav > :is(.session-fork-point, .session-branch) > a,
+.theme-minimal .session-nav > .session-fork-point > span {
+    display: inline;
+    padding: 0;
+    text-decoration: none;
+}
+
+.theme-minimal .session-nav > .session-fork-point > :is(a, span) {
+    color: var(--muted);
+}
+
+.theme-minimal .session-nav > .session-fork-point {
+    max-width: min(100%, 24ch);
+}
+
+.theme-minimal .session-compaction-point {
+    border-left: 1px solid var(--l0);
+}
+
+.theme-minimal .fork-link,
+.theme-minimal .branch-link,
+.theme-minimal .compaction-link {
+    color: var(--note);
+}
+
+.theme-minimal .fork-link:hover,
+.theme-minimal .branch-link:hover,
+.theme-minimal .compaction-link:hover {
+    color: var(--fg);
+}
+
+/* Page navigation (paginated combined transcripts). */
+.theme-minimal .page-header {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 12px;
+}
+
+.theme-minimal .page-title {
+    font-size: 1em;
+    color: var(--fg);
+}
+
+.theme-minimal .page-stats {
+    gap: 4px 12px;
+    font: 0.72em var(--mono);
+}
+
+.theme-minimal .page-nav-links {
+    justify-content: flex-start;
+    gap: 12px;
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top-color: var(--rule);
+}
+
+.theme-minimal .page-nav-link {
+    padding: 0;
+    background: transparent;
+    color: var(--note);
+}
+
+.theme-minimal .page-nav-link:hover {
+    background: transparent;
+    color: var(--fg);
+    transform: none;
+}
+
+/* ---------------------------------------- search & filter panel */
+
+/* Filter toggles become the mockup's chips: a role-coloured dot, the
+   active ones in --fg, the hidden types struck through. */
+.theme-minimal .filter-toolbar.visible {
+    gap: 8px;
+    padding: 8px 10px;
+}
+
+.theme-minimal .toolbar-header {
+    margin-bottom: 0;
+    padding-bottom: 6px;
+}
+
+.theme-minimal .toolbar-header h3 {
+    font-size: 0.85em;
+    color: var(--fg);
+}
+
+.theme-minimal .close-toolbar-btn:hover {
+    background: var(--code);
+}
+
+.theme-minimal .filter-section {
+    margin-top: 0;
+    padding-top: 8px;
+}
+
+.theme-minimal .filter-toggles {
+    gap: 4px;
+    margin-bottom: 6px;
+}
+
+.theme-minimal .filter-toggle,
+.theme-minimal .filter-toggle[data-type] {
+    --rc: var(--muted);
+    min-height: 26px;
+    padding: 0 9px;
+    border: 1px solid var(--rule);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--muted);
+    font: 0.8em var(--sans);
+    text-decoration: line-through;
+    transform: none;
+}
+
+.theme-minimal .filter-toggle::before {
+    content: "";
+    width: 7px;
+    height: 7px;
+    flex: none;
+    border-radius: 50%;
+    box-shadow: inset 0 0 0 1.5px var(--rc);
+}
+
+.theme-minimal .filter-toggle.active,
+.theme-minimal .filter-toggle.active:hover {
+    border-color: var(--muted);
+    background: transparent;
+    color: var(--fg);
+    text-decoration: none;
+}
+
+.theme-minimal .filter-toggle.active::before {
+    background: var(--rc);
+}
+
+.theme-minimal .filter-toggle:hover {
+    background: transparent;
+    color: var(--fg);
+    transform: none;
+}
+
+.theme-minimal .filter-toggle[data-type="user"] { --rc: var(--user); }
+.theme-minimal .filter-toggle[data-type="system"] { --rc: var(--sys); }
+.theme-minimal .filter-toggle[data-type="assistant"] { --rc: var(--asst); }
+.theme-minimal .filter-toggle[data-type="thinking"] { --rc: var(--muted); }
+.theme-minimal .filter-toggle[data-type="tool"] { --rc: var(--tool); }
+.theme-minimal .filter-toggle[data-type="sidechain"] { --rc: var(--ring); }
+.theme-minimal .filter-toggle[data-type="memory"] { --rc: var(--asst); }
+.theme-minimal .filter-toggle[data-type="image"] { --rc: var(--note); }
+
+.theme-minimal .filter-action-btn,
+.theme-minimal .search-nav-btn {
+    border-color: var(--rule);
+    background: transparent;
+    color: var(--muted);
+}
+
+.theme-minimal .filter-action-btn:hover,
+.theme-minimal .search-nav-btn:hover:not(:disabled) {
+    border-color: var(--muted);
+    background: transparent;
+    color: var(--fg);
+    transform: none;
+}
+
+.theme-minimal .search-clear:hover {
+    background: var(--code);
+}
+
+.theme-minimal .search-input {
+    border-radius: 6px;
+}
+
+/* Matches: a translucent mark on top of whatever the text colour is. */
+.theme-minimal .search-highlight {
+    background: color-mix(in srgb, var(--warn) 38%, transparent);
+    color: inherit;
+}
+
+.theme-minimal .search-highlight.current {
+    background: color-mix(in srgb, var(--user) 60%, transparent);
+    color: inherit;
+}
+
+/* ---------------------------------------------------------- timeline */
+
+/* Container and labels read the --timeline-* properties set above. The
+   rest is vis-timeline's own stylesheet (loaded from unpkg after ours,
+   hence the extra .theme-minimal specificity, and !important where the
+   classic overrides already use it). */
+.theme-minimal #timeline-container {
+    box-shadow: none;
+    color: var(--fg);
+}
+
+.theme-minimal .vis-timeline,
+.theme-minimal .vis-panel,
+.theme-minimal .vis-panel.vis-center,
+.theme-minimal .vis-panel.vis-left,
+.theme-minimal .vis-panel.vis-right,
+.theme-minimal .vis-panel.vis-top,
+.theme-minimal .vis-panel.vis-bottom,
+.theme-minimal .vis-labelset .vis-label,
+.theme-minimal .vis-foreground .vis-group {
+    border-color: var(--rule);
+}
+
+.theme-minimal .vis-labelset .vis-label,
+.theme-minimal .vis-labelset .vis-label .vis-inner {
+    color: var(--fg) !important;
+}
+
+.theme-minimal .vis-time-axis .vis-text {
+    color: var(--muted) !important;
+}
+
+.theme-minimal .vis-time-axis .vis-grid.vis-minor {
+    border-color: var(--rule);
+}
+
+.theme-minimal .vis-time-axis .vis-grid.vis-major {
+    border-color: color-mix(in srgb, var(--muted) 45%, var(--bg));
+}
+
+/* Item types without a classic colour rule (memory, teammate, …). */
+.theme-minimal .vis-item {
+    background-color: var(--code);
+    border-color: var(--rule);
+    color: var(--fg);
+}
+
+.theme-minimal .vis-item.vis-selected {
+    border-color: var(--note) !important;
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--note) 35%, transparent) !important;
+}
+
+.theme-minimal .vis-item.vis-point,
+.theme-minimal .vis-item.vis-box {
+    color: var(--fg);
+}
+
+.theme-minimal .vis-item .vis-item-content {
+    color: var(--fg);
+}
+
+.theme-minimal .vis-current-time {
+    background-color: var(--err);
+}
+
+.theme-minimal div.vis-tooltip {
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    background: var(--bg);
+    color: var(--fg);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+    font-family: var(--sans);
+}
+
+/* ------------------------------------------- compact spawn rows (P7c) */
+
+/* A Task / Agent spawn reads as its call line (description, subagent type,
+   `[async #id]`, model), the prompt as a 2-line preview and the branch
+   control (dag.css). The prompt is a touch smaller than prose; a long one
+   is the shared <details> preview (utils.render_markdown_preview) with its
+   "+N lines" beside the preview's last line rather than on a line of its
+   own. The agent's answer on the merge row — a sync result, an async
+   notification — previews the same way once it is longer than three
+   lines (P8). */
+.theme-minimal #transcript .message.tool_use > .content > .task-prompt {
+    font-size: 0.94em;
+}
+
+.theme-minimal #transcript :is(.task-prompt, .task-result, .task-notification-result) > details.collapsible-code > summary {
+    flex-direction: row;
+    align-items: flex-end;
+    column-gap: 10px;
+}
+
+.theme-minimal #transcript :is(.task-prompt, .task-result, .task-notification-result) > details.collapsible-code > summary > .preview-content {
+    flex: 1 1 0;
+    min-width: 0;
+}
+
+.theme-minimal #transcript :is(.task-prompt, .task-result, .task-notification-result) > details.collapsible-code > summary::after,
+.theme-minimal #transcript :is(.task-prompt, .task-result, .task-notification-result) > details.collapsible-code > summary > .line-count {
+    flex: none;
+    align-self: flex-end;
+}
+
+.theme-minimal #transcript :is(.task-prompt, .task-result, .task-notification-result) .preview-content :is(p, ul, ol, pre, blockquote, table) {
+    margin: 0;
+}
+
+/* A heading at the top of an agent's answer (`## Summary`) reads as a bold
+   line of the preview, not a title twice the size that fills the clip. */
+.theme-minimal #transcript :is(.task-prompt, .task-result, .task-notification-result) .preview-content :is(h1, h2, h3, h4, h5, h6) {
+    margin: 0;
+    font-size: 1em;
+    line-height: inherit;
+}
+
+/* The spawn's teammate fields (name, team, mode), its result's agent
+   metadata (agent id, worktree, branch, usage) and an async notification's
+   task fields (id, status, tokens, tool uses, duration) as one dim wrapped
+   line of key value pairs instead of a card of rows. */
+.theme-minimal #transcript :is(.message:is(.tool_use, .tool_result) > .content > .teammate-spawn-card, .message.task-notification > .content > .task-notification-card) {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0 6px;
+    margin: 1px 0 0;
+    padding: 0;
+    border: 0;
+    font: 0.72em/1.7 var(--mono);
+    color: var(--muted);
+}
+
+.theme-minimal #transcript :is(.message:is(.tool_use, .tool_result) > .content > .teammate-spawn-card, .message.task-notification > .content > .task-notification-card) dt {
+    font-size: 1em;
+}
+
+.theme-minimal #transcript :is(.message:is(.tool_use, .tool_result) > .content > .teammate-spawn-card, .message.task-notification > .content > .task-notification-card) dd + dt {
+    margin-left: 8px;
+}

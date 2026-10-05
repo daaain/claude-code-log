@@ -107,6 +107,17 @@ identification and tree building. For every Task tool_result whose
   the notification (not from the sidechain assistant) is what makes
   the fold survive at AGENT where sidechain entries are stripped
   pre-render.
+  The same pass records the notification's `message_index` on
+  `TaskOutput.async_notification_index`. The **minimal theme** shows the
+  answer the other way round: on the notification card (the async
+  branch's merge row, at the time the answer arrived — never ghosted,
+  at any depth), while the spawn's result keeps only the launch line and
+  a `Result ↓` link to it (`.mn-async-jump`; the Agent id row, repeated
+  as the notification's Task ID, is dropped) — with JavaScript folded into
+  the spawn's branch control (P7c). Classic and Markdown
+  output are unchanged. See
+  [minimal-theme.md § 7](minimal-theme.md#7-teammate-anchors-and-results-at-the-merge-row)
+  and [§ 9](minimal-theme.md#9-compact-spawn-rows-and-other-polish-p7c-p8).
 - **Sidechain dedup (HOOK/TOOL only):** when the last sub-assistant
   text matches the notification's `result_text`, drops the duplicate
   from the sidechain tree. No-op at AGENT (sidechain already gone).
@@ -115,7 +126,8 @@ At `RenderingDepth.AGENT` the format-specific renderers honor the flag
 by **ghosting** the duplicate notification — `format_TaskNotificationMessage`
 and `title_TaskNotificationMessage` (in both `HtmlRenderer` and
 `MarkdownRenderer`) return `""` when `self.detail == AGENT and
-content.result_is_duplicate`. The rendering loop's existing
+content.result_is_duplicate` (in `HtmlRenderer`, classic theme only:
+the minimal theme keeps both, as above). The rendering loop's existing
 "skip empty messages" elision (HTML's
 `if title or html or msg.children:` and Markdown's
 `_render_message` returning `""` for no-title-no-content) drops the
@@ -157,7 +169,8 @@ notification card retains its body as the surviving copy.
   TaskOutput poll card HTML.
 - `html/renderer.py::HtmlRenderer.format_TaskNotificationMessage` /
   `title_TaskNotificationMessage` — return `""` at AGENT for
-  duplicate-flagged notifications (ghost mechanism).
+  duplicate-flagged notifications (ghost mechanism); in the minimal
+  theme both keep the notification, title and body.
 - `html/tool_formatters.py::format_task_output` — renders
   `async_final_answer` as a collapsible below the launch stub.
 - `markdown/renderer.py::MarkdownRenderer.format_TaskNotificationMessage` /
@@ -212,7 +225,8 @@ its `workflow_agent` card.
 
 See [workflows.md](workflows.md) for the full as-built reference
 (on-disk layout, parse model, taskId linkage, splice mechanics,
-depth behaviour).
+depth behaviour). In the minimal theme each agent with a transcript is a
+branch lane of its own (§ 6).
 
 ## 5. Nested agent hierarchies (#213)
 
@@ -367,3 +381,67 @@ indent, badge, marker). Note the fixture's agents answer directly with
 no thinking blocks; real sub-agents usually *think* before spawning,
 so an agent's own thinking→spawn nesting renders as an invisible
 0-width passthrough group — only true agent boundaries draw a line.
+
+## 6. Branch lanes (minimal theme)
+
+The minimal HTML theme (`--theme minimal`) lays a transcript out as a
+DAG: sub-agents and rewind forks become **lanes** beside the main line
+(design: [`work/minimal-theme-dag.md`](../work/minimal-theme-dag.md)
+§ 1.6). The DOM keeps the nested tree described above; a format-neutral
+pass, `lanes.annotate_lanes(roots)` in
+[`lanes.py`](../claude_code_log/lanes.py), only labels it. The HTML
+renderer runs it after formatting, **for the minimal theme only**, and
+`html/minimal_theme.lane_attributes` turns the result into `data-*`
+attributes on the cards (classic output never carries them).
+
+| Flavour | Lane | Spawn row | Merge row | Kind |
+|---|---|---|---|---|
+| Sync sub-agent | `agent-<agentId>` | the `Task`/`Agent` tool_use | its paired tool_result | `agent` |
+| Async agent | `agent-<agentId>` | the tool_use | the `<task-notification>` card (`task_id` = agent id, else `spawning_task_message_index`) | `async-agent` |
+| Nested agent (§ 5) | `agent-<agentId>`, `parent_lane` = the spawning agent's lane | the tool_use inside the parent lane | its tool_result inside the parent lane | as above |
+| Teammate (§ 3) | none — the thread stays in its spawner's lane | — | — | recorded as `teammate` so the spawn card can link to the thread's first card |
+| Workflow agent (§ 4) | `wfagent-<agentId>` for an agent card whose side-channel transcript rendered (else none: a plain row); phase and agent cards stay in the Workflow call's lane | the agent's phase card (no phases: the Workflow call's result) | the agent card, once it reports a result | `workflow-agent` |
+
+Membership is the card's own session line: a sidechain card with a
+`{trunk}#agent-<id>` session id is in `agent-<id>`. The spawn anchor
+is found with `renderer.spawned_agent_id_of` — the same
+`spawnedAgentId`-first rule `_relocate_subagent_blocks` uses — and the
+spawn row is that tool_result's `pair_first` (an interrupted spawn with
+no result uses the card the loader stamped). A lane exists only once it
+has a rendered card: a transcript that deduplicated into its spawn pair
+(§ 5.3) or was stripped at a reduced detail level leaves an ordinary
+tool call. Each lane also records its **user turn** (the top-level card
+under the session or branch header that holds the spawn row), its rank
+in that turn by spawn time (the client's "interleave at most three per
+turn" cap) and its stats: `N steps` (rendered cards minus each pair's
+second half), tokens and duration from the notification's `<usage>`
+(async) or the result tail (sync), else the span of the lane's
+timestamps (`"6 steps · 48.4k tokens · 2m 13s"`).
+
+An agent lane **without a merge row** also carries a `state`
+(`data-lane-state`): `ended` when the page proves the agent is over — a
+synchronous agent's parent line (same lane, same session) has a later
+model step or prompt, a `TaskStop` reported the agent stopped, or the lane
+is nested in one that merged or ended — else `open`. The minimal theme
+draws an `open` lane as *running* on a live-served page, with how long it
+has been quiet (a session silent for over a week reads as stopped); see
+[minimal-theme.md § 8](minimal-theme.md#8-live-updates-and-running-lanes).
+
+A **workflow agent** lane's membership is its agent card's subtree (the
+grafted side-channel, `in_workflow_sidechannel`); its stats take the
+snapshot's tokens and duration (`WorkflowAgentMessage.tokens` /
+`.duration_ms`), its name the agent's label. It is ranked and capped in its
+**group** — `<runId>/<phase ordinal>` (`data-lane-group`), the whole run
+without phases — instead of the user turn, so a phase fanning out to many
+agents gets its own `+N more agents` and leaves the turn's other branches
+alone. Without a result it is `ended` once the run's snapshot exists or
+its state is terminal, else `open`. See
+[minimal-theme.md § 1.1](minimal-theme.md#11-workflow-agents).
+
+Rewind forks follow the same model; see
+[dag.md § Branch lanes](dag.md#branch-lanes-minimal-theme). Teammate
+exchanges are linked rather than laned: `lanes.teammate_links` pairs each
+`SendMessage` with the `<teammate-message>` that delivered it (see
+[teammates.md § 6.1](teammates.md#minimal-theme-anchors)). Tests:
+`test/test_lanes.py`.
+

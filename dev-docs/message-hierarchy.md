@@ -103,6 +103,51 @@ The fold bar has two buttons with three possible states:
 - **Sessions and User messages**: Start in **State B** (⏷ ⏵⏵) - first level visible
 - **Assistant, System, Thinking, Tools**: Start in **State A** (⏵ ⏵⏵) - fully folded
 
+### Fold depth (minimal theme)
+
+The minimal theme (`--theme minimal`, work/minimal-theme-dag.md § 1.5)
+adds a toolbar control — **Prompts / Steps / All** — that drives this same
+state machine instead of adding a second one. The minimal template branch
+exports the closure's functions (`window.claudeLogApplyFoldState`,
+`window.claudeLogSyncFoldBar`, `window.claudeLogUpdateDetailsToggle`; the
+classic page doesn't), and `minimal.js` decides, per card, only whether
+the card's **own** `.children` container is shown; every fold bar is then
+re-synced from what the containers actually show, so the icons land on
+states A/B/C by construction.
+
+| Depth | Session / branch headers | Main-lane cards (users, assistants, tools…) | Cards that open a deeper agent's transcript | `<details>` collapsibles |
+|---|---|---|---|---|
+| **Prompts** | shown → B | folded → A (each turn is its prompt + fold-bar line) | folded → A | all closed |
+| **Steps** (default) | shown | shown (C, or B above a folded sub-agent) | folded → A | all closed (previews) |
+| **All** | shown → C | shown → C | shown → C | all open |
+
+"Opens a deeper agent's transcript" = the card's immediate children
+include a `.sidechain` card whose `agent-depth-N` is greater than the
+card's own (non-sidechain cards count as depth 0): the spawning
+`tool_result` of a Task/Agent (sync, async, teammate) or a workflow agent
+card. Steps keeps their containers folded, but on a page where the DAG
+engine runs (`minimal_dag.js`, [minimal-theme.md](minimal-theme.md)) a
+**sub-agent lane's** container is shown or hidden by the toolbar's
+**Branches** mode instead, at every depth (spec § 1.5: sub-agent subtrees
+follow the Branches mode, not the fold depth) — the engine forces it with
+`dag-entry` / `dag-hidden` and hides that card's fold bar. A workflow agent
+card's transcript is a lane too (minimal-theme.md § 1.1). Containers that
+are not lanes (teammate threads, workflow phase groups) keep following the
+depth. Without JavaScript nothing folds at all.
+
+- **When.** The stored depth (`localStorage` `claude-code-log:fold-depth`,
+  default `steps`) is applied right after `setInitialFoldState()`, before
+  the hash / `?uuid=` deep links and the search component's `?q=` reveal
+  their targets, so a link always wins over the depth.
+- **Overrides.** A fold-bar click (or the 📋 open/close-all) changes the
+  page locally and clears the segment's `on` (every button
+  `aria-pressed="false"`) until a depth is chosen again, which re-applies
+  it everywhere. Opening a single preview does not clear it.
+- **Live updates.** On a rehydrate, the current depth is applied only to
+  cards new in that update (`live-new`) and, on the patch path, to a card
+  whose `.children` container arrived with it (its first children); the
+  fold state the swap restored, and every hand override, is left alone.
+
 ## Example Flow
 
 **Starting from State A (fully folded):**

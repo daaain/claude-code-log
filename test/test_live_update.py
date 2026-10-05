@@ -12,23 +12,25 @@ import json
 import os
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
 
 from claude_code_log.converter import process_projects_hierarchy
 from claude_code_log.watch import WatchEngine
+from test.conftest import collect_page_errors
 
 SESSION_ID = "dddddddd-eeee-ffff-0000-111111111111"
 
 
-def _entry(uuid: str, text: str) -> str:
+def _entry(uuid: str, text: str, parent: str | None = None) -> str:
     return (
         json.dumps(
             {
                 "type": "user",
                 "timestamp": "2026-08-30T21:00:00Z",
-                "parentUuid": None,
+                "parentUuid": parent,
                 "isSidechain": False,
                 "userType": "human",
                 "cwd": "/tmp/live",
@@ -43,6 +45,67 @@ def _entry(uuid: str, text: str) -> str:
         )
         + "\n"
     )
+
+
+def _reply(uuid: str, text: str, parent: str) -> str:
+    """An assistant answer to ``parent`` — a second message type, so a
+    type filter has something to hide and something to leave."""
+    return (
+        json.dumps(
+            {
+                "type": "assistant",
+                "timestamp": "2026-08-30T21:00:01Z",
+                "parentUuid": parent,
+                "isSidechain": False,
+                "userType": "external",
+                "cwd": "/tmp/live",
+                "sessionId": SESSION_ID,
+                "version": "1.0.0",
+                "uuid": uuid,
+                "requestId": f"req-{uuid}",
+                "message": {
+                    "id": f"msg-{uuid}",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-test",
+                    "content": [{"type": "text", "text": text}],
+                    "stop_reason": "end_turn",
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 1, "output_tokens": 1},
+                },
+            }
+        )
+        + "\n"
+    )
+
+
+@contextmanager
+def _served(projects: Path, theme: str = "classic"):
+    """Serve ``projects`` with a watcher re-rendering it on every change."""
+    process_projects_hierarchy(projects, silent=True, theme=theme)
+
+    from claude_code_log.server import ArchiveServer
+
+    engine = WatchEngine(
+        [projects],
+        lambda _paths: process_projects_hierarchy(projects, silent=True, theme=theme),
+        quiet_period=0.1,
+        max_latency=0.5,
+        poll_interval=0.05,
+        on_error=lambda exc: pytest.fail(f"watch conversion failed: {exc!r}"),
+    )
+    engine.prime()
+    stop = threading.Event()
+    thread = engine.run_in_thread(stop)
+
+    server = ArchiveServer(projects, port=0)
+    server.start()
+    try:
+        yield server.url
+    finally:
+        stop.set()
+        thread.join(timeout=10)
+        server.stop()
 
 
 @pytest.fixture
@@ -61,30 +124,30 @@ def live_archive(tmp_path: Path):
         ),
         encoding="utf-8",
     )
-    process_projects_hierarchy(projects, silent=True)
+    with _served(projects) as url:
+        yield url, project, jsonl
 
-    from claude_code_log.server import ArchiveServer
 
-    engine = WatchEngine(
-        [projects],
-        lambda _paths: process_projects_hierarchy(projects, silent=True),
-        quiet_period=0.1,
-        max_latency=0.5,
-        poll_interval=0.05,
-        on_error=lambda exc: pytest.fail(f"watch conversion failed: {exc!r}"),
-    )
-    engine.prime()
-    stop = threading.Event()
-    thread = engine.run_in_thread(stop)
-
-    server = ArchiveServer(projects, port=0)
-    server.start()
-    try:
-        yield server.url, project, jsonl
-    finally:
-        stop.set()
-        thread.join(timeout=10)
-        server.stop()
+@pytest.fixture(params=["classic", "minimal"])
+def conversation_archive(request: pytest.FixtureRequest, tmp_path: Path):
+    """Like ``live_archive``, in either theme, with prompts and answers;
+    every sixth prompt mentions ``needle`` (a search target)."""
+    projects = tmp_path / "projects"
+    project = projects / "-tmp-live"
+    project.mkdir(parents=True)
+    jsonl = project / f"{SESSION_ID}.jsonl"
+    lines = []
+    for i in range(24):
+        needle = "needle " if i % 6 == 0 else ""
+        lines.append(
+            _entry(f"q-{i}", f"seed question {i} {needle}" + ("padding " * 40))
+        )
+        lines.append(
+            _reply(f"a-{i}", f"seed answer {i} " + ("padding " * 40), f"q-{i}")
+        )
+    jsonl.write_text("".join(lines), encoding="utf-8")
+    with _served(projects, request.param) as url:
+        yield url, project, jsonl
 
 
 def _wait_for(page, expression: str, timeout: int = 30000) -> None:
@@ -695,3 +758,161 @@ class TestLiveUpdate:
         assert follow.count() == 1
         assert "live-active" not in (follow.get_attribute("class") or "")
         assert not follow.is_visible()
+
+
+# The cards a live update brought, by `data-uuid` (both themes render it).
+_CARD = "document.querySelector('#transcript .message[data-uuid=\"{}\"]')"
+
+
+@pytest.mark.browser
+class TestLiveUpdateKeepsFilterAndSearch:
+    """A live update brings the server's markup: no ``filtered-hidden`` and
+    none of the search's classes. The page re-applies an active filter and
+    re-runs an active search over it, once per update — on a patch and on
+    the wholesale swap — in both themes, and quietly: nothing scrolls,
+    unfolds or opens under the reader (dev-docs/minimal-theme.md § 11)."""
+
+    def _open(self, page, base: str, project: Path) -> list[str]:
+        """Like ``TestLiveUpdate._open``, but a dropped live-update poll is
+        not an error (see ``collect_page_errors``)."""
+        url = f"{base}/{project.name}/session-{SESSION_ID}.html"
+        errors = collect_page_errors(page, url)
+        page.goto(url)
+        page.wait_for_selector("#transcript")
+        return errors
+
+    _TAG_CARDS = TestLiveUpdate._TAG_CARDS
+    _COUNT_TAGGED = TestLiveUpdate._COUNT_TAGGED
+
+    def _prepare_route(self, page, jsonl: Path, route: str) -> None:
+        """One update first (the first one after load swaps: the page has no
+        card hashes yet), then tag every card, and for ``swap`` renumber one
+        so the next update cannot patch (as in
+        ``test_the_swap_is_the_fallback_when_the_ids_move``)."""
+        self._arrive(page, jsonl, _entry("warm-up", "WARM-UP"), wait_for="warm-up")
+        page.evaluate(self._TAG_CARDS)
+        if route == "swap":
+            page.evaluate(
+                "() => { const els = [...document.querySelectorAll('#transcript .message')];"
+                " els[Math.floor(els.length / 2)].id = 'msg-d-999999'; }"
+            )
+
+    def _check_route(self, page, route: str) -> None:
+        kept = page.evaluate(self._COUNT_TAGGED)["kept"]
+        if route == "swap":
+            assert kept == 0, "the update patched: the swap was not exercised"
+        else:
+            assert kept > 0, "every card was rebuilt: the patch did not run"
+
+    def _arrive(self, page, jsonl: Path, *entries: str, wait_for: str) -> None:
+        with jsonl.open("a", encoding="utf-8") as f:
+            f.write("".join(entries))
+        _wait_for(page, f"() => !!{_CARD.format(wait_for)}")
+
+    @pytest.mark.parametrize("route", ["patch", "swap"])
+    def test_a_filter_hides_what_an_update_brings(
+        self, page, conversation_archive, route: str
+    ) -> None:
+        base, project, jsonl = conversation_archive
+        errors = self._open(page, base, project)
+        page.click("#filterMessages")
+        page.click('.filter-toggle[data-type="assistant"]')
+        _wait_for(
+            page,
+            "() => [...document.querySelectorAll('#transcript .message.assistant')]"
+            ".every(el => el.classList.contains('filtered-hidden'))",
+        )
+        self._prepare_route(page, jsonl, route)
+
+        self._arrive(
+            page,
+            jsonl,
+            _entry("q-new", "FILTER-QUESTION"),
+            _reply("a-new", "FILTER-ANSWER", "q-new"),
+            wait_for="a-new",
+        )
+        self._check_route(page, route)
+        _wait_for(
+            page,
+            f"() => {_CARD.format('a-new')}.classList.contains('filtered-hidden')",
+            timeout=5000,
+        )
+        state = page.evaluate(
+            "() => ({"
+            " shownAnswers: [...document.querySelectorAll('#transcript .message.assistant')]"
+            "   .filter(el => el.checkVisibility()).map(el => el.id),"
+            f" question: {_CARD.format('q-new')}.checkVisibility(),"
+            " hiddenQuestions: document.querySelectorAll("
+            "   '#transcript .message.user.filtered-hidden').length,"
+            " count: document.querySelector('.filter-toggle[data-type=\"assistant\"] .count')"
+            "   .textContent })"
+        )
+        assert state["shownAnswers"] == [], "an answer shows although filtered out"
+        assert state["question"], "the filter hid a prompt it lets through"
+        assert state["hiddenQuestions"] == 0
+        assert state["count"] == "(0/25)", "the toggle's count missed the update"
+        assert errors == []
+
+    @pytest.mark.parametrize("route", ["patch", "swap"])
+    def test_a_search_is_rerun_quietly_over_what_an_update_brings(
+        self, page, conversation_archive, route: str
+    ) -> None:
+        base, project, jsonl = conversation_archive
+        errors = self._open(page, base, project)
+        page.click("#filterMessages")
+        page.fill("#searchInput", "needle")
+        _wait_for(
+            page,
+            "() => document.querySelectorAll('.message.search-match').length === 4",
+        )
+        # Make the last match the current one: a search re-run that is not
+        # quiet scrolls back to it (and a re-run from scratch to the first).
+        for _ in range(3):
+            page.press("#searchInput", "Enter")
+        page.wait_for_timeout(800)  # the smooth scroll lands
+        assert page.evaluate(
+            "document.getElementById('searchResultCount').textContent"
+        ).startswith("4 of 4")
+        page.evaluate("window.scrollTo({top: 0, behavior: 'instant'})")
+        assert page.evaluate("window.scrollY") == 0
+        matches = page.evaluate(
+            "[...document.querySelectorAll('.message.search-match')].map(el => el.dataset.uuid)"
+        )
+        self._prepare_route(page, jsonl, route)
+        page.wait_for_timeout(800)
+        assert page.evaluate("window.scrollY") == 0, "the warm-up update moved the page"
+
+        self._arrive(
+            page,
+            jsonl,
+            _entry("q-new", "SEARCH-QUESTION mentions the needle"),
+            _reply("a-new", "SEARCH-ANSWER does not", "q-new"),
+            wait_for="a-new",
+        )
+        self._check_route(page, route)
+        _wait_for(
+            page,
+            f"() => {_CARD.format('q-new')}.classList.contains('search-match')"
+            f" && {_CARD.format('a-new')}.classList.contains('search-hidden')",
+            timeout=5000,
+        )
+        page.wait_for_timeout(800)  # a stray (smooth) scroll would have landed
+        state = page.evaluate(
+            "() => ({"
+            " matches: [...document.querySelectorAll('.message.search-match')]"
+            "   .map(el => el.dataset.uuid),"
+            " shownUnmatched: [...document.querySelectorAll("
+            "   '#transcript .message:not(.session-header):not(.search-match)')]"
+            "   .filter(el => el.checkVisibility()).map(el => el.id),"
+            " highlighted: !!document.querySelector("
+            "   '#transcript .message[data-uuid=\"q-new\"] .search-highlight'),"
+            " count: document.getElementById('searchResultCount').textContent,"
+            " scrollY: window.scrollY })"
+        )
+        assert state["matches"] == matches + ["q-new"]
+        assert state["shownUnmatched"] == [], "the search let a non-match through"
+        assert state["highlighted"], "the new match is not highlighted"
+        # The current match is still the one the reader chose.
+        assert state["count"].startswith("4 of 5"), state["count"]
+        assert state["scrollY"] == 0, "the refresh moved the page"
+        assert errors == []

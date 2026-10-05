@@ -33,8 +33,10 @@ claude_code_log/
 │   ├── assistant_factory.py
 │   ├── tool_factory.py
 │   └── system_factory.py
+├── lanes.py            # Branch lanes (sub-agents, forks) for the minimal theme
 ├── html/               # HTML-specific rendering
 │   ├── renderer.py
+│   ├── minimal_theme.py  # Minimal theme helpers (gutter, call line, lane attributes)
 │   ├── user_formatters.py
 │   ├── assistant_formatters.py
 │   ├── system_formatters.py
@@ -46,7 +48,8 @@ claude_code_log/
     ├── transcript.html
     ├── index.html
     └── components/
-        └── timeline.html
+        ├── timeline.html
+        └── minimal/    # The minimal theme's CSS and JS (incl. the DAG engine)
 
 scripts/                # Development utilities
 test/test_data/         # Representative JSONL samples
@@ -240,6 +243,13 @@ uv run pyright
 uv run ty check
 ```
 
+The minimal theme's dark syntax-highlighting sheet
+(`claude_code_log/html/templates/components/minimal/pygments_dark.css`) is
+generated — don't edit it by hand. After a Pygments upgrade or a change to
+`pygments_styles.css`, regenerate it with
+`uv run python scripts/generate_minimal_pygments_css.py`; a unit test fails
+while the committed file differs from the script's output.
+
 ### Whitespace
 
 An [`.editorconfig`](.editorconfig) at the repo root defines the baseline —
@@ -415,8 +425,9 @@ Key points:
   `BINDINGS` for the keybindings tables (`scripts/generate_tui_docs.py`) and
   captures SVG screenshots of the running TUI
   (`scripts/generate_tui_screenshots.py`). Both scripts are runnable standalone.
-- **Example output** (`example.md` + `examples/transcript.html`) is rendered at
-  build time from a bundled sample project
+- **Example output** (`example.md` + `examples/transcript.html`, and the same
+  transcript in the minimal theme as `examples/transcript-minimal.html`) is
+  rendered at build time from a bundled sample project
   (`scripts/generate_example_output.py`, also `just example`) — no private data
   or release asset involved. Generation is fault-tolerant so a render hiccup
   can't block the build.
@@ -429,12 +440,74 @@ Key points:
   build; pushes to `main` deploy to Pages. The repo's **Settings → Pages →
   Source** must be set to **GitHub Actions** (one-time).
 
+### Demo videos
+
+The README's overview video and the docs site's
+[Demo videos](docs/demos.md) page are recorded by a script, so they can be
+re-recorded whenever the UI changes:
+
+```bash
+just demos                     # record every scene into .demos/ (~6 min)
+just demos --only branches     # re-record one scene (chapter and beat)
+just demos --list              # the scenes
+just demos --publish           # record, then update docs/assets/demos/ + docs/demos.md
+```
+
+`scripts/demos/record.py` drives Chromium through each **scene** with
+Playwright: captions, title cards, a cursor and fades are drawn by an
+overlay injected into the page (`director.py`), frames come from a Chrome
+DevTools screencast, and ffmpeg (from the `demos` dependency group's
+`imageio-ffmpeg` wheel) encodes the clips and cross-fades them into the
+supercut and the walkthrough. The data is synthetic and committed
+(`scripts/demos/demo_data.py`, plus the live chapter's
+`test/dag_live_fixture.py`), served by the real `claude-code-log serve`, so
+the videos re-record identically anywhere. To show a new feature, add a
+`@scene` and list it in `CHAPTERS` or `SUPERCUT`.
+
+The README embeds the supercut as a GitHub upload: after `--publish`, drag
+`docs/assets/demos/supercut.mp4` into the README editor on GitHub and
+replace the old attachment link.
+
 ## Architecture
 
 Start with [dev-docs/application_model.md](dev-docs/application_model.md)
 for the system overview (subsystems, data lifecycle, glossary). For
 the rendering pipeline specifically, see
 [dev-docs/rendering-architecture.md](dev-docs/rendering-architecture.md).
+
+### Themes
+
+HTML output has two themes, `classic` (the default) and `minimal`,
+selected with `--theme` or `CLAUDE_CODE_LOG_THEME`; `default` resolves
+through `utils.DEFAULT_THEME`, so changing the default is a one-line
+change. The user guide is [docs/themes.md](docs/themes.md); the as-built
+reference for the minimal theme — where its parts live, the branch
+(DAG) engine, previews, live updates, performance — starts at
+[dev-docs/minimal-theme.md](dev-docs/minimal-theme.md). Two rules hold
+for every change:
+
+- **Classic message markup stays byte-identical.** Minimal-only
+  template additions are glued inline (`{% if minimal %}…{% endif %}`,
+  no new lines outside the conditional) and minimal-only formatter
+  behaviour is behind `normalize_theme(self.theme) == "minimal"`, so a
+  minimal change never moves a classic message's markup. The embedded
+  CSS and JS the themes share (filter, search, timeline, live update)
+  may change, but only deliberately: say so in the commit, and check at
+  block level (after `just update-snapshot`) that every changed classic
+  line is in `<style>`/`<script>`. The minimal theme's introduction did
+  exactly this once — its shared filter/search/live-update hooks grew
+  classic pages by ~10KB and fixed three timeline behaviours (the Tool
+  toggle governing both tool groups, hiding items whose card is
+  filtered out, `getBoundingClientRect` scrolling) — with no message
+  markup changed.
+- **Timeline and filter parity in every branch mode.** The browser
+  sweep in `test/test_minimal_parity_browser.py` checks every filter
+  toggle × fold depth × branch mode with the timeline open, search and
+  live updates included; extend it when adding a message type.
+
+To compare how long a page takes to load and lay out in each theme, run
+`uv run python scripts/bench_page_load.py` (the minimal theme lays the
+transcript out once, as the DAG grid — dev-docs/minimal-theme.md § 5).
 
 ### Data Flow Overview
 

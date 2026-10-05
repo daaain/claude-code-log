@@ -117,7 +117,11 @@ def format_taskoutput_output(output: TaskOutputResult) -> str:
 # ---------------------------------------------------------------------------
 
 
-def format_task_notification_content(content: TaskNotificationMessage) -> str:
+def format_task_notification_content(
+    content: TaskNotificationMessage,
+    include_duplicate: bool = False,
+    preview: bool = False,
+) -> str:
     """Render a ``<task-notification>`` user entry as a metadata card +
     collapsible Markdown body for ``<result>``.
 
@@ -125,7 +129,11 @@ def format_task_notification_content(content: TaskNotificationMessage) -> str:
     (``🔄 Async result • <summary>``). When the renderer's Phase 3
     pass (`_link_async_notifications`) flagged the body as a duplicate
     of the spawning Task's last sidechain sub-assistant, the body
-    collapses to a backlink-only stub instead of doubling the content.
+    collapses to a backlink-only stub instead of doubling the content —
+    unless ``include_duplicate`` (the minimal theme, which shows the answer
+    here, at the async branch's merge row, and not on the spawn). The
+    minimal theme also asks for ``preview``: a Markdown answer longer than a
+    few lines is a two-line preview (``utils.render_markdown_preview``).
     """
     rows: list[str] = []
     if content.task_id:
@@ -168,8 +176,10 @@ def format_task_notification_content(content: TaskNotificationMessage) -> str:
             f'<dl class="teammate-tool-card task-notification-card">'
             f"{''.join(rows)}</dl>"
         )
-    if content.result_text and not content.result_is_duplicate:
+    if content.result_text and (include_duplicate or not content.result_is_duplicate):
         parts.append(
-            render_async_result_body(content.result_text, "task-notification-result")
+            render_async_result_body(
+                content.result_text, "task-notification-result", preview=preview
+            )
         )
     return "".join(parts)

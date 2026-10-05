@@ -368,6 +368,44 @@ HTML formatters are split by message category:
 | [tool_formatters.py](../claude_code_log/html/tool_formatters.py) | Tool inputs/outputs | `format_bash_input()`, `format_read_output()`, etc. |
 | [utils.py](../claude_code_log/html/utils.py) | Shared utilities | `render_markdown()`, `escape_html()`, `CSS_CLASS_REGISTRY` |
 
+### Theme branches in `transcript.html`
+
+`HtmlRenderer._generate_inner` passes the resolved theme name
+(`classic`/`minimal`) as `theme`; line 1 of `transcript.html` sets
+`minimal = theme == 'minimal'`. Every minimal-only addition is an
+`{% if minimal %}…{% endif %}` glued to an existing line — the Jinja
+environment has no `trim_blocks`, so a conditional on its own line would
+add a newline to classic message markup, which must stay byte-identical. The
+minimal branch adds the minimal stylesheets and `theme_init.js` to the
+head, the `<body>` class, the page header and sticky toolbar
+(`components/minimal/header.html`, which carries the classic floating
+buttons instead of the bottom stack), the `.mn-stage` wrapper, the gutter
+spans in each card's header, and `minimal.js` at the end of the body.
+Two shared regions take a full `{% if minimal %}…{% else %}…{% endif %}`
+instead of an inline addition: each card's title span (minimal splits it
+into a hidden `.mn-tn` prefix and the visible call line,
+`minimal_theme.call_title`) and a non-branch session header's title
+(`minimal_theme.session_header`); the `else` arm is the classic markup
+verbatim.
+Formatter output is untouched (the fragment store is theme-independent);
+the gutter strings come from template-only helpers in
+[html/minimal_theme.py](../claude_code_log/html/minimal_theme.py),
+registered as `mn_*` Jinja globals. CSS classes and token reference:
+[css-classes.md § Minimal Theme](css-classes.md#minimal-theme-theme-minimal).
+
+`index.html` and `archive_search.html` branch the same way (both receive
+`theme` — `HtmlRenderer.generate_projects_index`,
+`generate_archive_search_html(theme)` — and set `minimal` on line 1):
+minimal styles and `scheme_init.js` in a second `<style>` / `<script>`
+after the classic ones, the `<body>` class, a header carrying the shared
+colour-scheme toggle, and `pages.js` at the end. The index swaps whole
+regions with `{% if not minimal %}…{% endif %}` (the summary cards) or an
+inline `{% if minimal %}…{% else %}…{% endif %}` (each project:
+`components/minimal/index_rows.html`'s `mn_project_row` instead of
+`render_project_card`); the search page swaps its result renderer
+(`mnRenderGroups`, `components/minimal/search_rows.js`, included inside
+the page's script). [minimal-theme.md § 13](minimal-theme.md#13-project-index-and-archive-search).
+
 ---
 
 ## 9. CSS Class Derivation

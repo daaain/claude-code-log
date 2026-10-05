@@ -324,3 +324,8 @@ clear-cache:
     just cli --clear-html
 
 regen-all: backup render-test-data style-guide cli example
+
+# Re-record the demo videos (scripts/demos/record.py) into .demos/;
+# e.g. `just demos --only branches`, or `just demos --publish` to update the docs
+demos *ARGS:
+    uv run --group demos python scripts/demos/record.py {{ARGS}}

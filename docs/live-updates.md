@@ -53,6 +53,31 @@ tracking the live session until you restart. Their "View All Sessions"
 back-link keeps working throughout — it points at a page that exists and
 is still served, just one that stopped growing.
 
+Sub-agents update while they run, not only when they finish: a
+synchronous agent's transcript grows in its own file while the session
+waits for it, and each tick picks that up. With `--theme minimal` (see
+[Themes](themes.md)) the branch layout follows along — lanes you interleaved or put in a column
+stay that way across updates, a sub-agent that has not returned yet is
+drawn as **running** (its lane carries on to the newest message with an
+open end and a pulsing *running* label) and turns into an ordinary merge
+when its result arrives, and a rewind adds its fork lane without moving
+the main line. An agent waiting on something slow — a background process,
+a watcher — keeps reading as running however long it takes; once it has
+been silent for a minute its label says for how long (*running · quiet
+42m*). "Running" needs a live page: a page opened from `file://` (or a
+session nothing has moved in for over a week) shows such an agent as
+having ended without a result instead, and so does one the session
+stopped with `TaskStop`.
+
+In either theme, a message-type filter or a search you have set also
+applies to messages as they arrive, without moving you to the newest
+match.
+
+To follow the **combined** page live as well, run `claude-code-log watch
+--combined yes` (with the same `--theme`) beside `serve`: the server
+serves whatever is on disk, and that watch keeps the combined page
+current.
+
 This works only over the server. A page opened from `file://` cannot
 fetch anything at all — not even itself — so it stays static, exactly as
 before. Nothing about the generated HTML changes.
@@ -84,9 +109,15 @@ page notices on its next poll.
 | `--max-latency` | `2.0` | Convert anyway after this long, so a long unbroken stream still surfaces |
 | `--all-projects` | off | Watch the whole archive instead of one project |
 | `--combined` | `no` | `no` keeps ticks cheap: only the changed session is regenerated |
+| `--theme` | `$CLAUDE_CODE_LOG_THEME`, else `default` | HTML theme: `classic` (current look), `minimal`, or `default` (the built-in default, currently `classic`). Also on `serve` |
 
 Raise `--quiet-period` if conversions feel too frequent on a large
 project; lower `--interval` if you want changes noticed sooner.
+
+Switching `--theme` rewrites every page in the new theme on the first
+tick — including a combined page that `--combined no` would otherwise
+leave alone, so its session pages never link back into a page of the
+other theme. Later ticks are cheap again.
 
 ## Cost
 

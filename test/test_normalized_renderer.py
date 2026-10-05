@@ -41,6 +41,7 @@ def test_normalized_renderer_dispatches_options_title_and_creates_parent(
         compact=True,
         no_timestamps=True,
         no_recaps=True,
+        theme="minimal",
     )
 
     assert returned == output
@@ -53,6 +54,8 @@ def test_normalized_renderer_dispatches_options_title_and_creates_parent(
                 "compact": True,
                 "no_timestamps": True,
                 "no_recaps": True,
+                # Forwarded as given; get_renderer resolves it per format.
+                "theme": "minimal",
             },
         )
     ]

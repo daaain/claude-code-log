@@ -1,0 +1,776 @@
+/* Minimal theme (--theme minimal): the project index (index.html) and the
+   archive search page (archive_search.html). Included after the classic
+   stylesheets, tokens.css and chrome.css (page, header, toolbar, segmented
+   control); every rule is scoped under body.mn-page. The transcript pages
+   never include it. */
+
+.mn-page {
+    /* Gutter of a session row (index) and a search hit: a date, not just a
+       time of day as on a transcript, so wider than --gut. */
+    --mn-dgut: 74px;
+}
+
+.mn-page .mn-title-row .mn-seg {
+    align-self: center;
+}
+
+.mn-page h1 {
+    text-align: left;
+}
+
+.mn-page code {
+    padding: 0 3px;
+    border-radius: 3px;
+    background: var(--code);
+    font: 0.92em var(--mono);
+}
+
+.mn-page pre {
+    background: var(--code);
+    color: var(--fg);
+}
+
+.mn-page kbd {
+    padding: 0 4px;
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    font: 0.85em var(--mono);
+}
+
+/* A date range or a gutter localised by pages.js. */
+.mn-page .mn-when {
+    white-space: nowrap;
+}
+
+/* ---------------------------------------------------- search fields */
+
+/* The session finder (index) and the archive query (search page). */
+.mn-page .search-input-wrapper {
+    gap: 0;
+}
+
+.mn-page .search-input,
+.mn-page .search-input:focus {
+    height: 30px;
+    padding: 0 60px 0 10px;
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--fg);
+    box-shadow: none;
+    font: 0.9em var(--sans);
+}
+
+.mn-page .search-input:focus {
+    border-color: var(--muted);
+    outline: none;
+}
+
+.mn-page .search-hint {
+    right: 34px;
+    padding: 0 4px;
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    font: 0.72em/1.4 var(--mono);
+    color: var(--muted);
+}
+
+.mn-page .search-clear {
+    right: 4px;
+    padding: 2px 6px;
+    font-size: 14px;
+    color: var(--muted);
+}
+
+.mn-page .search-clear:hover {
+    background: var(--code);
+    color: var(--fg);
+}
+
+.mn-page input[type="checkbox"] {
+    accent-color: var(--fg);
+}
+
+.mn-page .search-highlight,
+.mn-page .search-result-excerpt .search-highlight {
+    padding: 0 1px;
+    border-radius: 2px;
+    background: color-mix(in srgb, var(--warn) 38%, transparent);
+    color: inherit;
+    font-weight: inherit;
+}
+
+.mn-page .search-no-results {
+    padding: 10px 0;
+    background: none;
+    text-align: left;
+    font: 0.8em var(--mono);
+    color: var(--muted);
+}
+
+/* ============================================================ index */
+
+/* The finder bar: the session finder, the link to archive search. Sticky,
+   like a transcript's toolbar; the finder's results open under it. */
+.mn-index .mn-finder {
+    gap: 6px 14px;
+    padding: 6px 0;
+}
+
+.mn-index .search-container {
+    flex: 1 1 22em;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 12px;
+    min-width: 0;
+}
+
+.mn-index .search-container .search-input-wrapper {
+    flex: 1 1 14em;
+    min-width: 0;
+}
+
+.mn-index .search-results-info.visible {
+    margin: 0;
+    font: 0.72em var(--mono);
+    color: var(--muted);
+}
+
+/* The finder has no "current match" on the index: results are a list. */
+.mn-index .search-nav-btn {
+    display: none;
+}
+
+.mn-index .search-options {
+    margin: 0;
+    gap: 10px;
+    font-size: 0.75em;
+}
+
+.mn-index .search-option {
+    gap: 4px;
+    color: var(--muted);
+}
+
+.mn-index .search-option:hover {
+    color: var(--fg);
+}
+
+/* "Search only visible" narrows a transcript's search to the cards its
+   filter shows; the index has no filter. */
+.mn-index .search-option:has(#searchInFiltered) {
+    display: none;
+}
+
+.mn-index .mn-archive-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.82em;
+    white-space: nowrap;
+    text-decoration: none;
+}
+
+.mn-index .mn-archive-link::before {
+    content: "";
+    width: 13px;
+    height: 13px;
+    background-color: currentColor;
+    -webkit-mask: var(--mn-icon) center / 13px 13px no-repeat;
+    mask: var(--mn-icon) center / 13px 13px no-repeat;
+    --mn-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round'%3E%3Ccircle cx='7' cy='7' r='4.5'/%3E%3Cpath d='M10.5 10.5 14 14M5 7h4M7 5v4'/%3E%3C/svg%3E");
+}
+
+/* The finder's results: a list under the bar, not a card. Last in the
+   bar, whatever the markup order, so the archive link stays on the
+   finder's line. */
+.mn-index .search-results-panel.visible {
+    order: 10;
+    flex: 1 1 100%;
+    max-height: min(60vh, 560px);
+    overflow-y: auto;
+    margin: 0;
+    padding: 4px 0 2px;
+    border: 0;
+    border-top: 1px solid var(--rule);
+    border-radius: 0;
+    background: var(--bg);
+    box-shadow: none;
+}
+
+.mn-index .search-results-header {
+    margin: 0 0 4px;
+    padding: 0;
+    border: 0;
+}
+
+.mn-index .search-results-title {
+    font: 0.72em var(--mono);
+    color: var(--muted);
+}
+
+.mn-index .search-close-btn {
+    padding: 0 6px;
+    font-size: 14px;
+    border-radius: 4px;
+}
+
+.mn-index .search-close-btn:hover {
+    background: var(--code);
+}
+
+.mn-index .search-result-group {
+    margin: 0 0 8px;
+}
+
+.mn-index .search-result-group-title {
+    margin: 0 0 2px;
+    font-size: 0.85em;
+    color: var(--fg);
+}
+
+.mn-index .search-result-item {
+    margin: 0;
+    padding: 3px 8px;
+    border: 0;
+    border-radius: 4px;
+    background: none;
+    box-shadow: none;
+    transition: none;
+}
+
+.mn-index .search-result-item:hover {
+    background: var(--code);
+    box-shadow: none;
+    transform: none;
+}
+
+.mn-index .search-result-session,
+.mn-index .search-result-meta {
+    margin: 0;
+    padding: 0;
+    border: 0;
+    font: 0.7em/1.6 var(--mono);
+    color: var(--muted);
+}
+
+.mn-index .search-result-excerpt {
+    font-size: 0.85em;
+    color: var(--fg);
+}
+
+/* ---------------------------------------------------- project rows */
+
+.mn-index .mn-projects {
+    display: block;
+    margin-top: 4px;
+}
+
+.mn-index .project-card.mn-project {
+    padding: 0;
+    border: 0;
+    border-bottom: 1px solid var(--rule);
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+    transform: none;
+    transition: none;
+}
+
+.mn-index .project-card.mn-project:hover {
+    box-shadow: none;
+    transform: none;
+}
+
+.mn-index .project-card.mn-project.archived {
+    opacity: 0.72;
+    background: none;
+}
+
+/* One line: chevron, name, then the dim metadata pushed right. */
+.mn-index .mn-prow {
+    position: relative;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    column-gap: 14px;
+    row-gap: 0;
+    padding: 7px 4px 7px 20px;
+    list-style: none;
+}
+
+.mn-index summary.mn-prow {
+    cursor: pointer;
+}
+
+.mn-index summary.mn-prow::-webkit-details-marker {
+    display: none;
+}
+
+.mn-index summary.mn-prow:hover {
+    background: var(--code);
+}
+
+.mn-index summary.mn-prow:focus-visible {
+    outline: 2px solid var(--muted);
+    outline-offset: -2px;
+}
+
+.mn-index summary.mn-prow::before {
+    content: "";
+    position: absolute;
+    left: 6px;
+    top: calc(7px + 0.55em);
+    width: 5px;
+    height: 5px;
+    border-right: 1.5px solid var(--muted);
+    border-bottom: 1.5px solid var(--muted);
+    transform: rotate(-45deg);
+}
+
+.mn-index details[open] > summary.mn-prow::before {
+    transform: rotate(45deg);
+    top: calc(7px + 0.4em);
+}
+
+.mn-index .mn-prow .project-name {
+    min-width: 0;
+    margin: 0;
+    font-size: 0.95em;
+    font-weight: 600;
+    word-break: normal;
+    overflow-wrap: anywhere;
+}
+
+.mn-index .mn-prow .project-name a {
+    color: var(--fg);
+    text-decoration: none;
+}
+
+.mn-index .mn-prow .project-name a:hover {
+    color: var(--note);
+    text-decoration: underline;
+}
+
+.mn-index .mn-prow .archived-badge {
+    margin-left: 8px;
+    padding: 0 6px;
+    background: transparent;
+    color: var(--muted);
+    font: 500 0.72em/1.6 var(--mono);
+    letter-spacing: 0;
+    text-transform: none;
+    vertical-align: baseline;
+}
+
+.mn-index .mn-prow .project-stats.mn-pmeta {
+    display: inline;
+    margin-left: auto;
+    font: 0.72em/1.6 var(--mono);
+    color: var(--muted);
+}
+
+.mn-index .mn-pextra {
+    flex: 1 1 100%;
+    margin: 0;
+    font: 0.72em/1.6 var(--mono);
+    color: var(--muted);
+}
+
+.mn-index .mn-pextra code {
+    font-size: 1em;
+}
+
+.mn-index .project-variants .variant-link {
+    margin: 0 6px 0 0;
+    padding: 0 5px;
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    color: var(--muted);
+}
+
+.mn-index .project-variants .variant-link:hover {
+    background: var(--code);
+    color: var(--fg);
+}
+
+/* ---------------------------------------------------- session rows */
+
+/* A project's sessions, in a transcript's row language: [gutter: date,
+   time] [rail: a user-coloured dot on a continuous hairline] [title,
+   first prompt, dim meta]. The hairline is each row's background, so
+   consecutive rows draw one line. */
+.mn-index .mn-sessions {
+    padding: 0 0 8px 6px;
+}
+
+.mn-page :is(.mn-srow, .mn-hit > a) {
+    display: grid;
+    grid-template-columns: var(--mn-dgut) var(--rail) minmax(0, 1fr);
+    padding: 3px 0;
+    border: 0;
+    border-radius: 4px;
+    background: linear-gradient(var(--rule), var(--rule)) no-repeat
+        calc(var(--mn-dgut) + var(--rail) / 2 - 0.5px) 0 / 1px 100%;
+    color: var(--fg);
+    text-decoration: none;
+    transition: none;
+}
+
+.mn-page :is(.mn-srow, .mn-hit > a):hover {
+    background-color: var(--code);
+}
+
+.mn-page :is(.mn-srow, .mn-hit > a):focus-visible {
+    outline: 2px solid var(--muted);
+    outline-offset: -2px;
+}
+
+/* A transcript's hairline (layout.css) between consecutive rows, across
+   the content column only, so the rail stays one unbroken line. */
+.mn-page :is(.mn-srow + .mn-srow, .mn-hit + .mn-hit > a)::after {
+    content: "";
+    grid-column: 3;
+    grid-row: 1;
+    align-self: start;
+    position: relative;
+    top: -3px;
+    height: 1px;
+    margin-bottom: -1px;
+    background: var(--hair);
+    pointer-events: none;
+}
+
+/* The dot, ringed in the page colour so it sits on the line. */
+.mn-page :is(.mn-srow, .mn-hit > a)::before {
+    content: "";
+    grid-column: 2;
+    grid-row: 1;
+    justify-self: center;
+    align-self: start;
+    margin-top: calc(0.68em * 1.85 / 2 - 3.5px);
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--rc, var(--user));
+    box-shadow: 0 0 0 2px var(--bg);
+}
+
+.mn-page :is(.mn-sgut, .mn-hgut) {
+    grid-column: 1;
+    grid-row: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    min-width: 0;
+    font: 0.68em/1.85 var(--mono);
+    color: var(--muted);
+    white-space: nowrap;
+}
+
+.mn-page :is(.mn-sbody, .mn-hbody) {
+    grid-column: 3;
+    grid-row: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    padding-left: 4px;
+}
+
+.mn-index .mn-srow .session-link-title {
+    overflow: hidden;
+    font-size: 0.9em;
+    font-weight: 600;
+    line-height: 1.45;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.mn-index .mn-srow .session-preview {
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background: none;
+    color: var(--muted);
+    font: 0.85em/1.45 var(--sans);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Without a title the first prompt is the row's text. */
+.mn-index .mn-srow .mn-sbody > .session-preview:first-child {
+    color: var(--fg);
+    font-size: 0.9em;
+}
+
+.mn-index .mn-srow .session-link-meta {
+    margin: 0;
+    font: 0.68em/1.6 var(--mono);
+    color: var(--muted);
+}
+
+/* --expand-paths: the folder hierarchy, one hairline per level. */
+.mn-index .project-tree .project-tree {
+    margin-left: 6px;
+    padding-left: 12px;
+    border-left: 1px solid var(--rule);
+}
+
+.mn-index .project-tree-dir > details > summary {
+    padding: 6px 0 2px;
+    font: 0.8em var(--mono);
+    color: var(--muted);
+}
+
+.mn-index .project-tree-dir > details > summary strong {
+    color: var(--fg);
+}
+
+.mn-index .project-tree-leaf {
+    margin: 0;
+}
+
+/* ============================================================ search */
+
+.mn-search .archive-search-header {
+    justify-content: flex-start;
+    gap: 2px 12px;
+}
+
+.mn-search .archive-search-header > a {
+    font-size: 0.8em;
+    text-decoration: none;
+}
+
+.mn-search .archive-search-header > a:hover {
+    text-decoration: underline;
+}
+
+/* The query bar reads as a transcript's toolbar: two rules, no card. */
+.mn-search .archive-search-form {
+    margin: 0 0 4px;
+    padding: 6px 0 8px;
+    border: 0;
+    border-top: 1px solid var(--rule2);
+    border-bottom: 1px solid var(--rule);
+    border-radius: 0;
+    background: var(--bg);
+    box-shadow: none;
+    backdrop-filter: none;
+}
+
+.mn-search .archive-search-filters {
+    gap: 6px 14px;
+    margin-top: 6px;
+    font: 0.78em var(--sans);
+    color: var(--muted);
+}
+
+.mn-search .archive-search-fields {
+    gap: 4px 10px;
+}
+
+.mn-search .search-option-inline {
+    color: var(--muted);
+}
+
+.mn-search .search-option-inline:hover,
+.mn-search .search-option-inline:has(input:checked) {
+    color: var(--fg);
+}
+
+.mn-search .archive-search-filters select,
+.mn-search .archive-search-reset,
+.mn-search .archive-search-more {
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--fg);
+    font: inherit;
+}
+
+.mn-search .archive-search-filters select {
+    min-height: 26px;
+    max-width: min(22em, 100%);
+    padding: 0 6px;
+}
+
+.mn-search .archive-search-filters select:hover,
+.mn-search .archive-search-reset:hover,
+.mn-search .archive-search-more:hover {
+    border-color: var(--muted);
+    background: var(--bg);
+    color: var(--fg);
+}
+
+.mn-search .archive-search-reset {
+    min-height: 24px;
+    padding: 0 8px;
+    color: var(--muted);
+}
+
+.mn-search .archive-search-status {
+    margin: 4px 0 6px;
+    min-height: 1.6em;
+    font: 0.72em/1.6 var(--mono);
+    color: var(--muted);
+    opacity: 1;
+}
+
+.mn-search .archive-search-setup {
+    margin: 12px 0;
+    padding: 10px 14px;
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+}
+
+.mn-search .archive-search-setup pre {
+    padding: 6px 10px;
+    border-radius: 4px;
+    font: 0.9em var(--mono);
+}
+
+.mn-search .archive-search-more {
+    margin-top: 6px;
+    padding: 6px;
+    font-size: 0.82em;
+    color: var(--muted);
+}
+
+/* ---------------------------------------------------- result rows */
+
+/* A project: a header line, then its hits as rows. */
+.mn-search .search-result-group.mn-rgroup {
+    margin: 0 0 10px;
+}
+
+.mn-search .search-result-group-title.mn-rhead {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin: 0;
+    padding: 6px 0 3px;
+    border-top: 1px solid var(--rule);
+    font: 600 0.85em var(--sans);
+    color: var(--fg);
+}
+
+.mn-search .mn-rproj {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.mn-page .search-result-count {
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    font: 400 0.82em var(--mono);
+    color: var(--muted);
+}
+
+.mn-search .search-result-item.mn-hit {
+    --rc: var(--muted);
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+    transition: none;
+}
+
+.mn-search .search-result-item.mn-hit:hover {
+    background: none;
+    box-shadow: none;
+    transform: none;
+}
+
+/* Role colours, as on a transcript row (layout.css). */
+.mn-search .mn-hit.mn-k-user { --rc: var(--user); }
+.mn-search .mn-hit.mn-k-assistant { --rc: var(--asst); }
+.mn-search .mn-hit.mn-k-tool { --rc: var(--tool); }
+.mn-search .mn-hit.mn-k-system { --rc: var(--sys); }
+.mn-search .mn-hit.mn-k-note { --rc: var(--note); }
+
+.mn-search .mn-hit.mn-k-thinking > a::before {
+    width: 5px;
+    height: 5px;
+    border: 1.5px solid var(--muted);
+    background: var(--bg);
+}
+
+.mn-search .mn-hrole {
+    color: var(--rc);
+    font-weight: 500;
+}
+
+.mn-search .mn-hbody .search-result-session {
+    margin: 0;
+    font: 0.72em/1.75 var(--mono);
+    color: var(--muted);
+}
+
+.mn-search .mn-hbody .archive-search-field {
+    margin-left: 8px;
+    font-size: 1em;
+    letter-spacing: 0;
+    text-transform: none;
+    opacity: 1;
+    color: var(--muted);
+}
+
+.mn-search .mn-hbody .search-result-excerpt {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    overflow: hidden;
+    font: 0.9em/1.45 var(--sans);
+    color: var(--fg);
+    overflow-wrap: anywhere;
+}
+
+/* ------------------------------------------------------------- phone */
+
+/* As on a transcript: the gutter becomes a line of its own above the row's
+   text, the dot and the hairline stay on the left. */
+@media (max-width: 640px) {
+    body.theme-minimal.mn-page {
+        padding: 0 10px 32px;
+    }
+
+    .mn-index .mn-prow .project-stats.mn-pmeta {
+        flex: 1 1 100%;
+        margin-left: 0;
+    }
+
+    .mn-page :is(.mn-srow, .mn-hit > a) {
+        grid-template-columns: var(--rail) minmax(0, 1fr);
+        background-position: calc(var(--rail) / 2 - 0.5px) 0;
+    }
+
+    .mn-page :is(.mn-srow, .mn-hit > a)::before {
+        grid-column: 1;
+    }
+
+    .mn-page :is(.mn-srow + .mn-srow, .mn-hit + .mn-hit > a)::after {
+        grid-column: 2;
+    }
+
+    .mn-page :is(.mn-sgut, .mn-hgut) {
+        grid-column: 2;
+        flex-direction: row;
+        gap: 8px;
+        padding-left: 4px;
+    }
+
+    .mn-page :is(.mn-sbody, .mn-hbody) {
+        grid-column: 2;
+        grid-row: 2;
+    }
+
+    .mn-index .search-hint {
+        display: none;
+    }
+}

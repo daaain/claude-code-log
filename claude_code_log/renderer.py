@@ -81,6 +81,9 @@ from .factories.attachment_factory import (
     queued_command_prompt_items,
 )
 from .utils import (
+    DEFAULT_THEME,
+    format_duration,
+    output_theme,
     format_timestamp,
     best_working_dir,
     format_timestamp_range,
@@ -328,6 +331,13 @@ class TemplateMessage:
         # follow-up — fork points survive depth filtering like the branches
         # they connect, instead of vanishing and orphaning the branches).
         self.fork_only: bool = False
+
+        # Branch lane this node renders in (``"main"``, ``"agent-<id>"`` or
+        # ``"branch-<branch sid>"``). Set by ``lanes.annotate_lanes``, which
+        # the HTML renderer calls only for the minimal theme; the template
+        # emits it as ``data-lane``. Render-time only: formatters never read
+        # it, so it is not part of the fragment-store key.
+        self.lane_id: str = "main"
 
     # -- Properties derived from content/meta --
 
@@ -2150,6 +2160,32 @@ def _identify_message_pairs(messages: list[TemplateMessage]) -> None:
         i += 1
 
 
+def spawned_agent_id_of(msg: TemplateMessage) -> Optional[str]:
+    """The agent spawned at this message, if it's a spawn anchor.
+
+    The sidecar-resolved ``spawned_agent_id`` (issue #213) works at any
+    nesting depth — an anchor INSIDE agent A's block links agent B's
+    block. The fallback is the legacy trunk shape: a trunk-session
+    tool_result whose ``agent_id`` is a reference backpatched from
+    ``toolUseResult.agentId`` (the ``tool_name`` would normally be
+    ``"Task"`` or ``"Agent"``, but the tool_factory's context-lookup
+    occasionally fails to populate it — e.g. when the tool_use sits in
+    a session-fork branch — so the agent_id alone decides).
+
+    Shared by ``_relocate_subagent_blocks`` and the lane model
+    (``lanes.py``), so both agree on which card opens which agent.
+    """
+    if msg.meta.spawned_agent_id:
+        return msg.meta.spawned_agent_id
+    if (
+        isinstance(msg.content, ToolResultMessage)
+        and msg.meta.agent_id
+        and "#agent-" not in (msg.meta.session_id or "")
+    ):
+        return msg.meta.agent_id
+    return None
+
+
 def _relocate_subagent_blocks(
     messages: list[TemplateMessage],
 ) -> list[TemplateMessage]:
@@ -2178,8 +2214,6 @@ def _relocate_subagent_blocks(
     messages`` leaves at the end) are excluded from blocks and stay
     where they are — the level-stack ignores them at level 0 anyway.
     """
-    from .models import ToolResultMessage
-
     blocks: dict[str, list[TemplateMessage]] = {}
     block_ids: set[int] = set()
     for msg in messages:
@@ -2196,34 +2230,12 @@ def _relocate_subagent_blocks(
 
     result: list[TemplateMessage] = []
 
-    def _spawned_id(msg: TemplateMessage) -> Optional[str]:
-        """The agent spawned at this message, if it's a spawn anchor.
-
-        The sidecar-resolved ``spawned_agent_id`` (issue #213) works at any
-        nesting depth — an anchor INSIDE agent A's block links agent B's
-        block. The fallback is the legacy trunk shape: a trunk-session
-        tool_result whose ``agent_id`` is a reference backpatched from
-        ``toolUseResult.agentId`` (the ``tool_name`` would normally be
-        ``"Task"`` or ``"Agent"``, but the tool_factory's context-lookup
-        occasionally fails to populate it — e.g. when the tool_use sits in
-        a session-fork branch — so the agent_id alone decides).
-        """
-        if msg.meta.spawned_agent_id:
-            return msg.meta.spawned_agent_id
-        if (
-            isinstance(msg.content, ToolResultMessage)
-            and msg.meta.agent_id
-            and "#agent-" not in (msg.meta.session_id or "")
-        ):
-            return msg.meta.agent_id
-        return None
-
     def _emit(msg: TemplateMessage) -> None:
         """Emit a message, then any block it anchors — recursively, so a
         nested agent's block lands right after its spawn entry inside the
         parent agent's block (one frame per nesting level)."""
         result.append(msg)
-        spawned = _spawned_id(msg)
+        spawned = spawned_agent_id_of(msg)
         if spawned:
             block = blocks.pop(spawned, None)
             if block:
@@ -2313,15 +2325,9 @@ def _reorder_paired_messages(messages: list[TemplateMessage]) -> list[TemplateMe
                         duration = last_time - first_time
 
                         # Format duration nicely
-                        total_seconds = duration.total_seconds()
-                        if total_seconds < 1:
-                            duration_str = f"took {int(total_seconds * 1000)} ms"
-                        elif total_seconds < 60:
-                            duration_str = f"took {total_seconds:.1f}s"
-                        else:
-                            minutes = int(total_seconds // 60)
-                            seconds = int(total_seconds % 60)
-                            duration_str = f"took {minutes}m {seconds}s"
+                        duration_str = (
+                            f"took {format_duration(duration.total_seconds())}"
+                        )
 
                         # Store duration in pair_last for template rendering
                         pair_last.pair_duration = duration_str
@@ -3138,7 +3144,9 @@ def _splice_one_workflow_run(
 
     spliced_top: list[TemplateMessage] = []
     phase_anchor_indices: list[int] = []
-    for phase, agents in groups:
+    run_id = getattr(run, "run_id", "") or ""
+    run_finished = bool(getattr(run, "has_snapshot", False))
+    for ordinal, (phase, agents) in enumerate(groups):
         if phase is not None:
             phase_tm = _new_synthetic_node(
                 ctx,
@@ -3171,6 +3179,12 @@ def _splice_one_workflow_run(
                     tool_calls=agent.tool_calls,
                     result=agent.result,
                     result_preview=agent.result_preview,
+                    agent_id=agent.agent_id,
+                    run_id=run_id,
+                    phase_ordinal=ordinal if phase is not None else None,
+                    phase_title=phase.title if phase is not None else "",
+                    duration_ms=agent.duration_ms,
+                    run_finished=run_finished,
                 ),
                 parent=base,
             )
@@ -3402,9 +3416,12 @@ def _link_async_notifications(
     spawn_target_kept = depth not in (RenderingDepth.ASSISTANT, RenderingDepth.USER)
     # Index notifications by task_id so we can find them in O(1).
     notifications: dict[str, TaskNotificationMessage] = {}
+    notification_index: dict[str, Optional[int]] = {}
     for tm in _visible(ctx.messages):
         if isinstance(tm.content, TaskNotificationMessage) and tm.content.task_id:
-            notifications.setdefault(tm.content.task_id, tm.content)
+            if tm.content.task_id not in notifications:
+                notifications[tm.content.task_id] = tm.content
+                notification_index[tm.content.task_id] = tm.message_index
     if not notifications:
         return
 
@@ -3461,6 +3478,7 @@ def _link_async_notifications(
         # the notification body would silently lose the answer.
         if spawn_target_kept and isinstance(content.output, TaskOutput):
             content.output.async_final_answer = notification.result_text
+            content.output.async_notification_index = notification_index.get(agent_id)
             notification.result_is_duplicate = True
 
         # ---- Branch 2: sidechain-only dedup --------------------------
@@ -5345,6 +5363,9 @@ class Renderer:
     # level (#179). Recaps are otherwise always visible (see
     # ``AwaySummaryMessage.depth_visibility``).
     no_recaps: bool = False
+    # HTML theme (``--theme``, see ``utils.THEMES``). Only ``HtmlRenderer``
+    # reads it; ``get_renderer`` stores the resolved name (never "default").
+    theme: str = DEFAULT_THEME
 
     # Output format identifier consulted by the class-side dispatch path
     # below. Subclasses override to ``"html"`` etc.; the default
@@ -5709,6 +5730,7 @@ def get_renderer(
     compact: bool = False,
     no_timestamps: bool = False,
     no_recaps: bool = False,
+    theme: str = DEFAULT_THEME,
 ) -> Renderer:
     """Get a renderer instance for the specified format.
 
@@ -5724,6 +5746,9 @@ def get_renderer(
         no_recaps: If True, suppress ``※ recap`` (away_summary) messages at
             every depth level (issue #179). Recaps are otherwise always
             visible.
+        theme: HTML theme: ``"classic"``, ``"minimal"`` or ``"default"``
+            (resolved through ``utils.DEFAULT_THEME``). HTML-only: other
+            formats carry no theme (stamped like ``"classic"``).
 
     Returns:
         A Renderer instance for the specified format.
@@ -5752,13 +5777,19 @@ def get_renderer(
     renderer.depth = depth
     renderer.compact = compact
     renderer.no_recaps = no_recaps
+    renderer.theme = output_theme(format, theme)
     return renderer
 
 
-def is_html_outdated(html_file_path: Path) -> bool:
+def is_html_outdated(html_file_path: Path, theme: str = DEFAULT_THEME) -> bool:
     """Check if an HTML file is outdated based on its version comment.
 
     This is a convenience function that uses the HtmlRenderer's is_outdated method.
+
+    ``theme`` is the theme the caller would render in now: the comment
+    carries the theme a page was written with (see
+    ``html.renderer.html_generator_stamp``), so a page written in another
+    theme reads as outdated exactly like one from another version.
 
     Returns:
         True if the file should be regenerated (missing version, different version, or file doesn't exist).
@@ -5767,4 +5798,5 @@ def is_html_outdated(html_file_path: Path) -> bool:
     from .html.renderer import HtmlRenderer
 
     renderer = HtmlRenderer()
+    renderer.theme = output_theme("html", theme)
     return renderer.is_outdated(html_file_path)
