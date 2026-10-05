@@ -805,11 +805,15 @@
 }
 
 .theme-minimal #transcript .content h1 {
-    font-size: 1.15em;
+    font-size: 1.4em;
 }
 
 .theme-minimal #transcript .content h2 {
-    font-size: 1.08em;
+    font-size: 1.26em;
+}
+
+.theme-minimal #transcript .content h3 {
+    font-size: 1.12em;
 }
 
 .theme-minimal #transcript .content table {
