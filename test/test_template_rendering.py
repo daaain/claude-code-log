@@ -2,7 +2,6 @@
 """Test cases for template rendering with representative JSONL data."""
 
 import json
-import re
 import tempfile
 from pathlib import Path
 import pytest
@@ -10,6 +9,7 @@ from claude_code_log.converter import convert_jsonl_to_html
 from claude_code_log.html.renderer import generate_projects_index_html
 from claude_code_log.converter import load_transcript
 from claude_code_log.html.renderer import generate_html
+from test.html_markup import rendered_markup
 
 
 class TestTemplateRendering:
@@ -173,9 +173,7 @@ class TestTemplateRendering:
         # Assert on the rendered markup only: the page's own scripts and
         # styles mention most class names, so a bare `in html_content`
         # passes whether or not any card carries them.
-        markup = re.sub(
-            r"<script.*?</script>|<style.*?</style>", "", html_content, flags=re.DOTALL
-        )
+        markup = rendered_markup(html_content)
 
         # Tool use card: specialized Edit header
         assert "class='message tool_use" in markup
