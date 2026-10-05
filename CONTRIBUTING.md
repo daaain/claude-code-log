@@ -458,12 +458,20 @@ reference for the minimal theme — where its parts live, the branch
 [dev-docs/minimal-theme.md](dev-docs/minimal-theme.md). Two rules hold
 for every change:
 
-- **Classic output stays byte-identical.** Minimal-only template
-  additions are glued inline (`{% if minimal %}…{% endif %}`, no new
-  lines outside the conditional) and minimal-only formatter behaviour is
-  behind `normalize_theme(self.theme) == "minimal"`; the classic
-  snapshot blocks must not change (regenerate only with
-  `just update-snapshot`, then compare at block level).
+- **Classic message markup stays byte-identical.** Minimal-only
+  template additions are glued inline (`{% if minimal %}…{% endif %}`,
+  no new lines outside the conditional) and minimal-only formatter
+  behaviour is behind `normalize_theme(self.theme) == "minimal"`, so a
+  minimal change never moves a classic message's markup. The embedded
+  CSS and JS the themes share (filter, search, timeline, live update)
+  may change, but only deliberately: say so in the commit, and check at
+  block level (after `just update-snapshot`) that every changed classic
+  line is in `<style>`/`<script>`. The minimal theme's introduction did
+  exactly this once — its shared filter/search/live-update hooks grew
+  classic pages by ~10KB and fixed three timeline behaviours (the Tool
+  toggle governing both tool groups, hiding items whose card is
+  filtered out, `getBoundingClientRect` scrolling) — with no message
+  markup changed.
 - **Timeline and filter parity in every branch mode.** The browser
   sweep in `test/test_minimal_parity_browser.py` checks every filter
   toggle × fold depth × branch mode with the timeline open, search and

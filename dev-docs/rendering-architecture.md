@@ -375,7 +375,7 @@ HTML formatters are split by message category:
 `minimal = theme == 'minimal'`. Every minimal-only addition is an
 `{% if minimal %}…{% endif %}` glued to an existing line — the Jinja
 environment has no `trim_blocks`, so a conditional on its own line would
-add a newline to classic output, which must stay byte-identical. The
+add a newline to classic message markup, which must stay byte-identical. The
 minimal branch adds the minimal stylesheets and `theme_init.js` to the
 head, the `<body>` class, the page header and sticky toolbar
 (`components/minimal/header.html`, which carries the classic floating

@@ -13,7 +13,7 @@ record now; where it and this page disagree, this page (and the code) win.
 | Part | Where | Reference |
 |---|---|---|
 | `--theme` / `CLAUDE_CODE_LOG_THEME`, `default` → `utils.DEFAULT_THEME`, same filenames, the generator stamp that makes a page from the other theme stale | `cli._resolve_theme`, `utils.normalize_theme`, `html/renderer.html_generator_stamp` | [application_model.md § 2.1](application_model.md#21-cli) |
-| Template branches (`{% if minimal %}`, glued inline so classic bytes never change), header and toolbar | `transcript.html`, `components/minimal/header.html` | [rendering-architecture.md § 8](rendering-architecture.md#theme-branches-in-transcripthtml) |
+| Template branches (`{% if minimal %}`, glued inline so classic message markup never changes), header and toolbar | `transcript.html`, `components/minimal/header.html` | [rendering-architecture.md § 8](rendering-architecture.md#theme-branches-in-transcripthtml) |
 | Look: tokens, row grid, components, light/dark, dark Pygments | `components/minimal/` `tokens.css`, `layout.css` (includes `chrome.css`: page, header, toolbar), `components.css`, `pygments_dark.css` (generated), `theme_init.js` (includes `scheme_init.js`) | [css-classes.md § Minimal Theme](css-classes.md#minimal-theme-theme-minimal) |
 | Server helpers: gutter, call line, session header, page meta, cross links, lane attributes | `html/minimal_theme.py` | css-classes.md (table), § 7, § 12 |
 | Role icons: the glyphs, kind / tool → glyph, the page's sprite | `html/minimal_icons.py` (`mn_role_icon`, `mn_icon`, `mn_icon_sprite`); legend `scripts/generate_icon_legend.py` → `docs/assets/themes/icons.png` | § 9 |
