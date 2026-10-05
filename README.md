@@ -2,9 +2,9 @@
 
 A Python CLI tool that converts Claude Code transcript JSONL files into readable HTML and Markdown formats.
 
-Browser log demo:
+Quick demo:
 
-[Browser log](https://github.com/user-attachments/assets/12d94faf-6901-4429-b4e6-ea5f102d0c1c)
+[Supercut](docs/assets/demos/supercut.mp4)
 
 ▶️ **[Feature walkthrough](https://daaain.github.io/claude-code-log/demos/)**: six short chapters on the archive index and search, reading a session, folding and filtering, agents and forks, and live sessions.
 
