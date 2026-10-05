@@ -492,11 +492,21 @@ class TestForkFixtures:
         ]
         assert cont_cards and {n.lane_id for n in cont_cards} == {MAIN_LANE}
 
-    def test_compaction_after_rewind_stays_in_the_fork(self) -> None:
+    @pytest.mark.parametrize(
+        ("fixture", "lane_id"),
+        [
+            ("dag_compact_after_rewind.jsonl", "branch-s1@b2u"),
+            # The compacted session continues as s2 (preserved segment).
+            ("dag_compact_after_rewind_preserved.jsonl", "branch-s2@b2u"),
+        ],
+    )
+    def test_compaction_after_rewind_stays_in_the_fork(
+        self, fixture: str, lane_id: str
+    ) -> None:
         """#331: a /compact on a rewind branch continues that branch, so the
         boundary and everything after it belong to the fork lane."""
-        model, nodes = _model(TEST_DATA / "dag_compact_after_rewind.jsonl")
-        lane = model.lanes["branch-s1@b2u"]
+        model, nodes = _model(TEST_DATA / fixture)
+        lane = model.lanes[lane_id]
         members = [n for n in nodes.values() if n.lane_id == lane.lane_id]
         types = {n.type for n in members}
         assert "system" in types  # the compact_boundary
