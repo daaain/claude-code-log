@@ -15,6 +15,13 @@ This file is now a historical record.** Branch of origin:
 > [`docs/themes.md`](../docs/themes.md). Where this file and those pages
 > disagree, they — and the code — are right; the phase notes below record
 > what was planned, what diverged and why, as of each phase.
+>
+> **Screenshots.** The per-phase screenshots the notes below cite
+> (`work/minimal-theme-dag-screenshots/p*/`) were dropped before merging
+> to keep the repository light (they were committed on the branch of
+> origin before that, so its history has them unless squashed away). The
+> final ones are in [`docs/assets/themes/`](../docs/assets/themes/), used
+> by the user guide.
 
 **Follow-ups** (deliberately not done in this feature):
 
@@ -1244,7 +1251,7 @@ token table); `rendering-architecture.md` (template theme branch).
   added with `just update-snapshot`: `+9404/-0`, block level one block
   added, none changed or removed.
 - **Screenshots** are committed (on request, instead of only attached) in
-  [`work/minimal-theme-dag-screenshots/p3a/`](minimal-theme-dag-screenshots/p3a/):
+  `work/minimal-theme-dag-screenshots/p3a/`:
   representative transcript light/dark × desktop/phone, async-agents
   light/dark desktop with the sub-agent group unfolded.
 
@@ -1374,7 +1381,7 @@ schemes.
   matching the hidden name; error pill; session summary clamp/expand;
   blocked storage for classic and minimal.
 - **Screenshots** in
-  [`work/minimal-theme-dag-screenshots/p3b/`](minimal-theme-dag-screenshots/p3b/):
+  `work/minimal-theme-dag-screenshots/p3b/`:
   representative light/dark, edge cases (error pill, params, Pygments),
   teammates, workflow, todo, fork, timeline — desktop, dark unless named.
 
@@ -1497,7 +1504,7 @@ A/B/C).
   "Tool" filter doesn't drop vis items — classic too, pre-existing. (Both
   fixed in P5.)
 - **Screenshots** in
-  [`work/minimal-theme-dag-screenshots/p4/`](minimal-theme-dag-screenshots/p4/):
+  `work/minimal-theme-dag-screenshots/p4/`:
   a real sample session (`real_projects/…claude-code-log-sample/fe869ecb…`)
   at Prompts / Steps / All, light and dark, desktop.
 
@@ -1658,7 +1665,7 @@ stats strings, teammate exclusion; new minimal snapshot
   session: call → output 14–19px before, 2px after; dot position
   unchanged. Test: `test_minimal_theme_browser.py::TestRowLayout::test_tool_call_and_output_read_as_one_unit`
   (fails on the old CSS). Screenshots (sample session, light, desktop) in
-  [`work/minimal-theme-dag-screenshots/p5/`](minimal-theme-dag-screenshots/p5/):
+  `work/minimal-theme-dag-screenshots/p5/`:
   one Read pair before/after, and a stretch of the session after.
 - **Extra item 2 — timeline "Tool" filter (both themes).** The toggle's
   type is `tool`, the timeline groups `tool_use`/`tool_result`, so the
@@ -1821,7 +1828,7 @@ fixture):
   removed; every classic block and the index identical; the three minimal
   blocks each `+1374/-14` (CSS/JS text, the rail host, the row renumbering).
 - **Screenshots** in
-  [`work/minimal-theme-dag-screenshots/p6/`](minimal-theme-dag-screenshots/p6/)
+  `work/minimal-theme-dag-screenshots/p6/`
   (64-colour PNGs): the demo fixture (`async-agents-*`) and
   `dag_within_fork.jsonl` (`fork-*`), Main only and Interleaved, light and
   dark, desktop.
@@ -1966,7 +1973,7 @@ never get a lane or column.
   moved answer (spawn: label + answer + Agent row out, `mn-async-jump` in;
   notification: the answer in).
 - **Screenshots** in
-  [`work/minimal-theme-dag-screenshots/p7/`](minimal-theme-dag-screenshots/p7/)
+  `work/minimal-theme-dag-screenshots/p7/`
   (48-colour PNGs, light and dark): the demo in Columns at 1600px
   (`async-agents-columns-*`), `dag_within_fork.jsonl` in Columns
   (`fork-columns-*`), the `wide=4` demo's overflow folded and revealed
@@ -2138,7 +2145,7 @@ dark, in `work/minimal-theme-dag-screenshots/p7b/`.
   three minimal blocks `+248/-23` each, all CSS/JS text (no card markup
   changed — the fixtures' agents all merged, so no `data-lane-state`).
 - **Screenshots** in
-  [`work/minimal-theme-dag-screenshots/p7b/`](minimal-theme-dag-screenshots/p7b/)
+  `work/minimal-theme-dag-screenshots/p7b/`
   (64-colour PNGs, ≈ 20–25KB): `running-*` — the live session page with
   the synchronous agent interleaved and still running (solid lane, open end,
   `running` pill) beside the background agent folded and running (dashed);
@@ -2317,7 +2324,7 @@ quiet for more than 30 minutes still reads as running, with the duration.
   blocks `+482/-51` (CSS/JS text), the async block `+3/-3` more — exactly
   the `Run background` row out and the `.mn-ack` wrapper in.
 - **Screenshots** in
-  [`work/minimal-theme-dag-screenshots/p7c/`](minimal-theme-dag-screenshots/p7c/)
+  `work/minimal-theme-dag-screenshots/p7c/`
   (24-colour PNGs, 856KB in all): `before-*` / `after-*` of the demo in
   Main only, Interleaved and Columns (1600px), `dag_within_fork.jsonl`, and
   the real `-experiments-worktrees` project, light and dark; plus
@@ -2455,7 +2462,7 @@ headless click-through smoke test failing on any page error.
 - **Screenshots**: `docs/assets/themes/` (Main only light + dark,
   Interleaved, Columns at 1600px, a running lane in dark — the demo and the
   live fixture), and in
-  [`work/minimal-theme-dag-screenshots/p8/`](minimal-theme-dag-screenshots/p8/)
+  `work/minimal-theme-dag-screenshots/p8/`
   the agent-answer previews on `-experiments-worktrees`, the diff preview
   on `-src-deep-manifest` (light, dark) and Columns in dark (64-colour
   PNGs, ≈ 430KB in all).
