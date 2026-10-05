@@ -201,8 +201,15 @@ class TestToggleFunctionality:
         # Toggle logic should handle multiple elements
         assert "allDetails.forEach" in html, "Should iterate over all details elements"
 
-    def test_thinking_content_collapsible(self):
-        """Test that thinking content is also collapsible when long."""
+    def test_long_thinking_content_renders_in_full(self):
+        """Long thinking renders as Markdown in full, not folded.
+
+        This test used to assert a ``collapsible-details`` fold, and passed
+        only because the timeline script contained that class name in a
+        regex; no thinking card has carried the fold since.
+        """
+        import re
+
         long_thinking = "This is a very long thinking process " * 20
         thinking_content = {
             "type": "thinking",
@@ -212,12 +219,14 @@ class TestToggleFunctionality:
         message = self._create_assistant_message([thinking_content])
 
         html = generate_html([message], "Test Thinking")
-
-        # Thinking content should also be collapsible
-        assert 'class="collapsible-details"' in html, (
-            "Thinking content should be collapsible"
+        markup = re.sub(
+            r"<script.*?</script>|<style.*?</style>", "", html, flags=re.DOTALL
         )
-        assert "💭 Thinking" in html, "Should show thinking icon"
+
+        assert '<div class="thinking-content markdown">' in markup
+        assert long_thinking.strip() in markup
+        assert "collapsible-details" not in markup
+        assert "💭 Thinking" in markup, "Should show thinking icon"
 
     def test_tool_result_collapsible(self):
         """Test that tool results are also collapsible when long."""
