@@ -6,6 +6,8 @@ Browser log demo:
 
 [Browser log](https://github.com/user-attachments/assets/12d94faf-6901-4429-b4e6-ea5f102d0c1c)
 
+▶️ **[Feature walkthrough](https://daaain.github.io/claude-code-log/demos/)**: six short chapters on the archive index and search, reading a session, folding and filtering, agents and forks, and live sessions.
+
 TUI demo:
 
 [TUI](https://github.com/user-attachments/assets/75718e2b-3b02-4e17-8f3d-366e2c40dcc2)

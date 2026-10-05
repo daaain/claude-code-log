@@ -440,6 +440,34 @@ Key points:
   build; pushes to `main` deploy to Pages. The repo's **Settings → Pages →
   Source** must be set to **GitHub Actions** (one-time).
 
+### Demo videos
+
+The README's overview video and the docs site's
+[Demo videos](docs/demos.md) page are recorded by a script, so they can be
+re-recorded whenever the UI changes:
+
+```bash
+just demos                     # record every scene into .demos/ (~6 min)
+just demos --only branches     # re-record one scene (chapter and beat)
+just demos --list              # the scenes
+just demos --publish           # record, then update docs/assets/demos/ + docs/demos.md
+```
+
+`scripts/demos/record.py` drives Chromium through each **scene** with
+Playwright: captions, title cards, a cursor and fades are drawn by an
+overlay injected into the page (`director.py`), frames come from a Chrome
+DevTools screencast, and ffmpeg (from the `demos` dependency group's
+`imageio-ffmpeg` wheel) encodes the clips and cross-fades them into the
+supercut and the walkthrough. The data is synthetic and committed
+(`scripts/demos/demo_data.py`, plus the live chapter's
+`test/dag_live_fixture.py`), served by the real `claude-code-log serve`, so
+the videos re-record identically anywhere. To show a new feature, add a
+`@scene` and list it in `CHAPTERS` or `SUPERCUT`.
+
+The README embeds the supercut as a GitHub upload: after `--publish`, drag
+`docs/assets/demos/supercut.mp4` into the README editor on GitHub and
+replace the old attachment link.
+
 ## Architecture
 
 Start with [dev-docs/application_model.md](dev-docs/application_model.md)

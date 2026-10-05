@@ -73,6 +73,7 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Example output: example.md
+  - Demo videos: demos.md
   - User Guide:
       - Themes: themes.md
       - Searching the whole archive: archive-search.md

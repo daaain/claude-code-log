@@ -158,6 +158,9 @@ precision = 2
 directory = "htmlcov"
 
 [dependency-groups]
+demos = [
+    "imageio-ffmpeg>=0.6.0",
+]
 dev = [
     "pytest>=8.3.5",
     "pytest-asyncio>=0.25.3",
