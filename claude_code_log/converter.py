@@ -533,14 +533,15 @@ def load_transcript(
                 print(f"Loading {jsonl_path} from cache...")
             return cached_entries
 
-    # Parse from source file. Capture the sidecar fingerprint FIRST — it
+    # Parse from source file. Capture the sub-agent snapshot FIRST — it
     # must describe the world as-of-the-parse (or older), so a sidecar
     # landing mid-parse mismatches on the next cache read and forces a
     # reparse, instead of being fingerprinted-as-covered without having
-    # been scanned (review advisory on PR #218).
-    from .cache import subagents_fingerprint
+    # been scanned (review advisory on PR #218). The fingerprint is built
+    # from it after the parse, scoped to what the parse spliced.
+    from .cache import SubagentsSnapshot, spliced_agent_scope
 
-    subagents_fp = subagents_fingerprint(jsonl_path)
+    subagents_snapshot = SubagentsSnapshot(jsonl_path)
     # The file's own identity, for the same reason and at the same moment:
     # a session appended to *during* this read must leave the cache
     # stamped with what we parsed, not with what the file reached, or the
@@ -796,6 +797,10 @@ def load_transcript(
                 result_messages.extend(agent_messages_map.pop(agent_id))
 
         messages = result_messages
+
+    subagents_fp = subagents_snapshot.fingerprint(
+        spliced_agent_scope(jsonl_path, messages)
+    )
 
     # Save to cache if cache manager is available. When this parse resumed
     # from a verified prefix and nothing but the file's own new lines
@@ -4396,7 +4401,7 @@ def _incremental_cache_refresh(
     full path's.
     """
     from .cache import CachedFileState
-    from .entry_store import stamp_file
+    from .entry_store import PendingStamp
 
     if not modified_files:
         return False
@@ -4436,12 +4441,14 @@ def _incremental_cache_refresh(
             # Stamp BEFORE the parse: a file that grows while we read it
             # must make the store decline (its stamp would then be older
             # than the file), never serve a list its stamp misdescribes.
-            stamp = stamp_file(f)
+            pending = PendingStamp.take(f)
             parsed = load_transcript(
                 f, cache_manager, None, None, silent, entry_store=entry_store
             )
             if entry_store is not None:
-                entry_store.put(f, stamp, parsed)
+                entry_store.put(
+                    f, pending.finish(f, parsed) if pending else None, parsed
+                )
         new_states = cache_manager.get_file_states(modified_names)
 
         closure: set[str] = set()

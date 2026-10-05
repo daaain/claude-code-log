@@ -364,7 +364,21 @@ bytes) as well as their `agent-*.meta.json` sidecars, because a trunk's
 cached rows carry those transcripts spliced in and a running agent grows
 its file without touching the trunk. Rows written before transcripts
 joined it are compared on the sidecar part alone, so the upgrade does not
-re-parse every session at once. This is what makes
+re-parse every session at once.
+
+In the flat layout an agent file's children sit beside it in the same
+`subagents/` dir, next to every unrelated sibling. So an agent file's
+fingerprint counts only the sibling transcripts its parse spliced in —
+the agent ids on its sidechain entries, which reach grandchildren through
+the children's own spliced rows — and stores that scope after an `@`
+(`cache.SubagentsSnapshot`, `fingerprint_scope`), so a check rebuilds the
+same narrowing. Without it, one running agent's append invalidated every
+sibling's row and a watch tick re-parsed the whole family (measured on a
+synthetic 50-agent family: 50 agent parses per tick → 1). The snapshot
+is taken before the parse and the scope applied after it, keeping the
+as-of-the-parse rule; the sidecar part stays family-wide, since only a
+re-parse can tell whose child a new spawn is. A dir is scanned once per
+`get_modified_files()` however many of its agents it checks. This is what makes
 TUI startup near-instant on multi-thousand-file archives.
 
 For the operations / recovery side (archived sessions, manual
@@ -1381,7 +1395,9 @@ reason it is a parameter rather than a memo:
   describe, so a file that grew mid-parse declines to the cache rather
   than serving a list its stamp misdescribes. The stamp also carries the
   file's **sub-agent fingerprint** (`cache.subagents_fingerprint`, which
-  covers the `agent-*.jsonl` transcripts as well as the sidecars): a held
+  covers the `agent-*.jsonl` transcripts as well as the sidecars, scoped
+  for an agent file as its cache row is — `PendingStamp` snapshots before
+  the parse and finishes after it): a held
   trunk list includes its agents' spliced transcripts, and a running
   agent grows its file while the trunk sits still — a trunk-only stamp
   kept a `watch` / `serve --watch` store serving that block one tick

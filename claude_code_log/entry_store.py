@@ -155,7 +155,9 @@ def entry_store_forced() -> bool:
     return value in ("1", "on", "true")
 
 
-def stamp_file(path: Path) -> Optional[FileStamp]:
+def stamp_file(
+    path: Path, scope: Optional[frozenset[str]] = None
+) -> Optional[FileStamp]:
     """``(size, mtime_ns, sub-agent fingerprint)`` for ``path``, or None.
 
     The fingerprint (``cache.subagents_fingerprint``) is part of the
@@ -165,7 +167,9 @@ def stamp_file(path: Path) -> Optional[FileStamp]:
     still, so a trunk-only stamp kept matching and a held list — kept
     across ``watch`` / ``serve --watch`` ticks — served the agent's block
     as it was one tick earlier, forever behind (work/minimal-theme-dag.md
-    P7b). None if the file can't be stat'd.
+    P7b). ``scope`` narrows an agent file's sibling transcripts to the
+    ones its parse spliced, as the cache row does. None if the file can't
+    be stat'd.
     """
     from .cache import subagents_fingerprint
 
@@ -173,7 +177,33 @@ def stamp_file(path: Path) -> Optional[FileStamp]:
         st = path.stat()
     except OSError:
         return None
-    return (st.st_size, st.st_mtime_ns, subagents_fingerprint(path))
+    return (st.st_size, st.st_mtime_ns, subagents_fingerprint(path, scope))
+
+
+@dataclass
+class PendingStamp:
+    """A stamp taken before a parse, completed once the parse says which
+    sibling transcripts it spliced (``cache.SubagentsSnapshot``)."""
+
+    size: int
+    mtime_ns: int
+    snapshot: Any  # cache.SubagentsSnapshot
+
+    @classmethod
+    def take(cls, path: Path) -> Optional[PendingStamp]:
+        from .cache import SubagentsSnapshot
+
+        try:
+            st = path.stat()
+        except OSError:
+            return None
+        return cls(st.st_size, st.st_mtime_ns, SubagentsSnapshot(path))
+
+    def finish(self, path: Path, entries: list[TranscriptEntry]) -> FileStamp:
+        from .cache import spliced_agent_scope
+
+        scope = spliced_agent_scope(path, entries)
+        return (self.size, self.mtime_ns, self.snapshot.fingerprint(scope))
 
 
 class ParsedEntryStore:
@@ -329,7 +359,9 @@ class ParsedEntryStore:
             self.misses += 1
             return None
         stamp, entries = held
-        if stamp_file(path) != stamp:
+        from .cache import fingerprint_scope
+
+        if stamp_file(path, fingerprint_scope(stamp[2])) != stamp:
             self.misses += 1
             return None
         self.hits += 1

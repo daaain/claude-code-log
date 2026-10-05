@@ -588,7 +588,10 @@ synchronous spawn blocks it). The trunk's cached rows and the entry
 store's held list both carry the agents' spliced transcripts, so both are
 pinned to the agent transcripts too: the cache's sub-agent fingerprint
 covers `agent-*.jsonl` (count, newest `mtime_ns`, total bytes) as well as
-the sidecars, and the entry store's stamp includes that fingerprint.
+the sidecars, and the entry store's stamp includes that fingerprint. For
+an agent file it counts only the siblings its parse spliced (its
+descendants), so one agent's growth stales its ancestors' rows, not its
+siblings' (application_model.md § 2.3).
 Before P7b a watch served the agent's block as it was at the last trunk
 change (`test_lanes.py::TestLiveGrowth`).
 

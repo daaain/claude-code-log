@@ -486,6 +486,65 @@ class TestNestedVisualLayer:
         assert not cm.is_file_cached(trunk)
         assert cm.get_modified_files([trunk]) == [trunk]
 
+    def test_growing_agent_invalidates_only_its_ancestors(self, tmp_path: Path) -> None:
+        """In the flat layout an agent file's siblings are mostly not its
+        children: an append to one running agent must invalidate the rows
+        that spliced it — its spawner and, through a chain, the spawner's
+        spawner — but not every sibling's (review on the minimal-theme PR:
+        a watch tick re-parsed the whole family)."""
+        import shutil
+
+        from claude_code_log.cache import CacheManager
+
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        trunk = proj / TRUNK.name
+        shutil.copy(TRUNK, trunk)
+        shutil.copytree(TRUNK.parent / TRUNK_SID, proj / TRUNK_SID)
+        sub = proj / TRUNK_SID / "subagents"
+        files = {agent: sub / f"agent-{agent}.jsonl" for agent in ALL_AGENTS}
+
+        cm = CacheManager(proj, "0.0.0-test", db_path=tmp_path / "cache.db")
+        load_transcript(trunk, cache_manager=cm, silent=True)
+        assert all(cm.is_file_cached(f) for f in files.values())
+
+        def grow(agent: str) -> None:
+            with files[agent].open("a", encoding="utf-8") as f:
+                f.write("\n")  # one byte: same second, different size
+
+        def stale() -> set[str]:
+            return {a for a, f in files.items() if not cm.is_file_cached(f)}
+
+        grow("nsleaf11")
+        assert stale() == {"nsleaf11", MID1}
+        assert set(cm.get_modified_files(list(files.values()))) == {
+            files["nsleaf11"],
+            files[MID1],
+        }
+        assert not cm.is_file_cached(trunk)
+
+        load_transcript(trunk, cache_manager=cm, silent=True)
+        assert stale() == set()
+        grow(CHAIN3)  # trunk → chain1 → chain2 → chain3
+        assert stale() == {CHAIN3, CHAIN2, CHAIN1}
+
+    def test_scoped_fingerprint_round_trips(self) -> None:
+        """A scoped fingerprint stores its scope, so a check rebuilds the same
+        narrowing; rows from before scoping stay unscoped and keep matching."""
+        from claude_code_log.cache import fingerprint_scope, subagents_fingerprint
+
+        mid = TRUNK.parent / TRUNK_SID / "subagents" / f"agent-{MID1}.jsonl"
+        scope = frozenset({"nsleaf11", "nsleaf12"})
+        scoped = subagents_fingerprint(mid, scope)
+        assert fingerprint_scope(scoped) == scope
+        assert scoped.endswith("@nsleaf11,nsleaf12")
+        assert scoped.split("|")[1].startswith("2:")  # two transcripts
+        leaf = subagents_fingerprint(mid, frozenset())
+        assert leaf.endswith("|0:0:0@") and fingerprint_scope(leaf) == frozenset()
+        unscoped = subagents_fingerprint(mid)
+        assert fingerprint_scope(unscoped) is None
+        assert unscoped.split("|")[1].startswith(f"{len(ALL_AGENTS)}:")
+
     def test_pre_transcript_fingerprints_do_not_mass_invalidate(
         self, tmp_path: Path
     ) -> None:

@@ -73,7 +73,7 @@ def _row(**overrides: object) -> sqlite3.Row:
 
 class TestContentVersionParticipatesInFreshness:
     def test_matching_version_is_fresh(self):
-        assert _cache_row_is_fresh(_row(), 1000.0, lambda: "", 4096) is True
+        assert _cache_row_is_fresh(_row(), 1000.0, lambda _scope: "", 4096) is True
 
     def test_a_different_version_is_stale(self):
         """The whole point: the file has not changed, and the row is stale
@@ -81,7 +81,7 @@ class TestContentVersionParticipatesInFreshness:
         would write today."""
         assert (
             _cache_row_is_fresh(
-                _row(content_version="deadbeef0000"), 1000.0, lambda: "", 4096
+                _row(content_version="deadbeef0000"), 1000.0, lambda _scope: "", 4096
             )
             is False
         )
@@ -93,7 +93,9 @@ class TestContentVersionParticipatesInFreshness:
         of our own output, so NULL means unknown-and-probably-incomplete —
         the #320 state — and must re-parse once."""
         assert (
-            _cache_row_is_fresh(_row(content_version=None), 1000.0, lambda: "", 4096)
+            _cache_row_is_fresh(
+                _row(content_version=None), 1000.0, lambda _scope: "", 4096
+            )
             is False
         )
 
