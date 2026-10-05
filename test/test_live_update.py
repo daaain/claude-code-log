@@ -19,6 +19,7 @@ import pytest
 
 from claude_code_log.converter import process_projects_hierarchy
 from claude_code_log.watch import WatchEngine
+from test.conftest import collect_page_errors
 
 SESSION_ID = "dddddddd-eeee-ffff-0000-111111111111"
 
@@ -772,25 +773,10 @@ class TestLiveUpdateKeepsFilterAndSearch:
     unfolds or opens under the reader (dev-docs/minimal-theme.md § 11)."""
 
     def _open(self, page, base: str, project: Path) -> list[str]:
-        """Like ``TestLiveUpdate._open``, but a failed load of the page's own
-        URL is not an error here: it can only be a live-update poll, which
-        live_update.js catches and retries on the next tick by design, yet
-        Chromium still logs a console error for it (seen as
-        ``net::ERR_CONNECTION_FAILED`` on a Windows runner). Script errors
-        and every other failed load still count."""
-        errors: list[str] = []
+        """Like ``TestLiveUpdate._open``, but a dropped live-update poll is
+        not an error (see ``collect_page_errors``)."""
         url = f"{base}/{project.name}/session-{SESSION_ID}.html"
-
-        def on_console(message) -> None:
-            if message.type != "error":
-                return
-            source = (message.location or {}).get("url", "")
-            if message.text.startswith("Failed to load resource") and source == url:
-                return
-            errors.append(f"{message.text} ({source})" if source else message.text)
-
-        page.on("console", on_console)
-        page.on("pageerror", lambda e: errors.append(str(e)))
+        errors = collect_page_errors(page, url)
         page.goto(url)
         page.wait_for_selector("#transcript")
         return errors
