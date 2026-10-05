@@ -12,7 +12,7 @@ import re
 import time
 from collections import defaultdict
 from collections.abc import Generator, Iterator
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -48,14 +48,22 @@ from .utils import (
     trunk_jsonl_files,
 )
 from .render_pool import RenderUnit, memory_capped_workers, resolve_render_jobs
+from .write_queue import (
+    WriteTurns,
+    as_completed_watching_workers,
+    install_write_turns,
+)
 from .render_dispatch import build_render_pool, dispatch_render_units
 from .cache import (
     CacheManager,
     SessionCacheData,
+    checkpoint_wal,
     connection_lease,
     get_all_cached_projects,
     get_cache_db_path,
     get_library_version,
+    is_busy_database_error,
+    trim_oversized_wal,
 )
 from .parser import parse_timestamp
 from .factories import create_transcript_entry
@@ -6332,7 +6340,7 @@ def _plan_project(
 
 def _convert_project_worker(
     worker_args: Dict[str, Any],
-) -> "tuple[str, float, Optional[str]]":
+) -> "tuple[str, float, Optional[str], bool]":
     """Convert one project inside a pool worker process.
 
     ``worker_args`` is a complete keyword-argument set for
@@ -6343,15 +6351,19 @@ def _convert_project_worker(
     Module-level, with dict-of-picklables in and primitives out, so it
     works under the ``spawn`` start method. Failures are returned as a
     formatted traceback instead of raised so the parent can attribute
-    them to the right project and keep processing the rest.
+    them to the right project and keep processing the rest. The last
+    element says whether the failure was lock contention on the cache
+    database, which the parent retries rather than reports.
     """
     start = time.monotonic()
     error: Optional[str] = None
+    busy = False
     try:
         convert_jsonl_to(**worker_args)
-    except Exception:
+    except Exception as exc:
         error = traceback.format_exc()
-    return (str(worker_args["input_path"]), time.monotonic() - start, error)
+        busy = is_busy_database_error(exc)
+    return (str(worker_args["input_path"]), time.monotonic() - start, error, busy)
 
 
 def process_projects_hierarchy(
@@ -6391,7 +6403,11 @@ def process_projects_hierarchy(
         else contextlib.nullcontext()
     )
     with lease:
-        return _process_projects_hierarchy(
+        if use_cache:
+            # Inside the lease, so the connection that recovers the log
+            # is the one the pass then keeps.
+            trim_oversized_wal(get_cache_db_path(projects_path))
+        result = _process_projects_hierarchy(
             projects_path=projects_path,
             from_date=from_date,
             to_date=to_date,
@@ -6412,6 +6428,11 @@ def process_projects_hierarchy(
             jobs=jobs,
             entry_store=entry_store,
         )
+        if use_cache:
+            # The pass's workers have all exited, so this is the moment the
+            # WAL can be reset — see `checkpoint_wal` (issue #332).
+            checkpoint_wal(get_cache_db_path(projects_path))
+        return result
 
 
 def _process_projects_hierarchy(
@@ -6749,10 +6770,31 @@ def _process_projects_hierarchy(
             "render_jobs": render_jobs,
         }
 
+    # Projects that failed only because another process held the cache's
+    # write lock past the busy timeout. SQLite has one writer at a time, so
+    # with a pool of project workers (plus anything else sharing the cache,
+    # such as a TUI) a long write can lock the others out — issue #332 lost
+    # 23 of 57 projects that way in one `serve` start. The conversion is
+    # idempotent (staleness is re-derived from the cache), so such a
+    # project is retried once the pool has drained and nothing else in
+    # this pass is writing, instead of being reported as failed.
+    locked_out: List[_ProjectPlan] = []
+
+    def _defer_locked_out(plan: _ProjectPlan) -> None:
+        locked_out.append(plan)
+        print(f"  {plan.project_dir.name}: cache busy, will retry")
+
     def _convert_plan_inline(
-        plan: _ProjectPlan, render_jobs: Optional[int] = None
+        plan: _ProjectPlan,
+        render_jobs: Optional[int] = None,
+        *,
+        final_attempt: bool = False,
     ) -> None:
-        """Convert one project in this process, reporting progress/failure."""
+        """Convert one project in this process, reporting progress/failure.
+
+        A lock-contention failure is deferred for retry unless this is
+        already the ``final_attempt``.
+        """
         if render_jobs is None:
             render_jobs = per_project_render_jobs
         project_start_time = time.monotonic()
@@ -6769,7 +6811,10 @@ def _process_projects_hierarchy(
                 **_conversion_kwargs(plan, silent=silent, render_jobs=render_jobs),
                 entry_store=entry_store,
             )
-        except Exception:
+        except Exception as exc:
+            if not final_attempt and is_busy_database_error(exc):
+                _defer_locked_out(plan)
+                return
             _print_project_failed(plan, traceback.format_exc())
             return
         _print_project_done(plan, time.monotonic() - project_start_time)
@@ -6790,7 +6835,17 @@ def _process_projects_hierarchy(
             # each and are reused across projects, so the overhead is a
             # one-off ~1s per worker.
             ctx = multiprocessing.get_context("spawn")
-            with ProcessPoolExecutor(max_workers=resolved_jobs, mp_context=ctx) as pool:
+            # One fair queue for the database's write lock, shared by every
+            # project worker — see `write_queue`. Installed only in the
+            # workers: the parent writes nothing while the pool runs, and
+            # must not inherit a queue a crashed worker may have left stuck
+            # when it falls back to converting inline below.
+            with ProcessPoolExecutor(
+                max_workers=resolved_jobs,
+                mp_context=ctx,
+                initializer=install_write_turns,
+                initargs=(WriteTurns(ctx),),
+            ) as pool:
                 future_to_plan = {
                     pool.submit(
                         _convert_project_worker,
@@ -6806,11 +6861,16 @@ def _process_projects_hierarchy(
                     ): plan
                     for plan in by_size
                 }
-                for future in as_completed(future_to_plan):
+                # Not plain `as_completed`: a worker that dies holding its
+                # write turn would leave the rest queued behind it, and the
+                # executor can miss the death — see `write_queue`.
+                for future in as_completed_watching_workers(pool, future_to_plan):
                     plan = future_to_plan[future]
-                    _dir, elapsed, error = future.result()
+                    _dir, elapsed, error, busy = future.result()
                     settled.add(id(plan))
-                    if error is not None:
+                    if error is not None and busy:
+                        _defer_locked_out(plan)
+                    elif error is not None:
                         _print_project_failed(plan, error)
                     else:
                         _print_project_done(plan, elapsed)
@@ -6837,6 +6897,14 @@ def _process_projects_hierarchy(
     # run ends on the project that dominates the wall.
     for plan in reversed(holdbacks):
         _convert_plan_inline(plan, render_jobs=min(render_budget, job_budget))
+
+    # Everything this pass writes has now finished, so a project locked out
+    # above meets only writers from *other* processes on its retry. A
+    # second lock-out is reported as the failure it then is.
+    for plan in locked_out:
+        _convert_plan_inline(
+            plan, render_jobs=min(render_budget, job_budget), final_attempt=True
+        )
 
     # ---- Phase 3 (collect): aggregate per-project index data from the
     # now-fresh cache. Sequential — cheap cache reads (the no-cache

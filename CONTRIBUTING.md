@@ -477,6 +477,13 @@ The tool implements a SQLite-based caching system for performance:
 - **Location**: `claude-code-log-cache.db` in the projects directory (or set `CLAUDE_CODE_LOG_CACHE_PATH` env var)
 - **Contents**: Pre-parsed session metadata (IDs, summaries, timestamps, token usage)
 - **Invalidation**: Automatic detection based on file modification times
+- **Concurrency**: WAL mode, one writer at a time. Every write goes through
+  `cache.write_transaction`; in the parallel pass, project workers take
+  turns through a fair cross-process queue (`write_queue.py`), so none gives
+  up on a sibling. Against other processes connections wait 30 s
+  (`CLAUDE_CODE_LOG_CACHE_TIMEOUT` overrides, in seconds), and a project
+  locked out is retried after the pool rather than failed. A pass compacts
+  an oversized WAL before it starts and truncates the WAL when it ends
 - **Performance**: 10-100x faster loading for large projects
 
 The cache automatically rebuilds when source files change or cache schema version changes.
