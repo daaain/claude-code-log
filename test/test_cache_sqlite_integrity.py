@@ -1469,12 +1469,21 @@ class TestCorruptDatabaseRecovery:
         ):
             conn.execute(f"DROP INDEX IF EXISTS {name}")
         conn.commit()
-        pages = [
-            r[0]
-            for r in conn.execute(
-                "SELECT pageno FROM dbstat WHERE name='messages' AND pagetype='leaf'"
-            )
-        ]
+        # `dbstat` is a compile-time option (SQLITE_ENABLE_DBSTAT_VTAB) that
+        # some interpreter builds lack, e.g. python-build-standalone's Windows
+        # 3.12.11 / 3.13.7 (SQLite 3.49.1); newer builds carry it.
+        try:
+            pages = [
+                r[0]
+                for r in conn.execute(
+                    "SELECT pageno FROM dbstat WHERE name='messages' AND pagetype='leaf'"
+                )
+            ]
+        except sqlite3.OperationalError as exc:
+            if "no such table: dbstat" not in str(exc):
+                raise
+            conn.close()
+            pytest.skip("this SQLite build lacks the dbstat virtual table")
         # `dbstat.pageno` counts pages of whatever size this database was
         # built with, so read it rather than assuming SQLite's 4096 default.
         page_size = conn.execute("PRAGMA page_size").fetchone()[0]

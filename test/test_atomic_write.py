@@ -141,7 +141,10 @@ def test_symlink_is_written_through_not_replaced(tmp_path: Path) -> None:
     real = tmp_path / "real.md"
     real.write_text("old")
     link = tmp_path / "link.md"
-    link.symlink_to(real)
+    try:
+        link.symlink_to(real)
+    except OSError:
+        pytest.skip("symlinks are unavailable")
 
     atomic_write_text(link, "new")
 

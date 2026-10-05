@@ -108,6 +108,10 @@ build:
     -rm dist/*
     uv build
 
+# The NORMAL path is the tag-driven release workflow (.github/workflows/release.yml
+# — trusted publishing after a maintainer approves, no token anywhere). This one
+# needs PyPI credentials (e.g. UV_PUBLISH_TOKEN) on this machine.
+# Publish dist/ to PyPI from a laptop — the manual escape hatch
 publish:
     uv publish
 
@@ -140,12 +144,20 @@ render-test-data:
 style-guide:
     uv run python scripts/generate_style_guide.py
 
-# Release a new version - e.g. `just release-prep 0.2.5` or `just release-prep minor`
+# Everything here is local: `git tag -d X.Y.Z && git reset --hard HEAD~1` undoes it.
+# Bump, changelog, commit and tag a release - e.g. `just release-prep 0.2.5` or `just release-prep minor`
 release-prep version_or_bump:
     #!/usr/bin/env bash
     set -euo pipefail
 
     echo "🚀 Starting release process"
+
+    # The tag has to name a commit on main: one cut on a branch and then
+    # squash-merged would point at a commit main never has.
+    if [[ "$(git branch --show-current)" != main ]]; then
+        echo "❌ Error: Release from main (on '$(git branch --show-current)')"
+        exit 1
+    fi
 
     if [[ -n $(git status --porcelain) ]]; then
         echo "❌ Error: There are uncommitted changes. Please commit or stash them first."
@@ -236,129 +248,36 @@ release-prep version_or_bump:
     git tag "$VERSION" -m "Release $VERSION"
 
     echo "🎉 Release $VERSION created successfully!"
-    echo "📦 You can now run 'just release-push' to publish to PyPI and GitHub"
+    echo "🔍 Check it with 'just release-preview' and 'git show --stat HEAD'"
+    echo "📦 Then run 'just release-push' to start the release workflow"
 
+# Nothing is published until a maintainer approves the `pypi` deployment in the
+# run — and once it is, PyPI never lets that version number be reused.
+# Push the release commit and tag, starting the release workflow (.github/workflows/release.yml)
 release-push:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    LAST_TAG=$(git tag --sort=-version:refname | head -n 1 || echo "")
-
-    echo "📦 Build and publish package $LAST_TAG"
-    just build
-    just publish
-
-    echo "⬆️  Pushing commit to origin"
-    git push origin main
-
-    echo "🏷️  Pushing tag $LAST_TAG"
-    git push origin $LAST_TAG
-
-    echo "🚀 Creating GitHub release"
-    just github-release
-
-# Create a GitHub release from the latest tag or a specific version
-github-release version="":
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    # Determine which tag to use
-    if [[ -n "{{ version }}" ]]; then
-        TARGET_TAG="{{ version }}"
-        echo "📦 Creating GitHub release for specified version: $TARGET_TAG"
-    else
-        TARGET_TAG=$(git tag --sort=-version:refname | head -n 1)
-        if [[ -z "$TARGET_TAG" ]]; then
-            echo "❌ Error: No tags found"
-            exit 1
-        fi
-        echo "📦 Creating GitHub release for latest tag: $TARGET_TAG"
-    fi
-
-    # Verify the tag exists
-    if ! git rev-parse "$TARGET_TAG" >/dev/null 2>&1; then
-        echo "❌ Error: Tag $TARGET_TAG does not exist"
+    # It pushes the local main, so the release commit has to be on it.
+    if [[ "$(git branch --show-current)" != main ]]; then
+        echo "❌ Error: Release from main (on '$(git branch --show-current)')"
         exit 1
     fi
 
-    # Get all tags sorted by version for finding the previous tag
-    ALL_TAGS=$(git tag --sort=-version:refname)
-
-    # Find the previous tag relative to TARGET_TAG
-    PREVIOUS_TAG=""
-    FOUND_TARGET=false
-    while IFS= read -r tag; do
-        if [[ "$FOUND_TARGET" == true ]]; then
-            PREVIOUS_TAG="$tag"
-            break
-        fi
-        if [[ "$tag" == "$TARGET_TAG" ]]; then
-            FOUND_TARGET=true
-        fi
-    done <<< "$ALL_TAGS"
-
-    echo "📝 Extracting release notes for $TARGET_TAG from CHANGELOG.md"
-
-    # Extract the release notes for this version from CHANGELOG.md
-    # This looks for the section starting with ## [$TARGET_TAG] and extracts until the next ## or end of file
-    RELEASE_NOTES_FILE=$(mktemp)
-    awk -v tag="$TARGET_TAG" '
-        /^## \[/ {
-            if (found && started) exit;
-            if (index($0, "[" tag "]") > 0) {
-                found=1;
-                next;
-            }
-        }
-        found && !started && /^$/ { started=1; next }
-        found && started && /^## \[/ { exit }
-        found && started { print }
-    ' CHANGELOG.md > "$RELEASE_NOTES_FILE"
-
-    # Check if we found any release notes
-    if [[ ! -s "$RELEASE_NOTES_FILE" ]]; then
-        echo "⚠️  Warning: No release notes found for $TARGET_TAG in CHANGELOG.md"
-        echo "Creating release with minimal notes..."
-        echo "Release $TARGET_TAG" > "$RELEASE_NOTES_FILE"
+    TAG=$(git tag --sort=-version:refname | head -n 1)
+    if [[ "$(git rev-parse HEAD)" != "$(git rev-parse "$TAG^{commit}")" ]]; then
+        echo "❌ Error: HEAD is not the latest tag ($TAG) — run 'just release-prep' first"
+        exit 1
     fi
 
-    # Add a link to the full changelog if we have a previous tag
-    if [[ -n "$PREVIOUS_TAG" ]]; then
-        echo "" >> "$RELEASE_NOTES_FILE"
-        echo "**Full Changelog**: https://github.com/daaain/claude-code-log/compare/$PREVIOUS_TAG...$TARGET_TAG" >> "$RELEASE_NOTES_FILE"
-    fi
+    # --atomic: both or neither — a tag pushed without its commit would name
+    # one main doesn't have.
+    echo "⬆️  Pushing main and tag $TAG to origin"
+    git push --atomic origin main "$TAG"
 
-    # Check if the release already exists
-    if gh release view "$TARGET_TAG" &>/dev/null; then
-        echo "⚠️  Release $TARGET_TAG already exists. Updating it..."
-        gh release edit "$TARGET_TAG" \
-            --title "Release $TARGET_TAG" \
-            --notes-file "$RELEASE_NOTES_FILE"
-    else
-        echo "🎉 Creating new GitHub release for $TARGET_TAG"
-        gh release create "$TARGET_TAG" \
-            --title "Release $TARGET_TAG" \
-            --notes-file "$RELEASE_NOTES_FILE"
-    fi
-
-    # Check if we have built artifacts to upload (only for current/latest releases)
-    if [[ -z "{{ version }}" ]] || [[ "$TARGET_TAG" == $(git tag --sort=-version:refname | head -n 1) ]]; then
-        if [[ -f "dist/claude_code_log-${TARGET_TAG#v}.tar.gz" ]]; then
-            echo "📦 Uploading source distribution"
-            gh release upload "$TARGET_TAG" "dist/claude_code_log-${TARGET_TAG#v}.tar.gz" --clobber
-        fi
-
-        if [[ -f "dist/claude_code_log-${TARGET_TAG#v}-py3-none-any.whl" ]]; then
-            echo "📦 Uploading wheel distribution"
-            gh release upload "$TARGET_TAG" "dist/claude_code_log-${TARGET_TAG#v}-py3-none-any.whl" --clobber
-        fi
-        # The example transcript showcase is published to the docs site
-        # (see docs/gen_pages.py), not attached to releases.
-    fi
-
-    rm "$RELEASE_NOTES_FILE"
-    echo "✅ GitHub release created/updated successfully!"
-    echo "🔗 View it at: https://github.com/daaain/claude-code-log/releases/tag/$TARGET_TAG"
+    echo "⏳ The release workflow waits for CI on the release commit, then for a maintainer"
+    echo "   to approve the PyPI deployment; the GitHub Release follows PyPI:"
+    echo "🔗 https://github.com/daaain/claude-code-log/actions/workflows/release.yml"
 
 # Helper command to preview what would be in the GitHub release
 release-preview version="":
@@ -389,18 +308,7 @@ release-preview version="":
     fi
 
     echo ""
-    awk -v tag="$TARGET_TAG" '
-        /^## \[/ {
-            if (found && started) exit;
-            if (index($0, "[" tag "]") > 0) {
-                found=1;
-                next;
-            }
-        }
-        found && !started && /^$/ { started=1; next }
-        found && started && /^## \[/ { exit }
-        found && started { print }
-    ' CHANGELOG.md
+    uv run --no-project python scripts/release_notes.py "$TARGET_TAG"
 
 # Render the showcase example transcript from bundled sample data into
 # test_output/ for local preview. The docs build publishes its own copy to the

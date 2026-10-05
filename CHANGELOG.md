@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [1.7.0] - 2026-10-05
+
+### Changed
+
+- **(Claude) Upgrade wenmode to 0.15.2 and bump to 1.7.0 (#340)**
+- **Release to PyPI from a tag-driven, maintainer-approved workflow (#341)**
+- **(Claude) Show the logical-parent arrow on a /compact boundary's uuid line (#338)**
+- **(Claude) Drop the host icon before a tool_result title that has its own (#337)**
+- **Keep a Markdown message's body when its title is empty (#336)**
+- **fix(search): report an unreadable cache as such, not as a missing FTS5 (#334)**
+- **Continue the rewind branch across a /compact boundary (#331)**
+- **Run the fail-fast just ci steps before the test suite**
+- **Switch the Markdown engine from mistune to wenmode (#329)**
+- **Resolve commit SHAs from one rev-list per repository (#330)**
+- **Render peer agent messages as teammate cards instead of steering (#309) (#328)**
+- **Apply the cache's write pragmas to every writing connection (#326)**
+- **Link teammate subagent transcripts spawned by the Agent tool (#316)**
+- **Re-parse cached entries when the shape of what we cache changes (#320) (#322)**
+- **Make watch ticks cheap (#321)**
+- **Update some README bits**
+
+
 ## [1.6.0] - 2026-08-31
 
 ### Changed
