@@ -33,9 +33,11 @@ class TestSearchBrowser:
             except FileNotFoundError:
                 pass
 
-    def _create_temp_html(self, messages: List[TranscriptEntry], title: str) -> Path:
+    def _create_temp_html(
+        self, messages: List[TranscriptEntry], title: str, theme: str = "classic"
+    ) -> Path:
         """Create a temporary HTML file for testing."""
-        html_content = generate_html(messages, title)
+        html_content = generate_html(messages, title, theme=theme)
 
         with tempfile.NamedTemporaryFile(suffix=".html", delete=False) as f:
             temp_file = Path(f.name)
@@ -276,6 +278,48 @@ class TestSearchBrowser:
         expect(page.locator(".message.search-hidden")).to_have_count(0)
         expect(page.locator(".message.search-match")).to_have_count(0)
         expect(page.locator(".search-highlight")).to_have_count(0)
+
+    @pytest.mark.browser
+    @pytest.mark.parametrize("theme", ["classic", "minimal"])
+    def test_escape_keeps_the_current_match_in_place(self, page: Page, theme: str):
+        """Clearing brings every hidden message back, most of them above the
+        reader; the match being read stays where it was on screen instead of
+        being pushed out of the viewport (both themes: the minimal one lays
+        the page out again a frame later)."""
+        messages = load_transcript(Path("test/test_data/representative_messages.jsonl"))
+        temp_file = self._create_temp_html(messages, f"Search Anchor {theme}", theme)
+        page.goto(f"file://{temp_file}")
+        page.evaluate("localStorage.clear()")
+        page.reload()
+
+        self._search_for(page, "decorator")
+        page.keyboard.press("Shift+Enter")  # wraps to the last match
+        settle = """() => new Promise(done => {
+            let last = -1, still = 0;
+            const tick = () => {
+                still = scrollY === last ? still + 1 : 0;
+                last = scrollY;
+                if (still > 5) done(); else requestAnimationFrame(tick);
+            };
+            tick();
+        })"""
+        page.evaluate(settle)
+        top = """() => document.querySelector('.search-highlight.current')
+            .closest('.message').getBoundingClientRect().top"""
+        current = page.locator(".search-highlight.current").first.evaluate(
+            "el => el.closest('.message').id"
+        )
+        before = page.evaluate(top)
+
+        page.keyboard.press("Escape")
+        expect(page.locator(".message.search-hidden")).to_have_count(0)
+        page.evaluate(settle)
+
+        after = page.evaluate(
+            "id => document.getElementById(id).getBoundingClientRect().top", current
+        )
+        assert abs(after - before) <= 2, (before, after)
+        assert 0 <= after < page.viewport_size["height"]
 
     @pytest.mark.browser
     def test_match_navigation(self, page: Page):

@@ -7466,8 +7466,8 @@
           clearHighlights();
   
           if (!query) {
+              keepScrollAnchor(clearSearchFilterClasses);
               searchState.matches = [];
-              clearSearchFilterClasses();
               updateSearchUI();
               if (searchState.isIndexPage && searchResultsPanel) {
                   searchResultsPanel.classList.remove('visible');
@@ -7897,15 +7897,44 @@
           }
       }
   
+      // Leaving search brings back every message it hid, most of them above
+      // where the reader is: keep the current match (else the message at the
+      // top of the viewport) at the same place on screen across `change`.
+      function keepScrollAnchor(change) {
+          const current = searchState.matches[searchState.currentMatchIndex];
+          let anchor = current && current.element.offsetParent !== null ? current.element : null;
+          if (!anchor && !searchState.isIndexPage) {
+              const hit = document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 3);
+              anchor = hit && hit.closest ? hit.closest('.message') : null;
+          }
+          if (!anchor) {
+              change();
+              return;
+          }
+          const before = anchor.getBoundingClientRect().top;
+          change();
+          const restore = () => {
+              if (!anchor.isConnected || anchor.offsetParent === null) return;
+              const delta = anchor.getBoundingClientRect().top - before;
+              if (Math.abs(delta) > 1) window.scrollBy({ top: delta, behavior: 'instant' });
+          };
+          restore();
+          // The minimal theme lays the page out again on the next frame (its
+          // DAG engine observes the filter classes and schedules the relayout
+          // from a MutationObserver): queued behind that observer's microtask,
+          // this frame callback runs after the relayout, before paint.
+          queueMicrotask(() => requestAnimationFrame(restore));
+      }
+  
       // Clear search
       function clearSearch() {
           searchInput.value = '';
           searchState.query = '';
-          searchState.matches = [];
-          searchState.currentMatchIndex = 0;
           updateSearchInputState();
           clearHighlights();
-          clearSearchFilterClasses();
+          keepScrollAnchor(clearSearchFilterClasses);
+          searchState.matches = [];
+          searchState.currentMatchIndex = 0;
           updateSearchUI();
   
           if (searchState.isIndexPage && searchResultsPanel) {
@@ -15472,8 +15501,8 @@
           clearHighlights();
   
           if (!query) {
+              keepScrollAnchor(clearSearchFilterClasses);
               searchState.matches = [];
-              clearSearchFilterClasses();
               updateSearchUI();
               if (searchState.isIndexPage && searchResultsPanel) {
                   searchResultsPanel.classList.remove('visible');
@@ -15903,15 +15932,44 @@
           }
       }
   
+      // Leaving search brings back every message it hid, most of them above
+      // where the reader is: keep the current match (else the message at the
+      // top of the viewport) at the same place on screen across `change`.
+      function keepScrollAnchor(change) {
+          const current = searchState.matches[searchState.currentMatchIndex];
+          let anchor = current && current.element.offsetParent !== null ? current.element : null;
+          if (!anchor && !searchState.isIndexPage) {
+              const hit = document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 3);
+              anchor = hit && hit.closest ? hit.closest('.message') : null;
+          }
+          if (!anchor) {
+              change();
+              return;
+          }
+          const before = anchor.getBoundingClientRect().top;
+          change();
+          const restore = () => {
+              if (!anchor.isConnected || anchor.offsetParent === null) return;
+              const delta = anchor.getBoundingClientRect().top - before;
+              if (Math.abs(delta) > 1) window.scrollBy({ top: delta, behavior: 'instant' });
+          };
+          restore();
+          // The minimal theme lays the page out again on the next frame (its
+          // DAG engine observes the filter classes and schedules the relayout
+          // from a MutationObserver): queued behind that observer's microtask,
+          // this frame callback runs after the relayout, before paint.
+          queueMicrotask(() => requestAnimationFrame(restore));
+      }
+  
       // Clear search
       function clearSearch() {
           searchInput.value = '';
           searchState.query = '';
-          searchState.matches = [];
-          searchState.currentMatchIndex = 0;
           updateSearchInputState();
           clearHighlights();
-          clearSearchFilterClasses();
+          keepScrollAnchor(clearSearchFilterClasses);
+          searchState.matches = [];
+          searchState.currentMatchIndex = 0;
           updateSearchUI();
   
           if (searchState.isIndexPage && searchResultsPanel) {
@@ -17895,8 +17953,8 @@
           clearHighlights();
   
           if (!query) {
+              keepScrollAnchor(clearSearchFilterClasses);
               searchState.matches = [];
-              clearSearchFilterClasses();
               updateSearchUI();
               if (searchState.isIndexPage && searchResultsPanel) {
                   searchResultsPanel.classList.remove('visible');
@@ -18326,15 +18384,44 @@
           }
       }
   
+      // Leaving search brings back every message it hid, most of them above
+      // where the reader is: keep the current match (else the message at the
+      // top of the viewport) at the same place on screen across `change`.
+      function keepScrollAnchor(change) {
+          const current = searchState.matches[searchState.currentMatchIndex];
+          let anchor = current && current.element.offsetParent !== null ? current.element : null;
+          if (!anchor && !searchState.isIndexPage) {
+              const hit = document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 3);
+              anchor = hit && hit.closest ? hit.closest('.message') : null;
+          }
+          if (!anchor) {
+              change();
+              return;
+          }
+          const before = anchor.getBoundingClientRect().top;
+          change();
+          const restore = () => {
+              if (!anchor.isConnected || anchor.offsetParent === null) return;
+              const delta = anchor.getBoundingClientRect().top - before;
+              if (Math.abs(delta) > 1) window.scrollBy({ top: delta, behavior: 'instant' });
+          };
+          restore();
+          // The minimal theme lays the page out again on the next frame (its
+          // DAG engine observes the filter classes and schedules the relayout
+          // from a MutationObserver): queued behind that observer's microtask,
+          // this frame callback runs after the relayout, before paint.
+          queueMicrotask(() => requestAnimationFrame(restore));
+      }
+  
       // Clear search
       function clearSearch() {
           searchInput.value = '';
           searchState.query = '';
-          searchState.matches = [];
-          searchState.currentMatchIndex = 0;
           updateSearchInputState();
           clearHighlights();
-          clearSearchFilterClasses();
+          keepScrollAnchor(clearSearchFilterClasses);
+          searchState.matches = [];
+          searchState.currentMatchIndex = 0;
           updateSearchUI();
   
           if (searchState.isIndexPage && searchResultsPanel) {
@@ -33254,8 +33341,8 @@
           clearHighlights();
   
           if (!query) {
+              keepScrollAnchor(clearSearchFilterClasses);
               searchState.matches = [];
-              clearSearchFilterClasses();
               updateSearchUI();
               if (searchState.isIndexPage && searchResultsPanel) {
                   searchResultsPanel.classList.remove('visible');
@@ -33686,15 +33773,44 @@
           }
       }
   
+      // Leaving search brings back every message it hid, most of them above
+      // where the reader is: keep the current match (else the message at the
+      // top of the viewport) at the same place on screen across `change`.
+      function keepScrollAnchor(change) {
+          const current = searchState.matches[searchState.currentMatchIndex];
+          let anchor = current && current.element.offsetParent !== null ? current.element : null;
+          if (!anchor && !searchState.isIndexPage) {
+              const hit = document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 3);
+              anchor = hit && hit.closest ? hit.closest('.message') : null;
+          }
+          if (!anchor) {
+              change();
+              return;
+          }
+          const before = anchor.getBoundingClientRect().top;
+          change();
+          const restore = () => {
+              if (!anchor.isConnected || anchor.offsetParent === null) return;
+              const delta = anchor.getBoundingClientRect().top - before;
+              if (Math.abs(delta) > 1) window.scrollBy({ top: delta, behavior: 'instant' });
+          };
+          restore();
+          // The minimal theme lays the page out again on the next frame (its
+          // DAG engine observes the filter classes and schedules the relayout
+          // from a MutationObserver): queued behind that observer's microtask,
+          // this frame callback runs after the relayout, before paint.
+          queueMicrotask(() => requestAnimationFrame(restore));
+      }
+  
       // Clear search
       function clearSearch() {
           searchInput.value = '';
           searchState.query = '';
-          searchState.matches = [];
-          searchState.currentMatchIndex = 0;
           updateSearchInputState();
           clearHighlights();
-          clearSearchFilterClasses();
+          keepScrollAnchor(clearSearchFilterClasses);
+          searchState.matches = [];
+          searchState.currentMatchIndex = 0;
           updateSearchUI();
   
           if (searchState.isIndexPage && searchResultsPanel) {
@@ -48277,8 +48393,8 @@
           clearHighlights();
   
           if (!query) {
+              keepScrollAnchor(clearSearchFilterClasses);
               searchState.matches = [];
-              clearSearchFilterClasses();
               updateSearchUI();
               if (searchState.isIndexPage && searchResultsPanel) {
                   searchResultsPanel.classList.remove('visible');
@@ -48709,15 +48825,44 @@
           }
       }
   
+      // Leaving search brings back every message it hid, most of them above
+      // where the reader is: keep the current match (else the message at the
+      // top of the viewport) at the same place on screen across `change`.
+      function keepScrollAnchor(change) {
+          const current = searchState.matches[searchState.currentMatchIndex];
+          let anchor = current && current.element.offsetParent !== null ? current.element : null;
+          if (!anchor && !searchState.isIndexPage) {
+              const hit = document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 3);
+              anchor = hit && hit.closest ? hit.closest('.message') : null;
+          }
+          if (!anchor) {
+              change();
+              return;
+          }
+          const before = anchor.getBoundingClientRect().top;
+          change();
+          const restore = () => {
+              if (!anchor.isConnected || anchor.offsetParent === null) return;
+              const delta = anchor.getBoundingClientRect().top - before;
+              if (Math.abs(delta) > 1) window.scrollBy({ top: delta, behavior: 'instant' });
+          };
+          restore();
+          // The minimal theme lays the page out again on the next frame (its
+          // DAG engine observes the filter classes and schedules the relayout
+          // from a MutationObserver): queued behind that observer's microtask,
+          // this frame callback runs after the relayout, before paint.
+          queueMicrotask(() => requestAnimationFrame(restore));
+      }
+  
       // Clear search
       function clearSearch() {
           searchInput.value = '';
           searchState.query = '';
-          searchState.matches = [];
-          searchState.currentMatchIndex = 0;
           updateSearchInputState();
           clearHighlights();
-          clearSearchFilterClasses();
+          keepScrollAnchor(clearSearchFilterClasses);
+          searchState.matches = [];
+          searchState.currentMatchIndex = 0;
           updateSearchUI();
   
           if (searchState.isIndexPage && searchResultsPanel) {
@@ -54256,8 +54401,8 @@
           clearHighlights();
   
           if (!query) {
+              keepScrollAnchor(clearSearchFilterClasses);
               searchState.matches = [];
-              clearSearchFilterClasses();
               updateSearchUI();
               if (searchState.isIndexPage && searchResultsPanel) {
                   searchResultsPanel.classList.remove('visible');
@@ -54688,15 +54833,44 @@
           }
       }
   
+      // Leaving search brings back every message it hid, most of them above
+      // where the reader is: keep the current match (else the message at the
+      // top of the viewport) at the same place on screen across `change`.
+      function keepScrollAnchor(change) {
+          const current = searchState.matches[searchState.currentMatchIndex];
+          let anchor = current && current.element.offsetParent !== null ? current.element : null;
+          if (!anchor && !searchState.isIndexPage) {
+              const hit = document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 3);
+              anchor = hit && hit.closest ? hit.closest('.message') : null;
+          }
+          if (!anchor) {
+              change();
+              return;
+          }
+          const before = anchor.getBoundingClientRect().top;
+          change();
+          const restore = () => {
+              if (!anchor.isConnected || anchor.offsetParent === null) return;
+              const delta = anchor.getBoundingClientRect().top - before;
+              if (Math.abs(delta) > 1) window.scrollBy({ top: delta, behavior: 'instant' });
+          };
+          restore();
+          // The minimal theme lays the page out again on the next frame (its
+          // DAG engine observes the filter classes and schedules the relayout
+          // from a MutationObserver): queued behind that observer's microtask,
+          // this frame callback runs after the relayout, before paint.
+          queueMicrotask(() => requestAnimationFrame(restore));
+      }
+  
       // Clear search
       function clearSearch() {
           searchInput.value = '';
           searchState.query = '';
-          searchState.matches = [];
-          searchState.currentMatchIndex = 0;
           updateSearchInputState();
           clearHighlights();
-          clearSearchFilterClasses();
+          keepScrollAnchor(clearSearchFilterClasses);
+          searchState.matches = [];
+          searchState.currentMatchIndex = 0;
           updateSearchUI();
   
           if (searchState.isIndexPage && searchResultsPanel) {
@@ -58158,8 +58332,8 @@
           clearHighlights();
   
           if (!query) {
+              keepScrollAnchor(clearSearchFilterClasses);
               searchState.matches = [];
-              clearSearchFilterClasses();
               updateSearchUI();
               if (searchState.isIndexPage && searchResultsPanel) {
                   searchResultsPanel.classList.remove('visible');
@@ -58590,15 +58764,44 @@
           }
       }
   
+      // Leaving search brings back every message it hid, most of them above
+      // where the reader is: keep the current match (else the message at the
+      // top of the viewport) at the same place on screen across `change`.
+      function keepScrollAnchor(change) {
+          const current = searchState.matches[searchState.currentMatchIndex];
+          let anchor = current && current.element.offsetParent !== null ? current.element : null;
+          if (!anchor && !searchState.isIndexPage) {
+              const hit = document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 3);
+              anchor = hit && hit.closest ? hit.closest('.message') : null;
+          }
+          if (!anchor) {
+              change();
+              return;
+          }
+          const before = anchor.getBoundingClientRect().top;
+          change();
+          const restore = () => {
+              if (!anchor.isConnected || anchor.offsetParent === null) return;
+              const delta = anchor.getBoundingClientRect().top - before;
+              if (Math.abs(delta) > 1) window.scrollBy({ top: delta, behavior: 'instant' });
+          };
+          restore();
+          // The minimal theme lays the page out again on the next frame (its
+          // DAG engine observes the filter classes and schedules the relayout
+          // from a MutationObserver): queued behind that observer's microtask,
+          // this frame callback runs after the relayout, before paint.
+          queueMicrotask(() => requestAnimationFrame(restore));
+      }
+  
       // Clear search
       function clearSearch() {
           searchInput.value = '';
           searchState.query = '';
-          searchState.matches = [];
-          searchState.currentMatchIndex = 0;
           updateSearchInputState();
           clearHighlights();
-          clearSearchFilterClasses();
+          keepScrollAnchor(clearSearchFilterClasses);
+          searchState.matches = [];
+          searchState.currentMatchIndex = 0;
           updateSearchUI();
   
           if (searchState.isIndexPage && searchResultsPanel) {
@@ -70685,8 +70888,8 @@
           clearHighlights();
   
           if (!query) {
+              keepScrollAnchor(clearSearchFilterClasses);
               searchState.matches = [];
-              clearSearchFilterClasses();
               updateSearchUI();
               if (searchState.isIndexPage && searchResultsPanel) {
                   searchResultsPanel.classList.remove('visible');
@@ -71117,15 +71320,44 @@
           }
       }
   
+      // Leaving search brings back every message it hid, most of them above
+      // where the reader is: keep the current match (else the message at the
+      // top of the viewport) at the same place on screen across `change`.
+      function keepScrollAnchor(change) {
+          const current = searchState.matches[searchState.currentMatchIndex];
+          let anchor = current && current.element.offsetParent !== null ? current.element : null;
+          if (!anchor && !searchState.isIndexPage) {
+              const hit = document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 3);
+              anchor = hit && hit.closest ? hit.closest('.message') : null;
+          }
+          if (!anchor) {
+              change();
+              return;
+          }
+          const before = anchor.getBoundingClientRect().top;
+          change();
+          const restore = () => {
+              if (!anchor.isConnected || anchor.offsetParent === null) return;
+              const delta = anchor.getBoundingClientRect().top - before;
+              if (Math.abs(delta) > 1) window.scrollBy({ top: delta, behavior: 'instant' });
+          };
+          restore();
+          // The minimal theme lays the page out again on the next frame (its
+          // DAG engine observes the filter classes and schedules the relayout
+          // from a MutationObserver): queued behind that observer's microtask,
+          // this frame callback runs after the relayout, before paint.
+          queueMicrotask(() => requestAnimationFrame(restore));
+      }
+  
       // Clear search
       function clearSearch() {
           searchInput.value = '';
           searchState.query = '';
-          searchState.matches = [];
-          searchState.currentMatchIndex = 0;
           updateSearchInputState();
           clearHighlights();
-          clearSearchFilterClasses();
+          keepScrollAnchor(clearSearchFilterClasses);
+          searchState.matches = [];
+          searchState.currentMatchIndex = 0;
           updateSearchUI();
   
           if (searchState.isIndexPage && searchResultsPanel) {
@@ -81270,8 +81502,8 @@
           clearHighlights();
   
           if (!query) {
+              keepScrollAnchor(clearSearchFilterClasses);
               searchState.matches = [];
-              clearSearchFilterClasses();
               updateSearchUI();
               if (searchState.isIndexPage && searchResultsPanel) {
                   searchResultsPanel.classList.remove('visible');
@@ -81701,15 +81933,44 @@
           }
       }
   
+      // Leaving search brings back every message it hid, most of them above
+      // where the reader is: keep the current match (else the message at the
+      // top of the viewport) at the same place on screen across `change`.
+      function keepScrollAnchor(change) {
+          const current = searchState.matches[searchState.currentMatchIndex];
+          let anchor = current && current.element.offsetParent !== null ? current.element : null;
+          if (!anchor && !searchState.isIndexPage) {
+              const hit = document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 3);
+              anchor = hit && hit.closest ? hit.closest('.message') : null;
+          }
+          if (!anchor) {
+              change();
+              return;
+          }
+          const before = anchor.getBoundingClientRect().top;
+          change();
+          const restore = () => {
+              if (!anchor.isConnected || anchor.offsetParent === null) return;
+              const delta = anchor.getBoundingClientRect().top - before;
+              if (Math.abs(delta) > 1) window.scrollBy({ top: delta, behavior: 'instant' });
+          };
+          restore();
+          // The minimal theme lays the page out again on the next frame (its
+          // DAG engine observes the filter classes and schedules the relayout
+          // from a MutationObserver): queued behind that observer's microtask,
+          // this frame callback runs after the relayout, before paint.
+          queueMicrotask(() => requestAnimationFrame(restore));
+      }
+  
       // Clear search
       function clearSearch() {
           searchInput.value = '';
           searchState.query = '';
-          searchState.matches = [];
-          searchState.currentMatchIndex = 0;
           updateSearchInputState();
           clearHighlights();
-          clearSearchFilterClasses();
+          keepScrollAnchor(clearSearchFilterClasses);
+          searchState.matches = [];
+          searchState.currentMatchIndex = 0;
           updateSearchUI();
   
           if (searchState.isIndexPage && searchResultsPanel) {
@@ -89779,8 +90040,8 @@
           clearHighlights();
   
           if (!query) {
+              keepScrollAnchor(clearSearchFilterClasses);
               searchState.matches = [];
-              clearSearchFilterClasses();
               updateSearchUI();
               if (searchState.isIndexPage && searchResultsPanel) {
                   searchResultsPanel.classList.remove('visible');
@@ -90210,15 +90471,44 @@
           }
       }
   
+      // Leaving search brings back every message it hid, most of them above
+      // where the reader is: keep the current match (else the message at the
+      // top of the viewport) at the same place on screen across `change`.
+      function keepScrollAnchor(change) {
+          const current = searchState.matches[searchState.currentMatchIndex];
+          let anchor = current && current.element.offsetParent !== null ? current.element : null;
+          if (!anchor && !searchState.isIndexPage) {
+              const hit = document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 3);
+              anchor = hit && hit.closest ? hit.closest('.message') : null;
+          }
+          if (!anchor) {
+              change();
+              return;
+          }
+          const before = anchor.getBoundingClientRect().top;
+          change();
+          const restore = () => {
+              if (!anchor.isConnected || anchor.offsetParent === null) return;
+              const delta = anchor.getBoundingClientRect().top - before;
+              if (Math.abs(delta) > 1) window.scrollBy({ top: delta, behavior: 'instant' });
+          };
+          restore();
+          // The minimal theme lays the page out again on the next frame (its
+          // DAG engine observes the filter classes and schedules the relayout
+          // from a MutationObserver): queued behind that observer's microtask,
+          // this frame callback runs after the relayout, before paint.
+          queueMicrotask(() => requestAnimationFrame(restore));
+      }
+  
       // Clear search
       function clearSearch() {
           searchInput.value = '';
           searchState.query = '';
-          searchState.matches = [];
-          searchState.currentMatchIndex = 0;
           updateSearchInputState();
           clearHighlights();
-          clearSearchFilterClasses();
+          keepScrollAnchor(clearSearchFilterClasses);
+          searchState.matches = [];
+          searchState.currentMatchIndex = 0;
           updateSearchUI();
   
           if (searchState.isIndexPage && searchResultsPanel) {
@@ -98235,8 +98525,8 @@
           clearHighlights();
   
           if (!query) {
+              keepScrollAnchor(clearSearchFilterClasses);
               searchState.matches = [];
-              clearSearchFilterClasses();
               updateSearchUI();
               if (searchState.isIndexPage && searchResultsPanel) {
                   searchResultsPanel.classList.remove('visible');
@@ -98666,15 +98956,44 @@
           }
       }
   
+      // Leaving search brings back every message it hid, most of them above
+      // where the reader is: keep the current match (else the message at the
+      // top of the viewport) at the same place on screen across `change`.
+      function keepScrollAnchor(change) {
+          const current = searchState.matches[searchState.currentMatchIndex];
+          let anchor = current && current.element.offsetParent !== null ? current.element : null;
+          if (!anchor && !searchState.isIndexPage) {
+              const hit = document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 3);
+              anchor = hit && hit.closest ? hit.closest('.message') : null;
+          }
+          if (!anchor) {
+              change();
+              return;
+          }
+          const before = anchor.getBoundingClientRect().top;
+          change();
+          const restore = () => {
+              if (!anchor.isConnected || anchor.offsetParent === null) return;
+              const delta = anchor.getBoundingClientRect().top - before;
+              if (Math.abs(delta) > 1) window.scrollBy({ top: delta, behavior: 'instant' });
+          };
+          restore();
+          // The minimal theme lays the page out again on the next frame (its
+          // DAG engine observes the filter classes and schedules the relayout
+          // from a MutationObserver): queued behind that observer's microtask,
+          // this frame callback runs after the relayout, before paint.
+          queueMicrotask(() => requestAnimationFrame(restore));
+      }
+  
       // Clear search
       function clearSearch() {
           searchInput.value = '';
           searchState.query = '';
-          searchState.matches = [];
-          searchState.currentMatchIndex = 0;
           updateSearchInputState();
           clearHighlights();
-          clearSearchFilterClasses();
+          keepScrollAnchor(clearSearchFilterClasses);
+          searchState.matches = [];
+          searchState.currentMatchIndex = 0;
           updateSearchUI();
   
           if (searchState.isIndexPage && searchResultsPanel) {
@@ -106636,8 +106955,8 @@
           clearHighlights();
   
           if (!query) {
+              keepScrollAnchor(clearSearchFilterClasses);
               searchState.matches = [];
-              clearSearchFilterClasses();
               updateSearchUI();
               if (searchState.isIndexPage && searchResultsPanel) {
                   searchResultsPanel.classList.remove('visible');
@@ -107067,15 +107386,44 @@
           }
       }
   
+      // Leaving search brings back every message it hid, most of them above
+      // where the reader is: keep the current match (else the message at the
+      // top of the viewport) at the same place on screen across `change`.
+      function keepScrollAnchor(change) {
+          const current = searchState.matches[searchState.currentMatchIndex];
+          let anchor = current && current.element.offsetParent !== null ? current.element : null;
+          if (!anchor && !searchState.isIndexPage) {
+              const hit = document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 3);
+              anchor = hit && hit.closest ? hit.closest('.message') : null;
+          }
+          if (!anchor) {
+              change();
+              return;
+          }
+          const before = anchor.getBoundingClientRect().top;
+          change();
+          const restore = () => {
+              if (!anchor.isConnected || anchor.offsetParent === null) return;
+              const delta = anchor.getBoundingClientRect().top - before;
+              if (Math.abs(delta) > 1) window.scrollBy({ top: delta, behavior: 'instant' });
+          };
+          restore();
+          // The minimal theme lays the page out again on the next frame (its
+          // DAG engine observes the filter classes and schedules the relayout
+          // from a MutationObserver): queued behind that observer's microtask,
+          // this frame callback runs after the relayout, before paint.
+          queueMicrotask(() => requestAnimationFrame(restore));
+      }
+  
       // Clear search
       function clearSearch() {
           searchInput.value = '';
           searchState.query = '';
-          searchState.matches = [];
-          searchState.currentMatchIndex = 0;
           updateSearchInputState();
           clearHighlights();
-          clearSearchFilterClasses();
+          keepScrollAnchor(clearSearchFilterClasses);
+          searchState.matches = [];
+          searchState.currentMatchIndex = 0;
           updateSearchUI();
   
           if (searchState.isIndexPage && searchResultsPanel) {
@@ -114865,8 +115213,8 @@
           clearHighlights();
   
           if (!query) {
+              keepScrollAnchor(clearSearchFilterClasses);
               searchState.matches = [];
-              clearSearchFilterClasses();
               updateSearchUI();
               if (searchState.isIndexPage && searchResultsPanel) {
                   searchResultsPanel.classList.remove('visible');
@@ -115296,15 +115644,44 @@
           }
       }
   
+      // Leaving search brings back every message it hid, most of them above
+      // where the reader is: keep the current match (else the message at the
+      // top of the viewport) at the same place on screen across `change`.
+      function keepScrollAnchor(change) {
+          const current = searchState.matches[searchState.currentMatchIndex];
+          let anchor = current && current.element.offsetParent !== null ? current.element : null;
+          if (!anchor && !searchState.isIndexPage) {
+              const hit = document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 3);
+              anchor = hit && hit.closest ? hit.closest('.message') : null;
+          }
+          if (!anchor) {
+              change();
+              return;
+          }
+          const before = anchor.getBoundingClientRect().top;
+          change();
+          const restore = () => {
+              if (!anchor.isConnected || anchor.offsetParent === null) return;
+              const delta = anchor.getBoundingClientRect().top - before;
+              if (Math.abs(delta) > 1) window.scrollBy({ top: delta, behavior: 'instant' });
+          };
+          restore();
+          // The minimal theme lays the page out again on the next frame (its
+          // DAG engine observes the filter classes and schedules the relayout
+          // from a MutationObserver): queued behind that observer's microtask,
+          // this frame callback runs after the relayout, before paint.
+          queueMicrotask(() => requestAnimationFrame(restore));
+      }
+  
       // Clear search
       function clearSearch() {
           searchInput.value = '';
           searchState.query = '';
-          searchState.matches = [];
-          searchState.currentMatchIndex = 0;
           updateSearchInputState();
           clearHighlights();
-          clearSearchFilterClasses();
+          keepScrollAnchor(clearSearchFilterClasses);
+          searchState.matches = [];
+          searchState.currentMatchIndex = 0;
           updateSearchUI();
   
           if (searchState.isIndexPage && searchResultsPanel) {
@@ -122899,8 +123276,8 @@
           clearHighlights();
   
           if (!query) {
+              keepScrollAnchor(clearSearchFilterClasses);
               searchState.matches = [];
-              clearSearchFilterClasses();
               updateSearchUI();
               if (searchState.isIndexPage && searchResultsPanel) {
                   searchResultsPanel.classList.remove('visible');
@@ -123330,15 +123707,44 @@
           }
       }
   
+      // Leaving search brings back every message it hid, most of them above
+      // where the reader is: keep the current match (else the message at the
+      // top of the viewport) at the same place on screen across `change`.
+      function keepScrollAnchor(change) {
+          const current = searchState.matches[searchState.currentMatchIndex];
+          let anchor = current && current.element.offsetParent !== null ? current.element : null;
+          if (!anchor && !searchState.isIndexPage) {
+              const hit = document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 3);
+              anchor = hit && hit.closest ? hit.closest('.message') : null;
+          }
+          if (!anchor) {
+              change();
+              return;
+          }
+          const before = anchor.getBoundingClientRect().top;
+          change();
+          const restore = () => {
+              if (!anchor.isConnected || anchor.offsetParent === null) return;
+              const delta = anchor.getBoundingClientRect().top - before;
+              if (Math.abs(delta) > 1) window.scrollBy({ top: delta, behavior: 'instant' });
+          };
+          restore();
+          // The minimal theme lays the page out again on the next frame (its
+          // DAG engine observes the filter classes and schedules the relayout
+          // from a MutationObserver): queued behind that observer's microtask,
+          // this frame callback runs after the relayout, before paint.
+          queueMicrotask(() => requestAnimationFrame(restore));
+      }
+  
       // Clear search
       function clearSearch() {
           searchInput.value = '';
           searchState.query = '';
-          searchState.matches = [];
-          searchState.currentMatchIndex = 0;
           updateSearchInputState();
           clearHighlights();
-          clearSearchFilterClasses();
+          keepScrollAnchor(clearSearchFilterClasses);
+          searchState.matches = [];
+          searchState.currentMatchIndex = 0;
           updateSearchUI();
   
           if (searchState.isIndexPage && searchResultsPanel) {
@@ -130882,8 +131288,8 @@
           clearHighlights();
   
           if (!query) {
+              keepScrollAnchor(clearSearchFilterClasses);
               searchState.matches = [];
-              clearSearchFilterClasses();
               updateSearchUI();
               if (searchState.isIndexPage && searchResultsPanel) {
                   searchResultsPanel.classList.remove('visible');
@@ -131313,15 +131719,44 @@
           }
       }
   
+      // Leaving search brings back every message it hid, most of them above
+      // where the reader is: keep the current match (else the message at the
+      // top of the viewport) at the same place on screen across `change`.
+      function keepScrollAnchor(change) {
+          const current = searchState.matches[searchState.currentMatchIndex];
+          let anchor = current && current.element.offsetParent !== null ? current.element : null;
+          if (!anchor && !searchState.isIndexPage) {
+              const hit = document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 3);
+              anchor = hit && hit.closest ? hit.closest('.message') : null;
+          }
+          if (!anchor) {
+              change();
+              return;
+          }
+          const before = anchor.getBoundingClientRect().top;
+          change();
+          const restore = () => {
+              if (!anchor.isConnected || anchor.offsetParent === null) return;
+              const delta = anchor.getBoundingClientRect().top - before;
+              if (Math.abs(delta) > 1) window.scrollBy({ top: delta, behavior: 'instant' });
+          };
+          restore();
+          // The minimal theme lays the page out again on the next frame (its
+          // DAG engine observes the filter classes and schedules the relayout
+          // from a MutationObserver): queued behind that observer's microtask,
+          // this frame callback runs after the relayout, before paint.
+          queueMicrotask(() => requestAnimationFrame(restore));
+      }
+  
       // Clear search
       function clearSearch() {
           searchInput.value = '';
           searchState.query = '';
-          searchState.matches = [];
-          searchState.currentMatchIndex = 0;
           updateSearchInputState();
           clearHighlights();
-          clearSearchFilterClasses();
+          keepScrollAnchor(clearSearchFilterClasses);
+          searchState.matches = [];
+          searchState.currentMatchIndex = 0;
           updateSearchUI();
   
           if (searchState.isIndexPage && searchResultsPanel) {
