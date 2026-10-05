@@ -1479,7 +1479,9 @@ class TestCorruptDatabaseRecovery:
                     "SELECT pageno FROM dbstat WHERE name='messages' AND pagetype='leaf'"
                 )
             ]
-        except sqlite3.OperationalError:
+        except sqlite3.OperationalError as exc:
+            if "no such table: dbstat" not in str(exc):
+                raise
             conn.close()
             pytest.skip("this SQLite build lacks the dbstat virtual table")
         # `dbstat.pageno` counts pages of whatever size this database was
