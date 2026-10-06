@@ -671,8 +671,16 @@ body.theme-minimal {
     font-style: normal;
 }
 
+/* The two "expand all" buttons look alike: the table's own and a nested
+   fold's ("expand all items"). Italic marks them as controls, not data.
+   The nested one sits inside the table's 0.8em (nested tables don't
+   compound it), so 0.9em lands on the same 0.72em of the row. */
 .theme-minimal #transcript .tool-params-expand-all {
-    font: 0.72em var(--mono);
+    font: italic 0.72em var(--mono);
+}
+
+.theme-minimal #transcript .tool-param-rows-toggle {
+    font: italic 0.9em var(--mono);
 }
 
 /* -------------------------------------------------------------- todo */

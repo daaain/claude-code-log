@@ -27272,8 +27272,13 @@
       display: none;
   }
   
+  /* z-index: a pair's first card can be shorter than its role line, which
+     then overflows into the next card; that card, later in the DOM, would sit
+     on top and swallow the label's hover (its title tooltip). Above the cards,
+     below every sticky bar. */
   .theme-minimal #transcript .mn-role {
       position: relative;
+      z-index: 1;
       padding-right: calc(var(--ic) + var(--ic-gap));
       color: var(--rc);
       font-weight: 500;
@@ -28648,8 +28653,16 @@
       font-style: normal;
   }
   
+  /* The two "expand all" buttons look alike: the table's own and a nested
+     fold's ("expand all items"). Italic marks them as controls, not data.
+     The nested one sits inside the table's 0.8em (nested tables don't
+     compound it), so 0.9em lands on the same 0.72em of the row. */
   .theme-minimal #transcript .tool-params-expand-all {
-      font: 0.72em var(--mono);
+      font: italic 0.72em var(--mono);
+  }
+  
+  .theme-minimal #transcript .tool-param-rows-toggle {
+      font: italic 0.9em var(--mono);
   }
   
   /* -------------------------------------------------------------- todo */
@@ -41889,8 +41902,13 @@
       display: none;
   }
   
+  /* z-index: a pair's first card can be shorter than its role line, which
+     then overflows into the next card; that card, later in the DOM, would sit
+     on top and swallow the label's hover (its title tooltip). Above the cards,
+     below every sticky bar. */
   .theme-minimal #transcript .mn-role {
       position: relative;
+      z-index: 1;
       padding-right: calc(var(--ic) + var(--ic-gap));
       color: var(--rc);
       font-weight: 500;
@@ -43265,8 +43283,16 @@
       font-style: normal;
   }
   
+  /* The two "expand all" buttons look alike: the table's own and a nested
+     fold's ("expand all items"). Italic marks them as controls, not data.
+     The nested one sits inside the table's 0.8em (nested tables don't
+     compound it), so 0.9em lands on the same 0.72em of the row. */
   .theme-minimal #transcript .tool-params-expand-all {
-      font: 0.72em var(--mono);
+      font: italic 0.72em var(--mono);
+  }
+  
+  .theme-minimal #transcript .tool-param-rows-toggle {
+      font: italic 0.9em var(--mono);
   }
   
   /* -------------------------------------------------------------- todo */
@@ -46727,7 +46753,7 @@
       <div class='message tool_result error pair_last' data-uuid='ns-r4' id='msg-d-42' data-lane="main" data-merges="agent-nsintr01">
           <div class='header'>
               <span class='mn-title mn-generic' title="🚨 Error · ID: toolu_ns_nsintr01"><span class='mn-tn'>🚨 Error</span></span>
-              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-tool-error'/></svg>Error</span>
+              <div class='header-info'><span class='mn-role' title="🚨 Error · ID: toolu_ns_nsintr01"><svg class='mn-ic' aria-hidden='true'><use href='#mi-tool-error'/></svg>Error</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-06-12T09:00:00.000Z' data-duration='took 0 ms'>2026-06-12 09:00:00</span><span class='mn-time'>09:00:00</span>
                   </div>
@@ -64965,8 +64991,13 @@
       display: none;
   }
   
+  /* z-index: a pair's first card can be shorter than its role line, which
+     then overflows into the next card; that card, later in the DOM, would sit
+     on top and swallow the label's hover (its title tooltip). Above the cards,
+     below every sticky bar. */
   .theme-minimal #transcript .mn-role {
       position: relative;
+      z-index: 1;
       padding-right: calc(var(--ic) + var(--ic-gap));
       color: var(--rc);
       font-weight: 500;
@@ -66341,8 +66372,16 @@
       font-style: normal;
   }
   
+  /* The two "expand all" buttons look alike: the table's own and a nested
+     fold's ("expand all items"). Italic marks them as controls, not data.
+     The nested one sits inside the table's 0.8em (nested tables don't
+     compound it), so 0.9em lands on the same 0.72em of the row. */
   .theme-minimal #transcript .tool-params-expand-all {
-      font: 0.72em var(--mono);
+      font: italic 0.72em var(--mono);
+  }
+  
+  .theme-minimal #transcript .tool-param-rows-toggle {
+      font: italic 0.9em var(--mono);
   }
   
   /* -------------------------------------------------------------- todo */

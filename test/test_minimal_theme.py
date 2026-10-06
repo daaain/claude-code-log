@@ -149,6 +149,20 @@ class TestCallTitle:
         )
         assert parts["tooltip"] == "💻 Bash Run it · ID: toolu_1"
 
+    def test_role_tooltip_only_when_a_hidden_title_said_more(self) -> None:
+        """A name-only title is hidden, so the role label carries its tooltip;
+        a bare-role title adds nothing, and a visible title keeps its own."""
+        name_only = minimal_theme.call_title(
+            "🛠️ mcp__x__scan", _msg(tool_name="mcp__x__scan"), "tool_use", "ID: t1"
+        )
+        assert name_only["generic"]
+        assert name_only["role_tooltip"] == "🛠️ mcp__x__scan · ID: t1"
+        assert self._split("💭 Thinking", "thinking")["role_tooltip"] == ""
+        visible = self._split(
+            "📝 Edit <span class='tool-summary'>/tmp/x.py</span>", tool_name="Edit"
+        )
+        assert not visible["generic"] and visible["role_tooltip"] == ""
+
     def test_role_only_titles_stay_generic(self) -> None:
         assert self._split("🤷 User", "user")["generic"]
         assert self._split("🔗 Sub-assistant", "assistant sidechain")["generic"]

@@ -160,8 +160,11 @@ def call_title(
     Returns ``prefix`` (HTML the template keeps in a hidden ``.mn-tn`` span,
     so the title's text content — which search and the timeline read — is
     unchanged), ``rest`` (HTML shown), ``generic`` (nothing left to show: the
-    title line is hidden) and ``tooltip`` (the whole title as plain text, plus
-    the classic ``title_hint`` such as ``ID: toolu_…``).
+    title line is hidden), ``tooltip`` (the whole title as plain text, plus
+    the classic ``title_hint`` such as ``ID: toolu_…``) and ``role_tooltip``
+    (the same text when the hidden title said more than a bare role: the
+    gutter's role label is then the only place the name shows, ellipsized
+    when long, so it carries the tooltip instead; empty otherwise).
     """
     full = str(full_title or "")
     cut = full.find("<")
@@ -188,11 +191,16 @@ def call_title(
     rest = html.escape(rest_text, quote=False) + tail
     plain = _plain(full)
     tooltip = f"{plain} · {title_hint}" if plain and title_hint else plain or ""
+    bare_role = is_generic_title(full)
+    generic = not _plain(rest) or bare_role
     return {
         "prefix": html.escape(prefix_text, quote=False),
         "rest": rest,
-        "generic": not _plain(rest) or is_generic_title(full),
+        "generic": generic,
         "tooltip": tooltip or (title_hint or ""),
+        "role_tooltip": (tooltip or title_hint or "")
+        if generic and not bare_role
+        else "",
     }
 
 

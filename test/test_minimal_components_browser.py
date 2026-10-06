@@ -16,6 +16,7 @@ context.
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Any
@@ -352,3 +353,121 @@ class TestBlockedStorage:
         expect(page.locator("body")).to_have_class(re.compile(r"\bshow-raw-user\b"))
         expect(button).to_have_attribute("title", "Show user messages as Markdown")
         assert errors == []
+
+
+LONG_TOOL = "mcp__plugin_semsync_semsync__scan_with_a_rather_long_name"
+
+
+def _entry(uuid: str, parent: str | None, role: str, content: list[Any]) -> dict:
+    message: dict[str, Any] = {"role": role, "content": content}
+    if role == "assistant":
+        message.update(id=f"m-{uuid}", type="message", model="claude")
+    return {
+        "type": role,
+        "timestamp": f"2026-01-01T10:00:0{len(uuid)}.000Z",
+        "parentUuid": parent,
+        "isSidechain": False,
+        "userType": "external",
+        "cwd": "/tmp",
+        "sessionId": "s",
+        "version": "1.0.0",
+        "uuid": uuid,
+        "message": message,
+    }
+
+
+def _gutter_fixture(tmp_path: Path) -> Path:
+    """A tool whose whole title is its (long) name, paired with its result,
+    then a tool whose input nests rows: both "expand all" controls."""
+    items = [{"name": f"item_{i}", "role": "padding words " * 20} for i in range(3)]
+    entries = [
+        _entry(
+            "a1",
+            None,
+            "assistant",
+            [
+                {"type": "tool_use", "id": "t1", "name": LONG_TOOL, "input": {}},
+            ],
+        ),
+        _entry(
+            "u1",
+            "a1",
+            "user",
+            [
+                {"type": "tool_result", "tool_use_id": "t1", "content": "done"},
+            ],
+        ),
+        _entry(
+            "a22",
+            "u1",
+            "assistant",
+            [
+                {
+                    "type": "tool_use",
+                    "id": "t2",
+                    "name": "SomeTool",
+                    "input": {"items": items},
+                },
+            ],
+        ),
+    ]
+    source = tmp_path / "gutter.jsonl"
+    source.write_text(
+        "\n".join(json.dumps(e) for e in entries) + "\n", encoding="utf-8"
+    )
+    return source
+
+
+HIT_AT_CENTRE = """el => {
+    el.scrollIntoView({block: 'center'});
+    const r = el.getBoundingClientRect();
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return !!hit && (hit === el || el.contains(hit));
+}"""
+
+
+@pytest.mark.browser
+class TestGutterRole:
+    def test_a_name_only_title_moves_its_tooltip_to_the_role(
+        self, page: Page, tmp_path: Path
+    ) -> None:
+        """The hidden title held the only tooltip; the visible, ellipsized
+        role label now carries it, and bare-role rows get none."""
+        page.goto(_render(tmp_path, _gutter_fixture(tmp_path)).as_uri())
+        card = page.locator("#transcript .message.tool_use").first
+        expect(card.locator(".header > .mn-title")).to_be_hidden()
+        role = card.locator(".mn-role")
+        expect(role).to_have_attribute("title", re.compile(rf"{LONG_TOOL} · ID: t1"))
+        assert page.locator(".message.tool_result .mn-role[title]").count() == 0
+
+    def test_every_role_label_is_hoverable(self, page: Page, tmp_path: Path) -> None:
+        """A pair's first card can be shorter than its role line; the next
+        card must not sit on top of the overflow and swallow the hover."""
+        for width in (1400, 420):
+            page.set_viewport_size({"width": width, "height": 900})
+            page.goto(_render(tmp_path, _gutter_fixture(tmp_path)).as_uri())
+            roles = page.locator("#transcript .message .mn-role")
+            assert roles.count() >= 3
+            covered = [
+                roles.nth(i).inner_text()
+                for i in range(roles.count())
+                if roles.nth(i).is_visible()
+                and not roles.nth(i).evaluate(HIT_AT_CENTRE)
+            ]
+            assert covered == [], f"covered at {width}px: {covered}"
+
+
+@pytest.mark.browser
+def test_both_expand_all_controls_share_one_style(page: Page, tmp_path: Path) -> None:
+    page.goto(_render(tmp_path, _gutter_fixture(tmp_path)).as_uri())
+    page.evaluate(
+        "() => document.querySelectorAll('#transcript details').forEach(d => d.open = true)"
+    )
+    styles = [
+        page.locator(f"#transcript {sel}").first.evaluate(
+            "e => (s => [s.fontFamily, s.fontSize, s.fontStyle])(getComputedStyle(e))"
+        )
+        for sel in (".tool-params-expand-all", ".tool-param-rows-toggle")
+    ]
+    assert styles[0] == styles[1]
+    assert styles[0][2] == "italic"
