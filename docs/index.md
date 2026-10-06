@@ -41,7 +41,7 @@ uvx claude-code-log@latest --tui
 - **Themes** — `--theme minimal` for a compact light/dark page with sub-agents
   and forks as foldable branches ([themes guide](themes.md))
 - **Date range filtering** — natural language (`"today"`, `"last week"`)
-- **Detail levels & compact mode** — `--detail` and `--compact` for LLM-friendly Markdown
+- **Depth levels & compact mode** — `--depth` and `--compact` for LLM-friendly Markdown
 - **Server-side Markdown** — syntax-highlighted rendering via wenmode
 - **Obsidian / vault output** — `--expand-paths` mirrors each project under its real
   on-disk path and defaults `--combined` to `no` (per-session files only); a prior

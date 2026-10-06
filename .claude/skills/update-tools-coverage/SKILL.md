@@ -14,7 +14,7 @@ sync with the upstream contracts and our implementation:
    [`claude_code_log/factories/tool_factory.py`](../../../claude_code_log/factories/tool_factory.py).
 3. **Codex** — the installed version's generated app-server `ThreadItem`
    schema, plus the rollout adapters in `providers/codex.py`,
-   `providers/codex_tools.py`, and `providers/codex_javascript.py`.
+   `providers/codex_tools.py`, and `providers/codex_quickjs.py`.
 
 The doc grades each documented tool **Full** (typed input + typed output),
 **Input only** (typed input, generic output), or **Generic** (no registry
@@ -89,10 +89,10 @@ closed upstream function-name list. Check two separate tables instead:
 3. Reconcile concrete call mappings with `_canonicalize()` in
    `providers/codex_tools.py`, result/batch reconstruction in
    `providers/codex.py`, and the `test/test_codex_*` contracts.
-4. Reconcile the static-JavaScript list with the whitelisted transfer
-   functions in `providers/codex_javascript.py`. Never describe legacy-regex
-   support as production fallback: it is retained only as an explicit test
-   comparison baseline.
+4. Reconcile the "`exec` JavaScript analysis" section with the QuickJS
+   report → batch mapper in `providers/codex_quickjs.py` (`_build_batch`).
+   Unsupported scripts fall back to the raw-script `ToolExecution` card;
+   there is no legacy recognizer fallback to document.
 
 The generated schema is version-specific and the rollout format is not a
 public wire contract. State both facts in the documentation snapshot.

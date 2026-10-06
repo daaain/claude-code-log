@@ -41,15 +41,15 @@ claude_code_log/
 │   ├── assistant_formatters.py
 │   ├── system_formatters.py
 │   ├── tool_formatters.py
-│   └── utils.py
-├── markdown/           # Markdown output rendering
-│   └── renderer.py
-└── templates/          # Jinja2 HTML templates
-    ├── transcript.html
-    ├── index.html
-    └── components/
-        ├── timeline.html
-        └── minimal/    # The minimal theme's CSS and JS (incl. the DAG engine)
+│   ├── utils.py
+│   └── templates/      # Jinja2 HTML templates
+│       ├── transcript.html
+│       ├── index.html
+│       └── components/
+│           ├── timeline.html
+│           └── minimal/  # The minimal theme's CSS and JS (incl. the DAG engine)
+└── markdown/           # Markdown output rendering
+    └── renderer.py
 
 scripts/                # Development utilities
 test/test_data/         # Representative JSONL samples
@@ -127,24 +127,15 @@ uv run pytest test/test_snapshot_html.py -v
 uv run pytest test/test_snapshot_html.py -n0 --snapshot-update
 ```
 
-> **`--snapshot-update` must run serially (`-n0`) — a guard now enforces
-> this.** Syrupy and pytest-xdist misbehave when writing the shared `.ambr`
-> files in parallel, on two observed occasions. Once, a raced update
-> silently *truncated* ~6000 lines, leaving a structurally-broken file that
-> still passed on the next read — a confirmed corruption. Separately, a
-> parallel `--snapshot-update` with a stale `__pycache__` produced a diff in
-> which an *untouched* fixture appeared to regenerate with structure it had
-> never carried (fold-bar / children markup); re-run serially with a purged
-> cache, the same operation was cleanly additive and that structure did not
-> appear. The mechanism of the second case isn't pinned down (the large
-> deletion count first quoted for it turned out to be alignment noise — see
-> "Recognising the race" below), but an operation that makes an untouched
-> fixture look different is dangerous regardless, and "vanished under `-n0`"
-> is the reproducible part. Because `pyproject.toml` defaults to `-n auto`,
-> this unsafe combination is the *default*, so a `conftest.py` guard
-> (`pytest_configure`) now fails fast when `--snapshot-update` is combined
-> with more than one xdist worker, pointing you at `-n0`. Ordinary parallel
-> runs (no update) are unaffected — CI is untouched.
+> **`--snapshot-update` must run serially (`-n0`).** Syrupy and
+> pytest-xdist race when writing the shared `.ambr` files in parallel: a
+> raced update can silently truncate a file, or make an untouched fixture
+> appear to regenerate with structure it never had, and either result can
+> still pass on the next read. Running serially with a purged `__pycache__`
+> avoids both. Because `pyproject.toml` defaults to `-n auto`, a
+> `conftest.py` guard (`pytest_configure`) fails fast when
+> `--snapshot-update` is combined with more than one xdist worker. Ordinary
+> parallel runs (no update) are unaffected.
 
 **Recognising the race in a diff.** The guard prevents the mistake going
 forward, but you may still meet a suspicious `.ambr` diff — reviewing a PR
@@ -541,7 +532,7 @@ Uses Jinja2 templates for HTML generation:
 
 ### Timeline Component
 
-The interactive timeline is implemented in JavaScript within `claude_code_log/templates/components/timeline.html`. When adding new message types or modifying CSS class generation, ensure the timeline's message type detection logic is updated accordingly.
+The interactive timeline is implemented in JavaScript within `claude_code_log/html/templates/components/timeline.html`. When adding new message types or modifying CSS class generation, ensure the timeline's message type detection logic is updated accordingly.
 
 ## Cache System
 
