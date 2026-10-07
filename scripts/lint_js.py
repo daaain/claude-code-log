@@ -43,7 +43,10 @@ FIXTURE = REPO / "test" / "test_data" / "representative_messages.jsonl"
 INCLUDE_LINE = re.compile(r"^(\s*)(\{%-?\s*include\b.*?%\})\s*$")
 # A script block the browser runs: no src, and no type, or a JS one. JSON
 # islands (type="application/json") are data, not code.
-SCRIPT = re.compile(r"<script\b([^>]*)>(.*?)</script>", re.S | re.I)
+# The end tag tolerates what browsers accept (`</script >`, `</SCRIPT foo>`).
+SCRIPT = re.compile(
+    r"<script\b([^>]*)>(.*?)</script\b[^>]*>", re.IGNORECASE | re.DOTALL
+)
 JS_TYPES = {"", "text/javascript", "module", "application/javascript"}
 
 
