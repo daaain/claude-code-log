@@ -429,3 +429,54 @@ def test_the_close_button_stays_in_the_viewport_corner(
         expect(page.locator(DIALOG)).to_be_hidden()
     finally:
         browser.close()
+
+
+WHEEL = """([deltaY, deltaMode]) => {
+    const frame = document.querySelector('.cc-zoom-frame');
+    const r = frame.getBoundingClientRect();
+    frame.dispatchEvent(new WheelEvent('wheel', {
+        deltaY, deltaMode, bubbles: true, cancelable: true,
+        clientX: r.left + r.width / 2, clientY: r.top + r.height / 2,
+    }));
+    return document.querySelector('dialog.cc-zoom img').getBoundingClientRect().width;
+}"""
+LINE, PAGE = 1, 2  # WheelEvent.DOM_DELTA_LINE / DOM_DELTA_PAGE
+
+
+class TestWheelDeltaModes:
+    """Firefox reports wheel steps in lines (deltaMode 1) on Linux and
+    Windows, where Chromium reports pixels; a page step (mode 2) also
+    exists. Each must zoom as much as the pixels it stands for."""
+
+    def _zoomed_width(
+        self, page: Page, pages: dict[str, Path], delta: float, mode: int
+    ) -> float:
+        _open(page, pages["minimal"])
+        return page.evaluate(WHEEL, [delta, mode])
+
+    def test_a_line_step_zooms_like_its_pixels(
+        self, page: Page, pages: dict[str, Path]
+    ) -> None:
+        # One Firefox notch: three lines, of 16px each.
+        pixels = self._zoomed_width(page, pages, -48, 0)
+        lines = self._zoomed_width(page, pages, -3, LINE)
+        assert pixels > _geometry(page)["frame"]["w"] + 10
+        assert lines == pytest.approx(pixels, abs=1)
+
+    def test_a_page_step_zooms_like_a_frame_height(
+        self, page: Page, pages: dict[str, Path]
+    ) -> None:
+        _open(page, pages["minimal"])
+        frame_h = _geometry(page)["frame"]["h"]
+        pixels = self._zoomed_width(page, pages, -0.5 * frame_h, 0)
+        pages_ = self._zoomed_width(page, pages, -0.5, PAGE)
+        assert pages_ == pytest.approx(pixels, abs=1)
+
+    @pytest.mark.parametrize("mode", [LINE, PAGE])
+    def test_the_caps_hold_in_every_mode(
+        self, page: Page, pages: dict[str, Path], mode: int
+    ) -> None:
+        _open(page, pages["minimal"])
+        fit = _geometry(page)["frame"]["w"]
+        assert page.evaluate(WHEEL, [-1000, mode]) == pytest.approx(BIG[0], abs=1)
+        assert page.evaluate(WHEEL, [1000, mode]) == pytest.approx(fit, abs=1)

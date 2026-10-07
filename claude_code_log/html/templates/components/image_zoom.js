@@ -23,7 +23,8 @@
     'use strict';
 
     const MAX_FRACTION = 0.9;   // of the viewport, each way
-    const WHEEL_RATE = 0.0015;  // zoom factor per wheel delta unit (exp)
+    const WHEEL_RATE = 0.0015;  // zoom factor per wheel pixel (exp)
+    const LINE_PX = 16;         // pixels per wheel "line" (deltaMode 1)
 
     let dialog = null;
     let frame = null;
@@ -158,7 +159,12 @@
             const px = event.clientX - r.left;
             const py = event.clientY - r.top;
             if (px < 0 || py < 0 || px > r.width || py > r.height) return;
-            zoomAt(px, py, scale * Math.exp(-event.deltaY * WHEEL_RATE));
+            // WHEEL_RATE is per pixel. Firefox reports a notch in lines
+            // (deltaMode 1), and a wheel can report pages (2).
+            let deltaY = event.deltaY;
+            if (event.deltaMode === 1) deltaY *= LINE_PX;
+            else if (event.deltaMode === 2) deltaY *= box.h;
+            zoomAt(px, py, scale * Math.exp(-deltaY * WHEEL_RATE));
         }, { passive: false });
 
         let drag = null;
