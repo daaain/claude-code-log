@@ -214,27 +214,53 @@ def _nested_json(depth: int) -> str:
     return '{"a": ' + "[" * depth + "]" * depth + "}"
 
 
-@pytest.mark.parametrize("depth", [100_000, 500], ids=["past-decoder", "past-bound"])
+def _simulate_decoder_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make ``json.loads`` give up on the test payload, as the decoder does
+    past its nesting limit. (Whether a real deep value reaches that limit
+    depends on the platform's stack, so the path is simulated.)"""
+    original = json.loads
+
+    def loads(s: Any, *args: Any, **kwargs: Any) -> Any:
+        if isinstance(s, str) and '"a": [' in s:
+            raise RecursionError("maximum recursion depth exceeded")
+        return original(s, *args, **kwargs)
+
+    monkeypatch.setattr(json, "loads", loads)
+
+
+@pytest.mark.parametrize("case", ["too-deep", "decoder-gives-up"])
 class TestDeepJsonBody:
     """A JSON body too deep for a table renders as prose; the page renders."""
 
-    def _messages(self, tmp_path: Path, depth: int) -> Any:
+    def _messages(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+    ) -> Any:
+        depth = 100 if case == "too-deep" else 3
         text = (
             "Before the block.\n"
             f'<teammate-message teammate_id="w">\n{_nested_json(depth)}\n'
             "</teammate-message>\n\nAfter the block."
         )
-        return load_transcript(_write(tmp_path, text))
+        messages = load_transcript(_write(tmp_path, text))
+        if case == "decoder-gives-up":
+            _simulate_decoder_failure(monkeypatch)
+        return messages
 
     @pytest.mark.parametrize("theme", ["classic", "minimal"])
-    def test_html(self, tmp_path: Path, theme: str, depth: int) -> None:
-        html = generate_html(self._messages(tmp_path, depth), "peer", theme=theme)
+    def test_html(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, theme: str, case: str
+    ) -> None:
+        messages = self._messages(tmp_path, monkeypatch, case)
+        html = generate_html(messages, "peer", theme=theme)
         assert "Before the block." in html and "After the block." in html
         body = html.split('<div class="teammate-body">')[1]
         assert "tool-params-table" not in body.split("After the block.")[0]
 
-    def test_markdown(self, tmp_path: Path, depth: int) -> None:
-        md = MarkdownRenderer().generate(self._messages(tmp_path, depth), "peer")
+    def test_markdown(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+    ) -> None:
+        messages = self._messages(tmp_path, monkeypatch, case)
+        md = MarkdownRenderer().generate(messages, "peer")
         assert "Before the block." in md and "After the block." in md
         assert "**a:**" not in md
 
@@ -247,12 +273,15 @@ class TestBodyParams:
         assert self._params('{"a": 1, "b": "x"}') == {"a": 1, "b": "x"}
 
     def test_json_not_an_object(self) -> None:
-        assert self._params(_nested_json(100_000)) is None  # past the decoder
-        assert self._params(_nested_json(500)) is None  # past the depth bound
+        assert self._params(_nested_json(100)) is None  # past the depth bound
         assert self._params(_nested_json(30)) is not None
         assert self._params("[1, 2]") is None
         assert self._params("{}") is None
         assert self._params("{not json}") is None
+
+    def test_decoder_giving_up_is_prose(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _simulate_decoder_failure(monkeypatch)
+        assert self._params(_nested_json(3)) is None
 
     def test_key_value_lines(self) -> None:
         assert self._params("a: 1\nb_c: two words\n\nd.e: x") == {

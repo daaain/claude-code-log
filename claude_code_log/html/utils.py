@@ -30,6 +30,7 @@ from wenmode.renderers.html import (
 from wenmode.renderers.html import render_code as _default_render_code
 
 from .renderer_code import highlight_code_with_pygments, truncate_highlighted_preview
+from ..json_depth import exceeds_depth
 from ..models import (
     AssistantTextMessage,
     AwaySummaryMessage,
@@ -940,7 +941,11 @@ def render_async_result_body(text: str, css_class: str, preview: bool = False) -
     if stripped.startswith('{"'):
         rendered = text
         try:
-            rendered = json.dumps(json.loads(text), indent=2, ensure_ascii=False)
+            parsed = json.loads(text)
+            # Too deep to pretty-print: every level adds indentation, so
+            # the output grows quadratically. Highlight the text as-is.
+            if not exceeds_depth(parsed):
+                rendered = json.dumps(parsed, indent=2, ensure_ascii=False)
         except (ValueError, RecursionError):
             pass  # truncated / variant payload — highlight the raw text as-is
         return render_file_content_collapsible(

@@ -19,6 +19,7 @@ from pydantic import BaseModel, ValidationError
 
 from .agent_metadata_factory import parse_agent_result_metadata
 from ..plugins import apply_transformers
+from ..json_depth import exceeds_depth
 from ..models import (
     # Tool input models
     AskUserQuestionInput,
@@ -1236,7 +1237,7 @@ def _try_load_json_text(tool_result: ToolResultContent) -> Optional[dict[str, An
         data: Any = json.loads(text)
     except (ValueError, RecursionError):
         return None
-    if isinstance(data, dict):
+    if isinstance(data, dict) and not exceeds_depth(data):
         return cast(dict[str, Any], data)
     return None
 

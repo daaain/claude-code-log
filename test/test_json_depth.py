@@ -24,12 +24,38 @@ from claude_code_log.json_depth import MAX_DATA_DEPTH, exceeds_depth
 from claude_code_log.markdown.renderer import MarkdownRenderer
 from claude_code_log.models import ToolResultContent
 
-PAST_DECODER = 100_000  # json.loads raises RecursionError
-PAST_BOUND = 500  # decodes, but too deep for nested tables
+# Past MAX_DATA_DEPTH, and still small. Whether the decoder itself gives
+# up on a deeper value depends on the platform's stack (a large one lets
+# CPython 3.14 decode a 100k-deep value), so that path is simulated.
+TOO_DEEP = 100
+CASES = ["too-deep", "decoder-gives-up"]
 
 
 def _nested(depth: int) -> str:
     return '{"a": ' + "[" * depth + "]" * depth + "}"
+
+
+@pytest.fixture(params=CASES)
+def case(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> Any:
+    """Arm a case, returning its payload; applied with ``case.arm()``."""
+
+    class Case:
+        name: str = request.param
+        payload: str = _nested(TOO_DEEP if request.param == "too-deep" else 3)
+
+        def arm(self) -> None:
+            if self.name != "decoder-gives-up":
+                return
+            original = json.loads
+
+            def loads(s: Any, *args: Any, **kwargs: Any) -> Any:
+                if isinstance(s, str) and '"a": [' in s:
+                    raise RecursionError("maximum recursion depth exceeded")
+                return original(s, *args, **kwargs)
+
+            monkeypatch.setattr(json, "loads", loads)
+
+    return Case()
 
 
 def _entry(**fields: Any) -> dict[str, Any]:
@@ -106,47 +132,47 @@ def _write_tool_result(tmp_path: Path, content: str) -> Path:
     return path
 
 
-@pytest.mark.parametrize(
-    "depth", [PAST_DECODER, PAST_BOUND], ids=["past-decoder", "past-bound"]
-)
 class TestDeepToolResult:
     @pytest.mark.parametrize("theme", ["classic", "minimal"])
-    def test_html(self, tmp_path: Path, theme: str, depth: int) -> None:
-        messages = load_transcript(_write_tool_result(tmp_path, _nested(depth)))
+    def test_html(self, tmp_path: Path, theme: str, case: Any) -> None:
+        messages = load_transcript(_write_tool_result(tmp_path, case.payload))
+        case.arm()
         html = generate_html(messages, "deep", theme=theme)
         assert "Before the tool." in html and "After the tool." in html
         assert "tool-result-json" not in html
 
-    def test_markdown(self, tmp_path: Path, depth: int) -> None:
-        messages = load_transcript(_write_tool_result(tmp_path, _nested(depth)))
+    def test_markdown(self, tmp_path: Path, case: Any) -> None:
+        messages = load_transcript(_write_tool_result(tmp_path, case.payload))
+        case.arm()
         md = MarkdownRenderer().generate(messages, "deep")
         assert "Before the tool." in md and "After the tool." in md
 
 
-@pytest.mark.parametrize(
-    "depth", [PAST_DECODER, PAST_BOUND], ids=["past-decoder", "past-bound"]
-)
 class TestOtherDecodeSites:
-    def test_tool_result_table(self, depth: int) -> None:
-        assert _json_result_table_html(_nested(depth)) is None
+    def test_tool_result_table(self, case: Any) -> None:
+        case.arm()
+        assert _json_result_table_html(case.payload) is None
 
-    def test_async_result_body(self, depth: int) -> None:
-        html = render_async_result_body(_nested(depth), "task-result")
+    def test_async_result_body(self, case: Any) -> None:
+        case.arm()
+        html = render_async_result_body(case.payload, "task-result")
         assert "task-result" in html
+        # Not pretty-printed: the payload's own single line is kept.
+        assert html.count("\n") < 50
 
-    def test_sidechannel_embedded_block(self, depth: int) -> None:
-        block = '{\n"a": ' + "[" * depth + "]" * depth + "\n}"
+    def test_sidechannel_embedded_block(self, case: Any) -> None:
+        case.arm()
+        block = case.payload.replace('{"a": ', '{\n"a": ', 1)[:-1] + "\n}"
         html = format_workflow_sidechannel_user_text(f"Intro.\n\n{block}\n\nOutro.")
         assert "Outro." in html
         assert "embedded-json" not in html
 
-    def test_teammate_tool_output_text(self, depth: int) -> None:
-        # This site feeds typed fields, not a table: only the decode guard.
+    def test_teammate_tool_output_text(self, case: Any) -> None:
+        case.arm()
         result = ToolResultContent(
-            type="tool_result", tool_use_id="t", content=_nested(depth)
+            type="tool_result", tool_use_id="t", content=case.payload
         )
-        loaded = _try_load_json_text(result)
-        assert loaded is None if depth == PAST_DECODER else loaded is not None
+        assert _try_load_json_text(result) is None
 
 
 class TestExceedsDepth:
