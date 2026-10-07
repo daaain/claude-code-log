@@ -4445,7 +4445,6 @@
           let items = null;
           let itemsDataSet = null;
           let groups = null;
-          let isTimelineLoaded = false;
           let timelineIdToElement = new Map(); // Map timeline IDs to DOM elements
           let isResizing = false;
   
@@ -4679,7 +4678,9 @@
                       // For system messages, try to extract just the message without the prefix
                       if (messageType === 'system') {
                           // System messages often have format like "⚠️ System Warning: message content"
-                          const systemMatch = textContent.match(/^[⚠️❌ℹ️]?\s*System\s+\w+:\s*(.+)$/);
+                          // An alternation, not a character class: ⚠️ and ℹ️ are two code
+                          // points each (symbol + variation selector).
+                          const systemMatch = textContent.match(/^(?:⚠️|❌|ℹ️)?\s*System\s+\w+:\s*(.+)$/);
                           if (systemMatch) {
                               textContent = systemMatch[1];
                           }
@@ -4848,7 +4849,7 @@
           }
   
           // Handle timeline item click - scroll to corresponding message
-          function onTimelineSelect(event) {
+          function onTimelineSelect() {
               const selection = timeline.getSelection();
               if (selection.length > 0) {
                   const itemId = selection[0];
@@ -4961,7 +4962,6 @@
                   script.src = 'https://unpkg.com/vis-timeline/standalone/umd/vis-timeline-graph2d.min.js';
                   script.onload = () => {
                       console.log('vis-timeline loaded successfully');
-                      isTimelineLoaded = true;
                       resolve();
                   };
                   script.onerror = () => {
@@ -6092,7 +6092,7 @@
           // New nodes. These carry the fade-in; the ones replaced above
           // deliberately do not, since they were already on screen.
           let added = 0;
-          for (const [key, newNode] of additions) {
+          for (const [, newNode] of additions) {
               const imported = document.importNode(newNode, true);
               if (!insertNode(newNode, imported)) return null;
               added += imported.querySelectorAll('.message').length;
@@ -6896,10 +6896,10 @@
   
                   if (action === 'fold-one') {
                       // Fold/unfold immediate children only
-                      handleFoldOne(targetId, isFolded, section);
+                      handleFoldOne(targetId, isFolded);
                   } else if (action === 'fold-all') {
                       // Fold/unfold all descendants recursively
-                      handleFoldAll(targetId, isFolded, section);
+                      handleFoldAll(targetId, isFolded);
                   }
               });
   
@@ -6968,14 +6968,14 @@
                   }
               }
   
-              function handleFoldOne(targetId, isFolded, sectionElement) {
+              function handleFoldOne(targetId, isFolded) {
                   const messageEl = getMessageEl(targetId);
                   if (!messageEl) return;
                   // Currently folded → reveal first level; else collapse fully.
                   applyFoldState(messageEl, isFolded ? 'first' : 'folded');
               }
   
-              function handleFoldAll(targetId, isFolded, sectionElement) {
+              function handleFoldAll(targetId, isFolded) {
                   const messageEl = getMessageEl(targetId);
                   if (!messageEl) return;
                   // Currently folded → open all levels; else collapse to first level.
@@ -7166,7 +7166,6 @@
       };
   
       // DOM elements
-      const searchContainer = document.getElementById('searchContainer');
       const searchInput = document.getElementById('searchInput');
       const searchClear = document.getElementById('searchClear');
       const searchHint = document.querySelector('.search-hint');
@@ -7787,7 +7786,7 @@
   
           const textNodes = [];
           let node;
-          while (node = walker.nextNode()) {
+          while ((node = walker.nextNode())) {
               if (node.nodeValue.trim()) {
                   textNodes.push(node);
               }
@@ -12709,7 +12708,6 @@
           let items = null;
           let itemsDataSet = null;
           let groups = null;
-          let isTimelineLoaded = false;
           let timelineIdToElement = new Map(); // Map timeline IDs to DOM elements
           let isResizing = false;
   
@@ -12943,7 +12941,9 @@
                       // For system messages, try to extract just the message without the prefix
                       if (messageType === 'system') {
                           // System messages often have format like "⚠️ System Warning: message content"
-                          const systemMatch = textContent.match(/^[⚠️❌ℹ️]?\s*System\s+\w+:\s*(.+)$/);
+                          // An alternation, not a character class: ⚠️ and ℹ️ are two code
+                          // points each (symbol + variation selector).
+                          const systemMatch = textContent.match(/^(?:⚠️|❌|ℹ️)?\s*System\s+\w+:\s*(.+)$/);
                           if (systemMatch) {
                               textContent = systemMatch[1];
                           }
@@ -13112,7 +13112,7 @@
           }
   
           // Handle timeline item click - scroll to corresponding message
-          function onTimelineSelect(event) {
+          function onTimelineSelect() {
               const selection = timeline.getSelection();
               if (selection.length > 0) {
                   const itemId = selection[0];
@@ -13225,7 +13225,6 @@
                   script.src = 'https://unpkg.com/vis-timeline/standalone/umd/vis-timeline-graph2d.min.js';
                   script.onload = () => {
                       console.log('vis-timeline loaded successfully');
-                      isTimelineLoaded = true;
                       resolve();
                   };
                   script.onerror = () => {
@@ -14251,7 +14250,7 @@
           // New nodes. These carry the fade-in; the ones replaced above
           // deliberately do not, since they were already on screen.
           let added = 0;
-          for (const [key, newNode] of additions) {
+          for (const [, newNode] of additions) {
               const imported = document.importNode(newNode, true);
               if (!insertNode(newNode, imported)) return null;
               added += imported.querySelectorAll('.message').length;
@@ -15055,10 +15054,10 @@
   
                   if (action === 'fold-one') {
                       // Fold/unfold immediate children only
-                      handleFoldOne(targetId, isFolded, section);
+                      handleFoldOne(targetId, isFolded);
                   } else if (action === 'fold-all') {
                       // Fold/unfold all descendants recursively
-                      handleFoldAll(targetId, isFolded, section);
+                      handleFoldAll(targetId, isFolded);
                   }
               });
   
@@ -15127,14 +15126,14 @@
                   }
               }
   
-              function handleFoldOne(targetId, isFolded, sectionElement) {
+              function handleFoldOne(targetId, isFolded) {
                   const messageEl = getMessageEl(targetId);
                   if (!messageEl) return;
                   // Currently folded → reveal first level; else collapse fully.
                   applyFoldState(messageEl, isFolded ? 'first' : 'folded');
               }
   
-              function handleFoldAll(targetId, isFolded, sectionElement) {
+              function handleFoldAll(targetId, isFolded) {
                   const messageEl = getMessageEl(targetId);
                   if (!messageEl) return;
                   // Currently folded → open all levels; else collapse to first level.
@@ -15325,7 +15324,6 @@
       };
   
       // DOM elements
-      const searchContainer = document.getElementById('searchContainer');
       const searchInput = document.getElementById('searchInput');
       const searchClear = document.getElementById('searchClear');
       const searchHint = document.querySelector('.search-hint');
@@ -15946,7 +15944,7 @@
   
           const textNodes = [];
           let node;
-          while (node = walker.nextNode()) {
+          while ((node = walker.nextNode())) {
               if (node.nodeValue.trim()) {
                   textNodes.push(node);
               }
@@ -17777,7 +17775,6 @@
       };
   
       // DOM elements
-      const searchContainer = document.getElementById('searchContainer');
       const searchInput = document.getElementById('searchInput');
       const searchClear = document.getElementById('searchClear');
       const searchHint = document.querySelector('.search-hint');
@@ -18398,7 +18395,7 @@
   
           const textNodes = [];
           let node;
-          while (node = walker.nextNode()) {
+          while ((node = walker.nextNode())) {
               if (node.nodeValue.trim()) {
                   textNodes.push(node);
               }
@@ -21671,6 +21668,8 @@
   
               // --- rendering ----------------------------------------------
   
+              // Called below, on the theme that uses it (minimal calls mnRenderGroups).
+              // oxlint-disable-next-line no-unused-vars
               function renderGroups(results, query, append) {
                   if (!append) resultsEl.innerHTML = '';
                   const groups = new Map();
@@ -21749,6 +21748,8 @@
                   if (r.type === 'system') return ['system', 'System'];
                   return ['other', r.type || r.field || ''];
               }
+              // Called from archive_search.html, which picks this or renderGroups per theme.
+              // oxlint-disable-next-line no-unused-vars
               function mnRenderGroups(results, query, append) {
                   if (!append) resultsEl.innerHTML = '';
                   const groups = new Map();
@@ -30558,7 +30559,6 @@
           let items = null;
           let itemsDataSet = null;
           let groups = null;
-          let isTimelineLoaded = false;
           let timelineIdToElement = new Map(); // Map timeline IDs to DOM elements
           let isResizing = false;
   
@@ -30792,7 +30792,9 @@
                       // For system messages, try to extract just the message without the prefix
                       if (messageType === 'system') {
                           // System messages often have format like "⚠️ System Warning: message content"
-                          const systemMatch = textContent.match(/^[⚠️❌ℹ️]?\s*System\s+\w+:\s*(.+)$/);
+                          // An alternation, not a character class: ⚠️ and ℹ️ are two code
+                          // points each (symbol + variation selector).
+                          const systemMatch = textContent.match(/^(?:⚠️|❌|ℹ️)?\s*System\s+\w+:\s*(.+)$/);
                           if (systemMatch) {
                               textContent = systemMatch[1];
                           }
@@ -30961,7 +30963,7 @@
           }
   
           // Handle timeline item click - scroll to corresponding message
-          function onTimelineSelect(event) {
+          function onTimelineSelect() {
               const selection = timeline.getSelection();
               if (selection.length > 0) {
                   const itemId = selection[0];
@@ -31078,7 +31080,6 @@
                   script.src = 'https://unpkg.com/vis-timeline/standalone/umd/vis-timeline-graph2d.min.js';
                   script.onload = () => {
                       console.log('vis-timeline loaded successfully');
-                      isTimelineLoaded = true;
                       resolve();
                   };
                   script.onerror = () => {
@@ -32201,7 +32202,7 @@
           // New nodes. These carry the fade-in; the ones replaced above
           // deliberately do not, since they were already on screen.
           let added = 0;
-          for (const [key, newNode] of additions) {
+          for (const [, newNode] of additions) {
               const imported = document.importNode(newNode, true);
               if (!insertNode(newNode, imported)) return null;
               added += imported.querySelectorAll('.message').length;
@@ -33008,10 +33009,10 @@
   
                   if (action === 'fold-one') {
                       // Fold/unfold immediate children only
-                      handleFoldOne(targetId, isFolded, section);
+                      handleFoldOne(targetId, isFolded);
                   } else if (action === 'fold-all') {
                       // Fold/unfold all descendants recursively
-                      handleFoldAll(targetId, isFolded, section);
+                      handleFoldAll(targetId, isFolded);
                   }
               });
   
@@ -33080,14 +33081,14 @@
                   }
               }
   
-              function handleFoldOne(targetId, isFolded, sectionElement) {
+              function handleFoldOne(targetId, isFolded) {
                   const messageEl = getMessageEl(targetId);
                   if (!messageEl) return;
                   // Currently folded → reveal first level; else collapse fully.
                   applyFoldState(messageEl, isFolded ? 'first' : 'folded');
               }
   
-              function handleFoldAll(targetId, isFolded, sectionElement) {
+              function handleFoldAll(targetId, isFolded) {
                   const messageEl = getMessageEl(targetId);
                   if (!messageEl) return;
                   // Currently folded → open all levels; else collapse to first level.
@@ -33291,7 +33292,6 @@
       };
   
       // DOM elements
-      const searchContainer = document.getElementById('searchContainer');
       const searchInput = document.getElementById('searchInput');
       const searchClear = document.getElementById('searchClear');
       const searchHint = document.querySelector('.search-hint');
@@ -33915,7 +33915,7 @@
   
           const textNodes = [];
           let node;
-          while (node = walker.nextNode()) {
+          while ((node = walker.nextNode())) {
               if (node.nodeValue.trim()) {
                   textNodes.push(node);
               }
@@ -45176,7 +45176,6 @@
           let items = null;
           let itemsDataSet = null;
           let groups = null;
-          let isTimelineLoaded = false;
           let timelineIdToElement = new Map(); // Map timeline IDs to DOM elements
           let isResizing = false;
   
@@ -45410,7 +45409,9 @@
                       // For system messages, try to extract just the message without the prefix
                       if (messageType === 'system') {
                           // System messages often have format like "⚠️ System Warning: message content"
-                          const systemMatch = textContent.match(/^[⚠️❌ℹ️]?\s*System\s+\w+:\s*(.+)$/);
+                          // An alternation, not a character class: ⚠️ and ℹ️ are two code
+                          // points each (symbol + variation selector).
+                          const systemMatch = textContent.match(/^(?:⚠️|❌|ℹ️)?\s*System\s+\w+:\s*(.+)$/);
                           if (systemMatch) {
                               textContent = systemMatch[1];
                           }
@@ -45579,7 +45580,7 @@
           }
   
           // Handle timeline item click - scroll to corresponding message
-          function onTimelineSelect(event) {
+          function onTimelineSelect() {
               const selection = timeline.getSelection();
               if (selection.length > 0) {
                   const itemId = selection[0];
@@ -45696,7 +45697,6 @@
                   script.src = 'https://unpkg.com/vis-timeline/standalone/umd/vis-timeline-graph2d.min.js';
                   script.onload = () => {
                       console.log('vis-timeline loaded successfully');
-                      isTimelineLoaded = true;
                       resolve();
                   };
                   script.onerror = () => {
@@ -47386,7 +47386,7 @@
           // New nodes. These carry the fade-in; the ones replaced above
           // deliberately do not, since they were already on screen.
           let added = 0;
-          for (const [key, newNode] of additions) {
+          for (const [, newNode] of additions) {
               const imported = document.importNode(newNode, true);
               if (!insertNode(newNode, imported)) return null;
               added += imported.querySelectorAll('.message').length;
@@ -48193,10 +48193,10 @@
   
                   if (action === 'fold-one') {
                       // Fold/unfold immediate children only
-                      handleFoldOne(targetId, isFolded, section);
+                      handleFoldOne(targetId, isFolded);
                   } else if (action === 'fold-all') {
                       // Fold/unfold all descendants recursively
-                      handleFoldAll(targetId, isFolded, section);
+                      handleFoldAll(targetId, isFolded);
                   }
               });
   
@@ -48265,14 +48265,14 @@
                   }
               }
   
-              function handleFoldOne(targetId, isFolded, sectionElement) {
+              function handleFoldOne(targetId, isFolded) {
                   const messageEl = getMessageEl(targetId);
                   if (!messageEl) return;
                   // Currently folded → reveal first level; else collapse fully.
                   applyFoldState(messageEl, isFolded ? 'first' : 'folded');
               }
   
-              function handleFoldAll(targetId, isFolded, sectionElement) {
+              function handleFoldAll(targetId, isFolded) {
                   const messageEl = getMessageEl(targetId);
                   if (!messageEl) return;
                   // Currently folded → open all levels; else collapse to first level.
@@ -48476,7 +48476,6 @@
       };
   
       // DOM elements
-      const searchContainer = document.getElementById('searchContainer');
       const searchInput = document.getElementById('searchInput');
       const searchClear = document.getElementById('searchClear');
       const searchHint = document.querySelector('.search-hint');
@@ -49100,7 +49099,7 @@
   
           const textNodes = [];
           let node;
-          while (node = walker.nextNode()) {
+          while ((node = walker.nextNode())) {
               if (node.nodeValue.trim()) {
                   textNodes.push(node);
               }
@@ -54489,7 +54488,6 @@
       };
   
       // DOM elements
-      const searchContainer = document.getElementById('searchContainer');
       const searchInput = document.getElementById('searchInput');
       const searchClear = document.getElementById('searchClear');
       const searchHint = document.querySelector('.search-hint');
@@ -55113,7 +55111,7 @@
   
           const textNodes = [];
           let node;
-          while (node = walker.nextNode()) {
+          while ((node = walker.nextNode())) {
               if (node.nodeValue.trim()) {
                   textNodes.push(node);
               }
@@ -58420,7 +58418,6 @@
       };
   
       // DOM elements
-      const searchContainer = document.getElementById('searchContainer');
       const searchInput = document.getElementById('searchInput');
       const searchClear = document.getElementById('searchClear');
       const searchHint = document.querySelector('.search-hint');
@@ -59044,7 +59041,7 @@
   
           const textNodes = [];
           let node;
-          while (node = walker.nextNode()) {
+          while ((node = walker.nextNode())) {
               if (node.nodeValue.trim()) {
                   textNodes.push(node);
               }
@@ -68255,7 +68252,6 @@
           let items = null;
           let itemsDataSet = null;
           let groups = null;
-          let isTimelineLoaded = false;
           let timelineIdToElement = new Map(); // Map timeline IDs to DOM elements
           let isResizing = false;
   
@@ -68489,7 +68485,9 @@
                       // For system messages, try to extract just the message without the prefix
                       if (messageType === 'system') {
                           // System messages often have format like "⚠️ System Warning: message content"
-                          const systemMatch = textContent.match(/^[⚠️❌ℹ️]?\s*System\s+\w+:\s*(.+)$/);
+                          // An alternation, not a character class: ⚠️ and ℹ️ are two code
+                          // points each (symbol + variation selector).
+                          const systemMatch = textContent.match(/^(?:⚠️|❌|ℹ️)?\s*System\s+\w+:\s*(.+)$/);
                           if (systemMatch) {
                               textContent = systemMatch[1];
                           }
@@ -68658,7 +68656,7 @@
           }
   
           // Handle timeline item click - scroll to corresponding message
-          function onTimelineSelect(event) {
+          function onTimelineSelect() {
               const selection = timeline.getSelection();
               if (selection.length > 0) {
                   const itemId = selection[0];
@@ -68775,7 +68773,6 @@
                   script.src = 'https://unpkg.com/vis-timeline/standalone/umd/vis-timeline-graph2d.min.js';
                   script.onload = () => {
                       console.log('vis-timeline loaded successfully');
-                      isTimelineLoaded = true;
                       resolve();
                   };
                   script.onerror = () => {
@@ -70014,7 +70011,7 @@
           // New nodes. These carry the fade-in; the ones replaced above
           // deliberately do not, since they were already on screen.
           let added = 0;
-          for (const [key, newNode] of additions) {
+          for (const [, newNode] of additions) {
               const imported = document.importNode(newNode, true);
               if (!insertNode(newNode, imported)) return null;
               added += imported.querySelectorAll('.message').length;
@@ -70821,10 +70818,10 @@
   
                   if (action === 'fold-one') {
                       // Fold/unfold immediate children only
-                      handleFoldOne(targetId, isFolded, section);
+                      handleFoldOne(targetId, isFolded);
                   } else if (action === 'fold-all') {
                       // Fold/unfold all descendants recursively
-                      handleFoldAll(targetId, isFolded, section);
+                      handleFoldAll(targetId, isFolded);
                   }
               });
   
@@ -70893,14 +70890,14 @@
                   }
               }
   
-              function handleFoldOne(targetId, isFolded, sectionElement) {
+              function handleFoldOne(targetId, isFolded) {
                   const messageEl = getMessageEl(targetId);
                   if (!messageEl) return;
                   // Currently folded → reveal first level; else collapse fully.
                   applyFoldState(messageEl, isFolded ? 'first' : 'folded');
               }
   
-              function handleFoldAll(targetId, isFolded, sectionElement) {
+              function handleFoldAll(targetId, isFolded) {
                   const messageEl = getMessageEl(targetId);
                   if (!messageEl) return;
                   // Currently folded → open all levels; else collapse to first level.
@@ -71104,7 +71101,6 @@
       };
   
       // DOM elements
-      const searchContainer = document.getElementById('searchContainer');
       const searchInput = document.getElementById('searchInput');
       const searchClear = document.getElementById('searchClear');
       const searchHint = document.querySelector('.search-hint');
@@ -71728,7 +71724,7 @@
   
           const textNodes = [];
           let node;
-          while (node = walker.nextNode()) {
+          while ((node = walker.nextNode())) {
               if (node.nodeValue.trim()) {
                   textNodes.push(node);
               }
@@ -79010,7 +79006,6 @@
           let items = null;
           let itemsDataSet = null;
           let groups = null;
-          let isTimelineLoaded = false;
           let timelineIdToElement = new Map(); // Map timeline IDs to DOM elements
           let isResizing = false;
   
@@ -79244,7 +79239,9 @@
                       // For system messages, try to extract just the message without the prefix
                       if (messageType === 'system') {
                           // System messages often have format like "⚠️ System Warning: message content"
-                          const systemMatch = textContent.match(/^[⚠️❌ℹ️]?\s*System\s+\w+:\s*(.+)$/);
+                          // An alternation, not a character class: ⚠️ and ℹ️ are two code
+                          // points each (symbol + variation selector).
+                          const systemMatch = textContent.match(/^(?:⚠️|❌|ℹ️)?\s*System\s+\w+:\s*(.+)$/);
                           if (systemMatch) {
                               textContent = systemMatch[1];
                           }
@@ -79413,7 +79410,7 @@
           }
   
           // Handle timeline item click - scroll to corresponding message
-          function onTimelineSelect(event) {
+          function onTimelineSelect() {
               const selection = timeline.getSelection();
               if (selection.length > 0) {
                   const itemId = selection[0];
@@ -79526,7 +79523,6 @@
                   script.src = 'https://unpkg.com/vis-timeline/standalone/umd/vis-timeline-graph2d.min.js';
                   script.onload = () => {
                       console.log('vis-timeline loaded successfully');
-                      isTimelineLoaded = true;
                       resolve();
                   };
                   script.onerror = () => {
@@ -80775,7 +80771,7 @@
           // New nodes. These carry the fade-in; the ones replaced above
           // deliberately do not, since they were already on screen.
           let added = 0;
-          for (const [key, newNode] of additions) {
+          for (const [, newNode] of additions) {
               const imported = document.importNode(newNode, true);
               if (!insertNode(newNode, imported)) return null;
               added += imported.querySelectorAll('.message').length;
@@ -81579,10 +81575,10 @@
   
                   if (action === 'fold-one') {
                       // Fold/unfold immediate children only
-                      handleFoldOne(targetId, isFolded, section);
+                      handleFoldOne(targetId, isFolded);
                   } else if (action === 'fold-all') {
                       // Fold/unfold all descendants recursively
-                      handleFoldAll(targetId, isFolded, section);
+                      handleFoldAll(targetId, isFolded);
                   }
               });
   
@@ -81651,14 +81647,14 @@
                   }
               }
   
-              function handleFoldOne(targetId, isFolded, sectionElement) {
+              function handleFoldOne(targetId, isFolded) {
                   const messageEl = getMessageEl(targetId);
                   if (!messageEl) return;
                   // Currently folded → reveal first level; else collapse fully.
                   applyFoldState(messageEl, isFolded ? 'first' : 'folded');
               }
   
-              function handleFoldAll(targetId, isFolded, sectionElement) {
+              function handleFoldAll(targetId, isFolded) {
                   const messageEl = getMessageEl(targetId);
                   if (!messageEl) return;
                   // Currently folded → open all levels; else collapse to first level.
@@ -81849,7 +81845,6 @@
       };
   
       // DOM elements
-      const searchContainer = document.getElementById('searchContainer');
       const searchInput = document.getElementById('searchInput');
       const searchClear = document.getElementById('searchClear');
       const searchHint = document.querySelector('.search-hint');
@@ -82470,7 +82465,7 @@
   
           const textNodes = [];
           let node;
-          while (node = walker.nextNode()) {
+          while ((node = walker.nextNode())) {
               if (node.nodeValue.trim()) {
                   textNodes.push(node);
               }
@@ -87392,7 +87387,6 @@
           let items = null;
           let itemsDataSet = null;
           let groups = null;
-          let isTimelineLoaded = false;
           let timelineIdToElement = new Map(); // Map timeline IDs to DOM elements
           let isResizing = false;
   
@@ -87626,7 +87620,9 @@
                       // For system messages, try to extract just the message without the prefix
                       if (messageType === 'system') {
                           // System messages often have format like "⚠️ System Warning: message content"
-                          const systemMatch = textContent.match(/^[⚠️❌ℹ️]?\s*System\s+\w+:\s*(.+)$/);
+                          // An alternation, not a character class: ⚠️ and ℹ️ are two code
+                          // points each (symbol + variation selector).
+                          const systemMatch = textContent.match(/^(?:⚠️|❌|ℹ️)?\s*System\s+\w+:\s*(.+)$/);
                           if (systemMatch) {
                               textContent = systemMatch[1];
                           }
@@ -87795,7 +87791,7 @@
           }
   
           // Handle timeline item click - scroll to corresponding message
-          function onTimelineSelect(event) {
+          function onTimelineSelect() {
               const selection = timeline.getSelection();
               if (selection.length > 0) {
                   const itemId = selection[0];
@@ -87908,7 +87904,6 @@
                   script.src = 'https://unpkg.com/vis-timeline/standalone/umd/vis-timeline-graph2d.min.js';
                   script.onload = () => {
                       console.log('vis-timeline loaded successfully');
-                      isTimelineLoaded = true;
                       resolve();
                   };
                   script.onerror = () => {
@@ -89437,7 +89432,7 @@
           // New nodes. These carry the fade-in; the ones replaced above
           // deliberately do not, since they were already on screen.
           let added = 0;
-          for (const [key, newNode] of additions) {
+          for (const [, newNode] of additions) {
               const imported = document.importNode(newNode, true);
               if (!insertNode(newNode, imported)) return null;
               added += imported.querySelectorAll('.message').length;
@@ -90241,10 +90236,10 @@
   
                   if (action === 'fold-one') {
                       // Fold/unfold immediate children only
-                      handleFoldOne(targetId, isFolded, section);
+                      handleFoldOne(targetId, isFolded);
                   } else if (action === 'fold-all') {
                       // Fold/unfold all descendants recursively
-                      handleFoldAll(targetId, isFolded, section);
+                      handleFoldAll(targetId, isFolded);
                   }
               });
   
@@ -90313,14 +90308,14 @@
                   }
               }
   
-              function handleFoldOne(targetId, isFolded, sectionElement) {
+              function handleFoldOne(targetId, isFolded) {
                   const messageEl = getMessageEl(targetId);
                   if (!messageEl) return;
                   // Currently folded → reveal first level; else collapse fully.
                   applyFoldState(messageEl, isFolded ? 'first' : 'folded');
               }
   
-              function handleFoldAll(targetId, isFolded, sectionElement) {
+              function handleFoldAll(targetId, isFolded) {
                   const messageEl = getMessageEl(targetId);
                   if (!messageEl) return;
                   // Currently folded → open all levels; else collapse to first level.
@@ -90511,7 +90506,6 @@
       };
   
       // DOM elements
-      const searchContainer = document.getElementById('searchContainer');
       const searchInput = document.getElementById('searchInput');
       const searchClear = document.getElementById('searchClear');
       const searchHint = document.querySelector('.search-hint');
@@ -91132,7 +91126,7 @@
   
           const textNodes = [];
           let node;
-          while (node = walker.nextNode()) {
+          while ((node = walker.nextNode())) {
               if (node.nodeValue.trim()) {
                   textNodes.push(node);
               }
@@ -96054,7 +96048,6 @@
           let items = null;
           let itemsDataSet = null;
           let groups = null;
-          let isTimelineLoaded = false;
           let timelineIdToElement = new Map(); // Map timeline IDs to DOM elements
           let isResizing = false;
   
@@ -96288,7 +96281,9 @@
                       // For system messages, try to extract just the message without the prefix
                       if (messageType === 'system') {
                           // System messages often have format like "⚠️ System Warning: message content"
-                          const systemMatch = textContent.match(/^[⚠️❌ℹ️]?\s*System\s+\w+:\s*(.+)$/);
+                          // An alternation, not a character class: ⚠️ and ℹ️ are two code
+                          // points each (symbol + variation selector).
+                          const systemMatch = textContent.match(/^(?:⚠️|❌|ℹ️)?\s*System\s+\w+:\s*(.+)$/);
                           if (systemMatch) {
                               textContent = systemMatch[1];
                           }
@@ -96457,7 +96452,7 @@
           }
   
           // Handle timeline item click - scroll to corresponding message
-          function onTimelineSelect(event) {
+          function onTimelineSelect() {
               const selection = timeline.getSelection();
               if (selection.length > 0) {
                   const itemId = selection[0];
@@ -96570,7 +96565,6 @@
                   script.src = 'https://unpkg.com/vis-timeline/standalone/umd/vis-timeline-graph2d.min.js';
                   script.onload = () => {
                       console.log('vis-timeline loaded successfully');
-                      isTimelineLoaded = true;
                       resolve();
                   };
                   script.onerror = () => {
@@ -98046,7 +98040,7 @@
           // New nodes. These carry the fade-in; the ones replaced above
           // deliberately do not, since they were already on screen.
           let added = 0;
-          for (const [key, newNode] of additions) {
+          for (const [, newNode] of additions) {
               const imported = document.importNode(newNode, true);
               if (!insertNode(newNode, imported)) return null;
               added += imported.querySelectorAll('.message').length;
@@ -98850,10 +98844,10 @@
   
                   if (action === 'fold-one') {
                       // Fold/unfold immediate children only
-                      handleFoldOne(targetId, isFolded, section);
+                      handleFoldOne(targetId, isFolded);
                   } else if (action === 'fold-all') {
                       // Fold/unfold all descendants recursively
-                      handleFoldAll(targetId, isFolded, section);
+                      handleFoldAll(targetId, isFolded);
                   }
               });
   
@@ -98922,14 +98916,14 @@
                   }
               }
   
-              function handleFoldOne(targetId, isFolded, sectionElement) {
+              function handleFoldOne(targetId, isFolded) {
                   const messageEl = getMessageEl(targetId);
                   if (!messageEl) return;
                   // Currently folded → reveal first level; else collapse fully.
                   applyFoldState(messageEl, isFolded ? 'first' : 'folded');
               }
   
-              function handleFoldAll(targetId, isFolded, sectionElement) {
+              function handleFoldAll(targetId, isFolded) {
                   const messageEl = getMessageEl(targetId);
                   if (!messageEl) return;
                   // Currently folded → open all levels; else collapse to first level.
@@ -99120,7 +99114,6 @@
       };
   
       // DOM elements
-      const searchContainer = document.getElementById('searchContainer');
       const searchInput = document.getElementById('searchInput');
       const searchClear = document.getElementById('searchClear');
       const searchHint = document.querySelector('.search-hint');
@@ -99741,7 +99734,7 @@
   
           const textNodes = [];
           let node;
-          while (node = walker.nextNode()) {
+          while ((node = walker.nextNode())) {
               if (node.nodeValue.trim()) {
                   textNodes.push(node);
               }
@@ -104663,7 +104656,6 @@
           let items = null;
           let itemsDataSet = null;
           let groups = null;
-          let isTimelineLoaded = false;
           let timelineIdToElement = new Map(); // Map timeline IDs to DOM elements
           let isResizing = false;
   
@@ -104897,7 +104889,9 @@
                       // For system messages, try to extract just the message without the prefix
                       if (messageType === 'system') {
                           // System messages often have format like "⚠️ System Warning: message content"
-                          const systemMatch = textContent.match(/^[⚠️❌ℹ️]?\s*System\s+\w+:\s*(.+)$/);
+                          // An alternation, not a character class: ⚠️ and ℹ️ are two code
+                          // points each (symbol + variation selector).
+                          const systemMatch = textContent.match(/^(?:⚠️|❌|ℹ️)?\s*System\s+\w+:\s*(.+)$/);
                           if (systemMatch) {
                               textContent = systemMatch[1];
                           }
@@ -105066,7 +105060,7 @@
           }
   
           // Handle timeline item click - scroll to corresponding message
-          function onTimelineSelect(event) {
+          function onTimelineSelect() {
               const selection = timeline.getSelection();
               if (selection.length > 0) {
                   const itemId = selection[0];
@@ -105179,7 +105173,6 @@
                   script.src = 'https://unpkg.com/vis-timeline/standalone/umd/vis-timeline-graph2d.min.js';
                   script.onload = () => {
                       console.log('vis-timeline loaded successfully');
-                      isTimelineLoaded = true;
                       resolve();
                   };
                   script.onerror = () => {
@@ -106600,7 +106593,7 @@
           // New nodes. These carry the fade-in; the ones replaced above
           // deliberately do not, since they were already on screen.
           let added = 0;
-          for (const [key, newNode] of additions) {
+          for (const [, newNode] of additions) {
               const imported = document.importNode(newNode, true);
               if (!insertNode(newNode, imported)) return null;
               added += imported.querySelectorAll('.message').length;
@@ -107404,10 +107397,10 @@
   
                   if (action === 'fold-one') {
                       // Fold/unfold immediate children only
-                      handleFoldOne(targetId, isFolded, section);
+                      handleFoldOne(targetId, isFolded);
                   } else if (action === 'fold-all') {
                       // Fold/unfold all descendants recursively
-                      handleFoldAll(targetId, isFolded, section);
+                      handleFoldAll(targetId, isFolded);
                   }
               });
   
@@ -107476,14 +107469,14 @@
                   }
               }
   
-              function handleFoldOne(targetId, isFolded, sectionElement) {
+              function handleFoldOne(targetId, isFolded) {
                   const messageEl = getMessageEl(targetId);
                   if (!messageEl) return;
                   // Currently folded → reveal first level; else collapse fully.
                   applyFoldState(messageEl, isFolded ? 'first' : 'folded');
               }
   
-              function handleFoldAll(targetId, isFolded, sectionElement) {
+              function handleFoldAll(targetId, isFolded) {
                   const messageEl = getMessageEl(targetId);
                   if (!messageEl) return;
                   // Currently folded → open all levels; else collapse to first level.
@@ -107674,7 +107667,6 @@
       };
   
       // DOM elements
-      const searchContainer = document.getElementById('searchContainer');
       const searchInput = document.getElementById('searchInput');
       const searchClear = document.getElementById('searchClear');
       const searchHint = document.querySelector('.search-hint');
@@ -108295,7 +108287,7 @@
   
           const textNodes = [];
           let node;
-          while (node = walker.nextNode()) {
+          while ((node = walker.nextNode())) {
               if (node.nodeValue.trim()) {
                   textNodes.push(node);
               }
@@ -113217,7 +113209,6 @@
           let items = null;
           let itemsDataSet = null;
           let groups = null;
-          let isTimelineLoaded = false;
           let timelineIdToElement = new Map(); // Map timeline IDs to DOM elements
           let isResizing = false;
   
@@ -113451,7 +113442,9 @@
                       // For system messages, try to extract just the message without the prefix
                       if (messageType === 'system') {
                           // System messages often have format like "⚠️ System Warning: message content"
-                          const systemMatch = textContent.match(/^[⚠️❌ℹ️]?\s*System\s+\w+:\s*(.+)$/);
+                          // An alternation, not a character class: ⚠️ and ℹ️ are two code
+                          // points each (symbol + variation selector).
+                          const systemMatch = textContent.match(/^(?:⚠️|❌|ℹ️)?\s*System\s+\w+:\s*(.+)$/);
                           if (systemMatch) {
                               textContent = systemMatch[1];
                           }
@@ -113620,7 +113613,7 @@
           }
   
           // Handle timeline item click - scroll to corresponding message
-          function onTimelineSelect(event) {
+          function onTimelineSelect() {
               const selection = timeline.getSelection();
               if (selection.length > 0) {
                   const itemId = selection[0];
@@ -113733,7 +113726,6 @@
                   script.src = 'https://unpkg.com/vis-timeline/standalone/umd/vis-timeline-graph2d.min.js';
                   script.onload = () => {
                       console.log('vis-timeline loaded successfully');
-                      isTimelineLoaded = true;
                       resolve();
                   };
                   script.onerror = () => {
@@ -114982,7 +114974,7 @@
           // New nodes. These carry the fade-in; the ones replaced above
           // deliberately do not, since they were already on screen.
           let added = 0;
-          for (const [key, newNode] of additions) {
+          for (const [, newNode] of additions) {
               const imported = document.importNode(newNode, true);
               if (!insertNode(newNode, imported)) return null;
               added += imported.querySelectorAll('.message').length;
@@ -115786,10 +115778,10 @@
   
                   if (action === 'fold-one') {
                       // Fold/unfold immediate children only
-                      handleFoldOne(targetId, isFolded, section);
+                      handleFoldOne(targetId, isFolded);
                   } else if (action === 'fold-all') {
                       // Fold/unfold all descendants recursively
-                      handleFoldAll(targetId, isFolded, section);
+                      handleFoldAll(targetId, isFolded);
                   }
               });
   
@@ -115858,14 +115850,14 @@
                   }
               }
   
-              function handleFoldOne(targetId, isFolded, sectionElement) {
+              function handleFoldOne(targetId, isFolded) {
                   const messageEl = getMessageEl(targetId);
                   if (!messageEl) return;
                   // Currently folded → reveal first level; else collapse fully.
                   applyFoldState(messageEl, isFolded ? 'first' : 'folded');
               }
   
-              function handleFoldAll(targetId, isFolded, sectionElement) {
+              function handleFoldAll(targetId, isFolded) {
                   const messageEl = getMessageEl(targetId);
                   if (!messageEl) return;
                   // Currently folded → open all levels; else collapse to first level.
@@ -116056,7 +116048,6 @@
       };
   
       // DOM elements
-      const searchContainer = document.getElementById('searchContainer');
       const searchInput = document.getElementById('searchInput');
       const searchClear = document.getElementById('searchClear');
       const searchHint = document.querySelector('.search-hint');
@@ -116677,7 +116668,7 @@
   
           const textNodes = [];
           let node;
-          while (node = walker.nextNode()) {
+          while ((node = walker.nextNode())) {
               if (node.nodeValue.trim()) {
                   textNodes.push(node);
               }
@@ -121599,7 +121590,6 @@
           let items = null;
           let itemsDataSet = null;
           let groups = null;
-          let isTimelineLoaded = false;
           let timelineIdToElement = new Map(); // Map timeline IDs to DOM elements
           let isResizing = false;
   
@@ -121833,7 +121823,9 @@
                       // For system messages, try to extract just the message without the prefix
                       if (messageType === 'system') {
                           // System messages often have format like "⚠️ System Warning: message content"
-                          const systemMatch = textContent.match(/^[⚠️❌ℹ️]?\s*System\s+\w+:\s*(.+)$/);
+                          // An alternation, not a character class: ⚠️ and ℹ️ are two code
+                          // points each (symbol + variation selector).
+                          const systemMatch = textContent.match(/^(?:⚠️|❌|ℹ️)?\s*System\s+\w+:\s*(.+)$/);
                           if (systemMatch) {
                               textContent = systemMatch[1];
                           }
@@ -122002,7 +121994,7 @@
           }
   
           // Handle timeline item click - scroll to corresponding message
-          function onTimelineSelect(event) {
+          function onTimelineSelect() {
               const selection = timeline.getSelection();
               if (selection.length > 0) {
                   const itemId = selection[0];
@@ -122115,7 +122107,6 @@
                   script.src = 'https://unpkg.com/vis-timeline/standalone/umd/vis-timeline-graph2d.min.js';
                   script.onload = () => {
                       console.log('vis-timeline loaded successfully');
-                      isTimelineLoaded = true;
                       resolve();
                   };
                   script.onerror = () => {
@@ -123169,7 +123160,7 @@
           // New nodes. These carry the fade-in; the ones replaced above
           // deliberately do not, since they were already on screen.
           let added = 0;
-          for (const [key, newNode] of additions) {
+          for (const [, newNode] of additions) {
               const imported = document.importNode(newNode, true);
               if (!insertNode(newNode, imported)) return null;
               added += imported.querySelectorAll('.message').length;
@@ -123973,10 +123964,10 @@
   
                   if (action === 'fold-one') {
                       // Fold/unfold immediate children only
-                      handleFoldOne(targetId, isFolded, section);
+                      handleFoldOne(targetId, isFolded);
                   } else if (action === 'fold-all') {
                       // Fold/unfold all descendants recursively
-                      handleFoldAll(targetId, isFolded, section);
+                      handleFoldAll(targetId, isFolded);
                   }
               });
   
@@ -124045,14 +124036,14 @@
                   }
               }
   
-              function handleFoldOne(targetId, isFolded, sectionElement) {
+              function handleFoldOne(targetId, isFolded) {
                   const messageEl = getMessageEl(targetId);
                   if (!messageEl) return;
                   // Currently folded → reveal first level; else collapse fully.
                   applyFoldState(messageEl, isFolded ? 'first' : 'folded');
               }
   
-              function handleFoldAll(targetId, isFolded, sectionElement) {
+              function handleFoldAll(targetId, isFolded) {
                   const messageEl = getMessageEl(targetId);
                   if (!messageEl) return;
                   // Currently folded → open all levels; else collapse to first level.
@@ -124243,7 +124234,6 @@
       };
   
       // DOM elements
-      const searchContainer = document.getElementById('searchContainer');
       const searchInput = document.getElementById('searchInput');
       const searchClear = document.getElementById('searchClear');
       const searchHint = document.querySelector('.search-hint');
@@ -124864,7 +124854,7 @@
   
           const textNodes = [];
           let node;
-          while (node = walker.nextNode()) {
+          while ((node = walker.nextNode())) {
               if (node.nodeValue.trim()) {
                   textNodes.push(node);
               }
@@ -129786,7 +129776,6 @@
           let items = null;
           let itemsDataSet = null;
           let groups = null;
-          let isTimelineLoaded = false;
           let timelineIdToElement = new Map(); // Map timeline IDs to DOM elements
           let isResizing = false;
   
@@ -130020,7 +130009,9 @@
                       // For system messages, try to extract just the message without the prefix
                       if (messageType === 'system') {
                           // System messages often have format like "⚠️ System Warning: message content"
-                          const systemMatch = textContent.match(/^[⚠️❌ℹ️]?\s*System\s+\w+:\s*(.+)$/);
+                          // An alternation, not a character class: ⚠️ and ℹ️ are two code
+                          // points each (symbol + variation selector).
+                          const systemMatch = textContent.match(/^(?:⚠️|❌|ℹ️)?\s*System\s+\w+:\s*(.+)$/);
                           if (systemMatch) {
                               textContent = systemMatch[1];
                           }
@@ -130189,7 +130180,7 @@
           }
   
           // Handle timeline item click - scroll to corresponding message
-          function onTimelineSelect(event) {
+          function onTimelineSelect() {
               const selection = timeline.getSelection();
               if (selection.length > 0) {
                   const itemId = selection[0];
@@ -130302,7 +130293,6 @@
                   script.src = 'https://unpkg.com/vis-timeline/standalone/umd/vis-timeline-graph2d.min.js';
                   script.onload = () => {
                       console.log('vis-timeline loaded successfully');
-                      isTimelineLoaded = true;
                       resolve();
                   };
                   script.onerror = () => {
@@ -131305,7 +131295,7 @@
           // New nodes. These carry the fade-in; the ones replaced above
           // deliberately do not, since they were already on screen.
           let added = 0;
-          for (const [key, newNode] of additions) {
+          for (const [, newNode] of additions) {
               const imported = document.importNode(newNode, true);
               if (!insertNode(newNode, imported)) return null;
               added += imported.querySelectorAll('.message').length;
@@ -132109,10 +132099,10 @@
   
                   if (action === 'fold-one') {
                       // Fold/unfold immediate children only
-                      handleFoldOne(targetId, isFolded, section);
+                      handleFoldOne(targetId, isFolded);
                   } else if (action === 'fold-all') {
                       // Fold/unfold all descendants recursively
-                      handleFoldAll(targetId, isFolded, section);
+                      handleFoldAll(targetId, isFolded);
                   }
               });
   
@@ -132181,14 +132171,14 @@
                   }
               }
   
-              function handleFoldOne(targetId, isFolded, sectionElement) {
+              function handleFoldOne(targetId, isFolded) {
                   const messageEl = getMessageEl(targetId);
                   if (!messageEl) return;
                   // Currently folded → reveal first level; else collapse fully.
                   applyFoldState(messageEl, isFolded ? 'first' : 'folded');
               }
   
-              function handleFoldAll(targetId, isFolded, sectionElement) {
+              function handleFoldAll(targetId, isFolded) {
                   const messageEl = getMessageEl(targetId);
                   if (!messageEl) return;
                   // Currently folded → open all levels; else collapse to first level.
@@ -132379,7 +132369,6 @@
       };
   
       // DOM elements
-      const searchContainer = document.getElementById('searchContainer');
       const searchInput = document.getElementById('searchInput');
       const searchClear = document.getElementById('searchClear');
       const searchHint = document.querySelector('.search-hint');
@@ -133000,7 +132989,7 @@
   
           const textNodes = [];
           let node;
-          while (node = walker.nextNode()) {
+          while ((node = walker.nextNode())) {
               if (node.nodeValue.trim()) {
                   textNodes.push(node);
               }

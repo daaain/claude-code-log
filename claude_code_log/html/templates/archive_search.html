@@ -446,6 +446,8 @@
 
             // --- rendering ----------------------------------------------
 
+            // Called below, on the theme that uses it (minimal calls mnRenderGroups).
+            // oxlint-disable-next-line no-unused-vars
             function renderGroups(results, query, append) {
                 if (!append) resultsEl.innerHTML = '';
                 const groups = new Map();

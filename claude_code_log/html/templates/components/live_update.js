@@ -373,7 +373,7 @@
         // New nodes. These carry the fade-in; the ones replaced above
         // deliberately do not, since they were already on screen.
         let added = 0;
-        for (const [key, newNode] of additions) {
+        for (const [, newNode] of additions) {
             const imported = document.importNode(newNode, true);
             if (!insertNode(newNode, imported)) return null;
             added += imported.querySelectorAll('.message').length;

@@ -1,5 +1,6 @@
 """Playwright-based tests for timeline functionality in the browser."""
 
+import json
 import tempfile
 import re
 from pathlib import Path
@@ -461,6 +462,40 @@ class TestTimelineBrowser:
         system_count = system_items.count()
 
         assert system_count > 0, "Should contain the system warning about Opus limit"
+
+    @pytest.mark.browser
+    @pytest.mark.parametrize("level", ["warning", "info", "error"])
+    def test_timeline_strips_a_system_prefix_after_any_level_icon(
+        self, page: Page, tmp_path: Path, level: str
+    ):
+        """A system message reading "System <Kind>: text" is labelled by its
+        text alone. The icons ⚠️ and ℹ️ are two code points (a symbol plus a
+        variation selector), so a character class of icons stripped only ❌."""
+        entry = {
+            "type": "system",
+            "content": "System Notice: the search index was rebuilt",
+            "level": level,
+            "isMeta": False,
+            "timestamp": "2026-01-01T10:00:00.000Z",
+            "uuid": "sys-1",
+            "parentUuid": None,
+            "isSidechain": False,
+            "userType": "external",
+            "cwd": "/workspace",
+            "sessionId": "s",
+            "version": "1.0.0",
+        }
+        source = tmp_path / "system_prefix.jsonl"
+        source.write_text(json.dumps(entry) + "\n", encoding="utf-8")
+        temp_file = self._create_temp_html(load_transcript(source), "System Prefix")
+
+        page.goto(f"file://{temp_file}")
+        page.locator("#toggleTimeline").click()
+        self._wait_for_timeline_loaded(page)
+
+        item = page.locator(".vis-item:has-text('the search index was rebuilt')")
+        expect(item).to_have_count(1)
+        expect(item).not_to_contain_text("System Notice")
 
     @pytest.mark.browser
     def test_timeline_message_click_navigation(self, page: Page):

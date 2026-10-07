@@ -981,10 +981,10 @@
 
                 if (action === 'fold-one') {
                     // Fold/unfold immediate children only
-                    handleFoldOne(targetId, isFolded, section);
+                    handleFoldOne(targetId, isFolded);
                 } else if (action === 'fold-all') {
                     // Fold/unfold all descendants recursively
-                    handleFoldAll(targetId, isFolded, section);
+                    handleFoldAll(targetId, isFolded);
                 }
             });
 
@@ -1053,14 +1053,14 @@
                 }
             }
 
-            function handleFoldOne(targetId, isFolded, sectionElement) {
+            function handleFoldOne(targetId, isFolded) {
                 const messageEl = getMessageEl(targetId);
                 if (!messageEl) return;
                 // Currently folded → reveal first level; else collapse fully.
                 applyFoldState(messageEl, isFolded ? 'first' : 'folded');
             }
 
-            function handleFoldAll(targetId, isFolded, sectionElement) {
+            function handleFoldAll(targetId, isFolded) {
                 const messageEl = getMessageEl(targetId);
                 if (!messageEl) return;
                 // Currently folded → open all levels; else collapse to first level.

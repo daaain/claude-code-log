@@ -17,7 +17,6 @@
         let items = null;
         let itemsDataSet = null;
         let groups = null;
-        let isTimelineLoaded = false;
         let timelineIdToElement = new Map(); // Map timeline IDs to DOM elements
         let isResizing = false;
 
@@ -251,7 +250,9 @@
                     // For system messages, try to extract just the message without the prefix
                     if (messageType === 'system') {
                         // System messages often have format like "⚠️ System Warning: message content"
-                        const systemMatch = textContent.match(/^[⚠️❌ℹ️]?\s*System\s+\w+:\s*(.+)$/);
+                        // An alternation, not a character class: ⚠️ and ℹ️ are two code
+                        // points each (symbol + variation selector).
+                        const systemMatch = textContent.match(/^(?:⚠️|❌|ℹ️)?\s*System\s+\w+:\s*(.+)$/);
                         if (systemMatch) {
                             textContent = systemMatch[1];
                         }
@@ -420,7 +421,7 @@
         }
 
         // Handle timeline item click - scroll to corresponding message
-        function onTimelineSelect(event) {
+        function onTimelineSelect() {
             const selection = timeline.getSelection();
             if (selection.length > 0) {
                 const itemId = selection[0];
@@ -537,7 +538,6 @@
                 script.src = 'https://unpkg.com/vis-timeline/standalone/umd/vis-timeline-graph2d.min.js';
                 script.onload = () => {
                     console.log('vis-timeline loaded successfully');
-                    isTimelineLoaded = true;
                     resolve();
                 };
                 script.onerror = () => {
