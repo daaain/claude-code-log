@@ -355,7 +355,7 @@ class TestBlockedStorage:
         assert errors == []
 
 
-LONG_TOOL = "mcp__plugin_semsync_semsync__scan_with_a_rather_long_name"
+LONG_TOOL = "mcp__plugin_example_example__scan_with_a_rather_long_name"
 
 
 def _entry(uuid: str, parent: str | None, role: str, content: list[Any]) -> dict:
