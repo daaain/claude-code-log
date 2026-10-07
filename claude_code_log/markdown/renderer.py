@@ -301,6 +301,9 @@ def _protect_html_tags(text: str) -> str:
     return "".join(out).rstrip("\n")
 
 
+# A Markdown thematic break (horizontal rule) on its own line.
+_THEMATIC_BREAK_RE = re.compile(r"(?:([-*_])[ \t]*)(?:\1[ \t]*){2,}")
+
 # A ``<`` that a lax HTML parser could take as a tag start: letter, ``/``,
 # ``!`` or ``?`` next. ``x < 3`` and ``<=`` are left alone.
 _TAG_LIKE_LT_RE = re.compile(r"<(?=[A-Za-z/!?])")
@@ -643,11 +646,19 @@ class MarkdownRenderer(Renderer):
           only if at least min_len characters
         - If over max_len, continues to end of current word
         - Adds "…" if truncated
+        - Skips leading YAML front matter (as the rendering does) and
+          horizontal-rule lines: neither says what the message is about.
+          A message with nothing else gets no excerpt.
         """
-        # Get first non-empty line
+        from ..frontmatter import split_frontmatter
+
+        split = split_frontmatter(text)
+        if split is not None:
+            text = split[1]
+        # Get first non-empty line that isn't a horizontal rule
         for line in text.split("\n"):
             line = line.strip()
-            if not line:
+            if not line or _THEMATIC_BREAK_RE.fullmatch(line):
                 continue
 
             # Check for early sentence endings (but enforce minimum length)
@@ -885,7 +896,10 @@ class MarkdownRenderer(Renderer):
                         # not become links, mirroring the HTML side
                         # where the SHA-link transform doesn't fire inside
                         # codespans / fenced code).
-                        parts.append(_protect_html_tags(self._linkify_shas(item.text)))
+                        frontmatter, body = self._split_frontmatter(item.text)
+                        parts.append(
+                            frontmatter + _protect_html_tags(self._linkify_shas(body))
+                        )
                     else:
                         parts.append(self._code_fence(item.text))
         return "\n\n".join(parts)
@@ -1033,12 +1047,16 @@ class MarkdownRenderer(Renderer):
         if not body:
             return header
         # Data bodies (JSON payloads, ``key: value`` lines) use the same
-        # key/value rendering as tool params; prose stays as written.
+        # key/value rendering as tool params; prose stays as written, its
+        # front matter (if any) shown as data.
         params = block.body_params()
         if params is not None:
             body = self._render_params(params)
+        else:
+            frontmatter, rest = self._split_frontmatter(body)
+            body = frontmatter + rest
         # The body comes from another session: neutralise raw HTML as for
-        # user text (a backtick in a value can end its code span).
+        # user text.
         return f"{header}\n\n{self._quote(_protect_html_tags(body))}"
 
     # -------------------------------------------------------------------------
@@ -1059,7 +1077,8 @@ class MarkdownRenderer(Renderer):
                     # before quoting so the substitution happens on
                     # the natural text shape (a leading "> " would
                     # confuse the word-boundary regex anchor).
-                    parts.append(self._quote(self._linkify_shas(item.text)))
+                    frontmatter, body = self._split_frontmatter(item.text)
+                    parts.append(self._quote(frontmatter + self._linkify_shas(body)))
         return "\n\n".join(parts)
 
     def format_ThinkingMessage(
@@ -1631,6 +1650,30 @@ class MarkdownRenderer(Renderer):
             )
         return rendered
 
+    def _split_frontmatter(self, text: str) -> tuple[str, str]:
+        """Take YAML front matter off the top of a Markdown body.
+
+        Returns the front matter rendered as data, with its trailing blank
+        line, and the body after it; ``("", text)`` when there is none.
+        Spliced in raw, a downstream viewer would read the closing fence
+        as a setext underline, as the HTML renderer used to. A mapping
+        renders as tool params do, anything else as a YAML code block;
+        either way raw HTML is neutralised, since the block is transcript
+        content (a backtick in a value can end its code span).
+        """
+        from ..frontmatter import RawFrontmatter, load_frontmatter, split_frontmatter
+
+        split = split_frontmatter(text)
+        if split is None:
+            return "", text
+        source, body = split
+        value = load_frontmatter(source)
+        if isinstance(value, RawFrontmatter):
+            rendered = self._code_fence(source.rstrip(), "yaml")
+        else:
+            rendered = _protect_html_tags(self._render_params(value))
+        return f"{rendered}\n\n", body
+
     def _render_params(self, params: dict[str, Any]) -> str:
         """Render parameters as a markdown key/value list."""
         if not params:
@@ -1643,13 +1686,15 @@ class MarkdownRenderer(Renderer):
                 formatted = json.dumps(value, indent=2, ensure_ascii=False)
                 lines.append(f"**{key}:**")
                 lines.append(self._code_fence(formatted, "json"))
-            elif isinstance(value, str) and len(value) > 100:
-                # Long string - render as code block
+            elif isinstance(value, str) and (len(value) > 100 or "\n" in value):
+                # Long or multi-line string - render as code block (a line
+                # break inside a code span would let the rest render as
+                # Markdown, e.g. a "# Heading" line)
                 lines.append(f"**{key}:**")
                 lines.append(self._code_fence(value))
             else:
-                # Simple value - inline
-                lines.append(f"**{key}:** `{value}`")
+                # Simple value - inline, in a span its backticks can't close
+                lines.append(f"**{key}:** {_inline_code(str(value))}")
         return "\n\n".join(lines)
 
     # -------------------------------------------------------------------------

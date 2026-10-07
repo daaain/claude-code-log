@@ -36,7 +36,7 @@ from .utils import (
     escape_html,
     render_collapsible_code,
     render_markdown_collapsible,
-    render_user_markdown,
+    render_markdown_document,
     render_user_markdown_collapsible,
 )
 
@@ -213,7 +213,7 @@ def format_user_text_content(text: str) -> str:
     escaped_text = escape_html(text)
     raw_block = f"<pre class='user-raw'>{escaped_text}</pre>"
 
-    rendered = render_user_markdown(text)
+    rendered = render_markdown_document(text, user=True)
     if not is_well_formed_html(rendered):
         # Source probably wasn't Markdown — only show the raw view, no
         # toggle. Use the bare <pre> form so styling matches legacy.

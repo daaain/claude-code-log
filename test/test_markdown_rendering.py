@@ -140,14 +140,14 @@ def test_user_ill_formed_markdown_falls_back_to_raw():
     assert "class='user-md'" in good
     assert "class='user-raw'" in good
 
-    # Force the fallback by patching render_user_markdown to return
+    # Force the fallback by patching render_markdown_document to return
     # deliberately ill-formed HTML. `mock.patch` handles the restore
     # and sidesteps ty's invalid-assignment complaint about raw attr
     # rebinding.
     from unittest.mock import patch
 
     with patch(
-        "claude_code_log.html.user_formatters.render_user_markdown",
+        "claude_code_log.html.user_formatters.render_markdown_document",
         return_value="<p>unclosed",
     ):
         bad = format_user_text_content("hello")

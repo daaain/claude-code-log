@@ -37,7 +37,11 @@ from ..models import (
     TeammateMessageBlock,
 )
 from .tool_formatters import render_params_table
-from .utils import escape_html, render_markdown, render_markdown_collapsible
+from .utils import (
+    escape_html,
+    render_markdown_collapsible,
+    render_markdown_document,
+)
 
 # Palette names the CSS recognises (kept in sync with teammate_styles.css).
 _PALETTE: frozenset[str] = frozenset(
@@ -178,12 +182,13 @@ def _format_teammate_block(
         # Data bodies (``idle_notification`` JSON payloads, ``key: value``
         # lines) go through the generic params renderer: Markdown for
         # string values, folds for long and nested ones, escaped as for
-        # tool input. Prose stays Markdown.
+        # tool input. Prose stays Markdown, as a whole document: front
+        # matter at its top shows as data.
         params = block.body_params()
         body_html = (
             render_params_table(params)
             if params is not None
-            else render_markdown(body_text)
+            else render_markdown_document(body_text)
         )
 
     return (

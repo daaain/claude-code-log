@@ -12,7 +12,7 @@ Part of the thematic formatter organization:
 import html
 
 from .ansi_colors import convert_ansi_to_html
-from .utils import render_markdown
+from .utils import render_markdown_document
 from ..models import (
     AwaySummaryMessage,
     HookAttachmentMessage,
@@ -215,7 +215,7 @@ def format_away_summary_content(content: AwaySummaryMessage) -> str:
     Returns:
         Rendered markdown HTML.
     """
-    return render_markdown(content.text)
+    return render_markdown_document(content.text)
 
 
 def _team_badge(team_name: str) -> str:
