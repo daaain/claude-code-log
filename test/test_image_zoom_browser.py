@@ -392,36 +392,40 @@ def test_the_close_button_stays_in_the_viewport_corner(
     browser = browser_type.launch(
         **browser_type_launch_args, ignore_default_args=["--hide-scrollbars"]
     )
-    page = browser.new_page(viewport=VIEWPORT)
-    page.goto(pages["minimal"].as_uri())
-    assert page.evaluate("() => innerWidth - document.documentElement.clientWidth") > 0
-    image = page.locator(UPLOADED)
-    image.scroll_into_view_if_needed()
-    expect(image).to_have_js_property("complete", True)
-    image.click()
-    expect(page.locator(DIALOG)).to_be_visible()
-    close = page.get_by_role("button", name="Close")
+    try:
+        page = browser.new_page(viewport=VIEWPORT)
+        page.goto(pages["minimal"].as_uri())
+        assert (
+            page.evaluate("() => innerWidth - document.documentElement.clientWidth") > 0
+        )
+        image = page.locator(UPLOADED)
+        image.scroll_into_view_if_needed()
+        expect(image).to_have_js_property("complete", True)
+        image.click()
+        expect(page.locator(DIALOG)).to_be_visible()
+        close = page.get_by_role("button", name="Close")
 
-    def corner() -> tuple[float, float, float, float]:
-        box = close.bounding_box()
-        assert box is not None
-        return box["x"], box["y"], box["x"] + box["width"], box["y"] + box["height"]
+        def corner() -> tuple[float, float, float, float]:
+            box = close.bounding_box()
+            assert box is not None
+            return box["x"], box["y"], box["x"] + box["width"], box["y"] + box["height"]
 
-    before = corner()
-    left, top, right, bottom = before
-    g = _geometry(page)
-    # In the visible corner: near the right edge, yet not under the page's
-    # vertical scrollbar (``vw`` is the width the scrollbar leaves).
-    assert g["vw"] - 30 < right <= g["vw"]
-    assert top < 30
-    # Outside the frame: it never covers the picture.
-    assert left >= g["frame"]["r"] or bottom <= g["frame"]["t"]
-    _wheel(page, -400, 20)
-    page.mouse.move(g["frame"]["l"] + 300, g["frame"]["t"] + 300)
-    page.mouse.down()
-    page.mouse.move(g["frame"]["l"] + 100, g["frame"]["t"] + 100, steps=5)
-    page.mouse.up()
-    assert corner() == before
-    close.click()
-    expect(page.locator(DIALOG)).to_be_hidden()
-    browser.close()
+        before = corner()
+        left, top, right, bottom = before
+        g = _geometry(page)
+        # In the visible corner: near the right edge, yet not under the page's
+        # vertical scrollbar (``vw`` is the width the scrollbar leaves).
+        assert g["vw"] - 30 < right <= g["vw"]
+        assert top < 30
+        # Outside the frame: it never covers the picture.
+        assert left >= g["frame"]["r"] or bottom <= g["frame"]["t"]
+        _wheel(page, -400, 20)
+        page.mouse.move(g["frame"]["l"] + 300, g["frame"]["t"] + 300)
+        page.mouse.down()
+        page.mouse.move(g["frame"]["l"] + 100, g["frame"]["t"] + 100, steps=5)
+        page.mouse.up()
+        assert corner() == before
+        close.click()
+        expect(page.locator(DIALOG)).to_be_hidden()
+    finally:
+        browser.close()

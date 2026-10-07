@@ -16,8 +16,9 @@
 // in its middle is the image at fit scale, at most 90% of the viewport
 // each way, so at any zoom the image covers the frame and panning is
 // clamped to keep it so; the × sits in the viewport's corner, in the
-// margin that leaves, wherever the zoom has moved the picture. The geometry is plain numbers: `scale` and the image's
-// top-left offset (`x`, `y`) in the frame, applied as one transform.
+// margin that leaves, wherever the zoom has moved the picture. The
+// geometry is plain numbers: `scale` and the image's top-left offset
+// (`x`, `y`) in the frame, applied as one transform.
 (function () {
     'use strict';
 
