@@ -296,6 +296,15 @@ class TestUnits:
         assert isinstance(load_frontmatter("- a\n- b\n"), RawFrontmatter)
         assert isinstance(load_frontmatter("{}\n"), RawFrontmatter)
 
+    def test_depth_bound_is_the_shared_json_one(self) -> None:
+        # The top mapping plus 31 nested ones is 32 containers: loaded. An
+        # empty {} as the 33rd counts too, exactly as for transcript JSON.
+        chain = "a: " + "{b: " * 31 + "{leaf}" + "}" * 31 + "\n"
+        assert isinstance(load_frontmatter(chain.replace("{leaf}", "1")), dict)
+        assert isinstance(
+            load_frontmatter(chain.replace("{leaf}", "{}")), RawFrontmatter
+        )
+
     def test_bounds(self) -> None:
         nested = "".join("  " * i + f"k{i}:\n" for i in range(40)) + "  " * 40 + "x\n"
         assert isinstance(load_frontmatter(nested), RawFrontmatter)  # depth

@@ -24,6 +24,8 @@ from typing import Any, Optional, cast
 import yaml
 from wenmode.plugins.frontmatter import FRONTMATTER_FENCE_RE
 
+from .json_depth import exceeds_depth
+
 # Lines as wenmode's block parser sees them: split on ``\n`` only, each
 # keeping its terminator.
 _LINE_RE = re.compile(r"[^\n]*\n|[^\n]+$")
@@ -98,28 +100,23 @@ class _NoAliasSafeLoader(yaml.SafeLoader):
 # Bounds on what is loaded as a mapping; past them the block shows as raw
 # YAML. PyYAML is pure Python here and recursive: a deeply nested block
 # raises RecursionError, and a huge one costs seconds to load. Real front
-# matter is a few lines deep and a few KiB long.
+# matter is a few lines deep and a few KiB long. The depth bound is the one
+# every transcript JSON decode uses (``json_depth.MAX_DATA_DEPTH``): it also
+# bounds the recursion of the params table that renders the result.
 MAX_FRONTMATTER_BYTES = 64 * 1024
-MAX_FRONTMATTER_DEPTH = 32
 
 
-class _TooDeep(Exception):
-    pass
-
-
-def _plain(value: Any, depth: int = 0) -> Any:
+def _plain(value: Any) -> Any:
     """Turn a loaded YAML value into str/number/bool/None, lists and dicts.
 
-    Raises ``_TooDeep`` past ``MAX_FRONTMATTER_DEPTH``, which also bounds
-    the recursion of the params table that renders the result.
+    Only called on a value within the depth bound, so the recursion is
+    bounded too.
     """
-    if depth > MAX_FRONTMATTER_DEPTH:
-        raise _TooDeep
     if isinstance(value, dict):
         mapping = cast("dict[Any, Any]", value)
-        return {str(key): _plain(item, depth + 1) for key, item in mapping.items()}
+        return {str(key): _plain(item) for key, item in mapping.items()}
     if isinstance(value, list):
-        return [_plain(item, depth + 1) for item in cast("list[Any]", value)]
+        return [_plain(item) for item in cast("list[Any]", value)]
     if value is None or isinstance(value, (str, bool, int, float)):
         return value
     if isinstance(value, (datetime.date, datetime.datetime)):
@@ -139,10 +136,10 @@ def load_frontmatter(source: str) -> "dict[str, Any] | RawFrontmatter":
         return RawFrontmatter(source)
     try:
         value = yaml.load(source, Loader=_NoAliasSafeLoader)  # noqa: S506 - safe loader subclass
-        if isinstance(value, dict) and value:
-            return _plain(value)
-    except (yaml.YAMLError, RecursionError, _TooDeep):
-        pass
+    except (yaml.YAMLError, RecursionError):
+        return RawFrontmatter(source)
+    if isinstance(value, dict) and value and not exceeds_depth(value):
+        return _plain(value)
     return RawFrontmatter(source)
 
 
