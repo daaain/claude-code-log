@@ -19,7 +19,8 @@
 {% include 'components/edit_diff_styles.css' %}
 {% include 'components/pygments_styles.css' %}
 {% include 'components/page_nav_styles.css' %}
-{% include 'components/teammate_styles.css' %}{% if minimal %}
+{% include 'components/teammate_styles.css' %}
+{% include 'components/image_zoom.css' %}{% if minimal %}
 {% include 'components/minimal/tokens.css' %}
 {% include 'components/minimal/layout.css' %}
 {% include 'components/minimal/components.css' %}
@@ -365,6 +366,9 @@
 
             // Live update (no-op unless served over http -- see the file)
             {% include 'components/live_update.js' %}
+
+            // Click a message image to zoom it
+            {% include 'components/image_zoom.js' %}
 
             // Debug UUID toggle
             debugButton.addEventListener('click', function () {

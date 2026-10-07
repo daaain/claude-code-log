@@ -1400,6 +1400,15 @@ details summary {
 .ansi-underline { text-decoration: underline; }
 
 /* Image styling */
+/* Any image a message carries (one from rendered Markdown too) stays in the
+   message's frame, in both themes; one drawn smaller than its natural size
+   opens in the zoom dialog on click (image_zoom.js). Zero specificity: a
+   rule that sizes an image on purpose (the inline favicon's 1em) still wins. */
+:where(#transcript .message) img {
+    max-width: 100%;
+    height: auto;
+}
+
 .tool-result-image,
 .uploaded-image {
     max-width: 100%;
