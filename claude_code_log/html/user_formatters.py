@@ -13,6 +13,7 @@ import uuid
 from typing import Any, Callable, Optional, cast
 
 from .ansi_colors import convert_ansi_to_html
+from ..json_depth import exceeds_depth
 from ..models import (
     BashInputMessage,
     BashOutputMessage,
@@ -335,8 +336,10 @@ def extract_embedded_json(text: str) -> "tuple[str, dict[str, Any]]":
                 candidate = "\n".join(lines[i:j])
                 try:
                     parsed: Any = json.loads(candidate)
-                except ValueError:
+                except (ValueError, RecursionError):
                     parsed = None
+                if exceeds_depth(parsed):
+                    parsed = None  # too deep for nested tables: keep the text
                 if isinstance(parsed, (dict, list)) and parsed:
                     placeholder = _json_placeholder()
                     blocks[placeholder] = parsed

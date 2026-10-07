@@ -1234,7 +1234,7 @@ def _try_load_json_text(tool_result: ToolResultContent) -> Optional[dict[str, An
         return None
     try:
         data: Any = json.loads(text)
-    except (json.JSONDecodeError, ValueError):
+    except (ValueError, RecursionError):
         return None
     if isinstance(data, dict):
         return cast(dict[str, Any], data)

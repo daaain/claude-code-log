@@ -941,7 +941,7 @@ def render_async_result_body(text: str, css_class: str, preview: bool = False) -
         rendered = text
         try:
             rendered = json.dumps(json.loads(text), indent=2, ensure_ascii=False)
-        except (json.JSONDecodeError, ValueError):
+        except (ValueError, RecursionError):
             pass  # truncated / variant payload — highlight the raw text as-is
         return render_file_content_collapsible(
             rendered,
