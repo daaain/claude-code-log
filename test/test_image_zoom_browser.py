@@ -147,7 +147,7 @@ def _assert_framed(g: dict[str, Any]) -> None:
 
 
 REFITTED = """() => {
-    const r = document.querySelector('dialog.cc-zoom').getBoundingClientRect();
+    const r = document.querySelector('.cc-zoom-frame').getBoundingClientRect();
     return r.width <= 0.9 * document.documentElement.clientWidth + 0.5
         && r.height <= 0.9 * window.innerHeight + 0.5;
 }"""
@@ -280,7 +280,7 @@ class TestZoomAndPan:
         # the picture being 3:2).
         page.set_viewport_size({"width": 1400, "height": 1000})
         page.wait_for_function(
-            "() => document.querySelector('dialog.cc-zoom')"
+            "() => document.querySelector('.cc-zoom-frame')"
             ".getBoundingClientRect().width > 1200"
         )
         g = _geometry(page)
@@ -364,7 +364,7 @@ class TestWhatOpens:
 def test_the_dialog_follows_the_dark_scheme(page: Page, pages: dict[str, Path]) -> None:
     _open(page, pages["minimal"])
     page.evaluate("() => document.documentElement.setAttribute('data-theme', 'dark')")
-    expect(page.locator(DIALOG)).to_have_css("background-color", DARK_BG)
+    expect(page.locator(".cc-zoom-frame")).to_have_css("background-color", DARK_BG)
 
 
 def test_focus_opens_on_the_frame_and_tab_reaches_the_close_button(
@@ -375,3 +375,35 @@ def test_focus_opens_on_the_frame_and_tab_reaches_the_close_button(
     expect(page.locator(".cc-zoom-frame")).to_be_focused()
     page.keyboard.press("Tab")
     expect(page.get_by_role("button", name="Close")).to_be_focused()
+
+
+def test_the_close_button_stays_in_the_viewport_corner(
+    page: Page, pages: dict[str, Path]
+) -> None:
+    """The × belongs to the page, not to the picture: in the corner the 90%
+    frame leaves free, wherever a zoom or a pan has moved the image."""
+    _open(page, pages["minimal"])
+    close = page.get_by_role("button", name="Close")
+
+    def corner() -> dict[str, float]:
+        box = close.bounding_box()
+        assert box is not None
+        return box
+
+    before = corner()
+    g = _geometry(page)
+    assert before["x"] + before["width"] > g["vw"] - 30
+    assert before["y"] < 30
+    # Outside the frame: it never covers the picture.
+    assert (
+        before["x"] >= g["frame"]["r"]
+        or before["y"] + before["height"] <= g["frame"]["t"]
+    )
+    _wheel(page, -400, 20)
+    page.mouse.move(g["frame"]["l"] + 300, g["frame"]["t"] + 300)
+    page.mouse.down()
+    page.mouse.move(g["frame"]["l"] + 100, g["frame"]["t"] + 100, steps=5)
+    page.mouse.up()
+    assert corner() == before
+    close.click()
+    expect(page.locator(DIALOG)).to_be_hidden()

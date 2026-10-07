@@ -88,15 +88,17 @@ favicon's `1em`) win.
 A message image (`#transcript .message img`) gets `cc-zoomable`, a `zoom-in`
 cursor, on hover when it is drawn smaller than its natural size. That is
 measured, not marked: nothing is emitted per image. Clicking one opens the
-page's single `dialog.cc-zoom`, created on first use with `showModal()`: a
-`.cc-zoom-frame` holding the image and a `button.cc-zoom-close` (×).
+page's single `dialog.cc-zoom`, created on first use with `showModal()`. The
+dialog is a transparent layer over the whole viewport. It holds a centred
+`.cc-zoom-frame` with the image, and a `button.cc-zoom-close` (×) in the
+viewport's top-right corner, which stays put however the image is zoomed.
 - The frame is the image at fit-to-frame scale, at most 90% of the viewport
   each way, and refits on resize.
 - The wheel zooms about the cursor between fit and the natural size, never
   past it.
 - A left-drag pans (`cc-zoom-pannable` / `cc-zoom-panning` for the grab
   cursors), clamped so the image always covers the frame.
-- ESC, a backdrop click or × closes the dialog, and focus returns to the
+- ESC, a click outside the frame or × closes the dialog, and focus returns to the
   page image.
 - An image inside a link or a `<summary>` (and the artifact favicon) keeps
   its own click behaviour.

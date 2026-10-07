@@ -4399,25 +4399,35 @@
       font-size: 0.95em;
   }
   /* Click-to-zoom dialog for message images (image_zoom.js), both themes.
-     The dialog is created on first use and sized by the script to the
-     image at fit-to-frame, at most 90% of the viewport each way, so the
-     UA's dialog padding, border and max sizes are reset here. It renders
-     in the top layer, above every sticky bar, without a z-index. */
+     The dialog is a transparent layer over the whole viewport: the frame,
+     sized by the script to the image at fit-to-frame (at most 90% of the
+     viewport each way), is centred in it, and the × sits in the viewport's
+     top-right corner, in the margin the 90% leaves. A click on the layer
+     outside the frame is a click on the dialog itself, which closes it. The
+     UA's dialog padding, border, background and max sizes are reset here.
+     It renders in the top layer, above every sticky bar, without a z-index. */
   img.cc-zoomable {
       cursor: zoom-in;
   }
   
   dialog.cc-zoom {
       box-sizing: border-box;
-      padding: 0;
-      border: 0;
+      width: 100vw;
+      height: 100vh;
       max-width: none;
       max-height: none;
+      margin: 0;
+      padding: 0;
+      border: 0;
       overflow: hidden;
-      background: var(--bg, #ffffff);
-      color: var(--text-primary, #333);
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
-      border-radius: 4px;
+      background: transparent;
+  }
+  
+  /* Only while open: a closed dialog must keep the UA's display: none. */
+  dialog.cc-zoom[open] {
+      display: flex;
+      align-items: center;
+      justify-content: center;
   }
   
   dialog.cc-zoom::backdrop {
@@ -4426,9 +4436,11 @@
   
   .cc-zoom-frame {
       position: relative;
-      width: 100%;
-      height: 100%;
+      flex: none;
       overflow: hidden;
+      background: var(--bg, #ffffff);
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+      border-radius: 4px;
       touch-action: none;
       outline: none;
   }
@@ -4456,8 +4468,8 @@
   
   .cc-zoom-close {
       position: absolute;
-      top: 6px;
-      right: 6px;
+      top: 10px;
+      right: 10px;
       width: 28px;
       height: 28px;
       padding: 0;
@@ -6384,9 +6396,11 @@
   // offer and does not open. Nor does an image inside a link: a click there
   // already means "follow the link", and the author chose that.
   //
-  // The frame is the image at fit scale, at most 90% of the viewport each
-  // way, so at any zoom the image covers the frame and panning is clamped
-  // to keep it so. The geometry is plain numbers: `scale` and the image's
+  // The dialog is a transparent layer over the whole viewport. The frame
+  // in its middle is the image at fit scale, at most 90% of the viewport
+  // each way, so at any zoom the image covers the frame and panning is
+  // clamped to keep it so; the × sits in the viewport's corner, in the
+  // margin that leaves, wherever the zoom has moved the picture. The geometry is plain numbers: `scale` and the image's
   // top-left offset (`x`, `y`) in the frame, applied as one transform.
   (function () {
       'use strict';
@@ -6449,8 +6463,8 @@
               : null;
           fit = Math.min(maxW / nat.w, maxH / nat.h, 1);
           box = { w: Math.round(nat.w * fit), h: Math.round(nat.h * fit) };
-          dialog.style.width = box.w + 'px';
-          dialog.style.height = box.h + 'px';
+          frame.style.width = box.w + 'px';
+          frame.style.height = box.h + 'px';
           if (centre) {
               scale = clamp(scale * fit / oldFit, fit, 1);
               x = box.w / 2 - centre.u * scale;
@@ -6495,16 +6509,16 @@
           close.setAttribute('aria-label', 'Close');
           close.textContent = '×';
           frame.appendChild(zoomImg);
-          frame.appendChild(close);
           dialog.appendChild(frame);
+          dialog.appendChild(close);
           document.body.appendChild(dialog);
   
           close.addEventListener('click', function () { dialog.close(); });
   
-          // The backdrop is part of the dialog element as far as events go,
-          // and the frame fills the dialog (no padding), so a click whose
-          // target is the dialog itself was on the backdrop. A drag that ends
-          // outside the frame is not one: the frame holds the pointer capture.
+          // The layer around the frame is the dialog element itself, so a
+          // click whose target is the dialog was outside the frame. A drag
+          // that ends outside the frame is not one: the frame holds the
+          // pointer capture.
           dialog.addEventListener('click', function (event) {
               if (event.target === dialog) dialog.close();
           });
@@ -6532,7 +6546,7 @@
   
           let drag = null;
           frame.addEventListener('pointerdown', function (event) {
-              if (event.button !== 0 || event.target.closest('.cc-zoom-close')) return;
+              if (event.button !== 0) return;
               if (scale <= fit + 1e-6) return;
               event.preventDefault();
               frame.setPointerCapture(event.pointerId);
@@ -12962,25 +12976,35 @@
       font-size: 0.95em;
   }
   /* Click-to-zoom dialog for message images (image_zoom.js), both themes.
-     The dialog is created on first use and sized by the script to the
-     image at fit-to-frame, at most 90% of the viewport each way, so the
-     UA's dialog padding, border and max sizes are reset here. It renders
-     in the top layer, above every sticky bar, without a z-index. */
+     The dialog is a transparent layer over the whole viewport: the frame,
+     sized by the script to the image at fit-to-frame (at most 90% of the
+     viewport each way), is centred in it, and the × sits in the viewport's
+     top-right corner, in the margin the 90% leaves. A click on the layer
+     outside the frame is a click on the dialog itself, which closes it. The
+     UA's dialog padding, border, background and max sizes are reset here.
+     It renders in the top layer, above every sticky bar, without a z-index. */
   img.cc-zoomable {
       cursor: zoom-in;
   }
   
   dialog.cc-zoom {
       box-sizing: border-box;
-      padding: 0;
-      border: 0;
+      width: 100vw;
+      height: 100vh;
       max-width: none;
       max-height: none;
+      margin: 0;
+      padding: 0;
+      border: 0;
       overflow: hidden;
-      background: var(--bg, #ffffff);
-      color: var(--text-primary, #333);
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
-      border-radius: 4px;
+      background: transparent;
+  }
+  
+  /* Only while open: a closed dialog must keep the UA's display: none. */
+  dialog.cc-zoom[open] {
+      display: flex;
+      align-items: center;
+      justify-content: center;
   }
   
   dialog.cc-zoom::backdrop {
@@ -12989,9 +13013,11 @@
   
   .cc-zoom-frame {
       position: relative;
-      width: 100%;
-      height: 100%;
+      flex: none;
       overflow: hidden;
+      background: var(--bg, #ffffff);
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+      border-radius: 4px;
       touch-action: none;
       outline: none;
   }
@@ -13019,8 +13045,8 @@
   
   .cc-zoom-close {
       position: absolute;
-      top: 6px;
-      right: 6px;
+      top: 10px;
+      right: 10px;
       width: 28px;
       height: 28px;
       padding: 0;
@@ -14842,9 +14868,11 @@
   // offer and does not open. Nor does an image inside a link: a click there
   // already means "follow the link", and the author chose that.
   //
-  // The frame is the image at fit scale, at most 90% of the viewport each
-  // way, so at any zoom the image covers the frame and panning is clamped
-  // to keep it so. The geometry is plain numbers: `scale` and the image's
+  // The dialog is a transparent layer over the whole viewport. The frame
+  // in its middle is the image at fit scale, at most 90% of the viewport
+  // each way, so at any zoom the image covers the frame and panning is
+  // clamped to keep it so; the × sits in the viewport's corner, in the
+  // margin that leaves, wherever the zoom has moved the picture. The geometry is plain numbers: `scale` and the image's
   // top-left offset (`x`, `y`) in the frame, applied as one transform.
   (function () {
       'use strict';
@@ -14907,8 +14935,8 @@
               : null;
           fit = Math.min(maxW / nat.w, maxH / nat.h, 1);
           box = { w: Math.round(nat.w * fit), h: Math.round(nat.h * fit) };
-          dialog.style.width = box.w + 'px';
-          dialog.style.height = box.h + 'px';
+          frame.style.width = box.w + 'px';
+          frame.style.height = box.h + 'px';
           if (centre) {
               scale = clamp(scale * fit / oldFit, fit, 1);
               x = box.w / 2 - centre.u * scale;
@@ -14953,16 +14981,16 @@
           close.setAttribute('aria-label', 'Close');
           close.textContent = '×';
           frame.appendChild(zoomImg);
-          frame.appendChild(close);
           dialog.appendChild(frame);
+          dialog.appendChild(close);
           document.body.appendChild(dialog);
   
           close.addEventListener('click', function () { dialog.close(); });
   
-          // The backdrop is part of the dialog element as far as events go,
-          // and the frame fills the dialog (no padding), so a click whose
-          // target is the dialog itself was on the backdrop. A drag that ends
-          // outside the frame is not one: the frame holds the pointer capture.
+          // The layer around the frame is the dialog element itself, so a
+          // click whose target is the dialog was outside the frame. A drag
+          // that ends outside the frame is not one: the frame holds the
+          // pointer capture.
           dialog.addEventListener('click', function (event) {
               if (event.target === dialog) dialog.close();
           });
@@ -14990,7 +15018,7 @@
   
           let drag = null;
           frame.addEventListener('pointerdown', function (event) {
-              if (event.button !== 0 || event.target.closest('.cc-zoom-close')) return;
+              if (event.button !== 0) return;
               if (scale <= fit + 1e-6) return;
               event.preventDefault();
               frame.setPointerCapture(event.pointerId);
@@ -27134,25 +27162,35 @@
       font-size: 0.95em;
   }
   /* Click-to-zoom dialog for message images (image_zoom.js), both themes.
-     The dialog is created on first use and sized by the script to the
-     image at fit-to-frame, at most 90% of the viewport each way, so the
-     UA's dialog padding, border and max sizes are reset here. It renders
-     in the top layer, above every sticky bar, without a z-index. */
+     The dialog is a transparent layer over the whole viewport: the frame,
+     sized by the script to the image at fit-to-frame (at most 90% of the
+     viewport each way), is centred in it, and the × sits in the viewport's
+     top-right corner, in the margin the 90% leaves. A click on the layer
+     outside the frame is a click on the dialog itself, which closes it. The
+     UA's dialog padding, border, background and max sizes are reset here.
+     It renders in the top layer, above every sticky bar, without a z-index. */
   img.cc-zoomable {
       cursor: zoom-in;
   }
   
   dialog.cc-zoom {
       box-sizing: border-box;
-      padding: 0;
-      border: 0;
+      width: 100vw;
+      height: 100vh;
       max-width: none;
       max-height: none;
+      margin: 0;
+      padding: 0;
+      border: 0;
       overflow: hidden;
-      background: var(--bg, #ffffff);
-      color: var(--text-primary, #333);
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
-      border-radius: 4px;
+      background: transparent;
+  }
+  
+  /* Only while open: a closed dialog must keep the UA's display: none. */
+  dialog.cc-zoom[open] {
+      display: flex;
+      align-items: center;
+      justify-content: center;
   }
   
   dialog.cc-zoom::backdrop {
@@ -27161,9 +27199,11 @@
   
   .cc-zoom-frame {
       position: relative;
-      width: 100%;
-      height: 100%;
+      flex: none;
       overflow: hidden;
+      background: var(--bg, #ffffff);
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+      border-radius: 4px;
       touch-action: none;
       outline: none;
   }
@@ -27191,8 +27231,8 @@
   
   .cc-zoom-close {
       position: absolute;
-      top: 6px;
-      right: 6px;
+      top: 10px;
+      right: 10px;
       width: 28px;
       height: 28px;
       padding: 0;
@@ -33114,9 +33154,11 @@
   // offer and does not open. Nor does an image inside a link: a click there
   // already means "follow the link", and the author chose that.
   //
-  // The frame is the image at fit scale, at most 90% of the viewport each
-  // way, so at any zoom the image covers the frame and panning is clamped
-  // to keep it so. The geometry is plain numbers: `scale` and the image's
+  // The dialog is a transparent layer over the whole viewport. The frame
+  // in its middle is the image at fit scale, at most 90% of the viewport
+  // each way, so at any zoom the image covers the frame and panning is
+  // clamped to keep it so; the × sits in the viewport's corner, in the
+  // margin that leaves, wherever the zoom has moved the picture. The geometry is plain numbers: `scale` and the image's
   // top-left offset (`x`, `y`) in the frame, applied as one transform.
   (function () {
       'use strict';
@@ -33179,8 +33221,8 @@
               : null;
           fit = Math.min(maxW / nat.w, maxH / nat.h, 1);
           box = { w: Math.round(nat.w * fit), h: Math.round(nat.h * fit) };
-          dialog.style.width = box.w + 'px';
-          dialog.style.height = box.h + 'px';
+          frame.style.width = box.w + 'px';
+          frame.style.height = box.h + 'px';
           if (centre) {
               scale = clamp(scale * fit / oldFit, fit, 1);
               x = box.w / 2 - centre.u * scale;
@@ -33225,16 +33267,16 @@
           close.setAttribute('aria-label', 'Close');
           close.textContent = '×';
           frame.appendChild(zoomImg);
-          frame.appendChild(close);
           dialog.appendChild(frame);
+          dialog.appendChild(close);
           document.body.appendChild(dialog);
   
           close.addEventListener('click', function () { dialog.close(); });
   
-          // The backdrop is part of the dialog element as far as events go,
-          // and the frame fills the dialog (no padding), so a click whose
-          // target is the dialog itself was on the backdrop. A drag that ends
-          // outside the frame is not one: the frame holds the pointer capture.
+          // The layer around the frame is the dialog element itself, so a
+          // click whose target is the dialog was outside the frame. A drag
+          // that ends outside the frame is not one: the frame holds the
+          // pointer capture.
           dialog.addEventListener('click', function (event) {
               if (event.target === dialog) dialog.close();
           });
@@ -33262,7 +33304,7 @@
   
           let drag = null;
           frame.addEventListener('pointerdown', function (event) {
-              if (event.button !== 0 || event.target.closest('.cc-zoom-close')) return;
+              if (event.button !== 0) return;
               if (scale <= fit + 1e-6) return;
               event.preventDefault();
               frame.setPointerCapture(event.pointerId);
@@ -42081,25 +42123,35 @@
       font-size: 0.95em;
   }
   /* Click-to-zoom dialog for message images (image_zoom.js), both themes.
-     The dialog is created on first use and sized by the script to the
-     image at fit-to-frame, at most 90% of the viewport each way, so the
-     UA's dialog padding, border and max sizes are reset here. It renders
-     in the top layer, above every sticky bar, without a z-index. */
+     The dialog is a transparent layer over the whole viewport: the frame,
+     sized by the script to the image at fit-to-frame (at most 90% of the
+     viewport each way), is centred in it, and the × sits in the viewport's
+     top-right corner, in the margin the 90% leaves. A click on the layer
+     outside the frame is a click on the dialog itself, which closes it. The
+     UA's dialog padding, border, background and max sizes are reset here.
+     It renders in the top layer, above every sticky bar, without a z-index. */
   img.cc-zoomable {
       cursor: zoom-in;
   }
   
   dialog.cc-zoom {
       box-sizing: border-box;
-      padding: 0;
-      border: 0;
+      width: 100vw;
+      height: 100vh;
       max-width: none;
       max-height: none;
+      margin: 0;
+      padding: 0;
+      border: 0;
       overflow: hidden;
-      background: var(--bg, #ffffff);
-      color: var(--text-primary, #333);
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
-      border-radius: 4px;
+      background: transparent;
+  }
+  
+  /* Only while open: a closed dialog must keep the UA's display: none. */
+  dialog.cc-zoom[open] {
+      display: flex;
+      align-items: center;
+      justify-content: center;
   }
   
   dialog.cc-zoom::backdrop {
@@ -42108,9 +42160,11 @@
   
   .cc-zoom-frame {
       position: relative;
-      width: 100%;
-      height: 100%;
+      flex: none;
       overflow: hidden;
+      background: var(--bg, #ffffff);
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+      border-radius: 4px;
       touch-action: none;
       outline: none;
   }
@@ -42138,8 +42192,8 @@
   
   .cc-zoom-close {
       position: absolute;
-      top: 6px;
-      right: 6px;
+      top: 10px;
+      right: 10px;
       width: 28px;
       height: 28px;
       padding: 0;
@@ -48628,9 +48682,11 @@
   // offer and does not open. Nor does an image inside a link: a click there
   // already means "follow the link", and the author chose that.
   //
-  // The frame is the image at fit scale, at most 90% of the viewport each
-  // way, so at any zoom the image covers the frame and panning is clamped
-  // to keep it so. The geometry is plain numbers: `scale` and the image's
+  // The dialog is a transparent layer over the whole viewport. The frame
+  // in its middle is the image at fit scale, at most 90% of the viewport
+  // each way, so at any zoom the image covers the frame and panning is
+  // clamped to keep it so; the × sits in the viewport's corner, in the
+  // margin that leaves, wherever the zoom has moved the picture. The geometry is plain numbers: `scale` and the image's
   // top-left offset (`x`, `y`) in the frame, applied as one transform.
   (function () {
       'use strict';
@@ -48693,8 +48749,8 @@
               : null;
           fit = Math.min(maxW / nat.w, maxH / nat.h, 1);
           box = { w: Math.round(nat.w * fit), h: Math.round(nat.h * fit) };
-          dialog.style.width = box.w + 'px';
-          dialog.style.height = box.h + 'px';
+          frame.style.width = box.w + 'px';
+          frame.style.height = box.h + 'px';
           if (centre) {
               scale = clamp(scale * fit / oldFit, fit, 1);
               x = box.w / 2 - centre.u * scale;
@@ -48739,16 +48795,16 @@
           close.setAttribute('aria-label', 'Close');
           close.textContent = '×';
           frame.appendChild(zoomImg);
-          frame.appendChild(close);
           dialog.appendChild(frame);
+          dialog.appendChild(close);
           document.body.appendChild(dialog);
   
           close.addEventListener('click', function () { dialog.close(); });
   
-          // The backdrop is part of the dialog element as far as events go,
-          // and the frame fills the dialog (no padding), so a click whose
-          // target is the dialog itself was on the backdrop. A drag that ends
-          // outside the frame is not one: the frame holds the pointer capture.
+          // The layer around the frame is the dialog element itself, so a
+          // click whose target is the dialog was outside the frame. A drag
+          // that ends outside the frame is not one: the frame holds the
+          // pointer capture.
           dialog.addEventListener('click', function (event) {
               if (event.target === dialog) dialog.close();
           });
@@ -48776,7 +48832,7 @@
   
           let drag = null;
           frame.addEventListener('pointerdown', function (event) {
-              if (event.button !== 0 || event.target.closest('.cc-zoom-close')) return;
+              if (event.button !== 0) return;
               if (scale <= fit + 1e-6) return;
               event.preventDefault();
               frame.setPointerCapture(event.pointerId);
@@ -65487,25 +65543,35 @@
       font-size: 0.95em;
   }
   /* Click-to-zoom dialog for message images (image_zoom.js), both themes.
-     The dialog is created on first use and sized by the script to the
-     image at fit-to-frame, at most 90% of the viewport each way, so the
-     UA's dialog padding, border and max sizes are reset here. It renders
-     in the top layer, above every sticky bar, without a z-index. */
+     The dialog is a transparent layer over the whole viewport: the frame,
+     sized by the script to the image at fit-to-frame (at most 90% of the
+     viewport each way), is centred in it, and the × sits in the viewport's
+     top-right corner, in the margin the 90% leaves. A click on the layer
+     outside the frame is a click on the dialog itself, which closes it. The
+     UA's dialog padding, border, background and max sizes are reset here.
+     It renders in the top layer, above every sticky bar, without a z-index. */
   img.cc-zoomable {
       cursor: zoom-in;
   }
   
   dialog.cc-zoom {
       box-sizing: border-box;
-      padding: 0;
-      border: 0;
+      width: 100vw;
+      height: 100vh;
       max-width: none;
       max-height: none;
+      margin: 0;
+      padding: 0;
+      border: 0;
       overflow: hidden;
-      background: var(--bg, #ffffff);
-      color: var(--text-primary, #333);
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
-      border-radius: 4px;
+      background: transparent;
+  }
+  
+  /* Only while open: a closed dialog must keep the UA's display: none. */
+  dialog.cc-zoom[open] {
+      display: flex;
+      align-items: center;
+      justify-content: center;
   }
   
   dialog.cc-zoom::backdrop {
@@ -65514,9 +65580,11 @@
   
   .cc-zoom-frame {
       position: relative;
-      width: 100%;
-      height: 100%;
+      flex: none;
       overflow: hidden;
+      background: var(--bg, #ffffff);
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+      border-radius: 4px;
       touch-action: none;
       outline: none;
   }
@@ -65544,8 +65612,8 @@
   
   .cc-zoom-close {
       position: absolute;
-      top: 6px;
-      right: 6px;
+      top: 10px;
+      right: 10px;
       width: 28px;
       height: 28px;
       padding: 0;
@@ -71583,9 +71651,11 @@
   // offer and does not open. Nor does an image inside a link: a click there
   // already means "follow the link", and the author chose that.
   //
-  // The frame is the image at fit scale, at most 90% of the viewport each
-  // way, so at any zoom the image covers the frame and panning is clamped
-  // to keep it so. The geometry is plain numbers: `scale` and the image's
+  // The dialog is a transparent layer over the whole viewport. The frame
+  // in its middle is the image at fit scale, at most 90% of the viewport
+  // each way, so at any zoom the image covers the frame and panning is
+  // clamped to keep it so; the × sits in the viewport's corner, in the
+  // margin that leaves, wherever the zoom has moved the picture. The geometry is plain numbers: `scale` and the image's
   // top-left offset (`x`, `y`) in the frame, applied as one transform.
   (function () {
       'use strict';
@@ -71648,8 +71718,8 @@
               : null;
           fit = Math.min(maxW / nat.w, maxH / nat.h, 1);
           box = { w: Math.round(nat.w * fit), h: Math.round(nat.h * fit) };
-          dialog.style.width = box.w + 'px';
-          dialog.style.height = box.h + 'px';
+          frame.style.width = box.w + 'px';
+          frame.style.height = box.h + 'px';
           if (centre) {
               scale = clamp(scale * fit / oldFit, fit, 1);
               x = box.w / 2 - centre.u * scale;
@@ -71694,16 +71764,16 @@
           close.setAttribute('aria-label', 'Close');
           close.textContent = '×';
           frame.appendChild(zoomImg);
-          frame.appendChild(close);
           dialog.appendChild(frame);
+          dialog.appendChild(close);
           document.body.appendChild(dialog);
   
           close.addEventListener('click', function () { dialog.close(); });
   
-          // The backdrop is part of the dialog element as far as events go,
-          // and the frame fills the dialog (no padding), so a click whose
-          // target is the dialog itself was on the backdrop. A drag that ends
-          // outside the frame is not one: the frame holds the pointer capture.
+          // The layer around the frame is the dialog element itself, so a
+          // click whose target is the dialog was outside the frame. A drag
+          // that ends outside the frame is not one: the frame holds the
+          // pointer capture.
           dialog.addEventListener('click', function (event) {
               if (event.target === dialog) dialog.close();
           });
@@ -71731,7 +71801,7 @@
   
           let drag = null;
           frame.addEventListener('pointerdown', function (event) {
-              if (event.button !== 0 || event.target.closest('.cc-zoom-close')) return;
+              if (event.button !== 0) return;
               if (scale <= fit + 1e-6) return;
               event.preventDefault();
               frame.setPointerCapture(event.pointerId);
@@ -80550,25 +80620,35 @@
       font-size: 0.95em;
   }
   /* Click-to-zoom dialog for message images (image_zoom.js), both themes.
-     The dialog is created on first use and sized by the script to the
-     image at fit-to-frame, at most 90% of the viewport each way, so the
-     UA's dialog padding, border and max sizes are reset here. It renders
-     in the top layer, above every sticky bar, without a z-index. */
+     The dialog is a transparent layer over the whole viewport: the frame,
+     sized by the script to the image at fit-to-frame (at most 90% of the
+     viewport each way), is centred in it, and the × sits in the viewport's
+     top-right corner, in the margin the 90% leaves. A click on the layer
+     outside the frame is a click on the dialog itself, which closes it. The
+     UA's dialog padding, border, background and max sizes are reset here.
+     It renders in the top layer, above every sticky bar, without a z-index. */
   img.cc-zoomable {
       cursor: zoom-in;
   }
   
   dialog.cc-zoom {
       box-sizing: border-box;
-      padding: 0;
-      border: 0;
+      width: 100vw;
+      height: 100vh;
       max-width: none;
       max-height: none;
+      margin: 0;
+      padding: 0;
+      border: 0;
       overflow: hidden;
-      background: var(--bg, #ffffff);
-      color: var(--text-primary, #333);
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
-      border-radius: 4px;
+      background: transparent;
+  }
+  
+  /* Only while open: a closed dialog must keep the UA's display: none. */
+  dialog.cc-zoom[open] {
+      display: flex;
+      align-items: center;
+      justify-content: center;
   }
   
   dialog.cc-zoom::backdrop {
@@ -80577,9 +80657,11 @@
   
   .cc-zoom-frame {
       position: relative;
-      width: 100%;
-      height: 100%;
+      flex: none;
       overflow: hidden;
+      background: var(--bg, #ffffff);
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+      border-radius: 4px;
       touch-action: none;
       outline: none;
   }
@@ -80607,8 +80689,8 @@
   
   .cc-zoom-close {
       position: absolute;
-      top: 6px;
-      right: 6px;
+      top: 10px;
+      right: 10px;
       width: 28px;
       height: 28px;
       padding: 0;
@@ -82653,9 +82735,11 @@
   // offer and does not open. Nor does an image inside a link: a click there
   // already means "follow the link", and the author chose that.
   //
-  // The frame is the image at fit scale, at most 90% of the viewport each
-  // way, so at any zoom the image covers the frame and panning is clamped
-  // to keep it so. The geometry is plain numbers: `scale` and the image's
+  // The dialog is a transparent layer over the whole viewport. The frame
+  // in its middle is the image at fit scale, at most 90% of the viewport
+  // each way, so at any zoom the image covers the frame and panning is
+  // clamped to keep it so; the × sits in the viewport's corner, in the
+  // margin that leaves, wherever the zoom has moved the picture. The geometry is plain numbers: `scale` and the image's
   // top-left offset (`x`, `y`) in the frame, applied as one transform.
   (function () {
       'use strict';
@@ -82718,8 +82802,8 @@
               : null;
           fit = Math.min(maxW / nat.w, maxH / nat.h, 1);
           box = { w: Math.round(nat.w * fit), h: Math.round(nat.h * fit) };
-          dialog.style.width = box.w + 'px';
-          dialog.style.height = box.h + 'px';
+          frame.style.width = box.w + 'px';
+          frame.style.height = box.h + 'px';
           if (centre) {
               scale = clamp(scale * fit / oldFit, fit, 1);
               x = box.w / 2 - centre.u * scale;
@@ -82764,16 +82848,16 @@
           close.setAttribute('aria-label', 'Close');
           close.textContent = '×';
           frame.appendChild(zoomImg);
-          frame.appendChild(close);
           dialog.appendChild(frame);
+          dialog.appendChild(close);
           document.body.appendChild(dialog);
   
           close.addEventListener('click', function () { dialog.close(); });
   
-          // The backdrop is part of the dialog element as far as events go,
-          // and the frame fills the dialog (no padding), so a click whose
-          // target is the dialog itself was on the backdrop. A drag that ends
-          // outside the frame is not one: the frame holds the pointer capture.
+          // The layer around the frame is the dialog element itself, so a
+          // click whose target is the dialog was outside the frame. A drag
+          // that ends outside the frame is not one: the frame holds the
+          // pointer capture.
           dialog.addEventListener('click', function (event) {
               if (event.target === dialog) dialog.close();
           });
@@ -82801,7 +82885,7 @@
   
           let drag = null;
           frame.addEventListener('pointerdown', function (event) {
-              if (event.button !== 0 || event.target.closest('.cc-zoom-close')) return;
+              if (event.button !== 0) return;
               if (scale <= fit + 1e-6) return;
               event.preventDefault();
               frame.setPointerCapture(event.pointerId);
@@ -89231,25 +89315,35 @@
       font-size: 0.95em;
   }
   /* Click-to-zoom dialog for message images (image_zoom.js), both themes.
-     The dialog is created on first use and sized by the script to the
-     image at fit-to-frame, at most 90% of the viewport each way, so the
-     UA's dialog padding, border and max sizes are reset here. It renders
-     in the top layer, above every sticky bar, without a z-index. */
+     The dialog is a transparent layer over the whole viewport: the frame,
+     sized by the script to the image at fit-to-frame (at most 90% of the
+     viewport each way), is centred in it, and the × sits in the viewport's
+     top-right corner, in the margin the 90% leaves. A click on the layer
+     outside the frame is a click on the dialog itself, which closes it. The
+     UA's dialog padding, border, background and max sizes are reset here.
+     It renders in the top layer, above every sticky bar, without a z-index. */
   img.cc-zoomable {
       cursor: zoom-in;
   }
   
   dialog.cc-zoom {
       box-sizing: border-box;
-      padding: 0;
-      border: 0;
+      width: 100vw;
+      height: 100vh;
       max-width: none;
       max-height: none;
+      margin: 0;
+      padding: 0;
+      border: 0;
       overflow: hidden;
-      background: var(--bg, #ffffff);
-      color: var(--text-primary, #333);
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
-      border-radius: 4px;
+      background: transparent;
+  }
+  
+  /* Only while open: a closed dialog must keep the UA's display: none. */
+  dialog.cc-zoom[open] {
+      display: flex;
+      align-items: center;
+      justify-content: center;
   }
   
   dialog.cc-zoom::backdrop {
@@ -89258,9 +89352,11 @@
   
   .cc-zoom-frame {
       position: relative;
-      width: 100%;
-      height: 100%;
+      flex: none;
       overflow: hidden;
+      background: var(--bg, #ffffff);
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+      border-radius: 4px;
       touch-action: none;
       outline: none;
   }
@@ -89288,8 +89384,8 @@
   
   .cc-zoom-close {
       position: absolute;
-      top: 6px;
-      right: 6px;
+      top: 10px;
+      right: 10px;
       width: 28px;
       height: 28px;
       padding: 0;
@@ -91614,9 +91710,11 @@
   // offer and does not open. Nor does an image inside a link: a click there
   // already means "follow the link", and the author chose that.
   //
-  // The frame is the image at fit scale, at most 90% of the viewport each
-  // way, so at any zoom the image covers the frame and panning is clamped
-  // to keep it so. The geometry is plain numbers: `scale` and the image's
+  // The dialog is a transparent layer over the whole viewport. The frame
+  // in its middle is the image at fit scale, at most 90% of the viewport
+  // each way, so at any zoom the image covers the frame and panning is
+  // clamped to keep it so; the × sits in the viewport's corner, in the
+  // margin that leaves, wherever the zoom has moved the picture. The geometry is plain numbers: `scale` and the image's
   // top-left offset (`x`, `y`) in the frame, applied as one transform.
   (function () {
       'use strict';
@@ -91679,8 +91777,8 @@
               : null;
           fit = Math.min(maxW / nat.w, maxH / nat.h, 1);
           box = { w: Math.round(nat.w * fit), h: Math.round(nat.h * fit) };
-          dialog.style.width = box.w + 'px';
-          dialog.style.height = box.h + 'px';
+          frame.style.width = box.w + 'px';
+          frame.style.height = box.h + 'px';
           if (centre) {
               scale = clamp(scale * fit / oldFit, fit, 1);
               x = box.w / 2 - centre.u * scale;
@@ -91725,16 +91823,16 @@
           close.setAttribute('aria-label', 'Close');
           close.textContent = '×';
           frame.appendChild(zoomImg);
-          frame.appendChild(close);
           dialog.appendChild(frame);
+          dialog.appendChild(close);
           document.body.appendChild(dialog);
   
           close.addEventListener('click', function () { dialog.close(); });
   
-          // The backdrop is part of the dialog element as far as events go,
-          // and the frame fills the dialog (no padding), so a click whose
-          // target is the dialog itself was on the backdrop. A drag that ends
-          // outside the frame is not one: the frame holds the pointer capture.
+          // The layer around the frame is the dialog element itself, so a
+          // click whose target is the dialog was outside the frame. A drag
+          // that ends outside the frame is not one: the frame holds the
+          // pointer capture.
           dialog.addEventListener('click', function (event) {
               if (event.target === dialog) dialog.close();
           });
@@ -91762,7 +91860,7 @@
   
           let drag = null;
           frame.addEventListener('pointerdown', function (event) {
-              if (event.button !== 0 || event.target.closest('.cc-zoom-close')) return;
+              if (event.button !== 0) return;
               if (scale <= fit + 1e-6) return;
               event.preventDefault();
               frame.setPointerCapture(event.pointerId);
@@ -98192,25 +98290,35 @@
       font-size: 0.95em;
   }
   /* Click-to-zoom dialog for message images (image_zoom.js), both themes.
-     The dialog is created on first use and sized by the script to the
-     image at fit-to-frame, at most 90% of the viewport each way, so the
-     UA's dialog padding, border and max sizes are reset here. It renders
-     in the top layer, above every sticky bar, without a z-index. */
+     The dialog is a transparent layer over the whole viewport: the frame,
+     sized by the script to the image at fit-to-frame (at most 90% of the
+     viewport each way), is centred in it, and the × sits in the viewport's
+     top-right corner, in the margin the 90% leaves. A click on the layer
+     outside the frame is a click on the dialog itself, which closes it. The
+     UA's dialog padding, border, background and max sizes are reset here.
+     It renders in the top layer, above every sticky bar, without a z-index. */
   img.cc-zoomable {
       cursor: zoom-in;
   }
   
   dialog.cc-zoom {
       box-sizing: border-box;
-      padding: 0;
-      border: 0;
+      width: 100vw;
+      height: 100vh;
       max-width: none;
       max-height: none;
+      margin: 0;
+      padding: 0;
+      border: 0;
       overflow: hidden;
-      background: var(--bg, #ffffff);
-      color: var(--text-primary, #333);
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
-      border-radius: 4px;
+      background: transparent;
+  }
+  
+  /* Only while open: a closed dialog must keep the UA's display: none. */
+  dialog.cc-zoom[open] {
+      display: flex;
+      align-items: center;
+      justify-content: center;
   }
   
   dialog.cc-zoom::backdrop {
@@ -98219,9 +98327,11 @@
   
   .cc-zoom-frame {
       position: relative;
-      width: 100%;
-      height: 100%;
+      flex: none;
       overflow: hidden;
+      background: var(--bg, #ffffff);
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+      border-radius: 4px;
       touch-action: none;
       outline: none;
   }
@@ -98249,8 +98359,8 @@
   
   .cc-zoom-close {
       position: absolute;
-      top: 6px;
-      right: 6px;
+      top: 10px;
+      right: 10px;
       width: 28px;
       height: 28px;
       padding: 0;
@@ -100522,9 +100632,11 @@
   // offer and does not open. Nor does an image inside a link: a click there
   // already means "follow the link", and the author chose that.
   //
-  // The frame is the image at fit scale, at most 90% of the viewport each
-  // way, so at any zoom the image covers the frame and panning is clamped
-  // to keep it so. The geometry is plain numbers: `scale` and the image's
+  // The dialog is a transparent layer over the whole viewport. The frame
+  // in its middle is the image at fit scale, at most 90% of the viewport
+  // each way, so at any zoom the image covers the frame and panning is
+  // clamped to keep it so; the × sits in the viewport's corner, in the
+  // margin that leaves, wherever the zoom has moved the picture. The geometry is plain numbers: `scale` and the image's
   // top-left offset (`x`, `y`) in the frame, applied as one transform.
   (function () {
       'use strict';
@@ -100587,8 +100699,8 @@
               : null;
           fit = Math.min(maxW / nat.w, maxH / nat.h, 1);
           box = { w: Math.round(nat.w * fit), h: Math.round(nat.h * fit) };
-          dialog.style.width = box.w + 'px';
-          dialog.style.height = box.h + 'px';
+          frame.style.width = box.w + 'px';
+          frame.style.height = box.h + 'px';
           if (centre) {
               scale = clamp(scale * fit / oldFit, fit, 1);
               x = box.w / 2 - centre.u * scale;
@@ -100633,16 +100745,16 @@
           close.setAttribute('aria-label', 'Close');
           close.textContent = '×';
           frame.appendChild(zoomImg);
-          frame.appendChild(close);
           dialog.appendChild(frame);
+          dialog.appendChild(close);
           document.body.appendChild(dialog);
   
           close.addEventListener('click', function () { dialog.close(); });
   
-          // The backdrop is part of the dialog element as far as events go,
-          // and the frame fills the dialog (no padding), so a click whose
-          // target is the dialog itself was on the backdrop. A drag that ends
-          // outside the frame is not one: the frame holds the pointer capture.
+          // The layer around the frame is the dialog element itself, so a
+          // click whose target is the dialog was outside the frame. A drag
+          // that ends outside the frame is not one: the frame holds the
+          // pointer capture.
           dialog.addEventListener('click', function (event) {
               if (event.target === dialog) dialog.close();
           });
@@ -100670,7 +100782,7 @@
   
           let drag = null;
           frame.addEventListener('pointerdown', function (event) {
-              if (event.button !== 0 || event.target.closest('.cc-zoom-close')) return;
+              if (event.button !== 0) return;
               if (scale <= fit + 1e-6) return;
               event.preventDefault();
               frame.setPointerCapture(event.pointerId);
@@ -107100,25 +107212,35 @@
       font-size: 0.95em;
   }
   /* Click-to-zoom dialog for message images (image_zoom.js), both themes.
-     The dialog is created on first use and sized by the script to the
-     image at fit-to-frame, at most 90% of the viewport each way, so the
-     UA's dialog padding, border and max sizes are reset here. It renders
-     in the top layer, above every sticky bar, without a z-index. */
+     The dialog is a transparent layer over the whole viewport: the frame,
+     sized by the script to the image at fit-to-frame (at most 90% of the
+     viewport each way), is centred in it, and the × sits in the viewport's
+     top-right corner, in the margin the 90% leaves. A click on the layer
+     outside the frame is a click on the dialog itself, which closes it. The
+     UA's dialog padding, border, background and max sizes are reset here.
+     It renders in the top layer, above every sticky bar, without a z-index. */
   img.cc-zoomable {
       cursor: zoom-in;
   }
   
   dialog.cc-zoom {
       box-sizing: border-box;
-      padding: 0;
-      border: 0;
+      width: 100vw;
+      height: 100vh;
       max-width: none;
       max-height: none;
+      margin: 0;
+      padding: 0;
+      border: 0;
       overflow: hidden;
-      background: var(--bg, #ffffff);
-      color: var(--text-primary, #333);
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
-      border-radius: 4px;
+      background: transparent;
+  }
+  
+  /* Only while open: a closed dialog must keep the UA's display: none. */
+  dialog.cc-zoom[open] {
+      display: flex;
+      align-items: center;
+      justify-content: center;
   }
   
   dialog.cc-zoom::backdrop {
@@ -107127,9 +107249,11 @@
   
   .cc-zoom-frame {
       position: relative;
-      width: 100%;
-      height: 100%;
+      flex: none;
       overflow: hidden;
+      background: var(--bg, #ffffff);
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+      border-radius: 4px;
       touch-action: none;
       outline: none;
   }
@@ -107157,8 +107281,8 @@
   
   .cc-zoom-close {
       position: absolute;
-      top: 6px;
-      right: 6px;
+      top: 10px;
+      right: 10px;
       width: 28px;
       height: 28px;
       padding: 0;
@@ -109375,9 +109499,11 @@
   // offer and does not open. Nor does an image inside a link: a click there
   // already means "follow the link", and the author chose that.
   //
-  // The frame is the image at fit scale, at most 90% of the viewport each
-  // way, so at any zoom the image covers the frame and panning is clamped
-  // to keep it so. The geometry is plain numbers: `scale` and the image's
+  // The dialog is a transparent layer over the whole viewport. The frame
+  // in its middle is the image at fit scale, at most 90% of the viewport
+  // each way, so at any zoom the image covers the frame and panning is
+  // clamped to keep it so; the × sits in the viewport's corner, in the
+  // margin that leaves, wherever the zoom has moved the picture. The geometry is plain numbers: `scale` and the image's
   // top-left offset (`x`, `y`) in the frame, applied as one transform.
   (function () {
       'use strict';
@@ -109440,8 +109566,8 @@
               : null;
           fit = Math.min(maxW / nat.w, maxH / nat.h, 1);
           box = { w: Math.round(nat.w * fit), h: Math.round(nat.h * fit) };
-          dialog.style.width = box.w + 'px';
-          dialog.style.height = box.h + 'px';
+          frame.style.width = box.w + 'px';
+          frame.style.height = box.h + 'px';
           if (centre) {
               scale = clamp(scale * fit / oldFit, fit, 1);
               x = box.w / 2 - centre.u * scale;
@@ -109486,16 +109612,16 @@
           close.setAttribute('aria-label', 'Close');
           close.textContent = '×';
           frame.appendChild(zoomImg);
-          frame.appendChild(close);
           dialog.appendChild(frame);
+          dialog.appendChild(close);
           document.body.appendChild(dialog);
   
           close.addEventListener('click', function () { dialog.close(); });
   
-          // The backdrop is part of the dialog element as far as events go,
-          // and the frame fills the dialog (no padding), so a click whose
-          // target is the dialog itself was on the backdrop. A drag that ends
-          // outside the frame is not one: the frame holds the pointer capture.
+          // The layer around the frame is the dialog element itself, so a
+          // click whose target is the dialog was outside the frame. A drag
+          // that ends outside the frame is not one: the frame holds the
+          // pointer capture.
           dialog.addEventListener('click', function (event) {
               if (event.target === dialog) dialog.close();
           });
@@ -109523,7 +109649,7 @@
   
           let drag = null;
           frame.addEventListener('pointerdown', function (event) {
-              if (event.button !== 0 || event.target.closest('.cc-zoom-close')) return;
+              if (event.button !== 0) return;
               if (scale <= fit + 1e-6) return;
               event.preventDefault();
               frame.setPointerCapture(event.pointerId);
@@ -115953,25 +116079,35 @@
       font-size: 0.95em;
   }
   /* Click-to-zoom dialog for message images (image_zoom.js), both themes.
-     The dialog is created on first use and sized by the script to the
-     image at fit-to-frame, at most 90% of the viewport each way, so the
-     UA's dialog padding, border and max sizes are reset here. It renders
-     in the top layer, above every sticky bar, without a z-index. */
+     The dialog is a transparent layer over the whole viewport: the frame,
+     sized by the script to the image at fit-to-frame (at most 90% of the
+     viewport each way), is centred in it, and the × sits in the viewport's
+     top-right corner, in the margin the 90% leaves. A click on the layer
+     outside the frame is a click on the dialog itself, which closes it. The
+     UA's dialog padding, border, background and max sizes are reset here.
+     It renders in the top layer, above every sticky bar, without a z-index. */
   img.cc-zoomable {
       cursor: zoom-in;
   }
   
   dialog.cc-zoom {
       box-sizing: border-box;
-      padding: 0;
-      border: 0;
+      width: 100vw;
+      height: 100vh;
       max-width: none;
       max-height: none;
+      margin: 0;
+      padding: 0;
+      border: 0;
       overflow: hidden;
-      background: var(--bg, #ffffff);
-      color: var(--text-primary, #333);
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
-      border-radius: 4px;
+      background: transparent;
+  }
+  
+  /* Only while open: a closed dialog must keep the UA's display: none. */
+  dialog.cc-zoom[open] {
+      display: flex;
+      align-items: center;
+      justify-content: center;
   }
   
   dialog.cc-zoom::backdrop {
@@ -115980,9 +116116,11 @@
   
   .cc-zoom-frame {
       position: relative;
-      width: 100%;
-      height: 100%;
+      flex: none;
       overflow: hidden;
+      background: var(--bg, #ffffff);
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+      border-radius: 4px;
       touch-action: none;
       outline: none;
   }
@@ -116010,8 +116148,8 @@
   
   .cc-zoom-close {
       position: absolute;
-      top: 6px;
-      right: 6px;
+      top: 10px;
+      right: 10px;
       width: 28px;
       height: 28px;
       padding: 0;
@@ -118056,9 +118194,11 @@
   // offer and does not open. Nor does an image inside a link: a click there
   // already means "follow the link", and the author chose that.
   //
-  // The frame is the image at fit scale, at most 90% of the viewport each
-  // way, so at any zoom the image covers the frame and panning is clamped
-  // to keep it so. The geometry is plain numbers: `scale` and the image's
+  // The dialog is a transparent layer over the whole viewport. The frame
+  // in its middle is the image at fit scale, at most 90% of the viewport
+  // each way, so at any zoom the image covers the frame and panning is
+  // clamped to keep it so; the × sits in the viewport's corner, in the
+  // margin that leaves, wherever the zoom has moved the picture. The geometry is plain numbers: `scale` and the image's
   // top-left offset (`x`, `y`) in the frame, applied as one transform.
   (function () {
       'use strict';
@@ -118121,8 +118261,8 @@
               : null;
           fit = Math.min(maxW / nat.w, maxH / nat.h, 1);
           box = { w: Math.round(nat.w * fit), h: Math.round(nat.h * fit) };
-          dialog.style.width = box.w + 'px';
-          dialog.style.height = box.h + 'px';
+          frame.style.width = box.w + 'px';
+          frame.style.height = box.h + 'px';
           if (centre) {
               scale = clamp(scale * fit / oldFit, fit, 1);
               x = box.w / 2 - centre.u * scale;
@@ -118167,16 +118307,16 @@
           close.setAttribute('aria-label', 'Close');
           close.textContent = '×';
           frame.appendChild(zoomImg);
-          frame.appendChild(close);
           dialog.appendChild(frame);
+          dialog.appendChild(close);
           document.body.appendChild(dialog);
   
           close.addEventListener('click', function () { dialog.close(); });
   
-          // The backdrop is part of the dialog element as far as events go,
-          // and the frame fills the dialog (no padding), so a click whose
-          // target is the dialog itself was on the backdrop. A drag that ends
-          // outside the frame is not one: the frame holds the pointer capture.
+          // The layer around the frame is the dialog element itself, so a
+          // click whose target is the dialog was outside the frame. A drag
+          // that ends outside the frame is not one: the frame holds the
+          // pointer capture.
           dialog.addEventListener('click', function (event) {
               if (event.target === dialog) dialog.close();
           });
@@ -118204,7 +118344,7 @@
   
           let drag = null;
           frame.addEventListener('pointerdown', function (event) {
-              if (event.button !== 0 || event.target.closest('.cc-zoom-close')) return;
+              if (event.button !== 0) return;
               if (scale <= fit + 1e-6) return;
               event.preventDefault();
               frame.setPointerCapture(event.pointerId);
@@ -124634,25 +124774,35 @@
       font-size: 0.95em;
   }
   /* Click-to-zoom dialog for message images (image_zoom.js), both themes.
-     The dialog is created on first use and sized by the script to the
-     image at fit-to-frame, at most 90% of the viewport each way, so the
-     UA's dialog padding, border and max sizes are reset here. It renders
-     in the top layer, above every sticky bar, without a z-index. */
+     The dialog is a transparent layer over the whole viewport: the frame,
+     sized by the script to the image at fit-to-frame (at most 90% of the
+     viewport each way), is centred in it, and the × sits in the viewport's
+     top-right corner, in the margin the 90% leaves. A click on the layer
+     outside the frame is a click on the dialog itself, which closes it. The
+     UA's dialog padding, border, background and max sizes are reset here.
+     It renders in the top layer, above every sticky bar, without a z-index. */
   img.cc-zoomable {
       cursor: zoom-in;
   }
   
   dialog.cc-zoom {
       box-sizing: border-box;
-      padding: 0;
-      border: 0;
+      width: 100vw;
+      height: 100vh;
       max-width: none;
       max-height: none;
+      margin: 0;
+      padding: 0;
+      border: 0;
       overflow: hidden;
-      background: var(--bg, #ffffff);
-      color: var(--text-primary, #333);
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
-      border-radius: 4px;
+      background: transparent;
+  }
+  
+  /* Only while open: a closed dialog must keep the UA's display: none. */
+  dialog.cc-zoom[open] {
+      display: flex;
+      align-items: center;
+      justify-content: center;
   }
   
   dialog.cc-zoom::backdrop {
@@ -124661,9 +124811,11 @@
   
   .cc-zoom-frame {
       position: relative;
-      width: 100%;
-      height: 100%;
+      flex: none;
       overflow: hidden;
+      background: var(--bg, #ffffff);
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+      border-radius: 4px;
       touch-action: none;
       outline: none;
   }
@@ -124691,8 +124843,8 @@
   
   .cc-zoom-close {
       position: absolute;
-      top: 6px;
-      right: 6px;
+      top: 10px;
+      right: 10px;
       width: 28px;
       height: 28px;
       padding: 0;
@@ -126542,9 +126694,11 @@
   // offer and does not open. Nor does an image inside a link: a click there
   // already means "follow the link", and the author chose that.
   //
-  // The frame is the image at fit scale, at most 90% of the viewport each
-  // way, so at any zoom the image covers the frame and panning is clamped
-  // to keep it so. The geometry is plain numbers: `scale` and the image's
+  // The dialog is a transparent layer over the whole viewport. The frame
+  // in its middle is the image at fit scale, at most 90% of the viewport
+  // each way, so at any zoom the image covers the frame and panning is
+  // clamped to keep it so; the × sits in the viewport's corner, in the
+  // margin that leaves, wherever the zoom has moved the picture. The geometry is plain numbers: `scale` and the image's
   // top-left offset (`x`, `y`) in the frame, applied as one transform.
   (function () {
       'use strict';
@@ -126607,8 +126761,8 @@
               : null;
           fit = Math.min(maxW / nat.w, maxH / nat.h, 1);
           box = { w: Math.round(nat.w * fit), h: Math.round(nat.h * fit) };
-          dialog.style.width = box.w + 'px';
-          dialog.style.height = box.h + 'px';
+          frame.style.width = box.w + 'px';
+          frame.style.height = box.h + 'px';
           if (centre) {
               scale = clamp(scale * fit / oldFit, fit, 1);
               x = box.w / 2 - centre.u * scale;
@@ -126653,16 +126807,16 @@
           close.setAttribute('aria-label', 'Close');
           close.textContent = '×';
           frame.appendChild(zoomImg);
-          frame.appendChild(close);
           dialog.appendChild(frame);
+          dialog.appendChild(close);
           document.body.appendChild(dialog);
   
           close.addEventListener('click', function () { dialog.close(); });
   
-          // The backdrop is part of the dialog element as far as events go,
-          // and the frame fills the dialog (no padding), so a click whose
-          // target is the dialog itself was on the backdrop. A drag that ends
-          // outside the frame is not one: the frame holds the pointer capture.
+          // The layer around the frame is the dialog element itself, so a
+          // click whose target is the dialog was outside the frame. A drag
+          // that ends outside the frame is not one: the frame holds the
+          // pointer capture.
           dialog.addEventListener('click', function (event) {
               if (event.target === dialog) dialog.close();
           });
@@ -126690,7 +126844,7 @@
   
           let drag = null;
           frame.addEventListener('pointerdown', function (event) {
-              if (event.button !== 0 || event.target.closest('.cc-zoom-close')) return;
+              if (event.button !== 0) return;
               if (scale <= fit + 1e-6) return;
               event.preventDefault();
               frame.setPointerCapture(event.pointerId);
@@ -133120,25 +133274,35 @@
       font-size: 0.95em;
   }
   /* Click-to-zoom dialog for message images (image_zoom.js), both themes.
-     The dialog is created on first use and sized by the script to the
-     image at fit-to-frame, at most 90% of the viewport each way, so the
-     UA's dialog padding, border and max sizes are reset here. It renders
-     in the top layer, above every sticky bar, without a z-index. */
+     The dialog is a transparent layer over the whole viewport: the frame,
+     sized by the script to the image at fit-to-frame (at most 90% of the
+     viewport each way), is centred in it, and the × sits in the viewport's
+     top-right corner, in the margin the 90% leaves. A click on the layer
+     outside the frame is a click on the dialog itself, which closes it. The
+     UA's dialog padding, border, background and max sizes are reset here.
+     It renders in the top layer, above every sticky bar, without a z-index. */
   img.cc-zoomable {
       cursor: zoom-in;
   }
   
   dialog.cc-zoom {
       box-sizing: border-box;
-      padding: 0;
-      border: 0;
+      width: 100vw;
+      height: 100vh;
       max-width: none;
       max-height: none;
+      margin: 0;
+      padding: 0;
+      border: 0;
       overflow: hidden;
-      background: var(--bg, #ffffff);
-      color: var(--text-primary, #333);
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
-      border-radius: 4px;
+      background: transparent;
+  }
+  
+  /* Only while open: a closed dialog must keep the UA's display: none. */
+  dialog.cc-zoom[open] {
+      display: flex;
+      align-items: center;
+      justify-content: center;
   }
   
   dialog.cc-zoom::backdrop {
@@ -133147,9 +133311,11 @@
   
   .cc-zoom-frame {
       position: relative;
-      width: 100%;
-      height: 100%;
+      flex: none;
       overflow: hidden;
+      background: var(--bg, #ffffff);
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+      border-radius: 4px;
       touch-action: none;
       outline: none;
   }
@@ -133177,8 +133343,8 @@
   
   .cc-zoom-close {
       position: absolute;
-      top: 6px;
-      right: 6px;
+      top: 10px;
+      right: 10px;
       width: 28px;
       height: 28px;
       padding: 0;
@@ -134977,9 +135143,11 @@
   // offer and does not open. Nor does an image inside a link: a click there
   // already means "follow the link", and the author chose that.
   //
-  // The frame is the image at fit scale, at most 90% of the viewport each
-  // way, so at any zoom the image covers the frame and panning is clamped
-  // to keep it so. The geometry is plain numbers: `scale` and the image's
+  // The dialog is a transparent layer over the whole viewport. The frame
+  // in its middle is the image at fit scale, at most 90% of the viewport
+  // each way, so at any zoom the image covers the frame and panning is
+  // clamped to keep it so; the × sits in the viewport's corner, in the
+  // margin that leaves, wherever the zoom has moved the picture. The geometry is plain numbers: `scale` and the image's
   // top-left offset (`x`, `y`) in the frame, applied as one transform.
   (function () {
       'use strict';
@@ -135042,8 +135210,8 @@
               : null;
           fit = Math.min(maxW / nat.w, maxH / nat.h, 1);
           box = { w: Math.round(nat.w * fit), h: Math.round(nat.h * fit) };
-          dialog.style.width = box.w + 'px';
-          dialog.style.height = box.h + 'px';
+          frame.style.width = box.w + 'px';
+          frame.style.height = box.h + 'px';
           if (centre) {
               scale = clamp(scale * fit / oldFit, fit, 1);
               x = box.w / 2 - centre.u * scale;
@@ -135088,16 +135256,16 @@
           close.setAttribute('aria-label', 'Close');
           close.textContent = '×';
           frame.appendChild(zoomImg);
-          frame.appendChild(close);
           dialog.appendChild(frame);
+          dialog.appendChild(close);
           document.body.appendChild(dialog);
   
           close.addEventListener('click', function () { dialog.close(); });
   
-          // The backdrop is part of the dialog element as far as events go,
-          // and the frame fills the dialog (no padding), so a click whose
-          // target is the dialog itself was on the backdrop. A drag that ends
-          // outside the frame is not one: the frame holds the pointer capture.
+          // The layer around the frame is the dialog element itself, so a
+          // click whose target is the dialog was outside the frame. A drag
+          // that ends outside the frame is not one: the frame holds the
+          // pointer capture.
           dialog.addEventListener('click', function (event) {
               if (event.target === dialog) dialog.close();
           });
@@ -135125,7 +135293,7 @@
   
           let drag = null;
           frame.addEventListener('pointerdown', function (event) {
-              if (event.button !== 0 || event.target.closest('.cc-zoom-close')) return;
+              if (event.button !== 0) return;
               if (scale <= fit + 1e-6) return;
               event.preventDefault();
               frame.setPointerCapture(event.pointerId);

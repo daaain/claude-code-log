@@ -1,23 +1,33 @@
 /* Click-to-zoom dialog for message images (image_zoom.js), both themes.
-   The dialog is created on first use and sized by the script to the
-   image at fit-to-frame, at most 90% of the viewport each way, so the
-   UA's dialog padding, border and max sizes are reset here. It renders
-   in the top layer, above every sticky bar, without a z-index. */
+   The dialog is a transparent layer over the whole viewport: the frame,
+   sized by the script to the image at fit-to-frame (at most 90% of the
+   viewport each way), is centred in it, and the × sits in the viewport's
+   top-right corner, in the margin the 90% leaves. A click on the layer
+   outside the frame is a click on the dialog itself, which closes it. The
+   UA's dialog padding, border, background and max sizes are reset here.
+   It renders in the top layer, above every sticky bar, without a z-index. */
 img.cc-zoomable {
     cursor: zoom-in;
 }
 
 dialog.cc-zoom {
     box-sizing: border-box;
-    padding: 0;
-    border: 0;
+    width: 100vw;
+    height: 100vh;
     max-width: none;
     max-height: none;
+    margin: 0;
+    padding: 0;
+    border: 0;
     overflow: hidden;
-    background: var(--bg, #ffffff);
-    color: var(--text-primary, #333);
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
-    border-radius: 4px;
+    background: transparent;
+}
+
+/* Only while open: a closed dialog must keep the UA's display: none. */
+dialog.cc-zoom[open] {
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
 dialog.cc-zoom::backdrop {
@@ -26,9 +36,11 @@ dialog.cc-zoom::backdrop {
 
 .cc-zoom-frame {
     position: relative;
-    width: 100%;
-    height: 100%;
+    flex: none;
     overflow: hidden;
+    background: var(--bg, #ffffff);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+    border-radius: 4px;
     touch-action: none;
     outline: none;
 }
@@ -56,8 +68,8 @@ dialog.cc-zoom::backdrop {
 
 .cc-zoom-close {
     position: absolute;
-    top: 6px;
-    right: 6px;
+    top: 10px;
+    right: 10px;
     width: 28px;
     height: 28px;
     padding: 0;

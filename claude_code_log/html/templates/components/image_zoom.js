@@ -12,9 +12,11 @@
 // offer and does not open. Nor does an image inside a link: a click there
 // already means "follow the link", and the author chose that.
 //
-// The frame is the image at fit scale, at most 90% of the viewport each
-// way, so at any zoom the image covers the frame and panning is clamped
-// to keep it so. The geometry is plain numbers: `scale` and the image's
+// The dialog is a transparent layer over the whole viewport. The frame
+// in its middle is the image at fit scale, at most 90% of the viewport
+// each way, so at any zoom the image covers the frame and panning is
+// clamped to keep it so; the × sits in the viewport's corner, in the
+// margin that leaves, wherever the zoom has moved the picture. The geometry is plain numbers: `scale` and the image's
 // top-left offset (`x`, `y`) in the frame, applied as one transform.
 (function () {
     'use strict';
@@ -77,8 +79,8 @@
             : null;
         fit = Math.min(maxW / nat.w, maxH / nat.h, 1);
         box = { w: Math.round(nat.w * fit), h: Math.round(nat.h * fit) };
-        dialog.style.width = box.w + 'px';
-        dialog.style.height = box.h + 'px';
+        frame.style.width = box.w + 'px';
+        frame.style.height = box.h + 'px';
         if (centre) {
             scale = clamp(scale * fit / oldFit, fit, 1);
             x = box.w / 2 - centre.u * scale;
@@ -123,16 +125,16 @@
         close.setAttribute('aria-label', 'Close');
         close.textContent = '×';
         frame.appendChild(zoomImg);
-        frame.appendChild(close);
         dialog.appendChild(frame);
+        dialog.appendChild(close);
         document.body.appendChild(dialog);
 
         close.addEventListener('click', function () { dialog.close(); });
 
-        // The backdrop is part of the dialog element as far as events go,
-        // and the frame fills the dialog (no padding), so a click whose
-        // target is the dialog itself was on the backdrop. A drag that ends
-        // outside the frame is not one: the frame holds the pointer capture.
+        // The layer around the frame is the dialog element itself, so a
+        // click whose target is the dialog was outside the frame. A drag
+        // that ends outside the frame is not one: the frame holds the
+        // pointer capture.
         dialog.addEventListener('click', function (event) {
             if (event.target === dialog) dialog.close();
         });
@@ -160,7 +162,7 @@
 
         let drag = null;
         frame.addEventListener('pointerdown', function (event) {
-            if (event.button !== 0 || event.target.closest('.cc-zoom-close')) return;
+            if (event.button !== 0) return;
             if (scale <= fit + 1e-6) return;
             event.preventDefault();
             frame.setPointerCapture(event.pointerId);
