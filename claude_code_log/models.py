@@ -940,7 +940,9 @@ class UserSteeringMessage(UserTextMessage):
 # A ``key: value`` line of a key/value teammate body (see
 # ``TeammateMessageBlock.body_params``): identifier-like key, whitespace
 # after the colon (so ``https://…`` is not a key), non-empty value.
-_KEY_VALUE_LINE_RE = re.compile(r"^\s*([A-Za-z_][\w.-]*)\s*:\s+(\S.*?)\s*$")
+# A data line's key looks like a field name (lowercase, as in the payloads
+# peers send); a capitalised ``Label:`` opens a prose paragraph.
+_KEY_VALUE_LINE_RE = re.compile(r"^\s*([a-z_][a-z0-9_.-]*)\s*:\s+(\S.*?)\s*$")
 
 
 @dataclass
@@ -970,9 +972,9 @@ class TeammateMessageBlock:
 
         A body is data when it is a non-empty JSON object (the
         ``idle_notification`` payloads), or when every non-blank line is
-        ``key: value`` with an identifier-like key (two lines at least,
-        no repeated key). Anything else, including prose with a few
-        ``Label: …`` lines, stays Markdown.
+        ``key: value`` with a lowercase field-name key (two lines at
+        least, no repeated key). Anything else, including prose whose
+        paragraphs open with ``Label: …``, stays Markdown.
         """
         text = self.body.strip()
         if text.startswith("{") and text.endswith("}"):

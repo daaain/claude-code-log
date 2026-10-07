@@ -84,7 +84,7 @@ def _entry(**fields: Any) -> dict[str, Any]:
     return base
 
 
-def _write(tmp_path: Path) -> Path:
+def _write(tmp_path: Path, peer_text: str | None = None) -> Path:
     entries = [
         _entry(
             type="user",
@@ -98,7 +98,7 @@ def _write(tmp_path: Path) -> Path:
             timestamp="2026-04-19T10:01:00.000Z",
             parentUuid="u1",
             uuid="u2",
-            message={"role": "user", "content": _peer_text()},
+            message={"role": "user", "content": peer_text or _peer_text()},
         ),
     ]
     path = tmp_path / "s1.jsonl"
@@ -182,15 +182,33 @@ class TestMarkdown:
 
     def test_peer_values_are_escaped(self, md: str) -> None:
         # No live tag outside code, in data or prose bodies: the only raw
-        # ``<img`` left is the short value, inside its inline code span.
+        # ``<img`` left are the short values, each inside its inline code
+        # span — the one carrying backticks in a span wide enough to hold
+        # them, so it cannot end the span early.
         assert "> **note:** `<img src=x onerror=alert(1)>`" in md
-        assert md.count("<img") == 1
-        assert "&lt;img src=x onerror=alert(2)&gt;" in md
+        assert f"> **tick:** ``{XSS_TICK}``" in md
+        assert md.count("<img") == 2
         assert "&lt;img src=y onerror=alert(3)&gt;" in md
 
     def test_framing_is_italic(self, md: str) -> None:
         assert f"*{LEADING}*" in md
         assert f"*{TRAILING}*" in md
+
+    def test_framing_is_escaped(self, tmp_path: Path) -> None:
+        # The framing comes from another session too: raw HTML before and
+        # after the blocks must not reach the .md file live.
+        text = (
+            "<img src=a onerror=alert(4)> sent this:\n"
+            '<teammate-message teammate_id="worker-a">\nhello\n'
+            "</teammate-message>\n\n"
+            "and then <img src=b onerror=alert(5)>"
+        )
+        md = MarkdownRenderer().generate(
+            load_transcript(_write(tmp_path, text)), "peer"
+        )
+        assert "<img" not in md
+        assert "&lt;img src=a onerror=alert(4)&gt;" in md
+        assert "&lt;img src=b onerror=alert(5)&gt;" in md
 
 
 class TestBodyParams:
@@ -219,3 +237,12 @@ class TestBodyParams:
         assert self._params("a: 1\na: 2") is None
         assert self._params("see: here\nhttps://example.com/x") is None
         assert self._params("- a: 1\n- b: 2") is None
+
+    def test_labelled_paragraphs_are_prose(self) -> None:
+        # Paragraphs that open with a capitalised label read as data
+        # line by line, but they are prose.
+        body = (
+            "Relay: the indexing job finished and the report is attached.\n\n"
+            "Important: rerun it after the schema change lands."
+        )
+        assert self._params(body) is None

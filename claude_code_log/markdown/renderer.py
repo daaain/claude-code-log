@@ -1649,7 +1649,7 @@ class MarkdownRenderer(Renderer):
                 lines.append(self._code_fence(value))
             else:
                 # Simple value - inline
-                lines.append(f"**{key}:** `{value}`")
+                lines.append(f"**{key}:** {_inline_code(str(value))}")
         return "\n\n".join(lines)
 
     # -------------------------------------------------------------------------
