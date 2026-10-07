@@ -291,10 +291,23 @@ class TestZoomAndPan:
 
 
 class TestWhatOpens:
-    def test_a_markdown_image_opens_in_minimal(
-        self, page: Page, pages: dict[str, Path]
+    @pytest.mark.parametrize("theme", ["classic", "minimal"])
+    def test_a_wide_markdown_image_stays_in_its_card_and_opens(
+        self, page: Page, pages: dict[str, Path], theme: str
     ) -> None:
-        _open(page, pages["minimal"], MARKDOWN_BIG)
+        """A Markdown image has no class of its own; both themes still size
+        it down to its message, which is what makes it zoomable."""
+        page.set_viewport_size(VIEWPORT)
+        page.goto(pages[theme].as_uri())
+        inside = page.locator(MARKDOWN_BIG).evaluate(
+            """img => {
+                const i = img.getBoundingClientRect();
+                const m = img.closest('.message').getBoundingClientRect();
+                return i.width > 0 && i.left >= m.left - 0.5 && i.right <= m.right + 0.5;
+            }"""
+        )
+        assert inside
+        _open(page, pages[theme], MARKDOWN_BIG)
         _assert_framed(_geometry(page))
 
     def test_an_image_at_its_natural_size_does_not_open(

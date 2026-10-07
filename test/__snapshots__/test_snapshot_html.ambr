@@ -1852,6 +1852,15 @@
   .ansi-underline { text-decoration: underline; }
   
   /* Image styling */
+  /* Any image a message carries (one from rendered Markdown too) stays in the
+     message's frame, in both themes; one drawn smaller than its natural size
+     opens in the zoom dialog on click (image_zoom.js). Zero specificity: a
+     rule that sizes an image on purpose (the inline favicon's 1em) still wins. */
+  :where(#transcript .message) img {
+      max-width: 100%;
+      height: auto;
+  }
+  
   .tool-result-image,
   .uploaded-image {
       max-width: 100%;
@@ -10406,6 +10415,15 @@
   .ansi-underline { text-decoration: underline; }
   
   /* Image styling */
+  /* Any image a message carries (one from rendered Markdown too) stays in the
+     message's frame, in both themes; one drawn smaller than its natural size
+     opens in the zoom dialog on click (image_zoom.js). Zero specificity: a
+     rule that sizes an image on purpose (the inline favicon's 1em) still wins. */
+  :where(#transcript .message) img {
+      max-width: 100%;
+      height: auto;
+  }
+  
   .tool-result-image,
   .uploaded-image {
       max-width: 100%;
@@ -24569,6 +24587,15 @@
   .ansi-underline { text-decoration: underline; }
   
   /* Image styling */
+  /* Any image a message carries (one from rendered Markdown too) stays in the
+     message's frame, in both themes; one drawn smaller than its natural size
+     opens in the zoom dialog on click (image_zoom.js). Zero specificity: a
+     rule that sizes an image on purpose (the inline favicon's 1em) still wins. */
+  :where(#transcript .message) img {
+      max-width: 100%;
+      height: auto;
+  }
+  
   .tool-result-image,
   .uploaded-image {
       max-width: 100%;
@@ -28785,14 +28812,6 @@
   
   .theme-minimal #transcript .markdown th {
       border-bottom: 1px solid var(--muted);
-  }
-  
-  /* Any image a message carries (one from rendered Markdown too) stays in the
-     message's frame, so in its column. Zero specificity: a rule that sizes an
-     image on purpose (the inline favicon's 1em) still wins. */
-  :where(.theme-minimal #transcript .message) img {
-      max-width: 100%;
-      height: auto;
   }
   
   .theme-minimal #transcript img.tool-result-image,
@@ -39515,6 +39534,15 @@
   .ansi-underline { text-decoration: underline; }
   
   /* Image styling */
+  /* Any image a message carries (one from rendered Markdown too) stays in the
+     message's frame, in both themes; one drawn smaller than its natural size
+     opens in the zoom dialog on click (image_zoom.js). Zero specificity: a
+     rule that sizes an image on purpose (the inline favicon's 1em) still wins. */
+  :where(#transcript .message) img {
+      max-width: 100%;
+      height: auto;
+  }
+  
   .tool-result-image,
   .uploaded-image {
       max-width: 100%;
@@ -43731,14 +43759,6 @@
   
   .theme-minimal #transcript .markdown th {
       border-bottom: 1px solid var(--muted);
-  }
-  
-  /* Any image a message carries (one from rendered Markdown too) stays in the
-     message's frame, so in its column. Zero specificity: a rule that sizes an
-     image on purpose (the inline favicon's 1em) still wins. */
-  :where(.theme-minimal #transcript .message) img {
-      max-width: 100%;
-      height: auto;
   }
   
   .theme-minimal #transcript img.tool-result-image,
@@ -62920,6 +62940,15 @@
   .ansi-underline { text-decoration: underline; }
   
   /* Image styling */
+  /* Any image a message carries (one from rendered Markdown too) stays in the
+     message's frame, in both themes; one drawn smaller than its natural size
+     opens in the zoom dialog on click (image_zoom.js). Zero specificity: a
+     rule that sizes an image on purpose (the inline favicon's 1em) still wins. */
+  :where(#transcript .message) img {
+      max-width: 100%;
+      height: auto;
+  }
+  
   .tool-result-image,
   .uploaded-image {
       max-width: 100%;
@@ -67136,14 +67165,6 @@
   
   .theme-minimal #transcript .markdown th {
       border-bottom: 1px solid var(--muted);
-  }
-  
-  /* Any image a message carries (one from rendered Markdown too) stays in the
-     message's frame, so in its column. Zero specificity: a rule that sizes an
-     image on purpose (the inline favicon's 1em) still wins. */
-  :where(.theme-minimal #transcript .message) img {
-      max-width: 100%;
-      height: auto;
   }
   
   .theme-minimal #transcript img.tool-result-image,
@@ -77982,6 +78003,15 @@
   .ansi-underline { text-decoration: underline; }
   
   /* Image styling */
+  /* Any image a message carries (one from rendered Markdown too) stays in the
+     message's frame, in both themes; one drawn smaller than its natural size
+     opens in the zoom dialog on click (image_zoom.js). Zero specificity: a
+     rule that sizes an image on purpose (the inline favicon's 1em) still wins. */
+  :where(#transcript .message) img {
+      max-width: 100%;
+      height: auto;
+  }
+  
   .tool-result-image,
   .uploaded-image {
       max-width: 100%;
@@ -86654,6 +86684,15 @@
   .ansi-underline { text-decoration: underline; }
   
   /* Image styling */
+  /* Any image a message carries (one from rendered Markdown too) stays in the
+     message's frame, in both themes; one drawn smaller than its natural size
+     opens in the zoom dialog on click (image_zoom.js). Zero specificity: a
+     rule that sizes an image on purpose (the inline favicon's 1em) still wins. */
+  :where(#transcript .message) img {
+      max-width: 100%;
+      height: auto;
+  }
+  
   .tool-result-image,
   .uploaded-image {
       max-width: 100%;
@@ -95606,6 +95645,15 @@
   .ansi-underline { text-decoration: underline; }
   
   /* Image styling */
+  /* Any image a message carries (one from rendered Markdown too) stays in the
+     message's frame, in both themes; one drawn smaller than its natural size
+     opens in the zoom dialog on click (image_zoom.js). Zero specificity: a
+     rule that sizes an image on purpose (the inline favicon's 1em) still wins. */
+  :where(#transcript .message) img {
+      max-width: 100%;
+      height: auto;
+  }
+  
   .tool-result-image,
   .uploaded-image {
       max-width: 100%;
@@ -104505,6 +104553,15 @@
   .ansi-underline { text-decoration: underline; }
   
   /* Image styling */
+  /* Any image a message carries (one from rendered Markdown too) stays in the
+     message's frame, in both themes; one drawn smaller than its natural size
+     opens in the zoom dialog on click (image_zoom.js). Zero specificity: a
+     rule that sizes an image on purpose (the inline favicon's 1em) still wins. */
+  :where(#transcript .message) img {
+      max-width: 100%;
+      height: auto;
+  }
+  
   .tool-result-image,
   .uploaded-image {
       max-width: 100%;
@@ -113349,6 +113406,15 @@
   .ansi-underline { text-decoration: underline; }
   
   /* Image styling */
+  /* Any image a message carries (one from rendered Markdown too) stays in the
+     message's frame, in both themes; one drawn smaller than its natural size
+     opens in the zoom dialog on click (image_zoom.js). Zero specificity: a
+     rule that sizes an image on purpose (the inline favicon's 1em) still wins. */
+  :where(#transcript .message) img {
+      max-width: 100%;
+      height: auto;
+  }
+  
   .tool-result-image,
   .uploaded-image {
       max-width: 100%;
@@ -122021,6 +122087,15 @@
   .ansi-underline { text-decoration: underline; }
   
   /* Image styling */
+  /* Any image a message carries (one from rendered Markdown too) stays in the
+     message's frame, in both themes; one drawn smaller than its natural size
+     opens in the zoom dialog on click (image_zoom.js). Zero specificity: a
+     rule that sizes an image on purpose (the inline favicon's 1em) still wins. */
+  :where(#transcript .message) img {
+      max-width: 100%;
+      height: auto;
+  }
+  
   .tool-result-image,
   .uploaded-image {
       max-width: 100%;
@@ -130498,6 +130573,15 @@
   .ansi-underline { text-decoration: underline; }
   
   /* Image styling */
+  /* Any image a message carries (one from rendered Markdown too) stays in the
+     message's frame, in both themes; one drawn smaller than its natural size
+     opens in the zoom dialog on click (image_zoom.js). Zero specificity: a
+     rule that sizes an image on purpose (the inline favicon's 1em) still wins. */
+  :where(#transcript .message) img {
+      max-width: 100%;
+      height: auto;
+  }
+  
   .tool-result-image,
   .uploaded-image {
       max-width: 100%;

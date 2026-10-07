@@ -147,14 +147,6 @@ body.theme-minimal {
     border-bottom: 1px solid var(--muted);
 }
 
-/* Any image a message carries (one from rendered Markdown too) stays in the
-   message's frame, so in its column. Zero specificity: a rule that sizes an
-   image on purpose (the inline favicon's 1em) still wins. */
-:where(.theme-minimal #transcript .message) img {
-    max-width: 100%;
-    height: auto;
-}
-
 .theme-minimal #transcript img.tool-result-image,
 .theme-minimal #transcript img.uploaded-image {
     margin: 4px 0;

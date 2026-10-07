@@ -81,6 +81,10 @@ Search uses it to keep the current match pinned when the same query is re-run
 after an option or filter change.
 
 **Image zoom** (`components/image_zoom.js` + `image_zoom.css`, both themes).
+Every message image, a Markdown one included, is capped at its message's
+width by `:where(#transcript .message) img` in `message_styles.css`. Its
+zero specificity lets a rule that sizes an image on purpose (the artifact
+favicon's `1em`) win.
 A message image (`#transcript .message img`) gets `cc-zoomable`, a `zoom-in`
 cursor, on hover when it is drawn smaller than its natural size. That is
 measured, not marked: nothing is emitted per image. Clicking one opens the
