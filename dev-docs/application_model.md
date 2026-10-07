@@ -1499,7 +1499,7 @@ considered and not needed for the case that motivated it.
 ### 2.17 Markdown engine
 
 Markdown is rendered by [wenmode](https://github.com/lepture/wenmode)
-(mistune's successor by the same author; the switch is #323). Three
+(mistune's successor by the same author; the switch is #323). Four
 pipelines share one rule set, built by
 [`markdown_plugins.transcript_rules()`](../claude_code_log/markdown_plugins.py):
 wenmode's `github` preset (wenmode ≥ 0.15.1) with strikethrough
@@ -1515,6 +1515,7 @@ implements it.
 |---|---|---|
 | HTML, assistant/tool/web content | `html/utils.py::_get_markdown_renderer` | `_TranscriptHTMLRenderer(escape=True, soft_break="br")` — every soft break as `<br />`, mistune's `hard_wrap`; handlers: Pygments on fenced code with a language, escaped block-level raw HTML wrapped in `<p>`; the SHA-link transform |
 | HTML, user content | `html/utils.py::_get_user_markdown_renderer` | the same pipeline as a distinct singleton (the render memo keys on which one rendered) |
+| HTML, whole document | `html/utils.py::_get_document_markdown_renderer` | wenmode's `frontmatter` plugin, loading with PyYAML; used by `render_markdown_document` only — see *Front matter* below |
 | Markdown output | `markdown/renderer.py::_protect_html_tags`, `markdown_plugins.linkify_shas_in_text` | no renderer at all — see below |
 
 **The escape contract is not a preference.** Transcript content is
@@ -1527,6 +1528,30 @@ mistune's denylist (`javascript:`, `vbscript:`, `data:` except images,
 allowlist would anticipate, and none of those can execute script.
 `test/test_xss_browser.py` and `test/test_markdown_rendering.py` pin
 it.
+
+**Front matter is data, and only at the top of a whole body.** Read as
+plain Markdown, the closing `---` of a YAML front-matter block is a
+setext underline, so the block became one heading. A whole body — a
+message, a recap, the full view of every `render_*markdown_collapsible`
+body, a Markdown file's Read/Write content, a plan — goes through
+`render_markdown_document`. When the text opens with a block
+([`frontmatter.is_frontmatter_start`](../claude_code_log/frontmatter.py):
+wenmode's rule, plus the line after the opening fence must hold
+something, so `---` then a blank line stays a horizontal rule), the
+document pipeline parses it once, the plugin stores the loaded value in
+`root.data`, and `render_node` renders the rest. A non-empty mapping
+shows as `render_params_table` above the body; anything else (a YAML
+error, a scalar, a list) as a YAML code block, so nothing is lost. Any
+other text goes to the ordinary pipeline and memo entry unchanged.
+Inline renders, the collapsed previews (cut from the body *after* the
+front matter) and the Markdown inside a params value never parse front
+matter, so a value that itself starts with `---` neither recurses nor
+turns into a table. Loading is `yaml.SafeLoader` with aliases refused
+(they would expand exponentially when walked into a table); dates and
+other non-JSON scalars become strings. The Markdown output splits the
+block with `split_frontmatter` and renders it through `_render_params`
+(behind `_protect_html_tags`) or a `yaml` fence, for user and assistant
+text.
 
 **Extensions are transforms, not inline rules.** SHA linkification
 (#156) runs after parsing, as a `RootTransform` walking `Text` and

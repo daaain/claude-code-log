@@ -885,7 +885,10 @@ class MarkdownRenderer(Renderer):
                         # not become links, mirroring the HTML side
                         # where the SHA-link transform doesn't fire inside
                         # codespans / fenced code).
-                        parts.append(_protect_html_tags(self._linkify_shas(item.text)))
+                        frontmatter, body = self._split_frontmatter(item.text)
+                        parts.append(
+                            frontmatter + _protect_html_tags(self._linkify_shas(body))
+                        )
                     else:
                         parts.append(self._code_fence(item.text))
         return "\n\n".join(parts)
@@ -1059,7 +1062,8 @@ class MarkdownRenderer(Renderer):
                     # before quoting so the substitution happens on
                     # the natural text shape (a leading "> " would
                     # confuse the word-boundary regex anchor).
-                    parts.append(self._quote(self._linkify_shas(item.text)))
+                    frontmatter, body = self._split_frontmatter(item.text)
+                    parts.append(self._quote(frontmatter + self._linkify_shas(body)))
         return "\n\n".join(parts)
 
     def format_ThinkingMessage(
@@ -1630,6 +1634,30 @@ class MarkdownRenderer(Renderer):
                 else content.skill_body
             )
         return rendered
+
+    def _split_frontmatter(self, text: str) -> tuple[str, str]:
+        """Take YAML front matter off the top of a Markdown body.
+
+        Returns the front matter rendered as data, with its trailing blank
+        line, and the body after it; ``("", text)`` when there is none.
+        Spliced in raw, a downstream viewer would read the closing fence
+        as a setext underline, as the HTML renderer used to. A mapping
+        renders as tool params do, anything else as a YAML code block;
+        either way raw HTML is neutralised, since the block is transcript
+        content (a backtick in a value can end its code span).
+        """
+        from ..frontmatter import RawFrontmatter, load_frontmatter, split_frontmatter
+
+        split = split_frontmatter(text)
+        if split is None:
+            return "", text
+        source, body = split
+        value = load_frontmatter(source)
+        if isinstance(value, RawFrontmatter):
+            rendered = self._code_fence(source.rstrip(), "yaml")
+        else:
+            rendered = _protect_html_tags(self._render_params(value))
+        return f"{rendered}\n\n", body
 
     def _render_params(self, params: dict[str, Any]) -> str:
         """Render parameters as a markdown key/value list."""

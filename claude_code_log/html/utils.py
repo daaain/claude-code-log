@@ -18,7 +18,7 @@ import html
 import json
 import re
 from pathlib import Path
-from typing import Any, Callable, Optional, TYPE_CHECKING
+from typing import Any, Optional, TYPE_CHECKING
 from urllib.parse import urlsplit
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -508,7 +508,7 @@ class _TranscriptHtmlHandlers:
         )
 
 
-def _build_transcript_markdown() -> Wenmode:
+def _build_transcript_markdown(document: bool = False) -> Wenmode:
     """The wenmode pipeline both content renderers use.
 
     ``escape=True`` renders raw HTML embedded in the source text
@@ -526,17 +526,28 @@ def _build_transcript_markdown() -> Wenmode:
     The SHA → commit-URL linkifier (issue #156) reads the per-render cwd
     from a ContextVar, so the cached singleton keeps working unchanged
     across transcripts from different repos.
+
+    ``document`` adds wenmode's ``frontmatter`` plugin, for a whole body
+    (a message, a Markdown file, a plan) that may open with YAML front
+    matter; see ``render_markdown_document``.
     """
     from ..markdown_plugins import transcript_plugins, transcript_rules
     from ..git_remote import resolve_sha_for_current_render
 
+    plugins: list[Any] = [*transcript_plugins(), _TranscriptHtmlHandlers()]
+    if document:
+        from wenmode.plugins import frontmatter
+
+        from ..frontmatter import load_frontmatter
+
+        plugins.append(frontmatter.configure(load=load_frontmatter))
     return Wenmode(
         transcript_rules(resolve_sha_for_current_render),
         # escape: untrusted content (XSS, #245). soft_break: a newline in
         # prose is a line break (checklists in assistant messages carry no
         # two-trailing-spaces markup) — mistune's hard_wrap.
         renderer=_TranscriptHTMLRenderer(escape=True, soft_break="br"),
-        plugins=[*transcript_plugins(), _TranscriptHtmlHandlers()],
+        plugins=plugins,
     )
 
 
@@ -549,6 +560,59 @@ def _get_markdown_renderer() -> Wenmode:
     the escaping contract.
     """
     return _build_transcript_markdown()
+
+
+@functools.lru_cache(maxsize=1)
+def _get_document_markdown_renderer() -> Wenmode:
+    """Cached renderer for whole bodies that open with YAML front matter.
+
+    The transcript pipeline plus wenmode's ``frontmatter`` plugin. Only
+    ``render_markdown_document`` uses it: inline renders, previews and the
+    Markdown inside a params-table value never parse front matter.
+    """
+    return _build_transcript_markdown(document=True)
+
+
+def _frontmatter_html(value: Any) -> str:
+    """HTML for loaded front matter: a params table, or a YAML code block."""
+    from ..frontmatter import RawFrontmatter, yaml_fence
+    from .tool_formatters import render_params_table
+
+    if isinstance(value, RawFrontmatter):
+        body = render_markdown(yaml_fence(value.source))
+    else:
+        body = render_params_table(value)
+    return f"<div class='frontmatter'>{body}</div>"
+
+
+def render_markdown_document(text: str, user: bool = False) -> str:
+    """Render a whole Markdown body, showing YAML front matter as data.
+
+    A body that opens with front matter (``frontmatter.is_frontmatter_start``)
+    is parsed by the document renderer, whose ``frontmatter`` plugin takes
+    the block out of the body; it renders as a params table above the rest
+    (a YAML code block when it is not a mapping). Any other body renders
+    exactly as ``render_markdown`` (``render_user_markdown`` when ``user``).
+    """
+    from ..frontmatter import is_frontmatter_start
+    from ..git_remote import current_render_repo_cwd
+
+    if not is_frontmatter_start(text):
+        return _render_markdown_memoized(text, escaping_user_renderer=user)
+
+    memo_key = ("document", current_render_repo_cwd(), text)
+    cached = markdown_cache.get(memo_key)
+    if cached is not None:
+        return cached
+    with timing_stat("_markdown_timings"):
+        renderer = _get_document_markdown_renderer()
+        root = renderer.parse(text)
+        body = renderer.render_node(root)
+        data = root.data or {}
+        if "frontmatter" in data:
+            body = _frontmatter_html(data["frontmatter"]) + body
+    markdown_cache.put(memo_key, body)
+    return body
 
 
 def _render_markdown_memoized(text: str, escaping_user_renderer: bool) -> str:
@@ -750,19 +814,35 @@ def render_collapsible_code(
     </details>"""
 
 
+def _preview_source(text: str) -> str:
+    """The text a collapsed preview is cut from: the body after any front
+    matter (a preview never parses front matter, so cutting it would leave
+    the setext-heading misreading), or the front matter as a YAML block
+    when nothing follows it."""
+    from ..frontmatter import split_frontmatter, yaml_fence
+
+    split = split_frontmatter(text)
+    if split is None:
+        return text
+    source, body = split
+    return body if body.strip() else yaml_fence(source)
+
+
 def _markdown_collapsible(
     raw_content: str,
     css_class: str,
-    render_fn: "Callable[[str], str]",
+    user: bool,
     line_threshold: int,
     preview_line_count: int,
 ) -> str:
-    """Shared body for the collapsible-markdown helpers, parameterized by the
-    markdown render function. Both render functions escape raw HTML
-    (``escape=True``): transcript content is untrusted regardless of source —
-    assistant/tool output routinely echoes arbitrary user/file/web input — so
-    raw tags are neutralised rather than injected as live DOM (XSS)."""
-    rendered_html = render_fn(raw_content)
+    """Shared body for the collapsible-markdown helpers; ``user`` picks the
+    user-content renderer. Both escape raw HTML (``escape=True``):
+    transcript content is untrusted regardless of source — assistant/tool
+    output routinely echoes arbitrary user/file/web input — so raw tags are
+    neutralised rather than injected as live DOM (XSS). The full body is a
+    document (front matter shows as data); the preview is not."""
+    render_fn = render_user_markdown if user else render_markdown
+    rendered_html = render_markdown_document(raw_content, user=user)
 
     lines = raw_content.splitlines()
     if len(lines) <= line_threshold:
@@ -770,7 +850,7 @@ def _markdown_collapsible(
         return f'<div class="{css_class} markdown">{rendered_html}</div>'
 
     # Long content - make collapsible with rendered preview
-    preview_lines = lines[:preview_line_count]
+    preview_lines = _preview_source(raw_content).splitlines()[:preview_line_count]
     preview_text = "\n".join(preview_lines)
     if len(lines) > preview_line_count:
         preview_text += "\n\n..."
@@ -810,7 +890,7 @@ def render_markdown_collapsible(
         HTML string with rendered markdown, optionally wrapped in collapsible details
     """
     return _markdown_collapsible(
-        raw_content, css_class, render_markdown, line_threshold, preview_line_count
+        raw_content, css_class, False, line_threshold, preview_line_count
     )
 
 
@@ -832,9 +912,13 @@ def render_markdown_preview(
     lines = text.splitlines()
     if len(lines) <= inline_lines and len(text) <= inline_chars:
         return render_markdown_collapsible(text, css_class)
-    preview = "\n".join([line for line in lines if line.strip()][:2])
+    preview_lines = _preview_source(text).splitlines()
+    preview = "\n".join([line for line in preview_lines if line.strip()][:2])
     collapsible = render_collapsible_code(
-        render_markdown(preview), render_markdown(text), len(lines), is_markdown=True
+        render_markdown(preview),
+        render_markdown_document(text),
+        len(lines),
+        is_markdown=True,
     )
     return f'<div class="{css_class}">{collapsible}</div>'
 
@@ -858,11 +942,7 @@ def render_user_markdown_collapsible(
     render as escaped text, not live DOM, when the transcript is opened.
     """
     return _markdown_collapsible(
-        raw_content,
-        css_class,
-        render_user_markdown,
-        line_threshold,
-        preview_line_count,
+        raw_content, css_class, True, line_threshold, preview_line_count
     )
 
 
