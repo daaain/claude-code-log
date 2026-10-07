@@ -401,3 +401,39 @@ class TestTeammateBody:
         assert "> **name:** `handoff-note`" in md
         assert "> # Handoff" in md
         assert "> name: handoff-note" not in md
+
+
+class TestMarkdownTitles:
+    """A Markdown title is the message's first line, after any front matter
+    and past any horizontal rule; a message with nothing else is untitled."""
+
+    @pytest.fixture
+    def md(self, tmp_path: Path) -> str:
+        entries = [
+            _user("u1", None, 0, "---\nname: x\n---\n\nPlease tag the release now.\n"),
+            _assistant(
+                "a1", "u1", 1, _text("---\nstatus: ok\n---\nTagged and pushed.\n")
+            ),
+            _assistant("a2", "a1", 2, _text("---\n\n**Summary.** All done.\n")),
+            _user("u2", "a2", 3, "---\nonly: front matter\n---\n"),
+            _user("u3", "u2", 4, "An ordinary question about the build?"),
+        ]
+        path = tmp_path / "s1.jsonl"
+        path.write_text(
+            "\n".join(json.dumps(e) for e in entries) + "\n", encoding="utf-8"
+        )
+        return MarkdownRenderer().generate(load_transcript(path), "fm")
+
+    def test_front_matter_is_skipped(self, md: str) -> None:
+        assert "## 🤷 User: *Please tag the release now.*" in md
+        assert "### 🤖 Assistant: *Tagged and pushed.*" in md
+
+    def test_a_leading_rule_is_skipped(self, md: str) -> None:
+        assert "### 🤖 Assistant: *\\*\\*Summary.\\*\\* All done.*" in md
+
+    def test_front_matter_only_is_untitled(self, md: str) -> None:
+        assert "\n## 🤷 User\n" in md
+
+    def test_ordinary_titles_are_unchanged(self, md: str) -> None:
+        assert "## 🤷 User: *An ordinary question about the build?*" in md
+        assert "*---*" not in md

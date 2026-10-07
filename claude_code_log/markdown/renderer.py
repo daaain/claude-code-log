@@ -301,6 +301,9 @@ def _protect_html_tags(text: str) -> str:
     return "".join(out).rstrip("\n")
 
 
+# A Markdown thematic break (horizontal rule) on its own line.
+_THEMATIC_BREAK_RE = re.compile(r"(?:([-*_])[ \t]*)(?:\1[ \t]*){2,}")
+
 # A ``<`` that a lax HTML parser could take as a tag start: letter, ``/``,
 # ``!`` or ``?`` next. ``x < 3`` and ``<=`` are left alone.
 _TAG_LIKE_LT_RE = re.compile(r"<(?=[A-Za-z/!?])")
@@ -643,11 +646,19 @@ class MarkdownRenderer(Renderer):
           only if at least min_len characters
         - If over max_len, continues to end of current word
         - Adds "…" if truncated
+        - Skips leading YAML front matter (as the rendering does) and
+          horizontal-rule lines: neither says what the message is about.
+          A message with nothing else gets no excerpt.
         """
-        # Get first non-empty line
+        from ..frontmatter import split_frontmatter
+
+        split = split_frontmatter(text)
+        if split is not None:
+            text = split[1]
+        # Get first non-empty line that isn't a horizontal rule
         for line in text.split("\n"):
             line = line.strip()
-            if not line:
+            if not line or _THEMATIC_BREAK_RE.fullmatch(line):
                 continue
 
             # Check for early sentence endings (but enforce minimum length)

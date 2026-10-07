@@ -110,6 +110,11 @@ def test_a_leading_rule_stays_a_rule(html: str) -> None:
 
 
 class TestMarkdownOutput:
+    def test_titles_skip_front_matter_and_rules(self, md: str) -> None:
+        assert "## 🤷 User: *Please turn these notes into a short summary…*" in md
+        assert "### 🤖 Assistant: *Here is the draft.*" in md
+        assert "*---*" not in md
+
     def test_a_backtick_value_stays_in_its_code_span(self, md: str) -> None:
         assert "**command:** ``run `make check` before pushing``" in md
 
