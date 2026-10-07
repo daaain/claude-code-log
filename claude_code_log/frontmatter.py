@@ -95,13 +95,31 @@ class _NoAliasSafeLoader(yaml.SafeLoader):
         return super().compose_node(parent, index)
 
 
-def _plain(value: Any) -> Any:
-    """Turn a loaded YAML value into str/number/bool/None, lists and dicts."""
+# Bounds on what is loaded as a mapping; past them the block shows as raw
+# YAML. PyYAML is pure Python here and recursive: a deeply nested block
+# raises RecursionError, and a huge one costs seconds to load. Real front
+# matter is a few lines deep and a few KiB long.
+MAX_FRONTMATTER_BYTES = 64 * 1024
+MAX_FRONTMATTER_DEPTH = 32
+
+
+class _TooDeep(Exception):
+    pass
+
+
+def _plain(value: Any, depth: int = 0) -> Any:
+    """Turn a loaded YAML value into str/number/bool/None, lists and dicts.
+
+    Raises ``_TooDeep`` past ``MAX_FRONTMATTER_DEPTH``, which also bounds
+    the recursion of the params table that renders the result.
+    """
+    if depth > MAX_FRONTMATTER_DEPTH:
+        raise _TooDeep
     if isinstance(value, dict):
         mapping = cast("dict[Any, Any]", value)
-        return {str(key): _plain(item) for key, item in mapping.items()}
+        return {str(key): _plain(item, depth + 1) for key, item in mapping.items()}
     if isinstance(value, list):
-        return [_plain(item) for item in cast("list[Any]", value)]
+        return [_plain(item, depth + 1) for item in cast("list[Any]", value)]
     if value is None or isinstance(value, (str, bool, int, float)):
         return value
     if isinstance(value, (datetime.date, datetime.datetime)):
@@ -113,14 +131,18 @@ def load_frontmatter(source: str) -> "dict[str, Any] | RawFrontmatter":
     """Load front matter as a mapping, or keep it as raw YAML source.
 
     Anything but a non-empty mapping (a YAML error, a scalar, a list, an
-    empty block) is returned as :class:`RawFrontmatter`.
+    empty block) is returned as :class:`RawFrontmatter`, and so is a block
+    past the size or depth bounds: a transcript must render whatever its
+    front matter holds.
     """
+    if len(source.encode("utf-8", "surrogatepass")) > MAX_FRONTMATTER_BYTES:
+        return RawFrontmatter(source)
     try:
         value = yaml.load(source, Loader=_NoAliasSafeLoader)  # noqa: S506 - safe loader subclass
-    except yaml.YAMLError:
-        return RawFrontmatter(source)
-    if isinstance(value, dict) and value:
-        return _plain(value)
+        if isinstance(value, dict) and value:
+            return _plain(value)
+    except (yaml.YAMLError, RecursionError, _TooDeep):
+        pass
     return RawFrontmatter(source)
 
 

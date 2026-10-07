@@ -593,6 +593,8 @@ def render_markdown_document(text: str, user: bool = False) -> str:
     the block out of the body; it renders as a params table above the rest
     (a YAML code block when it is not a mapping). Any other body renders
     exactly as ``render_markdown`` (``render_user_markdown`` when ``user``).
+    ``user`` does not apply to the front-matter path: the document renderer
+    is the same escaping pipeline as both, so one memo entry serves either.
     """
     from ..frontmatter import is_frontmatter_start
     from ..git_remote import current_render_repo_cwd

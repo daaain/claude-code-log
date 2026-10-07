@@ -283,3 +283,66 @@ class TestUnits:
         assert isinstance(load_frontmatter("a: &x [1]\nb: *x\n"), RawFrontmatter)
         assert isinstance(load_frontmatter("- a\n- b\n"), RawFrontmatter)
         assert isinstance(load_frontmatter("{}\n"), RawFrontmatter)
+
+    def test_bounds(self) -> None:
+        nested = "".join("  " * i + f"k{i}:\n" for i in range(40)) + "  " * 40 + "x\n"
+        assert isinstance(load_frontmatter(nested), RawFrontmatter)  # depth
+        shallow = "".join("  " * i + f"k{i}:\n" for i in range(5)) + "  " * 5 + "x\n"
+        assert isinstance(load_frontmatter(shallow), dict)
+        big = "".join(f"key{i}: value\n" for i in range(7000))
+        assert isinstance(load_frontmatter(big), RawFrontmatter)  # size
+
+
+DEEP_FLOW = "---\na: " + "[" * 1000 + "]" * 1000 + "\n---\n\nAfter deep flow.\n"
+# Under the size bound (one-space indents), yet deep enough that PyYAML's
+# recursive composer raises RecursionError.
+DEEP_BLOCK = (
+    "---\n"
+    + "".join(" " * i + f"k{i}:\n" for i in range(350))
+    + " " * 350
+    + "leaf\n---\n\nAfter deep block.\n"
+)
+# Over the size bound, but trivially valid YAML: shown raw, not loaded.
+OVER_CAP = (
+    "---\n"
+    + "".join(f"key{i}: value {i}\n" for i in range(7000))
+    + "---\n\nAfter big block.\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("doc", "after", "marker"),
+    [
+        (DEEP_FLOW, "After deep flow.", "[[[["),
+        (DEEP_BLOCK, "After deep block.", "k349:"),
+        (OVER_CAP, "After big block.", "key6999: value 6999"),
+    ],
+    ids=["deep-flow", "deep-block", "over-cap"],
+)
+class TestBounds:
+    """A front matter past the bounds renders raw; the conversion goes on."""
+
+    def _write_one(self, tmp_path: Path, doc: str) -> Path:
+        path = tmp_path / "s1.jsonl"
+        path.write_text(json.dumps(_user("u1", None, 0, doc)) + "\n", encoding="utf-8")
+        return path
+
+    @pytest.mark.parametrize("theme", ["classic", "minimal"])
+    def test_html(
+        self, tmp_path: Path, theme: str, doc: str, after: str, marker: str
+    ) -> None:
+        html = generate_html(
+            load_transcript(self._write_one(tmp_path, doc)), "fm", theme=theme
+        )
+        assert after in html
+        block = html[html.index("class='frontmatter'") : html.index(after)]
+        assert "tool-params-table" not in block
+        assert marker.split(":")[0] in block
+
+    def test_markdown(self, tmp_path: Path, doc: str, after: str, marker: str) -> None:
+        md = MarkdownRenderer().generate(
+            load_transcript(self._write_one(tmp_path, doc)), "fm"
+        )
+        assert after in md
+        assert "```yaml\n" in md
+        assert marker in md

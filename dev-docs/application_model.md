@@ -1548,10 +1548,13 @@ front matter) and the Markdown inside a params value never parse front
 matter, so a value that itself starts with `---` neither recurses nor
 turns into a table. Loading is `yaml.SafeLoader` with aliases refused
 (they would expand exponentially when walked into a table); dates and
-other non-JSON scalars become strings. The Markdown output splits the
-block with `split_frontmatter` and renders it through `_render_params`
-(behind `_protect_html_tags`) or a `yaml` fence, for user and assistant
-text.
+other non-JSON scalars become strings. A block over 64 KiB, nested
+deeper than 32 levels, or deep enough to exhaust PyYAML's recursion is
+shown raw instead: one message must never fail a project's render. The
+Markdown output splits the block with `split_frontmatter` and renders it
+through `_render_params` (behind `_protect_html_tags`) or a `yaml` fence,
+but only for user and assistant text — narrower than the HTML side, since
+most other bodies are code-fenced in `.md` anyway.
 
 **Extensions are transforms, not inline rules.** SHA linkification
 (#156) runs after parsing, as a `RootTransform` walking `Text` and
