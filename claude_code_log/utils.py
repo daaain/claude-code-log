@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional, TypeVar
 
+from .frontmatter import split_frontmatter
 from .models import (
     ContentItem,
     DEFAULT_DEPTH,
@@ -739,6 +740,12 @@ def create_session_preview(text_content: str) -> str:
         text_content,
         flags=re.DOTALL,
     ).strip()
+
+    # Skip leading YAML front matter, as the rendering does: the preview
+    # starts at the body. Front matter alone leaves an empty preview.
+    split = split_frontmatter(preview_content)
+    if split is not None:
+        preview_content = split[1].strip()
 
     # Strip command-tag XML soup down to ``/cmd`` or inner-text shape.
     preview_content = simplify_command_tags(preview_content)
