@@ -180,6 +180,14 @@ dev = [
     "pytest-timeout>=2.3.1",
 ]
 
+# Optional JS lint for the templates' scripts (`just lint-js`). oxlint is a
+# self-contained Rust binary: no Node. This PyPI package repackages the
+# official oxc-project release (packaging: github.com/dhruvkb/oxc-py), so
+# it is pinned exactly and bumped deliberately.
+js = [
+    "oxlint==1.84.0",
+]
+
 docs = [
     "mkdocs>=1.6.1",
     "mkdocs-material>=9.5.0",

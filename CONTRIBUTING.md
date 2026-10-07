@@ -232,7 +232,31 @@ ruff check --fix
 # Type checking
 uv run pyright
 uv run ty check
+
+# Lint the templates' JavaScript (optional `js` group, not part of `just ci`)
+just lint-js
 ```
+
+The HTML pages carry a fair amount of JavaScript: the files under
+`claude_code_log/html/templates/components/`, plus `<script>` blocks inline
+in the templates. `just lint-js` checks both with
+[oxlint](https://oxc.rs/docs/guide/usage/linter.html), a Rust linter that
+uses ESLint's rule names. It is installed from PyPI by the optional `js`
+dependency group (no Node needed), and that group stays out of the default
+install.
+
+Neither kind of JS can be linted where it sits, because of the Jinja in
+it. So `scripts/lint_js.py` lints a staged copy:
+- **Component files** are copied with their `{% include %}` lines turned
+  into comments, so a finding's `file:line` is the real one.
+- **Inline scripts** are taken from pages rendered in both themes, with each
+  component include replaced by a placeholder. They are reported as
+  `rendered/<page>-<theme>/script-<n>.js`; `just lint-js --keep` keeps the
+  staged copy so you can open one.
+
+The rules are oxlint's default correctness set, adjusted in `.oxlintrc.json`.
+It reports warnings only for now; the aim is to clear them and then gate on
+it.
 
 The minimal theme's dark syntax-highlighting sheet
 (`claude_code_log/html/templates/components/minimal/pygments_dark.css`) is

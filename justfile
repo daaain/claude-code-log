@@ -86,6 +86,11 @@ typecheck:
 ty:
     uv run ty check
 
+# Lint the templates' JavaScript with oxlint (optional `js` group; not part
+# of `ci` yet). Extra arguments go to oxlint; `--keep` keeps the staged copy.
+lint-js *ARGS:
+    uv run --group js python scripts/lint_js.py {{ ARGS }}
+
 # Fail-fast order: format and lint take seconds, ty is faster than pyright, the full test suite runs last
 ci: format lint ty typecheck test-all
 
