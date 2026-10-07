@@ -377,9 +377,14 @@ def _entry(uuid: str, parent: str | None, role: str, content: list[Any]) -> dict
 
 
 def _gutter_fixture(tmp_path: Path) -> Path:
-    """A tool whose whole title is its (long) name, paired with its result,
-    then a tool whose input nests rows: both "expand all" controls."""
+    """A tool whose whole title is its (long) name, paired with its result;
+    a tool whose input nests rows (a fold inside the 0.8em table); and a
+    ToolSearch whose list result folds at the result's top level."""
     items = [{"name": f"item_{i}", "role": "padding words " * 20} for i in range(3)]
+    refs = [
+        {"type": "tool_reference", "tool_name": f"mcp__plugin_x_x__tool_{i}"}
+        for i in range(5)
+    ]
     entries = [
         _entry(
             "a1",
@@ -409,6 +414,25 @@ def _gutter_fixture(tmp_path: Path) -> Path:
                     "input": {"items": items},
                 },
             ],
+        ),
+        _entry(
+            "a333",
+            "a22",
+            "assistant",
+            [
+                {
+                    "type": "tool_use",
+                    "id": "t3",
+                    "name": "ToolSearch",
+                    "input": {"query": "select:x", "max_results": 5},
+                },
+            ],
+        ),
+        _entry(
+            "u3333",
+            "a333",
+            "user",
+            [{"type": "tool_result", "tool_use_id": "t3", "content": refs}],
         ),
     ]
     source = tmp_path / "gutter.jsonl"
@@ -456,18 +480,46 @@ class TestGutterRole:
             ]
             assert covered == [], f"covered at {width}px: {covered}"
 
+    def test_a_truncated_label_shows_its_full_text_on_hover(
+        self, page: Page, tmp_path: Path
+    ) -> None:
+        """Only the rendered width says whether a label is ellipsized, so
+        minimal.js gives it its full text on hover; an untruncated label
+        stays bare."""
+        page.goto(_render(tmp_path, _gutter_fixture(tmp_path)).as_uri())
+        role = page.locator("#transcript .message.tool_use .mn-role").first
+        # Drop the server tooltip: this is the case of a visible title.
+        role.evaluate("e => e.removeAttribute('title')")
+        assert role.evaluate("e => e.scrollWidth > e.clientWidth"), "not truncated"
+        role.hover()
+        expect(role).to_have_attribute("title", LONG_TOOL)
+        short = page.locator("#transcript .mn-role", has_text="SomeTool").first
+        short.evaluate("e => e.removeAttribute('title')")
+        assert not short.evaluate("e => e.scrollWidth > e.clientWidth")
+        short.hover()
+        assert short.get_attribute("title") is None
+
 
 @pytest.mark.browser
-def test_both_expand_all_controls_share_one_style(page: Page, tmp_path: Path) -> None:
+def test_every_expand_all_control_shares_one_style(page: Page, tmp_path: Path) -> None:
+    """The table's own, a fold's inside the 0.8em table, and a fold's at a
+    result's top level: one font, wherever the button sits."""
     page.goto(_render(tmp_path, _gutter_fixture(tmp_path)).as_uri())
     page.evaluate(
         "() => document.querySelectorAll('#transcript details').forEach(d => d.open = true)"
     )
-    styles = [
-        page.locator(f"#transcript {sel}").first.evaluate(
-            "e => (s => [s.fontFamily, s.fontSize, s.fontStyle])(getComputedStyle(e))"
-        )
-        for sel in (".tool-params-expand-all", ".tool-param-rows-toggle")
-    ]
-    assert styles[0] == styles[1]
-    assert styles[0][2] == "italic"
+    controls = page.locator(
+        "#transcript :is(.tool-params-expand-all, .tool-param-rows-toggle)"
+    )
+    styles = controls.evaluate_all(
+        "els => els.map(e => (s => [e.className, s.fontFamily, s.fontSize, s.fontStyle])"
+        "(getComputedStyle(e)))"
+    )
+    kinds = {style[0] for style in styles}
+    assert kinds == {"tool-params-expand-all", "tool-param-rows-toggle"}
+    in_table = controls.evaluate_all(
+        "els => els.map(e => !!e.closest('.tool-params-table'))"
+    )
+    assert True in in_table and in_table.count(False) >= 2, in_table
+    assert len({tuple(style[1:]) for style in styles}) == 1, styles
+    assert styles[0][3] == "italic"
