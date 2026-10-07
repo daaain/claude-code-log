@@ -523,3 +523,34 @@ def test_every_expand_all_control_shares_one_style(page: Page, tmp_path: Path) -
     assert True in in_table and in_table.count(False) >= 2, in_table
     assert len({tuple(style[1:]) for style in styles}) == 1, styles
     assert styles[0][3] == "italic"
+
+
+@pytest.mark.browser
+def test_a_markdown_image_stays_in_its_message(page: Page, tmp_path: Path) -> None:
+    """An <img> from rendered Markdown has no class of its own; it must still
+    fit the message's frame instead of spilling out of its column."""
+    (tmp_path / "wide.svg").write_text(
+        "<svg xmlns='http://www.w3.org/2000/svg' width='3000' height='300'>"
+        "<rect width='3000' height='300' fill='red'/></svg>",
+        encoding="utf-8",
+    )
+    entries = [
+        _entry(
+            "a1",
+            None,
+            "assistant",
+            [{"type": "text", "text": "A diagram:\n\n![wide](wide.svg)\n"}],
+        )
+    ]
+    source = tmp_path / "image.jsonl"
+    source.write_text(
+        "\n".join(json.dumps(e) for e in entries) + "\n", encoding="utf-8"
+    )
+    page.goto(_render(tmp_path, source).as_uri())
+    image = page.locator("#transcript .message img[alt='wide']")
+    expect(image).to_be_visible()
+    widths = image.evaluate(
+        "e => [e.getBoundingClientRect().right, e.closest('.message').getBoundingClientRect().right, e.naturalWidth]"
+    )
+    assert widths[2] == 3000, "the image did not load"
+    assert widths[0] <= widths[1] + 0.5, widths
