@@ -10,10 +10,14 @@ img.cc-zoomable {
     cursor: zoom-in;
 }
 
+/* inset, not 100vw/100vh: those include the page's scrollbar, which would
+   put the × underneath it. A modal dialog is fixed, so inset spans exactly
+   the visible viewport. */
 dialog.cc-zoom {
     box-sizing: border-box;
-    width: 100vw;
-    height: 100vh;
+    inset: 0;
+    width: auto;
+    height: auto;
     max-width: none;
     max-height: none;
     margin: 0;

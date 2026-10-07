@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from playwright.sync_api import Page, ViewportSize, expect
+from playwright.sync_api import BrowserType, Page, ViewportSize, expect
 
 from claude_code_log.converter import load_transcript
 from claude_code_log.html.renderer import generate_html
@@ -378,27 +378,44 @@ def test_focus_opens_on_the_frame_and_tab_reaches_the_close_button(
 
 
 def test_the_close_button_stays_in_the_viewport_corner(
-    page: Page, pages: dict[str, Path]
+    browser_type: BrowserType,
+    browser_type_launch_args: dict[str, Any],
+    pages: dict[str, Path],
 ) -> None:
     """The × belongs to the page, not to the picture: in the corner the 90%
-    frame leaves free, wherever a zoom or a pan has moved the image."""
-    _open(page, pages["minimal"])
+    frame leaves free, wherever a zoom or a pan has moved the image, and
+    clear of the page's scrollbar.
+
+    Playwright starts Chromium with ``--hide-scrollbars``, which leaves the
+    page no scrollbar to sit under; this test launches one with a real
+    scrollbar, as desktop browsers have."""
+    browser = browser_type.launch(
+        **browser_type_launch_args, ignore_default_args=["--hide-scrollbars"]
+    )
+    page = browser.new_page(viewport=VIEWPORT)
+    page.goto(pages["minimal"].as_uri())
+    assert page.evaluate("() => innerWidth - document.documentElement.clientWidth") > 0
+    image = page.locator(UPLOADED)
+    image.scroll_into_view_if_needed()
+    expect(image).to_have_js_property("complete", True)
+    image.click()
+    expect(page.locator(DIALOG)).to_be_visible()
     close = page.get_by_role("button", name="Close")
 
-    def corner() -> dict[str, float]:
+    def corner() -> tuple[float, float, float, float]:
         box = close.bounding_box()
         assert box is not None
-        return box
+        return box["x"], box["y"], box["x"] + box["width"], box["y"] + box["height"]
 
     before = corner()
+    left, top, right, bottom = before
     g = _geometry(page)
-    assert before["x"] + before["width"] > g["vw"] - 30
-    assert before["y"] < 30
+    # In the visible corner: near the right edge, yet not under the page's
+    # vertical scrollbar (``vw`` is the width the scrollbar leaves).
+    assert g["vw"] - 30 < right <= g["vw"]
+    assert top < 30
     # Outside the frame: it never covers the picture.
-    assert (
-        before["x"] >= g["frame"]["r"]
-        or before["y"] + before["height"] <= g["frame"]["t"]
-    )
+    assert left >= g["frame"]["r"] or bottom <= g["frame"]["t"]
     _wheel(page, -400, 20)
     page.mouse.move(g["frame"]["l"] + 300, g["frame"]["t"] + 300)
     page.mouse.down()
@@ -407,3 +424,4 @@ def test_the_close_button_stays_in_the_viewport_corner(
     assert corner() == before
     close.click()
     expect(page.locator(DIALOG)).to_be_hidden()
+    browser.close()
