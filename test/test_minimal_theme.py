@@ -665,6 +665,12 @@ class TestShowcaseFixture:
             "mcp__plugin_showcase_example__inspect_repository_structure"
         ) in html
 
+    def test_the_runtime_only_cases_are_still_there(self, html: str) -> None:
+        """The short-first-card hover and the JS truncation tooltip only show
+        in a browser; this keeps a fixture trim from dropping their rows."""
+        assert "mcp__plugin_showcase_example__refresh_search_index" in html
+        assert "<use href='#mi-wakeup'/></svg>ScheduleWakeup</span>" in html
+
     def test_a_json_result_carries_both_expand_all_kinds(self, html: str) -> None:
         assert "<button type='button' class='tool-params-expand-all'" in html
         for kind in ("properties", "rows"):
