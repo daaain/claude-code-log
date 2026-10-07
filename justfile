@@ -86,13 +86,14 @@ typecheck:
 ty:
     uv run ty check
 
-# Lint the templates' JavaScript with oxlint (optional `js` group; not part
-# of `ci` yet). Extra arguments go to oxlint; `--keep` keeps the staged copy.
+# Lint the templates' JavaScript with oxlint (installs the optional `js`
+# group). Warnings fail it. Extra arguments go to oxlint; `--keep` keeps
+# the staged copy.
 lint-js *ARGS:
     uv run --group js python scripts/lint_js.py {{ ARGS }}
 
 # Fail-fast order: format and lint take seconds, ty is faster than pyright, the full test suite runs last
-ci: format lint ty typecheck test-all
+ci: format lint lint-js ty typecheck test-all
 
 # Regenerate the auto-generated TUI docs assets (screenshots) into docs/assets/tui
 docs-gen:

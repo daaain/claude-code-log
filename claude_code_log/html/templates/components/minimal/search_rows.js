@@ -37,6 +37,8 @@
                 if (r.type === 'system') return ['system', 'System'];
                 return ['other', r.type || r.field || ''];
             }
+            // Called from archive_search.html, which picks this or renderGroups per theme.
+            // oxlint-disable-next-line no-unused-vars
             function mnRenderGroups(results, query, append) {
                 if (!append) resultsEl.innerHTML = '';
                 const groups = new Map();

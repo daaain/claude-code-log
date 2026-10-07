@@ -115,3 +115,7 @@ jobs:
 
     - name: Run type checking
       run: uv run pyright
+
+    - name: Lint the templates' JavaScript (primary only)
+      if: matrix.is-primary
+      run: uv run --group js python scripts/lint_js.py

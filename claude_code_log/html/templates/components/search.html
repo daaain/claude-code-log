@@ -59,7 +59,6 @@
     };
 
     // DOM elements
-    const searchContainer = document.getElementById('searchContainer');
     const searchInput = document.getElementById('searchInput');
     const searchClear = document.getElementById('searchClear');
     const searchHint = document.querySelector('.search-hint');
@@ -683,7 +682,7 @@
 
         const textNodes = [];
         let node;
-        while (node = walker.nextNode()) {
+        while ((node = walker.nextNode())) {
             if (node.nodeValue.trim()) {
                 textNodes.push(node);
             }

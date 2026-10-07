@@ -18,8 +18,9 @@ own, and would otherwise be reported twice. A rendered script is reported as
 directory in place to read one.
 
 oxlint comes from the optional ``js`` dependency group
-(``uv sync --group js``); ``just lint-js`` runs this script with it. Any
-other arguments are passed to oxlint.
+(``uv sync --group js``); ``just lint-js`` runs this script with it, and
+``just ci`` and CI run that. A warning fails the run (``--deny-warnings``),
+like an error. Any other arguments are passed to oxlint.
 """
 
 from __future__ import annotations
@@ -136,7 +137,9 @@ def main(argv: list[str]) -> int:
         print(f"lint-js: {files} component files, {scripts} rendered scripts")
         # Run from the staging root so reported paths read as repo paths.
         config = REPO / ".oxlintrc.json"
-        cmd = [oxlint, *(["--config", str(config)] if config.exists() else [])]
+        cmd = [oxlint, "--deny-warnings"]
+        if config.exists():
+            cmd += ["--config", str(config)]
         return subprocess.run([*cmd, *oxlint_args, "."], cwd=stage).returncode
     finally:
         if keep:

@@ -233,7 +233,7 @@ ruff check --fix
 uv run pyright
 uv run ty check
 
-# Lint the templates' JavaScript (optional `js` group, not part of `just ci`)
+# Lint the templates' JavaScript (installs the optional `js` group)
 just lint-js
 ```
 
@@ -255,8 +255,11 @@ it. So `scripts/lint_js.py` lints a staged copy:
   staged copy so you can open one.
 
 The rules are oxlint's default correctness set, adjusted in `.oxlintrc.json`.
-It reports warnings only for now; the aim is to clear them and then gate on
-it.
+Any warning fails the run, so `just lint-js` is part of `just ci`, and CI
+runs it once (on the primary job). A finding that is a false positive gets a
+`// oxlint-disable-next-line <rule>` comment saying why. This happens, for
+example, with a function the template calls from another script, or only in
+the other theme.
 
 The minimal theme's dark syntax-highlighting sheet
 (`claude_code_log/html/templates/components/minimal/pygments_dark.css`) is
