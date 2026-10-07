@@ -37,6 +37,7 @@ from .utils import (
     render_user_markdown_collapsible,
     resolve_memory_body_links,
 )
+from ..json_depth import exceeds_depth
 from ..utils import (
     ARTIFACT_FAVICON_TEXT_MAX,
     is_safe_web_url,
@@ -1520,7 +1521,10 @@ def _json_result_table_html(raw_content: str) -> Optional[str]:
         return None
     try:
         parsed = json.loads(raw_content)
-    except ValueError:
+    except (ValueError, RecursionError):
+        return None
+    if exceeds_depth(parsed):
+        # Too deep for nested tables: keep the text rendering.
         return None
     if isinstance(parsed, dict) and parsed:
         container = cast("dict[Any, Any]", parsed)

@@ -857,8 +857,7 @@ body.theme-minimal {
     font-size: 0.85em;
 }
 
-.theme-minimal #transcript .teammate-tool-card dt,
-.theme-minimal #transcript .teammate-body .teammate-json dt {
+.theme-minimal #transcript .teammate-tool-card dt {
     font: 400 0.92em/1.7 var(--mono);
     color: var(--muted);
     opacity: 1;

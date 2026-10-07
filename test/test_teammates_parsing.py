@@ -479,10 +479,10 @@ class TestTeammateMessageParser:
         assert b.summary == "tests & docs done"
         assert b.body == "ok"
 
-    def test_json_body_renders_as_key_value_dl(self) -> None:
+    def test_json_body_renders_as_params_table(self) -> None:
         """Notification-shaped teammate bodies (``{"type":"...",...}``)
-        render as a ``<dl class="teammate-json">`` key/value list, not as
-        a Markdown code-blob."""
+        render through the generic params renderer (a key/value table),
+        not as a Markdown code-blob."""
         from claude_code_log.html.teammate_formatter import format_teammate_content
 
         text = (
@@ -495,15 +495,12 @@ class TestTeammateMessageParser:
         content = create_teammate_message(_meta(), text)
         assert content is not None
         html = format_teammate_content(content)
-        assert 'class="teammate-json"' in html
-        assert "<dt>type</dt>" in html
+        assert "tool-params-table" in html
+        assert "</span>type</td>" in html
         assert "idle_notification" in html
-        assert "<dt>idleReason</dt>" in html
-        # Markdown rendering would produce a `<p>` or `<pre>`; ensure
-        # the JSON path won.
-        assert (
-            "<p>" not in html.split('class="teammate-json"', 1)[1].split("</dl>", 1)[0]
-        )
+        assert "</span>idleReason</td>" in html
+        # The Markdown path would leave the raw JSON in a `<p>`.
+        assert '{"type"' not in html
 
     def test_non_json_body_falls_back_to_markdown(self) -> None:
         """A body that just happens to start with ``{`` but isn't valid
@@ -518,7 +515,8 @@ class TestTeammateMessageParser:
         content = create_teammate_message(_meta(), text)
         assert content is not None
         html = format_teammate_content(content)
-        assert 'class="teammate-json"' not in html
+        assert "tool-params-table" not in html
+        assert "<p>{not really json, missing quotes}</p>" in html
 
     def test_sidechain_teammate_at_level_4(self) -> None:
         """Regression: a sidechain ``TeammateMessage`` (team-lead's

@@ -16,8 +16,7 @@ fragments styled by ``components/teammate_styles.css``.
 
 from __future__ import annotations
 
-import json
-from typing import Any, Iterable, Optional
+from typing import Iterable, Optional
 
 from ..models import (
     SendMessageInput,
@@ -37,6 +36,7 @@ from ..models import (
     TeammateMessage,
     TeammateMessageBlock,
 )
+from .tool_formatters import render_params_table
 from .utils import escape_html, render_markdown, render_markdown_collapsible
 
 # Palette names the CSS recognises (kept in sync with teammate_styles.css).
@@ -175,12 +175,16 @@ def _format_teammate_block(
     if not body_text:
         body_html = ""
     else:
-        # Some teammate notifications come through as JSON payloads
-        # (e.g. ``{"type":"idle_notification",...}``) rather than
-        # markdown prose. Render those as a compact key:value list so
-        # they read as data, not as a code blob.
-        json_html = _try_render_json_body(body_text)
-        body_html = json_html if json_html is not None else render_markdown(body_text)
+        # Data bodies (``idle_notification`` JSON payloads, ``key: value``
+        # lines) go through the generic params renderer: Markdown for
+        # string values, folds for long and nested ones, escaped as for
+        # tool input. Prose stays Markdown.
+        params = block.body_params()
+        body_html = (
+            render_params_table(params)
+            if params is not None
+            else render_markdown(body_text)
+        )
 
     return (
         f'<div class="{class_attr}"{style}>'
@@ -188,49 +192,6 @@ def _format_teammate_block(
         f'<div class="teammate-body">{body_html}</div>'
         f"</div>"
     )
-
-
-def _try_render_json_body(text: str) -> Optional[str]:
-    """If *text* parses as a JSON object, render it as a key:value list.
-
-    Returns None when the body isn't JSON, isn't an object, or is too
-    nested to surface usefully — the caller falls back to Markdown.
-    Cheap pre-check (`{`/`}` framing) keeps the parser off the typical
-    Markdown path.
-    """
-    if not (text.startswith("{") and text.endswith("}")):
-        return None
-    try:
-        parsed = json.loads(text)
-    except (json.JSONDecodeError, ValueError):
-        return None
-    if not isinstance(parsed, dict):
-        return None
-    parsed_dict: dict[str, Any] = parsed  # pyright: ignore[reportUnknownVariableType]
-    rows: list[str] = []
-    for key, value in parsed_dict.items():
-        rows.append(
-            f"<dt>{escape_html(str(key))}</dt><dd>{_format_json_scalar(value)}</dd>"
-        )
-    if not rows:
-        return None
-    return f'<dl class="teammate-json">{"".join(rows)}</dl>'
-
-
-def _format_json_scalar(value: Any) -> str:
-    """Render a JSON scalar (or nested structure) as inline HTML.
-
-    Strings get a ``<code>`` wrapper; other scalars are stringified.
-    Nested dicts/lists fall back to a compact JSON dump in a ``<code>``
-    so the output stays one-row-per-key.
-    """
-    if isinstance(value, str):
-        return f"<code>{escape_html(value)}</code>"
-    if isinstance(value, bool) or value is None:
-        return f"<code>{escape_html(str(value).lower() if value is not None else 'null')}</code>"
-    if isinstance(value, (int, float)):
-        return f"<code>{escape_html(str(value))}</code>"
-    return f"<code>{escape_html(json.dumps(value, separators=(', ', ': ')))}</code>"
 
 
 # ---------------------------------------------------------------------------

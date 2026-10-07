@@ -1,10 +1,14 @@
 """Pydantic models for Claude Code transcript JSON structures."""
 
+import json
+import re
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, ClassVar, Union, Optional, Literal
+from typing import Any, ClassVar, Union, Optional, Literal, cast
 
 from pydantic import BaseModel, Field
+
+from .json_depth import exceeds_depth
 
 
 class MessageType(str, Enum):
@@ -935,6 +939,14 @@ class UserSteeringMessage(UserTextMessage):
     pass
 
 
+# A ``key: value`` line of a key/value teammate body (see
+# ``TeammateMessageBlock.body_params``): identifier-like key, whitespace
+# after the colon (so ``https://…`` is not a key), non-empty value.
+# A data line's key looks like a field name (lowercase, as in the payloads
+# peers send); a capitalised ``Label:`` opens a prose paragraph.
+_KEY_VALUE_LINE_RE = re.compile(r"^\s*([a-z_][a-z0-9_.-]*)\s*:\s+(\S.*?)\s*$")
+
+
 @dataclass
 class TeammateMessageBlock:
     """A single <teammate-message> block extracted from a User entry
@@ -956,6 +968,41 @@ class TeammateMessageBlock:
     summary: Optional[str] = None
     is_system: bool = False
     sender_task_id: Optional[str] = None
+
+    def body_params(self) -> Optional[dict[str, Any]]:
+        """The body as key/value data, or None when it is prose.
+
+        A body is data when it is a non-empty JSON object (the
+        ``idle_notification`` payloads) nested at most
+        ``json_depth.MAX_DATA_DEPTH`` levels, or when every non-blank line is
+        ``key: value`` with a lowercase field-name key (two lines at
+        least, no repeated key). Anything else, including prose whose
+        paragraphs open with ``Label: …``, stays Markdown.
+        """
+        text = self.body.strip()
+        if text.startswith("{") and text.endswith("}"):
+            try:
+                parsed: Any = json.loads(text)
+            except (ValueError, RecursionError):
+                # RecursionError: nesting too deep for the decoder. The
+                # body then renders as prose rather than failing the page.
+                return None
+            if not isinstance(parsed, dict) or not parsed:
+                return None
+            if exceeds_depth(parsed):
+                return None
+            obj = cast("dict[Any, Any]", parsed)
+            return {str(k): v for k, v in obj.items()}
+        lines = [line for line in text.splitlines() if line.strip()]
+        if len(lines) < 2:
+            return None
+        params: dict[str, Any] = {}
+        for line in lines:
+            m = _KEY_VALUE_LINE_RE.match(line)
+            if m is None or m.group(1) in params:
+                return None
+            params[m.group(1)] = m.group(2)
+        return params
 
 
 @dataclass

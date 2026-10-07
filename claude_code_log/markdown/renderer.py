@@ -181,6 +181,25 @@ def _inline_code(value: str) -> str:
     return f"{fence}{pad}{value}{pad}{fence}"
 
 
+def _italic_paragraphs(text: str) -> str:
+    """Italicise each paragraph of a teammate message's framing text.
+
+    The text around ``<teammate-message>`` blocks is the harness's
+    framing, not message content. A paragraph that already carries
+    emphasis or code markers (``*``, ``_``, backtick) is left as is,
+    since wrapping it could break or swallow that markup.
+    """
+    paragraphs = re.split(r"\n\s*\n", text.strip())
+    out: list[str] = []
+    for para in paragraphs:
+        para = para.strip()
+        if para and not any(c in para for c in "*_`"):
+            out.append(f"*{para}*")
+        elif para:
+            out.append(para)
+    return "\n\n".join(out)
+
+
 def _teammate_marker(name: str, color: Optional[str]) -> str:
     """Return a `🟢 name` marker for a teammate in Markdown output."""
     circle = _COLOR_CIRCLE.get((color or "").lower(), _COLOR_CIRCLE["default"])
@@ -989,11 +1008,11 @@ class MarkdownRenderer(Renderer):
         session_colors = self._colors_for(message)
         parts: list[str] = []
         if content.leading_text:
-            parts.append(content.leading_text)
+            parts.append(_italic_paragraphs(_protect_html_tags(content.leading_text)))
         for block in content.blocks:
             parts.append(self._format_teammate_block_markdown(block, session_colors))
         if content.trailing_text:
-            parts.append(content.trailing_text)
+            parts.append(_italic_paragraphs(_protect_html_tags(content.trailing_text)))
         return "\n\n".join(p for p in parts if p)
 
     def _format_teammate_block_markdown(
@@ -1013,7 +1032,14 @@ class MarkdownRenderer(Renderer):
         body = block.body.strip()
         if not body:
             return header
-        return f"{header}\n\n{self._quote(body)}"
+        # Data bodies (JSON payloads, ``key: value`` lines) use the same
+        # key/value rendering as tool params; prose stays as written.
+        params = block.body_params()
+        if params is not None:
+            body = self._render_params(params)
+        # The body comes from another session: neutralise raw HTML as for
+        # user text (a backtick in a value can end its code span).
+        return f"{header}\n\n{self._quote(_protect_html_tags(body))}"
 
     # -------------------------------------------------------------------------
     # Assistant Content Formatters

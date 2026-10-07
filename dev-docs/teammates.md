@@ -160,6 +160,8 @@ class TeammateMessageBlock:
     summary: Optional[str] = None
     is_system: bool = False  # teammate_id == "system"
 
+    def body_params(self) -> Optional[dict[str, Any]]: ...
+
 @dataclass
 class TeammateMessage(MessageContent):
     blocks: list[TeammateMessageBlock]
@@ -171,6 +173,12 @@ class TeammateMessage(MessageContent):
 A single user entry → a single `TeammateMessage` content carrying all its
 blocks plus surrounding text. The renderer iterates `blocks` to produce
 per-block cards.
+
+`body_params()` is the one place that decides whether a body is data:
+a non-empty JSON object (the `idle_notification` payloads), or lines
+that are all `key: value` with an identifier-like key (two at least, no
+repeated key). It returns the dict, or `None` for prose. Both renderers
+call it, so they agree on which bodies are data.
 
 ### 2.3 `AgentResultMetadata`
 
@@ -589,8 +597,13 @@ pair_first card, expecting a companion that never arrives.
 One `<div class="teammate-message">` per block, with a colored left
 border, `<div class="teammate-message-header">` carrying a
 `<span class="teammate-badge">` (icon + teammate_id), an optional
-italicized summary, and a Markdown-rendered body. Surrounding non-block
-text appears in `<div class="teammate-surrounding-text">` wrappers.
+italicized summary, and the body. A data body (`body_params()`, §2.2)
+renders through the generic `render_params_table` — Markdown for string
+values, folds for long and nested ones, the expand-all root, the same
+escaping as tool input; prose renders as Markdown. Surrounding non-block
+text — the harness's framing of a peer message ("Another Claude session
+sent a message:" …) — appears as plain text in
+`<div class="teammate-surrounding-text">` wrappers, italic in both themes.
 
 `teammate_id="system"` blocks gain the `teammate-system` class for
 neutral palette styling.
@@ -701,7 +714,11 @@ defense was wrong; this is the correct recipe.
 
 `format_TeammateMessage` renders one `> blockquote` per block, headed by
 `{circle} **{teammate_id}** · *{summary}*`. System blocks use the ⬛
-override.
+override. A data body goes through `_render_params`, as tool params do;
+every body and the surrounding text pass `_protect_html_tags` (the body
+comes from another session, and a backtick in a value can end its code
+span). Surrounding-text paragraphs are italicised unless they already
+carry `*`, `_` or backtick markup.
 
 `format_TaskListOutput` produces a Markdown pipe table. A `_table_cell`
 helper escapes `|` and replaces `\n` with `<br>` on every cell (PR #122

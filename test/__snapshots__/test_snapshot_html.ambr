@@ -4134,24 +4134,6 @@
       margin-bottom: 0;
   }
   
-  /* JSON-shaped teammate notifications (e.g. idle_notification payloads)
-     render as a compact key:value list rather than a code blob. */
-  .teammate-body .teammate-json {
-      display: grid;
-      grid-template-columns: max-content auto;
-      gap: 0.15em 0.6em;
-      margin: 0;
-  }
-  
-  .teammate-body .teammate-json dt {
-      color: var(--cc-gray);
-      font-weight: 600;
-  }
-  
-  .teammate-body .teammate-json dd {
-      margin: 0;
-  }
-  
   /* System teammate messages (teammate_id="system") render with a neutral
      palette and an italicized body to signal out-of-band notifications
      (teammate_terminated, etc.). */
@@ -4165,12 +4147,15 @@
   }
   
   /* Non-block text surrounding <teammate-message> blocks — preserved by the
-     parser as leading_text / trailing_text. */
+     parser as leading_text / trailing_text. It is the harness's framing
+     ("Another Claude session sent a message:" …), not message content, so
+     it reads as an aside: italic in both themes. */
   .teammate-surrounding-text {
       margin: 0.3em 0;
       white-space: pre-wrap;
       color: inherit;
       opacity: 0.8;
+      font-style: italic;
   }
   
   /* ----------------------------------------------------------------------
@@ -12722,24 +12707,6 @@
       margin-bottom: 0;
   }
   
-  /* JSON-shaped teammate notifications (e.g. idle_notification payloads)
-     render as a compact key:value list rather than a code blob. */
-  .teammate-body .teammate-json {
-      display: grid;
-      grid-template-columns: max-content auto;
-      gap: 0.15em 0.6em;
-      margin: 0;
-  }
-  
-  .teammate-body .teammate-json dt {
-      color: var(--cc-gray);
-      font-weight: 600;
-  }
-  
-  .teammate-body .teammate-json dd {
-      margin: 0;
-  }
-  
   /* System teammate messages (teammate_id="system") render with a neutral
      palette and an italicized body to signal out-of-band notifications
      (teammate_terminated, etc.). */
@@ -12753,12 +12720,15 @@
   }
   
   /* Non-block text surrounding <teammate-message> blocks — preserved by the
-     parser as leading_text / trailing_text. */
+     parser as leading_text / trailing_text. It is the harness's framing
+     ("Another Claude session sent a message:" …), not message content, so
+     it reads as an aside: italic in both themes. */
   .teammate-surrounding-text {
       margin: 0.3em 0;
       white-space: pre-wrap;
       color: inherit;
       opacity: 0.8;
+      font-style: italic;
   }
   
   /* ----------------------------------------------------------------------
@@ -26919,24 +26889,6 @@
       margin-bottom: 0;
   }
   
-  /* JSON-shaped teammate notifications (e.g. idle_notification payloads)
-     render as a compact key:value list rather than a code blob. */
-  .teammate-body .teammate-json {
-      display: grid;
-      grid-template-columns: max-content auto;
-      gap: 0.15em 0.6em;
-      margin: 0;
-  }
-  
-  .teammate-body .teammate-json dt {
-      color: var(--cc-gray);
-      font-weight: 600;
-  }
-  
-  .teammate-body .teammate-json dd {
-      margin: 0;
-  }
-  
   /* System teammate messages (teammate_id="system") render with a neutral
      palette and an italicized body to signal out-of-band notifications
      (teammate_terminated, etc.). */
@@ -26950,12 +26902,15 @@
   }
   
   /* Non-block text surrounding <teammate-message> blocks — preserved by the
-     parser as leading_text / trailing_text. */
+     parser as leading_text / trailing_text. It is the harness's framing
+     ("Another Claude session sent a message:" …), not message content, so
+     it reads as an aside: italic in both themes. */
   .teammate-surrounding-text {
       margin: 0.3em 0;
       white-space: pre-wrap;
       color: inherit;
       opacity: 0.8;
+      font-style: italic;
   }
   
   /* ----------------------------------------------------------------------
@@ -29590,8 +29545,7 @@
       font-size: 0.85em;
   }
   
-  .theme-minimal #transcript .teammate-tool-card dt,
-  .theme-minimal #transcript .teammate-body .teammate-json dt {
+  .theme-minimal #transcript .teammate-tool-card dt {
       font: 400 0.92em/1.7 var(--mono);
       color: var(--muted);
       opacity: 1;
@@ -41891,24 +41845,6 @@
       margin-bottom: 0;
   }
   
-  /* JSON-shaped teammate notifications (e.g. idle_notification payloads)
-     render as a compact key:value list rather than a code blob. */
-  .teammate-body .teammate-json {
-      display: grid;
-      grid-template-columns: max-content auto;
-      gap: 0.15em 0.6em;
-      margin: 0;
-  }
-  
-  .teammate-body .teammate-json dt {
-      color: var(--cc-gray);
-      font-weight: 600;
-  }
-  
-  .teammate-body .teammate-json dd {
-      margin: 0;
-  }
-  
   /* System teammate messages (teammate_id="system") render with a neutral
      palette and an italicized body to signal out-of-band notifications
      (teammate_terminated, etc.). */
@@ -41922,12 +41858,15 @@
   }
   
   /* Non-block text surrounding <teammate-message> blocks — preserved by the
-     parser as leading_text / trailing_text. */
+     parser as leading_text / trailing_text. It is the harness's framing
+     ("Another Claude session sent a message:" …), not message content, so
+     it reads as an aside: italic in both themes. */
   .teammate-surrounding-text {
       margin: 0.3em 0;
       white-space: pre-wrap;
       color: inherit;
       opacity: 0.8;
+      font-style: italic;
   }
   
   /* ----------------------------------------------------------------------
@@ -44562,8 +44501,7 @@
       font-size: 0.85em;
   }
   
-  .theme-minimal #transcript .teammate-tool-card dt,
-  .theme-minimal #transcript .teammate-body .teammate-json dt {
+  .theme-minimal #transcript .teammate-tool-card dt {
       font: 400 0.92em/1.7 var(--mono);
       color: var(--muted);
       opacity: 1;
@@ -65322,24 +65260,6 @@
       margin-bottom: 0;
   }
   
-  /* JSON-shaped teammate notifications (e.g. idle_notification payloads)
-     render as a compact key:value list rather than a code blob. */
-  .teammate-body .teammate-json {
-      display: grid;
-      grid-template-columns: max-content auto;
-      gap: 0.15em 0.6em;
-      margin: 0;
-  }
-  
-  .teammate-body .teammate-json dt {
-      color: var(--cc-gray);
-      font-weight: 600;
-  }
-  
-  .teammate-body .teammate-json dd {
-      margin: 0;
-  }
-  
   /* System teammate messages (teammate_id="system") render with a neutral
      palette and an italicized body to signal out-of-band notifications
      (teammate_terminated, etc.). */
@@ -65353,12 +65273,15 @@
   }
   
   /* Non-block text surrounding <teammate-message> blocks — preserved by the
-     parser as leading_text / trailing_text. */
+     parser as leading_text / trailing_text. It is the harness's framing
+     ("Another Claude session sent a message:" …), not message content, so
+     it reads as an aside: italic in both themes. */
   .teammate-surrounding-text {
       margin: 0.3em 0;
       white-space: pre-wrap;
       color: inherit;
       opacity: 0.8;
+      font-style: italic;
   }
   
   /* ----------------------------------------------------------------------
@@ -67993,8 +67916,7 @@
       font-size: 0.85em;
   }
   
-  .theme-minimal #transcript .teammate-tool-card dt,
-  .theme-minimal #transcript .teammate-body .teammate-json dt {
+  .theme-minimal #transcript .teammate-tool-card dt {
       font: 400 0.92em/1.7 var(--mono);
       color: var(--muted);
       opacity: 1;
@@ -80410,24 +80332,6 @@
       margin-bottom: 0;
   }
   
-  /* JSON-shaped teammate notifications (e.g. idle_notification payloads)
-     render as a compact key:value list rather than a code blob. */
-  .teammate-body .teammate-json {
-      display: grid;
-      grid-template-columns: max-content auto;
-      gap: 0.15em 0.6em;
-      margin: 0;
-  }
-  
-  .teammate-body .teammate-json dt {
-      color: var(--cc-gray);
-      font-weight: 600;
-  }
-  
-  .teammate-body .teammate-json dd {
-      margin: 0;
-  }
-  
   /* System teammate messages (teammate_id="system") render with a neutral
      palette and an italicized body to signal out-of-band notifications
      (teammate_terminated, etc.). */
@@ -80441,12 +80345,15 @@
   }
   
   /* Non-block text surrounding <teammate-message> blocks — preserved by the
-     parser as leading_text / trailing_text. */
+     parser as leading_text / trailing_text. It is the harness's framing
+     ("Another Claude session sent a message:" …), not message content, so
+     it reads as an aside: italic in both themes. */
   .teammate-surrounding-text {
       margin: 0.3em 0;
       white-space: pre-wrap;
       color: inherit;
       opacity: 0.8;
+      font-style: italic;
   }
   
   /* ----------------------------------------------------------------------
@@ -89116,24 +89023,6 @@
       margin-bottom: 0;
   }
   
-  /* JSON-shaped teammate notifications (e.g. idle_notification payloads)
-     render as a compact key:value list rather than a code blob. */
-  .teammate-body .teammate-json {
-      display: grid;
-      grid-template-columns: max-content auto;
-      gap: 0.15em 0.6em;
-      margin: 0;
-  }
-  
-  .teammate-body .teammate-json dt {
-      color: var(--cc-gray);
-      font-weight: 600;
-  }
-  
-  .teammate-body .teammate-json dd {
-      margin: 0;
-  }
-  
   /* System teammate messages (teammate_id="system") render with a neutral
      palette and an italicized body to signal out-of-band notifications
      (teammate_terminated, etc.). */
@@ -89147,12 +89036,15 @@
   }
   
   /* Non-block text surrounding <teammate-message> blocks — preserved by the
-     parser as leading_text / trailing_text. */
+     parser as leading_text / trailing_text. It is the harness's framing
+     ("Another Claude session sent a message:" …), not message content, so
+     it reads as an aside: italic in both themes. */
   .teammate-surrounding-text {
       margin: 0.3em 0;
       white-space: pre-wrap;
       color: inherit;
       opacity: 0.8;
+      font-style: italic;
   }
   
   /* ----------------------------------------------------------------------
@@ -98102,24 +97994,6 @@
       margin-bottom: 0;
   }
   
-  /* JSON-shaped teammate notifications (e.g. idle_notification payloads)
-     render as a compact key:value list rather than a code blob. */
-  .teammate-body .teammate-json {
-      display: grid;
-      grid-template-columns: max-content auto;
-      gap: 0.15em 0.6em;
-      margin: 0;
-  }
-  
-  .teammate-body .teammate-json dt {
-      color: var(--cc-gray);
-      font-weight: 600;
-  }
-  
-  .teammate-body .teammate-json dd {
-      margin: 0;
-  }
-  
   /* System teammate messages (teammate_id="system") render with a neutral
      palette and an italicized body to signal out-of-band notifications
      (teammate_terminated, etc.). */
@@ -98133,12 +98007,15 @@
   }
   
   /* Non-block text surrounding <teammate-message> blocks — preserved by the
-     parser as leading_text / trailing_text. */
+     parser as leading_text / trailing_text. It is the harness's framing
+     ("Another Claude session sent a message:" …), not message content, so
+     it reads as an aside: italic in both themes. */
   .teammate-surrounding-text {
       margin: 0.3em 0;
       white-space: pre-wrap;
       color: inherit;
       opacity: 0.8;
+      font-style: italic;
   }
   
   /* ----------------------------------------------------------------------
@@ -107035,24 +106912,6 @@
       margin-bottom: 0;
   }
   
-  /* JSON-shaped teammate notifications (e.g. idle_notification payloads)
-     render as a compact key:value list rather than a code blob. */
-  .teammate-body .teammate-json {
-      display: grid;
-      grid-template-columns: max-content auto;
-      gap: 0.15em 0.6em;
-      margin: 0;
-  }
-  
-  .teammate-body .teammate-json dt {
-      color: var(--cc-gray);
-      font-weight: 600;
-  }
-  
-  .teammate-body .teammate-json dd {
-      margin: 0;
-  }
-  
   /* System teammate messages (teammate_id="system") render with a neutral
      palette and an italicized body to signal out-of-band notifications
      (teammate_terminated, etc.). */
@@ -107066,12 +106925,15 @@
   }
   
   /* Non-block text surrounding <teammate-message> blocks — preserved by the
-     parser as leading_text / trailing_text. */
+     parser as leading_text / trailing_text. It is the harness's framing
+     ("Another Claude session sent a message:" …), not message content, so
+     it reads as an aside: italic in both themes. */
   .teammate-surrounding-text {
       margin: 0.3em 0;
       white-space: pre-wrap;
       color: inherit;
       opacity: 0.8;
+      font-style: italic;
   }
   
   /* ----------------------------------------------------------------------
@@ -115913,24 +115775,6 @@
       margin-bottom: 0;
   }
   
-  /* JSON-shaped teammate notifications (e.g. idle_notification payloads)
-     render as a compact key:value list rather than a code blob. */
-  .teammate-body .teammate-json {
-      display: grid;
-      grid-template-columns: max-content auto;
-      gap: 0.15em 0.6em;
-      margin: 0;
-  }
-  
-  .teammate-body .teammate-json dt {
-      color: var(--cc-gray);
-      font-weight: 600;
-  }
-  
-  .teammate-body .teammate-json dd {
-      margin: 0;
-  }
-  
   /* System teammate messages (teammate_id="system") render with a neutral
      palette and an italicized body to signal out-of-band notifications
      (teammate_terminated, etc.). */
@@ -115944,12 +115788,15 @@
   }
   
   /* Non-block text surrounding <teammate-message> blocks — preserved by the
-     parser as leading_text / trailing_text. */
+     parser as leading_text / trailing_text. It is the harness's framing
+     ("Another Claude session sent a message:" …), not message content, so
+     it reads as an aside: italic in both themes. */
   .teammate-surrounding-text {
       margin: 0.3em 0;
       white-space: pre-wrap;
       color: inherit;
       opacity: 0.8;
+      font-style: italic;
   }
   
   /* ----------------------------------------------------------------------
@@ -124619,24 +124466,6 @@
       margin-bottom: 0;
   }
   
-  /* JSON-shaped teammate notifications (e.g. idle_notification payloads)
-     render as a compact key:value list rather than a code blob. */
-  .teammate-body .teammate-json {
-      display: grid;
-      grid-template-columns: max-content auto;
-      gap: 0.15em 0.6em;
-      margin: 0;
-  }
-  
-  .teammate-body .teammate-json dt {
-      color: var(--cc-gray);
-      font-weight: 600;
-  }
-  
-  .teammate-body .teammate-json dd {
-      margin: 0;
-  }
-  
   /* System teammate messages (teammate_id="system") render with a neutral
      palette and an italicized body to signal out-of-band notifications
      (teammate_terminated, etc.). */
@@ -124650,12 +124479,15 @@
   }
   
   /* Non-block text surrounding <teammate-message> blocks — preserved by the
-     parser as leading_text / trailing_text. */
+     parser as leading_text / trailing_text. It is the harness's framing
+     ("Another Claude session sent a message:" …), not message content, so
+     it reads as an aside: italic in both themes. */
   .teammate-surrounding-text {
       margin: 0.3em 0;
       white-space: pre-wrap;
       color: inherit;
       opacity: 0.8;
+      font-style: italic;
   }
   
   /* ----------------------------------------------------------------------
@@ -133130,24 +132962,6 @@
       margin-bottom: 0;
   }
   
-  /* JSON-shaped teammate notifications (e.g. idle_notification payloads)
-     render as a compact key:value list rather than a code blob. */
-  .teammate-body .teammate-json {
-      display: grid;
-      grid-template-columns: max-content auto;
-      gap: 0.15em 0.6em;
-      margin: 0;
-  }
-  
-  .teammate-body .teammate-json dt {
-      color: var(--cc-gray);
-      font-weight: 600;
-  }
-  
-  .teammate-body .teammate-json dd {
-      margin: 0;
-  }
-  
   /* System teammate messages (teammate_id="system") render with a neutral
      palette and an italicized body to signal out-of-band notifications
      (teammate_terminated, etc.). */
@@ -133161,12 +132975,15 @@
   }
   
   /* Non-block text surrounding <teammate-message> blocks — preserved by the
-     parser as leading_text / trailing_text. */
+     parser as leading_text / trailing_text. It is the harness's framing
+     ("Another Claude session sent a message:" …), not message content, so
+     it reads as an aside: italic in both themes. */
   .teammate-surrounding-text {
       margin: 0.3em 0;
       white-space: pre-wrap;
       color: inherit;
       opacity: 0.8;
+      font-style: italic;
   }
   
   /* ----------------------------------------------------------------------
