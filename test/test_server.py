@@ -7,8 +7,10 @@ path traversal, conditional GET, and not dying on a client disconnect.
 
 from __future__ import annotations
 
+import http.server
 import os
 import socket
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -16,7 +18,9 @@ from typing import Any, Optional
 
 import pytest
 
+import claude_code_log.server as server_module
 from claude_code_log.server import REVISION_HEADER, ArchiveServer
+from claude_code_log.utils import _SHARING_RETRY_ATTEMPTS
 
 
 @pytest.fixture
@@ -270,6 +274,95 @@ def test_client_disconnect_does_not_kill_the_server(
     status, body, _ = _get(f"{server.url}/index.html")
     assert status == 200
     assert b"index" in body
+
+
+SESSION_URL_PATH = "/-Users-someone-project/session-abc123.html"
+
+
+def _open_failing(
+    monkeypatch: pytest.MonkeyPatch, target: Path, failures: Optional[int]
+) -> list[str]:
+    """Make every `open` of ``target`` by the server raise PermissionError.
+
+    ``failures`` opens fail (all of them when None), then they succeed —
+    what an `open` racing `atomic_write_text`'s `os.replace` sees on
+    Windows. Patched where the stock handler opens the file as well as
+    where ours does, so the race is simulated the same on either side of
+    the fix. Returns the outcome of each attempt, in order.
+    """
+    real_open = open
+    outcomes: list[str] = []
+
+    def racing_open(file: Any, *args: Any, **kwargs: Any) -> Any:
+        if os.fspath(file) != str(target):
+            return real_open(file, *args, **kwargs)
+        if failures is None or len(outcomes) < failures:
+            outcomes.append("denied")
+            raise PermissionError(13, "The process cannot access the file")
+        outcomes.append("opened")
+        return real_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(http.server, "open", racing_open, raising=False)
+    monkeypatch.setattr(server_module, "open", racing_open, raising=False)
+    monkeypatch.setattr("claude_code_log.utils._SHARING_RETRY_BACKOFF_S", 0.001)
+    return outcomes
+
+
+def test_a_page_mid_swap_is_served_not_404(
+    server: ArchiveServer, archive: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The live page's poll must not see a 404 while its file is replaced.
+
+    On Windows an `open` racing the writer's `os.replace` can raise
+    PermissionError, which the stock handler turns into a 404.
+    """
+    page = archive / "-Users-someone-project" / "session-abc123.html"
+    outcomes = _open_failing(monkeypatch, page.resolve(), failures=3)
+
+    status, body, headers = _get(f"{server.url}{SESSION_URL_PATH}")
+
+    assert status == 200
+    assert b"session" in body
+    assert headers[REVISION_HEADER]
+    assert outcomes[:4] == ["denied", "denied", "denied", "opened"], (
+        "the open was not retried past the swap"
+    )
+
+
+def test_a_file_that_stays_locked_is_still_404_in_bounded_time(
+    server: ArchiveServer, archive: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    page = archive / "-Users-someone-project" / "session-abc123.html"
+    outcomes = _open_failing(monkeypatch, page.resolve(), failures=None)
+
+    started = time.monotonic()
+    status, _, _ = _get(f"{server.url}{SESSION_URL_PATH}")
+
+    assert status == 404
+    assert time.monotonic() - started < 5
+    assert outcomes.count("denied") >= _SHARING_RETRY_ATTEMPTS
+
+
+def test_a_missing_file_is_404_without_retrying(
+    server: ArchiveServer, archive: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    missing = archive / "-Users-someone-project" / "session-gone.html"
+    attempts: list[str] = []
+    real_open = open
+
+    def counting_open(file: Any, *args: Any, **kwargs: Any) -> Any:
+        if os.fspath(file) == str(missing.resolve()):
+            attempts.append("open")
+        return real_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(http.server, "open", counting_open, raising=False)
+    monkeypatch.setattr(server_module, "open", counting_open, raising=False)
+
+    status, _, _ = _get(f"{server.url}/-Users-someone-project/session-gone.html")
+
+    assert status == 404
+    # Ours, then the stock handler's: one each, neither retried.
+    assert len(attempts) <= 2
 
 
 def test_server_reports_its_bound_port(archive: Path) -> None:
