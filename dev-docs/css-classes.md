@@ -80,6 +80,23 @@ across re-renders, unlike the positional `msg-d-N`/`data-message-id` slot ids).
 Search uses it to keep the current match pinned when the same query is re-run
 after an option or filter change.
 
+**Image zoom** (`components/image_zoom.js` + `image_zoom.css`, both themes).
+A message image (`#transcript .message img`) gets `cc-zoomable`, a `zoom-in`
+cursor, on hover when it is drawn smaller than its natural size. That is
+measured, not marked: nothing is emitted per image. Clicking one opens the
+page's single `dialog.cc-zoom`, created on first use with `showModal()`: a
+`.cc-zoom-frame` holding the image and a `button.cc-zoom-close` (×).
+- The frame is the image at fit-to-frame scale, at most 90% of the viewport
+  each way, and refits on resize.
+- The wheel zooms about the cursor between fit and the natural size, never
+  past it.
+- A left-drag pans (`cc-zoom-pannable` / `cc-zoom-panning` for the grab
+  cursors), clamped so the image always covers the frame.
+- ESC, a backdrop click or × closes the dialog, and focus returns to the
+  page image.
+- An image inside a link or a `<summary>` (and the artifact favicon) keeps
+  its own click behaviour.
+
 ### Timeline Classes and Colour Variables
 
 The vis-timeline component (`components/timeline.html`) keeps every colour
