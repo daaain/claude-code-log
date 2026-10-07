@@ -944,6 +944,27 @@ class UserSteeringMessage(UserTextMessage):
 # peers send); a capitalised ``Label:`` opens a prose paragraph.
 _KEY_VALUE_LINE_RE = re.compile(r"^\s*([a-z_][a-z0-9_.-]*)\s*:\s+(\S.*?)\s*$")
 
+# A JSON body nested deeper than this is not data for a table: the params
+# renderers recurse per level, so it renders as prose instead.
+MAX_DATA_BODY_DEPTH = 32
+
+
+def _nesting_exceeds(value: Any, limit: int) -> bool:
+    """True when ``value``'s dicts/lists nest deeper than ``limit`` (iterative)."""
+    stack: list[tuple[Any, int]] = [(value, 0)]
+    while stack:
+        item, depth = stack.pop()
+        if isinstance(item, dict):
+            children: list[Any] = list(cast("dict[Any, Any]", item).values())
+        elif isinstance(item, list):
+            children = list(cast("list[Any]", item))
+        else:
+            continue
+        if depth >= limit:
+            return True
+        stack.extend((child, depth + 1) for child in children)
+    return False
+
 
 @dataclass
 class TeammateMessageBlock:
@@ -971,7 +992,8 @@ class TeammateMessageBlock:
         """The body as key/value data, or None when it is prose.
 
         A body is data when it is a non-empty JSON object (the
-        ``idle_notification`` payloads), or when every non-blank line is
+        ``idle_notification`` payloads) nested at most
+        ``MAX_DATA_BODY_DEPTH`` levels, or when every non-blank line is
         ``key: value`` with a lowercase field-name key (two lines at
         least, no repeated key). Anything else, including prose whose
         paragraphs open with ``Label: …``, stays Markdown.
@@ -985,6 +1007,8 @@ class TeammateMessageBlock:
                 # body then renders as prose rather than failing the page.
                 return None
             if not isinstance(parsed, dict) or not parsed:
+                return None
+            if _nesting_exceeds(parsed, MAX_DATA_BODY_DEPTH):
                 return None
             obj = cast("dict[Any, Any]", parsed)
             return {str(k): v for k, v in obj.items()}

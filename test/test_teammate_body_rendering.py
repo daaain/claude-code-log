@@ -192,17 +192,6 @@ class TestMarkdown:
         assert f"*{LEADING}*" in md
         assert f"*{TRAILING}*" in md
 
-    def test_deeply_nested_json_body_renders(self, tmp_path: Path) -> None:
-        # Too deep for the JSON decoder: the body falls back to prose, and
-        # both the Markdown and the HTML output still render.
-        body = '{"a": ' + "[" * 100_000 + "]" * 100_000 + "}"
-        text = (
-            f'<teammate-message teammate_id="w">\n{body}\n</teammate-message>\n\nAfter.'
-        )
-        messages = load_transcript(_write(tmp_path, text))
-        assert "After." in MarkdownRenderer().generate(messages, "peer")
-        assert "After." in generate_html(messages, "peer")
-
     def test_framing_is_escaped(self, tmp_path: Path) -> None:
         # The framing comes from another session too: raw HTML before and
         # after the blocks must not reach the .md file live.
@@ -220,6 +209,36 @@ class TestMarkdown:
         assert "&lt;img src=b onerror=alert(5)&gt;" in md
 
 
+def _nested_json(depth: int) -> str:
+    """A JSON object whose ``a`` value nests ``depth`` lists deep."""
+    return '{"a": ' + "[" * depth + "]" * depth + "}"
+
+
+@pytest.mark.parametrize("depth", [100_000, 500], ids=["past-decoder", "past-bound"])
+class TestDeepJsonBody:
+    """A JSON body too deep for a table renders as prose; the page renders."""
+
+    def _messages(self, tmp_path: Path, depth: int) -> Any:
+        text = (
+            "Before the block.\n"
+            f'<teammate-message teammate_id="w">\n{_nested_json(depth)}\n'
+            "</teammate-message>\n\nAfter the block."
+        )
+        return load_transcript(_write(tmp_path, text))
+
+    @pytest.mark.parametrize("theme", ["classic", "minimal"])
+    def test_html(self, tmp_path: Path, theme: str, depth: int) -> None:
+        html = generate_html(self._messages(tmp_path, depth), "peer", theme=theme)
+        assert "Before the block." in html and "After the block." in html
+        body = html.split('<div class="teammate-body">')[1]
+        assert "tool-params-table" not in body.split("After the block.")[0]
+
+    def test_markdown(self, tmp_path: Path, depth: int) -> None:
+        md = MarkdownRenderer().generate(self._messages(tmp_path, depth), "peer")
+        assert "Before the block." in md and "After the block." in md
+        assert "**a:**" not in md
+
+
 class TestBodyParams:
     def _params(self, body: str) -> Any:
         return TeammateMessageBlock(teammate_id="x", body=body).body_params()
@@ -228,7 +247,9 @@ class TestBodyParams:
         assert self._params('{"a": 1, "b": "x"}') == {"a": 1, "b": "x"}
 
     def test_json_not_an_object(self) -> None:
-        assert self._params('{"a": ' + "[" * 100_000 + "]" * 100_000 + "}") is None
+        assert self._params(_nested_json(100_000)) is None  # past the decoder
+        assert self._params(_nested_json(500)) is None  # past the depth bound
+        assert self._params(_nested_json(30)) is not None
         assert self._params("[1, 2]") is None
         assert self._params("{}") is None
         assert self._params("{not json}") is None
