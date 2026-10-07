@@ -1036,12 +1036,16 @@ class MarkdownRenderer(Renderer):
         if not body:
             return header
         # Data bodies (JSON payloads, ``key: value`` lines) use the same
-        # key/value rendering as tool params; prose stays as written.
+        # key/value rendering as tool params; prose stays as written, its
+        # front matter (if any) shown as data.
         params = block.body_params()
         if params is not None:
             body = self._render_params(params)
+        else:
+            frontmatter, rest = self._split_frontmatter(body)
+            body = frontmatter + rest
         # The body comes from another session: neutralise raw HTML as for
-        # user text (a backtick in a value can end its code span).
+        # user text.
         return f"{header}\n\n{self._quote(_protect_html_tags(body))}"
 
     # -------------------------------------------------------------------------

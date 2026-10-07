@@ -124,3 +124,13 @@ class TestMarkdownOutput:
             "> ```yaml\n> status: draft\n> note: Use when: the parser fails\n> ```"
             in md
         )
+
+
+def test_a_teammate_body_opens_with_a_front_matter_table(html: str) -> None:
+    badge = html.index(
+        '<span class="teammate-icon">▎</span>archivist</span><span class="teammate-summary">Handoff'
+    )
+    body = html[badge:]
+    body = body[: body.index("teammate-surrounding-text")]
+    assert "class='frontmatter'" in body and "handoff-note</td>" in body
+    assert "<h1>Handoff</h1>" in body

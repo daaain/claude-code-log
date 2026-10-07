@@ -358,3 +358,37 @@ class TestBounds:
         assert after in md
         assert "```yaml\n" in md
         assert marker in md
+
+
+TEAMMATE_DOC = (
+    "---\nname: handoff-note\nowner: indexer\n---\n"
+    "# Handoff\n\nThe index is rebuilt; **review** the slow queries next.\n"
+)
+
+
+class TestTeammateBody:
+    """A peer message body that opens with front matter is a document too."""
+
+    def _write(self, tmp_path: Path) -> Path:
+        text = (
+            "Another Claude session sent a message:\n"
+            f'<teammate-message teammate_id="indexer" color="blue">\n{TEAMMATE_DOC}'
+            "</teammate-message>\n\nAfter the peer message."
+        )
+        path = tmp_path / "s1.jsonl"
+        path.write_text(json.dumps(_user("u1", None, 0, text)) + "\n", encoding="utf-8")
+        return path
+
+    @pytest.mark.parametrize("theme", ["classic", "minimal"])
+    def test_html(self, tmp_path: Path, theme: str) -> None:
+        html = generate_html(load_transcript(self._write(tmp_path)), "fm", theme=theme)
+        body = html.split('<div class="teammate-body">')[1].split("After the peer")[0]
+        assert "class='frontmatter'" in body and "handoff-note</td>" in body
+        assert "<h1>Handoff</h1>" in body and "<strong>review</strong>" in body
+        assert "<h2>name:" not in html
+
+    def test_markdown(self, tmp_path: Path) -> None:
+        md = MarkdownRenderer().generate(load_transcript(self._write(tmp_path)), "fm")
+        assert "> **name:** `handoff-note`" in md
+        assert "> # Handoff" in md
+        assert "> name: handoff-note" not in md
