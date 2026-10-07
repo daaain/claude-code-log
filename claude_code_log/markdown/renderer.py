@@ -1671,13 +1671,15 @@ class MarkdownRenderer(Renderer):
                 formatted = json.dumps(value, indent=2, ensure_ascii=False)
                 lines.append(f"**{key}:**")
                 lines.append(self._code_fence(formatted, "json"))
-            elif isinstance(value, str) and len(value) > 100:
-                # Long string - render as code block
+            elif isinstance(value, str) and (len(value) > 100 or "\n" in value):
+                # Long or multi-line string - render as code block (a line
+                # break inside a code span would let the rest render as
+                # Markdown, e.g. a "# Heading" line)
                 lines.append(f"**{key}:**")
                 lines.append(self._code_fence(value))
             else:
-                # Simple value - inline
-                lines.append(f"**{key}:** `{value}`")
+                # Simple value - inline, in a span its backticks can't close
+                lines.append(f"**{key}:** {_inline_code(str(value))}")
         return "\n\n".join(lines)
 
     # -------------------------------------------------------------------------

@@ -42,6 +42,7 @@ USER_DOC = (
     f"description: {LONG_DESCRIPTION}\n"
     "note: <script>alert(1)</script>\n"
     f"tick: '{XSS_TICK}'\n"
+    "block: |\n  first line\n\n  # Not a heading\n"
     "---\n"
     "# Body heading\n\nBody text.\n"
 )
@@ -124,7 +125,7 @@ def _write(tmp_path: Path) -> Path:
                     "type": "tool_use",
                     "id": "toolu_param",
                     "name": "SomeUnknownTool",
-                    "input": {"payload": PARAM_VALUE},
+                    "input": {"payload": PARAM_VALUE, "tool_tick": "run `x` now"},
                 }
             ],
         ),
@@ -242,12 +243,23 @@ class TestMarkdown:
         assert "> After invalid." in md
 
     def test_values_are_escaped(self, md: str) -> None:
-        # The only raw tag left is the short value, inside its code span; a
-        # backtick ending the span leaves its tag escaped.
+        # The only raw tags left are short values, each inside a code span:
+        # the one carrying backticks gets a span wide enough to hold them.
         assert "**note:** `<script>alert(1)</script>`" in md
         assert md.count("<script>") == 1
-        assert "<img src=x" not in md
-        assert "&lt;img src=x onerror=alert(2)&gt;" in md
+        assert f"**tick:** ``{XSS_TICK}``" in md
+        assert md.count("<img src=x") == 1
+
+    def test_multiline_value_is_fenced(self, md: str) -> None:
+        # A line break in a code span would let "# Not a heading" render as
+        # a heading downstream; the value is a fenced block instead.
+        assert "**block:**\n\n```\nfirst line\n\n# Not a heading\n" in md
+        assert "`first line" not in md
+
+    def test_tool_param_backtick_stays_in_its_span(self, md: str) -> None:
+        # The same params rendering serves tool input.
+        assert "**tool_tick:** ``run `x` now``" in md
+        assert "**payload:**\n\n```\n---\nparam_key" in md
 
     def test_rule_unaffected(self, md: str) -> None:
         assert "> ---\n> \n> Between rules.\n> \n> ---\n> After rules." in md
