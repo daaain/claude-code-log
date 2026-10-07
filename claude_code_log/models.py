@@ -980,7 +980,9 @@ class TeammateMessageBlock:
         if text.startswith("{") and text.endswith("}"):
             try:
                 parsed: Any = json.loads(text)
-            except ValueError:
+            except (ValueError, RecursionError):
+                # RecursionError: nesting too deep for the decoder. The
+                # body then renders as prose rather than failing the page.
                 return None
             if not isinstance(parsed, dict) or not parsed:
                 return None

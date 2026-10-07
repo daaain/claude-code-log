@@ -192,6 +192,17 @@ class TestMarkdown:
         assert f"*{LEADING}*" in md
         assert f"*{TRAILING}*" in md
 
+    def test_deeply_nested_json_body_renders(self, tmp_path: Path) -> None:
+        # Too deep for the JSON decoder: the body falls back to prose, and
+        # both the Markdown and the HTML output still render.
+        body = '{"a": ' + "[" * 100_000 + "]" * 100_000 + "}"
+        text = (
+            f'<teammate-message teammate_id="w">\n{body}\n</teammate-message>\n\nAfter.'
+        )
+        messages = load_transcript(_write(tmp_path, text))
+        assert "After." in MarkdownRenderer().generate(messages, "peer")
+        assert "After." in generate_html(messages, "peer")
+
     def test_framing_is_escaped(self, tmp_path: Path) -> None:
         # The framing comes from another session too: raw HTML before and
         # after the blocks must not reach the .md file live.
@@ -217,6 +228,7 @@ class TestBodyParams:
         assert self._params('{"a": 1, "b": "x"}') == {"a": 1, "b": "x"}
 
     def test_json_not_an_object(self) -> None:
+        assert self._params('{"a": ' + "[" * 100_000 + "]" * 100_000 + "}") is None
         assert self._params("[1, 2]") is None
         assert self._params("{}") is None
         assert self._params("{not json}") is None
