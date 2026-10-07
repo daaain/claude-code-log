@@ -20,7 +20,6 @@ import pytest
 
 import claude_code_log.server as server_module
 from claude_code_log.server import REVISION_HEADER, ArchiveServer
-from claude_code_log.utils import _SHARING_RETRY_ATTEMPTS
 
 
 @pytest.fixture
@@ -304,6 +303,8 @@ def _open_failing(
 
     monkeypatch.setattr(http.server, "open", racing_open, raising=False)
     monkeypatch.setattr(server_module, "open", racing_open, raising=False)
+    # The Windows count, so the retry runs whatever the platform.
+    monkeypatch.setattr("claude_code_log.utils._SHARING_RETRY_ATTEMPTS", 10)
     monkeypatch.setattr("claude_code_log.utils._SHARING_RETRY_BACKOFF_S", 0.001)
     return outcomes
 
@@ -340,7 +341,7 @@ def test_a_file_that_stays_locked_is_still_404_in_bounded_time(
 
     assert status == 404
     assert time.monotonic() - started < 5
-    assert outcomes.count("denied") >= _SHARING_RETRY_ATTEMPTS
+    assert outcomes.count("denied") >= 10
 
 
 def test_a_missing_file_is_404_without_retrying(

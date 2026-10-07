@@ -1063,7 +1063,10 @@ def generate_unified_diff(old_string: str, new_string: str) -> str:
 # this path, where the replace succeeds with readers mid-read. The same
 # swap seen from the reader's side — an `open` landing mid-replace — is
 # the same transient, and the live server retries it with these too.
-_SHARING_RETRY_ATTEMPTS = 10
+# Elsewhere a PermissionError is a real one (an unreadable file), so it
+# gets a single attempt: same path, no delay. Tests raise the count to
+# exercise the retry on any platform.
+_SHARING_RETRY_ATTEMPTS = 10 if os.name == "nt" else 1
 _SHARING_RETRY_BACKOFF_S = 0.02
 
 _T = TypeVar("_T")
