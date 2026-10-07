@@ -15,7 +15,11 @@ from typing import Any, cast
 
 import pytest
 
-from claude_code_log.converter import convert_jsonl_to, load_transcript
+from claude_code_log.converter import (
+    convert_jsonl_to,
+    load_directory_transcripts,
+    load_transcript,
+)
 from claude_code_log.html import minimal_theme
 from claude_code_log.html.renderer import generate_html
 
@@ -148,6 +152,20 @@ class TestCallTitle:
             "ID: toolu_1",
         )
         assert parts["tooltip"] == "💻 Bash Run it · ID: toolu_1"
+
+    def test_role_tooltip_only_when_a_hidden_title_said_more(self) -> None:
+        """A name-only title is hidden, so the role label carries its tooltip;
+        a bare-role title adds nothing, and a visible title keeps its own."""
+        name_only = minimal_theme.call_title(
+            "🛠️ mcp__x__scan", _msg(tool_name="mcp__x__scan"), "tool_use", "ID: t1"
+        )
+        assert name_only["generic"]
+        assert name_only["role_tooltip"] == "🛠️ mcp__x__scan · ID: t1"
+        assert self._split("💭 Thinking", "thinking")["role_tooltip"] == ""
+        visible = self._split(
+            "📝 Edit <span class='tool-summary'>/tmp/x.py</span>", tool_name="Edit"
+        )
+        assert not visible["generic"] and visible["role_tooltip"] == ""
 
     def test_role_only_titles_stay_generic(self) -> None:
         assert self._split("🤷 User", "user")["generic"]
@@ -623,3 +641,49 @@ class TestLongDiffAndCommandPreviews:
         assert "print(19)" in minimal.split("<div class='code-full'>", 1)[1]
         short = BashInput(command="ls -la")
         assert "<details" not in self._renderer("minimal").format_BashInput(short, msg)
+
+
+class TestShowcaseFixture:
+    """``test_data/minimal_showcase/`` gathers, in one session, the cases a
+    reader looks at to see the minimal theme's gutter labels, expand-all
+    controls and image sizing; render it with
+    ``claude-code-log test/test_data/minimal_showcase --theme minimal``.
+    This pins that each case is still there, so the fixture can't rot."""
+
+    @pytest.fixture(scope="class")
+    def html(self) -> str:
+        entries, tree = load_directory_transcripts(
+            TEST_DATA / "minimal_showcase", silent=True
+        )
+        return generate_html(entries, "Showcase", session_tree=tree, theme="minimal")
+
+    def test_a_long_name_only_tool_moves_its_tooltip_to_the_role(
+        self, html: str
+    ) -> None:
+        assert (
+            "<span class='mn-role' title=\"🛠️ "
+            "mcp__plugin_showcase_example__inspect_repository_structure"
+        ) in html
+
+    def test_the_runtime_only_cases_are_still_there(self, html: str) -> None:
+        """The short-first-card hover and the JS truncation tooltip only show
+        in a browser; this keeps a fixture trim from dropping their rows."""
+        assert "mcp__plugin_showcase_example__refresh_search_index" in html
+        assert "<use href='#mi-wakeup'/></svg>ScheduleWakeup</span>" in html
+
+    def test_a_json_result_carries_both_expand_all_kinds(self, html: str) -> None:
+        assert "<button type='button' class='tool-params-expand-all'" in html
+        for kind in ("properties", "rows"):
+            assert (
+                "class='tool-param-rows-toggle' data-state='collapsed'"
+                f" data-kind='{kind}'"
+            ) in html
+
+    def test_two_agent_lanes_and_the_image_in_the_first(self, html: str) -> None:
+        transcript = html.split('id="transcript"', 1)[1]
+        assert 'data-lane="agent-showcol2"' in transcript
+        # The wide image is a Markdown <img> inside the first agent's card:
+        # the nearest lane marker before it is that agent's.
+        before_image = transcript.split("columns-light.png", 1)[0]
+        assert "<img src=" in before_image.rsplit('data-lane="', 1)[1]
+        assert before_image.rsplit('data-lane="', 1)[1].startswith("agent-showcol1")

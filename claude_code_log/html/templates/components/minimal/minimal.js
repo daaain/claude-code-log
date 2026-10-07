@@ -89,6 +89,16 @@
             if (window.claudeLogOnRehydrate) window.claudeLogOnRehydrate(decorateSessionSummaries);
             window.addEventListener('resize', function () { decorateSessionSummaries(document); });
 
+            // ---- truncated role labels: the full label on hover ------------
+            // Only the rendered width tells whether a gutter label is
+            // ellipsized, so its tooltip is set here, on first hover. A label
+            // whose hidden title already gave it one (role_tooltip) keeps it.
+            document.addEventListener('mouseover', function (event) {
+                const role = event.target.closest && event.target.closest('#transcript .mn-role');
+                if (!role || role.hasAttribute('title')) return;
+                if (role.scrollWidth > role.clientWidth) role.title = role.textContent.trim();
+            });
+
             // ---- sticky offsets ------------------------------------------
             // The search & filter panel and the timeline are sticky too; they
             // sit under the toolbar, whose height changes when it wraps.

@@ -346,8 +346,13 @@
     display: none;
 }
 
+/* z-index: a pair's first card can be shorter than its role line, which
+   then overflows into the next card; that card, later in the DOM, would sit
+   on top and swallow the label's hover (its title tooltip). Above the cards,
+   below every sticky bar. */
 .theme-minimal #transcript .mn-role {
     position: relative;
+    z-index: 1;
     padding-right: calc(var(--ic) + var(--ic-gap));
     color: var(--rc);
     font-weight: 500;

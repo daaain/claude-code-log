@@ -27272,8 +27272,13 @@
       display: none;
   }
   
+  /* z-index: a pair's first card can be shorter than its role line, which
+     then overflows into the next card; that card, later in the DOM, would sit
+     on top and swallow the label's hover (its title tooltip). Above the cards,
+     below every sticky bar. */
   .theme-minimal #transcript .mn-role {
       position: relative;
+      z-index: 1;
       padding-right: calc(var(--ic) + var(--ic-gap));
       color: var(--rc);
       font-weight: 500;
@@ -28124,6 +28129,14 @@
       border-bottom: 1px solid var(--muted);
   }
   
+  /* Any image a message carries (one from rendered Markdown too) stays in the
+     message's frame, so in its column. Zero specificity: a rule that sizes an
+     image on purpose (the inline favicon's 1em) still wins. */
+  :where(.theme-minimal #transcript .message) img {
+      max-width: 100%;
+      height: auto;
+  }
+  
   .theme-minimal #transcript img.tool-result-image,
   .theme-minimal #transcript img.uploaded-image {
       margin: 4px 0;
@@ -28648,8 +28661,23 @@
       font-style: normal;
   }
   
-  .theme-minimal #transcript .tool-params-expand-all {
-      font: 0.72em var(--mono);
+  /* The two "expand all" buttons look alike: the table's own and a fold's
+     ("expand all rows"). Italic marks them as controls, not data. A fold's
+     button sits at any font size (a result's top level, or inside a 0.8em
+     table), so the size is one length resolved on #transcript: a registered
+     <length> computes where it is declared and inherits as that value. */
+  @property --mn-ctl {
+      syntax: '<length>';
+      inherits: true;
+      initial-value: 10px;
+  }
+  
+  .theme-minimal #transcript {
+      --mn-ctl: 0.72em;
+  }
+  
+  .theme-minimal #transcript :is(.tool-params-expand-all, .tool-param-rows-toggle) {
+      font: italic var(--mn-ctl) var(--mono);
   }
   
   /* -------------------------------------------------------------- todo */
@@ -34517,6 +34545,16 @@
               }
               if (window.claudeLogOnRehydrate) window.claudeLogOnRehydrate(decorateSessionSummaries);
               window.addEventListener('resize', function () { decorateSessionSummaries(document); });
+  
+              // ---- truncated role labels: the full label on hover ------------
+              // Only the rendered width tells whether a gutter label is
+              // ellipsized, so its tooltip is set here, on first hover. A label
+              // whose hidden title already gave it one (role_tooltip) keeps it.
+              document.addEventListener('mouseover', function (event) {
+                  const role = event.target.closest && event.target.closest('#transcript .mn-role');
+                  if (!role || role.hasAttribute('title')) return;
+                  if (role.scrollWidth > role.clientWidth) role.title = role.textContent.trim();
+              });
   
               // ---- sticky offsets ------------------------------------------
               // The search & filter panel and the timeline are sticky too; they
@@ -41889,8 +41927,13 @@
       display: none;
   }
   
+  /* z-index: a pair's first card can be shorter than its role line, which
+     then overflows into the next card; that card, later in the DOM, would sit
+     on top and swallow the label's hover (its title tooltip). Above the cards,
+     below every sticky bar. */
   .theme-minimal #transcript .mn-role {
       position: relative;
+      z-index: 1;
       padding-right: calc(var(--ic) + var(--ic-gap));
       color: var(--rc);
       font-weight: 500;
@@ -42741,6 +42784,14 @@
       border-bottom: 1px solid var(--muted);
   }
   
+  /* Any image a message carries (one from rendered Markdown too) stays in the
+     message's frame, so in its column. Zero specificity: a rule that sizes an
+     image on purpose (the inline favicon's 1em) still wins. */
+  :where(.theme-minimal #transcript .message) img {
+      max-width: 100%;
+      height: auto;
+  }
+  
   .theme-minimal #transcript img.tool-result-image,
   .theme-minimal #transcript img.uploaded-image {
       margin: 4px 0;
@@ -43265,8 +43316,23 @@
       font-style: normal;
   }
   
-  .theme-minimal #transcript .tool-params-expand-all {
-      font: 0.72em var(--mono);
+  /* The two "expand all" buttons look alike: the table's own and a fold's
+     ("expand all rows"). Italic marks them as controls, not data. A fold's
+     button sits at any font size (a result's top level, or inside a 0.8em
+     table), so the size is one length resolved on #transcript: a registered
+     <length> computes where it is declared and inherits as that value. */
+  @property --mn-ctl {
+      syntax: '<length>';
+      inherits: true;
+      initial-value: 10px;
+  }
+  
+  .theme-minimal #transcript {
+      --mn-ctl: 0.72em;
+  }
+  
+  .theme-minimal #transcript :is(.tool-params-expand-all, .tool-param-rows-toggle) {
+      font: italic var(--mn-ctl) var(--mono);
   }
   
   /* -------------------------------------------------------------- todo */
@@ -46727,7 +46793,7 @@
       <div class='message tool_result error pair_last' data-uuid='ns-r4' id='msg-d-42' data-lane="main" data-merges="agent-nsintr01">
           <div class='header'>
               <span class='mn-title mn-generic' title="🚨 Error · ID: toolu_ns_nsintr01"><span class='mn-tn'>🚨 Error</span></span>
-              <div class='header-info'><span class='mn-role'><svg class='mn-ic' aria-hidden='true'><use href='#mi-tool-error'/></svg>Error</span>
+              <div class='header-info'><span class='mn-role' title="🚨 Error · ID: toolu_ns_nsintr01"><svg class='mn-ic' aria-hidden='true'><use href='#mi-tool-error'/></svg>Error</span>
                   <div class='timestamp-row'>
                       <span class='timestamp' data-timestamp='2026-06-12T09:00:00.000Z' data-duration='took 0 ms'>2026-06-12 09:00:00</span><span class='mn-time'>09:00:00</span>
                   </div>
@@ -49701,6 +49767,16 @@
               }
               if (window.claudeLogOnRehydrate) window.claudeLogOnRehydrate(decorateSessionSummaries);
               window.addEventListener('resize', function () { decorateSessionSummaries(document); });
+  
+              // ---- truncated role labels: the full label on hover ------------
+              // Only the rendered width tells whether a gutter label is
+              // ellipsized, so its tooltip is set here, on first hover. A label
+              // whose hidden title already gave it one (role_tooltip) keeps it.
+              document.addEventListener('mouseover', function (event) {
+                  const role = event.target.closest && event.target.closest('#transcript .mn-role');
+                  if (!role || role.hasAttribute('title')) return;
+                  if (role.scrollWidth > role.clientWidth) role.title = role.textContent.trim();
+              });
   
               // ---- sticky offsets ------------------------------------------
               // The search & filter panel and the timeline are sticky too; they
@@ -64965,8 +65041,13 @@
       display: none;
   }
   
+  /* z-index: a pair's first card can be shorter than its role line, which
+     then overflows into the next card; that card, later in the DOM, would sit
+     on top and swallow the label's hover (its title tooltip). Above the cards,
+     below every sticky bar. */
   .theme-minimal #transcript .mn-role {
       position: relative;
+      z-index: 1;
       padding-right: calc(var(--ic) + var(--ic-gap));
       color: var(--rc);
       font-weight: 500;
@@ -65817,6 +65898,14 @@
       border-bottom: 1px solid var(--muted);
   }
   
+  /* Any image a message carries (one from rendered Markdown too) stays in the
+     message's frame, so in its column. Zero specificity: a rule that sizes an
+     image on purpose (the inline favicon's 1em) still wins. */
+  :where(.theme-minimal #transcript .message) img {
+      max-width: 100%;
+      height: auto;
+  }
+  
   .theme-minimal #transcript img.tool-result-image,
   .theme-minimal #transcript img.uploaded-image {
       margin: 4px 0;
@@ -66341,8 +66430,23 @@
       font-style: normal;
   }
   
-  .theme-minimal #transcript .tool-params-expand-all {
-      font: 0.72em var(--mono);
+  /* The two "expand all" buttons look alike: the table's own and a fold's
+     ("expand all rows"). Italic marks them as controls, not data. A fold's
+     button sits at any font size (a result's top level, or inside a 0.8em
+     table), so the size is one length resolved on #transcript: a registered
+     <length> computes where it is declared and inherits as that value. */
+  @property --mn-ctl {
+      syntax: '<length>';
+      inherits: true;
+      initial-value: 10px;
+  }
+  
+  .theme-minimal #transcript {
+      --mn-ctl: 0.72em;
+  }
+  
+  .theme-minimal #transcript :is(.tool-params-expand-all, .tool-param-rows-toggle) {
+      font: italic var(--mn-ctl) var(--mono);
   }
   
   /* -------------------------------------------------------------- todo */
@@ -72326,6 +72430,16 @@
               }
               if (window.claudeLogOnRehydrate) window.claudeLogOnRehydrate(decorateSessionSummaries);
               window.addEventListener('resize', function () { decorateSessionSummaries(document); });
+  
+              // ---- truncated role labels: the full label on hover ------------
+              // Only the rendered width tells whether a gutter label is
+              // ellipsized, so its tooltip is set here, on first hover. A label
+              // whose hidden title already gave it one (role_tooltip) keeps it.
+              document.addEventListener('mouseover', function (event) {
+                  const role = event.target.closest && event.target.closest('#transcript .mn-role');
+                  if (!role || role.hasAttribute('title')) return;
+                  if (role.scrollWidth > role.clientWidth) role.title = role.textContent.trim();
+              });
   
               // ---- sticky offsets ------------------------------------------
               // The search & filter panel and the timeline are sticky too; they
