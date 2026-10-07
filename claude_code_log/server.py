@@ -41,6 +41,7 @@ from pathlib import Path
 from typing import Any, BinaryIO, Callable, Optional
 
 from .cache import get_library_version
+from .utils import retry_on_sharing_violation
 
 # Requests under this prefix are the JSON API and never hit the filesystem.
 # Reserved so a project directory literally named `api` can't shadow it.
@@ -180,9 +181,35 @@ class ArchiveHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
     def send_head(self) -> Optional[BinaryIO]:
         self._revision = None
         path = self.translate_path(self.path)
-        if not os.path.isdir(path):
+        if os.path.isdir(path):
+            return super().send_head()
+        pin = self._pin_file(path)
+        try:
             self._revision = self._content_revision(path)
-        return super().send_head()
+            return super().send_head()
+        finally:
+            if pin is not None:
+                pin.close()
+
+    def _pin_file(self, path: str) -> Optional[BinaryIO]:
+        """Open ``path`` past a concurrent swap, and hold it while serving.
+
+        The stock `send_head` answers any `OSError` from its `open` with a
+        404. On Windows an `open` landing while `atomic_write_text` swaps
+        the page in can raise `PermissionError` — a transient, which made
+        one live-update poll see a 404 for its own page. Opening here
+        with the writer's own retry waits it out; holding the handle then
+        keeps the file in place for the stock `open` that follows, since
+        Windows refuses to replace a file open without FILE_SHARE_DELETE
+        (the writer retries that side). POSIX never raises here.
+
+        Anything else — a missing file above all — is left for the stock
+        handler to answer exactly as before, with no retry and no pin.
+        """
+        try:
+            return retry_on_sharing_violation(lambda: open(path, "rb"))
+        except OSError:
+            return None
 
     def end_headers(self) -> None:
         if self._revision is not None:

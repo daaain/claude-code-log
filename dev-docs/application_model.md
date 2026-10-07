@@ -1297,7 +1297,12 @@ whenever a request carries an `If-None-Match` and never evaluates one, so
 advertising an ETag would cost the 304s on multi-MB pages. Hashing is
 cached per `(path, mtime_ns, size)` but only once the file's mtime is a
 second old — a file being written right now is re-read, which is exactly
-the case the header exists for. On a change the page re-fetches and
+the case the header exists for. On Windows an `open` landing while
+`atomic_write_text` swaps the file in can raise `PermissionError`, which
+the stock handler answers with a 404; so `server.py` first opens the file
+with the writer's own retry (`utils.retry_on_sharing_violation`) and holds
+it while the stock handler serves it, because Windows will not replace a
+file that is held open. On a change the page re-fetches and
 either **patches** or **swaps**.
 
 **Patching** applies when the new render's node-key sequence *extends*

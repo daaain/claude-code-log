@@ -114,7 +114,8 @@ def test_the_replace_is_retried_past_a_holding_reader(tmp_path, monkeypatch) -> 
         real_replace(src, dst)
 
     monkeypatch.setattr(os, "replace", busy)
-    monkeypatch.setattr("claude_code_log.utils._REPLACE_BACKOFF_S", 0.001)
+    monkeypatch.setattr("claude_code_log.utils._SHARING_RETRY_ATTEMPTS", 10)
+    monkeypatch.setattr("claude_code_log.utils._SHARING_RETRY_BACKOFF_S", 0.001)
 
     atomic_write_text(target, "new")
     assert target.read_text() == "new"
@@ -129,7 +130,8 @@ def test_a_reader_that_never_lets_go_still_reports(tmp_path, monkeypatch) -> Non
         raise PermissionError(5, "Access is denied")
 
     monkeypatch.setattr(os, "replace", always_busy)
-    monkeypatch.setattr("claude_code_log.utils._REPLACE_BACKOFF_S", 0.001)
+    monkeypatch.setattr("claude_code_log.utils._SHARING_RETRY_ATTEMPTS", 10)
+    monkeypatch.setattr("claude_code_log.utils._SHARING_RETRY_BACKOFF_S", 0.001)
 
     with pytest.raises(PermissionError):
         atomic_write_text(target, "x")

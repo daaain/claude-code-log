@@ -6,7 +6,7 @@ import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional, TypeVar
 
 from .models import (
     ContentItem,
@@ -1060,21 +1060,37 @@ def generate_unified_diff(old_string: str, new_string: str) -> str:
 # this helper exists for) makes `os.replace` fail with PermissionError
 # until it closes, rather than the write being torn. A read of even a
 # 27 MB page is short, so a brief retry outlasts one; POSIX never takes
-# this path, where the replace succeeds with readers mid-read.
-_REPLACE_ATTEMPTS = 10
-_REPLACE_BACKOFF_S = 0.02
+# this path, where the replace succeeds with readers mid-read. The same
+# swap seen from the reader's side — an `open` landing mid-replace — is
+# the same transient, and the live server retries it with these too.
+# Elsewhere a PermissionError is a real one (an unreadable file), so it
+# gets a single attempt: same path, no delay. Tests raise the count to
+# exercise the retry on any platform.
+_SHARING_RETRY_ATTEMPTS = 10 if os.name == "nt" else 1
+_SHARING_RETRY_BACKOFF_S = 0.02
+
+_T = TypeVar("_T")
+
+
+def retry_on_sharing_violation(operation: Callable[[], _T]) -> _T:
+    """Run ``operation``, retried briefly while it raises PermissionError.
+
+    That is how Windows reports a file another process is swapping or
+    holding without sharing it; the last attempt's error propagates.
+    """
+    for attempt in range(_SHARING_RETRY_ATTEMPTS):
+        try:
+            return operation()
+        except PermissionError:
+            if attempt == _SHARING_RETRY_ATTEMPTS - 1:
+                raise
+            time.sleep(_SHARING_RETRY_BACKOFF_S)
+    raise AssertionError("unreachable")  # pragma: no cover
 
 
 def _replace_with_retry(tmp_path: Path, path: Path) -> None:
     """`os.replace`, retried briefly past a concurrent reader on Windows."""
-    for attempt in range(_REPLACE_ATTEMPTS):
-        try:
-            os.replace(tmp_path, path)
-            return
-        except PermissionError:
-            if attempt == _REPLACE_ATTEMPTS - 1:
-                raise
-            time.sleep(_REPLACE_BACKOFF_S)
+    retry_on_sharing_violation(lambda: os.replace(tmp_path, path))
 
 
 def atomic_write_text(
