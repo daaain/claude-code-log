@@ -92,6 +92,18 @@ ty:
 lint-js *ARGS:
     uv run --group js python scripts/lint_js.py {{ ARGS }}
 
+# Format the JS, CSS, JSON and YAML with oxfmt (installs the optional `js`
+# group); the template components holding Jinja go through
+# scripts/fmt_templates.py. Configured in .oxfmtrc.json.
+fmt-js:
+    uv run --group js oxfmt
+    uv run --group js python scripts/fmt_templates.py
+
+# Check that formatting, writing nothing.
+fmt-check:
+    uv run --group js oxfmt --check
+    uv run --group js python scripts/fmt_templates.py --check
+
 # Fail-fast order: format and lint take seconds, ty is faster than pyright, the full test suite runs last
 ci: format lint lint-js ty typecheck test-all
 

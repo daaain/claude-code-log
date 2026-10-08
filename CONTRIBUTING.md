@@ -235,6 +235,10 @@ uv run ty check
 
 # Lint the templates' JavaScript (installs the optional `js` group)
 just lint-js
+
+# Format JS, CSS, JSON and YAML, or only check (same group)
+just fmt-js
+just fmt-check
 ```
 
 The HTML pages carry a fair amount of JavaScript: the files under
@@ -267,6 +271,28 @@ generated — don't edit it by hand. After a Pygments upgrade or a change to
 `pygments_styles.css`, regenerate it with
 `uv run python scripts/generate_minimal_pygments_css.py`; a unit test fails
 while the committed file differs from the script's output.
+
+### Formatting JS, CSS, JSON and YAML
+
+[oxfmt](https://oxc.rs/docs/guide/usage/formatter.html), oxlint's sibling,
+formats the JavaScript, CSS, JSON and YAML; it comes from the same `js`
+group, pinned to an exact version because its output changes between
+releases. `.oxfmtrc.json` holds the options, and its `ignorePatterns`
+leave out, each with its reason: Markdown and TOML, data and generated
+files, and the two Pygments sheets, which
+`scripts/generate_minimal_pygments_css.py` reads line by line.
+
+A few component files hold Jinja (an `{% include %}`, a `{# comment #}`),
+which oxfmt cannot parse. `just fmt-js` formats them through
+`scripts/fmt_templates.py`, which masks each Jinja construct as a
+`/* jinja:N */` comment, formats the masked copy, and puts the constructs
+back verbatim. Each construct must sit on lines of its own; the script
+refuses anything else. Such files are found by their content, but they must
+also be listed in `ignorePatterns`, which a unit test checks.
+
+When upgrading oxfmt, look at what a run *covers* as well as whether it
+passes: a release can start formatting a new language (Markdown arrived
+after 0.69), and then a bare run rewrites files nobody chose to format.
 
 ### Whitespace
 

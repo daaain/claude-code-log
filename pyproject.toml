@@ -186,6 +186,7 @@ dev = [
 # official oxc-project release (packaging: github.com/dhruvkb/oxc-py), so
 # it is pinned exactly and bumped deliberately.
 js = [
+    "oxfmt==0.69.0",
     "oxlint==1.84.0",
 ]
 
