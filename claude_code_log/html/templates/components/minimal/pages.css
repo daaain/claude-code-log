@@ -411,8 +411,8 @@
     padding: 3px 0;
     border: 0;
     border-radius: 4px;
-    background: linear-gradient(var(--rule), var(--rule)) no-repeat
-        calc(var(--mn-dgut) + var(--rail) / 2 - 0.5px) 0 / 1px 100%;
+    background: linear-gradient(var(--rule), var(--rule)) no-repeat calc(var(--mn-dgut) + var(--rail) / 2 - 0.5px) 0 /
+        1px 100%;
     color: var(--fg);
     text-decoration: none;
     transition: none;
@@ -688,11 +688,21 @@
 }
 
 /* Role colours, as on a transcript row (layout.css). */
-.mn-search .mn-hit.mn-k-user { --rc: var(--user); }
-.mn-search .mn-hit.mn-k-assistant { --rc: var(--asst); }
-.mn-search .mn-hit.mn-k-tool { --rc: var(--tool); }
-.mn-search .mn-hit.mn-k-system { --rc: var(--sys); }
-.mn-search .mn-hit.mn-k-note { --rc: var(--note); }
+.mn-search .mn-hit.mn-k-user {
+    --rc: var(--user);
+}
+.mn-search .mn-hit.mn-k-assistant {
+    --rc: var(--asst);
+}
+.mn-search .mn-hit.mn-k-tool {
+    --rc: var(--tool);
+}
+.mn-search .mn-hit.mn-k-system {
+    --rc: var(--sys);
+}
+.mn-search .mn-hit.mn-k-note {
+    --rc: var(--note);
+}
 
 .mn-search .mn-hit.mn-k-thinking > a::before {
     width: 5px;

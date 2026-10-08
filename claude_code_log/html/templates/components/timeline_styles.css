@@ -27,7 +27,7 @@
     transition: background 0.2s ease;
 }
 
-#timeline-resize-handle>div {
+#timeline-resize-handle > div {
     background: var(--timeline-grip, #999);
 }
 
@@ -35,7 +35,7 @@
     background: linear-gradient(to bottom, transparent, var(--timeline-handle-hover-bg, #bbb));
 }
 
-#timeline-resize-handle:hover>div {
+#timeline-resize-handle:hover > div {
     background: var(--timeline-grip-hover, #777);
 }
 
@@ -43,7 +43,7 @@
     background: linear-gradient(to bottom, transparent, var(--timeline-handle-active-bg, #999));
 }
 
-#timeline-resize-handle:active>div {
+#timeline-resize-handle:active > div {
     background: var(--timeline-grip-active, #555);
 }
 

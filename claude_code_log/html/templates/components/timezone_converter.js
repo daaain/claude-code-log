@@ -1,6 +1,6 @@
 // Convert timestamps to user's timezone
 // This function can be called directly or will auto-run on DOMContentLoaded if included standalone
-(function() {
+(function () {
     // `root` scopes the work to a subtree. A live update replaces only the
     // transcript container, and its new cards carry raw ISO timestamps;
     // re-converting the whole document would redo every card that is
@@ -57,7 +57,9 @@
                 const utcTime = utcFormatter.format(date).replace(/, /g, ' ');
 
                 // Get timezone abbreviation (reuse formatter)
-                const timezoneName = tzNameFormatter.formatToParts(date).find(part => part.type === 'timeZoneName')?.value || userTimezone;
+                const timezoneName =
+                    tzNameFormatter.formatToParts(date).find(part => part.type === 'timeZoneName')?.value ||
+                    userTimezone;
 
                 // Handle time ranges (earliest to latest)
                 if (rawTimestampEnd) {
@@ -68,18 +70,29 @@
 
                         // Update the element with range
                         if (localTime !== utcTime || localTimeEnd !== utcTimeEnd) {
-                            element.innerHTML = localTime + ' to ' + localTimeEnd + ' <span style="color: #888; font-size: 0.9em;">(' + timezoneName + ')</span>';
+                            element.innerHTML =
+                                localTime +
+                                ' to ' +
+                                localTimeEnd +
+                                ' <span style="color: #888; font-size: 0.9em;">(' +
+                                timezoneName +
+                                ')</span>';
                             element.title = 'UTC: ' + utcTime + ' to ' + utcTimeEnd;
                         } else {
                             // If they're the same (user is in UTC), just show UTC
-                            element.innerHTML = utcTime + ' to ' + utcTimeEnd + ' <span style="color: #888; font-size: 0.9em;">(UTC)</span>';
+                            element.innerHTML =
+                                utcTime +
+                                ' to ' +
+                                utcTimeEnd +
+                                ' <span style="color: #888; font-size: 0.9em;">(UTC)</span>';
                             element.title = 'UTC: ' + utcTime + ' to ' + utcTimeEnd;
                         }
                     }
                 } else {
                     // Single timestamp
                     if (localTime !== utcTime) {
-                        element.innerHTML = localTime + ' <span style="color: #888; font-size: 0.9em;">(' + timezoneName + ')</span>';
+                        element.innerHTML =
+                            localTime + ' <span style="color: #888; font-size: 0.9em;">(' + timezoneName + ')</span>';
                         element.title = duration ? duration : 'UTC: ' + utcTime;
                     } else {
                         // If they're the same (user is in UTC), just show UTC
@@ -87,7 +100,6 @@
                         element.title = duration ? duration : 'UTC: ' + utcTime;
                     }
                 }
-
             } catch (error) {
                 // If conversion fails, leave the original timestamp
                 console.warn('Failed to convert timestamp:', rawTimestamp, error);
@@ -106,10 +118,21 @@
         // within a few ms of a straight synchronous pass, while still handing
         // the main thread back whenever the browser wants it.
         const scheduleWork = window.requestIdleCallback
-            ? function(cb) { window.requestIdleCallback(cb, { timeout: 200 }); }
-            // No requestIdleCallback (Safari < 16): a macrotask still yields
-            // between slices, and the synthetic deadline keeps them bounded.
-            : function(cb) { setTimeout(function() { cb({ timeRemaining: function() { return 8; }, didTimeout: false }); }, 0); };
+            ? function (cb) {
+                  window.requestIdleCallback(cb, { timeout: 200 });
+              }
+            : // No requestIdleCallback (Safari < 16): a macrotask still yields
+              // between slices, and the synthetic deadline keeps them bounded.
+              function (cb) {
+                  setTimeout(function () {
+                      cb({
+                          timeRemaining: function () {
+                              return 8;
+                          },
+                          didTimeout: false
+                      });
+                  }, 0);
+              };
 
         let cursor = 0;
         function drain(deadline) {
@@ -130,7 +153,9 @@
         // one, so the largest pages yield instead of blocking on load.
         const firstSliceEnds = performance.now() + 24;
         drain({
-            timeRemaining: function() { return Math.max(0, firstSliceEnds - performance.now()); },
+            timeRemaining: function () {
+                return Math.max(0, firstSliceEnds - performance.now());
+            },
             didTimeout: false
         });
     }

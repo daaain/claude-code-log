@@ -14,18 +14,40 @@
    carry at least two classes (layout.css "Specificity, two tiers"). */
 
 /* Lane colours (rail slot → colour; forks are always --lF). */
-.theme-minimal .dag-lc-a { --lc: var(--lA); }
-.theme-minimal .dag-lc-b { --lc: var(--lB); }
-.theme-minimal .dag-lc-f { --lc: var(--lF); }
-.theme-minimal .dag-lc-s { --lc: var(--sys); }
-.theme-minimal .dag-lc-p { --lc: var(--asst); }
+.theme-minimal .dag-lc-a {
+    --lc: var(--lA);
+}
+.theme-minimal .dag-lc-b {
+    --lc: var(--lB);
+}
+.theme-minimal .dag-lc-f {
+    --lc: var(--lF);
+}
+.theme-minimal .dag-lc-s {
+    --lc: var(--sys);
+}
+.theme-minimal .dag-lc-p {
+    --lc: var(--asst);
+}
 
-.theme-minimal .dag-s1 { --dag-slot: 1; }
-.theme-minimal .dag-s2 { --dag-slot: 2; }
-.theme-minimal .dag-s3 { --dag-slot: 3; }
-.theme-minimal .dag-s4 { --dag-slot: 4; }
-.theme-minimal .dag-s5 { --dag-slot: 5; }
-.theme-minimal .dag-s6 { --dag-slot: 6; }
+.theme-minimal .dag-s1 {
+    --dag-slot: 1;
+}
+.theme-minimal .dag-s2 {
+    --dag-slot: 2;
+}
+.theme-minimal .dag-s3 {
+    --dag-slot: 3;
+}
+.theme-minimal .dag-s4 {
+    --dag-slot: 4;
+}
+.theme-minimal .dag-s5 {
+    --dag-slot: 5;
+}
+.theme-minimal .dag-s6 {
+    --dag-slot: 6;
+}
 
 /* ------------------------------------------------------------- stage */
 
@@ -94,7 +116,9 @@
 }
 
 @keyframes dag-run {
-    to { stroke-dashoffset: -7; }
+    to {
+        stroke-dashoffset: -7;
+    }
 }
 
 /* A column lane's pointers (`col-in`, `col-out`): a short curve towards the
@@ -113,11 +137,21 @@
     stop-opacity: 0;
 }
 
-.theme-minimal #dag-rail path.dag-fade.dag-lc-a { stroke: url(#dag-fade-a); }
-.theme-minimal #dag-rail path.dag-fade.dag-lc-b { stroke: url(#dag-fade-b); }
-.theme-minimal #dag-rail path.dag-fade.dag-lc-f { stroke: url(#dag-fade-f); }
-.theme-minimal #dag-rail path.dag-fade.dag-lc-s { stroke: url(#dag-fade-s); }
-.theme-minimal #dag-rail path.dag-fade.dag-lc-p { stroke: url(#dag-fade-p); }
+.theme-minimal #dag-rail path.dag-fade.dag-lc-a {
+    stroke: url(#dag-fade-a);
+}
+.theme-minimal #dag-rail path.dag-fade.dag-lc-b {
+    stroke: url(#dag-fade-b);
+}
+.theme-minimal #dag-rail path.dag-fade.dag-lc-f {
+    stroke: url(#dag-fade-f);
+}
+.theme-minimal #dag-rail path.dag-fade.dag-lc-s {
+    stroke: url(#dag-fade-s);
+}
+.theme-minimal #dag-rail path.dag-fade.dag-lc-p {
+    stroke: url(#dag-fade-p);
+}
 
 @media (prefers-reduced-motion: reduce) {
     .theme-minimal #dag-rail path.dag-running.dag-dash,
@@ -175,9 +209,23 @@
 /* Workflow phase and agent cards, and the agents' transcripts (lanes), are
    rows of the grid too: the nested workflow gutter (components.css) only
    applies without the engine, or inside a block. */
-.theme-minimal .mn-stage.dag-on #transcript .children:has(> .message-node > .message.workflow_phase) > .message-node:not(.dag-block *),
-.theme-minimal .mn-stage.dag-on #transcript .message-node:has(> .message.workflow_phase) > .children > .message-node:not(.dag-block *),
-.theme-minimal .mn-stage.dag-on #transcript .message-node:has(> .message.workflow_agent) > .children > .message-node:not(.dag-block *) {
+.theme-minimal
+    .mn-stage.dag-on
+    #transcript
+    .children:has(> .message-node > .message.workflow_phase)
+    > .message-node:not(.dag-block *),
+.theme-minimal
+    .mn-stage.dag-on
+    #transcript
+    .message-node:has(> .message.workflow_phase)
+    > .children
+    > .message-node:not(.dag-block *),
+.theme-minimal
+    .mn-stage.dag-on
+    #transcript
+    .message-node:has(> .message.workflow_agent)
+    > .children
+    > .message-node:not(.dag-block *) {
     --gut: var(--dag-gut);
     --rail: var(--dag-rail);
 }
@@ -213,10 +261,12 @@
     --dag-indent: calc(var(--dag-ind0) + var(--dag-ind-step) * var(--dag-slot, 1));
     --dag-c3: calc(var(--gut) + var(--rail));
     grid-template-columns: var(--gut) calc(var(--rail) + var(--dag-indent)) minmax(0, 1fr);
-    background: linear-gradient(90deg,
+    background: linear-gradient(
+        90deg,
         transparent var(--dag-c3),
         color-mix(in srgb, var(--lc) 9%, transparent) var(--dag-c3),
-        transparent 75%);
+        transparent 75%
+    );
 }
 
 .theme-minimal .mn-stage.dag-on #transcript .message.dag-in > .header > .header-info::after {
@@ -241,17 +291,39 @@
    the call, then the tag (and an error pill) from the result, which grows
    its row if it must rather than overlap the next. Wide layout only. */
 @media (min-width: 641px) {
-    .theme-minimal .mn-stage.dag-on #transcript .message.dag-in.pair_first:not(.dag-split) > .header > .header-info::after {
+    .theme-minimal
+        .mn-stage.dag-on
+        #transcript
+        .message.dag-in.pair_first:not(.dag-split)
+        > .header
+        > .header-info::after {
         content: none;
     }
 
-    .theme-minimal .mn-stage.dag-on #transcript .message.dag-in:is(.pair_middle, .pair_last):not(.dag-split) > .header > .header-info {
+    .theme-minimal
+        .mn-stage.dag-on
+        #transcript
+        .message.dag-in:is(.pair_middle, .pair_last):not(.dag-split)
+        > .header
+        > .header-info {
         display: flex;
         padding-top: 1.85em;
     }
 
-    .theme-minimal .mn-stage.dag-on #transcript .message.dag-in:is(.pair_middle, .pair_last):not(.dag-split):not(.error) > .header > .header-info > *,
-    .theme-minimal .mn-stage.dag-on #transcript .message.dag-in.error:is(.pair_middle, .pair_last):not(.dag-split) > .header > .header-info > :not(.mn-role) {
+    .theme-minimal
+        .mn-stage.dag-on
+        #transcript
+        .message.dag-in:is(.pair_middle, .pair_last):not(.dag-split):not(.error)
+        > .header
+        > .header-info
+        > *,
+    .theme-minimal
+        .mn-stage.dag-on
+        #transcript
+        .message.dag-in.error:is(.pair_middle, .pair_last):not(.dag-split)
+        > .header
+        > .header-info
+        > :not(.mn-role) {
         display: none;
     }
 }
@@ -451,7 +523,9 @@
 }
 
 @keyframes dag-pulse {
-    50% { opacity: 0.25; }
+    50% {
+        opacity: 0.25;
+    }
 }
 
 .theme-minimal #transcript .mn-bmini {
@@ -521,7 +595,7 @@
     display: none;
 }
 
-.theme-minimal .mn-stage.dag-on #transcript .message.pair_first:has(> .mn-bctls .mn-back[aria-expanded='false']) {
+.theme-minimal .mn-stage.dag-on #transcript .message.pair_first:has(> .mn-bctls .mn-back[aria-expanded="false"]) {
     padding-bottom: 3px;
 }
 
@@ -585,7 +659,8 @@ body.theme-minimal.dag-wide {
     min-width: calc(var(--dag-min, 0px) + 32px);
 }
 
-body.theme-minimal.dag-wide :is(.mn-top, .mn-toolbar, .filter-toolbar, #timeline-container, .navigation, .page-navigation) {
+body.theme-minimal.dag-wide
+    :is(.mn-top, .mn-toolbar, .filter-toolbar, #timeline-container, .navigation, .page-navigation) {
     position: sticky;
     left: 16px;
     max-width: calc(var(--dag-view, 100vw) - 32px);
@@ -626,7 +701,9 @@ body.theme-minimal.dag-wide :is(.mn-top, .mn-toolbar, .filter-toolbar, #timeline
     overflow: hidden;
     white-space: nowrap;
     border-bottom: 1px solid var(--rule);
-    background: linear-gradient(color-mix(in srgb, var(--lc) 5%, transparent), color-mix(in srgb, var(--lc) 5%, transparent)), var(--bg);
+    background:
+        linear-gradient(color-mix(in srgb, var(--lc) 5%, transparent), color-mix(in srgb, var(--lc) 5%, transparent)),
+        var(--bg);
 }
 
 /* A column's head: the name and two compact actions (`⇤`, `−`; their
@@ -855,7 +932,8 @@ body.theme-minimal.dag-wide :is(.mn-top, .mn-toolbar, .filter-toolbar, #timeline
         min-width: calc(var(--dag-min, 0px) + 20px);
     }
 
-    body.theme-minimal.dag-wide :is(.mn-top, .mn-toolbar, .filter-toolbar, #timeline-container, .navigation, .page-navigation) {
+    body.theme-minimal.dag-wide
+        :is(.mn-top, .mn-toolbar, .filter-toolbar, #timeline-container, .navigation, .page-navigation) {
         left: 10px;
         max-width: calc(var(--dag-view, 100vw) - 20px);
     }

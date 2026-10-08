@@ -243,7 +243,9 @@
     padding: 20px;
     background-color: var(--white-dimmed);
     border-radius: 8px;
-    box-shadow: -7px -7px 10px #eeeeee44, 7px 7px 10px #00000011;
+    box-shadow:
+        -7px -7px 10px #eeeeee44,
+        7px 7px 10px #00000011;
     border-left: var(--white-dimmed) 1px solid;
     border-top: var(--white-dimmed) 1px solid;
     border-bottom: #00000017 1px solid;
@@ -317,7 +319,9 @@
     border-radius: 6px;
     cursor: pointer;
     transition: all 0.2s;
-    box-shadow: -3px -3px 5px #eeeeee22, 3px 3px 5px #00000008;
+    box-shadow:
+        -3px -3px 5px #eeeeee22,
+        3px 3px 5px #00000008;
     border-left: #ffffff44 1px solid;
     border-top: #ffffff44 1px solid;
     border-bottom: #00000012 1px solid;
@@ -327,7 +331,9 @@
 .search-result-item:hover {
     background-color: #ffffff99;
     transform: translateY(-1px);
-    box-shadow: -5px -5px 8px #eeeeee33, 5px 5px 8px #00000012;
+    box-shadow:
+        -5px -5px 8px #eeeeee33,
+        5px 5px 8px #00000012;
 }
 
 .search-result-item a {
@@ -390,14 +396,22 @@
 }
 
 .search-loading::after {
-    content: '...';
+    content: "...";
     animation: dots 1.5s infinite;
 }
 
 @keyframes dots {
-    0%, 20% { content: '.'; }
-    40% { content: '..'; }
-    60%, 100% { content: '...'; }
+    0%,
+    20% {
+        content: ".";
+    }
+    40% {
+        content: "..";
+    }
+    60%,
+    100% {
+        content: "...";
+    }
 }
 
 /* Keyboard shortcut hint */

@@ -16,7 +16,9 @@
     background-color: var(--bg-card);
     border-radius: 6px;
     padding: 8px;
-    box-shadow: -7px -7px 10px #eeeeee44, 7px 7px 10px #00000011;
+    box-shadow:
+        -7px -7px 10px #eeeeee44,
+        7px 7px 10px #00000011;
     border-left: var(--bg-card) 1px solid;
     border-top: var(--bg-card) 1px solid;
     border-bottom: #00000017 1px solid;

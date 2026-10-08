@@ -6,7 +6,9 @@
     padding: 15px;
     background-color: #ffffff66;
     border-radius: 8px;
-    box-shadow: -7px -7px 10px #eeeeee44, 7px 7px 10px #00000011;
+    box-shadow:
+        -7px -7px 10px #eeeeee44,
+        7px 7px 10px #00000011;
     border-left: #ffffff66 1px solid;
     border-top: #ffffff66 1px solid;
     border-bottom: #00000017 1px solid;
@@ -66,11 +68,11 @@
 }
 
 .page-nav-link.prev::before {
-    content: '';
+    content: "";
 }
 
 .page-nav-link.next::after {
-    content: '';
+    content: "";
 }
 
 /* Hide next link on last page (will be revealed via in-place editing when new page is created) */

@@ -460,14 +460,23 @@ body.theme-minimal {
     display: flex;
 }
 
-.theme-minimal #transcript .message.tool_result.error:is(.pair_middle, .pair_last) > .header > .header-info > :not(.mn-role) {
+.theme-minimal
+    #transcript
+    .message.tool_result.error:is(.pair_middle, .pair_last)
+    > .header
+    > .header-info
+    > :not(.mn-role) {
     display: none;
 }
 
 /* …one gutter line down, below the call's role, which hangs into this
    row (layout.css; P7c — the pill used to cover it). */
 @media (min-width: 641px) {
-    .theme-minimal #transcript .message.tool_result.error:is(.pair_middle, .pair_last):not(.dag-split) > .header > .header-info {
+    .theme-minimal
+        #transcript
+        .message.tool_result.error:is(.pair_middle, .pair_last):not(.dag-split)
+        > .header
+        > .header-info {
         padding-top: 1.85em;
     }
 }
@@ -493,7 +502,10 @@ body.theme-minimal {
     --pv: 2.8em;
 }
 
-.theme-minimal #transcript :is(details.collapsible-code, details.collapsible-details, details.tool-param-collapsible) > summary {
+.theme-minimal
+    #transcript
+    :is(details.collapsible-code, details.collapsible-details, details.tool-param-collapsible)
+    > summary {
     display: flex;
     flex-direction: column;
     align-items: stretch;
@@ -506,7 +518,10 @@ body.theme-minimal {
     cursor: pointer;
 }
 
-.theme-minimal #transcript :is(details.collapsible-code, details.collapsible-details, details.tool-param-collapsible) > summary::-webkit-details-marker {
+.theme-minimal
+    #transcript
+    :is(details.collapsible-code, details.collapsible-details, details.tool-param-collapsible)
+    > summary::-webkit-details-marker {
     display: none;
 }
 
@@ -527,7 +542,10 @@ body.theme-minimal {
 }
 
 /* The "+N lines" / "− less" line (mockup .more). */
-.theme-minimal #transcript :is(details.collapsible-code, details.collapsible-details, details.tool-param-collapsible) > summary::after,
+.theme-minimal
+    #transcript
+    :is(details.collapsible-code, details.collapsible-details, details.tool-param-collapsible)
+    > summary::after,
 .theme-minimal #transcript details.collapsible-code > summary > .line-count,
 .theme-minimal #transcript .mn-less {
     order: 2;
@@ -542,11 +560,17 @@ body.theme-minimal {
     color: var(--muted);
 }
 
-.theme-minimal #transcript :is(details.collapsible-code, details.collapsible-details, details.tool-param-collapsible) > summary::after {
+.theme-minimal
+    #transcript
+    :is(details.collapsible-code, details.collapsible-details, details.tool-param-collapsible)
+    > summary::after {
     content: "+ more";
 }
 
-.theme-minimal #transcript :is(details.collapsible-code, details.collapsible-details, details.tool-param-collapsible) > summary[data-more]::after {
+.theme-minimal
+    #transcript
+    :is(details.collapsible-code, details.collapsible-details, details.tool-param-collapsible)
+    > summary[data-more]::after {
     content: attr(data-more);
 }
 
@@ -568,11 +592,17 @@ body.theme-minimal {
     display: none;
 }
 
-.theme-minimal #transcript :is(details.collapsible-code, details.collapsible-details, details.tool-param-collapsible)[open] > summary::after {
+.theme-minimal
+    #transcript
+    :is(details.collapsible-code, details.collapsible-details, details.tool-param-collapsible)[open]
+    > summary::after {
     content: "− less";
 }
 
-.theme-minimal #transcript :is(details.collapsible-code, details.collapsible-details, details.tool-param-collapsible) > summary:hover::after,
+.theme-minimal
+    #transcript
+    :is(details.collapsible-code, details.collapsible-details, details.tool-param-collapsible)
+    > summary:hover::after,
 .theme-minimal #transcript details.collapsible-code > summary:hover > .line-count,
 .theme-minimal #transcript .mn-less:hover {
     color: var(--fg);
@@ -677,7 +707,7 @@ body.theme-minimal {
    table), so the size is one length resolved on #transcript: a registered
    <length> computes where it is declared and inherits as that value. */
 @property --mn-ctl {
-    syntax: '<length>';
+    syntax: "<length>";
     inherits: true;
     initial-value: 10px;
 }
@@ -1234,14 +1264,30 @@ body.theme-minimal {
     transform: none;
 }
 
-.theme-minimal .filter-toggle[data-type="user"] { --rc: var(--user); }
-.theme-minimal .filter-toggle[data-type="system"] { --rc: var(--sys); }
-.theme-minimal .filter-toggle[data-type="assistant"] { --rc: var(--asst); }
-.theme-minimal .filter-toggle[data-type="thinking"] { --rc: var(--muted); }
-.theme-minimal .filter-toggle[data-type="tool"] { --rc: var(--tool); }
-.theme-minimal .filter-toggle[data-type="sidechain"] { --rc: var(--ring); }
-.theme-minimal .filter-toggle[data-type="memory"] { --rc: var(--asst); }
-.theme-minimal .filter-toggle[data-type="image"] { --rc: var(--note); }
+.theme-minimal .filter-toggle[data-type="user"] {
+    --rc: var(--user);
+}
+.theme-minimal .filter-toggle[data-type="system"] {
+    --rc: var(--sys);
+}
+.theme-minimal .filter-toggle[data-type="assistant"] {
+    --rc: var(--asst);
+}
+.theme-minimal .filter-toggle[data-type="thinking"] {
+    --rc: var(--muted);
+}
+.theme-minimal .filter-toggle[data-type="tool"] {
+    --rc: var(--tool);
+}
+.theme-minimal .filter-toggle[data-type="sidechain"] {
+    --rc: var(--ring);
+}
+.theme-minimal .filter-toggle[data-type="memory"] {
+    --rc: var(--asst);
+}
+.theme-minimal .filter-toggle[data-type="image"] {
+    --rc: var(--note);
+}
 
 .theme-minimal .filter-action-btn,
 .theme-minimal .search-nav-btn {
@@ -1365,30 +1411,56 @@ body.theme-minimal {
     font-size: 0.94em;
 }
 
-.theme-minimal #transcript :is(.task-prompt, .task-result, .task-notification-result) > details.collapsible-code > summary {
+.theme-minimal
+    #transcript
+    :is(.task-prompt, .task-result, .task-notification-result)
+    > details.collapsible-code
+    > summary {
     flex-direction: row;
     align-items: flex-end;
     column-gap: 10px;
 }
 
-.theme-minimal #transcript :is(.task-prompt, .task-result, .task-notification-result) > details.collapsible-code > summary > .preview-content {
+.theme-minimal
+    #transcript
+    :is(.task-prompt, .task-result, .task-notification-result)
+    > details.collapsible-code
+    > summary
+    > .preview-content {
     flex: 1 1 0;
     min-width: 0;
 }
 
-.theme-minimal #transcript :is(.task-prompt, .task-result, .task-notification-result) > details.collapsible-code > summary::after,
-.theme-minimal #transcript :is(.task-prompt, .task-result, .task-notification-result) > details.collapsible-code > summary > .line-count {
+.theme-minimal
+    #transcript
+    :is(.task-prompt, .task-result, .task-notification-result)
+    > details.collapsible-code
+    > summary::after,
+.theme-minimal
+    #transcript
+    :is(.task-prompt, .task-result, .task-notification-result)
+    > details.collapsible-code
+    > summary
+    > .line-count {
     flex: none;
     align-self: flex-end;
 }
 
-.theme-minimal #transcript :is(.task-prompt, .task-result, .task-notification-result) .preview-content :is(p, ul, ol, pre, blockquote, table) {
+.theme-minimal
+    #transcript
+    :is(.task-prompt, .task-result, .task-notification-result)
+    .preview-content
+    :is(p, ul, ol, pre, blockquote, table) {
     margin: 0;
 }
 
 /* A heading at the top of an agent's answer (`## Summary`) reads as a bold
    line of the preview, not a title twice the size that fills the clip. */
-.theme-minimal #transcript :is(.task-prompt, .task-result, .task-notification-result) .preview-content :is(h1, h2, h3, h4, h5, h6) {
+.theme-minimal
+    #transcript
+    :is(.task-prompt, .task-result, .task-notification-result)
+    .preview-content
+    :is(h1, h2, h3, h4, h5, h6) {
     margin: 0;
     font-size: 1em;
     line-height: inherit;
@@ -1398,7 +1470,12 @@ body.theme-minimal {
    metadata (agent id, worktree, branch, usage) and an async notification's
    task fields (id, status, tokens, tool uses, duration) as one dim wrapped
    line of key value pairs instead of a card of rows. */
-.theme-minimal #transcript :is(.message:is(.tool_use, .tool_result) > .content > .teammate-spawn-card, .message.task-notification > .content > .task-notification-card) {
+.theme-minimal
+    #transcript
+    :is(
+        .message:is(.tool_use, .tool_result) > .content > .teammate-spawn-card,
+        .message.task-notification > .content > .task-notification-card
+    ) {
     display: flex;
     flex-wrap: wrap;
     align-items: baseline;
@@ -1410,10 +1487,23 @@ body.theme-minimal {
     color: var(--muted);
 }
 
-.theme-minimal #transcript :is(.message:is(.tool_use, .tool_result) > .content > .teammate-spawn-card, .message.task-notification > .content > .task-notification-card) dt {
+.theme-minimal
+    #transcript
+    :is(
+        .message:is(.tool_use, .tool_result) > .content > .teammate-spawn-card,
+        .message.task-notification > .content > .task-notification-card
+    )
+    dt {
     font-size: 1em;
 }
 
-.theme-minimal #transcript :is(.message:is(.tool_use, .tool_result) > .content > .teammate-spawn-card, .message.task-notification > .content > .task-notification-card) dd + dt {
+.theme-minimal
+    #transcript
+    :is(
+        .message:is(.tool_use, .tool_result) > .content > .teammate-spawn-card,
+        .message.task-notification > .content > .task-notification-card
+    )
+    dd
+    + dt {
     margin-left: 8px;
 }
