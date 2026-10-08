@@ -99,10 +99,14 @@ fmt-js:
     uv run --group js oxfmt
     uv run --group js python scripts/fmt_templates.py
 
-# Check that formatting, writing nothing.
+# Check that formatting, writing nothing. Both checks run, so every file
+# that needs formatting is listed.
 fmt-check:
-    uv run --group js oxfmt --check
-    uv run --group js python scripts/fmt_templates.py --check
+    #!/usr/bin/env bash
+    status=0
+    uv run --group js oxfmt --check || status=1
+    uv run --group js python scripts/fmt_templates.py --check || status=1
+    exit $status
 
 # Fail-fast order: format and lint take seconds, ty is faster than pyright, the full test suite runs last
 ci: format lint lint-js ty typecheck test-all

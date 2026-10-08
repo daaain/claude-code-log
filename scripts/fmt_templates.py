@@ -36,6 +36,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import Any
 
 REPO = Path(__file__).resolve().parent.parent
 COMPONENTS = REPO / "claude_code_log" / "html" / "templates" / "components"
@@ -88,7 +89,7 @@ def unmask(text: str, blocks: list[str]) -> str:
     return text
 
 
-def read_config() -> dict:
+def read_config() -> dict[str, Any]:
     """Parse ``.oxfmtrc.json``, whose comments sit on lines of their own."""
     text = CONFIG.read_text(encoding="utf-8")
     return json.loads(re.sub(r"^\s*//.*$", "", text, flags=re.MULTILINE))
@@ -96,7 +97,7 @@ def read_config() -> dict:
 
 def jinja_components() -> list[str]:
     """The component JS/CSS files that hold Jinja, as repo-relative paths."""
-    found = []
+    found: list[str] = []
     for path in sorted([*COMPONENTS.rglob("*.js"), *COMPONENTS.rglob("*.css")]):
         if JINJA.search(path.read_text(encoding="utf-8")):
             found.append(path.relative_to(REPO).as_posix())
@@ -142,7 +143,7 @@ def main(argv: list[str]) -> int:
     with tempfile.TemporaryDirectory(prefix="fmt-templates-") as tmp:
         stage = Path(tmp)
         _write(stage / "oxfmtrc.json", json.dumps(config))
-        blocks = {}
+        blocks: dict[str, list[str]] = {}
         for f in files:
             masked, blocks[f] = mask(_read(REPO / f))
             _write(stage / f, masked)
@@ -156,7 +157,7 @@ def main(argv: list[str]) -> int:
             print(result.stdout + result.stderr, file=sys.stderr)
             return result.returncode
 
-        changed = []
+        changed: list[str] = []
         for f in files:
             formatted = unmask(_read(stage / f), blocks[f])
             if formatted != _read(REPO / f):
