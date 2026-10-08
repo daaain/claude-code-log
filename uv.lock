@@ -185,6 +185,7 @@ docs = [
     { name = "mkdocs-material" },
 ]
 js = [
+    { name = "oxfmt" },
     { name = "oxlint" },
 ]
 
@@ -227,7 +228,10 @@ docs = [
     { name = "mkdocs-gen-files", specifier = ">=0.5.0" },
     { name = "mkdocs-material", specifier = ">=9.5.0" },
 ]
-js = [{ name = "oxlint", specifier = "==1.84.0" }]
+js = [
+    { name = "oxfmt", specifier = "==0.69.0" },
+    { name = "oxlint", specifier = "==1.84.0" },
+]
 
 [[package]]
 name = "claude-code-log-clmail-test"
@@ -791,6 +795,20 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/43/16/fc88b08840de0e0a72a2f9d8c6bae36be573e475a6326ae854bcc549fc45/nodeenv-1.9.1.tar.gz", hash = "sha256:6ec12890a2dab7946721edbfbcd91f3319c6ccc9aec47be7c7e6b7011ee6645f", size = 47437, upload-time = "2024-06-04T18:44:11.171Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d2/1d/1b658dbd2b9fa9c4c9f32accbfc0205d532c8c6194dc0f2a4c0428e7128a/nodeenv-1.9.1-py2.py3-none-any.whl", hash = "sha256:ba11c9782d29c27c70ffbdda2d7415098754709be8a7056d79a737cd901155c9", size = 22314, upload-time = "2024-06-04T18:44:08.352Z" },
+]
+
+[[package]]
+name = "oxfmt"
+version = "0.69.0"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9b/14/11dbcb57f22391905fd18007d8113fa9be36540f6be3a53325c28eb670ea/oxfmt-0.69.0-py3-none-macosx_10_12_x86_64.whl", hash = "sha256:aa4e67c29a42908e9971fb2b0a6295dd8567d194f81738d7dfa95149591dba91", size = 2682208, upload-time = "2026-09-22T10:51:27.561Z" },
+    { url = "https://files.pythonhosted.org/packages/bc/a7/dafa3523f74ff1538aec64b96180bdf865254874812f17bf756f7bf76991/oxfmt-0.69.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:27b91eac1b4c3db94c0aca38bd405479bba104fc2132f3634e973f58124302bd", size = 2404020, upload-time = "2026-09-22T10:51:29.11Z" },
+    { url = "https://files.pythonhosted.org/packages/4c/77/817b20aba5172cdf4f597f6fa686aa89ebcc7f42a565410b6fe8d077c60d/oxfmt-0.69.0-py3-none-manylinux_2_18_aarch64.whl", hash = "sha256:338c3c27eee86acaf12c5d8846d795e32be29a8c94d7774d6af4f204f3755549", size = 2589393, upload-time = "2026-09-22T10:51:30.642Z" },
+    { url = "https://files.pythonhosted.org/packages/ca/09/f5f403fdd1da7d4103adf5176317f2c8e6dc6e583761acf55f829a616b7b/oxfmt-0.69.0-py3-none-manylinux_2_18_x86_64.whl", hash = "sha256:06f0f6a1acf7c7ea083f1ef2a576e66e90cadab9fc5b86f749f43e1aa6147264", size = 2789527, upload-time = "2026-09-22T10:51:31.982Z" },
+    { url = "https://files.pythonhosted.org/packages/bd/e8/52c2758989bc57ec1c250e7fb3a7f2fcfe0b12d78a760138525aa98626e6/oxfmt-0.69.0-py3-none-musllinux_1_2_aarch64.whl", hash = "sha256:0a013467b62240418c87253c3581c6ba0a6ce05d11f04208cba5261c7295e07e", size = 2625406, upload-time = "2026-09-22T10:51:33.772Z" },
+    { url = "https://files.pythonhosted.org/packages/0e/27/d5e2847c17ebb81fb253d89d124e5a77ad87ff0b6f7c61ea9a85a5663967/oxfmt-0.69.0-py3-none-musllinux_1_2_x86_64.whl", hash = "sha256:07a6f8f3a6807e75e0648a86f2be269fa7a2ad4db4a0ba2c7bc9f5a5a55d656c", size = 2847104, upload-time = "2026-09-22T10:51:35.291Z" },
+    { url = "https://files.pythonhosted.org/packages/96/d5/5259971861dbaae430dd094a96f442cf1a4c911826587fa1a14eeb192d63/oxfmt-0.69.0-py3-none-win_amd64.whl", hash = "sha256:c05119fb81e25d37a81f0a784f39c19fd3e4a857555495189c6f8c6427e751c5", size = 2568650, upload-time = "2026-09-22T10:51:36.707Z" },
 ]
 
 [[package]]
