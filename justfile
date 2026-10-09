@@ -109,7 +109,7 @@ fmt-check:
     exit $status
 
 # Fail-fast order: format and lint take seconds, ty is faster than pyright, the full test suite runs last
-ci: format lint lint-js ty typecheck test-all
+ci: format lint lint-js fmt-check ty typecheck test-all
 
 # Regenerate the auto-generated TUI docs assets (screenshots) into docs/assets/tui
 docs-gen:
