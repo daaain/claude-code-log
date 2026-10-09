@@ -119,3 +119,12 @@ jobs:
       - name: Lint the templates' JavaScript (primary only)
         if: matrix.is-primary
         run: uv run --group js python scripts/lint_js.py
+
+      - name: Check JS, CSS, JSON and YAML formatting (primary only)
+        if: matrix.is-primary
+        # Both checks run, so every file that needs formatting is listed
+        run: |
+          status=0
+          uv run --group js oxfmt --check || status=1
+          uv run --group js python scripts/fmt_templates.py --check || status=1
+          exit $status

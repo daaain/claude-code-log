@@ -290,6 +290,17 @@ back verbatim. Each construct must sit on lines of its own; the script
 refuses anything else. Such files are found by their content, but they must
 also be listed in `ignorePatterns`, which a unit test checks.
 
+`just fmt-check` is part of `just ci`, and CI runs it once (on the primary
+job), so a change that isn't formatted fails; run `just fmt-js` before
+committing. The commit that first formatted the tree is listed in
+`.git-blame-ignore-revs`; to have `git blame` look past it, run once:
+
+```bash
+git config blame.ignoreRevsFile .git-blame-ignore-revs
+```
+
+GitHub's blame view reads the file by itself.
+
 When upgrading oxfmt, look at what a run *covers* as well as whether it
 passes: a release can start formatting a new language (Markdown arrived
 after 0.69), and then a bare run rewrites files nobody chose to format.
