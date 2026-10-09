@@ -300,7 +300,10 @@
     color: var(--fg);
 }
 
-.theme-minimal #transcript .mn-title :is(.tool-subagent, .message-model, .task-action, .task-async-hint, .pair-duration) {
+.theme-minimal
+    #transcript
+    .mn-title
+    :is(.tool-subagent, .message-model, .task-action, .task-async-hint, .pair-duration) {
     font: inherit;
     font-weight: 400;
     color: var(--muted);
@@ -467,13 +470,29 @@
    file, say — or the output) starts right under it: no top margin on it,
    nor on the code box at the head of a preview inside it. */
 .theme-minimal #transcript .message:is(.tool_use, .pair_middle, .pair_last) > .content > :first-child,
-.theme-minimal #transcript .message:is(.tool_use, .pair_middle, .pair_last) > .content > :first-child > details:first-child > summary > .preview-content > .highlight:first-child {
+.theme-minimal
+    #transcript
+    .message:is(.tool_use, .pair_middle, .pair_last)
+    > .content
+    > :first-child
+    > details:first-child
+    > summary
+    > .preview-content
+    > .highlight:first-child {
     margin-top: 0;
 }
 
 /* Turns: one rule above each main-lane prompt, except a session's first.
    A slash command's output (the pair's last half) belongs to its turn. */
-.theme-minimal #transcript .message-node:has(> .message.session-header) > .children > .message-node ~ .message-node > .message.user:not(.steering):not(.task-notification):not(.teammate):not(.sidechain):not(.command-output):not(.pair_middle):not(.pair_last) {
+.theme-minimal
+    #transcript
+    .message-node:has(> .message.session-header)
+    > .children
+    > .message-node
+    ~ .message-node
+    > .message.user:not(.steering):not(.task-notification):not(.teammate):not(.sidechain):not(.command-output):not(
+        .pair_middle
+    ):not(.pair_last) {
     margin-top: 4px;
     padding-top: 7px;
     border-top: 1px solid var(--rule2);
@@ -502,8 +521,21 @@
 
 .theme-minimal #transcript .message:is(.pair_middle, .pair_last):not(.dag-split)::after,
 .theme-minimal #transcript .message.dag-cfirst::after,
-.theme-minimal #transcript .message-node:has(> .message.session-header) > .children > .message-node:first-child > .message::after,
-.theme-minimal #transcript .message-node:has(> .message.session-header) > .children > .message-node ~ .message-node > .message.user:not(.steering):not(.task-notification):not(.teammate):not(.sidechain):not(.command-output):not(.pair_middle):not(.pair_last)::after {
+.theme-minimal
+    #transcript
+    .message-node:has(> .message.session-header)
+    > .children
+    > .message-node:first-child
+    > .message::after,
+.theme-minimal
+    #transcript
+    .message-node:has(> .message.session-header)
+    > .children
+    > .message-node
+    ~ .message-node
+    > .message.user:not(.steering):not(.task-notification):not(.teammate):not(.sidechain):not(.command-output):not(
+        .pair_middle
+    ):not(.pair_last)::after {
     content: none;
 }
 
@@ -557,7 +589,11 @@
     transition: color 0.12s;
 }
 
-.theme-minimal #transcript .message.user:not(.task-notification):not(.teammate):not(.sidechain):not(.steering) > .fold-bar > .fold-bar-section,
+.theme-minimal
+    #transcript
+    .message.user:not(.task-notification):not(.teammate):not(.sidechain):not(.steering)
+    > .fold-bar
+    > .fold-bar-section,
 .theme-minimal #transcript .message:hover > .fold-bar > .fold-bar-section,
 .theme-minimal #transcript .message > .fold-bar:focus-within > .fold-bar-section {
     color: var(--muted);
@@ -748,7 +784,9 @@
    2px line; the classic per-depth ring colours still apply. Same selector
    shape as the classic rule, one class more specific. */
 .theme-minimal .message-node:has(> .message.tool_result) > .children:has(> .message-node > .message.sidechain),
-.theme-minimal .message-node:has(> .message.tool_use:not(.workflow_agent)) > .children:has(> .message-node > .message.sidechain) {
+.theme-minimal
+    .message-node:has(> .message.tool_use:not(.workflow_agent))
+    > .children:has(> .message-node > .message.sidechain) {
     margin: 4px 0 4px calc(var(--gut) + var(--rail));
     padding-left: 8px;
     border-left-width: 2px;
@@ -756,7 +794,9 @@
 }
 
 .theme-minimal .message-node:has(> .message.tool_result) > .children:has(> .message-node > .message.agent-deep),
-.theme-minimal .message-node:has(> .message.tool_use:not(.workflow_agent)) > .children:has(> .message-node > .message.agent-deep) {
+.theme-minimal
+    .message-node:has(> .message.tool_use:not(.workflow_agent))
+    > .children:has(> .message-node > .message.agent-deep) {
     margin-left: 12px;
 }
 
@@ -832,7 +872,12 @@
 }
 
 /* User prompt: a warm tint (mockup .turn > .k-user .main). */
-.theme-minimal #transcript .message.user:not(.steering):not(.task-notification):not(.teammate):not(.compacted):not(.command-output):not(.sidechain) > .content {
+.theme-minimal
+    #transcript
+    .message.user:not(.steering):not(.task-notification):not(.teammate):not(.compacted):not(.command-output):not(
+        .sidechain
+    )
+    > .content {
     margin-left: 4px;
     padding: 2px 8px;
     border-radius: 4px;
@@ -1049,7 +1094,9 @@
     }
 
     .theme-minimal .message-node:has(> .message.tool_result) > .children:has(> .message-node > .message.sidechain),
-    .theme-minimal .message-node:has(> .message.tool_use:not(.workflow_agent)) > .children:has(> .message-node > .message.sidechain) {
+    .theme-minimal
+        .message-node:has(> .message.tool_use:not(.workflow_agent))
+        > .children:has(> .message-node > .message.sidechain) {
         margin-left: 16px;
         padding-left: 6px;
     }

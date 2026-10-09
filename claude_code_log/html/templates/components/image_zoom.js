@@ -22,17 +22,17 @@
 (function () {
     'use strict';
 
-    const MAX_FRACTION = 0.9;   // of the viewport, each way
-    const WHEEL_RATE = 0.0015;  // zoom factor per wheel pixel (exp)
-    const LINE_PX = 16;         // pixels per wheel "line" (deltaMode 1)
+    const MAX_FRACTION = 0.9; // of the viewport, each way
+    const WHEEL_RATE = 0.0015; // zoom factor per wheel pixel (exp)
+    const LINE_PX = 16; // pixels per wheel "line" (deltaMode 1)
 
     let dialog = null;
     let frame = null;
     let zoomImg = null;
-    let source = null;          // the page image the dialog was opened from
-    let nat = { w: 0, h: 0 };   // natural size
-    let box = { w: 0, h: 0 };   // frame size
-    let fit = 1;                // scale at which the image fills the frame
+    let source = null; // the page image the dialog was opened from
+    let nat = { w: 0, h: 0 }; // natural size
+    let box = { w: 0, h: 0 }; // frame size
+    let fit = 1; // scale at which the image fills the frame
     let scale = 1;
     let x = 0;
     let y = 0;
@@ -48,7 +48,7 @@
     function viewport() {
         return {
             w: document.documentElement.clientWidth || window.innerWidth,
-            h: window.innerHeight,
+            h: window.innerHeight
         };
     }
 
@@ -76,15 +76,13 @@
         const maxW = Math.floor(vp.w * MAX_FRACTION);
         const maxH = Math.floor(vp.h * MAX_FRACTION);
         const oldFit = fit;
-        const centre = keepView
-            ? { u: (box.w / 2 - x) / scale, v: (box.h / 2 - y) / scale }
-            : null;
+        const centre = keepView ? { u: (box.w / 2 - x) / scale, v: (box.h / 2 - y) / scale } : null;
         fit = Math.min(maxW / nat.w, maxH / nat.h, 1);
         box = { w: Math.round(nat.w * fit), h: Math.round(nat.h * fit) };
         frame.style.width = box.w + 'px';
         frame.style.height = box.h + 'px';
         if (centre) {
-            scale = clamp(scale * fit / oldFit, fit, 1);
+            scale = clamp((scale * fit) / oldFit, fit, 1);
             x = box.w / 2 - centre.u * scale;
             y = box.h / 2 - centre.v * scale;
         } else {
@@ -98,8 +96,8 @@
 
     function zoomAt(px, py, next) {
         next = clamp(next, fit, 1);
-        x = px - (px - x) * next / scale;
-        y = py - (py - y) * next / scale;
+        x = px - ((px - x) * next) / scale;
+        y = py - ((py - y) * next) / scale;
         scale = next;
         clampPan();
         apply();
@@ -131,7 +129,9 @@
         dialog.appendChild(close);
         document.body.appendChild(dialog);
 
-        close.addEventListener('click', function () { dialog.close(); });
+        close.addEventListener('click', function () {
+            dialog.close();
+        });
 
         // The layer around the frame is the dialog element itself, so a
         // click whose target is the dialog was outside the frame. A drag
@@ -153,19 +153,23 @@
 
         // Over the frame the wheel zooms about the cursor; anywhere in the
         // dialog (the backdrop included) it never scrolls the page behind.
-        dialog.addEventListener('wheel', function (event) {
-            event.preventDefault();
-            const r = frame.getBoundingClientRect();
-            const px = event.clientX - r.left;
-            const py = event.clientY - r.top;
-            if (px < 0 || py < 0 || px > r.width || py > r.height) return;
-            // WHEEL_RATE is per pixel. Firefox reports a notch in lines
-            // (deltaMode 1), and a wheel can report pages (2).
-            let deltaY = event.deltaY;
-            if (event.deltaMode === 1) deltaY *= LINE_PX;
-            else if (event.deltaMode === 2) deltaY *= box.h;
-            zoomAt(px, py, scale * Math.exp(-deltaY * WHEEL_RATE));
-        }, { passive: false });
+        dialog.addEventListener(
+            'wheel',
+            function (event) {
+                event.preventDefault();
+                const r = frame.getBoundingClientRect();
+                const px = event.clientX - r.left;
+                const py = event.clientY - r.top;
+                if (px < 0 || py < 0 || px > r.width || py > r.height) return;
+                // WHEEL_RATE is per pixel. Firefox reports a notch in lines
+                // (deltaMode 1), and a wheel can report pages (2).
+                let deltaY = event.deltaY;
+                if (event.deltaMode === 1) deltaY *= LINE_PX;
+                else if (event.deltaMode === 2) deltaY *= box.h;
+                zoomAt(px, py, scale * Math.exp(-deltaY * WHEEL_RATE));
+            },
+            { passive: false }
+        );
 
         let drag = null;
         frame.addEventListener('pointerdown', function (event) {

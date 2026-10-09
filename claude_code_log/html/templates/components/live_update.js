@@ -224,10 +224,20 @@
         let ok = true;
         root.querySelectorAll('.message-node').forEach(node => {
             const key = nodeKey(node);
-            if (!key) { ok = false; return; }
+            if (!key) {
+                ok = false;
+                return;
+            }
             ids.push(key);
             if (withHashes) {
-                hashes.set(key, hashOf(ownParts(node).map(el => el.outerHTML).join('')));
+                hashes.set(
+                    key,
+                    hashOf(
+                        ownParts(node)
+                            .map(el => el.outerHTML)
+                            .join('')
+                    )
+                );
             }
         });
         return { ids, hashes, ok };
@@ -282,8 +292,7 @@
     }
 
     function insertNode(newNode, imported) {
-        const parentNode = newNode.parentElement
-            && newNode.parentElement.closest('.message-node');
+        const parentNode = newNode.parentElement && newNode.parentElement.closest('.message-node');
         let liveKids;
         if (!parentNode) {
             liveKids = container();
@@ -405,9 +414,9 @@
         followBtn.dataset.unseen = String(unseen);
         followBtn.title = following
             ? 'Following new messages — click to stop'
-            : (unseen
-                ? `${unseen} new message${unseen === 1 ? '' : 's'} — click to follow`
-                : 'Follow new messages as they arrive');
+            : unseen
+              ? `${unseen} new message${unseen === 1 ? '' : 's'} — click to follow`
+              : 'Follow new messages as they arrive';
         document.body.classList.toggle('live-following', following);
     }
 
@@ -438,7 +447,7 @@
     function scrollToEnd() {
         window.scrollTo({
             top: document.documentElement.scrollHeight,
-            behavior: 'smooth',
+            behavior: 'smooth'
         });
     }
 
@@ -525,7 +534,7 @@
                 head.headers.get('Last-Modified') || '',
                 length,
                 head.headers.get('ETag') || '',
-                head.headers.get('X-Content-Revision') || '',
+                head.headers.get('X-Content-Revision') || ''
             ].join('|');
             const served = lastStamp === null ? loadedLength() : null;
             const missedOnLoad = !!served && !!length && Number(length) !== served;
@@ -560,7 +569,9 @@
 
     window.claudeLogLiveUpdate = {
         poll,
-        stop() { stopped = true; },
-        setFollowing,
+        stop() {
+            stopped = true;
+        },
+        setFollowing
     };
 })();

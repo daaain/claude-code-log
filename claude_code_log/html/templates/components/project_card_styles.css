@@ -40,7 +40,9 @@
     background-color: #ffffff66;
     border-radius: 8px;
     padding: 20px;
-    box-shadow: -7px -7px 10px #eeeeee44, 7px 7px 10px #00000011;
+    box-shadow:
+        -7px -7px 10px #eeeeee44,
+        7px 7px 10px #00000011;
     border-left: #ffffff66 1px solid;
     border-top: #ffffff66 1px solid;
     border-bottom: #00000017 1px solid;
@@ -48,7 +50,9 @@
 }
 
 .project-card:hover {
-    box-shadow: -10px -10px 15px #eeeeee66, 10px 10px 15px #00000022;
+    box-shadow:
+        -10px -10px 15px #eeeeee66,
+        10px 10px 15px #00000022;
     transform: translateY(-1px);
     transition: all 0.2s ease;
 }
@@ -95,7 +99,9 @@
     padding: 15px;
     background-color: #ffffff66;
     border-radius: 8px;
-    box-shadow: -7px -7px 10px #eeeeee44, 7px 7px 10px #00000011;
+    box-shadow:
+        -7px -7px 10px #eeeeee44,
+        7px 7px 10px #00000011;
     border-left: #ffffff66 1px solid;
     border-top: #ffffff66 1px solid;
     border-bottom: #00000017 1px solid;

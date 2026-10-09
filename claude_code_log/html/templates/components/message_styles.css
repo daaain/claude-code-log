@@ -16,7 +16,9 @@
     border-radius: 8px;
     border-left: var(--white-dimmed) 2px solid;
     background-color: var(--highlight-light);
-    box-shadow: -7px -7px 10px #eeeeee44, 7px 7px 10px #00000011;
+    box-shadow:
+        -7px -7px 10px #eeeeee44,
+        7px 7px 10px #00000011;
     border-top: var(--white-dimmed) 1px solid;
     border-bottom: #00000017 1px solid;
     border-right: #00000017 1px solid;
@@ -655,7 +657,7 @@ div.system-hook .header {
 }
 
 .content pre.command-output-content {
-    padding: .5em;
+    padding: 0.5em;
 }
 
 /* Bash command styling (user-initiated, right-aligned) */
@@ -754,7 +756,8 @@ div.system-hook .header {
     background-color: var(--error-semi);
 }
 
-.message.tool_use pre, .message.tool_result pre {
+.message.tool_use pre,
+.message.tool_result pre {
     font-size: 80%;
 }
 
@@ -791,7 +794,9 @@ div.system-hook .header {
     border-radius: 8px;
     padding: 16px;
     margin: 30px 0 20px 0;
-    box-shadow: -7px -7px 10px #eeeeee44, 7px 7px 10px #00000011;
+    box-shadow:
+        -7px -7px 10px #eeeeee44,
+        7px 7px 10px #00000011;
     border-left: var(--white-dimmed) 1px solid;
     border-top: var(--white-dimmed) 1px solid;
     border-bottom: #00000017 1px solid;
@@ -887,7 +892,7 @@ div.system-hook .header {
     overflow-wrap: break-word;
 }
 
-.content>pre {
+.content > pre {
     background-color: transparent;
     padding: 0;
     border-radius: 0;
@@ -910,12 +915,12 @@ div.system-hook .header {
 }
 
 .markdown td {
-    padding: .5em;
+    padding: 0.5em;
     border-top: 1px solid #bbb;
 }
 
 .markdown th {
-    padding: .5em;
+    padding: 0.5em;
     border-bottom: 1px solid #888;
 }
 
@@ -931,7 +936,9 @@ pre > code {
     padding: 8px;
     margin: 8px 0;
     overflow-x: auto;
-    box-shadow: -4px -4px 10px #eeeeee33, 4px 4px 10px #00000007;
+    box-shadow:
+        -4px -4px 10px #eeeeee33,
+        4px 4px 10px #00000007;
     border-left: var(--white-dimmed) 1px solid;
     border-top: var(--white-dimmed) 1px solid;
     border-bottom: #00000017 1px solid;
@@ -1131,8 +1138,8 @@ button > .tool-param-fold-glyph {
     list-style-type: disclosure-closed;
 }
 
-.tool-param-key-toggle[aria-expanded='true'] > .tool-param-fold-glyph,
-[data-state='expanded'] > .tool-param-fold-glyph {
+.tool-param-key-toggle[aria-expanded="true"] > .tool-param-fold-glyph,
+[data-state="expanded"] > .tool-param-fold-glyph {
     list-style-type: "\23F7";
     list-style-type: disclosure-open;
 }
@@ -1221,7 +1228,9 @@ button > .tool-param-fold-glyph {
     padding: 6px;
     margin: 4px 0;
     font-size: 0.9em;
-    box-shadow: -7px -7px 10px #eeeeee44, 7px 7px 10px #00000011;
+    box-shadow:
+        -7px -7px 10px #eeeeee44,
+        7px 7px 10px #00000011;
     border-left: var(--white-dimmed) 1px solid;
     border-top: var(--white-dimmed) 1px solid;
     border-bottom: #00000017 1px solid;
@@ -1236,7 +1245,9 @@ button > .tool-param-fold-glyph {
     margin: 8px 0;
     border-radius: 0 4px 4px 0;
     font-style: italic;
-    box-shadow: -7px -7px 10px #eeeeee44, 7px 7px 10px #00000011;
+    box-shadow:
+        -7px -7px 10px #eeeeee44,
+        7px 7px 10px #00000011;
     border-top: var(--white-dimmed) 1px solid;
     border-bottom: #00000017 1px solid;
     border-right: #00000017 1px solid;
@@ -1340,39 +1351,87 @@ details summary {
 
 /* ANSI color classes */
 /* Standard colors */
-.ansi-black { color: #000000; }
-.ansi-red { color: #cd3131; }
-.ansi-green { color: #0dbc79; }
-.ansi-yellow { color: #e5e510; }
-.ansi-blue { color: #2472c8; }
-.ansi-magenta { color: #bc3fbc; }
-.ansi-cyan { color: #11a8cd; }
-.ansi-white { color: #e5e5e5; }
+.ansi-black {
+    color: #000000;
+}
+.ansi-red {
+    color: #cd3131;
+}
+.ansi-green {
+    color: #0dbc79;
+}
+.ansi-yellow {
+    color: #e5e510;
+}
+.ansi-blue {
+    color: #2472c8;
+}
+.ansi-magenta {
+    color: #bc3fbc;
+}
+.ansi-cyan {
+    color: #11a8cd;
+}
+.ansi-white {
+    color: #e5e5e5;
+}
 
 /* Bright colors */
-.ansi-bright-black { color: #666666; }
-.ansi-bright-red { color: #f14c4c; }
-.ansi-bright-green { color: #23d18b; }
-.ansi-bright-yellow { color: #f5f543; }
-.ansi-bright-blue { color: #3b8eea; }
-.ansi-bright-magenta { color: #d670d6; }
-.ansi-bright-cyan { color: #29b8db; }
-.ansi-bright-white { color: #ffffff; }
+.ansi-bright-black {
+    color: #666666;
+}
+.ansi-bright-red {
+    color: #f14c4c;
+}
+.ansi-bright-green {
+    color: #23d18b;
+}
+.ansi-bright-yellow {
+    color: #f5f543;
+}
+.ansi-bright-blue {
+    color: #3b8eea;
+}
+.ansi-bright-magenta {
+    color: #d670d6;
+}
+.ansi-bright-cyan {
+    color: #29b8db;
+}
+.ansi-bright-white {
+    color: #ffffff;
+}
 
 /* Background colors */
-.ansi-bg-black { background-color: #000000; }
-.ansi-bg-red { background-color: #cd3131; }
-.ansi-bg-green { background-color: #0dbc79; }
-.ansi-bg-yellow { background-color: #e5e510; }
-.ansi-bg-blue { background-color: #2472c8; }
-.ansi-bg-magenta { background-color: #bc3fbc; }
-.ansi-bg-cyan { background-color: #11a8cd; }
-.ansi-bg-white { background-color: #e5e5e5; }
+.ansi-bg-black {
+    background-color: #000000;
+}
+.ansi-bg-red {
+    background-color: #cd3131;
+}
+.ansi-bg-green {
+    background-color: #0dbc79;
+}
+.ansi-bg-yellow {
+    background-color: #e5e510;
+}
+.ansi-bg-blue {
+    background-color: #2472c8;
+}
+.ansi-bg-magenta {
+    background-color: #bc3fbc;
+}
+.ansi-bg-cyan {
+    background-color: #11a8cd;
+}
+.ansi-bg-white {
+    background-color: #e5e5e5;
+}
 
 /* Debug UUID info */
 .debug-info {
     display: none;
-    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
     font-size: 0.7em;
     color: #999;
     padding: 2px 0;
@@ -1384,20 +1443,44 @@ details summary {
 }
 
 /* Bright background colors */
-.ansi-bg-bright-black { background-color: #666666; }
-.ansi-bg-bright-red { background-color: #f14c4c; }
-.ansi-bg-bright-green { background-color: #23d18b; }
-.ansi-bg-bright-yellow { background-color: #f5f543; }
-.ansi-bg-bright-blue { background-color: #3b8eea; }
-.ansi-bg-bright-magenta { background-color: #d670d6; }
-.ansi-bg-bright-cyan { background-color: #29b8db; }
-.ansi-bg-bright-white { background-color: #ffffff; }
+.ansi-bg-bright-black {
+    background-color: #666666;
+}
+.ansi-bg-bright-red {
+    background-color: #f14c4c;
+}
+.ansi-bg-bright-green {
+    background-color: #23d18b;
+}
+.ansi-bg-bright-yellow {
+    background-color: #f5f543;
+}
+.ansi-bg-bright-blue {
+    background-color: #3b8eea;
+}
+.ansi-bg-bright-magenta {
+    background-color: #d670d6;
+}
+.ansi-bg-bright-cyan {
+    background-color: #29b8db;
+}
+.ansi-bg-bright-white {
+    background-color: #ffffff;
+}
 
 /* Text styles */
-.ansi-bold { font-weight: bold; }
-.ansi-dim { opacity: 0.7; }
-.ansi-italic { font-style: italic; }
-.ansi-underline { text-decoration: underline; }
+.ansi-bold {
+    font-weight: bold;
+}
+.ansi-dim {
+    opacity: 0.7;
+}
+.ansi-italic {
+    font-style: italic;
+}
+.ansi-underline {
+    text-decoration: underline;
+}
 
 /* Image styling */
 /* Any image a message carries (one from rendered Markdown too) stays in the
@@ -1911,7 +1994,7 @@ img.artifact-favicon {
     border-radius: 9px;
     background-color: #d64545;
     color: #fff;
-    font-family: 'SFMono-Regular', Consolas, monospace;
+    font-family: "SFMono-Regular", Consolas, monospace;
     font-size: 10px;
     font-weight: 600;
     line-height: 17px;

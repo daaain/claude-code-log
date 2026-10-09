@@ -118,8 +118,10 @@
     --message-padding: 1em;
 
     /* Font families */
-    --font-monospace: 'Fira Code', 'Monaco', 'Consolas', 'SF Mono', 'Inconsolata', 'Droid Sans Mono', 'Source Code Pro', 'Ubuntu Mono', 'Cascadia Code', 'Menlo', monospace;
-    --font-ui: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-monospace:
+        "Fira Code", "Monaco", "Consolas", "SF Mono", "Inconsolata", "Droid Sans Mono", "Source Code Pro",
+        "Ubuntu Mono", "Cascadia Code", "Menlo", monospace;
+    --font-ui: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
 body {
@@ -128,7 +130,19 @@ body {
     max-width: 1200px;
     margin: 0 auto;
     padding: 10px;
-    background: linear-gradient(90deg, #f3d6d2, #f1dcce, #f0e4ca, #eeecc7, #e3ecc3, #d5eac0, #c6e8bd, #b9e6bc, #b6e3c5, #b3e1cf);
+    background: linear-gradient(
+        90deg,
+        #f3d6d2,
+        #f1dcce,
+        #f0e4ca,
+        #eeecc7,
+        #e3ecc3,
+        #d5eac0,
+        #c6e8bd,
+        #b9e6bc,
+        #b6e3c5,
+        #b3e1cf
+    );
     color: var(--text-primary);
 }
 
@@ -148,7 +162,6 @@ code {
     font-family: var(--font-monospace);
     line-height: 1.5;
 }
-
 
 pre {
     background-color: #12121212;
@@ -171,7 +184,9 @@ pre {
     background-color: #ffffff66;
     border-radius: 8px;
     padding: 16px;
-    box-shadow: -7px -7px 10px #eeeeee44, 7px 7px 10px #00000011;
+    box-shadow:
+        -7px -7px 10px #eeeeee44,
+        7px 7px 10px #00000011;
     border-left: #ffffff66 1px solid;
     border-top: #ffffff66 1px solid;
     border-bottom: #00000017 1px solid;
@@ -179,7 +194,9 @@ pre {
 }
 
 .card-base:hover {
-    box-shadow: -10px -10px 15px #eeeeee66, 10px 10px 15px #00000022;
+    box-shadow:
+        -10px -10px 15px #eeeeee66,
+        10px 10px 15px #00000022;
     transform: translateY(-1px);
     transition: all 0.2s ease;
 }
@@ -235,7 +252,9 @@ pre {
     align-items: center;
     justify-content: center;
     box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2);
-    transition: background-color 0.3s, transform 0.2s;
+    transition:
+        background-color 0.3s,
+        transform 0.2s;
     z-index: 1000;
     text-decoration: none;
 }
@@ -271,7 +290,7 @@ pre {
 .debug-toggle.floating-btn {
     bottom: 260px;
     font-size: 0.7em;
-    font-family: 'SFMono-Regular', Consolas, monospace;
+    font-family: "SFMono-Regular", Consolas, monospace;
     font-weight: 600;
 }
 
@@ -343,7 +362,7 @@ pre {
     right: 2px;
     padding: 1px 6px;
     font-size: 0.7em;
-    font-family: 'SFMono-Regular', Consolas, monospace;
+    font-family: "SFMono-Regular", Consolas, monospace;
     background: transparent;
     border: 1px solid #ccc;
     border-radius: 3px;
@@ -382,7 +401,7 @@ body.show-raw-user .user-content:not([data-user-view="md"]) .user-raw {
 .user-view-global.floating-btn {
     bottom: 320px;
     font-size: 0.7em;
-    font-family: 'SFMono-Regular', Consolas, monospace;
+    font-family: "SFMono-Regular", Consolas, monospace;
     font-weight: 600;
 }
 
@@ -412,7 +431,7 @@ body.show-raw-user .user-content:not([data-user-view="md"]) .user-raw {
  * wraps to one or two lines depending on the viewport. */
 .resume-toast {
     position: fixed;
-    right: calc(20px + 50px + 12px);  /* button right + width + gap */
+    right: calc(20px + 50px + 12px); /* button right + width + gap */
     bottom: calc(var(--resume-btn-bottom) + 25px);
     transform: translateY(50%);
     max-width: min(320px, calc(100vw - 120px));

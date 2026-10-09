@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 jobs:
   test:
@@ -31,91 +31,91 @@ jobs:
       COV_APPEND: ${{ matrix.is-primary && '--cov=claude_code_log --cov-append --cov-report=xml --cov-report=html --cov-report=term' || '' }}
 
     steps:
-    - uses: actions/checkout@v4
-      with:
-        # Full history so test/test_commit_linkifier.py's
-        # TestIntegrationLocalRepo can resolve SHAs older than the
-        # current tip (`git branch -r --contains` reads local refs
-        # only and needs the commits in the object DB).
-        fetch-depth: 0
+      - uses: actions/checkout@v4
+        with:
+          # Full history so test/test_commit_linkifier.py's
+          # TestIntegrationLocalRepo can resolve SHAs older than the
+          # current tip (`git branch -r --contains` reads local refs
+          # only and needs the commits in the object DB).
+          fetch-depth: 0
 
-    - name: Move TEMP to the workspace disk (Windows)
-      # On windows runners TMP/TEMP default to the C: OS disk, whose
-      # throttled I/O dominates this tmp-heavy suite; RUNNER_TEMP lives on
-      # the same disk as the workspace (D:). Measured via A/B experiment
-      # (run 28715118956): this redirect alone took the unit selection from
-      # 555s mean to 150s — parity with ubuntu (~161s). Defender is NOT the
-      # culprit: real-time protection is already off on current images
-      # (exclusions/disable measured as no-ops), and a ReFS dev drive
-      # (~296s) was dominated by this redirect. Details: work/win-io.md
-      if: runner.os == 'Windows'
-      shell: pwsh
-      run: |
-        "TMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
-        "TEMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+      - name: Move TEMP to the workspace disk (Windows)
+        # On windows runners TMP/TEMP default to the C: OS disk, whose
+        # throttled I/O dominates this tmp-heavy suite; RUNNER_TEMP lives on
+        # the same disk as the workspace (D:). Measured via A/B experiment
+        # (run 28715118956): this redirect alone took the unit selection from
+        # 555s mean to 150s — parity with ubuntu (~161s). Defender is NOT the
+        # culprit: real-time protection is already off on current images
+        # (exclusions/disable measured as no-ops), and a ReFS dev drive
+        # (~296s) was dominated by this redirect. Details: work/win-io.md
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          "TMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+          "TEMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
 
-    - name: Install uv
-      uses: astral-sh/setup-uv@v4
-      with:
-        enable-cache: true
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
 
-    - name: Set up Python ${{ matrix.python-version }}
-      run: uv python install ${{ matrix.python-version }}
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
 
-    - name: Install dependencies
-      run: uv sync --all-extras --dev && uv run playwright install chromium
+      - name: Install dependencies
+        run: uv sync --all-extras --dev && uv run playwright install chromium
 
-    - name: Run unit tests (coverage on primary only)
-      # -p no:playwright: unit tests don't use the browser fixtures; skipping the
-      # plugin avoids a ~1s playwright import per xdist worker, which Windows pays
-      # per spawned worker. See work/xdist-import-cost.md.
-      run: uv run pytest -p no:playwright -m "not (tui or browser or benchmark)" ${{ env.COV }}
+      - name: Run unit tests (coverage on primary only)
+        # -p no:playwright: unit tests don't use the browser fixtures; skipping the
+        # plugin avoids a ~1s playwright import per xdist worker, which Windows pays
+        # per spawned worker. See work/xdist-import-cost.md.
+        run: uv run pytest -p no:playwright -m "not (tui or browser or benchmark)" ${{ env.COV }}
 
-    - name: Run TUI tests (coverage append on primary only)
-      run: uv run pytest -m tui ${{ env.COV_APPEND }}
+      - name: Run TUI tests (coverage append on primary only)
+        run: uv run pytest -m tui ${{ env.COV_APPEND }}
 
-    - name: Run browser tests (coverage append on primary only)
-      run: uv run pytest -m browser ${{ env.COV_APPEND }}
+      - name: Run browser tests (coverage append on primary only)
+        run: uv run pytest -m browser ${{ env.COV_APPEND }}
 
-    - name: Run benchmark tests with coverage append (primary only)
-      if: matrix.is-primary
-      env:
-        CLAUDE_CODE_LOG_DEBUG_TIMING: "1"
-      run: uv run pytest -m benchmark ${{ env.COV_APPEND }} -v
+      - name: Run benchmark tests with coverage append (primary only)
+        if: matrix.is-primary
+        env:
+          CLAUDE_CODE_LOG_DEBUG_TIMING: "1"
+        run: uv run pytest -m benchmark ${{ env.COV_APPEND }} -v
 
-    - name: Upload coverage HTML report as artifact
-      uses: actions/upload-artifact@v4
-      if: matrix.is-primary
-      with:
-        name: coverage-report-html
-        path: htmlcov/
-        retention-days: 30
+      - name: Upload coverage HTML report as artifact
+        uses: actions/upload-artifact@v4
+        if: matrix.is-primary
+        with:
+          name: coverage-report-html
+          path: htmlcov/
+          retention-days: 30
 
-    - name: Upload coverage XML as artifact
-      uses: actions/upload-artifact@v4
-      if: matrix.is-primary
-      with:
-        name: coverage-report-xml
-        path: coverage.xml
-        retention-days: 30
+      - name: Upload coverage XML as artifact
+        uses: actions/upload-artifact@v4
+        if: matrix.is-primary
+        with:
+          name: coverage-report-xml
+          path: coverage.xml
+          retention-days: 30
 
-    - name: Coverage comment (PR only)
-      if: github.event_name == 'pull_request' && matrix.is-primary
-      uses: py-cov-action/python-coverage-comment-action@v3
-      with:
-        GITHUB_TOKEN: ${{ github.token }}
-        MINIMUM_GREEN: 75
-        MINIMUM_ORANGE: 60
+      - name: Coverage comment (PR only)
+        if: github.event_name == 'pull_request' && matrix.is-primary
+        uses: py-cov-action/python-coverage-comment-action@v3
+        with:
+          GITHUB_TOKEN: ${{ github.token }}
+          MINIMUM_GREEN: 75
+          MINIMUM_ORANGE: 60
 
-    - name: Run linting
-      run: uv run ruff check
+      - name: Run linting
+        run: uv run ruff check
 
-    - name: Run formatting check
-      run: uv run ruff format --check
+      - name: Run formatting check
+        run: uv run ruff format --check
 
-    - name: Run type checking
-      run: uv run pyright
+      - name: Run type checking
+        run: uv run pyright
 
-    - name: Lint the templates' JavaScript (primary only)
-      if: matrix.is-primary
-      run: uv run --group js python scripts/lint_js.py
+      - name: Lint the templates' JavaScript (primary only)
+        if: matrix.is-primary
+        run: uv run --group js python scripts/lint_js.py
