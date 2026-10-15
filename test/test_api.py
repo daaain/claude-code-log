@@ -277,6 +277,28 @@ def test_search_without_an_index_is_a_clean_error(tmp_path: Path) -> None:
             assert "not available" in json.loads(exc.read())["error"]
 
 
+@pytest.mark.parametrize("endpoint", ["/api/search?q=anything", "/api/projects"])
+def test_corrupt_cache_is_a_clean_error(tmp_path: Path, endpoint: str) -> None:
+    path = tmp_path / "cache.db"
+    path.write_bytes(b"not a SQLite database")
+    api = SearchApi(path)
+    with ArchiveServer(tmp_path, api_routes=api.routes(), port=0) as server:
+        with pytest.raises(urllib.error.HTTPError) as error:
+            urllib.request.urlopen(f"{server.url}{endpoint}")
+        assert error.value.code == 400
+        message = json.loads(error.value.read())["error"]
+        assert "cache database is unreadable" in message
+        assert "DatabaseError(" not in message
+
+
+def test_projects_does_not_hide_other_database_errors(tmp_path: Path) -> None:
+    path = tmp_path / "cache.db"
+    sqlite3.connect(path).close()
+    api = SearchApi(path)
+    with pytest.raises(sqlite3.OperationalError, match="no such table: projects"):
+        api.projects({})
+
+
 # --- the performance contract --------------------------------------------
 
 
