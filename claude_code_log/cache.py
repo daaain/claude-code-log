@@ -2759,6 +2759,42 @@ class CacheManager:
 
         return stale_sessions
 
+    def get_existing_session_ids(self, filename_session_ids: set[str]) -> set[str]:
+        """Resolve cached sessions through their actual, project-local source files.
+
+        Callers derive the "valid" session IDs from JSONL filename stems, but a
+        stem is only a reliable identifier for an uncached file. A single JSONL
+        can contain several session IDs, and none of them has to equal the
+        filename stem (for example after a file is renamed). Relying on stems
+        alone wrongly reports such sessions as archived even though their source
+        file still exists on disk.
+
+        This augments the filename-derived set with every cached session whose
+        recorded source file still exists, scoped to this project. It is
+        read-only and deliberately does not reconstruct transcripts.
+        """
+        existing = set(filename_session_ids)
+        if self._project_id is None:
+            return existing
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                """SELECT DISTINCT m.session_id, f.file_path
+                   FROM messages m JOIN cached_files f ON f.id = m.file_id
+                   WHERE m.project_id = ? AND f.project_id = m.project_id
+                     AND m.session_id IS NOT NULL""",
+                (self._project_id,),
+            ).fetchall()
+        path_exists: dict[str, bool] = {}
+        for row in rows:
+            sid, source = row["session_id"], row["file_path"]
+            if sid in existing:
+                continue
+            if source not in path_exists:
+                path_exists[source] = Path(source).is_file()
+            if path_exists[source]:
+                existing.add(sid)
+        return existing
+
     def get_archived_session_count(self, valid_session_ids: set[str]) -> int:
         """Count sessions in cache whose JSONL files have been deleted.
 
@@ -2772,6 +2808,8 @@ class CacheManager:
         """
         if self._project_id is None:
             return 0
+
+        valid_session_ids = self.get_existing_session_ids(valid_session_ids)
 
         with self._get_connection() as conn:
             cached_rows = conn.execute(
@@ -2798,6 +2836,8 @@ class CacheManager:
             return {}
 
         archived_sessions: Dict[str, SessionCacheData] = {}
+
+        valid_session_ids = self.get_existing_session_ids(valid_session_ids)
 
         with self._get_connection() as conn:
             session_rows = conn.execute(

@@ -1394,6 +1394,13 @@ class SessionBrowser(App[Optional[str]]):
                 self.log.debug(f"Cache building failed during startup: {e}")
                 return
 
+        # Resolve filename-stem IDs through the cache's recorded source files so
+        # renamed and multi-session JSONLs count as current, not archived. This
+        # feeds both the archived lookup and the current-session filter below.
+        valid_session_ids = self.cache_manager.get_existing_session_ids(
+            valid_session_ids
+        )
+
         # Only compute archived sessions if there are JSONL files to compare against
         # (in test environments, there may be cached sessions but no JSONL files)
         if valid_session_ids:
