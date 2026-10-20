@@ -158,6 +158,43 @@ class TestSessionBrowser:
                 assert app.sessions["session-123"].message_count == 2
 
     @pytest.mark.asyncio
+    async def test_archiving_last_jsonl_marks_session_archived(self):
+        """A cached session must be classified as archived, not current, once
+        the project's last source JSONL is gone, so the empty valid set still
+        routes it to archived_sessions (Restore available)."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_path = Path(temp_dir)  # deliberately contains no JSONL files
+            app = SessionBrowser(project_path)
+            orphan = {
+                "orphan-session": SessionCacheData(
+                    session_id="orphan-session",
+                    first_timestamp="2025-01-01T10:00:00Z",
+                    last_timestamp="2025-01-01T10:01:00Z",
+                    message_count=1,
+                    first_user_message="only in cache now",
+                )
+            }
+            with (
+                patch.object(
+                    app.cache_manager, "get_cached_project_data"
+                ) as mock_cache,
+                patch.object(app.cache_manager, "get_modified_files", return_value=[]),
+                patch.object(
+                    app.cache_manager, "get_existing_session_ids", return_value=set()
+                ),
+                patch.object(
+                    app.cache_manager, "get_archived_sessions", return_value=orphan
+                ),
+            ):
+                mock_cache.return_value = Mock(
+                    sessions=orphan, working_directories=[str(project_path)]
+                )
+                async with app.run_test() as pilot:
+                    await pilot.pause(0.1)
+                    assert app.sessions == {}
+                    assert "orphan-session" in app.archived_sessions
+
+    @pytest.mark.asyncio
     async def test_load_sessions_with_modified_files(self, temp_project_dir):
         """Test loading sessions when files have been modified since cache."""
         app = SessionBrowser(temp_project_dir)

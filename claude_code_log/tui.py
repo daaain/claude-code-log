@@ -1448,23 +1448,21 @@ class SessionBrowser(App[Optional[str]]):
             valid_session_ids
         )
 
-        # Only compute archived sessions if there are JSONL files to compare against
-        # (in test environments, there may be cached sessions but no JSONL files)
-        if valid_session_ids:
-            # Load archived sessions (cached but JSONL deleted)
-            self.archived_sessions = self.cache_manager.get_archived_sessions(
-                valid_session_ids
-            )
+        # Classify cached sessions against the resolved valid set. This also
+        # runs when the set is empty (e.g. the project's last source JSONL was
+        # just archived): every non-hidden cached session is then archived and
+        # offered for Restore, instead of lingering as a "current" session whose
+        # file is gone.
+        self.archived_sessions = self.cache_manager.get_archived_sessions(
+            valid_session_ids
+        )
 
-            # Filter current sessions to only those with existing JSONL files
-            self.sessions = {
-                sid: data
-                for sid, data in self.sessions.items()
-                if sid in valid_session_ids
-            }
-        else:
-            # No JSONL files to compare - treat all sessions as current
-            self.archived_sessions = {}
+        # Keep as current only the sessions whose source JSONL still exists.
+        self.sessions = {
+            sid: data
+            for sid, data in self.sessions.items()
+            if sid in valid_session_ids
+        }
 
         # Only update UI if we're in app context
         try:
