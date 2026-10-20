@@ -2770,8 +2770,12 @@ class CacheManager:
         file still exists on disk.
 
         This augments the filename-derived set with every cached session whose
-        recorded source file still exists, scoped to this project. It is
-        read-only and deliberately does not reconstruct transcripts.
+        recorded *trunk* source file still exists, scoped to this project. Only
+        non-sidechain rows count: a session's ``agent-*`` sub-transcripts live
+        in their own cached files but carry the trunk session ID, so a surviving
+        agent file must not keep a session "current" once its trunk JSONL is
+        gone (trunk discovery could not load it). It is read-only and
+        deliberately does not reconstruct transcripts.
         """
         existing = set(filename_session_ids)
         if self._project_id is None:
@@ -2781,7 +2785,8 @@ class CacheManager:
                 """SELECT DISTINCT m.session_id, f.file_path
                    FROM messages m JOIN cached_files f ON f.id = m.file_id
                    WHERE m.project_id = ? AND f.project_id = m.project_id
-                     AND m.session_id IS NOT NULL""",
+                     AND m.session_id IS NOT NULL
+                     AND m._is_sidechain = 0""",
                 (self._project_id,),
             ).fetchall()
         path_exists: dict[str, bool] = {}
@@ -2794,6 +2799,63 @@ class CacheManager:
             if path_exists[source]:
                 existing.add(sid)
         return existing
+
+    def get_session_source_paths(
+        self, session_id: str, trunk_only: bool = True
+    ) -> List[str]:
+        """Existing on-disk source paths for ``session_id`` in this project.
+
+        Resolves a session's real source file(s) from the cache instead of
+        assuming the ``<session-id>.jsonl`` naming, so archive/delete act on the
+        right file for a renamed or multi-session JSONL. With ``trunk_only``
+        (default) only non-sidechain rows count, so ``agent-*`` sub-transcripts
+        are never returned — a session's agent files must not be deleted when it
+        is archived. Paths whose file no longer exists are omitted; order
+        follows the cached file id.
+        """
+        if self._project_id is None:
+            return []
+        sidechain_clause = "\n                     AND m._is_sidechain = 0" if trunk_only else ""
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                """SELECT DISTINCT f.id AS fid, f.file_path AS file_path
+                   FROM messages m JOIN cached_files f ON f.id = m.file_id
+                   WHERE m.project_id = ? AND f.project_id = m.project_id
+                     AND m.session_id = ?"""
+                + sidechain_clause
+                + "\n                   ORDER BY f.id",
+                (self._project_id, session_id),
+            ).fetchall()
+        return [row["file_path"] for row in rows if Path(row["file_path"]).is_file()]
+
+    def get_sessions_sharing_file(
+        self, file_path: str, exclude_session_id: str
+    ) -> set[str]:
+        """Other non-hidden session IDs whose trunk rows live in ``file_path``.
+
+        A single JSONL can hold more than one session (a continuation written
+        into the previous session's file). Archiving or deleting that file
+        therefore affects those sessions too, so callers warn before removing a
+        shared source. Excludes ``exclude_session_id`` and hidden sessions,
+        counts trunk (non-sidechain) rows only, and is scoped to this project.
+        """
+        if self._project_id is None:
+            return set()
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                """SELECT DISTINCT m.session_id AS sid
+                   FROM messages m
+                   JOIN cached_files f ON f.id = m.file_id
+                   JOIN sessions s ON s.session_id = m.session_id
+                                  AND s.project_id = m.project_id
+                   WHERE m.project_id = ? AND f.file_path = ?
+                     AND m._is_sidechain = 0
+                     AND m.session_id IS NOT NULL
+                     AND m.session_id != ?
+                     AND s.hidden = 0""",
+                (self._project_id, file_path, exclude_session_id),
+            ).fetchall()
+        return {row["sid"] for row in rows}
 
     def get_archived_session_count(self, valid_session_ids: set[str]) -> int:
         """Count sessions in cache whose JSONL files have been deleted.

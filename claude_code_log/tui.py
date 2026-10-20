@@ -857,6 +857,11 @@ class ArchiveConfirmScreen(ModalScreen[bool]):
         margin-bottom: 1;
     }
 
+    #archive-shared {
+        color: $warning;
+        margin-bottom: 1;
+    }
+
     #archive-buttons {
         text-align: center;
         height: auto;
@@ -870,11 +875,21 @@ class ArchiveConfirmScreen(ModalScreen[bool]):
         Binding("escape", "cancel", "Cancel", show=False),
     ]
 
-    def __init__(self, session_id: str) -> None:
+    def __init__(
+        self, session_id: str, shared_sessions: Optional[List[str]] = None
+    ) -> None:
+        """Confirm archiving ``session_id``.
+
+        ``shared_sessions`` lists other current session IDs that share this
+        session's source JSONL; when non-empty the modal warns that archiving
+        removes the file for them too.
+        """
         super().__init__()
         self.session_id = session_id
+        self.shared_sessions = shared_sessions or []
 
     def compose(self) -> ComposeResult:
+        """Lay out the archive-confirmation modal."""
         with Container(id="archive-container"):
             yield Static("Archive Session", id="archive-title")
             yield Static(
@@ -886,6 +901,13 @@ class ArchiveConfirmScreen(ModalScreen[bool]):
                 "The session will be archived and can be restored from cache.",
                 id="archive-info",
             )
+            if self.shared_sessions:
+                shared = ", ".join(s[:8] for s in self.shared_sessions)
+                yield Static(
+                    f"⚠ Its JSONL also holds {len(self.shared_sessions)} other "
+                    f"session(s): {shared}.\nArchiving it archives them too.",
+                    id="archive-shared",
+                )
             yield Static("\\[Enter/y] Yes  \\[Esc/n] No", id="archive-buttons")
 
     def action_confirm(self) -> None:
@@ -927,6 +949,11 @@ class DeleteConfirmScreen(ModalScreen[Optional[str]]):
         margin-bottom: 1;
     }
 
+    #delete-shared {
+        color: $error;
+        margin-bottom: 1;
+    }
+
     #delete-buttons {
         text-align: center;
         height: auto;
@@ -942,12 +969,25 @@ class DeleteConfirmScreen(ModalScreen[Optional[str]]):
         Binding("escape", "cancel", "Cancel", show=False),
     ]
 
-    def __init__(self, session_id: str, is_archived: bool = False) -> None:
+    def __init__(
+        self,
+        session_id: str,
+        is_archived: bool = False,
+        shared_sessions: Optional[List[str]] = None,
+    ) -> None:
+        """Confirm deleting ``session_id``.
+
+        ``shared_sessions`` lists other current session IDs that share this
+        session's source JSONL; when non-empty the modal warns that the "Both"
+        option deletes the file for them too.
+        """
         super().__init__()
         self.session_id = session_id
         self.is_archived = is_archived
+        self.shared_sessions = shared_sessions or []
 
     def compose(self) -> ComposeResult:
+        """Lay out the delete-confirmation modal."""
         with Container(id="delete-container"):
             yield Static("Delete Session", id="delete-title")
             yield Static(
@@ -971,6 +1011,13 @@ class DeleteConfirmScreen(ModalScreen[Optional[str]]):
                     "• Both: Delete JSONL file AND cache (permanent!)",
                     id="delete-warning",
                 )
+                if self.shared_sessions:
+                    shared = ", ".join(s[:8] for s in self.shared_sessions)
+                    yield Static(
+                        f"⚠ \"Both\" also deletes the JSONL for "
+                        f"{len(self.shared_sessions)} other session(s): {shared}.",
+                        id="delete-shared",
+                    )
                 yield Static(
                     "\\[c] Cache only   \\[b] Both (permanent)   \\[Esc/n] Cancel",
                     id="delete-buttons",
@@ -2039,11 +2086,40 @@ class SessionBrowser(App[Optional[str]]):
             )
             return
 
-        # Push archive confirmation screen
+        # Push archive confirmation screen, warning if the source JSONL is
+        # shared with other current sessions.
         self.push_screen(
-            ArchiveConfirmScreen(session_id=self.selected_session_id),
+            ArchiveConfirmScreen(
+                session_id=self.selected_session_id,
+                shared_sessions=self._shared_source_sessions(
+                    self.selected_session_id
+                ),
+            ),
             callback=self._on_archive_confirm,
         )
+
+    def _resolve_source_paths(self, session_id: str) -> List[Path]:
+        """Existing trunk JSONL path(s) backing ``session_id``.
+
+        Resolves the real source files from the cache so archive/delete act on
+        a renamed or multi-session JSONL correctly, falling back to the
+        canonical ``<session-id>.jsonl`` only when the cache knows no source.
+        """
+        paths = [Path(p) for p in self.cache_manager.get_session_source_paths(session_id)]
+        if not paths:
+            legacy = self.project_path / f"{session_id}.jsonl"
+            if legacy.is_file():
+                paths = [legacy]
+        return paths
+
+    def _shared_source_sessions(self, session_id: str) -> List[str]:
+        """Other current session IDs that share ``session_id``'s source file(s)."""
+        shared: set[str] = set()
+        for path in self._resolve_source_paths(session_id):
+            shared |= self.cache_manager.get_sessions_sharing_file(
+                str(path), session_id
+            )
+        return sorted(shared & set(self.sessions))
 
     def _on_archive_confirm(self, confirmed: Optional[bool]) -> None:
         """Handle archive confirmation result."""
@@ -2051,10 +2127,14 @@ class SessionBrowser(App[Optional[str]]):
             return
 
         try:
-            # Delete the JSONL file
-            jsonl_path = self.project_path / f"{self.selected_session_id}.jsonl"
-            if jsonl_path.exists():
-                jsonl_path.unlink()
+            # Delete the real source JSONL file(s), resolved from the cache so a
+            # renamed or multi-session file is handled, not assumed by name.
+            removed = False
+            for jsonl_path in self._resolve_source_paths(self.selected_session_id):
+                if jsonl_path.exists():
+                    jsonl_path.unlink()
+                    removed = True
+            if removed:
                 self.notify(
                     f"Session {self.selected_session_id[:8]} archived",
                     severity="information",
@@ -2083,11 +2163,18 @@ class SessionBrowser(App[Optional[str]]):
         # Determine if this is an archived session (no JSONL to fall back on)
         is_archived_session = self.selected_session_id in self.archived_sessions
 
-        # Push confirmation screen
+        # Push confirmation screen, warning if "Both" would remove a JSONL that
+        # is shared with other current sessions.
+        shared = (
+            []
+            if is_archived_session
+            else self._shared_source_sessions(self.selected_session_id)
+        )
         self.push_screen(
             DeleteConfirmScreen(
                 session_id=self.selected_session_id,
                 is_archived=is_archived_session,
+                shared_sessions=shared,
             ),
             callback=self._on_delete_confirm,
         )
@@ -2100,11 +2187,18 @@ class SessionBrowser(App[Optional[str]]):
         try:
             deleted_what: list[str] = []
 
-            # Delete JSONL file if requested
+            # Delete JSONL file if requested, resolving the real source file(s)
+            # from the cache so a renamed or multi-session file is removed, not
+            # a path merely assumed from the session id.
             if delete_option == "both":
-                jsonl_path = self.project_path / f"{self.selected_session_id}.jsonl"
-                if jsonl_path.exists():
-                    jsonl_path.unlink()
+                removed_jsonl = False
+                for jsonl_path in self._resolve_source_paths(
+                    self.selected_session_id
+                ):
+                    if jsonl_path.exists():
+                        jsonl_path.unlink()
+                        removed_jsonl = True
+                if removed_jsonl:
                     deleted_what.append("JSONL file")
 
             # Delete from cache
