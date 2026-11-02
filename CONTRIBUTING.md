@@ -611,7 +611,9 @@ The tool implements a SQLite-based caching system for performance:
   up on a sibling. Against other processes connections wait 30 s
   (`CLAUDE_CODE_LOG_CACHE_TIMEOUT` overrides, in seconds), and a project
   locked out is retried after the pool rather than failed. A pass compacts
-  an oversized WAL before it starts and truncates the WAL when it ends
+  an oversized WAL before it starts and truncates the WAL when it ends. A
+  refresh that fails part-way leaves `projects.refresh_pending` set, and the
+  next run refreshes that project in full
 - **Performance**: 10-100x faster loading for large projects
 
 The cache automatically rebuilds when source files change or cache schema version changes.

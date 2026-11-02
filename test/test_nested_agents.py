@@ -477,6 +477,10 @@ class TestNestedVisualLayer:
 
         cm = CacheManager(proj, "0.0.0-test", db_path=tmp_path / "cache.db")
         load_transcript(trunk, cache_manager=cm, silent=True)
+        # Finish the refresh as ensure_fresh_cache would: a bare entry write
+        # leaves one pending (migration 015), and then every file reads as
+        # modified, whatever its own row says.
+        cm.update_project_aggregates(0, 0, 0, 0, 0, "", "")
         assert cm.is_file_cached(trunk)
         assert cm.get_modified_files([trunk]) == []
 
@@ -506,6 +510,10 @@ class TestNestedVisualLayer:
 
         cm = CacheManager(proj, "0.0.0-test", db_path=tmp_path / "cache.db")
         load_transcript(trunk, cache_manager=cm, silent=True)
+        # Finish the refresh as ensure_fresh_cache would: a bare entry write
+        # leaves one pending (migration 015), and then every file reads as
+        # modified, whatever its own row says.
+        cm.update_project_aggregates(0, 0, 0, 0, 0, "", "")
         assert all(cm.is_file_cached(f) for f in files.values())
 
         def grow(agent: str) -> None:

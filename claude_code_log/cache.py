@@ -173,6 +173,10 @@ class ProjectCache(BaseModel):
     # Session metadata
     sessions: dict[str, SessionCacheData]
 
+    # An entry write has not yet been followed by the session rows and
+    # aggregates derived from it (migration 015).
+    refresh_pending: bool = False
+
     # Working directories associated with this project
     working_directories: list[str] = []
 
@@ -1351,6 +1355,24 @@ class CacheManager:
             (datetime.now().isoformat(), self._project_id),
         )
 
+    def _mark_entries_written(self, conn: sqlite3.Connection) -> None:
+        """Stamp an entry write: ``last_updated``, and a refresh now pending.
+
+        Called inside the transaction that writes a file's entry rows, so
+        the flag commits with them (migration 015). The session rows and
+        aggregates derived from those entries are written later, in other
+        transactions; until ``update_project_aggregates`` clears the flag,
+        ``get_modified_files`` reports every file, and a refresh that
+        stopped in between is redone instead of looking finished.
+        """
+        if self._project_id is None:
+            return
+
+        conn.execute(
+            "UPDATE projects SET last_updated = ?, refresh_pending = 1 WHERE id = ?",
+            (datetime.now().isoformat(), self._project_id),
+        )
+
     def _normalize_timestamp(self, timestamp: Optional[str]) -> Optional[str]:
         """Normalize timestamp to consistent format for reliable string comparison.
 
@@ -1694,7 +1716,7 @@ class CacheManager:
             if auto_index_enabled():
                 reindex_files(conn, [file_id], commit=False)
 
-            self._update_last_updated(conn)
+            self._mark_entries_written(conn)
 
     def extend_cached_entries(
         self,
@@ -1833,7 +1855,7 @@ class CacheManager:
         if auto_index_enabled():
             reindex_files(conn, [file_id], commit=False)
 
-        self._update_last_updated(conn)
+        self._mark_entries_written(conn)
         return True
 
     def update_session_cache(self, session_data: Dict[str, SessionCacheData]) -> None:
@@ -1904,7 +1926,13 @@ class CacheManager:
         earliest_timestamp: str,
         latest_timestamp: str,
     ) -> None:
-        """Update project-level aggregate information."""
+        """Update project-level aggregate information.
+
+        The last write of a complete refresh, after every entry write and
+        the session rows derived from them, so it also clears the
+        ``refresh_pending`` flag those entry writes set (migration 015).
+        Call it only once the session rows match every entry row written.
+        """
         if self._project_id is None:
             return
 
@@ -1919,7 +1947,8 @@ class CacheManager:
                     total_cache_read_tokens = ?,
                     earliest_timestamp = ?,
                     latest_timestamp = ?,
-                    last_updated = ?
+                    last_updated = ?,
+                    refresh_pending = 0
                 WHERE id = ?
                 """,
                 (
@@ -2421,6 +2450,14 @@ class CacheManager:
         ).fetchall()
         return [row["cwd"] for row in rows]
 
+    def _refresh_pending(self, conn: sqlite3.Connection) -> bool:
+        """Whether an entry write awaits its derived rows — see
+        ``_mark_entries_written``."""
+        row = conn.execute(
+            "SELECT refresh_pending FROM projects WHERE id = ?", (self._project_id,)
+        ).fetchone()
+        return bool(row and row["refresh_pending"])
+
     def get_modified_files(self, jsonl_files: List[Path]) -> List[Path]:
         """Get list of JSONL files that need to be reprocessed.
 
@@ -2430,6 +2467,13 @@ class CacheManager:
         subagent-sidecar fingerprints, replacing the per-file query +
         directory probes that dominated freshness-check time on large
         archives (issue #12).
+
+        Every file is reported while a refresh is pending (migration 015):
+        then the question is not whether a file's entry rows are current,
+        it is whether everything derived from them is, and only redoing the
+        refresh answers that. Per-file entry freshness (``is_file_cached``,
+        what loading consults) is unaffected, so that refresh is served
+        from the cache rather than re-parsed.
         """
         if not jsonl_files:
             return []
@@ -2437,6 +2481,10 @@ class CacheManager:
             return list(jsonl_files)
 
         with self._get_connection() as conn:
+            if self._refresh_pending(conn):
+                # A refresh wrote entries and never finished: the session
+                # rows may predate them, whatever the files look like.
+                return list(jsonl_files)
             rows = conn.execute(
                 "SELECT file_name, source_mtime, source_size,"
                 " subagents_fingerprint, content_version"
@@ -2574,6 +2622,7 @@ class CacheManager:
             total_cache_creation_tokens=project_row["total_cache_creation_tokens"],
             total_cache_read_tokens=project_row["total_cache_read_tokens"],
             sessions=sessions,
+            refresh_pending=bool(project_row["refresh_pending"]),
             working_directories=working_directories,
             earliest_timestamp=project_row["earliest_timestamp"],
             latest_timestamp=project_row["latest_timestamp"],

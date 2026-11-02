@@ -4406,7 +4406,9 @@ def _incremental_cache_refresh(
     exactly what the full path would write for those files, so a
     declined attempt never leaves inconsistent state — the crash-window
     posture (per-file commits before fact writes) likewise matches the
-    full path's.
+    full path's, and so does its recovery: those commits set
+    ``refresh_pending`` (migration 015), which only the closing aggregate
+    write clears, so a refresh that stops between them is redone whole.
     """
     from .cache import CachedFileState
     from .entry_store import PendingStamp
@@ -4866,12 +4868,15 @@ def ensure_fresh_cache_detailed(
         # files over a populated cache, refresh from those files' bounded
         # closure instead of loading the whole project. Declines (False)
         # fall through to the unchanged full load below.
+        # Not after a refresh that never finished (migration 015): which
+        # session rows it left behind is unknown, so no closure is bounded.
         if (
             from_date is None
             and to_date is None
             and modified_files
             and cached_project_data is not None
             and cached_project_data.total_message_count > 0
+            and not cached_project_data.refresh_pending
             and _incremental_refresh_enabled()
         ):
             if _incremental_cache_refresh(

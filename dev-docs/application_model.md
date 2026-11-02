@@ -247,6 +247,29 @@ cache row, the session is reparsed. The schema-version row also
 invalidates the entire HTML cache when migrations bump the version,
 since rendered output may have changed even when source data hasn't.
 
+**A refresh that stops part-way is redone, not trusted.** A refresh
+commits each file's entry rows in a transaction of its own, then writes
+the session rows and project aggregates derived from them. Staleness
+reads both halves: a file is modified when its `cached_files` row is
+older than the file, and a rendered session is stale when its `sessions`
+row disagrees with the `html_cache` row of its last render. So a refresh
+that stopped in between (a write lost to `database is locked`, issue
+#332, or a kill) left the files current and the session rows as old as
+the renders, and every later run reported the project as cached while
+its renders lacked the new messages. Since migration 015, every entry
+write sets `projects.refresh_pending` in its own transaction and
+`update_project_aggregates`, the last write of a complete refresh,
+clears it. While it is set, `get_modified_files()` reports every file,
+which every freshness gate reads (the hierarchy plan, the session-scoped
+and streaming paths, the TUI), and `ensure_fresh_cache` takes the full
+refresh rather than the incremental one (§ 2.14), whose closure could not
+cover rows a previous run left behind. That full refresh loads entries
+through the per-file check (`is_file_cached`), which the flag does not
+touch, so it re-parses only what really changed. The flag is
+project-wide and boolean: two processes refreshing the same project at
+once can still clear each other's, as they could already overwrite each
+other's session rows.
+
 **Corruption is recovered by discarding, not repairing.** A damaged
 cache file is unusable and, left alone, permanently so: `apply_migration`
 records only a migration that completed, so a `CREATE INDEX` that hits a
@@ -499,6 +522,12 @@ Current migrations:
     session-bearing row and *prefer* that to seeking the uuids a query
     asked for, so three queries had to move that predicate out of SQL
     and into Python to keep it from making them slower.
+- `015_project_refresh_pending.sql` — adds `refresh_pending` to
+  projects: an entry write whose derived session rows and aggregates
+  have not been written yet (§ 2.3). Existing rows start set, because a
+  cache written before it may already hold that damage and nothing else
+  can tell: one full refresh per project, from the cached entries, on
+  the first run after upgrading.
 
 Recreating-tables migrations toggle `PRAGMA foreign_keys = OFF/ON`
 around the rebuild to avoid losing rows to cascade-deletes during the
