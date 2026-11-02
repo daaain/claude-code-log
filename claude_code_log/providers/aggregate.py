@@ -24,10 +24,11 @@ def write_all_providers_index(
     relative and cannot escape the aggregate output directory.
     """
     rows: list[dict[str, Any]] = []
+    resolved_output_root = output_root.resolve()
     for provider in providers:
         index_path = Path(provider["index_path"])
         try:
-            href = index_path.relative_to(output_root).as_posix()
+            href = index_path.resolve().relative_to(resolved_output_root).as_posix()
         except ValueError as exc:
             raise ValueError("provider index must be inside output_root") from exc
         rows.append(

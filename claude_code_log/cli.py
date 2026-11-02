@@ -380,6 +380,18 @@ def _run_all_providers(
             continue
 
         provider_output = output_root / provider_name
+        if provider_output.is_symlink():
+            raise click.ClickException(
+                f"Provider output directory must not be a symlink: {provider_output}"
+            )
+        try:
+            provider_output.resolve().relative_to(output_root.resolve())
+        except ValueError as exc:
+            raise click.ClickException(
+                f"Provider output directory must stay inside {output_root}: "
+                f"{provider_output}"
+            ) from exc
+
         try:
             if provider_name == "claude":
                 sessions = list(provider.discover_sessions())

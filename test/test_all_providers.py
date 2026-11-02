@@ -131,6 +131,35 @@ def test_all_providers_discovers_each_provider_once(
     assert (output / "codex" / "index.html").is_file()
 
 
+def test_all_providers_rejects_provider_output_symlink_before_writing(
+    tmp_path: Path, monkeypatch
+) -> None:
+    codex_home = tmp_path / "codex-home"
+    sessions_root = codex_home / "sessions"
+    _write_codex_session(sessions_root / "rollout-thread.jsonl", "thread")
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    registry = ProviderRegistry()
+    registry.register(CodexProvider())
+    monkeypatch.setattr(
+        "claude_code_log.providers.discover_providers", lambda: registry
+    )
+    output = tmp_path / "aggregate"
+    output.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    try:
+        (output / "codex").symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlinks unavailable: {exc}")
+
+    result = CliRunner().invoke(main, ["--all-providers", "--output", str(output)])
+
+    assert result.exit_code != 0
+    assert "must not be a symlink" in result.output
+    assert list(outside.iterdir()) == []
+    assert not (output / "index.html").exists()
+
+
 def test_all_providers_with_none_available_fails_without_creating_output(
     tmp_path: Path, monkeypatch
 ) -> None:
