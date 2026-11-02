@@ -379,14 +379,15 @@ def _run_all_providers(
             )
             continue
 
-        sessions = list(provider.discover_sessions())
-        if not sessions:
-            skipped.append({"name": provider_name, "reason": "no sessions discovered"})
-            continue
-
         provider_output = output_root / provider_name
         try:
             if provider_name == "claude":
+                sessions = list(provider.discover_sessions())
+                if not sessions:
+                    skipped.append(
+                        {"name": provider_name, "reason": "no sessions discovered"}
+                    )
+                    continue
                 data_dir = provider.get_data_dir()
                 if data_dir is None:
                     skipped.append(
@@ -417,9 +418,25 @@ def _run_all_providers(
                     silent=True,
                 )
             else:
+                data_dir = provider.get_data_dir()
+                if data_dir is None:
+                    skipped.append(
+                        {
+                            "name": provider_name,
+                            "reason": "data directory is unavailable",
+                        }
+                    )
+                    continue
+                sessions_root = data_dir / "sessions"
+                sessions = list(provider.discover_sessions_under(sessions_root))
+                if not sessions:
+                    skipped.append(
+                        {"name": provider_name, "reason": "no sessions discovered"}
+                    )
+                    continue
                 index_path = render_provider_wholesale(
                     provider_name,
-                    None,
+                    sessions_root,
                     provider_output,
                     from_date=from_date,
                     to_date=to_date,
@@ -436,6 +453,8 @@ def _run_all_providers(
                     expand_paths=expand_paths,
                     filter_path=filter_path,
                     silent=True,
+                    provider_instance=provider,
+                    session_infos=sessions,
                 )
         except NotImplementedError:
             skipped.append(

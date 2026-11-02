@@ -3,9 +3,12 @@
 import json
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 from claude_code_log.cli import main
+from claude_code_log.providers import ProviderRegistry
+from claude_code_log.providers.codex import CodexProvider
 from claude_code_log.providers.aggregate import write_all_providers_index
 
 
@@ -83,6 +86,7 @@ def test_all_providers_renders_provider_indexes_and_root_index(
         "codex-thread",
     )
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
     output = tmp_path / "aggregate"
 
@@ -97,12 +101,43 @@ def test_all_providers_renders_provider_indexes_and_root_index(
     assert "1 sessions discovered" in aggregate
 
 
+def test_all_providers_discovers_each_provider_once(
+    tmp_path: Path, monkeypatch
+) -> None:
+    codex_home = tmp_path / "codex-home"
+    sessions_root = codex_home / "sessions"
+    _write_codex_session(sessions_root / "rollout-thread.jsonl", "thread")
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+
+    class CountingCodexProvider(CodexProvider):
+        discovery_passes = 0
+
+        def discover_sessions_under(self, root: Path):
+            self.discovery_passes += 1
+            yield from super().discover_sessions_under(root)
+
+    provider = CountingCodexProvider()
+    registry = ProviderRegistry()
+    registry.register(provider)
+    monkeypatch.setattr(
+        "claude_code_log.providers.discover_providers", lambda: registry
+    )
+    output = tmp_path / "aggregate"
+
+    result = CliRunner().invoke(main, ["--all-providers", "--output", str(output)])
+
+    assert result.exit_code == 0, result.output
+    assert provider.discovery_passes == 1
+    assert (output / "codex" / "index.html").is_file()
+
+
 def test_all_providers_with_none_available_fails_without_creating_output(
     tmp_path: Path, monkeypatch
 ) -> None:
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "missing-codex-home"))
     output = tmp_path / "aggregate"
 
@@ -130,6 +165,7 @@ def test_all_providers_reports_unsupported_provider_and_does_not_write_empty_ind
     transcript.parent.mkdir(parents=True)
     transcript.write_text("{}\n", encoding="utf-8")
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "missing-codex-home"))
     output = tmp_path / "aggregate"
 
@@ -156,6 +192,7 @@ def test_all_providers_rejects_file_output(tmp_path: Path, monkeypatch) -> None:
         tmp_path / "codex-home" / "sessions" / "rollout-thread.jsonl", "thread"
     )
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
     output_file = tmp_path / "all.html"
 
@@ -175,8 +212,8 @@ def test_aggregate_index_supports_markdown_and_json(tmp_path: Path) -> None:
 
     markdown_path = write_all_providers_index(output, row, [], "markdown")
     assert markdown_path.name == "index.md"
-    assert (
-        "[Codex](codex/index.md) — 3 sessions discovered" in markdown_path.read_text()
+    assert "[Codex](codex/index.md) — 3 sessions discovered" in markdown_path.read_text(
+        encoding="utf-8"
     )
 
     json_provider_index = output / "codex" / "all-projects-summary.json"
@@ -190,3 +227,16 @@ def test_aggregate_index_supports_markdown_and_json(tmp_path: Path) -> None:
     assert document["providers"] == [
         {"name": "Codex", "href": "codex/all-projects-summary.json", "session_count": 3}
     ]
+
+
+def test_aggregate_index_rejects_outside_provider_index_before_writing(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "aggregate"
+    outside_index = tmp_path / "outside" / "index.html"
+    rows = [{"name": "Codex", "index_path": outside_index, "session_count": 1}]
+
+    with pytest.raises(ValueError, match="inside output_root"):
+        write_all_providers_index(output, rows, [])
+
+    assert not output.exists()

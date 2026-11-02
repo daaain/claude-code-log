@@ -5704,6 +5704,8 @@ def render_provider_wholesale(
     expand_paths: bool = False,
     filter_path: Optional[str] = None,
     silent: bool = False,
+    provider_instance: Optional[Any] = None,
+    session_infos: Optional[List[Any]] = None,
 ) -> Path:
     """Render every session of one provider under ``sessions_root`` into a
     project hierarchy — per-session pages, a per-project combined page, and a
@@ -5736,9 +5738,13 @@ def render_provider_wholesale(
     design — the cache identity is the output dir, not the source).
     """
     from .providers import SessionInfo, discover_providers
+    from .providers.base import BaseProvider
 
-    registry = discover_providers()
-    provider = registry.get_provider(provider_name)
+    if provider_instance is None:
+        registry = discover_providers()
+        provider = registry.get_provider(provider_name)
+    else:
+        provider = cast(BaseProvider, provider_instance)
     if provider is None:
         raise ValueError(f"Unknown provider: {provider_name}")
 
@@ -5750,8 +5756,28 @@ def render_provider_wholesale(
                 "or pass a directory to render."
             )
         sessions_root = data_dir / "sessions"
+    assert sessions_root is not None
 
-    infos = list(provider.discover_sessions_under(sessions_root))
+    if session_infos is not None:
+        provider_type = cast(Any, type(provider))
+        if (
+            provider_type.discover_sessions_under
+            is BaseProvider.discover_sessions_under
+        ):
+            raise NotImplementedError(
+                f"{provider_name} does not support wholesale rendering"
+            )
+        if (
+            provider_type.load_session_under is BaseProvider.load_session_under
+            and provider_type.load_session_with_totals
+            is BaseProvider.load_session_with_totals
+        ):
+            raise NotImplementedError(
+                f"{provider_name} does not support wholesale rendering"
+            )
+        infos = list(session_infos)
+    else:
+        infos = list(provider.discover_sessions_under(sessions_root))
     if not infos:
         # No sessions discovered under an explicitly-targeted root. Fail LOUDLY
         # rather than write an empty index and exit 0 — a silent empty-success

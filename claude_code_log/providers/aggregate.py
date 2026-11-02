@@ -23,7 +23,6 @@ def write_all_providers_index(
     Paths are required to be inside ``output_root`` so the generated links stay
     relative and cannot escape the aggregate output directory.
     """
-    output_root.mkdir(parents=True, exist_ok=True)
     rows: list[dict[str, Any]] = []
     for provider in providers:
         index_path = Path(provider["index_path"])
@@ -38,6 +37,8 @@ def write_all_providers_index(
                 "session_count": int(provider["session_count"]),
             }
         )
+
+    output_root.mkdir(parents=True, exist_ok=True)
 
     if output_format == "html":
         template_dir = Path(__file__).parents[1] / "html" / "templates"
