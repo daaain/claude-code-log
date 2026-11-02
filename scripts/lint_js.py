@@ -85,6 +85,7 @@ def _rendered_pages() -> dict[str, str]:
         generate_archive_search_html,
         generate_html,
         generate_projects_index_html,
+        generate_recent_html,
     )
     from claude_code_log.html.utils import get_template_environment
 
@@ -100,6 +101,7 @@ def _rendered_pages() -> dict[str, str]:
         pages[f"transcript-{theme}"] = generate_html(entries, "Lint", theme=theme)
         pages[f"index-{theme}"] = generate_projects_index_html([], theme=theme)
         pages[f"archive_search-{theme}"] = generate_archive_search_html(theme)
+        pages[f"recent-{theme}"] = generate_recent_html(theme)
     return pages
 
 

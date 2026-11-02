@@ -6558,7 +6558,7 @@ def _write_recent_page(
             projects_path, href_for=lambda _project, sid: links.get(sid)
         )
         atomic_write_text(index_dir / RECENT_DATA, recent_data_js(payload))
-        atomic_write_text(index_dir / RECENT_PAGE, generate_recent_html(payload, theme))
+        atomic_write_text(index_dir / RECENT_PAGE, generate_recent_html(theme))
     except Exception as exc:  # pragma: no cover - defensive
         print(f"Warning: could not write {RECENT_PAGE}: {exc}")
 

@@ -1620,14 +1620,16 @@ filenames resolve as the index's do, and writes `recent-data.js` then
 `recent.html`. A failure there is reported and never fails the run.
 
 **Self-refresh on `file://`.** A page opened as a file cannot `fetch`
-(see `live_update.js`), but it can add a `<script>`. So the page embeds
-its first payload (`<script type="application/json">`, made safe by
-`payload_json`, which escapes `<`) and then re-adds
-`<script src="recent-data.js?t=…">` every 15 s; the file calls
-`window.__cclRecent(payload)` and the page redraws its rows in place,
-keeping open rows, filters and scroll. Row content is built with DOM
-APIs and `textContent` only: titles and messages are untrusted
-transcript text. `cli.watch` calls `recent.write_recent_data` after each
+(see `live_update.js`), but it can add a `<script>`. So `recent.html`
+holds no data at all: it loads `recent-data.js` with a plain script tag
+on open, then re-adds `<script src="recent-data.js?t=…">` every 15 s. The
+file calls `window.__cclRecent(payload)` (its JSON made by `payload_json`,
+which escapes `<`), and the page redraws its rows in place, keeping open
+rows, filters and scroll. Keeping data out of the page also makes the
+page identical from run to run, which the parallel-vs-sequential output
+test relies on; only the data file carries the time it was written (the
+page's staleness notice reads it). Row content is built with DOM APIs and
+`textContent` only: titles and messages are untrusted transcript text. `cli.watch` calls `recent.write_recent_data` after each
 single-project tick (default layout only: no `--output`, and the watched
 project inside the projects directory), since that path never rewrites
 the index; `watch --all-projects` gets the page from the hierarchy run.

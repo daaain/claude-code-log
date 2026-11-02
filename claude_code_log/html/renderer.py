@@ -2132,3 +2132,22 @@ def generate_archive_search_html(theme: str = DEFAULT_THEME) -> str:
             ],
         )
     )
+
+
+def generate_recent_html(theme: str = DEFAULT_THEME) -> str:
+    """Render the recent sessions page (``recent.html``).
+
+    The page holds no data: it loads the sibling ``recent-data.js``
+    (:func:`claude_code_log.recent.recent_data_js`) on open and again on
+    every refresh, so it is identical from run to run and no transcript
+    text is ever inlined into it. It has one look in both themes (the
+    minimal theme's tokens); ``theme`` is accepted for symmetry with the
+    other page generators and recorded in the stamp.
+    """
+    env = get_template_environment()
+    return str(
+        env.get_template("recent.html").render(
+            library_version=get_library_version(),
+            theme=normalize_theme(theme),
+        )
+    )

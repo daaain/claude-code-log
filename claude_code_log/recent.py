@@ -299,10 +299,17 @@ def _default_href(project_dir: Path, session_id: str) -> str:
 
 
 def _session_rows(db_path: Path, cutoff_iso: str, limit: int) -> list[sqlite3.Row]:
-    """The newest visible session rows across every project."""
+    """The newest visible session rows across every project.
+
+    A ``mode=ro`` reader: it never writes the shared database, so it needs
+    none of the write pragmas (see the connection census in
+    ``test/test_cache_sqlite_integrity.py``).
+    """
     if not db_path.exists():
         return []
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    # as_uri() percent-encodes the absolute path, as the cache's own
+    # read-only connections do, so spaces and "?" in it stay a path.
+    conn = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     try:
         return conn.execute(

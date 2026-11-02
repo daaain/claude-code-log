@@ -1,0 +1,916 @@
+/* The recent sessions page (recent.html): one look in both themes. The
+   colours are the minimal theme's tokens (tokens.css, included before this
+   file), plus the few the page needs of its own, below. Every rule is
+   scoped under body.rc-page. */
+
+:root {
+    --rc-canvas: #f6f7f8; /* the page behind the panel (the panel is --bg) */
+    --rc-bar: #c9cdd2; /* a turn's bar on the strip */
+    --rc-ask: var(--user); /* asked you: orange */
+    --rc-cache: var(--note);
+    --rc-cachebg: #e3ecfb;
+    --rc-future: var(--code);
+    --rc-gridline: var(--rule);
+}
+
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+        --rc-canvas: #0e1013;
+        --rc-bar: #3d434c;
+        --rc-cachebg: #132238;
+    }
+}
+
+:root[data-theme="dark"] {
+    --rc-canvas: #0e1013;
+    --rc-bar: #3d434c;
+    --rc-cachebg: #132238;
+}
+
+body.rc-page {
+    margin: 0;
+    min-height: 100vh;
+    background: var(--rc-canvas);
+    color: var(--fg);
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 20px;
+}
+
+.rc-page *,
+.rc-page *::before,
+.rc-page *::after {
+    box-sizing: border-box;
+}
+
+.rc-page a {
+    color: var(--note);
+}
+
+.rc-page a:hover {
+    color: var(--fg);
+}
+
+.rc-page button {
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+}
+
+.rc-page :focus-visible {
+    outline: 2px solid var(--note);
+    outline-offset: 2px;
+}
+
+.rc-page code {
+    padding: 0 3px;
+    border-radius: 3px;
+    background: var(--code);
+    font: 0.92em var(--mono);
+}
+
+.rc-wrap {
+    max-width: 1240px;
+    margin: 0 auto;
+    padding: 20px 24px 56px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+/* ---------------------------------------------------------- header */
+
+.rc-nav {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 13px;
+}
+
+.rc-sp {
+    flex: 1;
+}
+
+/* The Auto / Light / Dark toggle (components/minimal/scheme_toggle.html),
+   styled here rather than through the minimal pages' chrome.css. */
+.rc-page .mn-seg {
+    display: inline-flex;
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    overflow: hidden;
+    background: var(--bg);
+}
+
+.rc-page .mn-seg button {
+    width: 32px;
+    min-height: 30px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.rc-page .mn-seg button + button {
+    border-left: 1px solid var(--rule);
+}
+
+.rc-page .mn-seg button.on {
+    background: var(--fg);
+    color: var(--bg);
+}
+
+.rc-page .mn-seg button:not(.on):hover {
+    color: var(--fg);
+}
+
+.rc-page .mn-seg svg {
+    display: block;
+}
+
+.rc-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 16px 32px;
+}
+
+.rc-head h1 {
+    margin: 0;
+    font-size: 34px;
+    line-height: 40px;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+}
+
+.rc-stats {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: stretch;
+    gap: 6px;
+    font-family: var(--mono);
+}
+
+.rc-filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.rc-filter {
+    min-height: 56px;
+    padding: 6px 14px;
+    border: 0;
+    border-radius: 4px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: center;
+    text-align: left;
+    background: transparent;
+    box-shadow: inset 0 0 0 1px var(--rule);
+    --rc-c: var(--fg);
+    color: var(--muted);
+}
+
+.rc-filter[data-filter="urgent"] {
+    --rc-c: var(--rc-ask);
+    color: var(--rc-c);
+}
+
+.rc-filter[data-filter="cache"] {
+    --rc-c: var(--rc-cache);
+    color: var(--rc-c);
+}
+
+.rc-filter[aria-pressed="true"] {
+    background: var(--rc-c);
+    color: var(--bg);
+    box-shadow: none;
+}
+
+.rc-k {
+    font-size: 11px;
+    line-height: 14px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+}
+
+.rc-filter .rc-n {
+    font-size: 28px;
+    line-height: 34px;
+    font-variant-numeric: tabular-nums;
+    font-weight: 300;
+    color: var(--rc-c);
+}
+
+.rc-filter[data-filter="urgent"] .rc-n,
+.rc-filter[data-filter="cache"] .rc-n {
+    font-weight: 500;
+}
+
+.rc-filter[aria-pressed="true"] .rc-n {
+    color: var(--bg);
+    font-weight: 500;
+}
+
+.rc-updated {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 6px 0 6px 18px;
+    margin-left: 6px;
+    border-left: 1px solid var(--rule);
+    color: var(--muted);
+}
+
+.rc-updated .rc-n {
+    font-size: 28px;
+    line-height: 34px;
+    font-weight: 300;
+    color: var(--fg);
+    font-variant-numeric: tabular-nums;
+}
+
+.rc-stale {
+    margin: 0;
+    padding: 10px 14px;
+    border-radius: 4px;
+    background: var(--errbg);
+    color: var(--err);
+    font-weight: 600;
+}
+
+.rc-stale[hidden] {
+    display: none;
+}
+
+/* ----------------------------------------------------------- panel */
+
+.rc-panel {
+    display: flex;
+    flex-direction: column;
+    border-radius: 8px;
+    background: var(--bg);
+    border: 1px solid var(--rule);
+    overflow: hidden;
+}
+
+.rc-thead {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 0 16px;
+    padding: 6px 16px;
+    border-bottom: 1px solid var(--rule);
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 14px;
+    color: var(--muted);
+}
+
+.rc-th {
+    padding-bottom: 2px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+}
+
+.rc-th-since {
+    flex: 0 0 128px;
+}
+
+.rc-th-session {
+    flex: 1 1 290px;
+}
+
+.rc-axis {
+    flex: 1 1 520px;
+    min-width: 0;
+    position: relative;
+    height: 14px;
+    margin-bottom: 2px;
+}
+
+.rc-axis span {
+    position: absolute;
+    transform: translateX(-50%);
+    white-space: nowrap;
+}
+
+.rc-axis .rc-axis-now {
+    color: var(--fg);
+    font-weight: 600;
+}
+
+.rc-group-toggle {
+    flex: 0 0 104px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 32px;
+    padding: 0 6px;
+    border-radius: 4px;
+    box-shadow: inset 0 0 0 1px var(--rule);
+    color: var(--fg);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.rc-group-toggle input {
+    width: 14px;
+    height: 14px;
+    margin: 0;
+    accent-color: var(--fg);
+}
+
+.rc-group-toggle:focus-within {
+    outline: 2px solid var(--note);
+    outline-offset: 2px;
+}
+
+.rc-group-toggle input:focus-visible {
+    outline: none;
+}
+
+.rc-rows,
+.rc-list {
+    display: flex;
+    flex-direction: column;
+}
+
+.rc-group-h {
+    margin: 0;
+    padding: 14px 16px 6px;
+    border-bottom: 1px solid var(--hair);
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 16px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    background: var(--rc-canvas);
+}
+
+.rc-group-h .rc-group-n {
+    margin-left: 8px;
+    font-weight: 400;
+}
+
+.rc-empty {
+    margin: 0;
+    padding: 28px 16px;
+    color: var(--muted);
+}
+
+.rc-empty[hidden] {
+    display: none;
+}
+
+/* ------------------------------------------------------------- row */
+
+.rc-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0 16px;
+    padding: 6px 16px;
+    border-bottom: 1px solid var(--hair);
+}
+
+.rc-block {
+    flex: 0 0 128px;
+    align-self: stretch;
+    min-height: 68px;
+    margin: 0;
+    padding: 8px 12px;
+    border: 0;
+    border-radius: 4px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: flex-start;
+    gap: 2px;
+    text-align: left;
+    background: transparent;
+}
+
+.rc-block-when {
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
+    font-family: var(--mono);
+}
+
+.rc-block-n {
+    font-size: 28px;
+    line-height: 32px;
+    letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;
+    font-weight: 500;
+}
+
+.rc-block-u {
+    font-size: 12px;
+}
+
+/* A weekday and a time ("Fri" "21:14"): smaller, to fit the block. */
+.rc-block-long .rc-block-n {
+    font-size: 22px;
+    letter-spacing: -0.04em;
+}
+
+.rc-block-status {
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 14px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+}
+
+.rc-state-asked .rc-block {
+    background: var(--rc-ask);
+    color: var(--bg);
+}
+
+.rc-state-error .rc-block {
+    background: var(--err);
+    color: var(--bg);
+}
+
+.rc-state-done .rc-block {
+    color: var(--fg);
+    box-shadow: inset 0 0 0 1.5px var(--fg);
+}
+
+.rc-state-busy .rc-block {
+    color: var(--tool);
+}
+
+.rc-info {
+    flex: 1 1 290px;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 6px 0;
+}
+
+.rc-title {
+    display: block;
+    text-decoration: none;
+    color: var(--fg);
+    font-size: 17px;
+    line-height: 23px;
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.rc-page a.rc-title {
+    color: var(--fg);
+}
+
+.rc-page a.rc-title:hover {
+    text-decoration: underline;
+}
+
+.rc-state-asked .rc-title,
+.rc-state-error .rc-title {
+    font-weight: 600;
+}
+
+.rc-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 10px;
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 16px;
+    color: var(--muted);
+}
+
+.rc-meta-project {
+    color: var(--fg);
+}
+
+.rc-meta-branch {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.rc-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0 6px;
+    border-radius: 3px;
+    background: var(--rc-cachebg);
+    color: var(--rc-cache);
+    font-weight: 600;
+}
+
+/* ----------------------------------------------------- time strip */
+
+.rc-strip {
+    flex: 1 1 520px;
+    min-width: 0;
+    position: relative;
+    height: 60px;
+    overflow: hidden;
+}
+
+.rc-strip > span,
+.rc-marks > span {
+    position: absolute;
+}
+
+.rc-future {
+    right: 0;
+    top: 0;
+    bottom: 0;
+    background: var(--rc-future);
+}
+
+.rc-grid {
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: var(--rc-gridline);
+}
+
+.rc-band {
+    top: 8px;
+    height: 36px;
+    background: var(--rc-cachebg);
+}
+
+.rc-band-risk {
+    box-shadow: inset 0 0 0 1px var(--rc-cache);
+}
+
+.rc-bar {
+    top: 24px;
+    height: 4px;
+    min-width: 2px;
+    background: var(--rc-bar);
+}
+
+.rc-tick {
+    top: 19px;
+    height: 14px;
+    width: 1px;
+    background: var(--tool);
+}
+
+.rc-marks {
+    position: absolute;
+    inset: 0;
+}
+
+.rc-mk {
+    top: 16px;
+    width: 20px;
+    height: 20px;
+    margin-left: -10px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg);
+    --rc-c: var(--fg);
+    color: var(--rc-c);
+    box-shadow: inset 0 0 0 1.5px var(--rc-c);
+}
+
+.rc-mk svg {
+    display: block;
+}
+
+.rc-dot {
+    top: 23px;
+    width: 6px;
+    height: 6px;
+    margin-left: -3px;
+    border-radius: 1px;
+    --rc-c: var(--fg);
+    background: var(--rc-c);
+}
+
+.rc-k-asst {
+    --rc-c: var(--asst);
+}
+
+.rc-k-ask {
+    --rc-c: var(--rc-ask);
+}
+
+.rc-k-err {
+    --rc-c: var(--err);
+}
+
+.rc-mk.rc-k-ask,
+.rc-mk.rc-k-err {
+    background: var(--rc-c);
+    color: var(--bg);
+    box-shadow: none;
+}
+
+.rc-now {
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    margin-left: -1px;
+    background: var(--fg);
+}
+
+.rc-strip-note {
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 14px;
+    color: var(--muted);
+    white-space: nowrap;
+    background: var(--bg);
+    padding: 0 2px;
+}
+
+.rc-earlier {
+    left: 2px;
+    top: 42px;
+}
+
+.rc-outside {
+    left: 6px;
+    top: 22px;
+}
+
+/* ----------------------------------------------------- copy button */
+
+.rc-copy {
+    flex: 0 0 104px;
+    min-height: 44px;
+    padding: 0 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    border-radius: 4px;
+    border: 1px solid var(--rule);
+    background: transparent;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+}
+
+.rc-page .rc-copy:hover {
+    color: var(--fg);
+    border-color: var(--muted);
+}
+
+.rc-copy.rc-copied {
+    color: var(--tool);
+}
+
+/* ---------------------------------------------------- expanded row */
+
+.rc-x {
+    flex-basis: 100%;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    padding: 10px 0 20px;
+}
+
+.rc-x[hidden] {
+    display: none;
+}
+
+.rc-x-side {
+    flex: 0 0 128px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 18px;
+}
+
+.rc-x-side dl {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    color: var(--muted);
+}
+
+.rc-x-side dl div {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.rc-x-side dd {
+    margin: 0;
+    color: var(--fg);
+    font-variant-numeric: tabular-nums;
+}
+
+.rc-page .rc-x-link {
+    min-height: 40px;
+    padding: 0 10px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    border: 1px solid var(--rule);
+    text-decoration: none;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    font-size: 11px;
+}
+
+.rc-x-main {
+    flex: 1 1 480px;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding-top: 1px;
+}
+
+.rc-prompt {
+    margin: 0;
+    max-width: 88ch;
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 20px;
+    color: var(--muted);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.rc-prompt-at {
+    color: var(--fg);
+}
+
+.rc-last {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.rc-who {
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 14px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+
+.rc-last-text {
+    margin: 0;
+    max-width: 72ch;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-size: 17px;
+    line-height: 27px;
+    color: var(--fg);
+}
+
+.rc-who-tool .rc-last-text,
+.rc-who-error .rc-last-text {
+    font-family: var(--mono);
+    font-size: 14px;
+    line-height: 22px;
+}
+
+.rc-who-error .rc-last-text {
+    color: var(--err);
+}
+
+.rc-noreply {
+    margin: 0;
+    color: var(--muted);
+}
+
+/* ---------------------------------------------------------- footer */
+
+.rc-foot {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 18px;
+    align-items: center;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+}
+
+.rc-legend {
+    display: contents;
+}
+
+.rc-lg {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.rc-lg .rc-mk,
+.rc-lg .rc-tick,
+.rc-lg .rc-band {
+    position: relative;
+    top: auto;
+    margin-left: 0;
+}
+
+.rc-lg .rc-tick {
+    display: inline-block;
+}
+
+.rc-lg .rc-band {
+    display: inline-block;
+    width: 18px;
+    height: 14px;
+}
+
+.rc-foot p {
+    margin: 0;
+}
+
+/* ---------------------------------------------------------- narrow */
+
+@media (max-width: 640px) {
+    .rc-wrap {
+        padding: 16px 16px 40px;
+    }
+
+    .rc-head h1 {
+        font-size: 26px;
+        line-height: 32px;
+    }
+
+    .rc-filter {
+        min-height: 48px;
+        padding: 4px 10px;
+    }
+
+    .rc-filter .rc-n,
+    .rc-updated .rc-n {
+        font-size: 22px;
+        line-height: 28px;
+    }
+
+    .rc-updated {
+        margin-left: 0;
+        padding-left: 12px;
+    }
+
+    .rc-row,
+    .rc-thead,
+    .rc-group-h {
+        padding-left: 10px;
+        padding-right: 10px;
+    }
+
+    .rc-row {
+        gap: 0 10px;
+    }
+
+    .rc-th-session {
+        display: none;
+    }
+
+    .rc-block {
+        flex-basis: 104px;
+        padding: 6px 10px;
+    }
+
+    .rc-block-n {
+        font-size: 22px;
+        line-height: 28px;
+    }
+
+    .rc-info {
+        flex-basis: 150px;
+    }
+
+    .rc-strip,
+    .rc-axis {
+        flex-basis: 100%;
+    }
+
+    .rc-x-side {
+        flex-basis: 100%;
+    }
+}
