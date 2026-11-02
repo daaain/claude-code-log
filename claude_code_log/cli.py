@@ -2578,6 +2578,27 @@ def watch(
 
     store = ParsedEntryStore() if (entry_store_enabled() and not all_projects) else None
 
+    def refresh_recent() -> None:
+        """Keep the recent-sessions page's data current.
+
+        A one-project watch never rewrites the index, so the archive's
+        ``recent.html`` would freeze at the last full run. Its data file
+        is cheap to rebuild (one cache query plus the recent sessions'
+        entries), so it is rewritten after every tick — but only in the
+        default layout, where the page sits next to the projects and the
+        watched project's cache is the archive's.
+        """
+        if output is not None or output_format != "html":
+            return
+        if root.parent.resolve() != projects_path.resolve():
+            return
+        from .recent import write_recent_data
+
+        try:
+            write_recent_data(projects_path, projects_path)
+        except Exception as exc:
+            click.echo(f"  recent sessions not refreshed: {exc!r}", err=True)
+
     def convert(_changed: set[Path]) -> None:
         started = time.monotonic()
         if all_projects:
@@ -2604,6 +2625,7 @@ def watch(
                 entry_store=store,
                 theme=resolved_theme,
             )
+            refresh_recent()
         click.echo(
             f"  {time.strftime('%H:%M:%S')}  converted in "
             f"{time.monotonic() - started:.2f}s"

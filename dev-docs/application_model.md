@@ -42,6 +42,7 @@ for user-facing operations docs see [`docs/`](../docs/).
 | Intra-project render fan-out | [`render_pool.py`](../claude_code_log/render_pool.py) (mechanism) + [`render_dispatch.py`](../claude_code_log/render_dispatch.py) (policy) | inlined below (§ 2.10) |
 | Diagnosing hangs (SIGUSR1) | [`cli.py`](../claude_code_log/cli.py) `_install_stack_dump_signal` | inlined below (§ 2.11) |
 | Watch mode / live page updates | [`watch.py`](../claude_code_log/watch.py), `html/templates/components/live_update.js` | inlined below (§ 2.15); design in [`work/watch-mode.md`](../work/watch-mode.md); user-facing in [`docs/live-updates.md`](../docs/live-updates.md) |
+| Recent sessions page (`recent.html`) | [`recent.py`](../claude_code_log/recent.py) (data), `converter._write_recent_page`, `cli.watch` (refresh), `html/templates/recent.html` + `components/recent/` | inlined below (§ 2.18); user-facing in [`docs/recent-sessions.md`](../docs/recent-sessions.md) |
 | Adding a new tool renderer | [`factories/tool_factory.py`](../claude_code_log/factories/tool_factory.py), `html/tool_formatters.py` | [implementing-a-tool-renderer.md](implementing-a-tool-renderer.md) (how-to) |
 | Which tools have a specialized renderer or provider adapter | `TOOL_INPUT_MODELS` / `TOOL_OUTPUT_PARSERS` in [`factories/tool_factory.py`](../claude_code_log/factories/tool_factory.py), plus provider adapters | [tools-coverage.md](tools-coverage.md) (Claude and Codex status vs. upstream references) |
 | Plugin system (third-party message transformers) | [`plugins.py`](../claude_code_log/plugins.py), [`factories/priorities.py`](../claude_code_log/factories/priorities.py), `Renderer._dispatch_format` | [plugins.md](plugins.md) |
@@ -1582,6 +1583,54 @@ bugs found during the migration and added the `soft_break` and
 `test/test_markdown_rendering.py` pins each of those behaviours, and
 `work/wenmode-evaluation.md` records the method for re-measuring a
 bump against real transcripts.
+
+### 2.18 Recent sessions page
+
+`recent.html` sits next to `index.html` and lists the sessions updated in
+the last `WINDOW_DAYS` (3) across every project, newest first, at most
+`MAX_SESSIONS` (60). It is a separate page rather than a view of the
+index because it carries per-session turn data and last messages, ticks
+in the browser, and goes stale on its own schedule; the index only links
+to it (one line in each theme).
+
+**Data.** [`recent.build_recent_payload`](../claude_code_log/recent.py)
+runs one query over the shared cache — `sessions JOIN projects`,
+`hidden = 0`, newest `last_timestamp` first — then loads each listed
+session's entries from the cache (`CacheManager.load_session_entries`,
+read-only) and summarises them in `summarise_session`. No schema change:
+everything is derived from rows the cache already holds, so archived
+sessions work too. A turn runs from a prompt you typed (`_user_text`
+excludes tool results, meta entries and injected bodies such as task
+notifications and command output) to the last entry before the next
+one, and ends `ask` (the last reply's last line ends with `?`), `err` (a
+`<synthetic>` reply or `API Error…` text), `open` (the final turn ends on
+a tool call or result) or `asst`. The session's state follows its final
+turn: `asked`, `error`, `busy` or `done`. Sidechain entries are skipped.
+Only turns that ended within `TURN_HORIZON_HOURS` (24) are sent; the rest
+are counted in `earlierTurns`.
+
+These are **transcript states, not liveness**: nothing here can tell an
+agent that stopped from one waiting quietly. Background work (async
+agents, monitors, `ScheduleWakeup`) is not modelled yet.
+
+**Writing.** `converter._write_recent_page` runs after the index on every
+HTML hierarchy run. It takes each session's link from the index's own
+`sessions[].file` entries, so `--output`, `--expand-paths` and variant
+filenames resolve as the index's do, and writes `recent-data.js` then
+`recent.html`. A failure there is reported and never fails the run.
+
+**Self-refresh on `file://`.** A page opened as a file cannot `fetch`
+(see `live_update.js`), but it can add a `<script>`. So the page embeds
+its first payload (`<script type="application/json">`, made safe by
+`payload_json`, which escapes `<`) and then re-adds
+`<script src="recent-data.js?t=…">` every 15 s; the file calls
+`window.__cclRecent(payload)` and the page redraws its rows in place,
+keeping open rows, filters and scroll. Row content is built with DOM
+APIs and `textContent` only: titles and messages are untrusted
+transcript text. `cli.watch` calls `recent.write_recent_data` after each
+single-project tick (default layout only: no `--output`, and the watched
+project inside the projects directory), since that path never rewrites
+the index; `watch --all-projects` gets the page from the hierarchy run.
 
 ---
 

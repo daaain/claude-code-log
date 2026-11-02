@@ -6529,6 +6529,40 @@ def process_projects_hierarchy(
         )
 
 
+def _write_recent_page(
+    index_dir: Path,
+    projects_path: Path,
+    project_summaries: List[Dict[str, Any]],
+    theme: str,
+) -> None:
+    """Write ``recent.html`` and its ``recent-data.js`` next to the index.
+
+    The page lists recently active sessions across every project and
+    refreshes itself from ``recent-data.js`` (see ``recent.py``). Session
+    links come from the index's own per-session ``file`` entries, so they
+    follow ``--output`` / ``--expand-paths`` / variant filenames exactly
+    as the index does. A failure here must never fail the conversion:
+    the page is a convenience next to the index, not part of it.
+    """
+    from .recent import RECENT_DATA, RECENT_PAGE, build_recent_payload, recent_data_js
+
+    links: Dict[str, str] = {}
+    for summary in project_summaries:
+        for session in summary.get("sessions", []):
+            if session.get("id") and session.get("file"):
+                links[str(session["id"])] = str(session["file"])
+    try:
+        from .html.renderer import generate_recent_html
+
+        payload = build_recent_payload(
+            projects_path, href_for=lambda _project, sid: links.get(sid)
+        )
+        atomic_write_text(index_dir / RECENT_DATA, recent_data_js(payload))
+        atomic_write_text(index_dir / RECENT_PAGE, generate_recent_html(payload, theme))
+    except Exception as exc:  # pragma: no cover - defensive
+        print(f"Warning: could not write {RECENT_PAGE}: {exc}")
+
+
 def _process_projects_hierarchy(
     projects_path: Path,
     from_date: Optional[str] = None,
@@ -7325,6 +7359,7 @@ def _process_projects_hierarchy(
         atomic_write_text(
             index_path.parent / "search.html", generate_archive_search_html(theme)
         )
+        _write_recent_page(index_path.parent, projects_path, project_summaries, theme)
 
     # Count total sessions from project summaries
     for summary in project_summaries:
