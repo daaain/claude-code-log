@@ -259,11 +259,14 @@ the renders, and every later run reported the project as cached while
 its renders lacked the new messages. Since migration 015, every entry
 write sets `projects.refresh_pending` in its own transaction and
 `update_project_aggregates`, the last write of a complete refresh,
-clears it. Both refresh paths write the session rows and the
-cross-session sidecar (§ 2.12) before it, and the full refresh fails
-rather than logs a sidecar write it loses: the rolled-back write leaves
-the old sidecar in place, which the closing write would otherwise
-vouch for. While it is set, `get_modified_files()` reports every file,
+clears it. An unfiltered refresh, on either path, writes the session
+rows and the cross-session sidecar (§ 2.12) before it, and does not
+pass over a sidecar write it loses: the rolled-back write leaves the old
+sidecar in place, which the closing write would otherwise vouch for.
+Contention fails the refresh, to be redone; any other failure, which
+could recur on every run, drops the sidecar instead
+(`abandon_session_sidecar`), so readers fall back to the full load
+until one writes it afresh. While it is set, `get_modified_files()` reports every file,
 which every freshness gate reads (the hierarchy plan, the session-scoped
 and streaming paths, the TUI), and `ensure_fresh_cache` takes the full
 refresh rather than the incremental one (§ 2.14), whose closure could not
@@ -1098,8 +1101,8 @@ output files byte-identical on the two measured projects, with 64 and
 Every decline (no sidecar yet, date filters, `--no-cache`, an
 inconsistent file map) falls back to the full load, whose behaviour is
 unchanged. A missing sidecar only costs that speed; a stale one would
-render wrongly, so a cache refresh that cannot write it fails and is
-redone (§ 2.3).
+render wrongly, so an unfiltered cache refresh that cannot write it
+either fails and is redone or drops it (§ 2.3).
 
 ### 2.13 Page-granular streaming conversion
 

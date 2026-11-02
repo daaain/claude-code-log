@@ -2367,6 +2367,27 @@ class CacheManager:
                 )
         return result
 
+    def abandon_session_sidecar(self, exc: BaseException) -> None:
+        """Handle a sidecar write that failed with ``exc`` during a refresh.
+
+        The failed write rolled back, so the previous sidecar still stands,
+        and a refresh that went on to finish would vouch for it. Contention
+        re-raises: the refresh fails with ``refresh_pending`` still set, and
+        the retry or the next run redoes it. Any other failure may recur on
+        every run, so instead of failing the project forever this drops
+        the ``sidecar_state`` row: every reader then declines to the full
+        load, as for a cache that never had a sidecar, until an unfiltered
+        full load writes one afresh. If that delete fails too, it raises.
+        """
+        if is_busy_database_error(exc):
+            raise exc
+        if self._project_id is None or self._read_only:
+            return
+        with self._get_connection() as conn, write_transaction(conn):
+            conn.execute(
+                "DELETE FROM sidecar_state WHERE project_id = ?", (self._project_id,)
+            )
+
     def merge_session_sidecar(
         self,
         parent_updates: Dict[str, Optional[Tuple[Optional[str], Optional[str]]]],

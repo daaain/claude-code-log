@@ -322,10 +322,11 @@ def test_a_locked_out_sidecar_merge_is_redone(
 ) -> None:
     """The cross-session sidecar ends up as a cold build would write it.
 
-    The incremental refresh writes the sidecar after the session rows and
-    aggregates. A resumed session adds a parent fact to it; if that write
-    is locked out, the cache must not look current with the fact missing,
-    because the session-scoped render trusts the sidecar as it stands.
+    The incremental refresh merges a resumed session's parent fact into
+    the sidecar. If that merge is locked out, the cache must not look
+    current with the fact missing, because the session-scoped render
+    trusts the sidecar as it stands: the aggregate write that marks the
+    refresh finished has to come after it.
     """
     project = _build_project(tmp_path)
     projects_dir = project.parent
@@ -366,9 +367,9 @@ def test_a_locked_out_full_refresh_sidecar_is_redone(
 
     The full refresh writes the sidecar inside its load, before the
     session rows and aggregates. A failed write leaves the old sidecar in
-    place, so it must fail the refresh rather than be logged and passed
-    over: the closing aggregate write would otherwise mark the project
-    current over a sidecar without the resumed session's parent.
+    place, so lock contention must fail the refresh rather than be logged
+    and passed over: the closing aggregate write would otherwise mark the
+    project current over a sidecar without the resumed session's parent.
     """
     project = _build_project(tmp_path)
     projects_dir = project.parent
@@ -401,3 +402,58 @@ def test_a_locked_out_full_refresh_sidecar_is_redone(
     assert repaired == reference
     # A refresh that could not write its sidecar did not finish.
     assert "projects failed" in out, out
+
+
+@pytest.mark.parametrize("incremental", ["1", "0"], ids=["incremental", "full"])
+def test_a_sidecar_that_cannot_be_written_is_dropped_not_trusted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    incremental: str,
+) -> None:
+    """A sidecar write failing for good, not on contention.
+
+    Such a failure can recur on every run, so failing the refresh would
+    leave the project unrendered forever. The sidecar is dropped instead:
+    the project renders, every reader falls back to the full load, and
+    the next refresh that can write the sidecar writes it whole.
+    """
+    project = _build_project(tmp_path)
+    projects_dir = project.parent
+    monkeypatch.setenv("CLAUDE_CODE_LOG_CACHE_PATH", str(tmp_path / "cache.db"))
+    monkeypatch.setenv("CLAUDE_CODE_LOG_INCREMENTAL_CACHE", incremental)
+    _run(projects_dir)
+
+    resumed = "sess-resumed"
+    _append(project / f"{resumed}.jsonl", _resumed_session(resumed, SESSIONS[0]))
+    beta = project / f"{SESSIONS[1]}.jsonl"
+    _append(beta, _turn(SESSIONS[1], 1, _late_marker(SESSIONS[1])))
+
+    fired: List[str] = []
+
+    def broken(*_args: Any, **_kwargs: Any) -> None:
+        fired.append("BROKEN")
+        raise sqlite3.IntegrityError("UNIQUE constraint failed")
+
+    capsys.readouterr()
+    with monkeypatch.context() as m:
+        m.setattr(CacheManager, "save_session_sidecar", broken)
+        m.setattr(CacheManager, "merge_session_sidecar", broken)
+        _run(projects_dir)
+    out = capsys.readouterr().out
+    assert fired  # positive control: a sidecar write was attempted
+    assert "projects failed" not in out, out
+    assert _late_marker(SESSIONS[1]) in (
+        project / f"session-{SESSIONS[1]}.md"
+    ).read_text(encoding="utf-8")
+    assert (project / f"session-{resumed}.md").exists()
+    manager = CacheManager(project, get_library_version())
+    assert manager.load_session_sidecar() is None
+
+    # The next growth refreshes in full and writes the sidecar whole.
+    _append(beta, _turn(SESSIONS[1], 2, "later still"))
+    _run(projects_dir)
+    reference = _cold_sidecar(tmp_path, project, monkeypatch)
+    assert reference is not None and resumed in reference.parents
+    repaired = CacheManager(project, get_library_version()).load_session_sidecar()
+    assert repaired == reference

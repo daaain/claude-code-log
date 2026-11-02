@@ -1361,9 +1361,9 @@ def load_directory_transcripts(
     session-scoped incremental path on later runs. Only the conversion's
     Phase-2 load passes it, and only for unfiltered loads — a date-filtered
     subset must never masquerade as the whole project's sidecar.
-    ``sidecar_required`` makes a failed sidecar write raise instead of
-    being logged: the cache refresh passes it, see
-    ``_persist_session_sidecar``.
+    ``sidecar_required`` makes a failed sidecar write raise on
+    contention or drop the sidecar otherwise, instead of only being
+    logged: the cache refresh passes it, see ``_persist_session_sidecar``.
     """
     all_messages: list[TranscriptEntry] = []
 
@@ -1507,13 +1507,13 @@ def _persist_session_sidecar(
     except Exception as e:
         # A failed write rolls back and leaves the previous sidecar in
         # place, which later runs keep trusting. During a cache refresh
-        # (``required``) that must fail the refresh: its closing
-        # aggregate write would otherwise clear ``refresh_pending`` and
-        # mark the project current over the old sidecar. A rewrite after
-        # a complete refresh is safe to lose, because the sidecar it
-        # would replace already describes the current files.
+        # (``required``) the closing aggregate write would vouch for it,
+        # so the refresh fails on contention or drops the sidecar
+        # (``abandon_session_sidecar``). A rewrite after a complete
+        # refresh is safe to lose: the sidecar it would replace already
+        # describes the current files.
         if required:
-            raise
+            cache_manager.abandon_session_sidecar(e)
         logging.getLogger(__name__).warning("Failed to persist session sidecar: %s", e)
 
 
@@ -4762,9 +4762,15 @@ def _incremental_cache_refresh(
                     latest = ts
 
         cache_manager.update_session_cache(p_rows)
-        cache_manager.merge_session_sidecar(
-            parent_updates, junction_replacements, winner_upserts
-        )
+        try:
+            cache_manager.merge_session_sidecar(
+                parent_updates, junction_replacements, winner_upserts
+            )
+        except Exception as e:
+            cache_manager.abandon_session_sidecar(e)
+            logging.getLogger(__name__).warning(
+                "Failed to merge session sidecar, dropped it: %s", e
+            )
         # Last, because it clears ``refresh_pending``: every write of the
         # refresh must have landed before the project may read current.
         cache_manager.update_project_aggregates(
