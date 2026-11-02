@@ -20,7 +20,9 @@
 -- Existing rows start SET: a cache written before this migration may
 -- already hold the damage, and nothing else can tell. That costs one
 -- whole-project refresh per project on the first run after upgrading,
--- served from the cached entries (no file is re-parsed for it).
+-- served from the cached entries (no file is re-parsed for it). A Codex
+-- project pays more: render_provider_wholesale picks the session pages to
+-- re-render from get_modified_files, so that run re-renders every page.
 
 ALTER TABLE projects ADD COLUMN refresh_pending INTEGER NOT NULL DEFAULT 0;
 

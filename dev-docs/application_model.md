@@ -527,7 +527,9 @@ Current migrations:
   have not been written yet (§ 2.3). Existing rows start set, because a
   cache written before it may already hold that damage and nothing else
   can tell: one full refresh per project, from the cached entries, on
-  the first run after upgrading.
+  the first run after upgrading. For a Codex project that run also
+  re-renders every session page, because `render_provider_wholesale`
+  picks the pages to re-render from `get_modified_files`.
 
 Recreating-tables migrations toggle `PRAGMA foreign_keys = OFF/ON`
 around the rebuild to avoid losing rows to cascade-deletes during the
