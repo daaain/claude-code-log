@@ -27,7 +27,7 @@ from typing import Any, Callable, Dict, List, Optional
 import pytest
 
 from claude_code_log import converter
-from claude_code_log.cache import CacheManager, get_library_version
+from claude_code_log.cache import CacheManager, SessionSidecar, get_library_version
 from claude_code_log.converter import process_projects_hierarchy
 
 SESSIONS = ["sess-alpha", "sess-beta", "sess-gamma"]
@@ -278,3 +278,126 @@ def test_a_failed_refresh_leaves_every_file_reported_modified(
     # Recomputing the derived rows is what clears it.
     _run(project.parent)
     assert CacheManager(project, get_library_version()).get_modified_files(files) == []
+
+
+def _resumed_session(sid: str, parent_sid: str) -> List[Dict[str, Any]]:
+    """A session resumed from ``parent_sid``'s last turn: a cross-session fact."""
+    first = _user(sid, f"{sid}-u0", f"{parent_sid}-a0", 20, _late_marker(sid))
+    return [first, _assistant(sid, f"{sid}-a0", f"{sid}-u0", 21, "resumed reply")]
+
+
+def _cold_sidecar(
+    tmp_path: Path, project: Path, monkeypatch: pytest.MonkeyPatch
+) -> Optional[SessionSidecar]:
+    """The sidecar a cold build of ``project``'s current files writes."""
+    cold = tmp_path / "cold" / "projects" / project.name
+    cold.mkdir(parents=True)
+    for f in project.glob("*.jsonl"):
+        (cold / f.name).write_bytes(f.read_bytes())
+    with monkeypatch.context() as m:
+        m.setenv("CLAUDE_CODE_LOG_CACHE_PATH", str(tmp_path / "cold.db"))
+        _run(cold.parent)
+        return CacheManager(cold, get_library_version()).load_session_sidecar()
+
+
+def _fail_sidecar_merge(m: pytest.MonkeyPatch, fired: List[str]) -> None:
+    """Lock out the incremental refresh's sidecar merge, once."""
+    original = CacheManager.merge_session_sidecar
+
+    def wrapper(self: CacheManager, *args: Any, **kwargs: Any) -> None:
+        if "LOCKED" not in fired:
+            fired.append("LOCKED")
+            _locked()
+        original(self, *args, **kwargs)
+
+    m.setattr(CacheManager, "merge_session_sidecar", wrapper)
+
+
+@pytest.mark.parametrize("retry", [False, True], ids=["next-run", "in-pass-retry"])
+def test_a_locked_out_sidecar_merge_is_redone(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    retry: bool,
+) -> None:
+    """The cross-session sidecar ends up as a cold build would write it.
+
+    The incremental refresh writes the sidecar after the session rows and
+    aggregates. A resumed session adds a parent fact to it; if that write
+    is locked out, the cache must not look current with the fact missing,
+    because the session-scoped render trusts the sidecar as it stands.
+    """
+    project = _build_project(tmp_path)
+    projects_dir = project.parent
+    monkeypatch.setenv("CLAUDE_CODE_LOG_CACHE_PATH", str(tmp_path / "cache.db"))
+    _run(projects_dir)
+
+    resumed = "sess-resumed"
+    _append(project / f"{resumed}.jsonl", _resumed_session(resumed, SESSIONS[0]))
+
+    fired: List[str] = []
+    capsys.readouterr()
+    with monkeypatch.context() as m:
+        _fail_sidecar_merge(m, fired)
+        if not retry:
+            m.setattr(converter, "is_busy_database_error", _never_busy)
+        _run(projects_dir)
+    out = capsys.readouterr().out
+    # Positive control: only the incremental refresh merges the sidecar,
+    # so the lock-out firing proves the pass took that path.
+    assert fired.count("LOCKED") == 1
+    assert ("cache busy, will retry" if retry else "projects failed") in out, out
+    _run(projects_dir)
+
+    reference = _cold_sidecar(tmp_path, project, monkeypatch)
+    assert reference is not None and resumed in reference.parents
+    repaired = CacheManager(project, get_library_version()).load_session_sidecar()
+    assert repaired == reference
+
+
+@pytest.mark.parametrize("retry", [False, True], ids=["next-run", "in-pass-retry"])
+def test_a_locked_out_full_refresh_sidecar_is_redone(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    retry: bool,
+) -> None:
+    """The full refresh's sidecar write, locked out for the whole pass.
+
+    The full refresh writes the sidecar inside its load, before the
+    session rows and aggregates. A failed write leaves the old sidecar in
+    place, so it must fail the refresh rather than be logged and passed
+    over: the closing aggregate write would otherwise mark the project
+    current over a sidecar without the resumed session's parent.
+    """
+    project = _build_project(tmp_path)
+    projects_dir = project.parent
+    monkeypatch.setenv("CLAUDE_CODE_LOG_CACHE_PATH", str(tmp_path / "cache.db"))
+    _run(projects_dir)
+
+    resumed = "sess-resumed"
+    _append(project / f"{resumed}.jsonl", _resumed_session(resumed, SESSIONS[0]))
+
+    fired: List[str] = []
+    capsys.readouterr()
+    with monkeypatch.context() as m:
+        m.setenv("CLAUDE_CODE_LOG_INCREMENTAL_CACHE", "0")
+
+        def locked_save(*_args: Any, **_kwargs: Any) -> None:
+            fired.append("LOCKED")
+            _locked()
+
+        m.setattr(CacheManager, "save_session_sidecar", locked_save)
+        if not retry:
+            m.setattr(converter, "is_busy_database_error", _never_busy)
+        _run(projects_dir)
+    out = capsys.readouterr().out
+    assert "LOCKED" in fired  # positive control: the full path wrote it
+    _run(projects_dir)
+
+    reference = _cold_sidecar(tmp_path, project, monkeypatch)
+    assert reference is not None and resumed in reference.parents
+    repaired = CacheManager(project, get_library_version()).load_session_sidecar()
+    assert repaired == reference
+    # A refresh that could not write its sidecar did not finish.
+    assert "projects failed" in out, out

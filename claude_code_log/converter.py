@@ -1348,6 +1348,7 @@ def load_directory_transcripts(
     to_date: Optional[str] = None,
     silent: bool = False,
     persist_sidecar: bool = False,
+    sidecar_required: bool = False,
 ) -> tuple[list[TranscriptEntry], SessionTree]:
     """Load all JSONL transcript files from a directory and combine them.
 
@@ -1360,6 +1361,9 @@ def load_directory_transcripts(
     session-scoped incremental path on later runs. Only the conversion's
     Phase-2 load passes it, and only for unfiltered loads — a date-filtered
     subset must never masquerade as the whole project's sidecar.
+    ``sidecar_required`` makes a failed sidecar write raise instead of
+    being logged: the cache refresh passes it, see
+    ``_persist_session_sidecar``.
     """
     all_messages: list[TranscriptEntry] = []
 
@@ -1433,7 +1437,9 @@ def load_directory_transcripts(
     )
 
     if persist_sidecar and cache_manager is not None:
-        _persist_session_sidecar(cache_manager, all_messages, tree)
+        _persist_session_sidecar(
+            cache_manager, all_messages, tree, required=sidecar_required
+        )
 
     return all_entries, tree
 
@@ -1442,6 +1448,7 @@ def _persist_session_sidecar(
     cache_manager: "CacheManager",
     all_messages: list[TranscriptEntry],
     tree: SessionTree,
+    required: bool = False,
 ) -> None:
     """Project this load's cross-session facts into the cache sidecar.
 
@@ -1498,9 +1505,15 @@ def _persist_session_sidecar(
     try:
         cache_manager.save_session_sidecar(sidecar)
     except Exception as e:
-        # The sidecar is an optimization input, never a correctness
-        # requirement — a failed write only means the next incremental
-        # run takes the full-load path.
+        # A failed write rolls back and leaves the previous sidecar in
+        # place, which later runs keep trusting. During a cache refresh
+        # (``required``) that must fail the refresh: its closing
+        # aggregate write would otherwise clear ``refresh_pending`` and
+        # mark the project current over the old sidecar. A rewrite after
+        # a complete refresh is safe to lose, because the sidecar it
+        # would replace already describes the current files.
+        if required:
+            raise
         logging.getLogger(__name__).warning("Failed to persist session sidecar: %s", e)
 
 
@@ -4749,6 +4762,11 @@ def _incremental_cache_refresh(
                     latest = ts
 
         cache_manager.update_session_cache(p_rows)
+        cache_manager.merge_session_sidecar(
+            parent_updates, junction_replacements, winner_upserts
+        )
+        # Last, because it clears ``refresh_pending``: every write of the
+        # refresh must have landed before the project may read current.
         cache_manager.update_project_aggregates(
             total_message_count=cached_project.total_message_count
             + d_count
@@ -4760,9 +4778,6 @@ def _incremental_cache_refresh(
             total_cache_read_tokens=cached_project.total_cache_read_tokens + d_cr,
             earliest_timestamp=earliest,
             latest_timestamp=latest,
-        )
-        cache_manager.merge_session_sidecar(
-            parent_updates, junction_replacements, winner_upserts
         )
     return True
 
@@ -4903,6 +4918,7 @@ def ensure_fresh_cache_detailed(
             # per-file writes). This is what lets the streaming path run
             # right after a cache update without a second full load.
             persist_sidecar=(from_date is None and to_date is None),
+            sidecar_required=True,
         )
 
         # Update cache with fresh data

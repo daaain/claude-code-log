@@ -1929,9 +1929,9 @@ class CacheManager:
         """Update project-level aggregate information.
 
         The last write of a complete refresh, after every entry write and
-        the session rows derived from them, so it also clears the
-        ``refresh_pending`` flag those entry writes set (migration 015).
-        Call it only once the session rows match every entry row written.
+        the session rows and sidecar derived from them, so it also clears
+        the ``refresh_pending`` flag those entry writes set (migration
+        015). Call it only once those match every entry row written.
         """
         if self._project_id is None:
             return
