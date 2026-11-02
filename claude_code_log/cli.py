@@ -332,6 +332,149 @@ def _run_provider_wholesale(
         click.launch(str(index_path))
 
 
+def _run_all_providers(
+    output: "Optional[Path]",
+    output_format: str,
+    image_export_mode: "Optional[str]",
+    page_size: int,
+    depth: RenderingDepth,
+    compact: bool,
+    no_timestamps: bool,
+    no_recaps: bool,
+    write_combined: bool,
+    write_individual: bool,
+    from_date: "Optional[str]",
+    to_date: "Optional[str]",
+    no_cache: bool,
+    open_browser: bool,
+    expand_paths: bool,
+    filter_path: "Optional[str]",
+    theme: str,
+) -> None:
+    """Render available providers under one root and link their indexes."""
+    from .providers import discover_providers
+    from .providers.aggregate import write_all_providers_index
+    from .utils import output_path_is_file
+
+    registry = discover_providers()
+    available = registry.get_available_providers()
+    if not available:
+        raise click.ClickException("No providers available.")
+
+    if output is not None and output_path_is_file(output):
+        raise click.UsageError(
+            "--all-providers writes multiple files; pass --output as a directory."
+        )
+    output_root = output or (
+        Path.home() / ".local" / "share" / "claude-code-log" / "all-providers"
+    )
+
+    rendered: list[dict[str, Any]] = []
+    skipped: list[dict[str, str]] = []
+    for provider_name in available:
+        provider = registry.get_provider(provider_name)
+        if provider is None:
+            skipped.append(
+                {"name": provider_name, "reason": "provider is no longer registered"}
+            )
+            continue
+
+        sessions = list(provider.discover_sessions())
+        if not sessions:
+            skipped.append({"name": provider_name, "reason": "no sessions discovered"})
+            continue
+
+        provider_output = output_root / provider_name
+        try:
+            if provider_name == "claude":
+                data_dir = provider.get_data_dir()
+                if data_dir is None:
+                    skipped.append(
+                        {
+                            "name": provider_name,
+                            "reason": "data directory is unavailable",
+                        }
+                    )
+                    continue
+                index_path = process_projects_hierarchy(
+                    data_dir,
+                    from_date=from_date,
+                    to_date=to_date,
+                    use_cache=not no_cache,
+                    generate_individual_sessions=write_individual,
+                    output_format=output_format,
+                    image_export_mode=image_export_mode,
+                    page_size=page_size,
+                    depth=depth,
+                    compact=compact,
+                    output_dir=provider_output,
+                    expand_paths=expand_paths,
+                    filter_path=filter_path,
+                    write_combined=write_combined,
+                    no_timestamps=no_timestamps,
+                    no_recaps=no_recaps,
+                    theme=theme,
+                    silent=True,
+                )
+            else:
+                index_path = render_provider_wholesale(
+                    provider_name,
+                    None,
+                    provider_output,
+                    from_date=from_date,
+                    to_date=to_date,
+                    output_format=output_format,
+                    image_export_mode=image_export_mode,
+                    depth=depth,
+                    compact=compact,
+                    no_timestamps=no_timestamps,
+                    no_recaps=no_recaps,
+                    theme=theme,
+                    write_combined=write_combined,
+                    write_individual=write_individual,
+                    use_cache=not no_cache,
+                    expand_paths=expand_paths,
+                    filter_path=filter_path,
+                    silent=True,
+                )
+        except NotImplementedError:
+            skipped.append(
+                {
+                    "name": provider_name,
+                    "reason": "provider does not support whole-provider rendering",
+                }
+            )
+            continue
+
+        if not index_path.is_file():
+            raise click.ClickException(
+                f"{provider_name} did not create its expected index: {index_path}"
+            )
+        rendered.append(
+            {
+                "name": provider_name.title(),
+                "index_path": index_path,
+                "session_count": len(sessions),
+            }
+        )
+
+    if not rendered:
+        reasons = "; ".join(
+            f"{provider['name']}: {provider['reason']}" for provider in skipped
+        )
+        raise click.ClickException(
+            "No available providers support aggregate rendering"
+            + (f" ({reasons})" if reasons else ".")
+        )
+
+    index_path = write_all_providers_index(
+        output_root, rendered, skipped, output_format
+    )
+    click.echo(f"Created all-providers index at {index_path}")
+    if open_browser:
+        click.launch(str(index_path))
+
+
 def _clear_provider_cache(output_root: Path) -> None:
     """Delete the provider wholesale cache DB (and its WAL/SHM sidecars) under
     the output root. Never touches the sessions tree — the DB lives beside the
@@ -1094,6 +1237,14 @@ def main() -> None:
     help="Load a single session from a registered provider (for example, codex).",
 )
 @click.option(
+    "--all-providers",
+    is_flag=True,
+    help=(
+        "Render each available provider into its own output directory and create "
+        "a root index linking to the provider indexes."
+    ),
+)
+@click.option(
     "--session-id",
     default=None,
     help="Export a single session by ID (full ID or prefix). Project path is optional — looks up the session globally via cache.",
@@ -1205,6 +1356,7 @@ def convert(
     page_size: int,
     jobs: Optional[int],
     provider: Optional[str],
+    all_providers: bool,
     session_id: Optional[str],
     depth: Optional[str],
     detail: Optional[str],
@@ -1515,6 +1667,67 @@ def convert(
         depth_level = DEFAULT_DEPTH
 
     try:
+        if all_providers:
+            conflicts: list[str] = []
+            if provider is not None:
+                conflicts.append("--provider")
+            if input_path is not None:
+                conflicts.append("INPUT_PATH")
+            if session_id is not None:
+                conflicts.append("--session-id")
+            if tui:
+                conflicts.append("--tui")
+            if projects_dir is not None:
+                conflicts.append("--projects-dir")
+            if (
+                all_projects
+                and ctx.get_parameter_source("all_projects")
+                is not click.core.ParameterSource.DEFAULT
+            ):
+                conflicts.append("--all-projects")
+            if clear_cache:
+                conflicts.append("--clear-cache")
+            if clear_output:
+                conflicts.append("--clear-output")
+            if jobs is not None:
+                conflicts.append("--jobs")
+            if (
+                ctx.get_parameter_source("page_size")
+                is not click.core.ParameterSource.DEFAULT
+            ):
+                conflicts.append("--page-size")
+            if conflicts:
+                click.echo(
+                    f"Error: --all-providers does not support {', '.join(conflicts)}.",
+                    err=True,
+                )
+                sys.exit(2)
+
+            try:
+                _run_all_providers(
+                    output,
+                    output_format,
+                    image_export_mode,
+                    page_size,
+                    depth_level,
+                    compact,
+                    no_timestamps,
+                    no_recaps,
+                    write_combined,
+                    write_individual,
+                    from_date,
+                    to_date,
+                    no_cache,
+                    open_browser,
+                    expand_paths,
+                    filter_path,
+                    resolved_theme,
+                )
+            except click.ClickException as exc:
+                exc.show()
+                sys.exit(exc.exit_code)
+            return
+
         if provider is not None:
             from .providers import SessionInfo, discover_providers
 

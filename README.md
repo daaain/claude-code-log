@@ -136,6 +136,19 @@ This creates:
 - `~/.claude/projects/project-name/session-{session-id}.html` - Individual session pages
 - `~/.claude/projects/project-name/session-{session-id}.md` - Markdown versions (with `--format md`, or on demand from the TUI)
 
+### Aggregate provider indexes
+
+Render the providers installed on this machine into one output tree:
+
+```bash
+claude-code-log --all-providers --output ./all-provider-logs
+```
+
+This writes a root index and a separate directory for each provider that
+supports whole-provider rendering. Available providers without that support
+are listed as skipped. If `--output` is omitted, the root defaults to
+`~/.local/share/claude-code-log/all-providers`.
+
 ### Single File or Directory Processing
 
 ```bash
