@@ -26,6 +26,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 import pytest
 
+from claude_code_log import converter
 from claude_code_log.cache import CacheManager, get_library_version
 from claude_code_log.converter import process_projects_hierarchy
 
@@ -115,6 +116,10 @@ def _run(projects_dir: Path) -> None:
     )
 
 
+def _never_busy(_exc: BaseException) -> bool:
+    return False
+
+
 def _locked(*_args: Any, **_kwargs: Any) -> None:
     # What sqlite3 raises when the busy timeout expires on the write lock.
     raise sqlite3.OperationalError("database is locked")
@@ -184,12 +189,22 @@ def _fail_second_session_render_record(m: pytest.MonkeyPatch, fired: List[str]) 
     ],
     ids=["second-file-write", "session-rows-write", "second-session-render-record"],
 )
-def test_a_locked_out_refresh_is_redone_on_the_next_run(
+@pytest.mark.parametrize("retry", [False, True], ids=["next-run", "in-pass-retry"])
+def test_a_locked_out_project_ends_up_rendered(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     inject: Callable[[pytest.MonkeyPatch, List[str]], None],
+    retry: bool,
 ) -> None:
+    """Whichever write the lock-out hits, every session ends up rendered.
+
+    ``next-run``: the pass's in-pass retry is off, so the project fails
+    and must be repaired by the next run — issue #332's shape, and the one
+    the ``refresh_pending`` flag exists for. ``in-pass-retry``: the retry
+    repairs it within the failing pass itself, which it can only do for a
+    refresh-phase lock-out through that same flag.
+    """
     project = _build_project(tmp_path)
     projects_dir = project.parent
     monkeypatch.setenv("CLAUDE_CODE_LOG_CACHE_PATH", str(tmp_path / "cache.db"))
@@ -205,28 +220,36 @@ def test_a_locked_out_refresh_is_redone_on_the_next_run(
         _turn(NEW_SESSION, 0, _late_marker(NEW_SESSION)),
     )
 
+    def stale() -> List[str]:
+        return [
+            sid
+            for sid in [*SESSIONS, NEW_SESSION]
+            if not (project / f"session-{sid}.md").exists()
+            or _late_marker(sid)
+            not in (project / f"session-{sid}.md").read_text(encoding="utf-8")
+        ]
+
     fired: List[str] = []
     capsys.readouterr()
     with monkeypatch.context() as m:
         inject(m, fired)
+        if not retry:
+            # Report the lock-out as a failure instead of deferring it.
+            m.setattr(converter, "is_busy_database_error", _never_busy)
         _run(projects_dir)
     out = capsys.readouterr().out
-    # Positive control: the lock-out happened (once — contention is
-    # transient) and reached the pass, which either reported the project
-    # or deferred it to its in-pass retry.
+    # Positive control: the lock-out happened, once (contention is
+    # transient), and the pass took the path under test.
     assert fired.count("LOCKED") == 1
-    assert "database is locked" in out or "cache busy, will retry" in out, out
+    if retry:
+        assert "cache busy, will retry" in out, out
+        assert stale() == [], "the in-pass retry left sessions unrendered"
+    else:
+        assert "projects failed" in out, out
+        assert stale(), "the failing pass left nothing to repair"
 
     _run(projects_dir)
-
-    stale = [
-        sid
-        for sid in [*SESSIONS, NEW_SESSION]
-        if not (project / f"session-{sid}.md").exists()
-        or _late_marker(sid)
-        not in (project / f"session-{sid}.md").read_text(encoding="utf-8")
-    ]
-    assert stale == [], "sessions never re-rendered after the failed refresh"
+    assert stale() == [], "sessions never re-rendered after the failed refresh"
 
 
 def test_a_failed_refresh_leaves_every_file_reported_modified(
