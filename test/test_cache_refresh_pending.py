@@ -29,7 +29,9 @@ import pytest
 from claude_code_log.cache import CacheManager, get_library_version
 from claude_code_log.converter import process_projects_hierarchy
 
-SESSIONS = ["sess-alpha", "sess-beta"]
+SESSIONS = ["sess-alpha", "sess-beta", "sess-gamma"]
+# Starts after the first run, so the failing run is the first to render it.
+NEW_SESSION = "sess-delta"
 
 
 def _user(
@@ -153,10 +155,34 @@ def _fail_session_rows_write(m: pytest.MonkeyPatch, fired: List[str]) -> None:
     m.setattr(CacheManager, "update_session_cache", wrapper)
 
 
+def _fail_second_session_render_record(m: pytest.MonkeyPatch, fired: List[str]) -> None:
+    """Lock out the render bookkeeping of the second session file written.
+
+    The render phase, after the refresh finished: that session's file is
+    on disk but unrecorded, and the sessions after it are not written at
+    all. The commonest site of the lock-outs on a real archive.
+    """
+    original = CacheManager.update_html_cache
+
+    def wrapper(self: CacheManager, html_path: str, *args: Any, **kwargs: Any) -> Any:
+        if html_path.startswith("session-") and "LOCKED" not in fired:
+            fired.append(html_path)
+            if len(fired) == 2:
+                fired.append("LOCKED")
+                _locked()
+        return original(self, html_path, *args, **kwargs)
+
+    m.setattr(CacheManager, "update_html_cache", wrapper)
+
+
 @pytest.mark.parametrize(
     "inject",
-    [_fail_second_file_write, _fail_session_rows_write],
-    ids=["second-file-write", "session-rows-write"],
+    [
+        _fail_second_file_write,
+        _fail_session_rows_write,
+        _fail_second_session_render_record,
+    ],
+    ids=["second-file-write", "session-rows-write", "second-session-render-record"],
 )
 def test_a_locked_out_refresh_is_redone_on_the_next_run(
     tmp_path: Path,
@@ -174,6 +200,10 @@ def test_a_locked_out_refresh_is_redone_on_the_next_run(
 
     for sid in SESSIONS:
         _append(project / f"{sid}.jsonl", _turn(sid, 1, _late_marker(sid)))
+    _append(
+        project / f"{NEW_SESSION}.jsonl",
+        _turn(NEW_SESSION, 0, _late_marker(NEW_SESSION)),
+    )
 
     fired: List[str] = []
     capsys.readouterr()
@@ -191,8 +221,9 @@ def test_a_locked_out_refresh_is_redone_on_the_next_run(
 
     stale = [
         sid
-        for sid in SESSIONS
-        if _late_marker(sid)
+        for sid in [*SESSIONS, NEW_SESSION]
+        if not (project / f"session-{sid}.md").exists()
+        or _late_marker(sid)
         not in (project / f"session-{sid}.md").read_text(encoding="utf-8")
     ]
     assert stale == [], "sessions never re-rendered after the failed refresh"
