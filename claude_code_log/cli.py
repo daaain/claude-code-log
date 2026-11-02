@@ -11,7 +11,7 @@ import threading
 import time
 import traceback
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, List, Optional
 
 import click
 from git import Repo, InvalidGitRepositoryError
@@ -1890,6 +1890,7 @@ def convert(
             if output is not None and not output_path_is_file(output):
                 output_dir_for_projects = output
 
+            failed_projects: List[str] = []
             output_path = process_projects_hierarchy(
                 input_path,
                 from_date,
@@ -1909,6 +1910,7 @@ def convert(
                 no_recaps=no_recaps,
                 theme=resolved_theme,
                 jobs=jobs,
+                failed_projects=failed_projects,
             )
 
             # Count processed projects
@@ -1919,12 +1921,24 @@ def convert(
                     if d.is_dir() and list(d.glob("*.jsonl"))
                 ]
             )
-            click.echo(
-                f"Successfully processed {project_count} projects and created index at {output_path}"
-            )
+            if failed_projects:
+                # Exit non-zero, so an unattended run cannot lose projects
+                # unnoticed (issue #332). The index is still written; the
+                # failed projects are left out of it.
+                click.echo(
+                    f"{len(failed_projects)} of {project_count} projects failed "
+                    f"(index written at {output_path}): {', '.join(failed_projects)}",
+                    err=True,
+                )
+            else:
+                click.echo(
+                    f"Successfully processed {project_count} projects and created index at {output_path}"
+                )
 
             if open_browser:
                 click.launch(str(output_path))
+            if failed_projects:
+                sys.exit(1)
             return
 
         # Provider auto-detection (silent-empty pin): a rollout handed as an

@@ -6505,6 +6505,7 @@ def process_projects_hierarchy(
     theme: str = DEFAULT_THEME,
     jobs: Optional[int] = None,
     entry_store: "Optional[ParsedEntryStore]" = None,
+    failed_projects: Optional[List[str]] = None,
 ) -> Path:
     """Process the entire ~/.claude/projects/ hierarchy and create linked output files.
 
@@ -6515,6 +6516,11 @@ def process_projects_hierarchy(
     Windows. See the lease's module comment in ``cache.py`` for the
     mechanism. The lease is released when this returns, so no handle
     outlives the pass. Everything else is documented on the body.
+
+    A project that fails is reported and the pass goes on. Pass a list as
+    ``failed_projects`` to have the name of each such project appended to
+    it, so a caller can tell a complete pass from one that lost projects
+    (the CLI exits non-zero on the latter).
     """
     lease = (
         connection_lease(get_cache_db_path(projects_path))
@@ -6547,6 +6553,7 @@ def process_projects_hierarchy(
             theme=theme,
             jobs=jobs,
             entry_store=entry_store,
+            failed_projects=failed_projects,
         )
         if use_cache:
             # The pass's workers have all exited, so this is the moment the
@@ -6576,6 +6583,7 @@ def _process_projects_hierarchy(
     theme: str = DEFAULT_THEME,
     jobs: Optional[int] = None,
     entry_store: "Optional[ParsedEntryStore]" = None,
+    failed_projects: Optional[List[str]] = None,
 ) -> Path:
     """Process the entire ~/.claude/projects/ hierarchy and create linked output files.
 
@@ -6607,6 +6615,8 @@ def _process_projects_hierarchy(
         theme: HTML theme (see ``convert_jsonl_to``). The theme shares
             filenames with every other theme, so it reaches the per-project
             staleness plan (``_plan_project``) as well as the conversion.
+        failed_projects: When given, the names of the projects that failed
+            are appended to it (see ``process_projects_hierarchy``).
     """
     import time
 
@@ -7258,6 +7268,7 @@ def _process_projects_hierarchy(
 
     # Process archived projects (projects in cache but without JSONL files)
     archived_project_count = 0
+    archived_failures: List[str] = []
     for archived_dir in sorted(archived_project_dirs):
         try:
             # Initialize cache manager for archived project
@@ -7355,6 +7366,7 @@ def _process_projects_hierarchy(
             )
         except Exception as e:
             print(f"Warning: Failed to process archived project {archived_dir}: {e}")
+            archived_failures.append(archived_dir.name)
             continue
 
     # Update total projects count to include archived
@@ -7413,11 +7425,24 @@ def _process_projects_hierarchy(
         for error in stats.errors:
             print(f"  Error ({project_name}): {error}")
 
+    # A project can fail at more than one stage; count it once. Failures
+    # used to show only as warnings in a long log, under an exit status of
+    # 0, so an unattended run lost projects silently (issue #332).
+    failed = list(
+        dict.fromkeys(
+            [name for name, stats in project_stats if stats.errors] + archived_failures
+        )
+    )
+    if failed_projects is not None:
+        failed_projects.extend(failed)
+
     # Global summary
     summary_parts: List[str] = []
     summary_parts.append(f"Processed {total_projects} projects in {elapsed:.1f}s")
     if projects_with_updates > 0:
         summary_parts.append(f"  {projects_with_updates} projects updated")
+    if failed:
+        summary_parts.append(f"  {len(failed)} projects failed: {', '.join(failed)}")
     print("\n".join(summary_parts))
 
     # Show archived sessions note if any exist
