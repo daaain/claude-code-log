@@ -23,6 +23,7 @@ from claude_code_log.cli import main
 from claude_code_log.html.renderer import check_html_version
 from claude_code_log.json.renderer import JsonRenderer
 from claude_code_log.markdown.renderer import MarkdownRenderer
+from test.conftest import assert_regenerated
 
 
 _requires_mkfifo = pytest.mark.skipif(
@@ -168,19 +169,19 @@ class TestIsOutdatedNonRegularFileGuard:
     @_requires_mkfifo
     def test_markdown_is_outdated_on_fifo_returns_true(self, tmp_path: Path):
         fifo = tmp_path / "f"
-        os.mkfifo(fifo)
+        os.mkfifo(fifo)  # ty: ignore[possibly-missing-attribute]
         assert self._call_with_timeout(MarkdownRenderer().is_outdated, fifo) is True
 
     @_requires_mkfifo
     def test_json_is_outdated_on_fifo_returns_true(self, tmp_path: Path):
         fifo = tmp_path / "f"
-        os.mkfifo(fifo)
+        os.mkfifo(fifo)  # ty: ignore[possibly-missing-attribute]
         assert self._call_with_timeout(JsonRenderer().is_outdated, fifo) is True
 
     @_requires_mkfifo
     def test_check_html_version_on_fifo_returns_none(self, tmp_path: Path):
         fifo = tmp_path / "f"
-        os.mkfifo(fifo)
+        os.mkfifo(fifo)  # ty: ignore[possibly-missing-attribute]
         assert self._call_with_timeout(check_html_version, fifo) is None
 
     def test_markdown_is_outdated_on_directory_returns_true(self, tmp_path: Path):
@@ -206,20 +207,20 @@ class TestIsOutdatedNonRegularFileGuard:
 
 
 class TestSingleFileStaleness:
-    """#221 follow-up: the *default* single-file output (no ``-o``, detail-
+    """#221 follow-up: the *default* single-file output (no ``-o``, depth-
     suffixed naming) rides the version-only skip, so a source that grows
     between runs was wrongly kept stale. And a genuine skip printed BOTH the
     converter's "is current, skipping" line and the CLI's "Successfully
     converted" line. These pin the fixes for the exact CLI repro:
-    ``claude-code-log <file>.jsonl --detail low`` run, grow source, re-run."""
+    ``claude-code-log <file>.jsonl --depth agent`` run, grow source, re-run."""
 
     def test_grown_source_regenerates(self, tmp_path: Path):
         src = _write_jsonl(tmp_path / "session.jsonl", "FIRST_turn_marker")
         runner = CliRunner()
 
-        r1 = runner.invoke(main, [str(src), "--detail", "low"])
+        r1 = runner.invoke(main, [str(src), "--depth", "agent"])
         assert r1.exit_code == 0, r1.output
-        out = next(tmp_path.glob("*.low.html"))
+        out = next(tmp_path.glob("*.agent.html"))
         assert "FIRST_turn_marker" in out.read_text(encoding="utf-8")
         out_mtime = out.stat().st_mtime
 
@@ -230,24 +231,24 @@ class TestSingleFileStaleness:
             f.write(json.dumps(_user_entry("SECOND_turn_marker")) + "\n")
         os.utime(src, (out_mtime + 2, out_mtime + 2))
 
-        r2 = runner.invoke(main, [str(src), "--detail", "low"])
+        r2 = runner.invoke(main, [str(src), "--depth", "agent"])
         assert r2.exit_code == 0, r2.output
         assert "skipping regeneration" not in r2.output
         second = out.read_text(encoding="utf-8")
         assert "SECOND_turn_marker" in second, "stale HTML served after source grew"
-        assert out.stat().st_mtime > out_mtime
+        assert_regenerated(out, out_mtime)
 
     def test_unchanged_source_skips_without_success_line(self, tmp_path: Path):
         src = _write_jsonl(tmp_path / "session.jsonl", "ONLY_turn_marker")
         runner = CliRunner()
 
-        r1 = runner.invoke(main, [str(src), "--detail", "low"])
+        r1 = runner.invoke(main, [str(src), "--depth", "agent"])
         assert r1.exit_code == 0, r1.output
         assert "Successfully converted" in r1.output
 
         # Re-run with the source untouched: skip announced exactly once, and
         # NOT also "Successfully converted" (the misleading double message).
-        r2 = runner.invoke(main, [str(src), "--detail", "low"])
+        r2 = runner.invoke(main, [str(src), "--depth", "agent"])
         assert r2.exit_code == 0, r2.output
         assert "skipping regeneration" in r2.output
         assert "Successfully converted" not in r2.output
@@ -323,8 +324,13 @@ class TestSingleFileStaleness:
         # The session was regenerated...
         assert session_html.exists(), "session HTML not regenerated"
         assert "individual session files" in r2.output
-        # ...the combined was skipped (converter says so)...
-        assert "skipping regeneration" in r2.output
+        # ...the combined was skipped (converter says so — either the full
+        # path's per-file skip line, or the session-scoped path's message,
+        # which names the same fact)...
+        assert (
+            "skipping regeneration" in r2.output
+            or "combined output current" in r2.output
+        )
         # ...and the CLI does NOT falsely claim to have combined it.
         assert "Successfully combined" not in r2.output, (
             f"claimed 'combined' when combined was skipped; output:\n{r2.output}"
@@ -366,7 +372,7 @@ class TestDirectoryNoCacheStaleness:
         assert "SECOND_dir_marker" in second, (
             "stale combined HTML served on a --no-cache directory re-run"
         )
-        assert combined.stat().st_mtime > out_mtime
+        assert_regenerated(combined, out_mtime)
 
 
 if __name__ == "__main__":

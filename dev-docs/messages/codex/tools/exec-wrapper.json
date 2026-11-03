@@ -1,0 +1,19 @@
+[
+  {
+    "type": "response_item",
+    "payload": {
+      "type": "custom_tool_call",
+      "name": "exec",
+      "input": "const result = await tools.exec_command({cmd: \"git status --short\"}); text(result.output);",
+      "call_id": "call-exec-wrapper-001"
+    }
+  },
+  {
+    "type": "response_item",
+    "payload": {
+      "type": "custom_tool_call_output",
+      "call_id": "call-exec-wrapper-001",
+      "output": ""
+    }
+  }
+]

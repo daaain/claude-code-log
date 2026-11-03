@@ -12,8 +12,9 @@ Used two ways:
 
 * By the MkDocs build (``docs/gen_pages.py`` via ``mkdocs-gen-files``) so the
   published example is regenerated on every build and never goes stale.
-* Standalone: ``python scripts/generate_example_output.py [OUTPUT.html]``
-  (defaults to ``test_output/example-transcript.html``).
+* Standalone: ``python scripts/generate_example_output.py [OUTPUT.html]
+  [THEME]`` (defaults to ``test_output/example-transcript.html`` and the
+  classic theme; pass ``minimal`` for the minimal theme).
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from claude_code_log.converter import convert_jsonl_to_html
+from claude_code_log.converter import convert_jsonl_to
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 # A real, multi-session sample of this project's own development. Rich enough to
@@ -37,8 +38,11 @@ _SAMPLE_DIR = (
 )
 
 
-def generate_example_html(out_path: Path) -> Path:
+def generate_example_html(out_path: Path, theme: str = "classic") -> Path:
     """Render the bundled sample project into a single self-contained HTML file.
+
+    ``theme`` is the HTML theme (``classic`` or ``minimal``); the docs site
+    publishes one page per theme.
 
     The sample is copied to a temp dir first so the render is deterministic
     (built fresh from the JSONL, ignoring any committed cache) and never writes
@@ -54,11 +58,13 @@ def generate_example_html(out_path: Path) -> Path:
             elif leftover.exists():
                 leftover.unlink()
 
-        result = convert_jsonl_to_html(
+        result = convert_jsonl_to(
+            "html",
             work,
             generate_individual_sessions=False,
             use_cache=False,
             silent=True,
+            theme=theme,
         )
 
         out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -72,6 +78,7 @@ if __name__ == "__main__":
         if len(sys.argv) > 1
         else Path("test_output/example-transcript.html")
     )
-    written = generate_example_html(target)
+    theme = sys.argv[2] if len(sys.argv) > 2 else "classic"
+    written = generate_example_html(target, theme)
     size_mb = written.stat().st_size / 1_000_000
     print(f"Wrote {written} ({size_mb:.1f} MB)")

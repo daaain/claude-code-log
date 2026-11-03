@@ -31,6 +31,8 @@ JSONL Parsing (parser.py)
 │   │   └── Plain user text
 │   ├── ToolResultContent → ToolResultMessage with output:
 │   │   ├── ReadOutput (cat-n formatted file content)
+│   │   ├── WriteOutput / DeleteOutput (status acknowledgment)
+│   │   ├── ToolExecutionOutput (status + labelled opaque emissions)
 │   │   ├── EditOutput (cat-n formatted edit result)
 │   │   └── ToolResultContent (generic fallback)
 │   └── ImageContent → Image messages
@@ -39,10 +41,10 @@ JSONL Parsing (parser.py)
 │   ├── TextContent → AssistantTextMessage
 │   ├── ThinkingContent → ThinkingMessage
 │   └── ToolUseContent → ToolUseMessage with parsed inputs:
-│       ├── ReadInput, WriteInput, EditInput, MultiEditInput
+│       ├── ReadInput, WriteInput, DeleteInput, EditInput, MultiEditInput
 │       ├── BashInput, GlobInput, GrepInput
 │       ├── TaskInput, TodoWriteInput, AskUserQuestionInput
-│       └── ExitPlanModeInput
+│       └── ExitPlanModeInput, ToolExecutionInput
 │
 ├── SystemTranscriptEntry
 │   ├── SystemMessage (level: info/warning/error)
@@ -146,7 +148,7 @@ Based on flags and tag patterns in `TextContent`, user text messages are classif
 - **Condition**: No special flags or tags
 - **Content Model**: Plain `TextContent`
 - **CSS Class**: `user`
-- **Files**: [user.json](messages/user/user.json) | [user.jsonl](messages/user/user.jsonl)
+- **Files**: [user.json](messages/claude-code/user/user.json) | [user.jsonl](messages/claude-code/user/user.jsonl)
 
 ```json
 {
@@ -164,7 +166,7 @@ Based on flags and tag patterns in `TextContent`, user text messages are classif
 - **Condition**: `isMeta: true` flag
 - **Content Model**: `UserSlashCommandMessage` (models.py)
 - **CSS Class**: `user slash-command`
-- **Files**: [user_slash_command.json](messages/user/user_slash_command.json)
+- **Files**: [user_slash_command.json](messages/claude-code/user/user_slash_command.json)
 
 ```json
 {
@@ -188,7 +190,7 @@ class UserSlashCommandMessage(MessageContent):
 - **Condition**: Contains `<command-name>` tags
 - **Content Model**: `SlashCommandMessage` with parsed name/args/contents
 - **CSS Class**: `user slash-command`
-- **Files**: [user_command.json](messages/user/user_command.json)
+- **Files**: [user_command.json](messages/claude-code/user/user_command.json)
 
 ```python
 @dataclass
@@ -208,7 +210,7 @@ class SlashCommandMessage(MessageContent):
 - **Condition**: Contains `<local-command-stdout>` tags
 - **Content Model**: `CommandOutputMessage`
 - **CSS Class**: `user command-output`
-- **Files**: [command_output.json](messages/user/command_output.json)
+- **Files**: [command_output.json](messages/claude-code/user/command_output.json)
 
 ```python
 @dataclass
@@ -222,7 +224,7 @@ class CommandOutputMessage(MessageContent):
 - **Condition**: Contains `<bash-input>` tags
 - **Content Model**: `BashInputMessage`
 - **CSS Class**: `bash-input` (filtered by User)
-- **Files**: [bash_input.json](messages/user/bash_input.json)
+- **Files**: [bash_input.json](messages/claude-code/user/bash_input.json)
 
 ```python
 @dataclass
@@ -237,7 +239,7 @@ The corresponding output uses `<bash-stdout>` and optionally `<bash-stderr>` tag
 - **Condition**: Contains `<bash-stdout>` tags
 - **Content Model**: `BashOutputMessage`
 - **CSS Class**: `bash-output` (filtered by User)
-- **Files**: [bash_output.json](messages/user/bash_output.json)
+- **Files**: [bash_output.json](messages/claude-code/user/bash_output.json)
 
 ### Compacted Conversation
 
@@ -251,9 +253,15 @@ class CompactedSummaryMessage(MessageContent):
     summary_text: str  # The compacted conversation summary
 ```
 
-### User Steering (Queue Remove)
+### User Steering (Queue Remove / queued_command)
 
-- **Condition**: `QueueOperationTranscriptEntry` with `operation: "remove"`
+- **Condition** (two sources, by harness era):
+  - Modern (Claude Code ≳2.1.101): a `type: "attachment"` /
+    `attachment.type: "queued_command"` entry — the preferred record, as
+    it is in-DAG and carries `uuid`/`parentUuid` (a debug line the legacy
+    `remove` lacks). Promoted in `factories/attachment_factory.py`.
+  - Legacy (≤~2.1.29): a `QueueOperationTranscriptEntry` with
+    `operation: "remove"` — chain-less, uuid-less.
 - **Content Model**: `UserSteeringMessage` (extends `UserTextMessage`)
 - **CSS Class**: `user steering`
 - **Title**: "User (steering)"
@@ -265,7 +273,66 @@ class UserSteeringMessage(UserTextMessage):
     pass  # Inherits items from UserTextMessage
 ```
 
-Steering messages represent user interrupts that cancel queued operations.
+Steering messages represent user input injected mid-turn to steer an
+ongoing assistant response.
+
+**One delivery, two records, one card.** A modern steering delivery writes
+*both* a `queued_command` attachment and a legacy `remove` op, normally 1:1.
+The renderer emits the attachment and suppresses the paired `remove`, so a
+reader sees one card rather than a duplicate. Suppression is content-keyed and
+budgeted per `(session, version, prompt-text)`; the mechanics, and why each
+part of that key is needed, are commented at the pre-pass in `renderer.py`.
+
+What the reader sees when pairing does *not* work out is the part worth stating
+here: nothing is ever dropped. A `remove` with no matching card renders as
+legacy steering, and a card that renders but cannot be paired leaves its
+`remove` visible rather than suppressing it on a match that cannot be shown.
+A non-pairable card always warns; an unmatched `remove` warns only where that
+session and version did produce a counted card — with no card there is nothing
+for it to be imbalanced against, so a legacy-only transcript stays silent — and
+then only once per `(session, version)`.
+
+**Prompt shapes.** `attachment.prompt` is normally a plain string, but a
+steering delivery carrying an image is written as a **list of content blocks**
+(`[{"type": "text", …}, {"type": "image", …}]`). Both shapes normalize through
+`attachment_factory.queued_command_prompt_items`, which the renderer's pre-pass
+shares, and any other shape renders from its `str()` rather than vanishing.
+Which shapes can be *paired* — and why an image-only list or a text-bearing
+`dict` cannot — is documented on that function.
+
+**Transformer pass.** A `queued_command` prompt goes through the same
+`create_user_message` classification and plugin-transformer pass as an
+idle-delivered prompt, so a `[monitor] …` steering injection renders as the
+same demoted marker as its non-steering siblings, and only a plain
+`UserTextMessage` is wrapped as `UserSteeringMessage`.
+
+**Null-content era (≤2.1.202).** Older harnesses wrote the paired `remove` with
+`content: null` — the steering text lived **only** in the `queued_command`
+attachment. Rendering steering from the attachment is therefore not just a
+de-duplication nicety but the *only* path that surfaces steering text at all on
+such transcripts. Null-content removes are dropped before the suppression pass,
+so they neither consume budget nor trip its warning.
+
+Measured over one machine's full local corpus on 2026-07-28 (5606 files, 4658
+removes): every version **≤ 2.1.202** wrote null content (3836 removes) and
+every version **≥ 2.1.205** wrote text (822 removes), with no version producing
+both. Two limits on that, because it is still a sample:
+
+- **The changeover is located to an interval, not a point.** It lies in
+  **(2.1.202, 2.1.205]**, and the versions in between cannot narrow it here:
+  2.1.203 does not appear in this corpus at all, and 2.1.204 appears (268
+  entries) but produced *no* `remove` ops. "Sharp" describes the observed
+  versions, not a verified single release.
+- **The floor is a sampling floor.** 2.0.55 is the oldest version present and
+  2.0.73 the oldest carrying a `remove` — oldest *available*, not oldest
+  *existing*. Nothing here shows what pre-2.0 harnesses wrote.
+
+Within those limits: on current harnesses the `remove` does carry its text and
+the content-keyed pairing is meaningful, and null-content is the legacy shape
+rather than the modern one. (An earlier revision of this page put the
+null-content era at "≥~2.1.187" — backwards, from a sample that happened to
+start there. Stating the bound as a dated interval is the guard against this
+correction hardening the same way.)
 
 ### User Memory
 
@@ -284,7 +351,7 @@ class UserMemoryMessage(MessageContent):
 - **Condition**: `isSidechain: true`
 - **CSS Class**: `user sidechain`
 - **Note**: Typically skipped during rendering (duplicates Task prompt)
-- **Files**: [user_sidechain.json](messages/user/user_sidechain.json)
+- **Files**: [user_sidechain.json](messages/claude-code/user/user_sidechain.json)
 
 ### Async Task Notification (`<task-notification>`)
 
@@ -304,6 +371,7 @@ class TaskNotificationMessage(MessageContent):
     task_id: str
     status: str               # "completed", "failed", …
     summary: str              # Agent "<description>" completed
+    event: str                # a Monitor event's text ("" otherwise)
     result_text: str          # the agent's final answer body
     usage: Optional[TaskNotificationUsage]
     transcript_path: Optional[str]   # "Full transcript available at: …"
@@ -313,12 +381,29 @@ class TaskNotificationMessage(MessageContent):
     spawning_task_message_index: Optional[int] = None
 ```
 
+`<usage>` comes in two forms, and `_parse_usage` reads both: older
+Claude Code wrote `key: value` lines (`total_tokens: N` …), current
+versions write child tags (`<subagent_tokens>N</subagent_tokens>
+<tool_uses>N</tool_uses><duration_ms>N</duration_ms>`; a few carry
+`<total_tokens>` instead, and a workflow adds counters such as
+`<agent_count>`, which are ignored). Both token names land in
+`TaskNotificationUsage.total_tokens`. A Monitor sends one notification
+per line its command prints, with no status, the line in `<event>` and a
+summary that only names the monitor; the card shows that text as an
+*Event* row (a code block when it spans lines). `<event>` and `<result>` are free
+text (a command's output, an agent's Markdown) and can quote any tag, so
+the parser takes them out first, each where it first opens and running
+to the last closing tag of its kind (a notification has one of each, so
+a quoted inner tag is text), and only then searches the rest for
+`<usage>` and the header fields. A result is trimmed; an event is kept
+verbatim, indentation included.
+
 The `result_text` is the canonical source for the spawn-fold —
 `_link_async_notifications` copies it onto
 `TaskOutput.async_final_answer` of the spawning `Task` tool_result so
 the answer renders in place. See
 [agents.md § 2 (Async task agents)](agents.md#2-async-task-agents-90)
-for the end-to-end flow and detail-level matrix.
+for the end-to-end flow and depth matrix.
 
 ### IDE Notifications
 
@@ -362,18 +447,18 @@ Tool results appear as `ToolResultContent` items in user messages, linked to the
 
 | Tool | Output Model | Key Fields | Files |
 |------|--------------|------------|-------|
-| Read | `ReadOutput` | file_path, content, start_line, num_lines, is_truncated | [tool_result](messages/tools/Read-tool_result.json) |
-| Edit | `EditOutput` | file_path, success, diffs, message, start_line | [tool_result](messages/tools/Edit-tool_result.json) |
-| Write | `WriteOutput` | file_path, success, message | [tool_result](messages/tools/Write-tool_result.json) |
-| Bash | `BashOutput` | content, has_ansi | [tool_result](messages/tools/Bash-tool_result.json) |
-| Task | `TaskOutput` *(see note)* | result, metadata, async_final_answer | [tool_result](messages/tools/Task-tool_result.json) |
+| Read | `ReadOutput` | file_path, content, start_line, num_lines, is_truncated | [tool_result](messages/claude-code/tools/Read-tool_result.json) |
+| Edit | `EditOutput` | file_path, success, diffs, message, start_line | [tool_result](messages/claude-code/tools/Edit-tool_result.json) |
+| Write | `WriteOutput` | file_path, success, message | [tool_result](messages/claude-code/tools/Write-tool_result.json) |
+| Bash | `BashOutput` | content, has_ansi | [tool_result](messages/claude-code/tools/Bash-tool_result.json) |
+| Task | `TaskOutput` *(see note)* | result, metadata, async_final_answer | [tool_result](messages/claude-code/tools/Task-tool_result.json) |
 | TaskOutput | `TaskOutputResult` *(see note)* | retrieval_status, task_id, task_type, status, output_truncated, output_file | (async-agent polling tool — issue #90) |
 | TaskStop | `TaskStopOutput` | stopped, message | (kills a background task by id — PR #158 follow-up) |
-| AskUserQuestion | `AskUserQuestionOutput` | answers, raw_message | [tool_result](messages/tools/AskUserQuestion-tool_result.json) |
-| ExitPlanMode | `ExitPlanModeOutput` | message, approved | [tool_result](messages/tools/ExitPlanMode-tool_result.json) |
-| Glob | `GlobOutput` *(TODO)* | pattern, files, truncated | [tool_result](messages/tools/Glob-tool_result.json) |
-| Grep | `GrepOutput` *(TODO)* | pattern, matches, output_mode, truncated | [tool_result](messages/tools/Grep-tool_result.json) |
-| (error) | — | is_error: true | [Bash error](messages/tools/Bash-tool_result_error.json) |
+| AskUserQuestion | `AskUserQuestionOutput` | answers, raw_message | [tool_result](messages/claude-code/tools/AskUserQuestion-tool_result.json) |
+| ExitPlanMode | `ExitPlanModeOutput` | message, approved | [tool_result](messages/claude-code/tools/ExitPlanMode-tool_result.json) |
+| Glob | `GlobOutput` *(TODO)* | pattern, files, truncated | [tool_result](messages/claude-code/tools/Glob-tool_result.json) |
+| Grep | `GrepOutput` *(TODO)* | pattern, matches, output_mode, truncated | [tool_result](messages/claude-code/tools/Grep-tool_result.json) |
+| (error) | — | is_error: true | [Bash error](messages/claude-code/tools/Bash-tool_result_error.json) |
 
 **(TODO)**: Glob and Grep output models defined in models.py but not yet used.
 
@@ -409,12 +494,12 @@ polls between an async-Task launch and its completion notification). The fold wr
 
 - **Condition**: `is_error: true`
 - **CSS Class**: `tool_result error`
-- **Files**: [Bash-tool_result_error.json](messages/tools/Bash-tool_result_error.json)
+- **Files**: [Bash-tool_result_error.json](messages/claude-code/tools/Bash-tool_result_error.json)
 
 ### Read Tool Result → ReadOutput
 
 Read tool results in cat-n format are parsed into structured `ReadOutput`:
-- **Files**: [Read-tool_result.json](messages/tools/Read-tool_result.json)
+- **Files**: [Read-tool_result.json](messages/claude-code/tools/Read-tool_result.json)
 
 ```python
 @dataclass
@@ -431,7 +516,7 @@ class ReadOutput(MessageContent):
 ### Edit Tool Result → EditOutput
 
 Edit tool results with cat-n snippets are parsed into structured `EditOutput`:
-- **Files**: [Edit-tool_result.json](messages/tools/Edit-tool_result.json)
+- **Files**: [Edit-tool_result.json](messages/claude-code/tools/Edit-tool_result.json)
 
 ```python
 @dataclass
@@ -454,12 +539,14 @@ class ToolResultMessage(MessageContent):
     output: ToolOutput  # Specialized output or ToolResultContent fallback
     is_error: bool = False
     tool_name: Optional[str] = None   # Name of the tool
-    file_path: Optional[str] = None   # File path for Read/Edit/Write
+    file_path: Optional[str] = None   # File path for Read/Write/Delete/Edit
 
 # ToolOutput is a union type for tool results
 ToolOutput = Union[
     ReadOutput,
     WriteOutput,
+    DeleteOutput,
+    ToolExecutionOutput,
     EditOutput,
     BashOutput,
     TaskOutput,
@@ -472,7 +559,7 @@ ToolOutput = Union[
 ## 1.4 Images (ImageContent)
 
 - **CSS Class**: `image`
-- **Files**: [image.json](messages/user/image.json)
+- **Files**: [image.json](messages/claude-code/user/image.json)
 
 ```json
 {
@@ -503,6 +590,108 @@ class ImageContent(BaseModel, MessageContent):
     source: ImageSource
 ```
 
+### `[Image #N]` placeholders and `imagePasteIds`
+
+A pasted image leaves an `[Image #N]` placeholder in the surrounding text and
+its bytes in a separate content block. The association between the two is
+recorded on the entry, as a sibling of `message`:
+
+```json
+{
+  "type": "user",
+  "imagePasteIds": [4, 6],
+  "message": {"content": [
+    {"type": "image", "source": {"...": "the block for [Image #4]"}},
+    {"type": "image", "source": {"...": "the block for [Image #6]"}},
+    {"type": "text", "text": "compare [Image #6] with [Image #4]"}
+  ]}
+}
+```
+
+The list runs parallel to the image blocks, so **`[Image #N]` is the block at
+`imagePasteIds.index(N)`**.
+
+**N is a paste counter, not a position.** It resets when the CLI restarts
+inside a session that outlives it, and it increments on delete-and-repaste —
+hence non-contiguous runs like `[4, 6, 8]`, numbers far above the block count,
+and the same N naming different images at different points in one session.
+Nothing may therefore be keyed at session scope: the per-message list is both
+necessary and sufficient.
+
+Reading N as a 1-based index into the blocks — what the renderer did before
+this was modelled — fails three ways, in rising order of how hard it is to
+spot: the placeholder stays literal and the image appends detached (N above
+the block count); a block is dropped; or a *different* image renders where the
+placeholder sat, with nothing in the output to mark it wrong.
+
+Resolution lives in `factories/user_factory.py`
+(`_image_reference_mapping`), and both halves of the rendering share one
+mapping: the inliner takes blocks by number, and whatever it did not take is
+appended in place. A block can therefore never be inlined *and* appended, nor
+dropped by a pass that never rendered it — which is what a placeholder buried
+in a `<system-reminder>` or an IDE-notification prefix used to cause.
+
+An up-front scan of the **raw** item text does survive, but only to decide
+whether an absent-field message's numbering is contiguous, and the asymmetry
+is deliberate: a raw scan can only *widen* the set of numbers, a wider set can
+only make contiguity harder to satisfy, so it can over-fail-close and never
+over-substitute. Using post-split text there would be the unsafe choice — a
+hidden placeholder would be invisible to the contiguity check while still
+being a real reference. Consumption deliberately does **not** use that scan,
+and that asymmetry is the fix.
+
+When the association cannot be established the placeholder renders literally,
+the block stays detached, and a warning names the condition — an unknown paste
+id, lists that are not parallel, a repeated id, a malformed field. A visible
+gap beats a confident substitution. The model field is deliberately untyped so
+a malformed value reaches that report rather than failing validation and
+costing the whole entry.
+
+Old transcripts carry no `imagePasteIds`, so position is the only evidence
+available there. It is used only when the numbering is `1..k` with no gaps and
+no more numbers than blocks.
+
+**Why that condition, stated correctly.** Not "a reset counter cannot produce
+`1..k`" — one that has just reset produces exactly that. The condition is
+chosen because on that shape **the two readings coincide**, so the renderer
+does not have to know which regime produced the numbering. Paste ids are
+distinct, `>= 1`, and recorded in ascending block order; a list containing
+`1..k` must therefore hold them in its first `k` slots, which makes
+`ids.index(N)` and `N-1` the same answer. A gap, or a number above the block
+count, breaks the coincidence — and those fail closed.
+
+The ascending premise is **measured, not guaranteed by the format**: 180/180
+distinct messages carrying the field have strictly ascending ids, no
+duplicates, none below 1 (2026-07-28 archive). Scored the other way — pretend
+the field were absent and run the fallback against the recorded ids as ground
+truth — it fires on 24 of the 110 placeholder-bearing messages, refuses the
+other 86, and is correct on all 24. That is evidence from the era that *has*
+the field; the era where the fallback actually applies has no ground truth by
+construction, which is the limit of the argument.
+
+**What this does NOT cover: a chunk-split record.**
+`chunk_message_content` gives `tool_use` / `tool_result` / `thinking` blocks
+their own chunks, so a record whose image block and referencing text are
+separated by one of those yields a text segment that sees **no** image blocks.
+The placeholder then stays literal and the block is appended from its own
+chunk — on this renderer and on every renderer before it, because both refuse
+for the same underlying reason: you cannot reference a block that is not in
+the list you were handed. Two independent mechanisms produce that refusal (an
+early return on the empty list, and the block-count bounds), which is why no
+test pins it — each shields the other from mutation. Zero records in a
+5,606-file archive have image blocks *and* a special block, so this is a
+property to preserve rather than a behaviour anyone relies on.
+
+**How old is "old" — measured, with its limits.** In one real archive scanned
+on 2026-07-28 (5,606 transcript files), every image-bearing message that
+contained an `[Image #N]` placeholder carried the field, across versions
+2.1.84–2.1.220; the oldest records lacking it are twenty at 2.0.73–2.0.74,
+none of which contains a placeholder. That does not pin an introduction
+version: both shapes occur *within* 2.0.74, and the archive's sampling floor
+for image-bearing records is 2.0.73. The repo's own `test/test_data` fixtures
+at 1.0.31, 1.0.43 and 1.0.128 do carry placeholders with no field, which is
+what keeps the positional path live rather than historical.
+
 ---
 
 # Part 2: Assistant Messages (AssistantTranscriptEntry)
@@ -520,7 +709,7 @@ Assistant messages contain `ContentItem` instances that are:
 
 - **Content Model**: `AssistantTextMessage` (models.py)
 - **CSS Class**: `assistant` (or `assistant sidechain`)
-- **Files**: [assistant.json](messages/assistant/assistant.json)
+- **Files**: [assistant.json](messages/claude-code/assistant/assistant.json)
 
 ```python
 @dataclass
@@ -534,13 +723,13 @@ class AssistantTextMessage(MessageContent):
 - **Condition**: `isSidechain: true`
 - **CSS Class**: `assistant sidechain`
 - **Title**: "Sub-assistant"
-- **Files**: [assistant_sidechain.json](messages/assistant/assistant_sidechain.json)
+- **Files**: [assistant_sidechain.json](messages/claude-code/assistant/assistant_sidechain.json)
 
 ## 2.3 Thinking Content → ThinkingMessage
 
 - **Content Model**: `ThinkingMessage` (models.py)
 - **CSS Class**: `thinking`
-- **Files**: [thinking.json](messages/assistant/thinking.json)
+- **Files**: [thinking.json](messages/claude-code/assistant/thinking.json)
 
 ```python
 @dataclass
@@ -572,9 +761,9 @@ class ToolUseMessage(MessageContent):
 
 # ToolInput is a union of typed input models
 ToolInput = Union[
-    BashInput, ReadInput, WriteInput, EditInput, MultiEditInput,
+    BashInput, ReadInput, WriteInput, DeleteInput, EditInput, MultiEditInput,
     GlobInput, GrepInput, TaskInput, TodoWriteInput,
-    AskUserQuestionInput, ExitPlanModeInput,
+    AskUserQuestionInput, ExitPlanModeInput, ToolExecutionInput,
     ToolUseContent,  # Generic fallback when no specialized parser
 ]
 ```
@@ -634,7 +823,7 @@ class AskUserQuestionItem(BaseModel):
 ### Tool Use Message Structure
 
 - **CSS Class**: `tool_use` (or `tool_use sidechain`)
-- **Files**: See [messages/tools/](messages/tools/) (e.g., `Read-tool_use.json`)
+- **Files**: See [messages/claude-code/tools/](messages/claude-code/tools/) (e.g., `Read-tool_use.json`)
 
 ```json
 {
@@ -667,7 +856,7 @@ System messages are parsed into structured content models in `models.py`:
 
 - **Content Model**: `SystemMessage` (models.py)
 - **CSS Class**: `system system-info`, `system system-warning`, `system system-error`
-- **Files**: [system_info.json](messages/system/system_info.json)
+- **Files**: [system_info.json](messages/claude-code/system/system_info.json)
 
 ```python
 @dataclass
@@ -708,7 +897,7 @@ class HookSummaryMessage(MessageContent):
 - **Condition**: `subtype: "away_summary"`
 - **CSS Class**: `system system-away-summary`
 - **Header**: `📝 Recap` (icon from `get_message_emoji`, title from `title_AwaySummaryMessage`)
-- **Detail levels**: visible at EVERY level (`detail_visibility = USER_ONLY`) — a recap is itself a high-level summary of activity (#179). Suppress with `--no-recaps` (handled in `_ghost_template_by_detail`), which drops them at all levels including FULL.
+- **Detail levels**: visible at EVERY level (`depth_visibility = USER`) — a recap is itself a high-level summary of activity (#179). Suppress with `--no-recaps` (handled in `_ghost_template_by_depth`), which drops them at all levels including HOOK.
 
 Claude Code emits these system entries when a session resumes after a break — narrative prose summarising recent activity. The factory strips a trailing `" (disable recaps in /config)"` UI hint when present (suffix-match, not global) so all renderers inherit the polished form.
 
@@ -735,7 +924,7 @@ These entry types primarily contain metadata, with some rendered conditionally.
 ## 4.1 Summary (SummaryTranscriptEntry)
 
 - **Purpose**: Session summary for navigation
-- **Files**: [summary.json](messages/system/summary.json)
+- **Files**: [summary.json](messages/claude-code/system/summary.json)
 
 ```json
 {
@@ -750,15 +939,21 @@ The `leafUuid` links the summary to the last message of the session.
 ## 4.2 Queue Operation (QueueOperationTranscriptEntry)
 
 - **Purpose**: User interrupts and steering during assistant responses
-- **Rendered**: Only `remove` operations (as `UserSteeringContent`)
+- **Rendered**: Only `remove` operations (as `UserSteeringMessage`). On
+  modern transcripts (≳2.1.101) a `remove` is suppressed when a paired
+  `queued_command` attachment covers its steering text (rendered instead);
+  a `remove` with no matching card — legacy transcripts, an unpaired
+  `remove`, or one whose card could not be paired (e.g. an image-only
+  prompt) — still renders. See "User Steering (Queue Remove /
+  queued_command)" above.
 - **CSS Class**: `user steering`
-- **Files**: [queue_operation.json](messages/system/queue_operation.json)
+- **Files**: [queue_operation.json](messages/claude-code/system/queue_operation.json)
 
 ## 4.3 File History Snapshot
 
 - **Purpose**: File state snapshots for undo/redo
 - **Not Rendered**
-- **Files**: [file_history_snapshot.json](messages/system/file_history_snapshot.json)
+- **Files**: [file_history_snapshot.json](messages/claude-code/system/file_history_snapshot.json)
 
 ---
 
@@ -945,39 +1140,39 @@ Sub-agent messages (from `Task` tool):
 
 | Tool | Use Sample | Result Sample | Input Model | Output Model |
 |------|------------|---------------|-------------|--------------|
-| Read | [tool_use](messages/tools/Read-tool_use.json) | [tool_result](messages/tools/Read-tool_result.json) | `ReadInput` | `ReadOutput` |
-| Write | [tool_use](messages/tools/Write-tool_use.json) | [tool_result](messages/tools/Write-tool_result.json) | `WriteInput` | `WriteOutput` *(TODO)* |
-| Edit | [tool_use](messages/tools/Edit-tool_use.json) | [tool_result](messages/tools/Edit-tool_result.json) | `EditInput` | `EditOutput` |
-| MultiEdit | [tool_use](messages/tools/MultiEdit-tool_use.json) | [tool_result](messages/tools/MultiEdit-tool_result.json) | `MultiEditInput` | — |
-| Glob | [tool_use](messages/tools/Glob-tool_use.json) | [tool_result](messages/tools/Glob-tool_result.json) | `GlobInput` | `GlobOutput` *(TODO)* |
-| Grep | [tool_use](messages/tools/Grep-tool_use.json) | [tool_result](messages/tools/Grep-tool_result.json) | `GrepInput` | `GrepOutput` *(TODO)* |
+| Read | [tool_use](messages/claude-code/tools/Read-tool_use.json) | [tool_result](messages/claude-code/tools/Read-tool_result.json) | `ReadInput` | `ReadOutput` |
+| Write | [tool_use](messages/claude-code/tools/Write-tool_use.json) | [tool_result](messages/claude-code/tools/Write-tool_result.json) | `WriteInput` | `WriteOutput` *(TODO)* |
+| Edit | [tool_use](messages/claude-code/tools/Edit-tool_use.json) | [tool_result](messages/claude-code/tools/Edit-tool_result.json) | `EditInput` | `EditOutput` |
+| MultiEdit | [tool_use](messages/claude-code/tools/MultiEdit-tool_use.json) | [tool_result](messages/claude-code/tools/MultiEdit-tool_result.json) | `MultiEditInput` | — |
+| Glob | [tool_use](messages/claude-code/tools/Glob-tool_use.json) | [tool_result](messages/claude-code/tools/Glob-tool_result.json) | `GlobInput` | `GlobOutput` *(TODO)* |
+| Grep | [tool_use](messages/claude-code/tools/Grep-tool_use.json) | [tool_result](messages/claude-code/tools/Grep-tool_result.json) | `GrepInput` | `GrepOutput` *(TODO)* |
 
 ### Shell Operations
 
 | Tool | Use Sample | Result Sample | Input Model | Output Model |
 |------|------------|---------------|-------------|--------------|
-| Bash | [tool_use](messages/tools/Bash-tool_use.json) | [tool_result](messages/tools/Bash-tool_result.json) | `BashInput` | `BashOutput` *(TODO)* |
-| BashOutput | [tool_use](messages/tools/BashOutput-tool_use.json) | [tool_result](messages/tools/BashOutput-tool_result.json) | — | — |
-| KillShell | [tool_use](messages/tools/KillShell-tool_use.json) | [tool_result](messages/tools/KillShell-tool_result.json) | — | — |
+| Bash | [tool_use](messages/claude-code/tools/Bash-tool_use.json) | [tool_result](messages/claude-code/tools/Bash-tool_result.json) | `BashInput` | `BashOutput` *(TODO)* |
+| BashOutput | [tool_use](messages/claude-code/tools/BashOutput-tool_use.json) | [tool_result](messages/claude-code/tools/BashOutput-tool_result.json) | — | — |
+| KillShell | [tool_use](messages/claude-code/tools/KillShell-tool_use.json) | [tool_result](messages/claude-code/tools/KillShell-tool_result.json) | — | — |
 
 ### Agent Operations
 
 | Tool | Use Sample | Result Sample | Input Model | Output Model |
 |------|------------|---------------|-------------|--------------|
-| Task | [tool_use](messages/tools/Task-tool_use.json) | [tool_result](messages/tools/Task-tool_result.json) | `TaskInput` | `TaskOutput` |
+| Task | [tool_use](messages/claude-code/tools/Task-tool_use.json) | [tool_result](messages/claude-code/tools/Task-tool_result.json) | `TaskInput` | `TaskOutput` |
 | TaskOutput *(async-agent polling)* | — | — | `TaskOutputInput` | `TaskOutputResult` |
 | TaskStop *(kill background task)* | — | — | `TaskStopInput` | `TaskStopOutput` |
-| TodoWrite | [tool_use](messages/tools/TodoWrite-tool_use.json) | [tool_result](messages/tools/TodoWrite-tool_result.json) | `TodoWriteInput` | — |
-| AskUserQuestion | [tool_use](messages/tools/AskUserQuestion-tool_use.json) | [tool_result](messages/tools/AskUserQuestion-tool_result.json) | `AskUserQuestionInput` | — |
-| ExitPlanMode | [tool_use](messages/tools/ExitPlanMode-tool_use.json) | [tool_result](messages/tools/ExitPlanMode-tool_result.json) | `ExitPlanModeInput` | — |
+| TodoWrite | [tool_use](messages/claude-code/tools/TodoWrite-tool_use.json) | [tool_result](messages/claude-code/tools/TodoWrite-tool_result.json) | `TodoWriteInput` | — |
+| AskUserQuestion | [tool_use](messages/claude-code/tools/AskUserQuestion-tool_use.json) | [tool_result](messages/claude-code/tools/AskUserQuestion-tool_result.json) | `AskUserQuestionInput` | — |
+| ExitPlanMode | [tool_use](messages/claude-code/tools/ExitPlanMode-tool_use.json) | [tool_result](messages/claude-code/tools/ExitPlanMode-tool_result.json) | `ExitPlanModeInput` | — |
 
 ### Web Operations
 
 | Tool | Use Sample | Result Sample | Input Model | Output Model |
 |------|------------|---------------|-------------|--------------|
-| WebFetch | [tool_use](messages/tools/WebFetch-tool_use.json) | [tool_result](messages/tools/WebFetch-tool_result.json) | — | — |
-| WebSearch | [tool_use](messages/tools/WebSearch-tool_use.json) | [tool_result](messages/tools/WebSearch-tool_result.json) | — | — |
-| Artifact *(deploy HTML/MD page, CC 2.1.172+)* | [tool_use](messages/tools/Artifact-tool_use.json) | [tool_result](messages/tools/Artifact-tool_result.json) | `ArtifactInput` | `ArtifactOutput` |
+| WebFetch | [tool_use](messages/claude-code/tools/WebFetch-tool_use.json) | [tool_result](messages/claude-code/tools/WebFetch-tool_result.json) | — | — |
+| WebSearch | [tool_use](messages/claude-code/tools/WebSearch-tool_use.json) | [tool_result](messages/claude-code/tools/WebSearch-tool_result.json) | — | — |
+| Artifact *(deploy HTML/MD page, CC 2.1.172+)* | [tool_use](messages/claude-code/tools/Artifact-tool_use.json) | [tool_result](messages/claude-code/tools/Artifact-tool_result.json) | `ArtifactInput` | `ArtifactOutput` |
 
 ---
 

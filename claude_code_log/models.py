@@ -1,10 +1,14 @@
 """Pydantic models for Claude Code transcript JSON structures."""
 
+import json
+import re
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, ClassVar, Union, Optional, Literal
+from typing import Any, ClassVar, Union, Optional, Literal, cast
 
 from pydantic import BaseModel, Field
+
+from .json_depth import exceeds_depth
 
 
 class MessageType(str, Enum):
@@ -46,47 +50,75 @@ class MessageType(str, Enum):
     SYSTEM_ERROR = "system-error"
 
 
-class DetailLevel(str, Enum):
-    """Output detail level controlling which message types are included.
+class RenderingDepth(str, Enum):
+    """How deep into the message hierarchy to render (#159).
 
-    Levels form a hierarchy: full > high > low > minimal > user-only.
+    Depths name the message-hierarchy node the output stops at, ordered
+    most-content-first (deepest to shallowest):
+    hook > tool > agent > assistant > user > session.
+
+    The ``--depth`` CLI option uses these names directly. The deprecated
+    ``--detail`` option (removed in 2.0) maps its legacy verbosity names
+    onto them via ``DETAIL_ALIASES``. ``session`` is depth-only — it has
+    no ``--detail`` spelling.
+
+    Enum values ARE the ``--depth`` names, so they double as the filename
+    suffix (see ``utils.variant_suffix``).
     """
 
-    FULL = "full"  # Everything
-    HIGH = "high"  # Detailed but cleaned (no system/hook noise)
-    LOW = "low"  # Interaction-focused + key signals
-    MINIMAL = "minimal"  # User + assistant messages only
-    USER_ONLY = "user-only"  # User prompts + steering only (for downstream agents)
+    HOOK = "hook"  # Everything, incl. hooks + system notices (--detail full)
+    TOOL = "tool"  # Detailed but cleaned, no system/hook noise (--detail high; DEFAULT)
+    AGENT = "agent"  # Interaction-focused + key tool signals (--detail low)
+    ASSISTANT = "assistant"  # User + assistant messages only (--detail minimal)
+    USER = "user"  # User prompts + steering only (--detail user-only)
+    SESSION = "session"  # Session structure only: headers/nav (depth-only)
 
-    def includes(self, threshold: "DetailLevel") -> bool:
-        """Return True iff this level is verbose enough to show content
-        whose ``detail_visibility`` is declared at ``threshold``.
+    def includes(self, threshold: "RenderingDepth") -> bool:
+        """Return True iff this depth is deep enough to show content whose
+        ``depth_visibility`` is declared at ``threshold``.
 
-        Monotone-down: ``FULL.includes(X)`` is True for every ``X``;
-        ``USER_ONLY.includes(X)`` is True only for ``USER_ONLY`` itself.
+        Monotone: ``HOOK.includes(X)`` is True for every ``X``;
+        ``SESSION.includes(X)`` is True only for ``SESSION`` itself.
         """
-        return _DETAIL_ORDER[self] <= _DETAIL_ORDER[threshold]
+        return _DEPTH_ORDER[self] <= _DEPTH_ORDER[threshold]
 
 
-# Verbosity ordering: lower index = more verbose. The ``DetailLevel.includes``
-# predicate (and ``MessageContent.visible_at``) treats a level as "verbose
-# enough" iff ``order[current] <= order[threshold]``.
-_DETAIL_ORDER: dict[DetailLevel, int] = {
-    DetailLevel.FULL: 0,
-    DetailLevel.HIGH: 1,
-    DetailLevel.LOW: 2,
-    DetailLevel.MINIMAL: 3,
-    DetailLevel.USER_ONLY: 4,
+# Depth ordering: lower index = deeper (more content). ``RenderingDepth.includes``
+# (and ``MessageContent.visible_at``) treats a depth as "deep enough" iff
+# ``order[current] <= order[threshold]``.
+_DEPTH_ORDER: dict[RenderingDepth, int] = {
+    RenderingDepth.HOOK: 0,
+    RenderingDepth.TOOL: 1,
+    RenderingDepth.AGENT: 2,
+    RenderingDepth.ASSISTANT: 3,
+    RenderingDepth.USER: 4,
+    RenderingDepth.SESSION: 5,
 }
 
-# Guard against drift: if a new DetailLevel value is added without an
+# Guard against drift: if a new RenderingDepth value is added without an
 # entry here, ``includes`` would raise KeyError silently on first use.
 # Fail loudly at import time instead. Uses ``if ... raise`` rather than
 # ``assert`` so the check survives ``python -O`` / ``PYTHONOPTIMIZE``.
-if set(_DETAIL_ORDER.keys()) != set(DetailLevel):
+if set(_DEPTH_ORDER.keys()) != set(RenderingDepth):
     raise RuntimeError(
-        f"_DETAIL_ORDER missing entries for: {set(DetailLevel) - set(_DETAIL_ORDER.keys())}"
+        f"_DEPTH_ORDER missing entries for: {set(RenderingDepth) - set(_DEPTH_ORDER.keys())}"
     )
+
+# The default output depth (#159): ``--depth tool`` — detailed but cleaned
+# of system/hook noise. A bare invocation (no --depth, no --detail) and the
+# no-suffix output filename both mean this depth.
+DEFAULT_DEPTH: RenderingDepth = RenderingDepth.TOOL
+
+# Deprecated ``--detail`` value → ``RenderingDepth`` (#159). ``--detail`` is
+# removed in 2.0; until then its legacy verbosity names map onto the depth
+# scale. ``session`` has no ``--detail`` spelling.
+DETAIL_ALIASES: dict[str, RenderingDepth] = {
+    "full": RenderingDepth.HOOK,
+    "high": RenderingDepth.TOOL,
+    "low": RenderingDepth.AGENT,
+    "minimal": RenderingDepth.ASSISTANT,
+    "user-only": RenderingDepth.USER,
+}
 
 
 # =============================================================================
@@ -230,6 +262,19 @@ class UserTranscriptEntry(BaseTranscriptEntry):
     message: UserMessageModel
     toolUseResult: Optional[ToolUseResult] = None
     agentId: Optional[str] = None  # From toolUseResult when present
+    # Paste ids for the image blocks in ``message.content``, in block order:
+    # the ``[Image #N]`` placeholder in the text refers to the block at
+    # ``imagePasteIds.index(N)``. N is a paste counter, NOT a position — it
+    # resets when the CLI restarts inside a session that outlives it, and it
+    # increments on delete-and-repaste, so the same N can name different
+    # images within one session and nothing may be keyed at session scope.
+    # Old transcripts do not carry it (see _image_reference_mapping for what
+    # is then left to go on, and dev-docs/messages.md for the sampling).
+    #
+    # Deliberately untyped: a malformed value has to reach the resolver to be
+    # reported, because a ValidationError here would drop the whole entry
+    # (the loader skips any line whose model validation raises).
+    imagePasteIds: Optional[Any] = None
     # Present on isMeta=True entries produced by a Skill tool invocation —
     # carries the id of the originating tool_use so the renderer can fold
     # the skill body into that tool_use block. See issue #93.
@@ -279,6 +324,9 @@ class SystemTranscriptEntry(BaseTranscriptEntry):
     # `preTokens`, `trigger`, `postTokens`, `durationMs`. Read at factory
     # time into SystemMessage.compact_pre_tokens / compact_trigger.
     compactMetadata: Optional[dict[str, Any]] = None
+    # A compact_boundary starts a fresh chain (parentUuid is null); this names
+    # the message it logically continues, which may sit on a rewind branch.
+    logicalParentUuid: Optional[str] = None
 
 
 class QueueOperationTranscriptEntry(BaseModel):
@@ -457,7 +505,27 @@ class MessageContent:
 
     # Set by RenderingContext.register() to enable content→TemplateMessage lookup
     # Using init=False to avoid dataclass inheritance issues with required fields
-    message_index: Optional[int] = field(default=None, init=False, repr=False)
+    # compare=False: the index is assigned per render tree, and the fragment
+    # store compares two trees' contents for the same source entry to decide
+    # whether a cached fragment may be reused — a per-tree field must not
+    # defeat that comparison (the contents ARE the same message).
+    message_index: Optional[int] = field(
+        default=None, init=False, repr=False, compare=False
+    )
+
+    # Identity of the source (TranscriptEntry, part) this content was built
+    # from: ``(id(entry), part_ordinal)``. Stamped by the pass-2 render loop
+    # for entry-derived content only — synthesized content (session/branch
+    # headers, grafted sidechannel nodes, ghost placeholders) stays None and
+    # is always formatted fresh. Valid only while the conversion's master
+    # message list keeps every entry alive (an ``id()`` can be reused after
+    # its object is freed), which is why the fragment store that consumes it
+    # is scoped to a single conversion. NOT a uuid: transcript uuids collide
+    # across resumed/forked sessions (see work/render-format-once.md § 4.1).
+    # compare=False for the same reason as message_index.
+    fragment_key: Optional[tuple[int, int]] = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     @property
     def message_type(self) -> str:
@@ -476,15 +544,15 @@ class MessageContent:
         """
         return False
 
-    def visible_at(self, detail: DetailLevel) -> bool:
-        """Return True iff this content is visible at ``detail``.
+    def visible_at(self, depth: RenderingDepth) -> bool:
+        """Return True iff this content is visible at ``depth``.
 
         Resolution: each subclass MAY declare a class-level
-        ``detail_visibility: ClassVar[DetailLevel]`` that names the LEAST
+        ``depth_visibility: ClassVar[RenderingDepth]`` that names the LEAST
         verbose level at which it should still render. The predicate is
-        monotone-down — a class declared at ``HIGH`` is visible at
-        ``FULL`` and ``HIGH`` and dropped at ``LOW`` and below
-        (see :meth:`DetailLevel.includes`).
+        monotone-down — a class declared at ``TOOL`` is visible at
+        ``HOOK`` and ``TOOL`` and dropped at ``AGENT`` and below
+        (see :meth:`RenderingDepth.includes`).
 
         Classes without a declared threshold are always visible — useful
         for built-ins like ``UserTextMessage`` that have no level-based
@@ -492,10 +560,10 @@ class MessageContent:
         their base via normal ClassVar inheritance unless they declare
         their own (documented contract — see ``dev-docs/plugins.md``).
         """
-        threshold = getattr(type(self), "detail_visibility", None)
+        threshold = getattr(type(self), "depth_visibility", None)
         if threshold is None:
             return True
-        return detail.includes(threshold)
+        return depth.includes(threshold)
 
 
 @dataclass
@@ -505,8 +573,8 @@ class SystemMessage(MessageContent):
     Used for info, warning, and error system messages.
     """
 
-    # System info/warning/error noise — visible only at FULL.
-    detail_visibility: ClassVar[DetailLevel] = DetailLevel.FULL
+    # System info/warning/error noise — visible only at HOOK.
+    depth_visibility: ClassVar[RenderingDepth] = RenderingDepth.HOOK
 
     level: str  # "info", "warning", "error"
     text: str  # Raw text content (may contain ANSI codes)
@@ -515,6 +583,10 @@ class SystemMessage(MessageContent):
     # Surfaced in the nav landmark label for /compact points.
     compact_pre_tokens: Optional[int] = None
     compact_trigger: Optional[str] = None
+    # The boundary's ``logicalParentUuid``: it has no ``parentUuid``, so this
+    # names the message it continues. Display-only (the debug uuid line);
+    # kept out of ``meta.parent_uuid``, which drives lookup and pairing.
+    compact_logical_parent_uuid: Optional[str] = None
 
     @property
     def message_type(self) -> str:
@@ -536,8 +608,8 @@ class HookSummaryMessage(MessageContent):
     Used for subtype="stop_hook_summary" system messages.
     """
 
-    # Hook noise — visible only at FULL.
-    detail_visibility: ClassVar[DetailLevel] = DetailLevel.FULL
+    # Hook noise — visible only at HOOK.
+    depth_visibility: ClassVar[RenderingDepth] = RenderingDepth.HOOK
 
     has_output: bool
     hook_errors: list[str]  # Error messages from hooks
@@ -559,12 +631,12 @@ class AwaySummaryMessage(MessageContent):
     """
 
     # Recaps are a high-level summary of activity, so they stay visible at
-    # EVERY detail level — including user-only, where "user said this, agent
+    # EVERY depth level — including user-only, where "user said this, agent
     # did that (just the recap)" is exactly the wanted view (#179). Declared at
-    # the least-verbose threshold (USER_ONLY) via the class-attribute
-    # detail-visibility mechanism. Suppress them explicitly with ``--no-recaps``
-    # (handled in ``_ghost_template_by_detail``), not by lowering this.
-    detail_visibility: ClassVar[DetailLevel] = DetailLevel.USER_ONLY
+    # the least-verbose threshold (USER) via the class-attribute
+    # depth-visibility mechanism. Suppress them explicitly with ``--no-recaps``
+    # (handled in ``_ghost_template_by_depth``), not by lowering this.
+    depth_visibility: ClassVar[RenderingDepth] = RenderingDepth.USER
 
     text: str  # Recap prose; may contain light markdown.
 
@@ -586,8 +658,8 @@ class HookAttachmentMessage(MessageContent):
     ran for a single Stop event). This one represents an individual
     hook invocation captured by the harness as an attachment, with
     full payload (command, exit code, stdout/stderr, duration). Visible
-    only at ``DetailLevel.FULL``; dropped at HIGH and below alongside
-    other hook noise (see ``detail_visibility`` below).
+    only at ``RenderingDepth.HOOK``; dropped at TOOL and below alongside
+    other hook noise (see ``depth_visibility`` below).
 
     ``kind`` distinguishes the attachment flavour:
 
@@ -603,8 +675,8 @@ class HookAttachmentMessage(MessageContent):
       but with non-zero ``exitCode``.
     """
 
-    # Hook attachment noise — visible only at FULL.
-    detail_visibility: ClassVar[DetailLevel] = DetailLevel.FULL
+    # Hook attachment noise — visible only at HOOK.
+    depth_visibility: ClassVar[RenderingDepth] = RenderingDepth.HOOK
 
     kind: str  # success / additional_context / blocking_error / non_blocking_error
     hook_event: str = ""  # PostToolUse / UserPromptSubmit / Stop / SessionStart / ...
@@ -638,8 +710,8 @@ class SlashCommandMessage(MessageContent):
     command-contents tags parsed from the text.
     """
 
-    # Slash-command framing — visible only at FULL.
-    detail_visibility: ClassVar[DetailLevel] = DetailLevel.FULL
+    # Slash-command framing — visible only at HOOK.
+    depth_visibility: ClassVar[RenderingDepth] = RenderingDepth.HOOK
 
     command_name: str
     command_args: str
@@ -657,8 +729,8 @@ class CommandOutputMessage(MessageContent):
     These are user messages containing local-command-stdout tags.
     """
 
-    # Local-command output — visible only at FULL.
-    detail_visibility: ClassVar[DetailLevel] = DetailLevel.FULL
+    # Local-command output — visible only at HOOK.
+    depth_visibility: ClassVar[RenderingDepth] = RenderingDepth.HOOK
 
     stdout: str
     is_markdown: bool  # True if content appears to be markdown
@@ -675,8 +747,8 @@ class BashInputMessage(MessageContent):
     These are user messages containing bash-input tags.
     """
 
-    # Inline bash — kept through HIGH, dropped at LOW and below.
-    detail_visibility: ClassVar[DetailLevel] = DetailLevel.HIGH
+    # Inline bash — kept through TOOL, dropped at AGENT and below.
+    depth_visibility: ClassVar[RenderingDepth] = RenderingDepth.TOOL
 
     command: str
 
@@ -692,8 +764,8 @@ class BashOutputMessage(MessageContent):
     These are user messages containing bash-stdout and/or bash-stderr tags.
     """
 
-    # Inline bash output — kept through HIGH, dropped at LOW and below.
-    detail_visibility: ClassVar[DetailLevel] = DetailLevel.HIGH
+    # Inline bash output — kept through TOOL, dropped at AGENT and below.
+    depth_visibility: ClassVar[RenderingDepth] = RenderingDepth.TOOL
 
     stdout: Optional[str] = None  # Raw stdout content (may contain ANSI codes)
     stderr: Optional[str] = None  # Raw stderr content (may contain ANSI codes)
@@ -717,8 +789,8 @@ class CompactedSummaryMessage(MessageContent):
     format_compacted_summary_content() in html/user_formatters.py.
     """
 
-    # /compact framing — visible only at FULL.
-    detail_visibility: ClassVar[DetailLevel] = DetailLevel.FULL
+    # /compact framing — visible only at HOOK.
+    depth_visibility: ClassVar[RenderingDepth] = RenderingDepth.HOOK
 
     summary_text: str
 
@@ -740,8 +812,8 @@ class UserMemoryMessage(MessageContent):
     format_user_memory_content() in html/user_formatters.py.
     """
 
-    # Memory-input framing — visible only at FULL.
-    detail_visibility: ClassVar[DetailLevel] = DetailLevel.FULL
+    # Memory-input framing — visible only at HOOK.
+    depth_visibility: ClassVar[RenderingDepth] = RenderingDepth.HOOK
 
     memory_text: str
 
@@ -759,8 +831,8 @@ class UserSlashCommandMessage(MessageContent):
     Formatted by format_user_slash_command_content() in html/user_formatters.py.
     """
 
-    # Slash-command expansion framing — visible only at FULL.
-    detail_visibility: ClassVar[DetailLevel] = DetailLevel.FULL
+    # Slash-command expansion framing — visible only at HOOK.
+    depth_visibility: ClassVar[RenderingDepth] = RenderingDepth.HOOK
 
     text: str
 
@@ -816,20 +888,39 @@ class IdeNotificationContent:
 
 
 @dataclass
+class SystemReminderContent:
+    """Content for ``<system-reminder>`` blocks embedded within user messages.
+
+    This is NOT a MessageContent subclass — like IdeNotificationContent it's an
+    item within UserTextMessage.items, alongside TextContent and ImageContent.
+    A user message may carry a system reminder (e.g. the ``/cd`` working-directory
+    notice) AND real content after it (e.g. a CLAUDE.md), so the reminder is
+    peeled out as an annotation while the remaining text renders as user content.
+
+    ``reminders`` holds each reminder block's inner text (a message may carry
+    more than one). Format-neutral: stores text, not HTML.
+    """
+
+    reminders: list[str]
+
+
+@dataclass
 class UserTextMessage(MessageContent):
-    """Content for user text with interleaved images and IDE notifications.
+    """Content for user text with interleaved images, IDE notifications, and
+    system reminders.
 
     The `items` field preserves the original order of content:
     - TextContent: Text portions of the message
     - ImageContent: Inline images
     - IdeNotificationContent: IDE notification tags (extracted from text)
+    - SystemReminderContent: <system-reminder> blocks (extracted from text)
 
     Empty items list indicates no content.
     """
 
     # Interleaved content items preserving original order
     items: list[  # pyright: ignore[reportUnknownVariableType]
-        TextContent | ImageContent | IdeNotificationContent
+        TextContent | ImageContent | IdeNotificationContent | SystemReminderContent
     ] = field(default_factory=list)
 
     @property
@@ -848,12 +939,24 @@ class UserSteeringMessage(UserTextMessage):
     pass
 
 
+# A ``key: value`` line of a key/value teammate body (see
+# ``TeammateMessageBlock.body_params``): identifier-like key, whitespace
+# after the colon (so ``https://…`` is not a key), non-empty value.
+# A data line's key looks like a field name (lowercase, as in the payloads
+# peers send); a capitalised ``Label:`` opens a prose paragraph.
+_KEY_VALUE_LINE_RE = re.compile(r"^\s*([a-z_][a-z0-9_.-]*)\s*:\s+(\S.*?)\s*$")
+
+
 @dataclass
 class TeammateMessageBlock:
-    """A single <teammate-message> block extracted from a User entry.
+    """A single <teammate-message> block extracted from a User entry
+    or from a peer agent queued_command attachment (#309).
 
     `is_system=True` corresponds to blocks with teammate_id="system"
     (e.g. teammate_terminated notifications).
+    `sender_task_id` is recorded for a future subagent transcript linker
+    (resolves to <session>/subagents/agent-<id>.jsonl when present; absent
+    on roughly a quarter of peer messages; unused by renderers today).
 
     This is a plain data container — the renderer-facing MessageContent
     wrapper is TeammateMessage (which holds one or more of these blocks).
@@ -864,6 +967,42 @@ class TeammateMessageBlock:
     color: Optional[str] = None
     summary: Optional[str] = None
     is_system: bool = False
+    sender_task_id: Optional[str] = None
+
+    def body_params(self) -> Optional[dict[str, Any]]:
+        """The body as key/value data, or None when it is prose.
+
+        A body is data when it is a non-empty JSON object (the
+        ``idle_notification`` payloads) nested at most
+        ``json_depth.MAX_DATA_DEPTH`` levels, or when every non-blank line is
+        ``key: value`` with a lowercase field-name key (two lines at
+        least, no repeated key). Anything else, including prose whose
+        paragraphs open with ``Label: …``, stays Markdown.
+        """
+        text = self.body.strip()
+        if text.startswith("{") and text.endswith("}"):
+            try:
+                parsed: Any = json.loads(text)
+            except (ValueError, RecursionError):
+                # RecursionError: nesting too deep for the decoder. The
+                # body then renders as prose rather than failing the page.
+                return None
+            if not isinstance(parsed, dict) or not parsed:
+                return None
+            if exceeds_depth(parsed):
+                return None
+            obj = cast("dict[Any, Any]", parsed)
+            return {str(k): v for k, v in obj.items()}
+        lines = [line for line in text.splitlines() if line.strip()]
+        if len(lines) < 2:
+            return None
+        params: dict[str, Any] = {}
+        for line in lines:
+            m = _KEY_VALUE_LINE_RE.match(line)
+            if m is None or m.group(1) in params:
+                return None
+            params[m.group(1)] = m.group(2)
+        return params
 
 
 @dataclass
@@ -927,6 +1066,10 @@ class TaskNotificationMessage(MessageContent):
         </task-notification>
         Full transcript available at: /tmp/.../tasks/a8b740b.output
 
+    (Current Claude Code writes ``<usage>`` as child tags instead —
+    ``<subagent_tokens>…</subagent_tokens><tool_uses>…`` — and a Monitor's
+    notifications carry an ``<event>``; see ``task_notification_factory``.)
+
     The ``result`` body usually duplicates the last sub-assistant
     message in the spawned agent's sidechain — Phase 3 of the
     async-agents plan folds it into the spawning Task's tool_result so
@@ -936,6 +1079,9 @@ class TaskNotificationMessage(MessageContent):
     task_id: str = ""
     status: str = ""
     summary: str = ""
+    # A Monitor event's text (the line its command printed); empty for
+    # any other notification.
+    event: str = ""
     result_text: str = ""
     usage: Optional[TaskNotificationUsage] = None
     transcript_path: Optional[str] = None
@@ -986,9 +1132,9 @@ class AssistantTextMessage(MessageContent):
     Empty items list indicates no content.
     """
 
-    # Assistant prose — visible at MINIMAL and above; dropped only at
-    # USER_ONLY (which keeps user prompts + steering only).
-    detail_visibility: ClassVar[DetailLevel] = DetailLevel.MINIMAL
+    # Assistant prose — visible at ASSISTANT and above; dropped only at
+    # USER (which keeps user prompts + steering only).
+    depth_visibility: ClassVar[RenderingDepth] = RenderingDepth.ASSISTANT
 
     # Interleaved content items preserving original order
     items: list[  # pyright: ignore[reportUnknownVariableType]
@@ -1018,8 +1164,8 @@ class ThinkingMessage(MessageContent):
     for parsing JSONL). This dataclass is for rendering purposes.
     """
 
-    # Thinking blocks — kept through HIGH, dropped at LOW and below.
-    detail_visibility: ClassVar[DetailLevel] = DetailLevel.HIGH
+    # Thinking blocks — kept through TOOL, dropped at AGENT and below.
+    depth_visibility: ClassVar[RenderingDepth] = RenderingDepth.TOOL
 
     thinking: str
     signature: Optional[str] = None
@@ -1048,8 +1194,8 @@ class UnknownMessage(MessageContent):
     specific handlers. Stores the type name for display purposes.
     """
 
-    # Unknown content — visible only at FULL.
-    detail_visibility: ClassVar[DetailLevel] = DetailLevel.FULL
+    # Unknown content — visible only at HOOK.
+    depth_visibility: ClassVar[RenderingDepth] = RenderingDepth.HOOK
 
     type_name: str  # The name/description of the unknown type
 
@@ -1116,10 +1262,10 @@ class ToolResultMessage(MessageContent):
     needed for rendering, such as the associated tool name and file path.
     """
 
-    # Tool results — kept through LOW (narrowed there by the orthogonal
-    # tool-name keep-list in ``_ghost_template_by_detail``), dropped at
-    # MINIMAL and below.
-    detail_visibility: ClassVar[DetailLevel] = DetailLevel.LOW
+    # Tool results — kept through AGENT (narrowed there by the orthogonal
+    # tool-name keep-list in ``_ghost_template_by_depth``), dropped at
+    # ASSISTANT and below.
+    depth_visibility: ClassVar[RenderingDepth] = RenderingDepth.AGENT
 
     tool_use_id: str
     output: (
@@ -1147,10 +1293,10 @@ class ToolUseMessage(MessageContent):
     Falls back to the original ToolUseContent when no specialized parser exists.
     """
 
-    # Tool invocations — kept through LOW (narrowed there by the orthogonal
-    # tool-name keep-list in ``_ghost_template_by_detail``), dropped at
-    # MINIMAL and below.
-    detail_visibility: ClassVar[DetailLevel] = DetailLevel.LOW
+    # Tool invocations — kept through AGENT (narrowed there by the orthogonal
+    # tool-name keep-list in ``_ghost_template_by_depth``), dropped at
+    # ASSISTANT and below.
+    depth_visibility: ClassVar[RenderingDepth] = RenderingDepth.AGENT
 
     input: "ToolInput"  # Specialized (BashInput, etc.) or ToolUseContent fallback
     tool_use_id: str  # From ToolUseContent.id
@@ -1177,7 +1323,7 @@ class WorkflowPhaseMessage(MessageContent):
     """
 
     title: str = ""
-    detail: str = ""
+    depth: str = ""
     agent_count: int = 0
 
     @property
@@ -1203,6 +1349,19 @@ class WorkflowAgentMessage(MessageContent):
     tool_calls: Optional[int] = None
     result: Any = None
     result_preview: str = ""
+    # Identity and accounting for the minimal theme's branch lanes
+    # (``lanes.py``: one lane per agent with a transcript). Not rendered by
+    # any formatter, so classic and Markdown output are unchanged.
+    agent_id: str = ""
+    run_id: str = ""
+    # 0-based position of the agent's phase in the run (None: the run has
+    # no phase grouping, so its agents hang off the Workflow call).
+    phase_ordinal: Optional[int] = None
+    phase_title: str = ""
+    duration_ms: Optional[int] = None
+    # The run's terminal snapshot exists, i.e. the run is over — an agent
+    # without a result then ended without one.
+    run_finished: bool = False
 
     @property
     def message_type(self) -> str:
@@ -1264,6 +1423,12 @@ class WriteInput(BaseModel):
     content: str
 
 
+class DeleteInput(BaseModel):
+    """Input parameters for the Delete tool."""
+
+    file_path: str
+
+
 class EditInput(BaseModel):
     """Input parameters for the Edit tool."""
 
@@ -1276,6 +1441,7 @@ class EditInput(BaseModel):
 class EditItem(BaseModel):
     """Single edit item for MultiEdit tool."""
 
+    file_path: Optional[str] = None
     old_string: str
     new_string: str
 
@@ -1672,11 +1838,18 @@ class WorkflowToolInput(BaseModel):
     model_config = {"extra": "allow"}
 
 
+class ToolExecutionInput(BaseModel):
+    """Opaque JavaScript executed by Codex's generic ``exec`` transport."""
+
+    script: str
+
+
 # Union of all typed tool inputs
 ToolInput = Union[
     BashInput,
     ReadInput,
     WriteInput,
+    DeleteInput,
     EditInput,
     MultiEditInput,
     GlobInput,
@@ -1703,6 +1876,7 @@ ToolInput = Union[
     TaskOutputInput,
     TaskStopInput,
     WorkflowToolInput,
+    ToolExecutionInput,
     ToolUseContent,  # Generic fallback when no specialized parser
 ]
 
@@ -1742,6 +1916,23 @@ class WriteOutput:
     file_path: str
     success: bool
     message: str  # First line acknowledgment (truncated from full output)
+
+
+@dataclass
+class DeleteOutput:
+    """Parsed Delete tool output, symmetric with DeleteInput."""
+
+    file_path: str
+    success: bool
+    message: str
+
+
+@dataclass
+class ToolExecutionOutput:
+    """Structured transport status and opaque emitted result items."""
+
+    status: str
+    items: list[dict[str, Any]]
 
 
 @dataclass
@@ -1841,6 +2032,11 @@ class TaskOutput:
     # sub-assistant from the sidechain rendering so the answer doesn't
     # appear twice.
     async_final_answer: Optional[str] = None
+    # The same pass records where that answer arrived: the message_index of
+    # the ``<task-notification>`` card. The minimal HTML theme shows the
+    # answer there (the branch's merge row) and links to it from the spawn;
+    # the classic theme ignores it.
+    async_notification_index: Optional[int] = None
 
 
 @dataclass
@@ -2041,6 +2237,7 @@ class WebSearchOutput:
     links: list[WebSearchLink]
     preamble: Optional[str] = None  # Text before the Links (usually query header)
     summary: Optional[str] = None  # Markdown analysis after the links
+    source_refs: list[str] = field(default_factory=list[str])
 
 
 @dataclass
@@ -2057,6 +2254,7 @@ class WebFetchOutput:
     code: Optional[int] = None  # HTTP status code
     code_text: Optional[str] = None  # HTTP status text (e.g., "OK")
     duration_ms: Optional[int] = None  # Time taken in milliseconds
+    source_refs: list[str] = field(default_factory=list[str])
 
 
 @dataclass
@@ -2211,6 +2409,8 @@ class TaskStopOutput:
 ToolOutput = Union[
     ReadOutput,
     WriteOutput,
+    DeleteOutput,
+    ToolExecutionOutput,
     EditOutput,
     BashOutput,
     TaskOutput,

@@ -1,0 +1,40 @@
+-- Record whether a rendered session page carries the combined back-link
+-- Migration: 013
+-- Description: Add a `combined_linked` column to `html_cache`.
+--
+-- A session page's "View All Sessions (Combined Transcript)" back-link
+-- was emitted or omitted according to the *run's* `--combined` setting,
+-- but nothing about that setting reaches the freshness check, which
+-- compares only message_count and library_version. So the link state was
+-- sticky: a page rendered by a `--combined no` run (which is every watch
+-- tick) kept no link for good, and later full conversions did not put it
+-- back -- they saw a current page and skipped it. An archive ended up
+-- with some session pages linking and some not, depending only on which
+-- run happened to render each one.
+--
+-- Two changes fix that, and this column is the second half. First, the
+-- link now follows whether the combined file *exists* rather than
+-- whether this run writes it: under `serve --watch` the startup
+-- conversion has written it and it is still served, so the link stays
+-- valid and the mixed state stops arising. Second, this column records
+-- what each page was rendered with, so a genuine transition -- a
+-- project that had no combined page until a full run wrote one, or one
+-- whose combined page was deleted -- marks the affected session pages
+-- stale and regenerates them.
+--
+-- The check costs nothing: `get_stale_sessions` already reads the whole
+-- html_cache table in one query and already stats every session file, so
+-- this rides along as one more in-memory comparison (measured at 0.05%
+-- of the call). Deriving the same fact by reading the rendered page
+-- would not be free -- the link sits past the inlined stylesheet, tens
+-- of KB in -- which is the mistake `_enable_next_link_on_previous_page`
+-- used to make.
+--
+-- Backward-compatible in the shape of 007 and 011: existing rows get
+-- NULL and are treated as already matching, so a populated cache does
+-- not mass-invalidate on upgrade. Pages that a past `--combined no` run
+-- left link-less stay that way until something else regenerates them --
+-- exactly today's behaviour, not a regression -- while every page
+-- written from here on carries its state and self-corrects.
+
+ALTER TABLE html_cache ADD COLUMN combined_linked INTEGER;

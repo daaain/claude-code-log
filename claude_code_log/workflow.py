@@ -74,7 +74,7 @@ def parse_workflow_meta(script: str) -> tuple[str, str, list[str]]:
     indented close yields no header). All field lookups are scoped to the
     matched block, so they can't pick up ``name:``/``title:`` elsewhere in
     the body. Phase titles are collected from every ``title:`` *after* the
-    ``phases:`` key, so a ``detail`` string containing ``]`` doesn't truncate
+    ``phases:`` key, so a ``depth`` string containing ``]`` doesn't truncate
     the list. String values may use any JS quote style (``'``/``"``/backtick)
     and may contain backslash-escaped quotes (``'SAM\\'s sweep'`` — observed
     in real meta blocks). Returns empty values when the block or a field
@@ -202,7 +202,7 @@ class WorkflowPhase:
 
     index: int
     title: str
-    detail: str = ""
+    depth: str = ""
     agents: list[WorkflowAgent] = field(default_factory=list)  # pyright: ignore[reportUnknownVariableType]
 
 
@@ -503,7 +503,7 @@ def _group_into_phases(
         return []
     phases = [
         WorkflowPhase(
-            index=idx, title=pm.get("title") or "", detail=pm.get("detail") or ""
+            index=idx, title=pm.get("title") or "", depth=pm.get("depth") or ""
         )
         for idx, pm in enumerate(phases_meta)
     ]

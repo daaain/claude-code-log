@@ -160,6 +160,8 @@ class TeammateMessageBlock:
     summary: Optional[str] = None
     is_system: bool = False  # teammate_id == "system"
 
+    def body_params(self) -> Optional[dict[str, Any]]: ...
+
 @dataclass
 class TeammateMessage(MessageContent):
     blocks: list[TeammateMessageBlock]
@@ -171,6 +173,12 @@ class TeammateMessage(MessageContent):
 A single user entry → a single `TeammateMessage` content carrying all its
 blocks plus surrounding text. The renderer iterates `blocks` to produce
 per-block cards.
+
+`body_params()` is the one place that decides whether a body is data:
+a non-empty JSON object (the `idle_notification` payloads), or lines
+that are all `key: value` with an identifier-like key (two at least, no
+repeated key). It returns the dict, or `None` for prose. Both renderers
+call it, so they agree on which bodies are data.
 
 ### 2.3 `AgentResultMetadata`
 
@@ -349,12 +357,29 @@ whose stem isn't in the agent-id set, and for each:
    block (the canonical teammate-spawn shape), extract the body via
    `find_team_lead_body`. Otherwise use the raw text.
 3. Normalize via `_normalize_prompt`: collapse whitespace, lowercase.
-4. Compare against each unresolved Task tool_use's `prompt` input
-   (similarly normalized). Exact match wins.
-5. Back-patch the Task tool_result's `agentId` field, add to the agent-id
+4. Match in **two passes**. Pass 1 pairs a candidate with an unresolved
+   spawn only when the normalized prompts match **and** the sidecar's
+   `name` equals the spawn's `input.name`; it runs to completion over
+   every candidate before pass 2 starts, so a named candidate cannot be
+   claimed by a nameless one. Pass 2 then takes whatever is left on an
+   exact normalized-prompt match alone — **but only when at least one
+   side has no name.** Two names that disagree are a positive signal
+   that the pair is wrong, so it is left unresolved rather than matched
+   on filename order.
+5. Back-patch the spawn tool_result's `agentId` field, add to the agent-id
    set, and **remove the matched entry from the unresolved pool** so a
    second candidate file with the same prompt can't claim it (this last
    step was a CodeRabbit-driven fix on PR #117 — see commit `cc9951d`).
+
+> **Both spawn tool names count.** `_collect_unresolved_task_results`
+> gathers prompts from `Task` *and* `Agent` tool_uses. Teammates are
+> spawned by `Agent` in current Claude Code, and the sidecar
+> `agent-<id>.meta.json` it writes for an `in_process_teammate` carries
+> no `toolUseId` — so for a modern teammate session the prompt-hash
+> fallback is the *only* link, and gating it on `Task` alone silently
+> dropped every teammate transcript (the subagent JSONLs were never
+> opened). Pinned by
+> `test_prompt_hash_fallback_covers_both_spawn_tool_names`.
 
 Pre-normalized prompts are computed once up front to avoid quadratic
 work in the inner loop.
@@ -572,8 +597,13 @@ pair_first card, expecting a companion that never arrives.
 One `<div class="teammate-message">` per block, with a colored left
 border, `<div class="teammate-message-header">` carrying a
 `<span class="teammate-badge">` (icon + teammate_id), an optional
-italicized summary, and a Markdown-rendered body. Surrounding non-block
-text appears in `<div class="teammate-surrounding-text">` wrappers.
+italicized summary, and the body. A data body (`body_params()`, §2.2)
+renders through the generic `render_params_table` — Markdown for string
+values, folds for long and nested ones, the expand-all root, the same
+escaping as tool input; prose renders as Markdown. Surrounding non-block
+text — the harness's framing of a peer message ("Another Claude session
+sent a message:" …) — appears as plain text in
+`<div class="teammate-surrounding-text">` wrappers, italic in both themes.
 
 `teammate_id="system"` blocks gain the `teammate-system` class for
 neutral palette styling.
@@ -623,6 +653,33 @@ Teammate messages use **left-aligned** styling (not right like normal
 user messages) — they're not from the human user and the WhatsApp-style
 right alignment would be misleading. This was an explicit ask in #91.
 
+#### Minimal theme: anchors
+
+In the minimal theme (`--theme minimal`) a teammate thread is not a DAG
+branch (work/minimal-theme-dag.md § 7 decision 4): it stays nested
+under the spawning result, collapsed by default, and the two ends of
+each exchange are linked on the same page instead.
+`lanes.teammate_links(roots, model)` (format-neutral) resolves:
+
+- the spawn card → the thread's first card (`→ alice's thread`);
+- a `SendMessage` card → the `<teammate-message>` card that delivered
+  it in the recipient's thread (`→ received by alice`), and back
+  (`← sent by team-lead`).
+
+A card's thread is its `{trunk}#agent-<id>` session line (a teammate's
+agent id → its name); cards outside any agent thread are the lead's
+(`team-lead`, the name teammates address it by). Messages pair on
+(sender, recipient, whitespace-normalised body), first unused match in
+DOM order; `system` blocks and broadcasts (`*`) are skipped, and an
+unresolved message gets no link rather than a dead one.
+`html/minimal_theme.cross_links` renders them as plain `#msg-d-N`
+anchors in a `.mn-xlinks` row under the card's content (labels are
+generated content, so search and the timeline never index them). They
+work without JavaScript; with it, the page's hash handler unfolds the
+target's ancestors. Classic output carries none of this. Tests:
+`test/test_lanes.py::TestTeammateLinks`,
+`test/test_minimal_dag_columns_browser.py::TestTeammateAnchors`.
+
 #### Timeline integration
 
 `CSS_CLASS_REGISTRY` in
@@ -657,7 +714,11 @@ defense was wrong; this is the correct recipe.
 
 `format_TeammateMessage` renders one `> blockquote` per block, headed by
 `{circle} **{teammate_id}** · *{summary}*`. System blocks use the ⬛
-override.
+override. A data body goes through `_render_params`, as tool params do;
+every body and the surrounding text pass `_protect_html_tags` (the body
+comes from another session, and a backtick in a value can end its code
+span). Surrounding-text paragraphs are italicised unless they already
+carry `*`, `_` or backtick markup.
 
 `format_TaskListOutput` produces a Markdown pipe table. A `_table_cell`
 helper escapes `|` and replaces `\n` with `<br>` on every cell (PR #122
@@ -829,11 +890,11 @@ trilogy. Not part of #91 but adjacent / discovered work:
 
 Async task agents (#90) are now supported — see
 [`agents.md` § 2](agents.md#2-async-task-agents-90) for the as-built
-flow (typed models, parsers, the spawn-fold pipeline, detail-level
+flow (typed models, parsers, the spawn-fold pipeline, depth
 matrix). The notification's `<result>` body folds onto
 `TaskOutput.async_final_answer` of the spawning Task tool_result so
-the answer renders at the spawn site, with detail-level-aware drop
-of the standalone notification card at LOW.
+the answer renders at the spawn site, with depth-aware drop
+of the standalone notification card at AGENT.
 
 Standard sync sub-agents (#79) share the same `agentId:` /
 `<usage>` metadata-tail shape that `parse_agent_result_metadata`
@@ -846,12 +907,13 @@ to use the fallback path (the current
 bare-text bodies, but hasn't been validated against real #79
 transcripts).
 
-### 10.2 Detail-level interaction
+### 10.2 Depth interaction
 
-The detail-level filter (`--detail high|low|minimal|user-only`) drops
-tool_use/tool_result content at LOW and below by default, but the
-`_LOW_KEEP_TOOLS` whitelist in `renderer.py` exempts the spawn pair so
-teammate work survives a LOW rendering:
+The depth filter (`--depth agent` and shallower; the deprecated
+`--detail low|minimal|user-only`) drops tool_use/tool_result content at
+AGENT and below by default, but the `_LOW_KEEP_TOOLS` whitelist in
+`renderer.py` exempts the spawn pair so teammate work survives an AGENT
+rendering:
 
 ```python
 _LOW_KEEP_TOOLS = {"WebSearch", "WebFetch", "Task", "Agent"}
@@ -862,15 +924,15 @@ the tool factory as `"Agent": TaskInput`); both names need to be
 whitelisted because real Claude Code teammate transcripts emit `Agent`
 rather than `Task`. With this in place:
 
-- The Agent / Task tool_use card stays visible at LOW.
+- The Agent / Task tool_use card stays visible at AGENT.
 - The matching tool_result card stays too, so the agent's response and
   `agent_metadata` (`agent_id`, `worktree_path`, usage, etc.) survive.
 - Subagent sidechain content (the "rest of the conversation" inside
-  the agent thread) is still filtered out at LOW by the broader
+  the agent thread) is still filtered out at AGENT by the broader
   `is_sidechain` rule — that's the intended trade-off; the
   spawn-and-result pair is enough to scan.
-- MINIMAL still strips everything except user/assistant text; the
-  `Agent` whitelist applies to LOW only.
+- ASSISTANT still strips everything except user/assistant text; the
+  `Agent` whitelist applies to AGENT only.
 
 Regression coverage for both halves of the contract:
 `TestExperimentsWorktreesTeammates::test_low_detail_preserves_agent_spawns`

@@ -52,7 +52,7 @@ _TYPE_PATTERN = re.compile(r"^[a-z][a-z0-9_-]*$")
 
 # Required top-level keys on the JSON payload.
 _REQUIRED_TOP_LEVEL_KEYS = frozenset(
-    {"version", "title", "detail", "compact", "sessions", "messages"}
+    {"version", "title", "depth", "compact", "sessions", "messages"}
 )
 
 # Required per-node keys. Optional keys (uuid, parent_uuid, pair_*, …)

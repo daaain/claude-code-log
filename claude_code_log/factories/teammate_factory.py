@@ -42,13 +42,13 @@ from ..models import (
 # ("15% -> 96% coverage"), so the only character we reject is ``<``
 # and the matching quote — anything else is in the value. The original
 # naïve ``[^>]*`` truncated openings at the first literal ``>``.
-_ATTR_RUN = r'(?:\s+[\w][\w-]*(?:\s*=\s*(?:"[^"<]*"|\'[^\'<]*\'))?)*\s*'
+ATTR_RUN = r'(?:\s+[\w][\w-]*(?:\s*=\s*(?:"[^"<]*"|\'[^\'<]*\'))?)*\s*'
 
 # One full <teammate-message ...>...</teammate-message> block. Attribute
 # parsing happens on the opening tag's attribute run (captured group 1).
 # Using DOTALL so the body may contain newlines (typically does).
 _BLOCK_RE = re.compile(
-    rf"<teammate-message\b({_ATTR_RUN})>(.*?)</teammate-message>",
+    rf"<teammate-message\b({ATTR_RUN})>(.*?)</teammate-message>",
     re.DOTALL,
 )
 
@@ -56,7 +56,7 @@ _BLOCK_RE = re.compile(
 _ATTR_RE = re.compile(r'(\w[\w-]*)\s*=\s*"([^"]*)"|(\w[\w-]*)\s*=\s*\'([^\']*)\'')
 
 # System teammate_id marks terminate/status notifications.
-_SYSTEM_ID = "system"
+SYSTEM_ID = "system"
 
 
 def has_teammate_message(text: str) -> bool:
@@ -75,7 +75,7 @@ def iter_teammate_blocks(text: str) -> Iterable[TeammateMessageBlock]:
             body=body,
             color=attrs.get("color"),
             summary=attrs.get("summary"),
-            is_system=(teammate_id == _SYSTEM_ID),
+            is_system=(teammate_id == SYSTEM_ID),
         )
 
 

@@ -1,0 +1,19 @@
+[
+  {
+    "type": "response_item",
+    "payload": {
+      "type": "function_call",
+      "name": "spawn_agent",
+      "arguments": "{\"task_name\":\"synthetic_research\",\"message\":\"Inspect synthetic fixtures.\"}",
+      "call_id": "call-spawn-001"
+    }
+  },
+  {
+    "type": "response_item",
+    "payload": {
+      "type": "function_call_output",
+      "call_id": "call-spawn-001",
+      "output": "{\"task_name\":\"synthetic_research\"}"
+    }
+  }
+]

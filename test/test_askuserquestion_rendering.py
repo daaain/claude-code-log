@@ -208,8 +208,10 @@ class TestAskUserQuestionRendering:
         assert "&lt;script&gt;" in html
         assert "&lt;test&gt;" in html
         assert "&lt;option&gt;" in html
-        # Input "&amp;" should be escaped to "&amp;amp;"
-        assert "&amp;amp;" in html
+        # A "&amp;" written in the question is a Markdown character
+        # reference for "&": it is decoded, then escaped once on output.
+        assert "&amp;amp;" not in html
+        assert "or &amp; symbol" in html
 
 
 class TestAskUserQuestionResultRendering:

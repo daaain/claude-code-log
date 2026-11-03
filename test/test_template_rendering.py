@@ -9,6 +9,7 @@ from claude_code_log.converter import convert_jsonl_to_html
 from claude_code_log.html.renderer import generate_projects_index_html
 from claude_code_log.converter import load_transcript
 from claude_code_log.html.renderer import generate_html
+from test.html_markup import rendered_markup
 
 
 class TestTemplateRendering:
@@ -62,10 +63,19 @@ class TestTemplateRendering:
 
     def test_edge_cases_render(self):
         """Test that edge cases render without errors."""
+        from claude_code_log.models import RenderingDepth
+
         test_data_path = Path(__file__).parent / "test_data" / "edge_cases.jsonl"
 
-        # Convert to HTML
-        html_file = convert_jsonl_to_html(test_data_path)
+        # Render at FULL: this fixture exercises full-detail edge content —
+        # slash-command framing (SlashCommandMessage) and local-command
+        # output (CommandOutputMessage) are ``depth_visibility = FULL``, so
+        # the new HIGH default (--depth tool, #159) intentionally cleans them.
+        # ``use_cache=False`` avoids a stale shared test_data/*.html masking a
+        # wrong-level render between runs.
+        html_file = convert_jsonl_to_html(
+            test_data_path, depth=RenderingDepth.HOOK, use_cache=False
+        )
         html_content = html_file.read_text(encoding="utf-8")
 
         # Basic checks
@@ -160,22 +170,18 @@ class TestTemplateRendering:
 
         messages = load_transcript(test_data_path)
         html_content = generate_html(messages)
+        # Assert on the rendered markup only: the page's own scripts and
+        # styles mention most class names, so a bare `in html_content`
+        # passes whether or not any card carries them.
+        markup = rendered_markup(html_content)
 
-        # Check tool use formatting
-        assert "Tool Use:" in html_content
-        assert "Edit" in html_content
-        assert "tool-use" in html_content
+        # Tool use card: specialized Edit header
+        assert "class='message tool_use" in markup
+        assert "📝 Edit" in markup
 
-        # Check tool result formatting
-        assert "Tool Result" in html_content  # Changed: no colon for non-error results
-        assert "File created successfully" in html_content
-        assert "tool-result" in html_content
-
-        # Check tool input details
-        assert 'class="collapsible-details"' in html_content
-        assert "<summary>" in html_content
-        assert "Input:" in html_content
-        assert "details-content" in html_content
+        # Tool result card, paired with it
+        assert "class='message tool_result" in markup
+        assert "File created successfully" in markup
 
     def test_timestamp_formatting(self):
         """Test that timestamps are formatted correctly."""
@@ -318,10 +324,20 @@ class TestTemplateRendering:
             assert "&lt;script&gt;" in html_content
             assert "&amp;" in html_content
             assert "&quot;" in html_content
-            # Should not contain unescaped HTML
-            assert (
-                "<script>" not in html_content or html_content.count("<script>") <= 2
-            )  # Allow for the markdown script and search script
+            # The user's payload must not survive as a live tag.
+            #
+            # This used to count `<script>` occurrences and allow up to
+            # two, which meant bumping the number every time the page grew
+            # a script block of its own — while saying nothing about
+            # whether the *content* was escaped. Assert the property
+            # itself: the payload's opening tag is escaped everywhere it
+            # appears, so it can never execute.
+            assert "<script>alert(" not in html_content
+            # Both renderings of the payload are escaped: the raw-text view
+            # keeps the apostrophe literal, the Markdown view entity-encodes
+            # it. Neither carries a live `<script>`.
+            assert "&lt;script&gt;alert('xss')&lt;/script&gt;" in html_content
+            assert "&lt;script&gt;alert(&#x27;xss&#x27;)&lt;/script&gt;" in html_content
 
 
 class TestNestedDomSkipsEmptyLeaves:

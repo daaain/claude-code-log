@@ -1,0 +1,385 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<title>DAG swimlanes</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&amp;family=Source+Sans+3:ital,wght@0,400;0,600;0,700;1,400&amp;display=swap">
+<style>
+body{margin:0}
+.app{--mono:"JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;--sans:"Source Sans 3",-apple-system,"Segoe UI",system-ui,sans-serif;--dy:calc(3px + .7em);min-height:100vh;background:var(--bg);color:var(--fg);font-family:var(--sans);line-height:1.4}
+.light{--bg:#ffffff;--fg:#1f2328;--muted:#5f6670;--rule:#e3e6ea;--rule2:#1f2328;--code:#f3f4f6;--userbg:#fbf2e8;--user:#a14a00;--asst:#6d28d9;--tool:#1a7f37;--err:#b42318;--errbg:#fdeceb;--note:#1f5fbf;--add:#116329;--addbg:#e6f6eb;--del:#a40e26;--delbg:#fdeaec;--l0:#9aa1aa;--lA:#2f8f46;--lB:#1e6fd9;--lF:#b0307a}
+.dark{--bg:#14161a;--fg:#e4e6e9;--muted:#969da7;--rule:#2a2e35;--rule2:#c9ccd1;--code:#1d2025;--userbg:#2a2118;--user:#f0a35c;--asst:#b8a1f8;--tool:#6fcf8f;--err:#ff8b84;--errbg:#3a1b1b;--note:#7cb4ff;--add:#86e0a2;--addbg:#14291c;--del:#ff9da2;--delbg:#331a1d;--l0:#5d646e;--lA:#6fcf8f;--lB:#7cb4ff;--lF:#f08bc4}
+.ln-main{--lc:var(--l0)}
+.ln-A{--lc:var(--lA)}
+.ln-B{--lc:var(--lB)}
+.ln-F{--lc:var(--lF)}
+.hl-A{--hc:var(--lA)}
+.hl-B{--hc:var(--lB)}
+.hl-F{--hc:var(--lF)}
+.k-user{--rc:var(--user)}
+.k-assistant{--rc:var(--asst)}
+.k-tool{--rc:var(--tool)}
+.k-spawn{--rc:var(--asst)}
+.k-notify{--rc:var(--note)}
+.k-error{--rc:var(--err)}
+.wrap{max-width:980px;margin:0 auto;padding:12px 16px 40px}
+.wrap.wide{max-width:none}
+.top{padding-bottom:8px;border-bottom:1px solid var(--rule2)}
+.title{display:flex;flex-wrap:wrap;align-items:baseline;column-gap:10px;row-gap:2px}
+h1{margin:0;font-size:1.16em;font-weight:700}
+.smeta{font:.72em var(--mono);color:var(--muted)}
+.tools{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;margin-top:8px}
+.lbl{font:.7em var(--mono);color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.seg{display:inline-flex;border:1px solid var(--rule);border-radius:6px;overflow:hidden}
+.seg button{font:inherit;font-size:.82em;color:var(--muted);background:transparent;border:0;min-height:30px;padding:0 10px;cursor:pointer}
+.seg button + button{border-left:1px solid var(--rule)}
+.seg button.on{background:var(--fg);color:var(--bg)}
+.seg button:not(.on):hover{color:var(--fg)}
+.seg.icons button{width:32px;padding:0;display:inline-flex;align-items:center;justify-content:center}
+.legend{display:flex;flex-wrap:wrap;gap:4px 12px;font:.7em var(--mono);color:var(--muted)}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.legend span::before{content:"";width:14px;height:2px;background:var(--lc)}
+.sp{flex:1}
+svg{display:block}
+.scroller{overflow-x:auto;margin-top:6px}
+.dag{display:grid;align-items:stretch}
+.w-main{display:contents}
+.gut{display:flex;flex-direction:column;align-items:flex-end;text-align:right;padding:3px 6px 3px 0;font:.68em/1.85 var(--mono);min-width:0}
+.time{order:-1;color:var(--muted)}
+.role{color:var(--rc);font-weight:500}
+.tok{color:var(--muted)}
+.tag{color:var(--lc);font-weight:600}
+.rail{display:flex;align-self:stretch}
+.sl{position:relative;width:16px;flex:none}
+.v::before,.vt::before,.vb::before{content:"";position:absolute;left:calc(50% - 1px);width:2px;background:var(--lc)}
+.v::before{top:0;bottom:0}
+.vt::before{top:0;height:var(--dy)}
+.vb::before{top:var(--dy);bottom:0}
+.vt.vb::before{top:0;bottom:0;height:auto}
+.dash::before{background:repeating-linear-gradient(var(--lc) 0 3px,transparent 3px 7px)}
+.h::after,.r::after{content:"";position:absolute;top:calc(var(--dy) - 1px);height:2px;background:var(--hc)}
+.h::after{left:0;right:0}
+.r::after{left:50%;right:0}
+.cd::after,.cu::after{content:"";position:absolute;left:0;width:calc(50% + 1px);box-sizing:border-box;border:0 solid var(--hc)}
+.cd::after{top:calc(var(--dy) - 1px);bottom:0;border-top-width:2px;border-right-width:2px;border-top-right-radius:8px}
+.cd.stub::after{bottom:auto;height:12px}
+.cu::after{top:0;height:calc(var(--dy) + 1px);border-bottom-width:2px;border-right-width:2px;border-bottom-right-radius:8px}
+.sl .d{display:none}
+.sl.dot .d{display:block;position:absolute;left:50%;top:var(--dy);width:8px;height:8px;margin:-4px 0 0 -4px;border-radius:50%;background:var(--rc);box-shadow:0 0 0 2px var(--bg);z-index:1}
+.c3{padding:3px 0 3px 6px;min-width:0}
+.cm{padding:3px 0;min-width:0}
+p{margin:0}
+.call{font:.8em/1.6 var(--mono);display:flex;flex-wrap:wrap;column-gap:8px;align-items:baseline}
+.k-spawn .call span:first-child,.k-notify .call span:first-child{font-weight:600}
+.dim{color:var(--muted)}
+.k-user .tx{background:var(--userbg);border-radius:4px;padding:2px 8px}
+.k-thinking .tx{color:var(--muted);font-style:italic}
+.pre{margin-top:2px;padding:4px 8px;background:var(--code);border-radius:4px;font:.78em/1.55 var(--mono);overflow-x:auto}
+.pre div{white-space:pre}
+.k-error .pre{background:var(--errbg);color:var(--err)}
+.pre .add{color:var(--add);background:var(--addbg);margin:0 -8px;padding:0 8px}
+.pre .del{color:var(--del);background:var(--delbg);margin:0 -8px;padding:0 8px}
+.clip{--pv:4.4em}
+.clip.prose{--pv:2.8em}
+.clip:not(.is-open) .box{max-height:var(--pv);overflow:hidden;-webkit-mask-image:linear-gradient(#000 45%,transparent);mask-image:linear-gradient(#000 45%,transparent)}
+.more{font:.7em var(--mono);color:var(--muted);background:none;border:0;padding:2px 0;cursor:pointer}
+.more:hover{color:var(--fg)}
+.clip.is-open .more .n,.clip:not(.is-open) .more .l{display:none}
+.bctl{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;margin-top:2px}
+.fold{display:inline-flex;align-items:center;gap:6px;font:.72em var(--mono);color:var(--lc);background:none;border:0;padding:2px 0;cursor:pointer;text-align:left}
+.fold:hover{text-decoration:underline}
+.chev{transition:transform .15s}
+.bctl.is-open .chev{transform:rotate(90deg)}
+.mini{font:.68em var(--mono);color:var(--muted);background:var(--bg);border:1px solid var(--rule);border-radius:4px;padding:0 7px;min-height:22px;cursor:pointer}
+.mini:hover{color:var(--fg);border-color:var(--muted)}
+.colbg{border-left:2px solid var(--lc);background:color-mix(in srgb,var(--lc) 5%,transparent)}
+.strip-btn{display:block;width:100%;padding:8px 0;background:none;border:0;cursor:pointer;color:var(--lc);font:600 .72em var(--mono)}
+.strip-btn span{writing-mode:vertical-rl;display:inline-block}
+.colhead{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 8px;padding:5px 10px 6px 12px;border-bottom:1px solid var(--rule);position:relative;z-index:1;min-width:0}
+.colhead b{color:var(--lc);font-weight:600;font-size:.92em}
+.colhead .dim{font:.66em var(--mono)}
+.colhead .acts{display:flex;gap:4px;margin-left:auto}
+.main-head{font:600 .7em var(--mono);color:var(--muted);text-transform:uppercase;letter-spacing:.06em;padding:8px 6px 6px;border-bottom:1px solid var(--rule)}
+.w-col{display:grid;grid-template-columns:46px minmax(0,1fr);column-gap:6px;padding:0 10px 0 8px;min-width:0;position:relative;z-index:1}
+.w-col .gut{align-items:flex-start;text-align:left;padding-right:0}
+@media (max-width:640px){.wrap{padding-left:10px;padding-right:10px}}
+</style>
+</helmet>
+<div class="{{appCls}}" style="font-size: {{fs}}px">
+<div class="{{wrapCls}}">
+<header class="top">
+<div class="title">
+<h1>Add a theme switcher to the HTML output</h1>
+<span class="smeta">3f9a21c4 · 3 Oct 2026 14:02–14:22 · 2 agents · 1 fork · 182k in · 9.4k out</span>
+</div>
+<div class="tools">
+<span class="lbl">Branches</span>
+<div class="seg" role="group" aria-label="All branches">
+<button class="{{bm.shut}}" aria-pressed="{{bmP.shut}}" onClick="{{setAll.shut}}">Folded</button>
+<button class="{{bm.inline}}" aria-pressed="{{bmP.inline}}" onClick="{{setAll.inline}}">Interleaved</button>
+<button class="{{bm.col}}" aria-pressed="{{bmP.col}}" onClick="{{setAll.col}}">Columns</button>
+</div>
+<div class="legend"><span class="ln-main">main</span><span class="ln-A">audit · agent</span><span class="ln-B">pygments · agent</span><span class="ln-F">fork</span></div>
+<span class="sp"></span>
+<div class="seg icons" role="group" aria-label="Colour theme">
+<button class="{{th.auto}}" aria-pressed="{{thP.auto}}" aria-label="Follow system" onClick="{{setTheme.auto}}"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="5.5"></circle><path d="M8 2.5a5.5 5.5 0 0 1 0 11z" fill="currentColor"></path></svg></button>
+<button class="{{th.light}}" aria-pressed="{{thP.light}}" aria-label="Light" onClick="{{setTheme.light}}"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="3"></circle><path d="M8 1.5V3M8 13v1.5M1.5 8H3M13 8h1.5M3.4 3.4l1 1M11.6 11.6l1 1M3.4 12.6l1-1M11.6 4.4l1-1"></path></svg></button>
+<button class="{{th.dark}}" aria-pressed="{{thP.dark}}" aria-label="Dark" onClick="{{setTheme.dark}}"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M13 9.5A5.5 5.5 0 0 1 6.5 3a5.5 5.5 0 1 0 6.5 6.5z"></path></svg></button>
+</div>
+</div>
+</header>
+<div class="scroller">
+<div class="dag" style="grid-template-columns: {{gtc}}">
+<sc-for list="{{cols}}" as="col" hint-placeholder-count="0">
+<div class="{{col.bgcls}}" style="grid-column: {{col.gc}}; grid-row: 1 / span {{col.span}}">
+<sc-if value="{{col.strip}}" hint-placeholder-val="{{false}}"><button class="strip-btn" aria-label="Expand column" onClick="{{col.expand}}"><span>{{col.name}}</span></button></sc-if>
+</div>
+<sc-if value="{{col.full}}" hint-placeholder-val="{{false}}"><div class="{{col.hcls}}" style="grid-column: {{col.gc}}; grid-row: 1"><b>{{col.name}}</b><span class="dim">{{col.meta}}</span><span class="acts"><button class="mini" onClick="{{col.inline}}">⇤ Interleave</button><button class="mini" onClick="{{col.collapse}}">Collapse</button></span></div></sc-if>
+</sc-for>
+<sc-if value="{{hasCols}}" hint-placeholder-val="{{false}}"><div class="main-head" style="grid-column: 3; grid-row: 1">Main session</div></sc-if>
+<sc-for list="{{rail}}" as="r" hint-placeholder-count="0">
+<div class="rail" style="grid-column: 2; grid-row: {{r.gr}}"><sc-for list="{{r.slots}}" as="sl" hint-placeholder-count="3"><span class="{{sl.cls}}"><i class="d"></i></span></sc-for></div>
+</sc-for>
+<sc-for list="{{items}}" as="m" hint-placeholder-count="0">
+<div class="{{m.wcls}}" style="grid-row: {{m.wr}}; grid-column: {{m.wc}}">
+<div class="gut {{m.kcls}}" style="grid-row: {{m.gr}}; grid-column: {{m.gc}}"><span class="role">{{m.role}}</span><span class="time">{{m.t}}</span><sc-if value="{{m.tagLbl}}" hint-placeholder-val="{{false}}"><span class="tag ln-{{m.lane}}">{{m.tagLbl}}</span></sc-if><sc-if value="{{m.tok}}" hint-placeholder-val="{{false}}"><span class="tok">{{m.tok}}</span></sc-if></div>
+<div class="{{m.mcls}}" style="grid-row: {{m.mr}}; grid-column: {{m.mc}}">
+<sc-if value="{{m.call}}" hint-placeholder-val="{{false}}"><div class="call"><span>{{m.call}}</span><sc-if value="{{m.dim}}" hint-placeholder-val="{{false}}"><span class="dim">{{m.dim}}</span></sc-if></div></sc-if>
+<sc-if value="{{m.text}}" hint-placeholder-val="{{false}}"><div class="{{m.tclip}}"><div class="box"><p>{{m.text}}</p></div><sc-if value="{{m.tmore}}" hint-placeholder-val="{{false}}"><button class="more" aria-expanded="{{m.ex}}" onClick="{{m.tg}}"><span class="n">{{m.tmoreLbl}}</span><span class="l">− less</span></button></sc-if></div></sc-if>
+<sc-if value="{{m.lines}}" hint-placeholder-val="{{false}}"><div class="{{m.pclip}}"><div class="box pre"><sc-for list="{{m.lines}}" as="ln" hint-placeholder-count="2"><div class="{{ln.c}}">{{ln.s}}</div></sc-for></div><sc-if value="{{m.more}}" hint-placeholder-val="{{false}}"><button class="more" aria-expanded="{{m.ex}}" onClick="{{m.tg}}"><span class="n">{{m.moreLbl}}</span><span class="l">− less</span></button></sc-if></div></sc-if>
+<sc-if value="{{m.ctl}}" hint-placeholder-val="{{false}}"><div class="{{m.ctl.cls}}"><button class="fold" aria-expanded="{{m.ctl.ex}}" onClick="{{m.ctl.toggle}}"><svg class="chev" width="10" height="10" viewBox="0 0 12 12" aria-hidden="true"><path d="M4 2.5 7.5 6 4 9.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg><span>{{m.ctl.label}}</span></button><button class="mini" onClick="{{m.ctl.col}}">{{m.ctl.colLabel}}</button></div></sc-if>
+</div>
+</div>
+</sc-for>
+</div>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"fs":{"editor":"range","min":11,"max":17,"step":0.5,"unit":"px","default":14},"$preview":{"width":1600,"height":1000}}'>
+var DEFAULT_MODE = 'col';
+var LANES = {
+  main: { slot: 0, tag: '', name: 'Main session' },
+  A: { slot: 1, tag: 'audit', name: 'Audit hard-coded colours', meta: 'Explore · sonnet · async', stats: '6 steps · 48.4k tokens · 2m 13s', ctlName: '', from: 'm3', merge: 'm9' },
+  B: { slot: 2, tag: 'pygments', name: 'Find dark Pygments styles', meta: 'general · haiku · async', stats: '3 steps · 12.1k tokens · 1m 02s', ctlName: '', from: 'm4', merge: 'm7' },
+  F: { slot: 1, tag: 'fork', name: 'Fork: OS-only theme', meta: 'rewound to 14:05:52', stats: '3 steps · 2m 47s', ctlName: '⑂ Fork: OS-only theme', from: 'm10', merge: null }
+};
+var BRANCHES = ['A', 'B', 'F'];
+var MSGS = [
+  { id: 'm1', lane: 'main', t: '14:02:11', kind: 'user', role: 'User', text: 'Can we add a --theme option so the HTML output can use a more compact stylesheet? Light and dark please, and the default should stay exactly as it is.' },
+  { id: 'm2', lane: 'main', t: '14:02:16', kind: 'assistant', role: 'Assistant', text: 'Two things can run in parallel: auditing the hard-coded colours and finding a dark syntax palette. I\'ll start both in the background and look at how the stylesheets load meanwhile.' },
+  { id: 'm3', lane: 'main', t: '14:02:18', kind: 'spawn', role: 'Agent', call: 'Audit hard-coded colours', dim: 'Explore · sonnet · async', ctl: 'A' },
+  { id: 'm4', lane: 'main', t: '14:02:18', kind: 'spawn', role: 'Agent', call: 'Find dark Pygments styles', dim: 'general · haiku · async', ctl: 'B' },
+  { id: 'a1', lane: 'A', t: '14:02:21', kind: 'tool', role: 'Grep', call: '#[0-9a-fA-F]{3,8}\\b', dim: 'components/ · 412 matches in 14 files' },
+  { id: 'm5', lane: 'main', t: '14:02:24', kind: 'tool', role: 'Grep', call: 'global_styles.css', dim: 'claude_code_log/html · 3 files', pre: 'templates/transcript.html:14\ntemplates/index.html:12\ntemplates/archive_search.html:9' },
+  { id: 'b1', lane: 'B', t: '14:02:26', kind: 'tool', role: 'Bash', call: '$ uv run python -m pygments -L styles', dim: '49 styles', pre: 'Styles:\n~~~~~~~\n* default:\n    The default style (inspired by Emacs 22).\n* github-dark:\n    Github\'s Dark-Colorscheme based theme for Pygments', more: 3 },
+  { id: 'a2', lane: 'A', t: '14:02:40', kind: 'tool', role: 'Read', call: 'components/timeline.html', dim: '84–90', pre: '84  const typeColors = {\n85      user: { background: \'#fff3e0\', border: \'#ff9800\' },\n86      assistant: { background: \'#f3e5f5\', border: \'#9c27b0\' },\n87      tool_use: { background: \'#e8f5e9\', border: \'#4caf50\' },\n88      thinking: { background: \'#f5f5f5\', border: \'#9e9e9e\' },\n89      system: { background: \'#fff8e1\', border: \'#d98100\' },\n90  };', more: 4 },
+  { id: 'm6', lane: 'main', t: '14:02:41', kind: 'tool', role: 'Read', call: 'claude_code_log/cli.py', dim: '210–214', pre: '210  @click.option(\n211      "--open-browser",\n212      is_flag=True,\n213      help="Open the generated HTML in a browser.",\n214  )', more: 2 },
+  { id: 'b2', lane: 'B', t: '14:02:55', kind: 'tool', role: 'WebFetch', call: 'pygments.org/styles', dim: '200 · 84 KB · 0.9s' },
+  { id: 'a3', lane: 'A', t: '14:03:02', kind: 'error', role: 'Bash', call: '$ rg -c "var\\(--" components/', dim: 'exit 2', pre: 'rg: components/: No such file or directory (os error 2)' },
+  { id: 'b3', lane: 'B', t: '14:03:20', kind: 'assistant', role: 'Agent', text: 'github-dark and one-dark both ship with Pygments 2.18; github-dark sits closest to the hairline palette.' },
+  { id: 'm7', lane: 'main', t: '14:03:21', kind: 'notify', role: 'Async', call: '↩ Find dark Pygments styles', dim: 'completed · 1m 02s', text: 'Use github-dark for the dark theme. Emit both palettes scoped under .light and .dark so a single page can switch without a rebuild; the default style stays as the light palette.', tmore: 1 },
+  { id: 'm8', lane: 'main', t: '14:03:30', kind: 'tool', role: 'Edit', call: 'claude_code_log/cli.py', dim: '+5 −0', pre: '+@click.option(\n+    "--theme",\n+    type=click.Choice(THEMES),\n+    default="default",\n+)', more: 2, diff: true },
+  { id: 'a4', lane: 'A', t: '14:03:41', kind: 'tool', role: 'Bash', call: '$ rg -c "var\\(--" claude_code_log/html/templates/components/', dim: '96 matches in 9 files' },
+  { id: 'a5', lane: 'A', t: '14:04:30', kind: 'assistant', role: 'Agent', text: '14 files and 412 literals; 11 variables are referenced but never declared.' },
+  { id: 'm9', lane: 'main', t: '14:04:31', kind: 'notify', role: 'Async', call: '↩ Audit hard-coded colours', dim: 'completed · 2m 13s', text: '14 files, 412 literals. Most are in message_styles.css (118) and global_styles.css (74). timeline.html sets item colours inline from JavaScript, so it needs its own variables, and 11 variables are referenced but never declared, such as --code-bg and --font-mono.', tmore: 2 },
+  { id: 'm10', lane: 'main', t: '14:05:52', kind: 'assistant', role: 'Assistant', tok: '61.2k · 1.4k', text: 'The compact theme is wired in as an extra stylesheet layered after global_styles.css. --theme hairline turns it on, and code blocks use github-dark in dark mode.', ctl: 'F' },
+  { id: 'm11', lane: 'main', t: '14:09:02', kind: 'user', role: 'User', text: 'Does the timeline pick up the dark palette as well?' },
+  { id: 'm12', lane: 'main', t: '14:10:12', kind: 'assistant', role: 'Assistant', tok: '64.0k · 312', text: 'Not yet: vis-timeline gets its colours inline from JavaScript. I\'ll read them from the same custom properties with getComputedStyle.' },
+  { id: 'f1', lane: 'F', t: '14:20:05', kind: 'user', role: 'User', text: 'Actually, skip the flag. Pick light or dark from the OS, with a toggle in the page.' },
+  { id: 'f2', lane: 'F', t: '14:20:40', kind: 'assistant', role: 'Assistant', text: 'Then no CLI change is needed: both palettes ship in every page, a prefers-color-scheme query picks one, and a data-theme attribute overrides it.' },
+  { id: 'f3', lane: 'F', t: '14:22:52', kind: 'tool', role: 'Edit', call: 'claude_code_log/cli.py', dim: '+0 −5', pre: '-@click.option(\n-    "--theme",\n-    type=click.Choice(THEMES),\n-    default="default",\n-)', more: 2, diff: true }
+];
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { modes: {}, open: {}, theme: 'auto', osDark: false };
+  }
+  componentDidMount() {
+    if (typeof window !== 'undefined' && window.matchMedia) {
+      this.mq = window.matchMedia('(prefers-color-scheme: dark)');
+      this.onMq = (e) => this.setState({ osDark: e.matches });
+      this.setState({ osDark: this.mq.matches });
+      if (this.mq.addEventListener) this.mq.addEventListener('change', this.onMq);
+    }
+  }
+  componentWillUnmount() {
+    if (this.mq && this.mq.removeEventListener) this.mq.removeEventListener('change', this.onMq);
+  }
+  setMode(l, md) {
+    this.setState((st) => {
+      const modes = Object.assign({}, st.modes);
+      modes[l] = md;
+      return { modes: modes };
+    });
+  }
+  renderVals() {
+    const s = this.state;
+    const mode = (l) => (l === 'main' ? 'inline' : (s.modes[l] || DEFAULT_MODE));
+    const colLanes = BRANCHES.filter((l) => mode(l) === 'col' || mode(l) === 'strip');
+    const hasCols = colLanes.length > 0;
+    const colOf = {};
+    colLanes.forEach((l, i) => { colOf[l] = i; });
+    const vis = MSGS.filter((m) => m.lane === 'main' || mode(m.lane) === 'inline' || mode(m.lane) === 'col');
+
+    // Pack rows: time order is kept top to bottom, but messages in different columns may share a row.
+    const rowOf = {}, lastRowOf = {}, nextFree = {};
+    let prev = 0;
+    vis.forEach((m) => {
+      const key = colOf[m.lane] !== undefined ? m.lane : 'main';
+      let r = Math.max(prev, nextFree[key] || 0);
+      const L = LANES[m.lane];
+      if (L.from && rowOf[L.from] !== undefined) r = Math.max(r, rowOf[L.from] + 1);
+      const merging = BRANCHES.find((b) => LANES[b].merge === m.id);
+      if (merging && lastRowOf[merging] !== undefined) r = Math.max(r, lastRowOf[merging] + 1);
+      rowOf[m.id] = r;
+      lastRowOf[m.lane] = r;
+      nextFree[key] = r + 1;
+      prev = r;
+    });
+    const nRows = prev + 1;
+    const base = hasCols ? 2 : 1;
+
+    // Rail: one row of lane slots per grid row, drawn like a git graph.
+    const railed = BRANCHES.filter((l) => mode(l) === 'shut' || mode(l) === 'inline');
+    const rowsOfLane = {};
+    vis.forEach((m) => {
+      if (m.lane !== 'main' && colOf[m.lane] !== undefined) return;
+      rowsOfLane[m.lane] = rowsOfLane[m.lane] || {};
+      rowsOfLane[m.lane][rowOf[m.id]] = m.kind;
+    });
+    const mainRows = Object.keys(rowsOfLane.main).map(Number);
+    const mainFirst = Math.min.apply(null, mainRows);
+    const mainLast = Math.max.apply(null, mainRows);
+    const span = {};
+    railed.forEach((l) => {
+      const L = LANES[l];
+      const from = rowOf[L.from];
+      let end = from;
+      if (L.merge) end = rowOf[L.merge];
+      else if (mode(l) === 'inline') end = Math.max.apply(null, Object.keys(rowsOfLane[l] || {}).map(Number).concat([from]));
+      span[l] = { from: from, end: end };
+    });
+    const rail = [];
+    for (let r = 0; r < nRows; r++) {
+      const sl = [0, 1, 2].map(() => ({ ln: '', hl: '', v: '', h: '', kind: '' }));
+      if (r >= mainFirst && r <= mainLast) {
+        sl[0].ln = 'main';
+        const k = rowsOfLane.main[r];
+        if (k) {
+          sl[0].kind = k;
+          sl[0].v = (r > mainFirst ? 'vt' : '') + (r < mainLast ? ' vb' : '');
+        } else sl[0].v = 'v';
+      }
+      railed.forEach((l) => {
+        const sp = span[l];
+        if (r < sp.from || r > sp.end) return;
+        const L = LANES[l];
+        const x = sl[L.slot];
+        x.ln = l;
+        const connect = () => {
+          sl[0].h = 'r';
+          sl[0].hl = l;
+          for (let k = 1; k < L.slot; k++) { sl[k].h = 'h'; sl[k].hl = l; }
+          x.hl = l;
+        };
+        if (r === sp.from) { x.v = sp.end > sp.from ? 'cd' : 'cd stub'; connect(); }
+        else if (r === sp.end && L.merge) { x.v = 'cu'; connect(); }
+        else if (rowsOfLane[l] && rowsOfLane[l][r]) { x.kind = rowsOfLane[l][r]; x.v = 'vt' + (r < sp.end ? ' vb' : ''); }
+        else x.v = 'v' + (mode(l) === 'shut' ? ' dash' : '');
+      });
+      rail.push({
+        gr: r + base,
+        slots: sl.map((x) => ({ cls: ['sl', x.ln && 'ln-' + x.ln, x.hl && 'hl-' + x.hl, x.v, x.h, x.kind && 'dot k-' + x.kind].filter(Boolean).join(' ') }))
+      });
+    }
+
+    const ctlFor = (l) => {
+      const md = mode(l);
+      const L = LANES[l];
+      const inCol = md === 'col' || md === 'strip';
+      const suffix = md === 'inline' ? ' · interleaved' : inCol ? ' · in column →' : '';
+      return {
+        cls: 'bctl ln-' + l + (md === 'inline' ? ' is-open' : ''),
+        ex: md === 'inline' ? 'true' : 'false',
+        label: (L.ctlName ? L.ctlName + ' · ' : '') + L.stats + suffix,
+        toggle: () => this.setMode(l, md === 'shut' ? 'inline' : 'shut'),
+        colLabel: inCol ? '⇤ Interleave' : 'Column ⇥',
+        col: () => this.setMode(l, inCol ? 'inline' : 'col')
+      };
+    };
+
+    const items = vis.map((m) => {
+      const inCol = colOf[m.lane] !== undefined && m.lane !== 'main';
+      const open = !!s.open[m.id];
+      const R = rowOf[m.id] + base;
+      const tg = () => this.setState((st) => {
+        const o = Object.assign({}, st.open);
+        o[m.id] = !o[m.id];
+        return { open: o };
+      });
+      return {
+        lane: m.lane, t: m.t, role: m.role, call: m.call || '', dim: m.dim || '', text: m.text || '', tok: m.tok || '',
+        tagLbl: m.lane !== 'main' && !inCol ? LANES[m.lane].tag : '',
+        kcls: 'k-' + m.kind,
+        wcls: inCol ? 'w-col ln-' + m.lane : 'w-main',
+        wr: inCol ? R : 'auto', wc: inCol ? 4 + colOf[m.lane] : 'auto',
+        gr: inCol ? 1 : R, gc: 1,
+        mr: inCol ? 1 : R, mc: inCol ? 2 : 3,
+        mcls: (inCol ? 'cm' : 'c3') + ' k-' + m.kind + ' in-' + m.lane,
+        tclip: 'tx' + (m.tmore ? ' clip prose' + (open ? ' is-open' : '') : ''),
+        tmore: m.tmore || 0, tmoreLbl: m.tmore ? '+ ' + m.tmore + (m.tmore > 1 ? ' lines' : ' line') : '',
+        lines: m.pre ? m.pre.split('\n').map((x) => ({ s: x, c: m.diff ? (x[0] === '+' ? 'add' : x[0] === '-' ? 'del' : '') : '' })) : null,
+        pclip: m.more ? 'clip' + (open ? ' is-open' : '') : '',
+        more: m.more || 0, moreLbl: m.more ? '+ ' + m.more + ' lines' : '',
+        ex: open ? 'true' : 'false', tg: tg,
+        ctl: m.ctl ? ctlFor(m.ctl) : null
+      };
+    });
+
+    const cols = colLanes.map((l, i) => {
+      const md = mode(l);
+      const L = LANES[l];
+      return {
+        gc: 4 + i, span: nRows + 1, name: L.name, meta: L.meta + ' · ' + L.stats,
+        bgcls: 'colbg ln-' + l, hcls: 'colhead ln-' + l,
+        strip: md === 'strip', full: md === 'col',
+        collapse: () => this.setMode(l, 'strip'),
+        expand: () => this.setMode(l, 'col'),
+        inline: () => this.setMode(l, 'inline')
+      };
+    });
+    const gtc = '64px 48px minmax(360px, 1fr)' + colLanes.map((l) => (mode(l) === 'strip' ? ' 34px' : ' minmax(300px, 1fr)')).join('');
+
+    const bm = {}, bmP = {}, setAll = {};
+    ['shut', 'inline', 'col'].forEach((md) => {
+      const all = BRANCHES.every((l) => mode(l) === md);
+      bm[md] = all ? 'on' : '';
+      bmP[md] = all ? 'true' : 'false';
+      setAll[md] = () => this.setState({ modes: { A: md, B: md, F: md } });
+    });
+    const th = {}, thP = {}, setTheme = {};
+    ['auto', 'light', 'dark'].forEach((t) => {
+      th[t] = s.theme === t ? 'on' : '';
+      thP[t] = s.theme === t ? 'true' : 'false';
+      setTheme[t] = () => this.setState({ theme: t });
+    });
+    const dark = s.theme === 'dark' || (s.theme === 'auto' && s.osDark);
+    return {
+      fs: this.props.fs ?? 14,
+      appCls: 'app ' + (dark ? 'dark' : 'light'),
+      wrapCls: 'wrap' + (hasCols ? ' wide' : ''),
+      hasCols: hasCols, gtc: gtc, cols: cols, rail: rail, items: items,
+      bm: bm, bmP: bmP, setAll: setAll,
+      th: th, thP: thP, setTheme: setTheme
+    };
+  }
+}
+</script>
+</body>
+</html>

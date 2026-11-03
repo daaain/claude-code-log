@@ -215,6 +215,18 @@ def format_websearch_output(output: WebSearchOutput) -> str:
     return render_markdown_collapsible(markdown_content, "websearch-results")
 ```
 
+### Escaping: all transcript content is untrusted
+
+Every transcript value is attacker-controlled — the assistant echoes
+user, file and web input verbatim, so a `<script>` payload can reach any
+field you render. Run every value you interpolate into f-string HTML
+through `escape_html()`, and render markdown only through
+`render_markdown` / `render_markdown_collapsible`, which escape raw HTML
+and neutralise unsafe link schemes. Add a payload-bearing case for each
+new field you render (see `test/test_markdown_rendering.py` and
+`test/test_xss_browser.py`). Detail:
+[dev-docs/implementing-a-tool-renderer.md](../../../dev-docs/implementing-a-tool-renderer.md).
+
 ### Update Exports
 
 Add functions to `__all__`:
@@ -262,25 +274,18 @@ def title_WebSearchInput(self, input: WebSearchInput, message: TemplateMessage) 
 
 ### Watch out: the template's wrench-suppression is emoji-range-gated
 
-Tool-use messages get a default `🛠️` prefix prepended by
-`templates/transcript.html` *unless* the title already starts with
-an emoji that `html/utils.py::starts_with_emoji` recognises. That
-function whitelists specific Unicode ranges:
+Tool messages get a default `🛠️` (tool_use) or `🧰` (tool_result)
+prefix prepended by `html/templates/transcript.html` *unless* the
+title already starts with an emoji that
+`html/utils.py::starts_with_emoji` recognises. That function
+whitelists specific Unicode ranges, listed in its docstring.
 
-- `0x2300-0x23FF` Misc Technical (`⏰ ⏳ ⏱️ ⏲️ ⏸ ⏹ ⏺ ⏏` …)
-- `0x2600-0x26FF` Misc Symbols
-- `0x2700-0x27BF` Dingbats
-- `0x1F300-0x1F5FF` Misc Symbols and Pictographs
-- `0x1F600-0x1F64F` Emoticons
-- `0x1F680-0x1F6FF` Transport and Map Symbols
-- `0x1F900-0x1F9FF` Supplemental Symbols
-
-If the icon you pass to `_tool_title` falls **outside** these
-ranges, the template will helpfully add a `🛠️` in front of it,
+If the icon you pass to `_tool_title` falls **outside** those
+ranges, the template adds the default icon in front of it,
 producing a redundant double-icon title like
 `🛠️ <your-icon> <ToolName>`. Verify by rendering a fixture and
-grepping for `🛠️` co-occurring with your icon, or by checking
-`ord(your_icon)` against the ranges above.
+grepping for `🛠️` co-occurring with your icon, or by calling
+`starts_with_emoji` on your title.
 
 If your icon is a real emoji that lives in a Unicode range not
 listed there, **add the range** to `starts_with_emoji` rather than

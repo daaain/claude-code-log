@@ -18,12 +18,19 @@ import html
 import json
 import re
 from pathlib import Path
-from typing import Any, Callable, Optional, TYPE_CHECKING
+from typing import Any, Optional, TYPE_CHECKING
+from urllib.parse import urlsplit
 
-import mistune
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
+from wenmode import HTMLRenderer, Wenmode
+from wenmode.renderers.html import (
+    normalize_url_for_scheme_check as _normalize_url_for_scheme_check,
+)
+from wenmode.renderers.html import render_code as _default_render_code
+
 from .renderer_code import highlight_code_with_pygments, truncate_highlighted_preview
+from ..json_depth import exceeds_depth
 from ..models import (
     AssistantTextMessage,
     AwaySummaryMessage,
@@ -50,6 +57,7 @@ from ..models import (
     WorkflowAgentMessage,
     WorkflowPhaseMessage,
 )
+from ..render_cache import markdown_cache
 from ..renderer_timings import timing_stat
 
 if TYPE_CHECKING:
@@ -380,8 +388,14 @@ def escape_html(text: str) -> str:
     return html.escape(normalized)
 
 
-def _create_pygments_plugin() -> Any:
-    """Create a mistune plugin that uses Pygments for code block syntax highlighting."""
+def _render_code_with_pygments(renderer: Any, node: Any, context: Any) -> str:
+    """wenmode ``code`` handler: Pygments when the fence names a language.
+
+    Falls back to wenmode's own ``<pre><code>`` rendering when there is
+    no language hint, so plain fences stay as they were.
+    """
+    if not node.lang:
+        return str(_default_render_code(renderer, node, context))
     from pygments import highlight
     from pygments.lexer import Lexer
     from pygments.lexers import get_lexer_by_name, TextLexer
@@ -389,92 +403,256 @@ def _create_pygments_plugin() -> Any:
     from pygments.formatters import HtmlFormatter
     from pygments.util import ClassNotFound
 
-    def plugin_pygments(md: Any) -> None:
-        """Plugin to add Pygments syntax highlighting to code blocks."""
-        original_render = md.renderer.block_code
-
-        def block_code(code: str, info: Optional[str] = None) -> str:
-            """Render code block with Pygments syntax highlighting if language is specified."""
-            if info:
-                # Language hint provided, use Pygments
-                lang = info.split()[0] if info else ""
-                # Default to plain text lexer
-                lexer: Lexer = TextLexer()
-                try:
-                    lexer = get_lexer_by_name(lang, stripall=False)
-                except ClassNotFound:
-                    pass  # Already have default
-
-                formatter: Formatter = HtmlFormatter(
-                    linenos=False,  # No line numbers in markdown code blocks
-                    cssclass="highlight",
-                    wrapcode=True,
-                )
-                # Track Pygments timing if enabled
-                with timing_stat("_pygments_timings"):
-                    return str(highlight(code, lexer, formatter))
-            else:
-                # No language hint, use default rendering
-                return original_render(code, info)
-
-        md.renderer.block_code = block_code
-
-    return plugin_pygments
+    lang = node.lang.split()[0]
+    lexer: Lexer = TextLexer()
+    try:
+        lexer = get_lexer_by_name(lang, stripall=False)
+    except ClassNotFound:
+        pass  # Already have default
+    formatter: Formatter = HtmlFormatter(
+        linenos=False,  # No line numbers in markdown code blocks
+        cssclass="highlight",
+        wrapcode=True,
+    )
+    with timing_stat("_pygments_timings"):
+        return str(highlight(node.value, lexer, formatter))
 
 
-@functools.lru_cache(maxsize=1)
-def _get_markdown_renderer() -> mistune.Markdown:
-    """Get cached Mistune markdown renderer with Pygments syntax highlighting.
+def _render_html_escaped(renderer: Any, node: Any, context: Any) -> str:
+    """wenmode ``html`` handler: raw HTML is shown as text, never live.
 
-    Uses ``escape=True`` so raw HTML embedded in the source text
-    (``<script>``, ``<img onerror=…>``, bare ``<b>``, …) is rendered as
-    literal entity-escaped text rather than injected as live DOM.
-
-    This renderer handles assistant/tool/web-authored content (assistant
-    prose, Task/WebSearch/WebFetch results, plans, system messages,
-    teammate bodies). That content is **not** trusted: the assistant
-    routinely echoes arbitrary user/file/web input verbatim — e.g. "write
-    an E2E test that types ``<script>alert(1)</script>`` into the field" —
-    so rendering it unescaped lets that payload execute when the transcript
-    HTML is opened. The Markdown output path already neutralises raw HTML
-    from every source (see ``markdown/renderer.py::_protect_html_tags``);
-    the HTML path must match. ``escape=True`` does not affect Markdown
-    formatting, plugin output (Pygments, SHA links), or code fences — only
-    raw HTML tags in the body.
+    Transcript content is untrusted from every source (#245 XSS), so
+    every raw-HTML node is entity-escaped. A block-level one (marked by
+    ``markdown_plugins.BlockHtmlMarker``) is wrapped in a paragraph so
+    it lays out like the text it now is.
     """
-    from ..markdown_plugins import make_codespan_sha_plugin, make_sha_plugin
+    if node.data and node.data.get("block"):
+        return "<p>" + str(renderer.escape_html(node.value.strip())) + "</p>\n"
+    return str(renderer.escape_html(node.value))
+
+
+# Schemes a link or image in a transcript must never carry: mistune's
+# list, plus OS protocol handlers that a click would hand to the desktop
+# (``search-ms:`` and ``ms-appinstaller:`` have real abuse history) and
+# the browser-internal ones. Anything else — ``cci:`` editor links,
+# ``vercel.json:20`` file references, relative paths — stays a working
+# link: transcripts are full of targets no allowlist would anticipate,
+# and none of those can execute script.
+_HARMFUL_URL_SCHEMES = frozenset(
+    {
+        "javascript",
+        "vbscript",
+        "file",
+        "data",
+        "feed",
+        "jar",
+        "livescript",
+        "mocha",
+        "ms-its",
+        "mk",
+        "res",
+        "view-source",
+        # beyond mistune's list
+        "search-ms",
+        "ms-appinstaller",
+        "ms-msdt",
+        "intent",
+        "blob",
+        "filesystem",
+        "about",
+    }
+)
+_GOOD_DATA_PREFIXES = (
+    "data:image/gif;",
+    "data:image/png;",
+    "data:image/jpeg;",
+    "data:image/webp;",
+)
+
+
+class _TranscriptHTMLRenderer(HTMLRenderer):
+    """wenmode's HTML renderer with a denylist URL policy.
+
+    wenmode's default allows only ``http``, ``https``, ``irc``, ``ircs``,
+    ``mailto`` and ``tel``; every other scheme loses its ``href``. The
+    XSS contract (#245) only needs the dangerous schemes gone, so this
+    keeps mistune's denylist (``file:`` included) and lets the rest
+    through unchanged. Attribute sanitising and raw-HTML escaping are
+    wenmode's defaults, untouched.
+    """
+
+    def sanitize_url(self, value: str) -> Optional[str]:
+        try:
+            normalized = _normalize_url_for_scheme_check(value)
+            scheme = urlsplit(normalized).scheme.lower()
+        except ValueError:
+            return None
+        if scheme in _HARMFUL_URL_SCHEMES and not normalized.lower().startswith(
+            _GOOD_DATA_PREFIXES
+        ):
+            return None
+        return value
+
+
+class _TranscriptHtmlHandlers:
+    """wenmode plugin installing the transcript HTML handlers above."""
+
+    def setup(self, wen: Wenmode, /) -> None:
+        wen.register_renderer_handlers(
+            {
+                "html": {
+                    "code": _render_code_with_pygments,
+                    "html": _render_html_escaped,
+                }
+            }
+        )
+
+
+def _build_transcript_markdown(document: bool = False) -> Wenmode:
+    """The wenmode pipeline both content renderers use.
+
+    ``escape=True`` renders raw HTML embedded in the source text
+    (``<script>``, ``<img onerror=…>``, bare ``<b>``, …) as literal
+    entity-escaped text rather than injected as live DOM, and the
+    renderer's URL policy drops ``javascript:``/``data:`` link targets. Transcript content is **not** trusted from any source: the
+    assistant routinely echoes arbitrary user/file/web input verbatim —
+    e.g. "write an E2E test that types ``<script>alert(1)</script>`` into
+    the field" — so rendering it unescaped lets that payload execute when
+    the transcript HTML is opened. The Markdown output path neutralises
+    raw HTML the same way (see ``markdown/renderer.py::_protect_html_tags``).
+    Escaping does not affect Markdown formatting, Pygments output, SHA
+    links or code fences — only raw HTML in the body.
+
+    The SHA → commit-URL linkifier (issue #156) reads the per-render cwd
+    from a ContextVar, so the cached singleton keeps working unchanged
+    across transcripts from different repos.
+
+    ``document`` adds wenmode's ``frontmatter`` plugin, for a whole body
+    (a message, a Markdown file, a plan) that may open with YAML front
+    matter; see ``render_markdown_document``.
+    """
+    from ..markdown_plugins import transcript_plugins, transcript_rules
     from ..git_remote import resolve_sha_for_current_render
 
-    return mistune.create_markdown(
-        plugins=[
-            "strikethrough",
-            "footnotes",
-            "table",
-            "url",
-            "task_lists",
-            "def_list",
-            _create_pygments_plugin(),
-            # SHA → commit-URL linkifier (issue #156). Resolver reads
-            # the per-render cwd from a ContextVar, so the cached
-            # singleton renderer keeps working unchanged across
-            # transcripts from different repos.
-            make_sha_plugin(resolve_sha_for_current_render),
-            # Codespan-wrapped variant: `5baac35` → <a><code>…</code></a>.
-            # Registers with before="codespan" so it fires before
-            # mistune's built-in rule consumes the backticks.
-            make_codespan_sha_plugin(resolve_sha_for_current_render),
-        ],
-        escape=True,  # Escape raw HTML: transcript content is untrusted (XSS)
-        hard_wrap=True,  # Line break for newlines (checklists in Assistant messages)
+    plugins: list[Any] = [*transcript_plugins(), _TranscriptHtmlHandlers()]
+    if document:
+        from wenmode.plugins import frontmatter
+
+        from ..frontmatter import load_frontmatter
+
+        plugins.append(frontmatter.configure(load=load_frontmatter))
+    return Wenmode(
+        transcript_rules(resolve_sha_for_current_render),
+        # escape: untrusted content (XSS, #245). soft_break: a newline in
+        # prose is a line break (checklists in assistant messages carry no
+        # two-trailing-spaces markup) — mistune's hard_wrap.
+        renderer=_TranscriptHTMLRenderer(escape=True, soft_break="br"),
+        plugins=plugins,
     )
 
 
-def render_markdown(text: str) -> str:
-    """Convert markdown text to HTML using mistune with Pygments syntax highlighting."""
+@functools.lru_cache(maxsize=1)
+def _get_markdown_renderer() -> Wenmode:
+    """Cached renderer for assistant/tool/web-authored content.
+
+    Assistant prose, Task/WebSearch/WebFetch results, plans, system
+    messages, teammate bodies. See ``_build_transcript_markdown`` for
+    the escaping contract.
+    """
+    return _build_transcript_markdown()
+
+
+@functools.lru_cache(maxsize=1)
+def _get_document_markdown_renderer() -> Wenmode:
+    """Cached renderer for whole bodies that open with YAML front matter.
+
+    The transcript pipeline plus wenmode's ``frontmatter`` plugin. Only
+    ``render_markdown_document`` uses it: inline renders, previews and the
+    Markdown inside a params-table value never parse front matter.
+    """
+    return _build_transcript_markdown(document=True)
+
+
+def _frontmatter_html(value: Any) -> str:
+    """HTML for loaded front matter: a params table, or a YAML code block."""
+    from ..frontmatter import RawFrontmatter, yaml_fence
+    from .tool_formatters import render_params_table
+
+    if isinstance(value, RawFrontmatter):
+        body = render_markdown(yaml_fence(value.source))
+    else:
+        body = render_params_table(value)
+    return f"<div class='frontmatter'>{body}</div>"
+
+
+def render_markdown_document(text: str, user: bool = False) -> str:
+    """Render a whole Markdown body, showing YAML front matter as data.
+
+    A body that opens with front matter (``frontmatter.is_frontmatter_start``)
+    is parsed by the document renderer, whose ``frontmatter`` plugin takes
+    the block out of the body; it renders as a params table above the rest
+    (a YAML code block when it is not a mapping). Any other body renders
+    exactly as ``render_markdown`` (``render_user_markdown`` when ``user``).
+    ``user`` does not apply to the front-matter path: the document renderer
+    is the same escaping pipeline as both, so one memo entry serves either.
+    """
+    from ..frontmatter import is_frontmatter_start
+    from ..git_remote import current_render_repo_cwd
+
+    if not is_frontmatter_start(text):
+        return _render_markdown_memoized(text, escaping_user_renderer=user)
+
+    memo_key = ("document", current_render_repo_cwd(), text)
+    cached = markdown_cache.get(memo_key)
+    if cached is not None:
+        return cached
+    with timing_stat("_markdown_timings"):
+        renderer = _get_document_markdown_renderer()
+        root = renderer.parse(text)
+        body = renderer.render_node(root)
+        data = root.data or {}
+        if "frontmatter" in data:
+            body = _frontmatter_html(data["frontmatter"]) + body
+    markdown_cache.put(memo_key, body)
+    return body
+
+
+def _render_markdown_memoized(text: str, escaping_user_renderer: bool) -> str:
+    """Render ``text`` through one of the two wenmode singletons, memoized.
+
+    Markdown output is a pure function of the text *and* the active render
+    repo cwd: the SHA-linkifier plugin resolves commit hashes against
+    ``git_remote._render_repo_cwd``, so the same ``5baac35`` links to
+    different repositories in different transcripts. The cwd is therefore
+    part of the key — without it a long-lived host (``serve``, the TUI)
+    would serve one project's commit links inside another's page.
+
+    ``escaping_user_renderer`` selects between the two renderer singletons
+    (they differ only in call site convention today, but they are distinct
+    objects and must not share cache entries).
+    """
+    from ..git_remote import current_render_repo_cwd
+
+    memo_key = (escaping_user_renderer, current_render_repo_cwd(), text)
+    cached = markdown_cache.get(memo_key)
+    if cached is not None:
+        return cached
+
     # Track markdown rendering time if enabled
     with timing_stat("_markdown_timings"):
-        renderer = _get_markdown_renderer()
-        return str(renderer(text))
+        renderer = (
+            _get_user_markdown_renderer()
+            if escaping_user_renderer
+            else _get_markdown_renderer()
+        )
+        rendered = renderer.render(text)
+    markdown_cache.put(memo_key, rendered)
+    return rendered
+
+
+def render_markdown(text: str) -> str:
+    """Convert markdown text to HTML using wenmode with Pygments syntax highlighting."""
+    return _render_markdown_memoized(text, escaping_user_renderer=False)
 
 
 _INLINE_PARA_BOUNDARY_RE = re.compile(r"</p>\s*<p>")
@@ -494,9 +672,7 @@ def render_markdown_inline(text: str) -> str:
     ``<option>``, …) is escaped to literal characters rather than injected —
     these short fields were previously HTML-escaped, so keep that contract.
     """
-    with timing_stat("_markdown_timings"):
-        renderer = _get_user_markdown_renderer()
-        rendered = str(renderer(text)).strip()
+    rendered = _render_markdown_memoized(text, escaping_user_renderer=True).strip()
     if rendered.startswith("<p>") and rendered.endswith("</p>"):
         inner = rendered[len("<p>") : -len("</p>")]
         return _INLINE_PARA_BOUNDARY_RE.sub("<br>", inner)
@@ -504,45 +680,22 @@ def render_markdown_inline(text: str) -> str:
 
 
 @functools.lru_cache(maxsize=1)
-def _get_user_markdown_renderer() -> mistune.Markdown:
-    """Markdown renderer for user-authored text.
+def _get_user_markdown_renderer() -> Wenmode:
+    """Cached renderer for user-authored text.
 
-    Uses ``escape=True`` so raw ``<script>`` or other HTML in the source is
-    rendered as literal escaped text, not injected into the DOM. The shared
-    renderer (``_get_markdown_renderer``) was historically ``escape=False``
-    for assistant/tool output that emitted pre-formed HTML; it now also
-    escapes — transcript content is untrusted from every source (#245 XSS),
-    so both pipelines neutralise raw HTML. This one is retained for the
-    user-content call sites (``render_user_markdown``).
+    Same pipeline as ``_get_markdown_renderer`` — the shared renderer was
+    historically ``escape=False`` for assistant/tool output that emitted
+    pre-formed HTML; both now escape (#245 XSS) because transcript
+    content is untrusted from every source. This one is retained as a
+    distinct object for the user-content call sites
+    (``render_user_markdown``); the memo keys on which singleton rendered.
     """
-    from ..markdown_plugins import make_codespan_sha_plugin, make_sha_plugin
-    from ..git_remote import resolve_sha_for_current_render
-
-    return mistune.create_markdown(
-        plugins=[
-            "strikethrough",
-            "footnotes",
-            "table",
-            "url",
-            "task_lists",
-            "def_list",
-            _create_pygments_plugin(),
-            # See _get_markdown_renderer for the SHA-link plugins'
-            # contract; identical here — escape=True only affects
-            # HTML in user text bodies, not link emission.
-            make_sha_plugin(resolve_sha_for_current_render),
-            make_codespan_sha_plugin(resolve_sha_for_current_render),
-        ],
-        escape=True,
-        hard_wrap=True,
-    )
+    return _build_transcript_markdown()
 
 
 def render_user_markdown(text: str) -> str:
     """Render user-authored Markdown with HTML escaping enabled."""
-    with timing_stat("_markdown_timings"):
-        renderer = _get_user_markdown_renderer()
-        return str(renderer(text))
+    return _render_markdown_memoized(text, escaping_user_renderer=True)
 
 
 # HTML tags that are self-closing / void per the HTML spec — these do
@@ -579,7 +732,7 @@ def is_well_formed_html(fragment: str) -> bool:
 
     Void elements (``<br>``, ``<img>``, …) don't push to the stack, and
     XHTML-style self-closing syntax (``<br />``, ``<hr />``) is treated
-    as equivalent — mistune emits XHTML self-closing for voids so the
+    as equivalent — wenmode emits XHTML self-closing for voids so the
     check must accept both.
     """
     from html.parser import HTMLParser
@@ -663,19 +816,35 @@ def render_collapsible_code(
     </details>"""
 
 
+def _preview_source(text: str) -> str:
+    """The text a collapsed preview is cut from: the body after any front
+    matter (a preview never parses front matter, so cutting it would leave
+    the setext-heading misreading), or the front matter as a YAML block
+    when nothing follows it."""
+    from ..frontmatter import split_frontmatter, yaml_fence
+
+    split = split_frontmatter(text)
+    if split is None:
+        return text
+    source, body = split
+    return body if body.strip() else yaml_fence(source)
+
+
 def _markdown_collapsible(
     raw_content: str,
     css_class: str,
-    render_fn: "Callable[[str], str]",
+    user: bool,
     line_threshold: int,
     preview_line_count: int,
 ) -> str:
-    """Shared body for the collapsible-markdown helpers, parameterized by the
-    markdown render function. Both render functions escape raw HTML
-    (``escape=True``): transcript content is untrusted regardless of source —
-    assistant/tool output routinely echoes arbitrary user/file/web input — so
-    raw tags are neutralised rather than injected as live DOM (XSS)."""
-    rendered_html = render_fn(raw_content)
+    """Shared body for the collapsible-markdown helpers; ``user`` picks the
+    user-content renderer. Both escape raw HTML (``escape=True``):
+    transcript content is untrusted regardless of source — assistant/tool
+    output routinely echoes arbitrary user/file/web input — so raw tags are
+    neutralised rather than injected as live DOM (XSS). The full body is a
+    document (front matter shows as data); the preview is not."""
+    render_fn = render_user_markdown if user else render_markdown
+    rendered_html = render_markdown_document(raw_content, user=user)
 
     lines = raw_content.splitlines()
     if len(lines) <= line_threshold:
@@ -683,7 +852,7 @@ def _markdown_collapsible(
         return f'<div class="{css_class} markdown">{rendered_html}</div>'
 
     # Long content - make collapsible with rendered preview
-    preview_lines = lines[:preview_line_count]
+    preview_lines = _preview_source(raw_content).splitlines()[:preview_line_count]
     preview_text = "\n".join(preview_lines)
     if len(lines) > preview_line_count:
         preview_text += "\n\n..."
@@ -723,8 +892,43 @@ def render_markdown_collapsible(
         HTML string with rendered markdown, optionally wrapped in collapsible details
     """
     return _markdown_collapsible(
-        raw_content, css_class, render_markdown, line_threshold, preview_line_count
+        raw_content, css_class, False, line_threshold, preview_line_count
     )
+
+
+def render_markdown_preview(
+    text: str, css_class: str, inline_lines: int, inline_chars: int
+) -> str:
+    """The minimal theme's short preview of a long Markdown block.
+
+    Text of at most ``inline_lines`` lines and ``inline_chars`` characters
+    renders inline (as ``render_markdown_collapsible`` would); anything
+    longer always becomes the shared collapsible preview — its first two
+    non-blank lines in the ``<summary>`` (clipped to two lines by the
+    theme's CSS; no "..." line, the fade and the "+N lines" label say there
+    is more) and the full text in the body. Used for a sub-agent's prompt
+    on its spawn row (P7c) and for its answer on the merge row (P8), so a
+    long agent report reads as two lines in "Main only" like every other
+    long block.
+    """
+    lines = text.splitlines()
+    if len(lines) <= inline_lines and len(text) <= inline_chars:
+        return render_markdown_collapsible(text, css_class)
+    preview_lines = _preview_source(text).splitlines()
+    preview = "\n".join([line for line in preview_lines if line.strip()][:2])
+    collapsible = render_collapsible_code(
+        render_markdown(preview),
+        render_markdown_document(text),
+        len(lines),
+        is_markdown=True,
+    )
+    return f'<div class="{css_class}">{collapsible}</div>'
+
+
+# The minimal theme's agent answers (sync results, async notifications): a
+# reply this short reads in full on the merge row; anything longer previews.
+ANSWER_INLINE_LINES = 3
+ANSWER_INLINE_CHARS = 320
 
 
 def render_user_markdown_collapsible(
@@ -740,11 +944,7 @@ def render_user_markdown_collapsible(
     render as escaped text, not live DOM, when the transcript is opened.
     """
     return _markdown_collapsible(
-        raw_content,
-        css_class,
-        render_user_markdown,
-        line_threshold,
-        preview_line_count,
+        raw_content, css_class, True, line_threshold, preview_line_count
     )
 
 
@@ -802,7 +1002,7 @@ def render_file_content_collapsible(
     return "".join(html_parts)
 
 
-def render_async_result_body(text: str, css_class: str) -> str:
+def render_async_result_body(text: str, css_class: str, preview: bool = False) -> str:
     """Render an async-result body, JSON-aware (issue #174 D4).
 
     A JSON-shaped payload — ``lstrip()`` starts with ``{"`` per cboos's
@@ -814,13 +1014,21 @@ def render_async_result_body(text: str, css_class: str) -> str:
     (Spilling to the full untruncated ``tool-results/<taskId>.txt`` is a
     separate enhancement — it needs the taskId plumbed to this layer — and
     is deferred to a follow-up.)
+
+    ``preview`` (minimal theme): a Markdown answer longer than a few lines
+    is the short two-line preview (``render_markdown_preview``) rather than
+    the 20-line threshold's five-line one.
     """
     stripped = (text or "").lstrip()
     if stripped.startswith('{"'):
         rendered = text
         try:
-            rendered = json.dumps(json.loads(text), indent=2, ensure_ascii=False)
-        except (json.JSONDecodeError, ValueError):
+            parsed = json.loads(text)
+            # Too deep to pretty-print: every level adds indentation, so
+            # the output grows quadratically. Highlight the text as-is.
+            if not exceeds_depth(parsed):
+                rendered = json.dumps(parsed, indent=2, ensure_ascii=False)
+        except (ValueError, RecursionError):
             pass  # truncated / variant payload — highlight the raw text as-is
         return render_file_content_collapsible(
             rendered,
@@ -828,6 +1036,10 @@ def render_async_result_body(text: str, css_class: str) -> str:
             css_class,
             line_threshold=10,
             preview_line_count=6,
+        )
+    if preview:
+        return render_markdown_preview(
+            text, css_class, ANSWER_INLINE_LINES, ANSWER_INLINE_CHARS
         )
     return render_markdown_collapsible(text, css_class)
 
@@ -839,16 +1051,22 @@ def starts_with_emoji(text: str) -> bool:
     """Check if a string starts with an emoji character.
 
     Checks common emoji Unicode ranges:
-    - Misc Technical: U+2300 - U+23FF (⏰ ⏳ ⏱️ ⏲️ ⏸ ⏹ ⏺ ⏏ ↩ etc.)
+    - Misc Technical: U+2300 - U+23FF (⏰ ⏳ ⏱️ ⏲️ ⏸ ⏹ ⏺ ⏏ etc.)
     - Misc Symbols: U+2600 - U+26FF
     - Dingbats: U+2700 - U+27BF
     - Misc Symbols and Pictographs: U+1F300 - U+1F5FF
     - Emoticons: U+1F600 - U+1F64F
     - Transport and Map Symbols: U+1F680 - U+1F6FF
     - Supplemental Symbols: U+1F900 - U+1F9FF
+    - Geometric Shapes Extended, coloured circles/squares: U+1F7E0 - U+1F7FF (🟢 🟦)
+    - Symbols and Pictographs Extended-A: U+1FA70 - U+1FAFF (🪝 🩺 🪙)
+    - White medium star: U+2B50 (⭐)
 
     Used by the transcript template to suppress the default ``🛠️``
-    emoji prefix when a tool title already starts with its own icon.
+    (tool_use) or ``🧰`` (tool_result) emoji prefix when a tool title
+    already starts with its own icon — e.g. a plugin result titled
+    ``📨 Mails …``. The error ``🚨`` is never suppressed. No built-in
+    result title starts with an emoji.
     Misses here cause a redundant wrench to appear in front of an
     otherwise-iconified title (e.g. ``🛠️ ⏰ ScheduleWakeup ...``);
     Misc Technical (U+2300-U+23FF) is included because the alarm
@@ -869,6 +1087,9 @@ def starts_with_emoji(text: str) -> bool:
         or 0x1F600 <= code_point <= 0x1F64F  # Emoticons
         or 0x1F680 <= code_point <= 0x1F6FF  # Transport and Map Symbols
         or 0x1F900 <= code_point <= 0x1F9FF  # Supplemental Symbols
+        or 0x1F7E0 <= code_point <= 0x1F7FF  # Coloured circles/squares (🟢 🟦)
+        or 0x1FA70 <= code_point <= 0x1FAFF  # Pictographs Extended-A (🪝 🩺)
+        or code_point == 0x2B50  # White medium star (⭐)
     )
 
 
@@ -893,4 +1114,27 @@ def get_template_environment() -> Environment:
     # Cast to Any to bypass Jinja2's overly strict globals type
     globals_dict: Any = env.globals
     globals_dict["starts_with_emoji"] = starts_with_emoji
+    # Minimal-theme gutter/meta helpers — called only from the template's
+    # `{% if minimal %}` branches, so classic output never touches them.
+    from . import minimal_icons, minimal_theme
+
+    globals_dict["mn_role_label"] = minimal_theme.role_label
+    globals_dict["mn_role_icon"] = minimal_icons.role_icon_markup
+    globals_dict["mn_icon"] = minimal_icons.icon_markup
+    globals_dict["mn_icon_sprite"] = minimal_icons.icon_sprite
+    globals_dict["mn_is_generic_title"] = minimal_theme.is_generic_title
+    globals_dict["mn_compact_tokens"] = minimal_theme.compact_token_usage
+    globals_dict["mn_gutter_time"] = minimal_theme.gutter_time
+    globals_dict["mn_page_meta"] = minimal_theme.page_meta
+    globals_dict["mn_call_title"] = minimal_theme.call_title
+    globals_dict["mn_session_header"] = minimal_theme.session_header
+    globals_dict["mn_lane_attrs"] = minimal_theme.lane_attrs
+    globals_dict["mn_cross_links"] = minimal_theme.cross_links
+    # The project index and archive search pages (minimal only).
+    globals_dict["mn_when"] = minimal_theme.when
+    globals_dict["mn_project_when"] = minimal_theme.project_when
+    globals_dict["mn_index_summary_meta"] = minimal_theme.index_summary_meta
+    globals_dict["mn_project_meta"] = minimal_theme.project_meta
+    globals_dict["mn_project_tooltip"] = minimal_theme.project_tooltip
+    globals_dict["mn_index_sessions"] = minimal_theme.index_sessions
     return env

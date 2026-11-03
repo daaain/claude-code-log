@@ -143,14 +143,14 @@ class TestAwaySummaryRendering:
         assert "📝 Recap" in html
 
 
-class TestAwaySummaryDetailLevels:
+class TestAwaySummaryRenderingDepths:
     """Detail-level visibility: a recap is itself a high-level summary of
-    activity, so it stays visible at EVERY detail level — including user-only,
+    activity, so it stays visible at EVERY depth level — including user-only,
     where "user said this, agent did that (just the recap)" is the wanted view
     (#179). ``--no-recaps`` is the explicit opt-out, applied at all levels.
 
     The CSS rules for `.system-away-summary` ship with every page regardless
-    of detail level, so these tests check whether a recap *message div* is
+    of depth level, so these tests check whether a recap *message div* is
     present (`class='message ...system-away-summary` substring) rather than
     just the bare modifier name."""
 
@@ -160,34 +160,34 @@ class TestAwaySummaryDetailLevels:
     # rendered recap entries (vs. the standalone CSS rule selectors).
     RECAP_DIV_MARKER = "message system system-away-summary"
 
-    _ALL_LEVELS = ("full", "high", "low", "minimal", "user-only")
+    _ALL_DEPTHS = ("hook", "tool", "agent", "assistant", "user")
 
-    def _render_at(self, detail, no_recaps: bool = False):
-        """Render the fixture at a given detail level and return the HTML."""
+    def _render_at(self, depth, no_recaps: bool = False):
+        """Render the fixture at a given depth level and return the HTML."""
         from claude_code_log.html.renderer import HtmlRenderer
 
         entry = create_transcript_entry(AWAY_SUMMARY_RAW)
         renderer = HtmlRenderer()
-        renderer.detail = detail
+        renderer.depth = depth
         renderer.no_recaps = no_recaps
         return renderer.generate([entry], "Detail Test")
 
     def test_recap_visible_at_every_level(self):
-        """#179: recaps survive at all detail levels, full → user-only."""
-        from claude_code_log.models import DetailLevel
+        """#179: recaps survive at all depth levels, full → user-only."""
+        from claude_code_log.models import RenderingDepth
 
-        for level in self._ALL_LEVELS:
-            html = self._render_at(DetailLevel(level))
+        for level in self._ALL_DEPTHS:
+            html = self._render_at(RenderingDepth(level))
             assert self.RECAP_DIV_MARKER in html, f"recap dropped at {level}"
             assert "project-level layout" in html, f"recap text dropped at {level}"
 
     def test_no_recaps_suppresses_at_every_level(self):
-        """#179: --no-recaps removes recaps regardless of detail level,
+        """#179: --no-recaps removes recaps regardless of depth level,
         including FULL (`--detail full --no-recaps`)."""
-        from claude_code_log.models import DetailLevel
+        from claude_code_log.models import RenderingDepth
 
-        for level in self._ALL_LEVELS:
-            html = self._render_at(DetailLevel(level), no_recaps=True)
+        for level in self._ALL_DEPTHS:
+            html = self._render_at(RenderingDepth(level), no_recaps=True)
             assert self.RECAP_DIV_MARKER not in html, (
                 f"--no-recaps failed to suppress recap at {level}"
             )
@@ -249,12 +249,12 @@ class TestRecapVisibilityMatrix:
             create_transcript_entry(recap_raw),
         ]
 
-    def _render(self, detail: str, no_recaps: bool):
+    def _render(self, depth: str, no_recaps: bool):
         from claude_code_log.html.renderer import HtmlRenderer
-        from claude_code_log.models import DetailLevel
+        from claude_code_log.models import RenderingDepth
 
         renderer = HtmlRenderer()
-        renderer.detail = DetailLevel(detail)
+        renderer.depth = RenderingDepth(depth)
         renderer.no_recaps = no_recaps
         return renderer.generate(self._entries(), "Matrix")
 
@@ -266,23 +266,23 @@ class TestRecapVisibilityMatrix:
         )
 
     def test_minimal_shows_user_agent_recap(self):
-        assert self._seen(self._render("minimal", False)) == (True, True, True)
+        assert self._seen(self._render("assistant", False)) == (True, True, True)
 
     def test_minimal_no_recaps_shows_user_agent(self):
-        assert self._seen(self._render("minimal", True)) == (True, True, False)
+        assert self._seen(self._render("assistant", True)) == (True, True, False)
 
     def test_user_only_shows_user_recap(self):
-        assert self._seen(self._render("user-only", False)) == (True, False, True)
+        assert self._seen(self._render("user", False)) == (True, False, True)
 
     def test_user_only_no_recaps_shows_user_only(self):
-        assert self._seen(self._render("user-only", True)) == (True, False, False)
+        assert self._seen(self._render("user", True)) == (True, False, False)
 
 
 class TestNoRecapsAllFormats:
     """``--no-recaps`` must suppress recaps in EVERY message-rendering format —
     html, markdown, and json. JSON honors ``--detail`` (it runs the ghost pass),
     so it must honor ``--no-recaps`` too; this is the regression for the JSON
-    silent no-op found in the #179 review (json/renderer.py forwarded detail
+    silent no-op found in the #179 review (json/renderer.py forwarded depth
     but not no_recaps). The other matrix tests are HTML-only, which is why it
     slipped — this exercises all three formats via the real get_renderer path."""
 

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import time
 from dataclasses import dataclass, field, replace
@@ -17,7 +18,7 @@ if TYPE_CHECKING:
     from .workflow import WorkflowRun
 
 from .models import (
-    DetailLevel,
+    RenderingDepth,
     MessageContent,
     MessageMeta,
     MessageType,
@@ -75,9 +76,16 @@ from .factories import (
     create_user_message,
     ToolItemResult,
 )
-from .factories.attachment_factory import create_attachment_message
+from .factories.attachment_factory import (
+    create_attachment_message,
+    queued_command_prompt_items,
+)
 from .utils import (
+    DEFAULT_THEME,
+    format_duration,
+    output_theme,
     format_timestamp,
+    best_working_dir,
     format_timestamp_range,
     get_parent_session_id,
     get_project_display_name,
@@ -89,6 +97,8 @@ from .utils import (
 from .renderer_timings import (
     log_timing,
 )
+
+logger = logging.getLogger(__name__)
 
 
 # -- Rendering Context --------------------------------------------------------
@@ -313,14 +323,21 @@ class TemplateMessage:
         # Fork point preview text (short excerpt of fork point message content)
         self.fork_point_preview: str = ""
 
-        # Set by ``_ghost_template_by_detail`` when this slot is a fork point
-        # whose own message body is filtered out at the current detail level,
+        # Set by ``_ghost_template_by_depth`` when this slot is a fork point
+        # whose own message body is filtered out at the current depth level,
         # but which is kept (not ghosted to None) so the fork point stays a
         # visible, anchorable landmark. The template renders only the
         # fork-point box for such a slot, not the message card (issue #233
-        # follow-up — fork points survive detail filtering like the branches
+        # follow-up — fork points survive depth filtering like the branches
         # they connect, instead of vanishing and orphaning the branches).
         self.fork_only: bool = False
+
+        # Branch lane this node renders in (``"main"``, ``"agent-<id>"`` or
+        # ``"branch-<branch sid>"``). Set by ``lanes.annotate_lanes``, which
+        # the HTML renderer calls only for the minimal theme; the template
+        # emits it as ``data-lane``. Render-time only: formatters never read
+        # it, so it is not part of the fragment-store key.
+        self.lane_id: str = "main"
 
     # -- Properties derived from content/meta --
 
@@ -710,7 +727,7 @@ class TemplateSummary:
 def generate_template_messages(
     messages: list[TranscriptEntry],
     session_tree: Optional["SessionTree"] = None,
-    detail: DetailLevel | str = DetailLevel.FULL,
+    depth: RenderingDepth | str = RenderingDepth.HOOK,
     no_recaps: bool = False,
 ) -> Tuple[list[TemplateMessage], list[dict[str, Any]], RenderingContext]:
     """Generate root messages and session navigation from transcript messages.
@@ -722,8 +739,8 @@ def generate_template_messages(
         messages: List of transcript entries to process.
         session_tree: Optional pre-built SessionTree from DAG construction.
             When provided, avoids an expensive DAG rebuild.
-        detail: Output detail level controlling which message types are included.
-            Accepts either a DetailLevel enum or a plain string (e.g. "low").
+        depth: Output depth level controlling which message types are included.
+            Accepts either a RenderingDepth enum or a plain string (e.g. "low").
 
     Returns:
         A tuple of (root_messages, session_nav, context) where:
@@ -733,12 +750,12 @@ def generate_template_messages(
     """
     from .utils import get_warmup_session_ids
 
-    # Normalize plain string to DetailLevel for convenience (e.g. from CLI)
-    if not isinstance(detail, DetailLevel):
-        detail = DetailLevel(detail)
+    # Normalize plain string to RenderingDepth for convenience (e.g. from CLI)
+    if not isinstance(depth, RenderingDepth):
+        depth = RenderingDepth(depth)
 
     # Performance timing
-    t_start = time.time()
+    t_start = time.perf_counter()
 
     # Filter out warmup-only sessions
     with log_timing("Filter warmup sessions", t_start):
@@ -769,14 +786,19 @@ def generate_template_messages(
             messages, session_tree=session_tree
         )
 
+    # Resolve render lines before filtering: a queue-op's anchor entry may
+    # itself be filtered out (see ``_queue_op_render_sids``).
+    uuid_to_render_sid = _build_uuid_to_render_sid(session_hierarchy)
+    queue_op_render_sids = _queue_op_render_sids(messages, uuid_to_render_sid)
+
     # Filter messages (removes summaries, warmup, empty, etc.)
     with log_timing("Filter messages", t_start):
         filtered_messages = _filter_messages(messages)
 
     # Detail-level filtering happens entirely post-render via
-    # ``_ghost_template_by_detail`` (single-axis collapse — Phase 3 of the
-    # ghosting epic). The pre-render ``_filter_by_detail`` is gone; the
-    # per-class ``detail_visibility`` predicate now drives all stripping.
+    # ``_ghost_template_by_depth`` (single-axis collapse — Phase 3 of the
+    # ghosting epic). The pre-render ``_filter_by_depth`` is gone; the
+    # per-class ``depth_visibility`` predicate now drives all stripping.
 
     # Pass 1: Collect session metadata and token tracking
     with log_timing("Collect session info", t_start):
@@ -797,11 +819,13 @@ def generate_template_messages(
             session_summaries,
             session_team_names,
             junction_targets,
+            uuid_to_render_sid,
+            queue_op_render_sids,
         )
 
     # Fold Skill-tool bodies (isMeta slash-command entries) into their
-    # originating tool_use. Runs before the detail filter so the body
-    # survives alongside the tool_use at HIGH — and the now-redundant
+    # originating tool_use. Runs before the depth filter so the body
+    # survives alongside the tool_use at TOOL — and the now-redundant
     # slash-command + "Launching skill" tool_result are dropped once.
     with log_timing("Pair Skill tool_uses", t_start):
         _pair_skill_tool_uses(ctx)
@@ -811,16 +835,16 @@ def generate_template_messages(
         _link_junction_forwards(ctx)
 
     # Detail-level post-render: ghost non-visible slots in place.
-    # ``_ghost_template_by_detail`` sets ``ctx.messages[i] = None``
+    # ``_ghost_template_by_depth`` sets ``ctx.messages[i] = None``
     # for each filtered slot and repairs anchor-target references
     # (``session_first_message``, ``parent_message_index``,
     # ``junction_forward_links``) so dropped fork-points don't leave
     # dead ``#msg-d-{N}`` links.
-    # ``--no-recaps`` suppresses recaps even at FULL, so run the ghost pass
+    # ``--no-recaps`` suppresses recaps even at HOOK, so run the ghost pass
     # whenever filtering OR recap suppression is requested (#179).
-    if detail != DetailLevel.FULL or no_recaps:
-        with log_timing(f"Detail post-render filter ({detail.value})", t_start):
-            _ghost_template_by_detail(ctx, detail, no_recaps=no_recaps)
+    if depth != RenderingDepth.HOOK or no_recaps:
+        with log_timing(f"Detail post-render filter ({depth.value})", t_start):
+            _ghost_template_by_depth(ctx, depth, no_recaps=no_recaps)
 
     # Prepare session navigation data (uses ctx for session header indices)
     session_nav: list[dict[str, Any]] = []
@@ -889,15 +913,15 @@ def generate_template_messages(
     # spawning Task's sidechain with that spawn, fold the answer onto
     # ``TaskOutput.async_final_answer``, and flag the notification
     # ``result_is_duplicate``. The format-specific renderers honour the
-    # flag — at ``DetailLevel.LOW`` they return empty for the
+    # flag — at ``RenderingDepth.AGENT`` they return empty for the
     # duplicate's title and body, so the rendering loop's existing
     # "skip empty messages" elision drops the card without us having
     # to delete + reindex (which would invalidate ancestry classes,
     # backlink fields, and session nav anchors). The notification
     # itself stays in ``ctx.messages`` — only its rendered output
-    # disappears at LOW.
+    # disappears at AGENT.
     with log_timing("Link async notifications", t_start):
-        _link_async_notifications(ctx, detail)
+        _link_async_notifications(ctx, depth)
 
     # Surface the model each agent ran on (issue #246). Runs here — after
     # pairing and async linking — so a spawn card can reach its paired
@@ -1025,7 +1049,7 @@ def _build_uuid_to_render_sid(
     the ``SessionTree`` already knew authoritatively. The loop
     variable carried a latent bug: if a branch's ``first_uuid`` was
     dropped before rendering (structurally, by ``_filter_messages`` —
-    or, before the single-axis collapse, by the pre-render detail
+    or, before the single-axis collapse, by the pre-render depth
     filter), the trigger never fired and subsequent branch messages
     silently inherited the *previous* branch's sid (or ``None``).
 
@@ -1066,6 +1090,39 @@ def _build_uuid_to_render_sid(
             for uuid in line_uuids:
                 result[uuid] = sid
         # Trunk sessions are deliberately omitted — see docstring.
+    return result
+
+
+def _queue_op_render_sids(
+    messages: list[TranscriptEntry],
+    uuid_to_render_sid: dict[str, str],
+) -> dict[int, Optional[str]]:
+    """Resolve each queue-op's DAG-line from the *unfiltered* entry stream.
+
+    Queue-ops are uuid-less (no DAG line of their own) and carry only the
+    raw trunk ``sessionId``. ``_splice_queue_ops_chronologically`` inserts
+    each one right after a same-session anchor entry, so it belongs to that
+    anchor's line: one anchored inside a rewind branch must stay in the
+    branch rather than be regrouped under the trunk header.
+
+    Resolved here, before ``_filter_messages``, because the anchor itself
+    may not survive filtering (an image-only prompt, a passthrough hook, a
+    warmup message); tracking it inside the render loop would hand the
+    queue-op the line of whatever surviving entry came before — the same
+    latent bug ``_build_uuid_to_render_sid`` closes for branch entries.
+
+    Keyed by ``id(entry)``; ``None`` means the trunk.
+    """
+    result: dict[int, Optional[str]] = {}
+    last_by_session: dict[str, Optional[str]] = {}
+    for message in messages:
+        session_id = getattr(message, "sessionId", None) or ""
+        if isinstance(message, QueueOperationTranscriptEntry):
+            result[id(message)] = last_by_session.get(session_id)
+            continue
+        uuid = getattr(message, "uuid", None)
+        if uuid:
+            last_by_session[session_id] = uuid_to_render_sid.get(uuid)
     return result
 
 
@@ -2103,6 +2160,32 @@ def _identify_message_pairs(messages: list[TemplateMessage]) -> None:
         i += 1
 
 
+def spawned_agent_id_of(msg: TemplateMessage) -> Optional[str]:
+    """The agent spawned at this message, if it's a spawn anchor.
+
+    The sidecar-resolved ``spawned_agent_id`` (issue #213) works at any
+    nesting depth — an anchor INSIDE agent A's block links agent B's
+    block. The fallback is the legacy trunk shape: a trunk-session
+    tool_result whose ``agent_id`` is a reference backpatched from
+    ``toolUseResult.agentId`` (the ``tool_name`` would normally be
+    ``"Task"`` or ``"Agent"``, but the tool_factory's context-lookup
+    occasionally fails to populate it — e.g. when the tool_use sits in
+    a session-fork branch — so the agent_id alone decides).
+
+    Shared by ``_relocate_subagent_blocks`` and the lane model
+    (``lanes.py``), so both agree on which card opens which agent.
+    """
+    if msg.meta.spawned_agent_id:
+        return msg.meta.spawned_agent_id
+    if (
+        isinstance(msg.content, ToolResultMessage)
+        and msg.meta.agent_id
+        and "#agent-" not in (msg.meta.session_id or "")
+    ):
+        return msg.meta.agent_id
+    return None
+
+
 def _relocate_subagent_blocks(
     messages: list[TemplateMessage],
 ) -> list[TemplateMessage]:
@@ -2131,8 +2214,6 @@ def _relocate_subagent_blocks(
     messages`` leaves at the end) are excluded from blocks and stay
     where they are — the level-stack ignores them at level 0 anyway.
     """
-    from .models import ToolResultMessage
-
     blocks: dict[str, list[TemplateMessage]] = {}
     block_ids: set[int] = set()
     for msg in messages:
@@ -2149,34 +2230,12 @@ def _relocate_subagent_blocks(
 
     result: list[TemplateMessage] = []
 
-    def _spawned_id(msg: TemplateMessage) -> Optional[str]:
-        """The agent spawned at this message, if it's a spawn anchor.
-
-        The sidecar-resolved ``spawned_agent_id`` (issue #213) works at any
-        nesting depth — an anchor INSIDE agent A's block links agent B's
-        block. The fallback is the legacy trunk shape: a trunk-session
-        tool_result whose ``agent_id`` is a reference backpatched from
-        ``toolUseResult.agentId`` (the ``tool_name`` would normally be
-        ``"Task"`` or ``"Agent"``, but the tool_factory's context-lookup
-        occasionally fails to populate it — e.g. when the tool_use sits in
-        a session-fork branch — so the agent_id alone decides).
-        """
-        if msg.meta.spawned_agent_id:
-            return msg.meta.spawned_agent_id
-        if (
-            isinstance(msg.content, ToolResultMessage)
-            and msg.meta.agent_id
-            and "#agent-" not in (msg.meta.session_id or "")
-        ):
-            return msg.meta.agent_id
-        return None
-
     def _emit(msg: TemplateMessage) -> None:
         """Emit a message, then any block it anchors — recursively, so a
         nested agent's block lands right after its spawn entry inside the
         parent agent's block (one frame per nesting level)."""
         result.append(msg)
-        spawned = _spawned_id(msg)
+        spawned = spawned_agent_id_of(msg)
         if spawned:
             block = blocks.pop(spawned, None)
             if block:
@@ -2266,15 +2325,9 @@ def _reorder_paired_messages(messages: list[TemplateMessage]) -> list[TemplateMe
                         duration = last_time - first_time
 
                         # Format duration nicely
-                        total_seconds = duration.total_seconds()
-                        if total_seconds < 1:
-                            duration_str = f"took {int(total_seconds * 1000)} ms"
-                        elif total_seconds < 60:
-                            duration_str = f"took {total_seconds:.1f}s"
-                        else:
-                            minutes = int(total_seconds // 60)
-                            seconds = int(total_seconds % 60)
-                            duration_str = f"took {minutes}m {seconds}s"
+                        duration_str = (
+                            f"took {format_duration(duration.total_seconds())}"
+                        )
 
                         # Store duration in pair_last for template rendering
                         pair_last.pair_duration = duration_str
@@ -3091,14 +3144,16 @@ def _splice_one_workflow_run(
 
     spliced_top: list[TemplateMessage] = []
     phase_anchor_indices: list[int] = []
-    for phase, agents in groups:
+    run_id = getattr(run, "run_id", "") or ""
+    run_finished = bool(getattr(run, "has_snapshot", False))
+    for ordinal, (phase, agents) in enumerate(groups):
         if phase is not None:
             phase_tm = _new_synthetic_node(
                 ctx,
                 WorkflowPhaseMessage(
                     meta=MessageMeta.empty(),
                     title=phase.title,
-                    detail=phase.detail,
+                    depth=phase.depth,
                     agent_count=len(agents),
                 ),
                 parent=attach,
@@ -3124,6 +3179,12 @@ def _splice_one_workflow_run(
                     tool_calls=agent.tool_calls,
                     result=agent.result,
                     result_preview=agent.result_preview,
+                    agent_id=agent.agent_id,
+                    run_id=run_id,
+                    phase_ordinal=ordinal if phase is not None else None,
+                    phase_title=phase.title if phase is not None else "",
+                    duration_ms=agent.duration_ms,
+                    run_finished=run_finished,
                 ),
                 parent=base,
             )
@@ -3178,10 +3239,10 @@ def _graft_agent_sidechannel(
     """
     if not entries:
         return
-    # The side-channel is rendered at the default FULL detail regardless of the
-    # main render's detail level (the splice only fires at FULL/HIGH anyway —
-    # the Workflow tool_use host is dropped at LOW and below). So an agent's
-    # transcript may carry FULL-only content (e.g. system/hook entries) even at
+    # The side-channel is rendered at HOOK depth (everything) regardless of the
+    # main render's depth (the splice only fires at HOOK/TOOL anyway —
+    # the Workflow tool_use host is dropped at AGENT and below). So an agent's
+    # transcript may carry HOOK-only content (e.g. system/hook entries) even at
     # ``--detail high`` (monk PR3 review N2). Acceptable: the side-channel is an
     # opt-in deep-dive under a fold.
     sub_roots, _sub_nav, _sub_ctx = generate_template_messages(entries)
@@ -3292,7 +3353,7 @@ def _recount_spliced_children(
 
 
 def _link_async_notifications(
-    ctx: RenderingContext, detail: DetailLevel = DetailLevel.FULL
+    ctx: RenderingContext, depth: RenderingDepth = RenderingDepth.HOOK
 ) -> None:
     """Stitch the async-agent flow into a single coherent rendering
     (issue #90).
@@ -3329,9 +3390,9 @@ def _link_async_notifications(
     that shows the agent's *work* (not its final summary), and a
     notification reduced to a navigation card.
 
-    The pass splits in two so it stays correct at every detail level:
+    The pass splits in two so it stays correct at every depth level:
 
-    - **Spawn-fold (FULL/HIGH/LOW):** when a notification's
+    - **Spawn-fold (HOOK/TOOL/AGENT):** when a notification's
       ``task_id`` matches a Task/Agent tool_result's ``agent_id``,
       fold the notification's ``result_text`` onto the tool_result's
       ``TaskOutput.async_final_answer`` and flag the notification
@@ -3341,23 +3402,26 @@ def _link_async_notifications(
       doesn't need to match.
     - **Sidechain-only dedup:** when the last sub-assistant text
       matches the notification's ``result_text``, drop it from the
-      tree. This branch is a no-op at LOW/MINIMAL/USER_ONLY where
-      ``_ghost_template_by_detail`` has ghosted the sidechain entries
+      tree. This branch is a no-op at AGENT/ASSISTANT/USER where
+      ``_ghost_template_by_depth`` has ghosted the sidechain entries
       (so they fall out of the rendered tree) — and that's fine,
       because there's no duplicate left to remove.
 
-    At MINIMAL/USER_ONLY the spawn fold is skipped entirely: the
-    Task tool_result is dropped by ``_ghost_template_by_detail``,
+    At ASSISTANT/USER the spawn fold is skipped entirely: the
+    Task tool_result is dropped by ``_ghost_template_by_depth``,
     so there's nothing to fold onto. We leave the notification card
     intact so the agent's answer remains visible somewhere — the
     notification body becomes the only surviving copy.
     """
-    spawn_target_kept = detail not in (DetailLevel.MINIMAL, DetailLevel.USER_ONLY)
+    spawn_target_kept = depth not in (RenderingDepth.ASSISTANT, RenderingDepth.USER)
     # Index notifications by task_id so we can find them in O(1).
     notifications: dict[str, TaskNotificationMessage] = {}
+    notification_index: dict[str, Optional[int]] = {}
     for tm in _visible(ctx.messages):
         if isinstance(tm.content, TaskNotificationMessage) and tm.content.task_id:
-            notifications.setdefault(tm.content.task_id, tm.content)
+            if tm.content.task_id not in notifications:
+                notifications[tm.content.task_id] = tm.content
+                notification_index[tm.content.task_id] = tm.message_index
     if not notifications:
         return
 
@@ -3396,8 +3460,8 @@ def _link_async_notifications(
         # spawning tool_use (where the reader expects the spawn to
         # live in the rendered transcript). pair_first holds that
         # index when the pair was matched. Set this even at
-        # MINIMAL/USER_ONLY — when the spawn is filtered the index is
-        # harmless, and at LOW it lets us link back to the surviving
+        # ASSISTANT/USER — when the spawn is filtered the index is
+        # harmless, and at AGENT it lets us link back to the surviving
         # tool_use card.
         spawn_idx = tm.pair_first if tm.pair_first is not None else tm.message_index
         if spawn_idx is not None:
@@ -3414,6 +3478,7 @@ def _link_async_notifications(
         # the notification body would silently lose the answer.
         if spawn_target_kept and isinstance(content.output, TaskOutput):
             content.output.async_final_answer = notification.result_text
+            content.output.async_notification_index = notification_index.get(agent_id)
             notification.result_is_duplicate = True
 
         # ---- Branch 2: sidechain-only dedup --------------------------
@@ -3421,7 +3486,7 @@ def _link_async_notifications(
         # result body, drop the duplicate from the sidechain tree so
         # the answer only appears once (folded into the spawn). This
         # branch is the only piece that needs the sidechain — at
-        # LOW/MINIMAL/USER_ONLY ``_ghost_template_by_detail`` ghosts the
+        # AGENT/ASSISTANT/USER ``_ghost_template_by_depth`` ghosts the
         # sidechain entries (excluded from the tree), so
         # ``_last_sidechain_assistant`` returns None and we skip this branch.
         located = _last_sidechain_assistant(tm)
@@ -3727,6 +3792,23 @@ def _queue_op_content_as_list(
     return []
 
 
+def _steering_match_text(content: Optional[list[ContentItem] | str]) -> str:
+    """Normalized text used to pair a steering ``remove`` with its
+    ``queued_command``.
+
+    Both records carry the same human prompt (``remove.content`` ==
+    ``queued_command.prompt``), so suppression matches on this text rather
+    than on arrival order. Order-based matching loses/duplicates content
+    when the 1:1 pairing is imperfect and an orphan ``remove`` (no paired
+    ``queued_command``) precedes a paired one.
+    """
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        return extract_text_content(content).strip()
+    return ""
+
+
 def _filter_messages(messages: list[TranscriptEntry]) -> list[TranscriptEntry]:
     """Filter messages to those that should be rendered.
 
@@ -3764,11 +3846,12 @@ def _filter_messages(messages: list[TranscriptEntry]) -> list[TranscriptEntry]:
 
         # Attachment entries (issue #128): include — pass-2 walker will
         # call ``create_attachment_message`` to surface hook payloads at
-        # full detail. Non-hook attachment flavours produce ``None`` and
-        # are silently dropped at registration time, mirroring the
-        # pre-#128 PassthroughTranscriptEntry behaviour. Detail-level
-        # filtering happens later: ``_ghost_template_by_detail`` drops
-        # ``HookAttachmentMessage`` at HIGH and below.
+        # HOOK depth (and ``queued_command`` as a steering message).
+        # The remaining non-hook flavours produce ``None`` and are
+        # silently dropped at registration time, mirroring the pre-#128
+        # PassthroughTranscriptEntry behaviour. Detail-level filtering
+        # happens later: ``_ghost_template_by_depth`` drops
+        # ``HookAttachmentMessage`` at TOOL and below.
         if isinstance(message, AttachmentTranscriptEntry):
             filtered.append(message)
             continue
@@ -3816,32 +3899,32 @@ def _filter_messages(messages: list[TranscriptEntry]) -> list[TranscriptEntry]:
 
 # -- Detail-level filtering ---------------------------------------------------
 #
-# Pre-render: strip content items from TranscriptEntry based on detail level.
+# Pre-render: strip content items from TranscriptEntry based on depth level.
 # Post-render: remove TemplateMessage types created by factories from text that
 # shouldn't appear at the given level (bash I/O, slash commands, etc.).
 
 # Tool names kept at --detail low (interaction + key signals).
 # ``Agent`` is the teammates-feature spawn name (aliased to TaskInput
 # in the tool factory); it must be paired with ``Task`` so real
-# teammate transcripts keep their spawn-and-result pairs at low detail.
+# teammate transcripts keep their spawn-and-result pairs at AGENT depth.
 _LOW_KEEP_TOOLS = {"WebSearch", "WebFetch", "Task", "Agent"}
 
-# Per-class detail-level filtering lives on the content classes themselves
-# via ``MessageContent.visible_at`` / the ``detail_visibility`` ClassVar
+# Per-class depth-level filtering lives on the content classes themselves
+# via ``MessageContent.visible_at`` / the ``depth_visibility`` ClassVar
 # (see ``models.py`` and ``dev-docs/plugins.md`` §6). The thin wrapper
 # below survives only because it is called from many sites in this
-# module; new code should call ``content.visible_at(detail)`` directly.
+# module; new code should call ``content.visible_at(depth)`` directly.
 
 
-def _content_visible_at(content: "MessageContent", detail: DetailLevel) -> bool:
-    """Return True iff ``content`` is visible at the given detail level.
+def _content_visible_at(content: "MessageContent", depth: RenderingDepth) -> bool:
+    """Return True iff ``content`` is visible at the given depth level.
 
     Thin delegate to :meth:`MessageContent.visible_at`, which reads the
-    class-side ``detail_visibility`` ClassVar via the monotone-down
-    ordering on :class:`DetailLevel`. Plugin classes participate
+    class-side ``depth_visibility`` ClassVar via the monotone-down
+    ordering on :class:`RenderingDepth`. Plugin classes participate
     automatically through the same predicate.
     """
-    return content.visible_at(detail)
+    return content.visible_at(depth)
 
 
 _LAUNCHING_SKILL_PREFIX = "Launching skill:"
@@ -3983,7 +4066,7 @@ def _drop_anchor_refs_into_ghosts(ctx: RenderingContext) -> None:
     cached before ghosting runs: ``session_first_message`` and each branch
     header's ``parent_message_index``. See ``_pair_skill_tool_uses`` for
     why junction forward links are out of scope. Phase 2 of the ghosting
-    epic adds a broader ``_repair_stale_anchor_refs`` for the detail-filter
+    epic adds a broader ``_repair_stale_anchor_refs`` for the depth-filter
     ghost path; this is the skill-fold-scoped counterpart.
     """
     ctx.session_first_message = {
@@ -4000,18 +4083,18 @@ def _drop_anchor_refs_into_ghosts(ctx: RenderingContext) -> None:
             msg.content.parent_message_index = None
 
 
-def _ghost_template_by_detail(
+def _ghost_template_by_depth(
     ctx: RenderingContext,
-    detail: DetailLevel,
+    depth: RenderingDepth,
     no_recaps: bool = False,
 ) -> None:
-    """Ghost (set to None) ctx.messages slots that aren't visible at ``detail``.
+    """Ghost (set to None) ctx.messages slots that aren't visible at ``depth``.
 
     Visibility is computed by :func:`_content_visible_at`, which delegates
-    to each content class's ``visible_at`` predicate / ``detail_visibility``
-    ClassVar. At ``LOW``, the ``_LOW_KEEP_TOOLS`` allowlist narrows
+    to each content class's ``visible_at`` predicate / ``depth_visibility``
+    ClassVar. At ``AGENT``, the ``_LOW_KEEP_TOOLS`` allowlist narrows
     built-in tool messages further to a specific set of tool names. At
-    ``MINIMAL`` / ``LOW`` / ``USER_ONLY`` sidechain messages are also
+    ``ASSISTANT`` / ``AGENT`` / ``USER`` sidechain messages are also
     dropped.
 
     After ghosting, anchor-target references that pointed to now-ghosted
@@ -4034,22 +4117,32 @@ def _ghost_template_by_detail(
     for idx, msg in enumerate(ctx.messages):
         if msg is None:
             continue
-        visible = _content_visible_at(msg.content, detail)
+        visible = _content_visible_at(msg.content, depth)
 
-        # LOW keep-list: built-in ToolUseMessage / ToolResultMessage declare
-        # ``detail_visibility = LOW``, so the predicate keeps them at LOW;
+        # SESSION (#159) — the most minimal level, "session structure only".
+        # ``visible_at`` keeps threshold-less built-ins (UserTextMessage etc.)
+        # visible at every level, so it can't express "drop even user
+        # messages" on its own; override here to keep ONLY session/branch
+        # headers. Non-header content that is a fork point still survives as a
+        # navigational landmark via the ``if not visible`` branch below, so
+        # back-links/anchors don't dangle.
+        if depth == RenderingDepth.SESSION:
+            visible = isinstance(msg.content, SessionHeaderMessage)
+
+        # AGENT keep-list: built-in ToolUseMessage / ToolResultMessage declare
+        # ``depth_visibility = AGENT``, so the predicate keeps them at AGENT;
         # the keep-list then narrows that set to a few specific tool names
         # (Web/Task/Agent). Plugin subclasses that declare *their own*
-        # ``detail_visibility`` opt out — their declared visibility is
+        # ``depth_visibility`` opt out — their declared visibility is
         # authoritative, letting a plugin (e.g. clmail communicate) be
-        # visible at LOW without core needing to update _LOW_KEEP_TOOLS.
-        # Detection: the class introduces ``detail_visibility`` in its own
+        # visible at AGENT without core needing to update _LOW_KEEP_TOOLS.
+        # Detection: the class introduces ``depth_visibility`` in its own
         # ``__dict__`` AND is not one of the built-in bases (which declare
-        # the LOW baseline that this keep-list is designed to narrow).
-        if visible and detail == DetailLevel.LOW:
+        # the AGENT baseline that this keep-list is designed to narrow).
+        if visible and depth == RenderingDepth.AGENT:
             content_cls = type(msg.content)
             declares_own_visibility = (
-                "detail_visibility" in content_cls.__dict__
+                "depth_visibility" in content_cls.__dict__
                 and content_cls not in (ToolUseMessage, ToolResultMessage)
             )
             if (
@@ -4061,20 +4154,21 @@ def _ghost_template_by_detail(
                     visible = False
 
         if visible and (
-            detail in (DetailLevel.MINIMAL, DetailLevel.LOW, DetailLevel.USER_ONLY)
+            depth
+            in (RenderingDepth.ASSISTANT, RenderingDepth.AGENT, RenderingDepth.USER)
             and msg.is_sidechain
         ):
             visible = False
 
         # ``--no-recaps`` (#179): recaps are otherwise visible at every level
-        # (AwaySummaryMessage.detail_visibility == USER_ONLY); this is the
-        # explicit opt-out, applied regardless of detail level.
+        # (AwaySummaryMessage.depth_visibility == USER); this is the
+        # explicit opt-out, applied regardless of depth level.
         if visible and no_recaps and isinstance(msg.content, AwaySummaryMessage):
             visible = False
 
         if not visible:
             # A fork point is navigational structure, not message content: the
-            # branches it connects (session headers) always survive detail
+            # branches it connects (session headers) always survive depth
             # filtering, so the fork point must too — otherwise the branches
             # render with no visible fork point above them and the back-links
             # have nothing to anchor to (#233 follow-up). Keep the slot as a
@@ -4087,8 +4181,8 @@ def _ghost_template_by_detail(
             # ``_link_junction_forwards``, which runs before this pass.
             #
             # Load-bearing invariant: this no-dead-anchor guarantee depends on
-            # branch session headers ALWAYS surviving detail filtering
-            # (``SessionHeaderMessage`` declares no ``detail_visibility`` →
+            # branch session headers ALWAYS surviving depth filtering
+            # (``SessionHeaderMessage`` declares no ``depth_visibility`` →
             # ``visible_at`` is True at every level). If a branch could be
             # ghosted, a 2-branch fork could drop below 2 survivors →
             # ``_repair_stale_anchor_refs`` empties ``junction_forward_links``
@@ -4096,7 +4190,7 @@ def _ghost_template_by_detail(
             # with no ``id='msg-d-N'`` and a still-visible sibling branch's
             # back-link would dangle. Pinned by
             # ``test_branch_headers_always_visible_keeps_fork_anchored`` so a
-            # future ``SessionHeaderMessage.detail_visibility`` trips a test
+            # future ``SessionHeaderMessage.depth_visibility`` trips a test
             # rather than silently activating a dead anchor (monk review note).
             if msg.junction_forward_links:
                 msg.fork_only = True
@@ -4346,10 +4440,10 @@ def _build_branch_header(
                 parent_msg_idx = msg.message_index
                 break
     # When the fork point itself isn't visible (e.g. a content-less system
-    # node ghosted at reduced detail), leave ``parent_msg_idx`` None so the
+    # node ghosted at reduced depth), leave ``parent_msg_idx`` None so the
     # branch header renders "from ⟂ Fork point" as plain text — NOT retargeted
     # at the parent session header, which produced a misleading anchor that
-    # jumped to the wrong place (issue #233). At full detail the #233
+    # jumped to the wrong place (issue #233). At HOOK depth the #233
     # placeholder keeps the fork point visible, so this fallback is only
     # reached in the genuinely-unresolvable case.
     original_sid = b_hier.get("original_session_id", message.sessionId)
@@ -4473,8 +4567,8 @@ def _fork_placeholder_content(message: SystemTranscriptEntry) -> SystemMessage:
     ``_fork_point_preview`` (which already walks up *past* system hosts) treats
     it as the expected fork host. The label is the raw ``(subtype)`` — honest
     about what the otherwise-invisible node is, and general across subtypes.
-    ``SystemMessage.detail_visibility`` is ``FULL``, so the placeholder ghosts
-    at reduced detail just like any system entry; the fork anchor then degrades
+    ``SystemMessage.depth_visibility`` is ``HOOK``, so the placeholder ghosts
+    at reduced depth just like any system entry; the fork anchor then degrades
     to no-link (handled in ``_build_branch_header`` / the nav), not a wrong one.
     """
     return SystemMessage(
@@ -4492,6 +4586,8 @@ def _render_messages(
     session_summaries: dict[str, str] | None = None,
     session_team_names: dict[str, str] | None = None,
     junction_targets: dict[str, list[str]] | None = None,
+    uuid_to_render_sid: dict[str, str] | None = None,
+    queue_op_render_sids: dict[int, Optional[str]] | None = None,
 ) -> RenderingContext:
     """Pass 2: Render pre-filtered messages to TemplateMessage objects.
 
@@ -4532,8 +4628,11 @@ def _render_messages(
     #     meta.session_id at read time).
     # Replaces the pre-D11 ``current_render_session`` loop variable.
     # See ``_build_uuid_to_render_sid`` for the latent-bug fix this
-    # closes at non-FULL detail.
-    uuid_to_render_sid = _build_uuid_to_render_sid(session_hierarchy)
+    # closes at non-HOOK depth.
+    if uuid_to_render_sid is None:
+        uuid_to_render_sid = _build_uuid_to_render_sid(session_hierarchy)
+    if queue_op_render_sids is None:
+        queue_op_render_sids = _queue_op_render_sids(messages, uuid_to_render_sid)
 
     # uuid → entry map for branch-preview scanning. ``_build_branch_header``
     # walks each branch's DAG-line uuids (from ``session_hierarchy[sid]
@@ -4542,18 +4641,137 @@ def _render_messages(
     # list; entries removed by structural filtering are simply absent
     # from the map and skipped by the scan.
     uuid_to_entry: dict[str, TranscriptEntry] = {}
+    # Pass 1 for legacy steering-``remove`` suppression: per ``(session,
+    # version, prompt-text)``, the count of *renderable* ``queued_command``
+    # attachments. Modern Claude Code (≳2.1.101) writes an in-DAG
+    # ``queued_command`` for every steering delivery, 1:1 with the chain-less
+    # legacy ``remove`` op; once we render the former we must suppress the
+    # latter to avoid a duplicate card. Keyed per session (session HTML is
+    # cached individually — cross-session state would break incremental-cache
+    # correctness), per version (a resumed session can span a harness upgrade,
+    # so learn it from the file rather than assume), AND per prompt text: a
+    # ``remove`` is paired to a ``queued_command`` by content, not arrival
+    # order, so an orphan ``remove`` (no paired card) can't consume a different
+    # remove's budget and get dropped. ``qc_versions`` records which
+    # ``(session, version)`` had any card, to scope the imbalance warning.
+    renderable_qc_count: dict[tuple[str, str, str], int] = {}
+    qc_versions: set[tuple[str, str]] = set()
     for entry in messages:
         entry_uuid = getattr(entry, "uuid", "")
         if entry_uuid:
             uuid_to_entry.setdefault(entry_uuid, entry)
+        if (
+            isinstance(entry, AttachmentTranscriptEntry)
+            and (entry.attachment or {}).get("type") == "queued_command"
+        ):
+            # Only count a ``queued_command`` that will actually render.
+            # ``queued_command_prompt_items`` is the SAME predicate the factory
+            # applies, shared rather than mirrored so the budget can't drift
+            # from what gets emitted: a promptless attachment must not seed the
+            # budget and drop the paired ``remove`` that still holds the
+            # steering text. It also accepts a *list* prompt — an image-bearing
+            # steering delivery — whose text is what the paired ``remove``
+            # carries, so such a pair now matches instead of orphaning.
+            qc_prompt = queued_command_prompt_items(entry.attachment or {})
+            if qc_prompt is not None and qc_prompt.pairable:
+                text = _steering_match_text(qc_prompt.items)
+                key = (entry.sessionId, entry.version, text)
+                renderable_qc_count[key] = renderable_qc_count.get(key, 0) + 1
+                qc_versions.add((entry.sessionId, entry.version))
 
     # Track which sessions have had headers added.
     seen_sessions: set[str] = set()
+
+    # Pass 2 state for steering-``remove`` suppression: the last version-bearing
+    # entry seen per session, in file order. Queue-op entries carry no
+    # ``version``; a ``remove`` happens mid-turn and a turn cannot span a
+    # harness restart, so the most recent version in its session is its version.
+    last_version_by_session: dict[str, str] = {}
+    # Decrementing budget of renderable ``queued_command`` cards per ``(session,
+    # version, prompt-text)``, seeded from the pass-1 count. Each suppressed
+    # ``remove`` spends one unit under ITS OWN text key; once a text's budget is
+    # exhausted (or absent), further removes with that text are *rendered* as
+    # legacy steering rather than dropped. This makes suppression LOSSLESS and
+    # order-independent: we hide exactly the removes that have a matching card
+    # (no duplicate), and any orphan remove still renders.
+    #
+    # This comment used to cite "a 2.1.160 file with 34 removes / 29 qc" as
+    # proof the 1:1 pairing breaks in real archives. That was a raw record
+    # count: at 2.1.160 EVERY remove carries ``content: null`` (34/34 across
+    # the local corpus on 2026-07-28), and null removes are dropped by
+    # ``_filter_messages`` before this loop, so they can neither pair nor
+    # orphan. Such a count does not measure the pairing performed here. In the
+    # one case investigated end to end (#294) the pairing was exactly 1:1 —
+    # 232/232 — and the orphans came from cards this pass failed to count.
+    # Whether it can break for real is still open, so the lossless design
+    # stays; what changed is that we no longer assert a violation we have not
+    # observed.
+    qc_budget: dict[tuple[str, str, str], int] = dict(renderable_qc_count)
+    # (session, version) keys already warned about, so the imbalance is logged
+    # at most once per key rather than per orphan remove.
+    warned_qc_imbalance: set[tuple[str, str]] = set()
 
     for message in messages:
         message_type = message.type
         msg_session_id = getattr(message, "sessionId", "") or ""
         message_uuid = getattr(message, "uuid", "") or ""
+
+        # Track the harness version per session in file order (pass 2 of the
+        # steering-``remove`` suppression). Version-bearing entries carry a
+        # non-empty ``version``; queue-op / summary entries don't and leave the
+        # last value in place.
+        msg_version = getattr(message, "version", "") or ""
+        if msg_version:
+            last_version_by_session[msg_session_id] = msg_version
+
+        # Suppress the legacy steering ``remove`` when its session still has an
+        # unspent ``queued_command`` with the SAME prompt text under the same
+        # (inferred) harness version: the modern in-DAG attachment is rendered
+        # instead, 1:1. Old transcripts (no ``queued_command`` anywhere) have no
+        # budget → removes render as before. ``remove`` ops are uuid-less (no
+        # DAG role), so suppression is plain skipping with no dangling-anchor
+        # risk.
+        if (
+            isinstance(message, QueueOperationTranscriptEntry)
+            and message.operation == "remove"
+        ):
+            inferred_version = last_version_by_session.get(message.sessionId, "")
+            # A non-empty inferred version is required: an empty string means no
+            # version-bearing entry preceded this remove, so we can't confirm a
+            # same-version ``queued_command`` — render the remove (safe default)
+            # rather than risk suppressing a real steering card.
+            remove_text = _steering_match_text(message.content)
+            key = (message.sessionId, inferred_version, remove_text)
+            if inferred_version and qc_budget.get(key, 0) > 0:
+                qc_budget[key] -= 1  # spend the matching card; hide this remove
+                continue
+            # No matching queued_command (or its budget is spent) → this is an
+            # orphan remove. Fall through to render it (lossless). If the session
+            # DID have cards under this version, say so — but only as what we
+            # actually observed. The earlier wording asserted the
+            # remove↔queued_command pairing was "violated"; that is a claim
+            # about the data we cannot make from here, and it was wrong in the
+            # case that prompted it (#294): the pairing was intact and it was
+            # our own pre-pass that failed to count an image-bearing card.
+            # A card we render but cannot pair warns for itself, naming the
+            # shape, in ``attachment_factory.queued_command_prompt_items``.
+            version_key = (message.sessionId, inferred_version)
+            if (
+                inferred_version
+                and version_key in qc_versions
+                and version_key not in warned_qc_imbalance
+            ):
+                warned_qc_imbalance.add(version_key)
+                logger.warning(
+                    "steering 'remove' op in session %s under version %s has no "
+                    "counted queued_command card — rendering it as legacy "
+                    "steering (content preserved). Either the archive holds an "
+                    "unpaired 'remove', or a card was rendered that the "
+                    "suppression pre-pass could not pair; a preceding "
+                    "'not pairable' warning, if any, names the shape.",
+                    message.sessionId,
+                    inferred_version,
+                )
 
         # Pre-D11 inline derivation (``current_render_session`` +
         # agent-parent resolution) collapsed into one map lookup.
@@ -4561,6 +4779,9 @@ def _render_messages(
         # ``_render_session_id`` stays unset and falls back to
         # ``meta.session_id`` at read time.
         effective_session: Optional[str] = uuid_to_render_sid.get(message_uuid)
+        if isinstance(message, QueueOperationTranscriptEntry):
+            # Uuid-less: inherits its anchor's line, resolved pre-filter.
+            effective_session = queue_op_render_sids.get(id(message))
 
         # Branch header: fires off the SAME map-driven trigger that
         # assigns ``render_session_id``. A branch sid contains ``@``;
@@ -4581,7 +4802,7 @@ def _render_messages(
             and not is_agent_session(msg_session_id)
         ):
             # Ensure the branch's PARENT trunk session header is
-            # registered FIRST. At non-FULL detail every trunk
+            # registered FIRST. At non-HOOK depth every trunk
             # message of the branch's parent session can be
             # filtered out, leaving a branch descendant as the
             # first surviving entry for that trunk session. Without
@@ -4637,6 +4858,14 @@ def _render_messages(
         # Handle system messages (already filtered in pass 1)
         if isinstance(message, SystemTranscriptEntry):
             system_content = create_system_message(message)
+            if system_content is not None:
+                # Fragment identity for the render fragment store (step 3,
+                # work/render-format-once.md): the entry's Python id is
+                # stable for the whole conversion because the master
+                # message list keeps it alive. Only real factory output is
+                # stamped — the fork placeholder below depends on ctx
+                # state, so it stays unstamped and renders fresh per tree.
+                system_content.fragment_key = (id(message), 0)
             # A content-less system entry (e.g. ``turn_duration``,
             # ``stop_hook_summary`` with no body) is normally dropped — but if
             # it is a *within-session fork point* (issue #233), dropping it
@@ -4662,6 +4891,7 @@ def _render_messages(
         if isinstance(message, AttachmentTranscriptEntry):
             attachment_content = create_attachment_message(message)
             if attachment_content:
+                attachment_content.fragment_key = (id(message), 0)
                 attachment_msg = TemplateMessage(attachment_content)
                 if effective_session:
                     attachment_msg.render_session_id = effective_session
@@ -4758,8 +4988,13 @@ def _render_messages(
         usage_used = False
 
         # Process each chunk - regular chunks (list) become text/image messages,
-        # special chunks (single item) become tool/thinking messages
-        for chunk in chunks:
+        # special chunks (single item) become tool/thinking messages.
+        # The enumerate ordinal doubles as the fragment-key part index:
+        # chunking is a pure function of the entry, so the same entry
+        # yields the same ordinals in every render pass, and keying by
+        # chunk position (rather than by surviving-content position) stays
+        # aligned even when an empty chunk is skipped.
+        for part_ordinal, chunk in enumerate(chunks):
             # Each chunk needs its own meta copy to preserve original values
             chunk_meta = replace(meta)
 
@@ -4777,6 +5012,10 @@ def _render_messages(
                         chunk,  # Pass the chunk items
                         chunk_text,  # Pre-extracted text for pattern detection
                         is_slash_command=chunk_meta.is_meta,
+                        # Sibling of ``message``, not inside it — the entry
+                        # carries the [Image #N] ↔ block association that the
+                        # content alone does not.
+                        image_paste_ids=getattr(message, "imagePasteIds", None),
                     )
                 elif effective_type == "assistant":
                     # Pass usage only on first chunk
@@ -4786,11 +5025,19 @@ def _render_messages(
                         chunk_meta, chunk, chunk_usage
                     )
 
-                # Convert to UserSteeringMessage for queue-operation 'remove' messages
+                # Convert to UserSteeringMessage for queue-operation 'remove'
+                # messages. Exact-type check (not ``isinstance``): a plugin
+                # transformer may have rewritten the text into a
+                # ``UserTextMessage`` *subclass* that carries its content in
+                # own fields with ``items=[]`` (e.g. hook-demotion). Rebuilding
+                # ``UserSteeringMessage(items=content_model.items)`` from such a
+                # subclass would clobber the transformed content back into an
+                # empty-items steering card. Only the plain, untransformed
+                # ``UserTextMessage`` is promoted to steering here.
                 if (
                     isinstance(message, QueueOperationTranscriptEntry)
                     and message.operation == "remove"
-                    and isinstance(content_model, UserTextMessage)
+                    and type(content_model) is UserTextMessage
                 ):
                     content_model = UserSteeringMessage(
                         items=content_model.items, meta=chunk_meta
@@ -4800,6 +5047,7 @@ def _render_messages(
                 if not chunk or content_model is None:
                     continue
 
+                content_model.fragment_key = (id(message), part_ordinal)
                 chunk_msg = TemplateMessage(content_model)
                 if effective_session:
                     chunk_msg.render_session_id = effective_session
@@ -4850,6 +5098,7 @@ def _render_messages(
                 if tool_result.content is None:
                     continue
 
+                tool_result.content.fragment_key = (id(message), part_ordinal)
                 tool_msg = TemplateMessage(tool_result.content)
                 if effective_session:
                     tool_msg.render_session_id = effective_session
@@ -4930,6 +5179,62 @@ def _surface_agent_models(ctx: RenderingContext) -> None:
 # -- Project Index Generation -------------------------------------------------
 
 
+def _non_anchor_parts(path: Path) -> list[str]:
+    """``path``'s components with the filesystem anchor (``/`` or ``C:\\``)
+    dropped, so a disambiguation label never leads with a bare separator."""
+    parts = list(path.parts)
+    if parts and parts[0] == path.anchor:
+        parts = parts[1:]
+    return parts
+
+
+def _path_suffix_label(path: Path, depth: int) -> str:
+    """The last ``depth`` non-anchor components of ``path`` as a ``/``-joined
+    label (``/home/joe/x/codex`` at depth 2 → ``x/codex``)."""
+    parts = _non_anchor_parts(path)
+    if not parts:
+        return path.name
+    return "/".join(parts[-depth:])
+
+
+def _disambiguate_display_names(projects: list["TemplateProject"]) -> None:
+    """Make colliding project display names unique in place.
+
+    Two projects whose least-nested working directories share a basename
+    (e.g. two worktrees both named ``codex``, or several ``main`` worktrees)
+    otherwise render identical labels and read as one project split in two.
+    For each colliding basename, prepend parent path components ONE AT A TIME
+    until the group is separated (``frontend/app`` vs ``backend/app``, never the
+    whole path).
+
+    A strict no-op when every basename is already unique — groups of one are
+    left untouched — so a collision-free index (the overwhelming common case,
+    including all existing snapshots) renders byte-identically. Only projects
+    with a real working-dir path participate; fallback-named projects keep their
+    decoded name.
+    """
+    from collections import defaultdict
+
+    groups: dict[str, list[tuple[TemplateProject, Path]]] = defaultdict(list)
+    for tp in projects:
+        _name, best = best_working_dir(tp.name, tp.working_directories)
+        if best is not None:
+            groups[tp.display_name].append((tp, best))
+
+    for members in groups.values():
+        if len(members) < 2:
+            continue  # unique basename → leave the label bare
+        max_depth = max(len(_non_anchor_parts(bp)) for _, bp in members)
+        depth = 1
+        while depth < max_depth:
+            labels = [_path_suffix_label(bp, depth) for _, bp in members]
+            if len(set(labels)) == len(labels):
+                break  # every member is now distinct
+            depth += 1
+        for tp, bp in members:
+            tp.display_name = _path_suffix_label(bp, depth)
+
+
 def prepare_projects_index(
     project_summaries: list[dict[str, Any]],
 ) -> tuple[list["TemplateProject"], "TemplateSummary"]:
@@ -4948,6 +5253,9 @@ def prepare_projects_index(
 
     # Convert to template-friendly format
     template_projects = [TemplateProject(project) for project in sorted_projects]
+    # Disambiguate any colliding basename labels across the full set (no-op
+    # unless a real collision exists → existing output stays byte-identical).
+    _disambiguate_display_names(template_projects)
     template_summary = TemplateSummary(project_summaries)
 
     return template_projects, template_summary
@@ -4957,6 +5265,7 @@ def title_for_projects_index(
     project_summaries: list[dict[str, Any]],
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
+    provider_label: Optional[str] = None,
 ) -> str:
     """Generate a title for the projects index page.
 
@@ -4967,11 +5276,15 @@ def title_for_projects_index(
         project_summaries: List of project summary dictionaries.
         from_date: Optional start date filter string.
         to_date: Optional end date filter string.
+        provider_label: Optional provider name for the title (e.g. "Codex"). When
+            None (the default, Claude path) the title reads "Claude Code
+            Projects" as before, keeping existing output byte-identical.
 
     Returns:
         A title string for the projects index page.
     """
-    title = "Claude Code Projects"
+    base = f"{provider_label} Projects" if provider_label else "Claude Code Projects"
+    title = base
 
     if project_summaries:
         # Collect all working directories from all projects
@@ -4990,7 +5303,7 @@ def title_for_projects_index(
 
             if len(working_paths) == 1:
                 # Single working directory - use its name
-                title = f"Claude Code Projects - {working_paths[0].name}"
+                title = f"{base} - {working_paths[0].name}"
             else:
                 # Multiple working directories - try to find common parent
                 try:
@@ -5011,7 +5324,7 @@ def title_for_projects_index(
 
                         if len(common_parts) > 1:  # More than just root "/"
                             common_path = Path(*common_parts)
-                            title = f"Claude Code Projects - {common_path.name}"
+                            title = f"{base} - {common_path.name}"
                 except Exception:
                     # Fall back to default title if path analysis fails
                     pass
@@ -5044,12 +5357,15 @@ class Renderer:
     - Subclasses override methods to implement format-specific rendering
     """
 
-    detail: DetailLevel = DetailLevel.FULL
+    depth: RenderingDepth = RenderingDepth.HOOK
     compact: bool = False
-    # When True, suppress ``※ recap`` (away_summary) messages at every detail
+    # When True, suppress ``※ recap`` (away_summary) messages at every depth
     # level (#179). Recaps are otherwise always visible (see
-    # ``AwaySummaryMessage.detail_visibility``).
+    # ``AwaySummaryMessage.depth_visibility``).
     no_recaps: bool = False
+    # HTML theme (``--theme``, see ``utils.THEMES``). Only ``HtmlRenderer``
+    # reads it; ``get_renderer`` stores the resolved name (never "default").
+    theme: str = DEFAULT_THEME
 
     # Output format identifier consulted by the class-side dispatch path
     # below. Subclasses override to ``"html"`` etc.; the default
@@ -5243,7 +5559,7 @@ class Renderer:
         self, content: WorkflowPhaseMessage, _: TemplateMessage
     ) -> str:
         # Format-neutral header label for a spliced workflow phase card
-        # (#174 PR3). The agent count + detail render in the body.
+        # (#174 PR3). The agent count + depth render in the body.
         return f"Phase: {content.title}" if content.title else "Phase"
 
     def title_WorkflowAgentMessage(
@@ -5410,10 +5726,11 @@ class Renderer:
 def get_renderer(
     format: str,
     image_export_mode: Optional[str] = None,
-    detail: DetailLevel = DetailLevel.FULL,
+    depth: RenderingDepth = RenderingDepth.HOOK,
     compact: bool = False,
     no_timestamps: bool = False,
     no_recaps: bool = False,
+    theme: str = DEFAULT_THEME,
 ) -> Renderer:
     """Get a renderer instance for the specified format.
 
@@ -5421,14 +5738,17 @@ def get_renderer(
         format: The output format ("html", "md", or "markdown").
         image_export_mode: Image export mode ("placeholder", "embedded", "referenced").
             If None, defaults to "embedded" for HTML and "referenced" for Markdown.
-        detail: Output detail level controlling which message types are included.
+        depth: Output depth level controlling which message types are included.
         compact: If True, merge consecutive same-type headings (Markdown only).
         no_timestamps: If True, suppress per-message timestamp lines
             in Markdown output (issue #160). Ignored for HTML/JSON
             since they don't emit those lines.
         no_recaps: If True, suppress ``※ recap`` (away_summary) messages at
-            every detail level (issue #179). Recaps are otherwise always
+            every depth level (issue #179). Recaps are otherwise always
             visible.
+        theme: HTML theme: ``"classic"``, ``"minimal"`` or ``"default"``
+            (resolved through ``utils.DEFAULT_THEME``). HTML-only: other
+            formats carry no theme (stamped like ``"classic"``).
 
     Returns:
         A Renderer instance for the specified format.
@@ -5454,16 +5774,22 @@ def get_renderer(
         renderer = JsonRenderer()
     else:
         raise ValueError(f"Unsupported format: {format}")
-    renderer.detail = detail
+    renderer.depth = depth
     renderer.compact = compact
     renderer.no_recaps = no_recaps
+    renderer.theme = output_theme(format, theme)
     return renderer
 
 
-def is_html_outdated(html_file_path: Path) -> bool:
+def is_html_outdated(html_file_path: Path, theme: str = DEFAULT_THEME) -> bool:
     """Check if an HTML file is outdated based on its version comment.
 
     This is a convenience function that uses the HtmlRenderer's is_outdated method.
+
+    ``theme`` is the theme the caller would render in now: the comment
+    carries the theme a page was written with (see
+    ``html.renderer.html_generator_stamp``), so a page written in another
+    theme reads as outdated exactly like one from another version.
 
     Returns:
         True if the file should be regenerated (missing version, different version, or file doesn't exist).
@@ -5472,4 +5798,5 @@ def is_html_outdated(html_file_path: Path) -> bool:
     from .html.renderer import HtmlRenderer
 
     renderer = HtmlRenderer()
+    renderer.theme = output_theme("html", theme)
     return renderer.is_outdated(html_file_path)

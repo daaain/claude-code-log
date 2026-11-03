@@ -1,10 +1,12 @@
 # Claude Code Log
 
-A Python CLI tool that converts Claude Code transcript JSONL files into readable HTML and Markdown formats.
+A Python CLI tool that converts Claude Code transcript JSONL files into readable HTML and Markdown (plus JSON for tooling).
 
-Browser log demo:
+Quick demo:
 
-[Browser log](https://github.com/user-attachments/assets/12d94faf-6901-4429-b4e6-ea5f102d0c1c)
+[Supercut](https://github.com/user-attachments/assets/cc7eb87a-4f8e-416c-ad6b-f6abc635ad59)
+
+▶️ **[Feature walkthrough](https://daaain.github.io/claude-code-log/demos/)**: six short chapters on the archive index and search, reading a session, folding and filtering, agents and forks, and live sessions.
 
 TUI demo:
 
@@ -15,6 +17,12 @@ TUI demo:
 📋 **[View Changelog](CHANGELOG.md)** - See what's new in each release
 
 This tool generates clean, minimalist HTML pages showing user prompts and assistant responses chronologically. It's designed to create a readable log of your Claude Code interactions with support for both individual files and entire project hierarchies.
+
+> [!NOTE]
+> Experimental provider support is now available for single-session exports from
+> Antigravity CLI (`agy`, **alpha**) and Codex CLI (`codex`, **beta**). Use
+> `--provider agy|codex --session-id <id>`; these integrations may change as the
+> upstream transcript formats evolve.
 
 📄 **[View Example HTML Output](https://daaain.github.io/claude-code-log/example/)** - A real example generated from a sample of this project's development, regenerated on every docs build
 
@@ -29,6 +37,7 @@ uvx claude-code-log@latest --open-browser
 ## Key Features
 
 - **Interactive TUI (Terminal User Interface)**: Browse and manage Claude Code sessions with real-time navigation, summaries, and quick actions for HTML export and session resuming
+- **Watch Mode**: `claude-code-log watch` re-converts as a session is written, so Markdown in an editor or Obsidian stays current; `claude-code-log serve --watch` makes an open session page grow as messages arrive, keeping your scroll position and folded sections
 - **Project Hierarchy Processing**: Process entire `~/.claude/projects/` directory with linked index page
 - **Individual Session Files**: Generate separate HTML files for each session with navigation links
 - **Single File or Directory Processing**: Convert individual JSONL files or specific directories
@@ -37,12 +46,14 @@ uvx claude-code-log@latest --open-browser
 - **Runtime Message Filtering**: JavaScript-powered filtering to show/hide message types (user, assistant, system, tool use, etc.)
 - **Chronological Ordering**: All messages sorted by timestamp across sessions
 - **Interactive timeline**: Generate an interactive, zoomable timeline grouped by message times to navigate conversations visually
+- **Themes**: `--theme minimal` gives a compact light/dark page where sub-agents and rewind forks are branches you can fold away, interleave with the main conversation or open side by side in columns (see [Choosing a Theme](#choosing-a-theme))
 - **Cross-Session Summary Matching**: Properly match async-generated summaries to their original sessions
 - **Date Range Filtering**: Filter messages by date range using natural language (e.g., "today", "yesterday", "last week")
 - **Rich Message Types**: Support for user/assistant messages, tool use/results, thinking content, images
 - **System Command Visibility**: Show system commands (like `init`) in expandable details with structured parsing
-- **Markdown Rendering**: Server-side markdown rendering with syntax highlighting using mistune
-- **Detail Levels & Compact Mode**: `--detail full|high|low|minimal|user-only` filters by verbosity and `--compact` merges repeated section headings — pairs well with `--format md` to feed past conversations back to an LLM for analysis or experience building
+- **Markdown Rendering**: Server-side markdown rendering with syntax highlighting using wenmode
+- **Archive Search**: `claude-code-log serve` serves the archive over loopback with full-text search across every project and session (see the [archive search guide](https://daaain.github.io/claude-code-log/archive-search/)); every generated page also has in-page search
+- **Depth Levels & Compact Mode**: `--depth session|user|assistant|agent|tool|hook` sets how deep into the message hierarchy to render and `--compact` merges repeated section headings — pairs well with `--format md` to feed past conversations back to an LLM for analysis or experience building
 - **Floating Navigation**: Always-available back-to-top button and filter controls
 - **CLI Interface**: Simple command-line tool using Click
 
@@ -52,7 +63,7 @@ This tool helps you answer questions like:
 
 - **"How can I review all my Claude Code conversations?"**
 - **"What did I work on with Claude yesterday/last week?"**
-- **"How much are my Claude Code sessions costing?"**
+- **"How many tokens are my Claude Code sessions using?"**
 - **"How can I search through my entire Claude Code history?"**
 - **"What tools did Claude use in this project?"**
 - **"How can I share my Claude Code conversation with others?"**
@@ -87,13 +98,16 @@ claude-code-log my-project --tui  # Automatically converts to ~/.claude/projects
   - `m`: Generate and open session Markdown in browser
   - `v`: View session Markdown in embedded viewer (with table of contents)
   - `c`: Resume session in Claude Code with `claude -r <sessionId>`
-  - `r`: Reload session data from files
+  - `a` / `d`: Archive or delete the selected session
+  - `r`: Restore an archived session back to a JSONL file
+  - `e`: Toggle the expanded view of the selected row
   - `p`: Switch to project selector view
+  - `?`: Show all keybindings
   - `H`/`M`/`V`: Force regenerate HTML/Markdown (hidden shortcuts for development)
 - **Project Statistics**: Real-time display of total sessions, messages, tokens, and date range
 - **Cache Integration**: Leverages existing cache system for fast loading with automatic cache validation
-- **Keyboard Navigation**: Arrow keys to navigate, Enter to expand row details, `q` to quit
-- **Row Expansion**: Press Enter to expand selected row showing full summary, first user message, working directory, and detailed token usage
+- **Keyboard Navigation**: Arrow keys to navigate, Enter to open the session's HTML, `q` to quit
+- **Row Expansion**: Press `e` to expand the selected row, showing full summary, first user message, working directory, and detailed token usage
 
 ### Default Behavior (Process All Projects)
 
@@ -120,7 +134,7 @@ This creates:
 - `~/.claude/projects/index.html` - Top level index with project cards and statistics
 - `~/.claude/projects/project-name/combined_transcripts.html` - Individual project pages (these can be several megabytes)
 - `~/.claude/projects/project-name/session-{session-id}.html` - Individual session pages
-- `~/.claude/projects/project-name/session-{session-id}.md` - Markdown versions (generated on-demand via TUI)
+- `~/.claude/projects/project-name/session-{session-id}.md` - Markdown versions (with `--format md`, or on demand from the TUI)
 
 ### Single File or Directory Processing
 
@@ -144,23 +158,26 @@ claude-code-log /path/to/directory --from-date "3 days ago" --to-date "yesterday
 
 ### Feeding Past Conversations to an LLM
 
-The combination `--detail low --format md --compact` produces condensed Markdown suitable as context for an LLM to review or distill patterns from past work:
+The combination `--depth agent --format md --compact` produces condensed Markdown suitable as context for an LLM to review or distill patterns from past work:
 
 ```bash
 # Session → compact Markdown for LLM review
-claude-code-log transcript.jsonl --detail low --format md --compact -o session.md
+claude-code-log transcript.jsonl --depth agent --format md --compact -o session.md
 
 # Whole project history
-claude-code-log /path/to/project --detail low --format md --compact
+claude-code-log /path/to/project --depth agent --format md --compact
 ```
 
-`--detail` levels (smallest → largest output):
+`--depth` levels (smallest → largest output):
 
-- `user-only` — just user prompts and steering (useful as input to a downstream agent, e.g. building a requirements doc)
-- `minimal` — user + assistant text only
-- `low` — interaction-focused; keeps WebSearch, WebFetch, and Task (agent delegations) as key signals
-- `high` — detailed but cleaned; drops system/hook noise
-- `full` — everything (default)
+- `session` — session structure only (headers and navigation)
+- `user` — just user prompts and steering (useful as input to a downstream agent, e.g. building a requirements doc)
+- `assistant` — user + assistant text only
+- `agent` — adds sub-agents and key tool signals (WebSearch, WebFetch, agent delegations)
+- `tool` — adds tools, cleaned of system/hook noise (default)
+- `hook` — everything, including hooks and system notices
+
+`--detail full|high|low|minimal|user-only` still works but is deprecated (removed in 2.0); it maps to `hook`, `tool`, `agent`, `assistant` and `user` respectively. Add `--no-recaps` to drop the `※ recap` summaries, which otherwise appear at every depth.
 
 `--compact` merges consecutive same-type sections in Markdown so runs of assistant responses share one heading instead of repeating `### 🤖 Assistant:` for each.
 
@@ -179,6 +196,26 @@ claude-code-log --tui
 
 Placeholders: `{host}`, `{path}`, `{sha}`. The template fires only when the static map doesn't already know the host, so a mix of GitHub repos + self-hosted GitLab gets correct links from both. SHAs not reachable from any local remote-tracking ref render as plain text — local-only work-in-progress commits never produce broken links.
 
+### Choosing a Theme
+
+HTML output comes in themes, selected with `--theme` (on the default command, `serve` and `watch`, and for the TUI's HTML exports) or the `CLAUDE_CODE_LOG_THEME` environment variable:
+
+- `classic` — the original look (the default)
+- `minimal` — a compact light/dark theme: dense rows on a time rail, long content folded to short previews, and sub-agents and rewind forks drawn as branches you can fold away, interleave with the main conversation or open side by side in columns
+- `default` — the built-in default, currently `classic`
+
+```bash
+claude-code-log --theme minimal
+
+# Same thing via env var; an explicit --theme always wins over it
+export CLAUDE_CODE_LOG_THEME=minimal
+claude-code-log --theme classic   # still classic
+```
+
+Themes write the same files (`combined_transcripts.html`, `session-*.html`, …) rather than separate ones, and each page records the theme it was rendered in, so switching theme regenerates the whole archive (and switching back regenerates it again). `--theme` is HTML-only; with `--format md` it is ignored with a warning. An unknown `CLAUDE_CODE_LOG_THEME` value is an error. The [themes guide](https://daaain.github.io/claude-code-log/themes/) walks through the minimal theme's toolbar, branch modes and dark mode, with screenshots.
+
+![The minimal theme with two background agents folded to one line each](docs/assets/themes/main-light.png)
+
 ## Project Hierarchy Output
 
 When processing all projects, the tool generates:
@@ -189,7 +226,7 @@ When processing all projects, the tool generates:
 ├── project1/
 │   ├── combined_transcripts.html        # Combined project page
 │   ├── session-{session-id}.html        # Individual session pages
-│   ├── session-{session-id}.md          # Markdown version (on-demand via TUI)
+│   ├── session-{session-id}.md          # Markdown version (--format md or TUI)
 │   └── session-{session-id2}.html       # More session pages...
 ├── project2/
 │   ├── combined_transcripts.html
@@ -224,7 +261,7 @@ When processing all projects, the tool generates:
 - **Session Navigation**: Interactive table of contents with session summaries and timestamp ranges
 - **Token Usage Display**: Individual message and session-level token consumption tracking
 - **Syntax Highlighting**: Code blocks properly formatted with markdown rendering
-- **Markdown Support**: Server-side rendering with mistune including:
+- **Markdown Support**: Server-side rendering with wenmode including:
   - Headers, lists, emphasis, strikethrough
   - Code blocks and inline code
   - Links, images, and tables
@@ -243,20 +280,28 @@ Markdown export provides a lightweight, portable alternative to HTML:
 - **Code Preservation**: Syntax highlighting hints via fenced code blocks
 - **Embedded Viewer**: TUI includes built-in Markdown viewer with table of contents
 - **Image Support**: Configurable image handling (placeholder, embedded base64, or referenced files)
-- **`--compact` Mode**: Merge consecutive same-type section headings — most useful with `--detail low` or `minimal` where tool stripping creates runs of Assistant or User sections
+- **`--compact` Mode**: Merge consecutive same-type section headings — most useful with `--depth agent` or `assistant` where tool stripping creates runs of Assistant or User sections
 
 ## Installation
 
-Install using pip:
+The recommended way is installing as a `uv` tool:
 
 ```bash
-pip install claude-code-log
+uv tool install claude-code-log
 ```
 
-Or run directly with uvx (no separate installation step required):
+This will create a `claude-code-log` binary that you can call directly.
+
+Or run directly with `uvx` (no separate installation step required):
 
 ```bash
 uvx claude-code-log@latest
+```
+
+Alternatively, if you prefer, install using `pip`:
+
+```bash
+pip install claude-code-log
 ```
 
 Or install from source:
@@ -266,6 +311,8 @@ git clone https://github.com/daaain/claude-code-log.git
 cd claude-code-log
 uv sync
 uv run claude-code-log
+# or if you want `claude-code-log` binary that works everywhere:
+uv tool install --editable .
 ```
 
 ## Contributing
@@ -287,15 +334,12 @@ Cross-platform (macOS and Windows/MSYS).
 
 - tutorial overlay
 - integrate `claude-trace` request logs if present?
-- convert images to WebP as screenshots are often huge PNGs – this might be time consuming to keep redoing (so would also need some caching) and need heavy dependencies with compilation (unless there are fast pure Python conversation libraries? Or WASM?)
-- add special formatting for built-in tools: Glob, Grep, LS, MultiEdit, NotebookRead, NotebookEdit, WebFetch, TodoRead, WebSearch
+- convert images to WebP as screenshots are often huge PNGs – this might be time consuming to keep redoing (so would also need some caching) and need heavy dependencies with compilation (unless there are fast pure Python conversion libraries? Or WASM?)
+- add special formatting for built-in tools: LS, NotebookRead, NotebookEdit, TodoRead
 - add `ccusage` like daily summary and maybe some textual summary too based on Claude generate session summaries?
-– import logs from @claude Github Actions
+- import logs from @claude Github Actions
 - stream logs from @claude Github Actions, see [octotail](https://github.com/getbettr/octotail)
-- wrap up CLI as Github Action to run after Cladue Github Action and process [output](https://github.com/anthropics/claude-code-base-action?tab=readme-ov-file#outputs)
+- wrap up CLI as Github Action to run after Claude Github Action and process [output](https://github.com/anthropics/claude-code-base-action?tab=readme-ov-file#outputs)
 - feed the filtered user messages to headless claude CLI to distill the user intent from the session
-- filter message type on Python (CLI) side too, not just UI
-- add minimalist theme and make it light + dark; animate gradient background in fancy theme
-- do we need special handling for hooks?
-- make processing parallel, currently we only use 1 CPU (core) and it's slow
+- animate gradient background in the classic theme
 - merge git worktree directories

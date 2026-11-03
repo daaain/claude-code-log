@@ -1,0 +1,9 @@
+{
+  // oxlint config for `just lint-js` (scripts/lint_js.py). The default
+  // "correctness" rules, with one exception:
+  "rules": {
+    // `catch (err) {}` is deliberate here: storage, JSON and DOM calls that
+    // may throw in a sandboxed or file:// page are allowed to fail quietly.
+    "no-unused-vars": ["warn", { "caughtErrors": "none" }]
+  }
+}

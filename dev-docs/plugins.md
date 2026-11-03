@@ -42,11 +42,16 @@ Two motivating use cases drove the design:
   bespoke `format_markdown`.
 - **Hook-style demotion.** A `UserTextMessage` whose body matches a
   marker (e.g. `[hook] ...`) gets reclassified into a typed wrapper
-  so it can render compactly or be hidden at low detail levels.
+  so it can render compactly or be hidden at low depths.
 
-Plugins are **discovered through entry points**, so just `pip install`
-ing a plugin package wires it in — no edit to `claude-code-log`
-itself.
+External plugins are **discovered through entry points**, so just `pip install`
+ing a plugin package wires it in — no edit to `claude-code-log` itself.
+The core may also register built-in transformers through the same contract for
+provider-private semantic names. For example, the Codex adapter exposes its
+OpenAI Developer Docs fetch as `CodexDoc`, which the built-in transformer
+renders as a URL/anchor request followed by collapsible Markdown. Keeping the
+internal name provider-local prevents the transformer from claiming a
+similarly named MCP call in another provider.
 
 ---
 
@@ -211,14 +216,14 @@ renderer's dispatcher consults them after the renderer's own
 ```python
 from dataclasses import dataclass
 from typing import ClassVar, Optional
-from claude_code_log.models import DetailLevel, ToolUseMessage
+from claude_code_log.models import RenderingDepth, ToolUseMessage
 from claude_code_log.plugins import escape_html, safe_markdown_inline
 
 @dataclass
 class MyToolMessage(ToolUseMessage):
     """Plugin-defined subclass; carries its own render methods."""
 
-    detail_visibility: ClassVar[DetailLevel] = DetailLevel.LOW
+    depth_visibility: ClassVar[RenderingDepth] = RenderingDepth.AGENT
 
     def format_markdown(self, _renderer, _message) -> str:
         # ``action`` is transcript-derived (untrusted — see §4.2). Interpolated
@@ -228,7 +233,7 @@ class MyToolMessage(ToolUseMessage):
         return f"_(my plugin) action={safe_markdown_inline(action)}_"
 
     def format_html(self, _renderer, _message) -> Optional[str]:
-        return None  # fall back to mistune(format_markdown)
+        return None  # fall back to wenmode(format_markdown)
 
     def title(self, _renderer, _message) -> Optional[str]:
         # A title() return goes to ``{{ message_title | safe }}`` with NO core
@@ -246,13 +251,13 @@ Signature contract for each method:
 
 | Method | Signature | Return | Notes |
 |---|---|---|---|
-| `format_markdown` | `(self, renderer, message) -> str` | Markdown source string. | Define this whenever your class produces meaningful Markdown. Drives both Markdown output AND HTML output (via mistune) unless `format_html` is also defined. **Escape transcript-derived interpolation** ([§4.2](#42-security-conscious-rendering)): the Markdown-output path emits this verbatim. |
-| `format_html` | `(self, renderer, message) -> str` | Raw HTML string (real string — no None sentinel). | Define this ONLY when you need HTML different from mistune-of-`format_markdown`. The dispatcher synthesizes that fallback automatically when `format_html` is absent. **You own escaping** — the return is injected as live DOM; `escape_html` every transcript-derived interpolation ([§4.2](#42-security-conscious-rendering)). |
-| `title` | `(self, renderer, message) -> Optional[str]` | Heading text or `None`. | Return `None` for "headless" (inline) messages. Return `""` (empty string, not None) to suppress the heading explicitly — the dispatcher distinguishes the two. **`escape_html` transcript-derived interpolation** — the title is emitted via `\| safe` with no core escaping ([§4.2](#42-security-conscious-rendering)). |
+| `format_markdown` | `(self, renderer, message) -> str` | Markdown source string. | Define this whenever your class produces meaningful Markdown. Drives both Markdown output AND HTML output (via wenmode) unless `format_html` is also defined. **Escape transcript-derived interpolation** ([§4.2](#42-security-conscious-rendering)): the Markdown-output path emits this verbatim. |
+| `format_html` | `(self, renderer, message) -> str` | Raw HTML string (real string — no None sentinel). | Define this ONLY when you need HTML different from wenmode-of-`format_markdown`. The dispatcher synthesizes that fallback automatically when `format_html` is absent. **You own escaping** — the return is injected as live DOM; `escape_html` every transcript-derived interpolation ([§4.2](#42-security-conscious-rendering)). |
+| `title` | `(self, renderer, message) -> Optional[str]` | Heading text or `None`. | Return `None` for "headless" (inline) messages. Return `""` (empty string, not None) to suppress the heading explicitly — the dispatcher distinguishes the two. An empty title suppresses the heading, never the body: HTML and Markdown both still render `format`'s output. In HTML, a `ToolUseMessage`/`ToolResultMessage` title that starts with an emoji replaces the host's default icon (🛠️, 🧰) instead of following it; the error 🚨 always stays. **`escape_html` transcript-derived interpolation** — the title is emitted via `\| safe` with no core escaping ([§4.2](#42-security-conscious-rendering)). |
 
 **`format_html` is opt-in.** If your plugin class defines only
 `format_markdown`, the HtmlRenderer dispatcher automatically
-synthesizes HTML by running the Markdown through mistune and
+synthesizes HTML by running the Markdown through wenmode and
 wrapping the result in `<div class="markdown">…</div>`. You do NOT
 need to write a `render_markdown(self.format_markdown(...))` shim
 — that's the dispatcher's job.
@@ -272,7 +277,8 @@ subclass replacement to inherit the host's standard error chrome
 (🚨 emoji, red `.tool_result.error` CSS class). The mechanism is
 wired in `html/utils.py`: `isinstance(content, ToolResultMessage)
 and content.is_error` triggers both. Bash errors use the same
-primitive — no custom plugin styling needed.
+primitive — no custom plugin styling needed. A `title` cannot suppress
+the 🚨, even one starting with its own emoji (`🚨 📨 …`).
 
 The dispatcher looks up these methods on each MRO node's `__dict__`
 explicitly (not via `getattr`/inheritance). That means: **a class
@@ -419,7 +425,7 @@ the standard MRO walk runs:
    subclass owns the HTML rendering.
 2. **`format_markdown` on the actual class triggers synthesis.** If
    `format_html` is absent but `format_markdown` is defined on the
-   actual class, the dispatcher renders the Markdown through mistune
+   actual class, the dispatcher renders the Markdown through wenmode
    and wraps the result in `<div class="markdown">…</div>`. Skip the
    MRO walk — the synthesized output is the answer.
 3. **Otherwise, defer to the base walk.** This finds renderer-side
@@ -437,44 +443,44 @@ class's built-in renderer behaviour to take over.
 
 ---
 
-## 6. `detail_visibility`
+## 6. `depth_visibility`
 
-`claude-code-log` filters messages per the `--detail` flag. Levels
+`claude-code-log` filters messages per the `--depth` flag. Levels
 in order of decreasing verbosity:
 
 ```
-FULL > HIGH > LOW > MINIMAL > USER_ONLY
+HOOK > TOOL > AGENT > ASSISTANT > USER
 ```
 
-Your plugin class declares a `ClassVar[DetailLevel]` to opt into
+Your plugin class declares a `ClassVar[RenderingDepth]` to opt into
 class-based visibility:
 
 ```python
-detail_visibility: ClassVar[DetailLevel] = DetailLevel.LOW
+depth_visibility: ClassVar[RenderingDepth] = RenderingDepth.AGENT
 ```
 
 **Semantics: monotone-down.** The message is visible iff the
-current detail level is *at least as verbose as* the declared
+current depth is *at least as verbose as* the declared
 minimum. With the ordering above:
 
 | Declared | Visible at |
 |---|---|
-| `FULL` | `FULL` only |
-| `HIGH` | `FULL`, `HIGH` |
-| `LOW` | `FULL`, `HIGH`, `LOW` |
-| `MINIMAL` | `FULL`, `HIGH`, `LOW`, `MINIMAL` |
-| `USER_ONLY` | all levels |
+| `HOOK` | `HOOK` only |
+| `TOOL` | `HOOK`, `TOOL` |
+| `AGENT` | `HOOK`, `TOOL`, `AGENT` |
+| `ASSISTANT` | `HOOK`, `TOOL`, `AGENT`, `ASSISTANT` |
+| `USER` | all levels |
 
-The order is pinned in a `_DETAIL_ORDER` map next to `DetailLevel` in
+The order is pinned in a `_DEPTH_ORDER` map next to `RenderingDepth` in
 `models.py` (so a future reorder of the enum can't silently flip
 semantics), guarded by a module-load assertion that every
-`DetailLevel` value is mapped. The predicate itself lives on each
+`RenderingDepth` value is mapped. The predicate itself lives on each
 content class as `MessageContent.visible_at(detail)` and consults the
-class-side `detail_visibility` ClassVar via `DetailLevel.includes`.
+class-side `depth_visibility` ClassVar via `RenderingDepth.includes`.
 
 **Opt-in nature.** Most built-in `MessageContent` classes declare their
-own `detail_visibility` (e.g. `ToolUseMessage = LOW`, `SystemMessage =
-FULL`), and a plugin class subclassing such a built-in inherits the
+own `depth_visibility` (e.g. `ToolUseMessage = AGENT`, `SystemMessage =
+HOOK`), and a plugin class subclassing such a built-in inherits the
 parent's threshold through normal ClassVar inheritance unless it
 declares its own. A handful of built-ins (`UserTextMessage`,
 `TeammateMessage`, `TaskNotificationMessage`, `SessionHeaderMessage`)
@@ -490,31 +496,31 @@ visibility is authoritative.
 
 **Practical guide.** Pick based on user-perceived value:
 
-- `FULL` only — debug/dev signal that clutters normal viewing.
-- `HIGH` — interesting but optional; user has opted into detail.
-- `LOW` — should appear in the default summary view (the typical
+- `HOOK` only — debug/dev signal that clutters normal viewing.
+- `TOOL` — interesting but optional; user has opted into detail.
+- `AGENT` — should appear in the default summary view (the typical
   choice for tool-rendering plugins; bypasses the `_LOW_KEEP_TOOLS`
   allowlist that core would otherwise check).
-- `MINIMAL` — essential context (sparingly).
-- `USER_ONLY` — visible even in user-only views (almost never the
+- `ASSISTANT` — essential context (sparingly).
+- `USER` — visible even in user-only views (almost never the
   right choice for a tool/hook plugin; reserved for user-originated
   content).
 
-**`HIGH` vs `FULL` for hook-style content** — the two reference
+**`TOOL` vs `HOOK` for hook-style content** — the two reference
 plugins make different choices here, deliberately:
 
-- `hook_demotion.py` (this repo's test plugin) uses `FULL` —
+- `hook_demotion.py` (this repo's test plugin) uses `HOOK` —
   surfaces only in the most-verbose view. Right when the hook
   notification is pure noise reduction for typical reviewers.
 - A real-world plugin (e.g. for clmail-style hook notifications a
-  reviewer wants to *see when they fired*) typically picks `HIGH`
-  — surfaces in `HIGH` *and* `FULL`, hidden at `LOW` and below.
+  reviewer wants to *see when they fired*) typically picks `TOOL`
+  — surfaces in `TOOL` *and* `HOOK`, hidden at `AGENT` and below.
   Right when the hook firing itself is signal worth keeping in the
   detail view.
 
-The rule of thumb: ask "would a reviewer skimming at `HIGH` want
-to know this happened?" If yes, pick `HIGH`. If only at the
-debug-the-transcript level, pick `FULL`.
+The rule of thumb: ask "would a reviewer skimming at `TOOL` want
+to know this happened?" If yes, pick `TOOL`. If only at the
+debug-the-transcript level, pick `HOOK`.
 
 ---
 
@@ -687,9 +693,9 @@ a future plugin author copy-pasting your code with the wrong
 `applies_to`.
 
 **`format_html` returning `None`.** Most plugins should return `None`
-to fall back to mistune-rendered Markdown. Write a custom
+to fall back to wenmode-rendered Markdown. Write a custom
 `format_html` only when the Markdown formulation can't capture what
-you want (e.g. embedded SVG, complex tables that mistune mangles).
+you want (e.g. embedded SVG, or a table layout Markdown cannot express).
 
 **Don't escape Markdown manually for code spans.** Backslashes do not
 escape backticks inside inline code spans (CommonMark explicit). If
@@ -713,11 +719,11 @@ modifies plugins (including injecting directly via
 `_cached_transformers`) must `reset_cache()` afterward — process-wide
 state otherwise leaks across tests.
 
-**`detail_visibility` is checked via `hasattr` for the LOW keep-list
-opt-out.** This means inheriting `detail_visibility` from a future
+**`depth_visibility` is checked via `hasattr` for the AGENT keep-list
+opt-out.** This means inheriting `depth_visibility` from a future
 core-migrated parent class behaves the same as declaring it
 yourself: the keep-list is bypassed. Usually what you want; mention
-it if you're debugging a "why is my plugin visible at LOW even though
+it if you're debugging a "why is my plugin visible at AGENT even though
 the tool isn't in `_LOW_KEEP_TOOLS`?" question.
 
 **Markdown-shaped HTML and the `.markdown` CSS scope.** The
@@ -762,7 +768,7 @@ the bare `render_markdown` path needs one of the two recipes above.
 **Note on the synthesis path.** When you DON'T define `format_html`
 and the HtmlRenderer dispatch synthesizes HTML from your
 `format_markdown` (see [§5.1](#51-htmlrenderer-extension-actual-class-precedence--markdown-synthesis)),
-the synthesizer always wraps the mistune output in
+the synthesizer always wraps the wenmode output in
 `<div class="markdown">`. You don't need to set `has_markdown = True`
 for that path — it's implicit in the synthesis. `has_markdown` only
 matters when you implement `format_html` yourself and want the host
@@ -790,7 +796,7 @@ NOT already wrap. Synthesis classes leave `has_markdown` alone.
 | Protocol + loader + dispatch | [`claude_code_log/plugins.py`](../claude_code_log/plugins.py) |
 | Priority constants | [`claude_code_log/factories/priorities.py`](../claude_code_log/factories/priorities.py) |
 | Renderer dispatch | `Renderer._dispatch_format`, `Renderer._dispatch_title`, `HtmlRenderer._class_dispatch_format` in [`renderer.py`](../claude_code_log/renderer.py) / [`html/renderer.py`](../claude_code_log/html/renderer.py) |
-| Visibility predicate | `MessageContent.visible_at`, `DetailLevel.includes`, `_DETAIL_ORDER` in [`models.py`](../claude_code_log/models.py); `_ghost_template_by_detail` (post-render driver) in [`renderer.py`](../claude_code_log/renderer.py) |
+| Visibility predicate | `MessageContent.visible_at`, `RenderingDepth.includes`, `_DEPTH_ORDER` in [`models.py`](../claude_code_log/models.py); `_ghost_template_by_depth` (post-render driver) in [`renderer.py`](../claude_code_log/renderer.py) |
 | Reference plugin (canonical example) | [`test/_plugins/clmail/`](../test/_plugins/clmail/) + [`README.md`](../test/_plugins/clmail/README.md) |
 | Test suite (four layers) | [`test/test_plugin_system.py`](../test/test_plugin_system.py) |
 | Design discussion | [`work/tool-renderer-plugins.md`](../work/tool-renderer-plugins.md) |

@@ -6,11 +6,18 @@ unintended changes to the rendered HTML structure.
 
 import shutil
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from claude_code_log.converter import convert_jsonl_to_html, load_transcript
+from claude_code_log.converter import (
+    convert_jsonl_to_html,
+    load_directory_transcripts,
+    load_transcript,
+)
 from claude_code_log.html.renderer import (
+    HtmlRenderer,
+    generate_archive_search_html,
     generate_html,
     generate_projects_index_html,
     generate_session_html,
@@ -31,10 +38,22 @@ class TestTranscriptHTMLSnapshots:
         assert html == html_snapshot
 
     def test_edge_cases_html(self, html_snapshot, test_data_dir):
-        """Snapshot test for edge cases - errors, special chars, long text."""
+        """Snapshot test for edge cases - errors, special chars, long text.
+
+        Uses the library render default (FULL) so system/hook/noise content
+        stays in the snapshot — the CLI default is now HIGH (--depth tool,
+        #159), but generate_html renders everything by default.
+        """
         test_file = test_data_dir / "edge_cases.jsonl"
         messages = load_transcript(test_file)
         html = generate_html(messages, "Edge Cases")
+        assert html == html_snapshot
+
+    def test_system_reminder_html(self, html_snapshot, test_data_dir):
+        """End-to-end snapshot for <system-reminder> user annotations (#275)."""
+        test_file = test_data_dir / "system_reminder.jsonl"
+        messages = load_transcript(test_file)
+        html = generate_html(messages, "System Reminders")
         assert html == html_snapshot
 
     def test_multi_session_html(self, html_snapshot, test_data_dir, tmp_path):
@@ -44,6 +63,29 @@ class TestTranscriptHTMLSnapshots:
             tmp_path / "session_a.jsonl",
         )
         shutil.copy(test_data_dir / "session_b.jsonl", tmp_path / "session_b.jsonl")
+
+        html_file = convert_jsonl_to_html(tmp_path, use_cache=False)
+        html = html_file.read_text(encoding="utf-8")
+        assert html == html_snapshot
+
+    def test_steering_chronological_order_html(
+        self, html_snapshot, test_data_dir, tmp_path
+    ):
+        """End-to-end guard for #295: a mid-conversation `remove` steering
+        entry rendered through the dir/combined path.
+
+        UUID-less queue-ops carry no uuid, so the DAG builder drops them and
+        directory-mode loading re-adds them; before the fix they were appended
+        at the END, so this steering op (07:00:02, between a1 and u2) rendered
+        after the last assistant message. That whole bug class was invisible to
+        the snapshot suite — no existing fixture contained a queue-operation —
+        so this fixture exists specifically so any future reordering of the
+        composition moves this snapshot and has to be explained.
+        """
+        shutil.copy(
+            test_data_dir / "session_id_steering_order.jsonl",
+            tmp_path / "session_id_steering_order.jsonl",
+        )
 
         html_file = convert_jsonl_to_html(tmp_path, use_cache=False)
         html = html_file.read_text(encoding="utf-8")
@@ -108,22 +150,145 @@ class TestAsyncAgentsHTMLSnapshots:
 
         Regression guard for the "fold lost at low" report (mail #2620 →
         Plan A): the spawn-fold is now sourced from the notification's
-        ``result_text``, so it survives the LOW detail level where
+        ``result_text``, so it survives the LOW depth level where
         sidechain entries are stripped pre-render. The locked-in shape
         confirms the ``Result (from async notification)`` fold is
         still rendered under the ``Async agent launched successfully``
         stub at LOW.
         """
         from claude_code_log.html.renderer import HtmlRenderer
-        from claude_code_log.models import DetailLevel
+        from claude_code_log.models import RenderingDepth
 
         async_dir = test_data_dir / "async_agents"
         main_jsonl = async_dir / "eb000000-0000-4000-8000-000000000001.jsonl"
         messages = load_transcript(main_jsonl)
         renderer = HtmlRenderer()
-        renderer.detail = DetailLevel.LOW
+        renderer.depth = RenderingDepth.AGENT
         html = renderer.generate(messages, "Async Agents Fixture (LOW)")
         assert html == html_snapshot
+
+
+class TestMinimalThemeHTMLSnapshots:
+    """Snapshot tests for the minimal theme (``--theme minimal``).
+
+    The classic snapshots above must never change because of the theme
+    (work/minimal-theme-dag.md § 1.1); these lock in the minimal page.
+    """
+
+    def test_minimal_representative_html(self, html_snapshot, test_data_dir):
+        """Representative messages rendered with the minimal theme (P3a)."""
+        test_file = test_data_dir / "representative_messages.jsonl"
+        messages = load_transcript(test_file)
+        html = generate_html(messages, "Test Transcript", theme="minimal")
+        assert html == html_snapshot
+
+    def test_minimal_async_agents_html(self, html_snapshot, test_data_dir):
+        """Async agent with the minimal theme: lane attributes (P5) on the
+        spawn, sidechain and notification cards."""
+        messages, tree = load_directory_transcripts(
+            test_data_dir / "async_agents", silent=True
+        )
+        html = generate_html(
+            messages, "Async Agents (minimal)", session_tree=tree, theme="minimal"
+        )
+        assert html == html_snapshot
+
+    def test_minimal_nested_agents_html(self, html_snapshot, test_data_dir):
+        """Nested sub-agents with the minimal theme: nested lane parents and
+        depths (P5)."""
+        messages, tree = load_directory_transcripts(
+            test_data_dir / "nested_agents", silent=True
+        )
+        html = generate_html(
+            messages, "Nested Agents (minimal)", session_tree=tree, theme="minimal"
+        )
+        assert html == html_snapshot
+
+    def test_minimal_project_index_html(self, html_snapshot):
+        """The project index in the minimal theme: compact project rows with
+        dim metadata, sessions as rows with a time gutter."""
+        html = generate_projects_index_html(_index_project_summaries(), theme="minimal")
+        assert html == html_snapshot
+
+    def test_minimal_project_index_tree_html(self, html_snapshot):
+        """``--expand-paths`` folder tree, an archived project, a project
+        written ``--combined no``, variants and teams, minimal theme."""
+        alpha, beta = _index_project_summaries()
+        alpha = {
+            **alpha,
+            "working_directories": ["/Users/test/projects/alpha"],
+            "team_names": ["red", "blue"],
+            "sessions": [
+                *alpha["sessions"],
+                {
+                    "id": "def67890-0000-4000-8000-000000000000",
+                    "summary": None,
+                    "timestamp_range": "2025-01-02 08:30:00 to 2025-01-02 09:00:00",
+                    "first_timestamp": "2025-01-02T08:30:00Z",
+                    "last_timestamp": "2025-01-02T09:00:00Z",
+                    "message_count": 4,
+                    "first_user_message": "A session without a summary",
+                    "file": "-Users-test-project-alpha/session-def67890.html",
+                },
+            ],
+            "html_variants": [
+                {"label": "full", "file": "a/combined_transcripts.html"},
+                {"label": "low", "file": "a/combined_transcripts.low.html"},
+            ],
+        }
+        beta = {
+            **beta,
+            "working_directories": ["/Users/test/work/beta"],
+            "is_archived": True,
+            "combined_suppressed": True,
+        }
+        renderer = HtmlRenderer()
+        renderer.theme = "minimal"
+        html = renderer.generate_projects_index([alpha, beta], expand_paths_tree=True)
+        assert html == html_snapshot
+
+    def test_minimal_archive_search_html(self, html_snapshot):
+        """The archive search page in the minimal theme (its rows are built
+        by the page's script; this pins the page, its styles and scripts)."""
+        assert generate_archive_search_html(theme="minimal") == html_snapshot
+
+
+def _index_project_summaries() -> list[dict[str, Any]]:
+    """Two projects: one with tokens, a time range and a session; one bare."""
+    return [
+        {
+            "name": "-Users-test-project-alpha",
+            "path": Path("/tmp/project-alpha"),
+            "html_file": "-Users-test-project-alpha/combined_transcripts.html",
+            "jsonl_count": 5,
+            "message_count": 42,
+            "last_modified": 1700000000.0,
+            "total_input_tokens": 1000,
+            "total_output_tokens": 2000,
+            "total_cache_creation_tokens": 500,
+            "total_cache_read_tokens": 1500,
+            "latest_timestamp": "2025-01-15T10:00:00Z",
+            "earliest_timestamp": "2025-01-01T09:00:00Z",
+            "working_directories": ["/Users/test/projects/alpha"],
+            "sessions": [
+                {
+                    "id": "session-abc12345",
+                    "summary": "Test session summary",
+                    "timestamp_range": "2025-01-15 10:00:00",
+                    "message_count": 10,
+                    "first_user_message": "Hello, this is a test",
+                }
+            ],
+        },
+        {
+            "name": "-Users-test-project-beta",
+            "path": Path("/tmp/project-beta"),
+            "html_file": "-Users-test-project-beta/combined_transcripts.html",
+            "jsonl_count": 3,
+            "message_count": 25,
+            "last_modified": 1700000100.0,
+        },
+    ]
 
 
 class TestIndexHTMLSnapshots:
@@ -131,40 +296,6 @@ class TestIndexHTMLSnapshots:
 
     def test_project_index_html(self, html_snapshot):
         """Snapshot test for project index template."""
-        project_summaries = [
-            {
-                "name": "-Users-test-project-alpha",
-                "path": Path("/tmp/project-alpha"),
-                "html_file": "-Users-test-project-alpha/combined_transcripts.html",
-                "jsonl_count": 5,
-                "message_count": 42,
-                "last_modified": 1700000000.0,
-                "total_input_tokens": 1000,
-                "total_output_tokens": 2000,
-                "total_cache_creation_tokens": 500,
-                "total_cache_read_tokens": 1500,
-                "latest_timestamp": "2025-01-15T10:00:00Z",
-                "earliest_timestamp": "2025-01-01T09:00:00Z",
-                "working_directories": ["/Users/test/projects/alpha"],
-                "sessions": [
-                    {
-                        "id": "session-abc12345",
-                        "summary": "Test session summary",
-                        "timestamp_range": "2025-01-15 10:00:00",
-                        "message_count": 10,
-                        "first_user_message": "Hello, this is a test",
-                    }
-                ],
-            },
-            {
-                "name": "-Users-test-project-beta",
-                "path": Path("/tmp/project-beta"),
-                "html_file": "-Users-test-project-beta/combined_transcripts.html",
-                "jsonl_count": 3,
-                "message_count": 25,
-                "last_modified": 1700000100.0,
-            },
-        ]
-
+        project_summaries = _index_project_summaries()
         html = generate_projects_index_html(project_summaries)
         assert html == html_snapshot

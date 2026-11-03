@@ -1,0 +1,169 @@
+name: Release
+
+# Tag → build + wait for CI → (a maintainer approves) → publish to PyPI →
+# GitHub Release.
+# Adapted from foldyard's release workflow. `just release-prep` makes the
+# commit and tag; `just release-push` pushes them, which starts this.
+#
+# The approval is the `pypi` environment's required reviewers (repo Settings →
+# Environments → pypi): the publish job waits until any one of them approves
+# the run, so a pushed tag on its own publishes nothing. The approval is only
+# requested once CI on the release commit has passed (the `ci` job).
+#
+# Trusted publishing: PyPI trusts THIS workflow in THIS repo (PyPI project
+# settings → Publishing → GitHub publisher: owner daaain, repo claude-code-log,
+# workflow release.yml, environment pypi). No API token is stored anywhere;
+# `uv publish` exchanges the job's OIDC token for a short-lived upload token.
+# Build and publish are separate jobs so the publish job holds the id-token
+# permission and nothing else, and never runs project code.
+on:
+  push:
+    # Tags are bare versions (1.6.0, not v1.6.0), as every release so far.
+    tags: ["[0-9]+.[0-9]+.[0-9]+"]
+
+# Least privilege by default; the two jobs that need more (publish: id-token,
+# github-release: contents write) say so themselves and run no project code.
+permissions:
+  contents: read
+
+jobs:
+  # `just release-push` pushes main and the tag together, so CI (ci.yml) and
+  # this workflow start side by side on the same commit. Rather than re-run the
+  # whole matrix, wait for THAT run: publish needs this job, so reviewers are
+  # only asked to approve once the release commit's CI is green, and a red run
+  # fails the release before anyone is asked.
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      # A tag cut on a branch (or a commit squash-merged away) would release
+      # code main never had. CI only runs on pushes to main, so the wait below
+      # would refuse it too — but slowly, and only while ci.yml's trigger stays
+      # main-only. This says so directly. Tag rulesets can't express it: they
+      # govern who may push a tag, not which commit it names.
+      - name: The tagged commit must be on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Comparing main...SHA: `identical` or `behind` means main contains it.
+          status="$(gh api "repos/$GITHUB_REPOSITORY/compare/main...$GITHUB_SHA" --jq .status)"
+          case "$status" in
+            identical|behind) echo "✓ $GITHUB_SHA is on main" ;;
+            *) echo "✗ tag $GITHUB_REF_NAME names $GITHUB_SHA, which is not on main ($status)"
+               exit 1 ;;
+          esac
+      - name: Wait for CI on the tagged commit to pass
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          find_run() {
+            gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --commit "$GITHUB_SHA" \
+              --event push --limit 1 --json databaseId --jq '.[0].databaseId // empty'
+          }
+          # The CI run can register a moment after this one does.
+          for _ in $(seq 30); do
+            run_id="$(find_run)"
+            [ -n "$run_id" ] && break
+            sleep 10
+          done
+          if [ -z "${run_id:-}" ]; then
+            echo "✗ no CI run for $GITHUB_SHA — release a commit that was pushed to main"
+            exit 1
+          fi
+          echo "Waiting on CI run $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$run_id"
+          gh run watch "$run_id" --repo "$GITHUB_REPOSITORY" --exit-status --interval 30 > /dev/null \
+            || { echo "✗ CI failed on $GITHUB_SHA — fix it and release the next version"; exit 1; }
+          echo "✓ CI passed"
+
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v8.2.0
+      # The same number is written in four places: the tag, pyproject.toml,
+      # uv.lock (it records the project's own version) and CHANGELOG.md.
+      # Failing here costs a re-tag; failing after publish costs the version
+      # number forever, since PyPI never lets one be reused.
+      - name: Tag, pyproject, uv.lock and CHANGELOG must agree
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          version="$(uv version --short)"
+          if [ "$tag" != "$version" ]; then
+            echo "✗ tag $tag does not match [project].version = $version — bump pyproject first"
+            exit 1
+          fi
+          locked="$(awk '/^name = "claude-code-log"$/{getline; print}' uv.lock | sed -n 's/^version = "\(.*\)"$/\1/p')"
+          if [ "$locked" != "$version" ]; then
+            echo "✗ uv.lock records claude-code-log $locked, pyproject says $version — run \`uv lock\`"
+            exit 1
+          fi
+      - run: uv build
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+      # The GitHub Release's notes: this version's CHANGELOG section, extracted
+      # HERE (the job that already runs project code, read-only) so the job
+      # holding contents:write runs none. A missing section fails the run.
+      # Its own artifact, because `uv publish` uploads everything in dist/.
+      - name: Release notes from CHANGELOG.md
+        run: |
+          set -euo pipefail
+          mkdir notes
+          python3 scripts/release_notes.py "$GITHUB_REF_NAME" > notes/notes.md
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: notes
+          path: notes/
+          if-no-files-found: error
+
+  publish:
+    needs: [ci, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: astral-sh/setup-uv@v8.2.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: dist
+          path: dist/
+      - run: uv publish
+
+  # After PyPI took it, never before: a GitHub Release for a version PyPI
+  # refused would advertise one nobody can install. The wheel and sdist ride
+  # along, byte-identical to what PyPI has.
+  github-release:
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: dist
+          path: dist/
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: notes
+          path: notes/
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "Release $GITHUB_REF_NAME" --notes-file notes/notes.md dist/*

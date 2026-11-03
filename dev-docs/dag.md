@@ -508,7 +508,7 @@ continuation content (prose or thinking — `_is_continuation_content`)
 sits between the two in linear order, so the result keeps its
 chronological place. Sibling tool messages (parallel batches),
 sidechain/subagent threads, and empty splits don't block pairing. At
-reduced detail levels the ghost pass runs *before* pairing, so once the
+reduced depths the ghost pass runs *before* pairing, so once the
 continuation is filtered out the pair re-forms and renders adjacent —
 the compact view wanted there. Pinned by `test_continuation_fork.py`
 (DAG side) and `test_continuation_pairing.py` (renderer side).
@@ -570,6 +570,28 @@ graph LR
 Branch nodes get their `session_id` rewritten to the branch id so the
 session tree attaches them at the fork point (`attachment_uuid`).
 
+### Branch lanes (minimal theme)
+
+The minimal theme's DAG layout (`lanes.py`; agents in
+[agents.md § 6](agents.md#6-branch-lanes-minimal-theme)) gives rewind
+branches lanes too. At a rewind **every** child is a branch
+pseudo-session, but the layout needs a main line to continue: the
+**earliest** branch at each fork point (grouped by the headers'
+`attachment_uuid`, ordered by their first message's timestamp) continues
+its fork point's lane — its header is recorded as a *continuation* and
+its cards keep that lane — and each later branch becomes lane
+`branch-<branch sid>`, spawned at the fork-point card
+(`parent_message_index`) and never merged. A non-agent card's lane is
+looked up from its `render_session_id`, so a rewind inside a fork lane
+nests (`parent_lane` = the outer fork lane) and a `/compact` that
+continues a branch ([below](#compaction-after-a-rewind)) stays in that
+branch's lane. An agent spawned on a branch has that branch as its
+parent lane. Agent lines are never split into branch pseudo-sessions
+(their render sid is their parent's), so a rewind *inside* a sub-agent
+stays in the agent's lane. A fork point filtered to a `fork_only`
+landmark still spawns its lanes: the attribute goes on the fork-point
+box, which carries the `msg-d-N` id.
+
 ---
 
 ## Compact Boundaries and Multi-Root Sessions
@@ -604,8 +626,10 @@ graph TB
 
 1. Walk every root via `_walk_session_with_forks` (not just the earliest)
    so orphan-promoted subtrees are covered.
-2. Merge non-branch DAG-lines from all roots into a single trunk, ordered
-   by `first_timestamp`.
+2. Merge the DAG-line segments from all roots by line id, ordered by
+   `first_timestamp` — non-branch segments into a single trunk, and a
+   `compact_boundary` root that continues a rewind branch into that
+   branch (see [Compaction after a rewind](#compaction-after-a-rewind)).
 3. Classify roots to decide log level (`_classify_unexpected_roots`):
    - `_EXPECTED_ROOT_SYSTEM_SUBTYPES = {"compact_boundary", "local_command"}`
      covers system entries; `_EXPECTED_ROOT_PASSTHROUGH_TYPES = {"progress"}`
@@ -618,6 +642,53 @@ graph TB
 This keeps the signal useful: orphan user/assistant entries still surface
 as warnings; routine `/compact` multi-root sessions and async-hook
 remnants stay quiet.
+
+### Compaction after a rewind
+
+The boundary's `parentUuid` is `null`, but it records the message it
+continues in `logicalParentUuid`. After a rewind that message sits on a
+branch line (`{trunk}@{uuid}`), not the trunk. Walking the boundary as a
+trunk root put the post-compaction conversation on the trunk line, so the
+trunk "resumed" after its own branches. Those branch blocks, which have
+earlier timestamps, then rendered at the bottom of the session, after its
+real tail.
+
+`_compaction_continuation_line` resolves the line the boundary continues,
+and `_walk_session_with_forks(..., line_id=...)` starts the walk on that
+line. Its segment merges into the branch by timestamp, so the branch header
+encloses the post-compaction messages. Roots are walked in timestamp
+order, so a later compaction finds an earlier one's line already assigned,
+and chains of compactions follow the branch.
+
+Compactions that keep a preserved segment re-parent its tail (often the
+`logicalParentUuid` itself) under the boundary's own summary anchor. That
+uuid is then not on any walked line yet, so the other members of
+`compactMetadata.preservedSegment` / `preservedMessages`, which stay on the
+pre-compaction line, stand in for it. When no reference resolves to an
+already-walked line, the boundary is walked as the trunk, as before.
+
+Pinned by `test_compact_after_rewind.py` (fixtures
+`dag_compact_after_rewind.jsonl` and
+`dag_compact_after_rewind_preserved.jsonl`).
+
+The same field is also displayed, on the boundary's debug uuid line; see
+[Compaction nav landmarks](#compaction-nav-landmarks).
+
+### Queue-ops inside a branch
+
+Queue-operation entries (`<task-notification>` / `<agent-message>`
+enqueues, steering `remove`s) have no uuid, so they never get a DAG
+line. `_splice_queue_ops_chronologically` (converter) inserts each one
+right after its same-session anchor entry. The anchor may sit on a
+branch, but the queue-op itself carries only the raw trunk `sessionId`.
+So `_queue_op_render_sids` (renderer) gives it its anchor's DAG line:
+the line of the last uuid-bearing entry before it in its session. Without
+that, the session regrouping moves the queue-op under the trunk header,
+ahead of every branch, however late it arrived. The lookup runs on the
+*unfiltered* entries, before `_filter_messages`, because the anchor itself
+may be filtered out (an image-only prompt, a passthrough hook). Tracking it
+in the render loop would hand the queue-op the line of the last entry
+that survived filtering instead.
 
 ### Expected Root Types
 
@@ -674,13 +745,23 @@ Plumbing:
   verbatim).
 
 The label degrades gracefully whenever any step is missing — no
-`parent_uuid`, parent filtered out (e.g. at `HIGH` detail level), parent
+`parent_uuid`, parent filtered out (e.g. at `TOOL` depth), parent
 isn't a `SystemMessage`, or `compact_pre_tokens` is None/zero — by
 dropping the `(Nk tokens)` fragment while still appending the summary's
 own timestamp. Older transcripts without `compactMetadata` get
 `Conversation compacted • <timestamp>`.
 
 `compact_trigger` (`"manual"` / `"auto"`) is plumbed but not rendered.
+
+`SystemMessage.compact_logical_parent_uuid: Optional[str]` carries the
+boundary's `logicalParentUuid` — the message it continues, see
+[Compaction after a rewind](#compaction-after-a-rewind) — (str only,
+same factory branch). It is
+display-only: the HTML debug uuid line, which prints `uuid → parent`,
+falls back to `uuid ⇢ logical` (dashed arrow, tooltip *logical parent
+(across /compact)*) when `meta.parent_uuid` is empty, so the chain no
+longer looks broken at every /compact. It is deliberately **not** copied
+into `meta.parent_uuid`, which drives parent lookup and pairing.
 
 ---
 

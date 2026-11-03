@@ -8,15 +8,15 @@
                class="search-input"
                placeholder="Search conversations..."
                autocomplete="off">
-        <span class="search-hint">Ctrl+F</span>
+        <span class="search-hint">/</span>
         <button id="searchClear" class="search-clear" title="Clear search">✕</button>
     </div>
 
     <div id="searchResultsInfo" class="search-results-info">
         <div class="search-navigation">
             <span id="searchResultCount">No results</span>
-            <button id="searchPrev" class="search-nav-btn" disabled title="Previous match (Shift+F3)">↑</button>
-            <button id="searchNext" class="search-nav-btn" disabled title="Next match (F3)">↓</button>
+            <button id="searchPrev" class="search-nav-btn" disabled title="Previous match (Shift+Enter / Shift+F3)">↑ <kbd class="search-kbd">Shift+Enter/F3</kbd></button>
+            <button id="searchNext" class="search-nav-btn" disabled title="Next match (Enter / F3)">↓ <kbd class="search-kbd">Enter/F3</kbd></button>
         </div>
     </div>
 
@@ -51,6 +51,7 @@
         query: '',
         useRegex: false,
         searchInFiltered: true,
+        showContext: false,
         currentMatchIndex: 0,
         matches: [],
         searchIndex: null,
@@ -58,7 +59,6 @@
     };
 
     // DOM elements
-    const searchContainer = document.getElementById('searchContainer');
     const searchInput = document.getElementById('searchInput');
     const searchClear = document.getElementById('searchClear');
     const searchHint = document.querySelector('.search-hint');
@@ -68,6 +68,7 @@
     const searchNext = document.getElementById('searchNext');
     const searchRegex = document.getElementById('searchRegex');
     const searchInFiltered = document.getElementById('searchInFiltered');
+    const searchShowContext = document.getElementById('searchShowContext');
     const searchResultsPanel = document.getElementById('searchResultsPanel');
     const searchResultsContent = document.getElementById('searchResultsContent');
     const searchResultsClose = document.getElementById('searchResultsClose');
@@ -77,8 +78,10 @@
         // Detect page type by content rather than URL so it works regardless of filename
         searchState.isIndexPage = document.querySelector('.project-list') !== null;
 
-        // Build search index from page content
-        buildSearchIndex();
+        // Build search index from page content{% if minimal %} — on first use
+        // in the minimal theme (performSearch): reading every card's text
+        // here held the page's first layout back by ≈ 0.17s on a 5MB page.{% endif %}
+        {% if not minimal %}buildSearchIndex();{% endif %}
 
         // Restore previous search state from localStorage
         restoreSearchState();
@@ -93,19 +96,87 @@
         if (!searchState.isIndexPage) {
             setupTranscriptFilterObserver();
         }
+
+        applyUrlQuery();
+    }
+
+    // A deep link from archive search arrives as `?uuid=…&q=…`. The uuid
+    // scrolls to the card (handled in transcript.html); running the query
+    // here is what actually reveals the match, because in most real hits the
+    // matched text sits inside a collapsed <details> that only this
+    // component opens. Running it also highlights the term.
+    //
+    // Deliberately after restoreSearchState: an explicit link beats whatever
+    // the user last typed on another page.
+    function applyUrlQuery() {
+        let params;
+        try {
+            params = new URLSearchParams(window.location.search);
+        } catch (e) {
+            return;
+        }
+        const query = params.get('q') || '';
+        if (!query) return;
+
+        searchInput.value = query;
+        // Show context so the surrounding conversation stays visible: a deep
+        // link is for reading the match in place, not for filtering down to
+        // it.
+        searchState.showContext = true;
+        if (searchShowContext) {
+            searchShowContext.checked = true;
+        }
+        openSearch({focus: false});
+        performSearch(query);
+
+        // Failsafe: the FTS backend can match where this page's literal
+        // scan doesn't (diacritics folding, tokenizer quirks). A deep link
+        // that finds nothing locally must not leave search-as-filter hiding
+        // every message — drop the filter and fall back to the uuid scroll.
+        if (searchState.matches.length === 0) {
+            clearSearchFilterClasses();
+        }
+
+        // The same FTS-vs-literal gap can also be partial: other messages
+        // match locally, but the deep-link target itself doesn't. The
+        // filter would then hide exactly the card the reader came for — so
+        // force the target (and its ancestors) visible as context.
+        const uuid = params.get('uuid');
+        if (uuid && searchState.matches.length > 0) {
+            const escaped = (window.CSS && CSS.escape) ? CSS.escape(uuid) : uuid;
+            let unhid = false;
+            document.querySelectorAll('.message[data-uuid="' + escaped + '"]')
+                .forEach(card => {
+                    [card, ...collectAncestorCards(card)].forEach(el => {
+                        if (el.classList.contains('search-hidden')) {
+                            el.classList.remove('search-hidden');
+                            el.classList.add('search-context');
+                            unhid = true;
+                        }
+                    });
+                });
+            if (unhid) syncTimelineWithSearch();
+        }
+
+        // Re-run the uuid scroll *after* searching. performSearch hides
+        // non-matching messages and unfolds ancestors, so any scroll done
+        // before it lands somewhere else once the layout settles.
+        if (uuid && window.claudeLogRevealMessageByUuid) {
+            window.claudeLogRevealMessageByUuid(uuid);
+        }
     }
 
     // Build search index from current page
     function buildSearchIndex() {
         searchState.searchIndex = [];
-        
+
         if (searchState.isIndexPage) {
             // Index page: index projects with individual sessions
             document.querySelectorAll('.project-card').forEach(card => {
                 const projectName = card.querySelector('.project-name a')?.textContent || '';
                 const projectStats = card.querySelector('.project-stats')?.textContent || '';
                 const projectLink = card.querySelector('.project-name a')?.getAttribute('href') || '';
-                
+
                 // Index the project itself
                 searchState.searchIndex.push({
                     type: 'project',
@@ -116,14 +187,14 @@
                     searchText: `${projectName} ${projectStats}`,
                     originalText: `${projectName} ${projectStats}`
                 });
-                
+
                 // Index individual sessions within the project
                 card.querySelectorAll('.session-link').forEach(link => {
                     const sessionText = link.textContent || '';
                     const sessionHref = link.getAttribute('href') || '';
                     const sessionPreview = link.querySelector('.session-preview')?.textContent?.trim() || '';
                     const sessionMeta = link.querySelector('.session-link-meta')?.textContent || '';
-                    
+
                     searchState.searchIndex.push({
                         type: 'session',
                         projectName: projectName,
@@ -144,7 +215,7 @@
                 const content = message.querySelector('.content')?.textContent || '';
                 const timestamp = message.querySelector('.timestamp')?.textContent || '';
                 const sessionId = findSessionForMessage(message);
-                
+
                 searchState.searchIndex.push({
                     type: 'message',
                     header: header,
@@ -159,32 +230,93 @@
         }
     }
 
-    // Find session ID for a message
+    // Find session ID for a message. In the nested DOM the session header is
+    // an ANCESTOR card (each message card sits inside .message-node wrappers
+    // under the session's .children container), not a preceding sibling.
     function findSessionForMessage(messageElement) {
-        let prev = messageElement.previousElementSibling;
-        while (prev) {
-            if (prev.classList.contains('session-header')) {
-                return prev.dataset.sessionId || null;
+        let node = messageElement.parentElement;
+        while (node) {
+            if (node.classList && node.classList.contains('message-node')) {
+                const card = node.querySelector(':scope > .message.session-header');
+                if (card) {
+                    return card.dataset.sessionId || null;
+                }
             }
-            prev = prev.previousElementSibling;
+            node = node.parentElement;
         }
         return null;
+    }
+
+    // Collect the ancestor message cards of a message (nearest first),
+    // excluding session headers (they are never filtered by search).
+    function collectAncestorCards(messageElement) {
+        const ancestors = [];
+        let node = messageElement.parentElement;
+        while (node) {
+            if (node.classList && node.classList.contains('message-node')) {
+                const card = node.querySelector(':scope > .message');
+                if (card && card !== messageElement && !card.classList.contains('session-header')) {
+                    ancestors.push(card);
+                }
+            }
+            node = node.parentElement;
+        }
+        return ancestors;
+    }
+
+    // Split a literal query into terms the way the archive search's FTS
+    // backend does: whitespace separates independent AND-ed terms, a
+    // double-quoted run stays one literal phrase, and a trailing `*`
+    // (explicit prefix syntax) is dropped — substring matching already
+    // covers prefixes. Deep links from the archive search page arrive as
+    // `?q=<raw query>`, so matching here has to speak the same language:
+    // treating `foo bar` as one contiguous string would find nothing in a
+    // message that FTS matched on the two words apart, and search-as-filter
+    // would hide every message.
+    function parseQueryTerms(query) {
+        const terms = [];
+        for (let raw of (query.match(/"[^"]*"\*?|\S+/g) || [])) {
+            raw = raw.replace(/\*$/, '');
+            if (raw.startsWith('"') && raw.endsWith('"') && raw.length > 1) {
+                raw = raw.slice(1, -1);
+            }
+            if (raw.trim()) terms.push(raw);
+        }
+        return terms;
+    }
+
+    // Build the case-insensitive global search pattern for `query`, honoring
+    // the regex/literal toggle. A literal query becomes an alternation of
+    // its escaped terms (longest first, so `foo foobar` highlights the whole
+    // of `foobar` rather than its `foo` prefix). Returns null when the query
+    // has no usable terms, or useRegex is on and the query is not yet a
+    // valid regex — each caller supplies its own fallback so invalid-regex
+    // handling stays per-caller.
+    function buildSearchPattern(query) {
+        try {
+            let source;
+            if (searchState.useRegex) {
+                source = query;
+            } else {
+                const terms = parseQueryTerms(query);
+                if (terms.length === 0) return null;
+                source = terms
+                    .sort((a, b) => b.length - a.length)
+                    .map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+                    .join('|');
+            }
+            return new RegExp(source, 'gi');
+        } catch (e) {
+            return null;
+        }
     }
 
     // Create excerpt with context around matches
     function createExcerpt(text, query, contextLength = 50) {
         if (!text || !query) return '';
-        
-        // Create search pattern (always case-insensitive)
-        let pattern;
-        try {
-            if (searchState.useRegex) {
-                pattern = new RegExp(query, 'gi');
-            } else {
-                const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                pattern = new RegExp(escapedQuery, 'gi');
-            }
-        } catch (e) {
+
+        const pattern = buildSearchPattern(query);
+        if (!pattern) {
             return text.substring(0, 100) + (text.length > 100 ? '...' : '');
         }
 
@@ -200,9 +332,9 @@
         matches.forEach(match => {
             const start = Math.max(0, match.index - contextLength);
             const end = Math.min(text.length, match.index + match[0].length + contextLength);
-            
+
             // Check for overlap with existing ranges
-            const overlaps = processedRanges.find(range => 
+            const overlaps = processedRanges.find(range =>
                 (start >= range.start && start <= range.end) ||
                 (end >= range.start && end <= range.end) ||
                 (start <= range.start && end >= range.end)
@@ -219,14 +351,14 @@
 
         // Sort by start position and create excerpts
         processedRanges.sort((a, b) => a.start - b.start);
-        
+
         processedRanges.forEach(range => {
             let excerpt = text.substring(range.start, range.end);
-            
+
             // Add ellipsis if needed
             if (range.start > 0) excerpt = '...' + excerpt;
             if (range.end < text.length) excerpt = excerpt + '...';
-            
+
             excerpts.push(excerpt);
         });
 
@@ -237,20 +369,11 @@
     function countMatches(text, query) {
         if (!text || !query) return 0;
 
-        try {
-            let pattern;
-            if (searchState.useRegex) {
-                pattern = new RegExp(query, 'gi');
-            } else {
-                const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                pattern = new RegExp(escapedQuery, 'gi');
-            }
+        const pattern = buildSearchPattern(query);
+        if (!pattern) return 0;
 
-            const matches = text.match(pattern);
-            return matches ? matches.length : 0;
-        } catch (e) {
-            return 0;
-        }
+        const matches = text.match(pattern);
+        return matches ? matches.length : 0;
     }
 
     // Toggle search hint and clear button visibility based on input content
@@ -292,13 +415,23 @@
         // Search options
         searchRegex.addEventListener('change', () => {
             searchState.useRegex = searchRegex.checked;
-            if (searchState.query) performSearch(searchState.query);
+            saveSearchState();
+            if (searchState.query) performSearch(searchState.query, { preserveCurrent: true });
         });
 
         searchInFiltered.addEventListener('change', () => {
             searchState.searchInFiltered = searchInFiltered.checked;
-            if (searchState.query) performSearch(searchState.query);
+            saveSearchState();
+            if (searchState.query) performSearch(searchState.query, { preserveCurrent: true });
         });
+
+        if (searchShowContext) {
+            searchShowContext.addEventListener('change', () => {
+                searchState.showContext = searchShowContext.checked;
+                saveSearchState();
+                if (searchState.query) performSearch(searchState.query, { preserveCurrent: true });
+            });
+        }
 
         // Navigation buttons
         searchPrev.addEventListener('click', () => navigateMatch(-1));
@@ -315,20 +448,43 @@
         document.addEventListener('keydown', handleKeyboardShortcuts);
     }
 
-    // Perform search
+    // Perform search. options.preserveCurrent keeps the current match instead
+    // of resetting to the first match — used when re-running the same query
+    // after an option/filter change so the view stays put instead of jumping
+    // back to match 1. Matching is by element identity: an option or filter
+    // re-search only re-queries the same DOM nodes, and data-uuid is NOT
+    // unique per card — cards split from one transcript entry (text +
+    // tool_use) share the entry's UUID. A live update is the exception: it
+    // replaces cards (a patched card, or every card on a wholesale swap), so
+    // a current match that left the page is found again by its data-uuid
+    // and its position among the cards sharing it (cardKey).
+    function cardKey(el) {
+        const uuid = el.getAttribute('data-uuid');
+        if (!uuid) return '#' + el.id;
+        const root = el.closest('#transcript') || document;
+        const twins = Array.from(root.querySelectorAll(
+            '.message[data-uuid="' + ((window.CSS && CSS.escape) ? CSS.escape(uuid) : uuid) + '"]'));
+        return uuid + '/' + Math.max(0, twins.indexOf(el));
+    }
     let isSearching = false;
-    function performSearch(query) {
+    function performSearch(query, options = {}) {
         // Prevent concurrent searches
         if (isSearching) return;
         isSearching = true;
 
+        const currentMatch = searchState.matches[searchState.currentMatchIndex];
+        const preserveElement = options.preserveCurrent && !searchState.isIndexPage && currentMatch
+            ? currentMatch.element
+            : null;
+
         searchState.query = query;
         searchClear.classList.toggle('visible', query.length > 0);
-        
+
         // Clear previous highlights
         clearHighlights();
-        
+
         if (!query) {
+            keepScrollAnchor(clearSearchFilterClasses);
             searchState.matches = [];
             updateSearchUI();
             if (searchState.isIndexPage && searchResultsPanel) {
@@ -340,28 +496,31 @@
 
         // Save search state
         saveSearchState();
-        
+
         // Create search pattern (always case-insensitive)
-        let searchPattern;
-        try {
-            if (searchState.useRegex) {
-                searchPattern = new RegExp(query, 'gi');
-            } else {
-                const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                searchPattern = new RegExp(escapedQuery, 'gi');
-            }
-        } catch (e) {
-            // Invalid regex
+        const searchPattern = buildSearchPattern(query);
+        if (!searchPattern) {
+            // Invalid regex: show everything rather than filtering on a
+            // pattern the user is still typing
             searchState.matches = [];
+            clearSearchFilterClasses();
             updateSearchUI();
             isSearching = false;
             return;
         }
 
-        // Search through index
+        // Search through index{% if minimal %}
+        if (!searchState.searchIndex) buildSearchIndex();{% endif %}
         searchState.matches = [];
         let totalMatchCount = 0;
-        
+
+        // Literal matching is per-term with AND semantics — same as the FTS
+        // backend the deep links come from: every term must appear in the
+        // item, anywhere and in any order.
+        const queryTerms = searchState.useRegex
+            ? []
+            : parseQueryTerms(query).map(t => t.toLowerCase());
+
         searchState.searchIndex.forEach(item => {
             // Check if element is visible (for transcript pages with filters)
             if (!searchState.isIndexPage && searchState.searchInFiltered) {
@@ -372,7 +531,6 @@
 
             // Always use case-insensitive search
             const searchText = item.searchText.toLowerCase();
-            const searchQuery = query.toLowerCase();
 
             // Check if item matches the search
             let matchesItem = false;
@@ -380,47 +538,137 @@
                 searchPattern.lastIndex = 0;  // Reset lastIndex before each test to avoid skipping matches
                 matchesItem = searchPattern.test(searchText);
             } else {
-                matchesItem = searchText.includes(searchQuery);
+                matchesItem = queryTerms.every(term => searchText.includes(term));
             }
 
             if (matchesItem) {
                 // Count actual matches in this item
                 const matchCount = countMatches(item.originalText || item.searchText, query);
                 totalMatchCount += matchCount;
-                
+
                 // Add match count and excerpt to the item
                 const matchItem = {
                     ...item,
                     matchCount: matchCount,
                     excerpt: createExcerpt(item.originalText || item.searchText, query)
                 };
-                
+
                 searchState.matches.push(matchItem);
-                
+
                 // Highlight matches in the element
                 if (!searchState.isIndexPage) {
                     highlightInElement(item.element, searchPattern);
                 }
             }
         });
-        
+
         searchState.totalMatchCount = totalMatchCount;
 
         searchState.currentMatchIndex = searchState.matches.length > 0 ? 0 : -1;
+        if (preserveElement && searchState.currentMatchIndex === 0) {
+            let preservedIndex = searchState.matches.findIndex(
+                m => m.element === preserveElement
+            );
+            if (preservedIndex < 0 && !preserveElement.isConnected) {
+                const key = cardKey(preserveElement);
+                preservedIndex = searchState.matches.findIndex(m => cardKey(m.element) === key);
+            }
+            if (preservedIndex >= 0) {
+                searchState.currentMatchIndex = preservedIndex;
+            }
+        }
+
+        // On transcript pages, search acts as a filter: non-matching messages
+        // are hidden, matches are revealed (unfolded) and highlighted.
+        if (!searchState.isIndexPage) {
+            applyTranscriptSearchFilter(options.quiet);
+        }
+
         updateSearchUI();
-        
+
         // Show results panel for index page
         if (searchState.isIndexPage && searchResultsPanel) {
             displayIndexSearchResults();
         }
-        
-        // Navigate to first match
-        if (searchState.matches.length > 0 && !searchState.isIndexPage) {
-            navigateToMatch(0);
+
+        // Navigate to the current match — the first one for a fresh query,
+        // or the preserved one after an option/filter re-search (the layout
+        // may have shifted, so re-scrolling to it keeps it in view).
+        if (searchState.matches.length > 0 && !searchState.isIndexPage && !options.quiet) {
+            navigateToMatch(searchState.currentMatchIndex);
         }
 
         // Reset searching flag
         isSearching = false;
+    }
+
+    // Apply search-as-filter classes on a transcript page:
+    //   .search-match   — message matches the query (kept visible, unfolded)
+    //   .search-context — ancestor of a match ("Show context" mode only)
+    //   .search-hidden  — everything else (display: none)
+    // Session headers are never touched so the session structure stays visible.
+    function applyTranscriptSearchFilter(quiet) {
+        const matched = new Set(searchState.matches.map(m => m.element));
+
+        // Ancestors of matches: visible-but-dimmed when "Show context" is on
+        const contextCards = new Set();
+        if (searchState.showContext) {
+            matched.forEach(el => {
+                collectAncestorCards(el).forEach(card => {
+                    if (!matched.has(card)) contextCards.add(card);
+                });
+            });
+        }
+
+        searchState.searchIndex.forEach(item => {
+            const el = item.element;
+            el.classList.toggle('search-match', matched.has(el));
+            el.classList.toggle('search-context', contextCards.has(el));
+            el.classList.toggle('search-hidden',
+                !matched.has(el) && !contextCards.has(el));
+        });
+
+        // Unfold ancestors so every match is actually visible (matches inside
+        // folded subtrees would otherwise stay hidden by the fold state).
+        if (window.claudeLogRevealMessage && !quiet) {
+            matched.forEach(el => window.claudeLogRevealMessage(el));
+        }
+
+        // A highlight inside a collapsed <details> (tool output, collapsible
+        // code, structured params) stays invisible even after the message
+        // itself is revealed — open every details on the path from each
+        // highlight up to its message card.
+        if (!quiet) matched.forEach(el => {
+            el.querySelectorAll('.search-highlight').forEach(highlight => {
+                let details = highlight.closest('details');
+                while (details && el.contains(details)) {
+                    details.open = true;
+                    details = details.parentElement
+                        ? details.parentElement.closest('details')
+                        : null;
+                }
+            });
+        });
+
+        syncTimelineWithSearch();
+    }
+
+    // Remove all search filter classes (query cleared or invalid)
+    function clearSearchFilterClasses() {
+        if (searchState.isIndexPage) return;
+        document.querySelectorAll('.message.search-hidden, .message.search-match, .message.search-context')
+            .forEach(el => {
+                el.classList.remove('search-hidden', 'search-match', 'search-context');
+            });
+        syncTimelineWithSearch();
+    }
+
+    // Keep the timeline consistent with search filtering (it reads the
+    // .search-hidden class off the message elements).
+    function syncTimelineWithSearch() {
+        if (window.applyTimelineSearchFilter) {
+            window.applyTimelineSearchFilter();
+        }
     }
 
     // Highlight text in element
@@ -434,7 +682,7 @@
 
         const textNodes = [];
         let node;
-        while (node = walker.nextNode()) {
+        while ((node = walker.nextNode())) {
             if (node.nodeValue.trim()) {
                 textNodes.push(node);
             }
@@ -442,12 +690,16 @@
 
         textNodes.forEach(textNode => {
             const text = textNode.nodeValue;
+            // matchAll clones the regex but INHERITS lastIndex — a global
+            // pattern advanced by an earlier .test()/.matchAll() would
+            // silently skip matches, so reset it per text node.
+            pattern.lastIndex = 0;
             const matches = [...text.matchAll(pattern)];
-            
+
             if (matches.length > 0) {
                 const fragment = document.createDocumentFragment();
                 let lastIndex = 0;
-                
+
                 matches.forEach(match => {
                     // Add text before match
                     if (match.index > lastIndex) {
@@ -455,23 +707,23 @@
                             document.createTextNode(text.substring(lastIndex, match.index))
                         );
                     }
-                    
+
                     // Add highlighted match
                     const span = document.createElement('span');
                     span.className = 'search-highlight';
                     span.textContent = match[0];
                     fragment.appendChild(span);
-                    
+
                     lastIndex = match.index + match[0].length;
                 });
-                
+
                 // Add remaining text
                 if (lastIndex < text.length) {
                     fragment.appendChild(
                         document.createTextNode(text.substring(lastIndex))
                     );
                 }
-                
+
                 textNode.parentNode.replaceChild(fragment, textNode);
             }
         });
@@ -489,50 +741,54 @@
     // Navigate between matches
     function navigateMatch(direction) {
         if (searchState.matches.length === 0) return;
-        
+
         searchState.currentMatchIndex += direction;
-        
+
         if (searchState.currentMatchIndex < 0) {
             searchState.currentMatchIndex = searchState.matches.length - 1;
         } else if (searchState.currentMatchIndex >= searchState.matches.length) {
             searchState.currentMatchIndex = 0;
         }
-        
+
         navigateToMatch(searchState.currentMatchIndex);
     }
 
     // Navigate to specific match
     function navigateToMatch(index) {
         if (index < 0 || index >= searchState.matches.length) return;
-        
+
         // Update current highlight
         document.querySelectorAll('.search-highlight.current').forEach(el => {
             el.classList.remove('current');
         });
-        
+
         const match = searchState.matches[index];
-        const highlights = match.element.querySelectorAll('.search-highlight');
-        if (highlights.length > 0) {
-            highlights[0].classList.add('current');
-            highlights[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
+        const highlights = Array.from(match.element.querySelectorAll('.search-highlight'));
+        // Prefer a rendered highlight: the first one in DOM order can be the
+        // duplicate inside a .preview-content summary, which is display:none
+        // once its <details> has been auto-opened.
+        const target = highlights.find(h => h.offsetParent !== null) || highlights[0];
+        if (target) {
+            target.classList.add('current');
+            target.scrollIntoView({ behavior: 'smooth', block: 'center' });
         } else {
             match.element.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }
-        
+
         updateSearchUI();
     }
 
     // Display search results for index page
     function displayIndexSearchResults() {
         if (!searchResultsPanel || !searchResultsContent) return;
-        
+
         searchResultsPanel.classList.add('visible');
-        
+
         if (searchState.matches.length === 0) {
             searchResultsContent.innerHTML = '<div class="search-no-results">No results found</div>';
             return;
         }
-        
+
         // Group results by project and type
         const groupedResults = {};
         searchState.matches.forEach(match => {
@@ -540,89 +796,107 @@
             if (!groupedResults[key]) {
                 groupedResults[key] = { projects: [], sessions: [] };
             }
-            
+
             if (match.type === 'project') {
                 groupedResults[key].projects.push(match);
             } else if (match.type === 'session') {
                 groupedResults[key].sessions.push(match);
             }
         });
-        
+
         let html = '';
         Object.entries(groupedResults).forEach(([projectName, groups]) => {
             const totalMatches = [...groups.projects, ...groups.sessions];
             const totalMatchCount = totalMatches.reduce((sum, match) => sum + match.matchCount, 0);
-            
+
             html += `
                 <div class="search-result-group">
                     <div class="search-result-group-title">
-                        ${projectName}
+                        ${escapeHtml(projectName)}
                         <span class="search-result-count">${totalMatchCount} matches in ${totalMatches.length} items</span>
                     </div>
             `;
-            
+
             // Show project matches first
             groups.projects.forEach(match => {
                 html += `
                     <div class="search-result-item">
-                        <a href="${match.link}">
+                        <a href="${escapeHtml(match.link)}">
                             <div class="search-result-session">📁 Project Overview</div>
                             <div class="search-result-excerpt">
                                 ${highlightText(match.excerpt, searchState.query)}
                             </div>
                             <div class="search-result-meta">
                                 <span>${match.matchCount} matches</span>
-                                <span>${match.stats}</span>
+                                <span>${escapeHtml(match.stats)}</span>
                             </div>
                         </a>
                     </div>
                 `;
             });
-            
+
             // Show session matches
             groups.sessions.forEach(match => {
                 const sessionId = match.link.split('/').pop().replace('session-', '').replace('.html', '').substring(0, 8);
                 html += `
                     <div class="search-result-item">
-                        <a href="${match.link}">
-                            <div class="search-result-session">💬 Session ${sessionId}</div>
+                        <a href="${escapeHtml(match.link)}">
+                            <div class="search-result-session">💬 Session ${escapeHtml(sessionId)}</div>
                             <div class="search-result-excerpt">
                                 ${highlightText(match.excerpt, searchState.query)}
                             </div>
                             <div class="search-result-meta">
                                 <span>${match.matchCount} matches</span>
-                                <span>${match.sessionMeta}</span>
+                                <span>${escapeHtml(match.sessionMeta)}</span>
                             </div>
                         </a>
                     </div>
                 `;
             });
-            
+
             html += '</div>';
         });
-        
+
         searchResultsContent.innerHTML = html;
     }
 
-    // Highlight text in search results (always case-insensitive)
+    // Escape text for interpolation into innerHTML-backed markup — the
+    // indexed content is arbitrary conversation text.
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text ?? '';
+        return div.innerHTML;
+    }
+
+    // Highlight text in search results (always case-insensitive). Matches
+    // run against the raw text; the output is escaped segment by segment so
+    // only the highlight spans themselves are markup.
     function highlightText(text, query) {
-        if (!query) return text;
+        if (!text) return '';
+        if (!query) return escapeHtml(text);
 
-        const pattern = searchState.useRegex ?
-            new RegExp(query, 'gi') :
-            new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+        const pattern = buildSearchPattern(query);
+        if (!pattern) return escapeHtml(text);
 
-        return text.replace(pattern, match => `<span class="search-highlight">${match}</span>`);
+        let html = '';
+        let lastIndex = 0;
+        for (const match of text.matchAll(pattern)) {
+            html += escapeHtml(text.substring(lastIndex, match.index));
+            html += `<span class="search-highlight">${escapeHtml(match[0])}</span>`;
+            lastIndex = match.index + match[0].length;
+        }
+        html += escapeHtml(text.substring(lastIndex));
+        return html;
     }
 
     // Update search UI
     function updateSearchUI() {
         const hasMatches = searchState.matches.length > 0;
-        
+
         searchResultsInfo.classList.toggle('visible', hasMatches);
         searchPrev.disabled = !hasMatches;
         searchNext.disabled = !hasMatches;
-        
+
         if (hasMatches) {
             if (searchState.isIndexPage) {
                 const totalMatches = searchState.totalMatchCount || searchState.matches.length;
@@ -642,14 +916,44 @@
         }
     }
 
+    // Leaving search brings back every message it hid, most of them above
+    // where the reader is: keep the current match (else the message at the
+    // top of the viewport) at the same place on screen across `change`.
+    function keepScrollAnchor(change) {
+        const current = searchState.matches[searchState.currentMatchIndex];
+        let anchor = current && current.element.offsetParent !== null ? current.element : null;
+        if (!anchor && !searchState.isIndexPage) {
+            const hit = document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 3);
+            anchor = hit && hit.closest ? hit.closest('.message') : null;
+        }
+        if (!anchor) {
+            change();
+            return;
+        }
+        const before = anchor.getBoundingClientRect().top;
+        change();
+        const restore = () => {
+            if (!anchor.isConnected || anchor.offsetParent === null) return;
+            const delta = anchor.getBoundingClientRect().top - before;
+            if (Math.abs(delta) > 1) window.scrollBy({ top: delta, behavior: 'instant' });
+        };
+        restore();
+        // The minimal theme lays the page out again on the next frame (its
+        // DAG engine observes the filter classes and schedules the relayout
+        // from a MutationObserver): queued behind that observer's microtask,
+        // this frame callback runs after the relayout, before paint.
+        queueMicrotask(() => requestAnimationFrame(restore));
+    }
+
     // Clear search
     function clearSearch() {
         searchInput.value = '';
         searchState.query = '';
-        searchState.matches = [];
-        searchState.currentMatchIndex = 0;
         updateSearchInputState();
         clearHighlights();
+        keepScrollAnchor(clearSearchFilterClasses);
+        searchState.matches = [];
+        searchState.currentMatchIndex = 0;
         updateSearchUI();
 
         if (searchState.isIndexPage && searchResultsPanel) {
@@ -659,45 +963,69 @@
         saveSearchState();
     }
 
+    // True when the keystroke happened somewhere the user is typing text —
+    // the `/` shortcut must not fire there.
+    function isTypingContext(target) {
+        if (!target) return false;
+        const tag = target.tagName;
+        return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' ||
+            target.isContentEditable;
+    }
+
+    // Open (and focus) the search input, revealing the toolbar that hosts it
+    // on transcript pages.
+    // options.focus === false reveals the search UI without taking focus —
+    // used for deep links, where focusing (and the scroll that comes with
+    // it) would fight the scroll-to-message we just performed.
+    function openSearch(options = {}) {
+        const filterToolbar = document.querySelector('.filter-toolbar');
+        if (filterToolbar && !filterToolbar.classList.contains('visible')) {
+            const filterButton = document.getElementById('filterMessages');
+            if (filterButton) filterButton.click();
+        }
+
+        if (searchInput && options.focus !== false) {
+            searchInput.focus();
+            searchInput.select();
+        }
+    }
 
     // Handle keyboard shortcuts
     function handleKeyboardShortcuts(e) {
-        // Ctrl+F or Cmd+F
-        if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+        // `/` opens search (GitHub/Gmail-style) — the browser's native
+        // Ctrl/Cmd+F find is deliberately left alone.
+        if (e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey && !isTypingContext(e.target)) {
             e.preventDefault();
-
-            // On transcript pages, open filter toolbar if not visible
-            const filterToolbar = document.querySelector('.filter-toolbar');
-            if (filterToolbar && !filterToolbar.classList.contains('visible')) {
-                // Trigger filter button click to show toolbar
-                const filterButton = document.getElementById('filterMessages');
-                if (filterButton) filterButton.click();
-            }
-
-            // Focus and select search input
-            if (searchInput) {
-                searchInput.focus();
-                searchInput.select();
-            }
+            openSearch();
+            return;
         }
 
-        // F3 - Next match
+        // F3 - open search when idle (like `/`), otherwise next/previous match
         if (e.key === 'F3') {
             e.preventDefault();
-            if (e.shiftKey) {
+            if (!searchState.query) {
+                openSearch();
+            } else if (e.shiftKey) {
                 navigateMatch(-1);
             } else {
                 navigateMatch(1);
             }
         }
 
-        // Escape - Close search results panel on index page
+        // Escape - clear an active search, or close the index results panel
         if (e.key === 'Escape') {
-            if (searchState.isIndexPage && searchResultsPanel && searchResultsPanel.classList.contains('visible')) {
-                searchResultsPanel.classList.remove('visible');
+            if (searchState.isIndexPage) {
+                if (searchResultsPanel && searchResultsPanel.classList.contains('visible')) {
+                    searchResultsPanel.classList.remove('visible');
+                }
+            } else if (searchState.query || document.activeElement === searchInput) {
+                clearSearch();
+                if (document.activeElement === searchInput) {
+                    searchInput.blur();
+                }
             }
         }
-        
+
         // Enter - Next match when search input is focused
         if (e.key === 'Enter' && document.activeElement === searchInput) {
             e.preventDefault();
@@ -709,44 +1037,73 @@
         }
     }
 
-    // Save search state to localStorage
+    // Save search state to localStorage. Storage can be unavailable
+    // (private mode, a sandboxed file:// page): writing then throws, and
+    // performSearch calls this mid-search — the search must still run.
     function saveSearchState() {
         const state = {
             query: searchState.query,
             useRegex: searchState.useRegex,
-            searchInFiltered: searchState.searchInFiltered
+            searchInFiltered: searchState.searchInFiltered,
+            showContext: searchState.showContext
         };
-        localStorage.setItem('claudeLogSearchState', JSON.stringify(state));
+        try {
+            localStorage.setItem('claudeLogSearchState', JSON.stringify(state));
+        } catch (err) { /* storage unavailable: state lasts this page */ }
     }
 
-    // Restore search state from localStorage
+    // Restore search state from localStorage. Reading throws when storage
+    // is unavailable, which must not abort initSearch (no listeners would
+    // be bound and in-page search would never start).
     function restoreSearchState() {
-        const saved = localStorage.getItem('claudeLogSearchState');
+        let saved = null;
+        try {
+            saved = localStorage.getItem('claudeLogSearchState');
+        } catch (err) { /* storage unavailable: start from the defaults */ }
         if (saved) {
             try {
                 const state = JSON.parse(saved);
                 searchState.useRegex = state.useRegex || false;
                 searchState.searchInFiltered = state.searchInFiltered !== false;
+                searchState.showContext = state.showContext || false;
 
                 // Update UI
                 searchRegex.checked = searchState.useRegex;
                 searchInFiltered.checked = searchState.searchInFiltered;
+                if (searchShowContext) {
+                    searchShowContext.checked = searchState.showContext;
+                }
             } catch (e) {
                 console.error('Failed to restore search state:', e);
             }
         }
     }
 
+    // Whether a class string carries the type filter's class. The observer
+    // below reacts to that alone: search's own search-* writes would loop,
+    // and other classes on a card (a live update's `live-new`, the minimal
+    // theme's engine classes) change nothing the search reads — reacting
+    // to them re-ran the search un-quietly and scrolled a live page.
+    function isFilteredOut(classString) {
+        return /(^|\s)filtered-hidden(\s|$)/.test(classString || '');
+    }
+
     // Re-index when filters change (for transcript pages)
     function setupTranscriptFilterObserver() {
         let isUpdatingFilters = false;
         const observer = new MutationObserver((mutations) => {
-            // Only react to filtered-hidden class changes, not search highlights
+            // Only react to genuine filter changes on message elements —
+            // `filtered-hidden` coming or going (isFilteredOut); search's own
+            // search-hidden/search-match/search-context class writes must
+            // not re-trigger a search (feedback loop).
             const hasFilterChange = mutations.some(mutation => {
                 if (mutation.type === 'attributes' && mutation.attributeName === 'class') {
                     const target = mutation.target;
-                    // Check if this is a message element getting filtered
-                    return target.classList && target.classList.contains('message');
+                    if (!target.classList || !target.classList.contains('message')) {
+                        return false;
+                    }
+                    return isFilteredOut(mutation.oldValue) !==
+                        isFilteredOut(target.getAttribute('class'));
                 }
                 return false;
             });
@@ -755,7 +1112,7 @@
                 isUpdatingFilters = true;
                 setTimeout(() => {
                     buildSearchIndex();
-                    performSearch(searchState.query);
+                    performSearch(searchState.query, { preserveCurrent: true, quiet: quietRefresh });
                     isUpdatingFilters = false;
                 }, 100);
             }
@@ -765,9 +1122,29 @@
         observer.observe(document.body, {
             attributes: true,
             attributeFilter: ['class'],
+            attributeOldValue: true,
             subtree: true
         });
     }
+
+    // A live update brings new cards — or, on a wholesale swap, a whole new
+    // #transcript — that the index has never seen and that carry none of
+    // the search's classes (transcript.html calls this once per update).
+    // Re-index and re-run the query quietly: the matches, classes and
+    // count follow the page, but nothing scrolls, unfolds or opens under
+    // the reader. `filtered`: the filter was just re-applied too, so the
+    // filter observer above is about to re-run the search — quietly as
+    // well.
+    let quietRefresh = false;
+    window.claudeLogRefreshSearch = function (filtered) {
+        if (!searchState.query || searchState.isIndexPage) return;
+        buildSearchIndex();
+        performSearch(searchState.query, { preserveCurrent: true, quiet: true });
+        if (filtered) {
+            quietRefresh = true;
+            setTimeout(() => { quietRefresh = false; }, 300);
+        }
+    };
 
     // Initialize when DOM is ready
     if (document.readyState === 'loading') {

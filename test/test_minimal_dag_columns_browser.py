@@ -1,0 +1,851 @@
+"""Browser tests for the minimal theme's DAG engine, P7 (``minimal_dag.js``).
+
+work/minimal-theme-dag.md P7; dev-docs/minimal-theme.md. Column (swimlane)
+mode per branch and as the global "Columns" choice, collapsing a column to a
+strip, the per-turn "+N more branches" overflow, reveals past the cap
+(search, the timeline), teammate anchors and the async result shown at its
+merge row only.
+
+Fixtures (``test/dag_demo_fixture.py``): the mockup-shaped demo project, the
+same with four extra background agents in its first turn (``wide=4``), and a
+lead + teammate exchanging messages both ways (``write_team_demo``).
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+from playwright.sync_api import Page, expect
+
+from test.dag_demo_fixture import write_dag_demo, write_team_demo, write_workflow_demo
+from test.test_minimal_dag_browser import (
+    BRANCHES_KEY,
+    DEPTH_KEY,
+    DOT_Y,
+    W_ENGINE,
+    W_LOADER,
+    W_RENDER,
+    A,
+    B,
+    C,
+    D,
+    _fork_lane,
+    _head_attr,
+    _lane_card_id,
+    _mode,
+    _numbers,
+    _open,
+    _rail,
+    _render,
+    _settle,
+    _toggle,
+    _visible_count,
+)
+
+pytestmark = pytest.mark.browser
+
+EXTRA = [f"agent-e000x0{k}" for k in range(4)]  # wide=4: ranks 3–6 in turn 1
+TAIL = "agent-t001tail"  # tail=N: the trailing synchronous agent
+
+
+@pytest.fixture(scope="module")
+def pages(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
+    tmp = tmp_path_factory.mktemp("dag7")
+    return {
+        "demo": _render(write_dag_demo(tmp / "demo"), tmp / "demo.html", "Demo"),
+        "wide": _render(write_dag_demo(tmp / "wide", 1, 4), tmp / "wide.html", "Wide"),
+        "team": _render(write_team_demo(tmp / "team"), tmp / "team.html", "Team"),
+        "workflow": _render(
+            write_workflow_demo(tmp / "workflow"), tmp / "workflow.html", "Workflow"
+        ),
+        # A synchronous agent whose rows are the transcript's last …
+        "tail": _render(
+            write_dag_demo(tmp / "tail", tail=3), tmp / "tail.html", "Tail"
+        ),
+        # … and one of 300 steps, its result after them.
+        "long": _render(
+            write_dag_demo(tmp / "long", tail=300, follow=True),
+            tmp / "long.html",
+            "Long",
+        ),
+    }
+
+
+@pytest.fixture
+def clean(page: Page):
+    yield page
+    try:
+        page.evaluate(
+            f"localStorage.removeItem('{BRANCHES_KEY}'); localStorage.removeItem('{DEPTH_KEY}')"
+        )
+    except Exception:  # page already closed
+        pass
+
+
+def _column_of(page: Page, lane: str) -> list[str]:
+    """Computed grid-column-start of the lane's visible cards."""
+    return page.evaluate(
+        """(lane) => [...document.querySelectorAll(`#transcript .message[data-lane="${lane}"]`)]
+            .filter(el => el.checkVisibility())
+            .map(el => getComputedStyle(el).gridColumnStart)""",
+        lane,
+    )
+
+
+def _columns(page: Page) -> None:
+    page.locator("[data-mn-branches='columns']").click()
+
+
+# Visible cards with a timestamp: [top, bottom, lane, ms, column].
+CARDS = """() => [...document.querySelectorAll('#transcript .message')]
+    .filter(el => el.checkVisibility())
+    .map(el => {
+        const stamp = el.querySelector('.timestamp[data-timestamp]');
+        const box = el.getBoundingClientRect();
+        return [box.top, box.bottom, el.getAttribute('data-lane'),
+                stamp ? Date.parse(stamp.getAttribute('data-timestamp')) : null,
+                getComputedStyle(el).gridColumnStart];
+    })
+    .filter(row => row[3] !== null)"""
+
+
+# ---------------------------------------------------------------- columns
+
+
+class TestColumns:
+    def test_one_lane_in_a_column(self, clean: Page, pages: dict[str, Path]):
+        page = clean
+        _open(page, pages["demo"])
+        cards = page.locator(f"#transcript .message[data-lane='{A}']").count()
+        page.locator(f"[data-lane-ref='{A}'] .mn-bcol").click()
+        assert _mode(page, A) == "column"
+        assert page.locator(".mn-stage.dag-cols").count() == 1
+        assert page.locator("body.dag-wide").count() == 1
+        # Every card of the lane, in the column next to main.
+        assert _visible_count(page, A) == cards
+        assert set(_column_of(page, A)) == {"2"}
+        assert set(_column_of(page, "main")) == {"1"}
+        # Its head: the name, "⇤ Interleave" and "Collapse".
+        head = page.locator(f".dag-chrome[data-col='{A}'] .dag-colhead")
+        expect(head).to_be_visible()
+        assert head.locator(".dag-colname").get_attribute("data-label") == _head_attr(
+            page, A, "data-lane-name"
+        )
+        expect(page.locator(".dag-mainhead")).to_be_visible()
+        # The spawn row's control says so, and its button switches back.
+        ctl = page.locator(f"[data-lane-ref='{A}']")
+        assert ctl.locator(".mn-bfold").get_attribute("data-mode") == " · in column →"
+        assert ctl.locator(".mn-bcol").get_attribute("data-label") == "⇤ Interleave"
+        # A column draws its lane in the column (TestColumnLanes), not on
+        # the main line's rail; the others keep theirs.
+        assert set(_rail(page, A)["parts"]) == {"col-in", "col", "col-out"}
+        assert set(_rail(page, B)["parts"]) == {"fork", "lane", "merge"}
+
+    def test_rows_are_time_aligned(self, clean: Page, pages: dict[str, Path]):
+        page = clean
+        _open(page, pages["demo"])
+        _columns(page)
+        cards = page.evaluate(CARDS)
+        assert {c[4] for c in cards} >= {"1", "2", "3"}
+        # Time runs top to bottom across columns: a card wholly below another
+        # is never earlier.
+        for top, _bottom, lane, ms, _col in cards:
+            for top2, _b2, lane2, ms2, _c2 in cards:
+                if top2 > top + 1:
+                    assert ms2 >= ms, (lane, ms, lane2, ms2)
+        # Packing: cards in different columns share rows (equal tops).
+        shared = {
+            (round(c[0]), round(d[0]))
+            for c in cards
+            for d in cards
+            if c[4] != d[4] and abs(c[0] - d[0]) <= 1
+        }
+        assert shared
+        # A lane starts below its spawn row, an async merge row (the
+        # notification) sits below the lane's last row.
+        spawn = page.evaluate(
+            "(id) => document.getElementById(id).getBoundingClientRect().top",
+            _lane_card_id(page, A, "data-lane-from"),
+        )
+        merge = page.evaluate(
+            "(id) => document.getElementById(id).getBoundingClientRect().top",
+            _lane_card_id(page, A, "data-lane-to"),
+        )
+        tops = [c[0] for c in cards if c[2] == A]
+        assert min(tops) > spawn and merge > max(tops)
+
+    def test_all_columns_with_nesting_and_persistence(
+        self, clean: Page, pages: dict[str, Path]
+    ):
+        page = clean
+        _open(page, pages["demo"])
+        _columns(page)
+        lanes = page.evaluate(
+            "[...document.querySelectorAll('[data-lane-id]')].map(e => e.dataset.laneId)"
+        )
+        assert len(lanes) == 5
+        assert all(_mode(page, x) == "column" for x in lanes)
+        cols = {lane: set(_column_of(page, lane)) for lane in lanes}
+        assert all(len(c) == 1 for c in cols.values())
+        assert len({next(iter(c)) for c in cols.values()}) == 5  # distinct
+        # The nested lane sits right next to its parent's column.
+        assert int(next(iter(cols[D]))) == int(next(iter(cols[C]))) + 1
+        btn = page.locator("[data-mn-branches='columns']")
+        expect(btn).to_have_attribute("aria-pressed", "true")
+        assert page.evaluate(f"localStorage.getItem('{BRANCHES_KEY}')") == "columns"
+        page.reload()
+        page.wait_for_function("window.claudeLogDag && window.claudeLogDag.timing()")
+        assert all(_mode(page, x) == "column" for x in lanes)
+        # Main only puts everything back: no columns, no chrome, narrow page.
+        page.locator("[data-mn-branches='main']").click()
+        assert all(_mode(page, x) == "folded" for x in lanes)
+        assert page.locator(".mn-stage.dag-cols").count() == 0
+        assert page.locator(".dag-chrome").count() == 0
+        assert page.locator("body.dag-wide").count() == 0
+
+    def test_collapse_to_a_strip_and_expand(self, clean: Page, pages: dict[str, Path]):
+        page = clean
+        _open(page, pages["demo"])
+        _columns(page)
+        page.locator(f".dag-chrome[data-col='{A}'] [data-col-act='collapse']").click()
+        assert _mode(page, A) == "strip"
+        assert _visible_count(page, A) == 0
+        strip = page.locator(f".dag-chrome[data-col='{A}'] .dag-strip")
+        expect(strip).to_be_visible()
+        width = page.evaluate(
+            f"document.querySelector('.dag-chrome[data-col=\"{A}\"]').getBoundingClientRect().width"
+        )
+        assert width == pytest.approx(34, abs=1)
+        assert strip.locator("span").get_attribute("data-label") == _head_attr(
+            page, A, "data-lane-name"
+        )
+        strip.click()
+        assert _mode(page, A) == "column"
+        assert _visible_count(page, A) > 0
+
+    def test_back_to_interleave(self, clean: Page, pages: dict[str, Path]):
+        page = clean
+        _open(page, pages["demo"])
+        page.locator(f"[data-lane-ref='{A}'] .mn-bcol").click()
+        page.locator(f".dag-chrome[data-col='{A}'] [data-col-act='interleave']").click()
+        assert _mode(page, A) == "interleaved"
+        assert page.locator(".mn-stage.dag-cols").count() == 0
+        assert set(_column_of(page, A)) == {"auto"}  # the one-column grid
+        assert page.locator(f"#transcript .message.dag-in[data-lane='{A}']").count()
+        assert _rail(page, A)["paths"]
+        # And from the spawn row's own button.
+        page.locator(f"[data-lane-ref='{B}'] .mn-bcol").click()
+        assert _mode(page, B) == "column"
+        page.locator(f"[data-lane-ref='{B}'] .mn-bcol").click()
+        assert _mode(page, B) == "interleaved"
+        # The chevron folds a column.
+        page.locator(f"[data-lane-ref='{B}'] .mn-bcol").click()
+        _toggle(page, B)
+        assert _mode(page, B) == "folded"
+
+    def test_back_to_interleave_leaves_no_empty_space(
+        self, clean: Page, pages: dict[str, Path]
+    ):
+        # C's column is taller than the page with C interleaved; the rail
+        # SVG drawn for it must not keep the page that tall afterwards.
+        page = clean
+        _open(page, pages["demo"])
+        height = "() => document.documentElement.scrollHeight"
+        _toggle(page, C)
+        _settle(page)
+        interleaved = page.evaluate(height)
+        page.locator(f"[data-lane-ref='{C}'] .mn-bcol").click()
+        _settle(page)
+        assert page.evaluate(height) > interleaved
+        page.locator(f".dag-chrome[data-col='{C}'] [data-col-act='interleave']").click()
+        _settle(page)
+        assert _mode(page, C) == "interleaved"
+        assert page.evaluate(height) == interleaved
+
+    def test_page_scrolls_sideways_and_the_toolbar_stays(
+        self, clean: Page, pages: dict[str, Path]
+    ):
+        page = clean
+        page.set_viewport_size({"width": 1280, "height": 900})
+        _open(page, pages["demo"])
+        assert page.evaluate(
+            "document.documentElement.scrollWidth <= document.documentElement.clientWidth"
+        )
+        _columns(page)
+        # 360px main + 5 × 300px columns: wider than the viewport.
+        assert page.evaluate(
+            "document.documentElement.scrollWidth > document.documentElement.clientWidth + 400"
+        )
+        page.evaluate("window.scrollTo(600, 0)")
+        _settle(page)
+        box = page.locator(".mn-toolbar").bounding_box()
+        assert box is not None
+        assert box["x"] == pytest.approx(16, abs=1)
+        assert box["x"] + box["width"] <= 1280
+        # The last column is reachable.
+        page.evaluate("window.scrollTo(document.documentElement.scrollWidth, 0)")
+        _settle(page)
+        last = page.evaluate(
+            """() => { const heads = [...document.querySelectorAll('.dag-chrome')];
+                return heads[heads.length - 1].getBoundingClientRect().right; }"""
+        )
+        assert last <= 1280 + 1
+
+
+# ------------------------------------------------------------ column lanes
+
+# A column's shown cards (in its grid track), stage-relative: each card's
+# dot y (padding-top + .7em, as the engine measures it), whether its dot is
+# drawn, where the dot's centre is (the middle of the card's rail track)
+# and whether it is a step of its own (not a tool pair's result half).
+COLUMN_CARDS = """(lane) => {
+    const stage = document.querySelector('.mn-stage').getBoundingClientRect();
+    const chrome = document.querySelector(`.dag-chrome[data-col="${lane}"]`);
+    const track = getComputedStyle(chrome).gridColumnStart;
+    return [...document.querySelectorAll('#transcript .message')]
+        .filter(el => el.checkVisibility() && getComputedStyle(el).gridColumnStart === track)
+        .map(el => {
+            const cs = getComputedStyle(el);
+            const box = el.getBoundingClientRect();
+            const tracks = cs.gridTemplateColumns.split(' ').map(parseFloat);
+            const dot = getComputedStyle(el, '::before');
+            const half = el.matches('.pair_middle, .pair_last') && !el.matches('.dag-split');
+            return {
+                id: el.id,
+                y: box.top - stage.top + parseFloat(cs.paddingTop) + 0.7 * parseFloat(cs.fontSize),
+                dot: dot.display !== 'none' && dot.content !== 'none',
+                dotX: box.left - stage.left + parseFloat(cs.paddingLeft) + tracks[0] + tracks[1] / 2,
+                step: !half && !el.matches('.session-header'),
+            };
+        });
+}"""
+CHROME_LEFT = """(lane) => document.querySelector(`.dag-chrome[data-col="${lane}"]`)
+    .getBoundingClientRect().left - document.querySelector('.mn-stage').getBoundingClientRect().left"""
+
+
+def _col_parts(page: Page, lane: str) -> dict[str, list[float]]:
+    """The lane's column paths, by part, as their numbers."""
+    return {part: _numbers(p["d"]) for part, p in _rail(page, lane)["parts"].items()}
+
+
+def _dot_y(page: Page, card_id: str) -> float:
+    return page.evaluate(DOT_Y, card_id)
+
+
+def _assert_pointer(numbers: list[float], x: float) -> None:
+    """A pointer leaves the lane at ``x`` and ends to its left, fading."""
+    assert numbers[0] == pytest.approx(x, abs=0.2)
+    assert numbers[-1] < x - 8, numbers
+
+
+class TestColumnLanes:
+    """In Columns a branch column's lane is drawn as a graph lane on the
+    column's own rail, over the lane's active span only: no full-height
+    border, no join across to the main line, a fading pointer towards the
+    parent column at the start and, for a lane that merges, at the end."""
+
+    def test_lanes_span_only_their_active_rows(
+        self, clean: Page, pages: dict[str, Path]
+    ):
+        page = clean
+        page.set_viewport_size({"width": 2200, "height": 900})
+        _open(page, pages["demo"])
+        _columns(page)
+        _settle(page)
+        fork = _fork_lane(page)
+        # The column's background carries no lane-coloured border any more.
+        assert (
+            page.evaluate(
+                f"""getComputedStyle(document.querySelector('.dag-chrome[data-col="{A}"]'))
+                .borderLeftStyle"""
+            )
+            == "none"
+        )
+        for lane in (A, B, C, D, fork):
+            cards = page.evaluate(COLUMN_CARDS, lane)
+            assert cards, lane
+            parts = _col_parts(page, lane)
+            merges = lane != fork
+            assert set(parts) == (
+                {"col-in", "col", "col-out"} if merges else {"col-in", "col"}
+            ), (lane, parts)
+            x, top, bottom = parts["col"]
+            # On the column's rail: every dot sits on the lane.
+            for card in cards:
+                if card["dot"]:
+                    assert card["dotX"] == pytest.approx(x, abs=1), (lane, card)
+            # One dot per message shown in the column (a tool pair's two
+            # halves are one step, as on the main line).
+            dots = [c for c in cards if c["dot"]]
+            assert len(dots) == len([c for c in cards if c["step"]]) > 0, lane
+            # From the first shown row …
+            ys = [c["y"] for c in cards]
+            assert top == pytest.approx(min(ys), abs=1.5), lane
+            _assert_pointer(parts["col-in"], x)
+            assert parts["col-in"][1] == pytest.approx(top, abs=0.2)
+            pin = parts["col-in"]  # M x top V lead A … x' y' H tip
+            assert pin[9] < pin[2] < top, "the pointer leads up and away"
+            if merges:
+                # … down to the merge row (the result, the notification),
+                # below the lane's last row, where it bends back.
+                merge_y = _dot_y(page, _lane_card_id(page, lane, "data-lane-to"))
+                assert merge_y > max(ys) + 1, lane
+                out = parts["col-out"]
+                _assert_pointer(out, x)
+                assert out[1] == pytest.approx(bottom, abs=0.2)
+                assert out[-2] == pytest.approx(merge_y, abs=1.5), lane
+                assert bottom < merge_y
+            else:
+                # … to the last: a fork never merges.
+                assert bottom == pytest.approx(max(ys), abs=1.5), lane
+
+    def test_workflow_agents_merge_at_their_rows(
+        self, clean: Page, pages: dict[str, Path]
+    ):
+        page = clean
+        page.set_viewport_size({"width": 2200, "height": 900})
+        _open(page, pages["workflow"])
+        _columns(page)
+        _settle(page)
+        for lane in (W_LOADER, W_RENDER):
+            parts = _col_parts(page, lane)
+            assert set(parts) == {"col-in", "col", "col-out"}, (lane, parts)
+            # The agent's own row on the main line is its merge row.
+            merge_y = _dot_y(page, _lane_card_id(page, lane, "data-lane-to"))
+            assert parts["col-out"][-2] == pytest.approx(merge_y, abs=1.5)
+        # A failed agent without a result ends at its last row, unpointed.
+        parts = _col_parts(page, W_ENGINE)
+        assert set(parts) == {"col-in", "col"}, parts
+        ys = [c["y"] for c in page.evaluate(COLUMN_CARDS, W_ENGINE)]
+        assert parts["col"][2] == pytest.approx(max(ys), abs=1.5)
+
+    def test_a_strip_keeps_its_span_without_dots(
+        self, clean: Page, pages: dict[str, Path]
+    ):
+        page = clean
+        page.set_viewport_size({"width": 2200, "height": 900})
+        _open(page, pages["demo"])
+        _columns(page)
+        page.locator(f".dag-chrome[data-col='{A}'] [data-col-act='collapse']").click()
+        _settle(page)
+        assert _visible_count(page, A) == 0  # no cards, so no dots
+        parts = _col_parts(page, A)
+        assert set(parts) == {"col-in", "col", "col-out"}, parts
+        x, top, bottom = parts["col"]
+        # By the strip's left edge, clear of its vertical name.
+        assert x == pytest.approx(page.evaluate(CHROME_LEFT, A) + 6, abs=0.5)
+        spawn_y = _dot_y(page, _lane_card_id(page, A, "data-lane-from"))
+        merge_y = _dot_y(page, _lane_card_id(page, A, "data-lane-to"))
+        assert spawn_y < top < bottom < merge_y
+        assert parts["col-out"][-2] == pytest.approx(merge_y, abs=1.5)
+        # Expanded again: the column's own rail.
+        page.locator(f".dag-chrome[data-col='{A}'] .dag-strip").click()
+        _settle(page)
+        assert _col_parts(page, A)["col"][0] > page.evaluate(CHROME_LEFT, A) + 6 + 30
+
+    def _strip(self, page: Page, lane: str) -> tuple[dict[str, list[float]], str]:
+        """Columns, ``lane`` collapsed to a strip: its paths and the id of
+        the last shown card."""
+        page.set_viewport_size({"width": 2200, "height": 900})
+        _columns(page)
+        page.locator(
+            f".dag-chrome[data-col='{lane}'] [data-col-act='collapse']"
+        ).click()
+        _settle(page)
+        assert _mode(page, lane) == "strip"
+        assert _visible_count(page, lane) == 0
+        last = page.evaluate(
+            """() => [...document.querySelectorAll('#transcript .message')]
+                .filter(el => el.checkVisibility())
+                .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)
+                .pop().id"""
+        )
+        return _col_parts(page, lane), last
+
+    def test_a_strip_at_the_end_keeps_its_lane(
+        self, clean: Page, pages: dict[str, Path]
+    ):
+        """A strip whose rows are the transcript's last has no shown row at
+        or after them: it starts (and, not merging, ends) level with the
+        last shown row before them instead of losing its lane."""
+        page = clean
+        _open(page, pages["tail"])
+        parts, last = self._strip(page, TAIL)
+        assert set(parts) == {"col-in", "col"}, parts
+        x, top, bottom = parts["col"]
+        assert x == pytest.approx(page.evaluate(CHROME_LEFT, TAIL) + 6, abs=0.5)
+        assert top == pytest.approx(_dot_y(page, last), abs=1.5)
+        assert bottom == pytest.approx(top, abs=0.2)
+        _assert_pointer(parts["col-in"], x)
+
+    def test_a_long_strip_finds_the_row_after_it(
+        self, clean: Page, pages: dict[str, Path]
+    ):
+        """A strip of hundreds of hidden rows (a long synchronous agent)
+        still reaches the shown row after them, its result: no scan over
+        the hidden items gives up first."""
+        page = clean
+        _open(page, pages["long"])
+        hidden = page.locator(f"#transcript .message[data-lane='{TAIL}']").count()
+        assert hidden > 512  # past where a per-item scan used to give up
+        parts, last = self._strip(page, TAIL)
+        assert set(parts) == {"col-in", "col"}, parts
+        x, top, _bottom = parts["col"]
+        assert x == pytest.approx(page.evaluate(CHROME_LEFT, TAIL) + 6, abs=0.5)
+        # The result: the first shown row at or after the strip's.
+        assert top == pytest.approx(_dot_y(page, last), abs=1.5)
+
+    def test_pointers_fade_in_the_lane_colour_in_both_schemes(
+        self, clean: Page, pages: dict[str, Path]
+    ):
+        page = clean
+        _open(page, pages["demo"])
+        _columns(page)
+        for scheme in ("light", "dark"):
+            page.evaluate(
+                f"document.documentElement.setAttribute('data-theme', '{scheme}')"
+            )
+            page.evaluate("window.claudeLogDag.relayout()")
+            fade = page.evaluate(
+                """(lane) => {
+                    const path = part => document.querySelector(
+                        `#dag-rail path[data-lane="${lane}"][data-part="${part}"]`);
+                    const stroke = getComputedStyle(path('col-in')).stroke;
+                    const id = /url\\("?#([^")]+)"?\\)/.exec(stroke)[1];
+                    const stops = [...document.getElementById(id).querySelectorAll('stop')]
+                        .map(s => [getComputedStyle(s).stopColor, +getComputedStyle(s).stopOpacity]);
+                    return {line: getComputedStyle(path('col')).stroke, stops};
+                }""",
+                A,
+            )
+            colours = {c for c, _o in fade["stops"]}
+            assert colours == {fade["line"]}, (scheme, fade)
+            opacity = [o for _c, o in fade["stops"]]
+            assert opacity[0] == 1 and opacity[-1] == 0, (scheme, fade)
+        page.evaluate("document.documentElement.removeAttribute('data-theme')")
+
+    def test_redrawn_on_resize_and_gone_in_main_only(
+        self, clean: Page, pages: dict[str, Path]
+    ):
+        page = clean
+        page.set_viewport_size({"width": 1600, "height": 900})
+        _open(page, pages["demo"])
+        _columns(page)
+        _settle(page)
+        before = _col_parts(page, A)["col"]
+        page.set_viewport_size({"width": 2400, "height": 900})
+        _settle(page)
+        _settle(page)
+        after = _col_parts(page, A)["col"]
+        assert after[0] != pytest.approx(before[0], abs=1), "not redrawn"
+        cards = page.evaluate(COLUMN_CARDS, A)
+        assert all(
+            c["dotX"] == pytest.approx(after[0], abs=1) for c in cards if c["dot"]
+        )
+        page.locator("[data-mn-branches='main']").click()
+        assert not any(p["part"].startswith("col") for p in _rail(page, A)["paths"])
+
+
+# ---------------------------------------------------------------- overflow
+
+
+class TestOverflow:
+    def test_more_branches_toggle(self, clean: Page, pages: dict[str, Path]):
+        page = clean
+        _open(page, pages["wide"])
+        ranks = page.evaluate(
+            """() => Object.fromEntries([...document.querySelectorAll('[data-lane-id]')]
+                .map(e => [e.dataset.laneId, +e.dataset.laneRank]))"""
+        )
+        assert ranks[A] == 1 and ranks[B] == 2 and ranks[EXTRA[0]] == 3
+        hidden = [lane for lane, rank in ranks.items() if rank > 3]
+        assert set(EXTRA[1:]) <= set(hidden)
+        # Three controls in turn 1; the rest behind the toggle on the third.
+        for lane in (A, B, EXTRA[0]):
+            expect(page.locator(f"[data-lane-ref='{lane}']")).to_be_visible()
+        for lane in hidden:
+            expect(page.locator(f"[data-lane-ref='{lane}']")).to_be_hidden()
+            assert _rail(page, lane)["paths"] == []
+        more = page.locator(f"[data-lane-ref='{EXTRA[0]}'] .mn-bmore")
+        assert more.get_attribute("data-label") == f"+{len(hidden)} more branches"
+        assert page.locator(".mn-bmore").count() == 1
+        # Revealed: every control and dashed lane.
+        more.click()
+        for lane in hidden:
+            expect(page.locator(f"[data-lane-ref='{lane}']")).to_be_visible()
+        assert _rail(page, EXTRA[3])["paths"]
+        assert more.get_attribute("data-label") == "− fewer branches"
+        # The reader chooses which three are interleaved (LRU per turn).
+        for lane in (A, B, EXTRA[3]):
+            _toggle(page, lane)
+        _toggle(page, EXTRA[2])
+        assert _mode(page, A) == "folded"
+        assert [_mode(page, x) for x in (B, EXTRA[3], EXTRA[2])] == ["interleaved"] * 3
+        # Fewer again: open lanes keep their controls; folded extras hide.
+        more.click()
+        expect(page.locator(f"[data-lane-ref='{EXTRA[3]}']")).to_be_visible()
+        expect(page.locator(f"[data-lane-ref='{EXTRA[1]}']")).to_be_hidden()
+        assert more.get_attribute("data-label") == f"+{len(hidden) - 2} more branches"
+
+    def test_columns_are_not_capped(self, clean: Page, pages: dict[str, Path]):
+        page = clean
+        _open(page, pages["wide"])
+        _columns(page)
+        lanes = page.evaluate(
+            "[...document.querySelectorAll('[data-lane-id]')].map(e => e.dataset.laneId)"
+        )
+        assert len(lanes) == 9
+        assert all(_mode(page, x) == "column" for x in lanes)
+        assert page.locator(".dag-chrome").count() == 10  # main + 9
+        assert page.locator(".mn-bctl[hidden]").count() == 0
+        assert page.locator(".mn-bmore").count() == 0
+
+    def test_search_across_many_lanes_shows_every_hit(
+        self, clean: Page, pages: dict[str, Path]
+    ):
+        page = clean
+        _open(page, pages["wide"])
+        _toggle(page, A)
+        _toggle(page, B)
+        page.locator("#filterMessages").click()
+        page.locator("#searchInput").fill("corner-")
+        for lane in EXTRA:
+            page.wait_for_function(
+                f"window.claudeLogDag.mode('{lane}') === 'interleaved'"
+            )
+        # Past the cap of three: nothing the reader had open was folded, and
+        # every hit is on screen.
+        assert _mode(page, A) == "interleaved" and _mode(page, B) == "interleaved"
+        for lane in EXTRA:
+            expect(
+                page.locator(
+                    f"#transcript .message.search-match[data-lane='{lane}']"
+                ).first
+            ).to_be_visible()
+        # The next manual selection trims the turn back to three.
+        page.locator("#searchInput").fill("")
+        _toggle(page, A)  # fold
+        _toggle(page, A)  # re-select
+        turn_open = [x for x in [A, B] + EXTRA if _mode(page, x) == "interleaved"]
+        assert len(turn_open) == 3 and A in turn_open
+
+    def test_search_under_columns_opens_columns(
+        self, clean: Page, pages: dict[str, Path]
+    ):
+        page = clean
+        _open(page, pages["wide"])
+        _columns(page)
+        page.locator(
+            f".dag-chrome[data-col='{EXTRA[1]}'] [data-col-act='collapse']"
+        ).click()
+        _toggle(page, EXTRA[2])  # fold
+        assert _mode(page, EXTRA[2]) == "folded"
+        page.locator("#filterMessages").click()
+        page.locator("#searchInput").fill("corner-")
+        page.wait_for_function(f"window.claudeLogDag.mode('{EXTRA[2]}') === 'column'")
+        page.wait_for_function(f"window.claudeLogDag.mode('{EXTRA[1]}') === 'column'")
+
+
+# ------------------------------------------------------------- reveals
+
+
+class TestReveal:
+    def test_timeline_click_opens_a_folded_lane(
+        self, clean: Page, pages: dict[str, Path]
+    ):
+        page = clean
+        # Tall enough for the timeline to render its Sub-assistant group (vis
+        # only draws the groups in view).
+        page.set_viewport_size({"width": 1280, "height": 1600})
+        _open(page, pages["demo"])
+        assert _mode(page, A) == "folded"
+        page.locator("#toggleTimeline").click()
+        page.wait_for_selector(".vis-timeline", timeout=30000)
+        page.wait_for_selector(".vis-item", timeout=10000)
+        item = page.locator(".vis-item:has-text('96 matches')").first
+        item.click(force=True)
+        page.wait_for_function(f"window.claudeLogDag.mode('{A}') === 'interleaved'")
+        target = page.locator(
+            f"#transcript .message[data-lane='{A}']:has-text('96 matches in 9 files')"
+        ).first
+        expect(target).to_be_visible()
+        expect(target).to_be_in_viewport(timeout=5000)
+
+
+# ------------------------------------------------------------ teammates
+
+
+class TestTeammateAnchors:
+    def test_teammates_are_not_lanes(self, clean: Page, pages: dict[str, Path]):
+        page = clean
+        _open(page, pages["team"])
+        assert page.locator("[data-lane-id]").count() == 0
+        assert page.locator(".mn-bctls").count() == 0
+        assert page.locator(".mn-branches").is_hidden()
+
+    def test_spawn_links_to_the_thread(self, clean: Page, pages: dict[str, Path]):
+        page = clean
+        _open(page, pages["team"])
+        spawn = page.locator("[data-teammate-link]")
+        first = "msg-" + (spawn.get_attribute("data-teammate-link") or "")
+        link = spawn.locator(".mn-xlink")
+        assert link.get_attribute("href") == f"#{first}"
+        assert link.get_attribute("data-label") == "→ alice's thread"
+        # Collapsed by default, revealed by the link.
+        assert not page.locator(f"#{first}").is_visible()
+        link.click()
+        expect(page.locator(f"#{first}")).to_be_visible()
+        expect(page.locator(f"#{first}")).to_be_in_viewport()
+
+    def test_messages_link_both_ways(self, clean: Page, pages: dict[str, Path]):
+        page = clean
+        _open(page, pages["team"])
+        # alice → lead: the lead's <teammate-message> links back to alice's
+        # SendMessage inside her (folded) thread …
+        received = page.locator(
+            "#transcript .message.teammate:not(.sidechain):has-text('Relay coverage')"
+        )
+        back = received.locator(".mn-xlink")
+        assert back.get_attribute("data-label") == "← sent by alice"
+        target = (back.get_attribute("href") or "")[1:]
+        back.click()
+        sent = page.locator(f"#{target}")
+        expect(sent).to_be_visible()
+        expect(sent).to_be_in_viewport()
+        assert "Relay coverage" in sent.inner_text()
+        assert sent.locator(".mn-xlink").get_attribute("href") == "#" + (
+            received.get_attribute("id") or ""
+        )
+        # lead → alice: the lead's SendMessage links to the copy in her thread.
+        reply = page.locator(
+            "#transcript .message.tool_use:not(.sidechain):has-text('calculate_next_retry')"
+        )
+        fwd = reply.locator(".mn-xlink")
+        assert fwd.get_attribute("data-label") == "→ received by alice"
+        fwd.click()
+        copy = page.locator((fwd.get_attribute("href") or ""))
+        expect(copy).to_be_visible()
+        assert "sidechain" in (copy.get_attribute("class") or "")
+        # A message with no counterpart gets no link.
+        stray = page.locator("#transcript .message.teammate:has-text('heartbeat')")
+        assert stray.locator(".mn-xlink").count() == 0
+
+
+# --------------------------------------------------------- result at merge
+
+
+class TestResultAtMerge:
+    def test_async_answer_only_on_the_notification(
+        self, clean: Page, pages: dict[str, Path]
+    ):
+        page = clean
+        _open(page, pages["demo"])
+        answer = "14 files, 412 literals"
+        spawn = _lane_card_id(page, A, "data-lane-from")
+        note = _lane_card_id(page, A, "data-lane-to")
+        # The spawn row: the call, its control and stats, the launch line.
+        spawn_text = page.evaluate(
+            """(id) => { const call = document.getElementById(id);
+                const node = call.closest('.message-node');
+                const result = node.nextElementSibling
+                    && node.nextElementSibling.querySelector(':scope > .message');
+                return call.innerText + '\\n' + (result ? result.innerText : ''); }""",
+            spawn,
+        )
+        assert answer not in spawn_text
+        assert "from async notification" not in spawn_text
+        # The answer is on the notification, at its arrival time …
+        expect(page.locator(f"#{note}")).to_contain_text(answer)
+        # … and the spawn's result links there: the result card's own line
+        # (server-rendered, for no-JS) folds with the launch acknowledgement
+        # into the branch control's `Result ↓` (P7c).
+        expect(page.locator(f".mn-async-jump a[href='#{note}']")).to_have_count(1)
+        jump = page.locator(f"[data-lane-ref='{A}'] .mn-bres[href='#{note}']")
+        expect(jump).to_have_count(1)
+        jump.click()
+        expect(page.locator(f"#{note}")).to_be_in_viewport()
+        # Exactly one copy of the answer on the page.
+        count = page.evaluate(
+            "(text) => [...document.querySelectorAll('#transcript .message')].filter(el => el.textContent.includes(text)).length",
+            answer,
+        )
+        assert count == 1
+
+
+class TestColumnsLiveUpdate:
+    def test_a_wholesale_swap_rebuilds_the_columns(
+        self, clean: Page, pages: dict[str, Path]
+    ):
+        page = clean
+        _open(page, pages["demo"])
+        page.locator(f"[data-lane-ref='{A}'] .mn-bcol").click()
+        # live_update.js's fallback: a fresh server render replaces
+        # #transcript; it carries none of the engine's state or chrome.
+        page.evaluate(
+            """() => {
+                const old = document.getElementById('transcript');
+                const next = old.cloneNode(true);
+                next.querySelectorAll('.mn-bctls, .dag-chrome').forEach(el => el.remove());
+                next.querySelectorAll('[style]').forEach(el => {
+                    el.style.removeProperty('grid-row'); el.style.removeProperty('grid-column');
+                    el.style.removeProperty('--dag-tag');
+                });
+                next.querySelectorAll('*').forEach(el => [...el.classList]
+                    .filter(c => c.startsWith('dag-')).forEach(c => el.classList.remove(c)));
+                old.replaceWith(next);
+                window.claudeLogRehydrate(next);
+            }"""
+        )
+        _settle(page)
+        assert _mode(page, A) == "column"
+        assert page.locator(f"#transcript > .dag-chrome[data-col='{A}']").count() == 1
+        assert page.locator("#transcript > .dag-chrome").count() == 2  # main + A
+        assert set(_column_of(page, A)) == {"2"}
+        # Chrome stays ahead of every card (it paints underneath them).
+        assert page.evaluate(
+            """() => [...document.getElementById('transcript').children]
+                .findIndex(el => !el.classList.contains('dag-chrome')) === 2"""
+        )
+
+    def test_turn_choices_survive_a_renumbering_swap(
+        self, clean: Page, pages: dict[str, Path]
+    ):
+        """A live swap that renumbers the positional ``msg-d-N`` ids (an entry
+        landing mid-page) must not lose the per-turn state: the expanded
+        "+N more branches" and the cap's LRU follow the turn, not its id
+        (P7b: they were keyed by ``data-lane-turn``'s ``d-N``)."""
+        page = clean
+        _open(page, pages["wide"])
+        more = page.locator(f"[data-lane-ref='{EXTRA[0]}'] .mn-bmore")
+        more.click()
+        for lane in (A, B, EXTRA[3]):
+            _toggle(page, lane)
+        page.evaluate(
+            """() => {
+                const shift = (v) => v.replace(/\\bd-(\\d+)\\b/g, (m, n) => 'd-' + (+n + 1000));
+                const old = document.getElementById('transcript');
+                const next = old.cloneNode(true);
+                next.querySelectorAll('.mn-bctls, .dag-chrome').forEach(el => el.remove());
+                next.querySelectorAll('[id^="msg-d-"]').forEach(el => { el.id = shift(el.id); });
+                next.querySelectorAll('[data-lane-from], [data-lane-to], [data-lane-turn]').forEach(el => {
+                    ['data-lane-from', 'data-lane-to', 'data-lane-turn'].forEach(name => {
+                        if (el.hasAttribute(name)) el.setAttribute(name, shift(el.getAttribute(name)));
+                    });
+                });
+                old.replaceWith(next);
+                window.claudeLogRehydrate(next);
+            }"""
+        )
+        _settle(page)
+        assert page.evaluate(
+            "document.querySelector('[data-lane-turn]').getAttribute('data-lane-turn')"
+        ).startswith("d-100")
+        more = page.locator(f"[data-lane-ref='{EXTRA[0]}'] .mn-bmore")
+        assert more.get_attribute("data-label") == "− fewer branches"
+        for lane in EXTRA[1:]:
+            expect(page.locator(f"[data-lane-ref='{lane}']")).to_be_visible()
+        # The cap still counts the three opened before the swap.
+        _toggle(page, EXTRA[2])
+        assert _mode(page, A) == "folded"
+        assert [_mode(page, x) for x in (B, EXTRA[3], EXTRA[2])] == ["interleaved"] * 3

@@ -33,20 +33,23 @@ claude_code_log/
 │   ├── assistant_factory.py
 │   ├── tool_factory.py
 │   └── system_factory.py
+├── lanes.py            # Branch lanes (sub-agents, forks) for the minimal theme
 ├── html/               # HTML-specific rendering
 │   ├── renderer.py
+│   ├── minimal_theme.py  # Minimal theme helpers (gutter, call line, lane attributes)
 │   ├── user_formatters.py
 │   ├── assistant_formatters.py
 │   ├── system_formatters.py
 │   ├── tool_formatters.py
-│   └── utils.py
-├── markdown/           # Markdown output rendering
-│   └── renderer.py
-└── templates/          # Jinja2 HTML templates
-    ├── transcript.html
-    ├── index.html
-    └── components/
-        └── timeline.html
+│   ├── utils.py
+│   └── templates/      # Jinja2 HTML templates
+│       ├── transcript.html
+│       ├── index.html
+│       └── components/
+│           ├── timeline.html
+│           └── minimal/  # The minimal theme's CSS and JS (incl. the DAG engine)
+└── markdown/           # Markdown output rendering
+    └── renderer.py
 
 scripts/                # Development utilities
 test/test_data/         # Representative JSONL samples
@@ -64,7 +67,7 @@ The project uses:
 - Textual for Terminal User Interface
 - Pydantic for data modeling and validation
 - Jinja2 for HTML template rendering
-- mistune for Markdown rendering
+- wenmode for Markdown rendering
 - dateparser for natural language date parsing
 
 ### Dependency Management
@@ -124,11 +127,57 @@ uv run pytest test/test_snapshot_html.py -v
 uv run pytest test/test_snapshot_html.py -n0 --snapshot-update
 ```
 
-> **Warning — don't let `--snapshot-update` run with `-n auto`.** Syrupy
-> and pytest-xdist race when writing snapshot files in parallel: the
-> `.ambr` file ends up truncated (observed: ~6000 lines silently
-> deleted on a single run, leaving the file structurally broken but
-> still passing on next read). Run `--snapshot-update` serially.
+> **`--snapshot-update` must run serially (`-n0`).** Syrupy and
+> pytest-xdist race when writing the shared `.ambr` files in parallel: a
+> raced update can silently truncate a file, or make an untouched fixture
+> appear to regenerate with structure it never had, and either result can
+> still pass on the next read. Running serially with a purged `__pycache__`
+> avoids both. Because `pyproject.toml` defaults to `-n auto`, a
+> `conftest.py` guard (`pytest_configure`) fails fast when
+> `--snapshot-update` is combined with more than one xdist worker. Ordinary
+> parallel runs (no update) are unaffected.
+
+**Recognising the race in a diff.** The guard prevents the mistake going
+forward, but you may still meet a suspicious `.ambr` diff — reviewing a PR
+that carries snapshot changes, or reading a historical diff from before the
+guard existed. The rule of thumb:
+
+> A negative in an `.ambr` diff is a signal to **investigate**, not a
+> verdict. A purely additive regeneration is `+N/-0`, so deletions mean one
+> of three things: an intentional content change you can name, a benign
+> realignment of shared boilerplate, or the race.
+
+To tell which, check at the **block level**, not the raw git diff: compare
+the set of snapshot names (a race removes or rewrites blocks you didn't
+touch) and diff each block's content. Inserting a snapshot or changing
+embedded CSS realigns shared boilerplate and can show hundreds of
+"deletions" with **zero content lost** — that is the benign case, and it is
+the one a raw `-N` most often turns out to be. A real `-275` was exactly this:
+block-level inspection found one snapshot added, none removed or renamed,
+and seven blocks each `+3` for a single `white-space: pre-wrap` rule, with
+zero content deleted. Confirm either way with a read-only `-n0` run after
+purging stale bytecode — if every snapshot passes, the committed file
+matches what the code renders and is not a raced artifact:
+
+```bash
+find . -name __pycache__ -type d -prune -exec rm -rf {} +
+uv run pytest test/test_snapshot_html.py -n0
+# all pass → the committed .ambr matches the render (not a raced file)
+```
+
+When you do intend to regenerate, use the recipe — it purges stale
+bytecode, regenerates serially, and then re-runs read-only to prove the
+file it just wrote is what the code renders:
+
+```bash
+just update-snapshot
+```
+
+A purely additive result (`+N/-0`, e.g. "8 snapshots passed. 1 snapshot
+generated.") is the healthy signature. The recipe exists because doing
+only part of this by hand is what produced both incidents above; reach
+for a bare `pytest --snapshot-update` only if you have a reason to, and
+keep the `-n0`.
 
 When snapshot tests fail:
 1. Review the diff to verify changes are intentional
@@ -183,7 +232,87 @@ ruff check --fix
 # Type checking
 uv run pyright
 uv run ty check
+
+# Lint the templates' JavaScript (installs the optional `js` group)
+just lint-js
+
+# Format JS, CSS, JSON and YAML, or only check (same group)
+just fmt-js
+just fmt-check
 ```
+
+The HTML pages carry a fair amount of JavaScript: the files under
+`claude_code_log/html/templates/components/`, plus `<script>` blocks inline
+in the templates. `just lint-js` checks both with
+[oxlint](https://oxc.rs/docs/guide/usage/linter.html), a Rust linter that
+uses ESLint's rule names. It is installed from PyPI by the optional `js`
+dependency group (no Node needed), and that group stays out of the default
+install.
+
+Neither kind of JS can be linted where it sits, because of the Jinja in
+it. So `scripts/lint_js.py` lints a staged copy:
+- **Component files** are copied with their `{% include %}` lines turned
+  into comments, so a finding's `file:line` is the real one.
+- **Inline scripts** are taken from pages rendered in both themes, with each
+  component include replaced by a placeholder. They are reported as
+  `rendered/<page>-<theme>/script-<n>.js`; `just lint-js --keep` keeps the
+  staged copy so you can open one.
+
+The rules are oxlint's default correctness set, adjusted in `.oxlintrc.json`.
+Any warning fails the run, so `just lint-js` is part of `just ci`, and CI
+runs it once (on the primary job). A finding that is a false positive gets a
+`// oxlint-disable-next-line <rule>` comment saying why. This happens, for
+example, with a function the template calls from another script, or only in
+the other theme.
+
+The minimal theme's dark syntax-highlighting sheet
+(`claude_code_log/html/templates/components/minimal/pygments_dark.css`) is
+generated — don't edit it by hand. After a Pygments upgrade or a change to
+`pygments_styles.css`, regenerate it with
+`uv run python scripts/generate_minimal_pygments_css.py`; a unit test fails
+while the committed file differs from the script's output.
+
+### Formatting JS, CSS, JSON and YAML
+
+[oxfmt](https://oxc.rs/docs/guide/usage/formatter.html), oxlint's sibling,
+formats the JavaScript, CSS, JSON and YAML; it comes from the same `js`
+group, pinned to an exact version because its output changes between
+releases. `.oxfmtrc.json` holds the options, and its `ignorePatterns`
+leave out, each with its reason: Markdown and TOML, data and generated
+files, and the two Pygments sheets, which
+`scripts/generate_minimal_pygments_css.py` reads line by line.
+
+A few component files hold Jinja (an `{% include %}`, a `{# comment #}`),
+which oxfmt cannot parse. `just fmt-js` formats them through
+`scripts/fmt_templates.py`, which masks each Jinja construct as a
+`/* jinja:N */` comment, formats the masked copy, and puts the constructs
+back verbatim. Each construct must sit on lines of its own; the script
+refuses anything else. Such files are found by their content, but they must
+also be listed in `ignorePatterns`, which a unit test checks.
+
+`just fmt-check` is part of `just ci`, and CI runs it once (on the primary
+job), so a change that isn't formatted fails; run `just fmt-js` before
+committing. The commit that first formatted the tree is listed in
+`.git-blame-ignore-revs`; to have `git blame` look past it, run once:
+
+```bash
+git config blame.ignoreRevsFile .git-blame-ignore-revs
+```
+
+GitHub's blame view reads the file by itself.
+
+When upgrading oxfmt, look at what a run *covers* as well as whether it
+passes: a release can start formatting a new language (Markdown arrived
+after 0.69), and then a bare run rewrites files nobody chose to format.
+
+### Whitespace
+
+An [`.editorconfig`](.editorconfig) at the repo root defines the baseline —
+UTF-8, LF line endings, a final newline, and trimmed trailing whitespace.
+Most editors honour it automatically; please keep it observed. Two paths
+deliberately opt out of trailing-whitespace trimming: Markdown (a line ending
+in two spaces is a hard break) and syrupy `.ambr` snapshots (the serializer
+indents blank lines, so regenerate them rather than trimming by hand).
 
 ## Performance Profiling
 
@@ -193,7 +322,125 @@ Enable timing instrumentation to identify bottlenecks:
 CLAUDE_CODE_LOG_DEBUG_TIMING=1 claude-code-log path/to/file.jsonl
 ```
 
-This outputs detailed timing for each rendering phase. The timing module is in `claude_code_log/renderer_timings.py`.
+This outputs detailed timing for each rendering phase, plus hit rates for
+the render memo caches. The timing module is in
+`claude_code_log/renderer_timings.py`.
+
+Pygments highlighting and Markdown rendering are memoized because every
+message is formatted twice per run (once for its combined page, once for
+its session file) — see `claude_code_log/render_cache.py` and
+[dev-docs/application_model.md § 2.9](dev-docs/application_model.md).
+Set `CLAUDE_CODE_LOG_RENDER_CACHE_MB=0` to disable memoization when
+bisecting a rendering difference; any other value sets the per-cache byte
+budget in MB (default 192).
+
+Above the leaf memo, a per-conversion fragment store
+(`claude_code_log/fragment_store.py`) reuses each message's complete
+formatted fragment between the combined-page and per-session passes.
+Set `CLAUDE_CODE_LOG_FRAGMENT_STORE=0` to disable it when bisecting.
+The store is a RAM-for-CPU trade (~+0.35× the project's transcript
+bytes at peak, measured), so a memory valve skips it automatically
+when available memory is under ~2.4× those bytes — the conversion
+then runs store-less at its pre-store footprint; an explicit `=1`
+forces the store past the valve. See
+[dev-docs/application_model.md § 2.9](dev-docs/application_model.md)
+for its correctness guards.
+
+A project's own pages and session files are additionally rendered in
+parallel worker processes, on by default at the CPU count. Set
+`CLAUDE_CODE_LOG_RENDER_JOBS=1` (or `off`) to disable it, or an integer to
+pin a worker count. It earns its keep on the runs that matter — an
+incremental run over a real archive measured 93.2s → 34.6s on 16 cores —
+at the cost of more total CPU, since each worker starts with a cold memo
+cache. Workers are *fed*, not self-loading: each unit crosses the process
+boundary carrying its own entry slice and (for session files) its slice
+of the fragment store, so workers verify-and-reuse formatted fragments
+instead of re-formatting, and no worker loads the project's transcript.
+Small projects are excluded outright, and the worker count is capped
+against available memory (the parent is charged its measured master-list
+footprint, each fed worker only its measured slice-holding cost): on a
+small machine or a large archive it degrades to serial rather than
+swapping. See
+[dev-docs/application_model.md § 2.10](dev-docs/application_model.md) for
+the measurements.
+
+Orthogonal to both, a conversion whose cache is fresh and whose combined
+output is current regenerates stale *session files* from those sessions'
+own JSONL plus a persisted cross-session sidecar, instead of loading the
+whole project (session-scoped incremental rendering — see
+[dev-docs/application_model.md § 2.12](dev-docs/application_model.md)).
+Set `CLAUDE_CODE_LOG_SESSION_SCOPED=0` to force the full-load path when
+bisecting a rendering difference.
+
+When the combined output *is* stale, a paginated project converts
+page-by-page instead of loading whole when either of two gates opens:
+on a memory-tight machine (available memory under ~2.4x the project's
+transcript bytes — the same knee where the fragment store declines) it
+always streams, and on a roomy machine it streams when at most a third
+of the planned pages need work — the daily-run shape, where a couple of
+page loads beat the whole-project load the full path would pay (a dense
+rebuild still declines to the full load + fan-out, which wins it on
+wall time). Pages are planned from cached session data, and each page's
+sessions are loaded, rendered (page + stale session files, with a
+per-page fragment store) and dropped in turn, so peak residency is one
+page rather than the project — an archive's size stops being the bound;
+the largest page's source files become it.
+`CLAUDE_CODE_LOG_STREAMING=1` bypasses both gates (it streams on a roomy
+machine and on a dense rebuild), but not the structural preconditions:
+the conversion still has to be the paginated HTML path with every page's
+sessions resolvable to their source files, and the machine still has to
+hold the largest page. `=0` disables streaming for bisecting. See
+[dev-docs/application_model.md § 2.13](dev-docs/application_model.md).
+
+The cache refresh itself is also incremental: when source files
+changed over a populated cache, session rows, project aggregates, and
+the cross-session sidecar are recomputed from the modified files'
+bounded coupling closure (dedup partners, attachment owners, junction
+targets) instead of loading the whole project — the refresh's
+residency scales with what changed, not with the archive. Anything
+hairy (deleted files, rewritten history, closures past a third of the
+project, cross-boundary token attribution) declines to the unchanged
+full-load refresh. Set `CLAUDE_CODE_LOG_INCREMENTAL_CACHE=0` to force
+the full refresh when bisecting. See
+[dev-docs/application_model.md § 2.14](dev-docs/application_model.md).
+
+That refresh parses each modified file from source, and the loads that
+follow it — the closure load and the session-scoped render — used to
+rebuild those same entries from the rows it had just written, twice.
+A per-conversion parsed-entry store
+(`claude_code_log/entry_store.py`) serves the refresh's list to both
+instead, taking a watch tick on an 803MB archive from 1.03s to 0.72s.
+Only the incremental refresh fills it, and only with the files that
+changed, so a cold conversion and the streaming path (whose bounded
+residency depends on dropping each page) carry no extra memory.
+
+Held *across* ticks — which `watch` does, owning one for the life of the
+loop — the same store also resumes. It pins its entries to a byte offset
+plus a hash of the bytes below it, so a tick hashes that prefix (32ms
+over 39.7MB, against 143ms to re-parse it), reads only what was
+appended, and appends just the new cache rows rather than rewriting the
+file's. That takes the same tick to **0.26s**. It applies only where the
+rows are provably the file's own lines: a trunk's rows carry its
+subagents' spliced transcripts, so a running subagent grows a block
+mid-sequence and those files take the unchanged full rewrite.
+
+Set `CLAUDE_CODE_LOG_ENTRY_STORE=0` to disable all of it when bisecting;
+a per-file memory valve declines to hold a file when available memory is
+under ~6× its bytes, and an explicit `=1` overrides that valve. See
+[dev-docs/application_model.md § 2.16](dev-docs/application_model.md).
+
+To re-measure on your own hardware (core count changes the answer for
+the fan-out), point the benchmark at a real project:
+
+```bash
+uv run python scripts/bench_render.py ~/.claude/projects/<project>
+```
+
+It copies the project to scratch space, warms the cache, then times every
+combination of the knobs — including, on a paginated project, streaming
+rows and an incremental scenario, with a peak-RSS column — and hashes the
+output of each, so it doubles as an equivalence check across far more real
+data than the test fixtures cover.
 
 ## Diagnosing Hangs
 
@@ -233,8 +480,9 @@ Key points:
   `BINDINGS` for the keybindings tables (`scripts/generate_tui_docs.py`) and
   captures SVG screenshots of the running TUI
   (`scripts/generate_tui_screenshots.py`). Both scripts are runnable standalone.
-- **Example output** (`example.md` + `examples/transcript.html`) is rendered at
-  build time from a bundled sample project
+- **Example output** (`example.md` + `examples/transcript.html`, and the same
+  transcript in the minimal theme as `examples/transcript-minimal.html`) is
+  rendered at build time from a bundled sample project
   (`scripts/generate_example_output.py`, also `just example`) — no private data
   or release asset involved. Generation is fault-tolerant so a render hiccup
   can't block the build.
@@ -247,12 +495,87 @@ Key points:
   build; pushes to `main` deploy to Pages. The repo's **Settings → Pages →
   Source** must be set to **GitHub Actions** (one-time).
 
+### Demo videos
+
+The README's overview video and the docs site's
+[Demo videos](docs/demos.md) page are recorded by a script, so they can be
+re-recorded whenever the UI changes:
+
+```bash
+just demos                     # record every scene into .demos/ (~6 min)
+just demos --only branches     # re-record one scene (chapter and beat)
+just demos --list              # the scenes
+just demos --publish           # record, then update docs/assets/demos/ + docs/demos.md
+```
+
+`scripts/demos/record.py` drives Chromium through each **scene** with
+Playwright: captions, title cards, a cursor and fades are drawn by an
+overlay injected into the page (`director.py`), frames come from a Chrome
+DevTools screencast, and ffmpeg (from the `demos` dependency group's
+`imageio-ffmpeg` wheel) encodes the clips and cross-fades them into the
+supercut and the walkthrough. The data is synthetic and committed
+(`scripts/demos/demo_data.py`, plus the live chapter's
+`test/dag_live_fixture.py`), served by the real `claude-code-log serve`, so
+the videos re-record identically anywhere. To show a new feature, add a
+`@scene` and list it in `CHAPTERS` or `SUPERCUT`.
+
+The recent sessions chapter and beat are driven by
+`test/recent_live_fixture.py`: sessions in four projects, written as real
+JSONL and moved on stage by stage, each stage converted by the real full
+run. The same stages are an end-to-end browser test
+(`test/test_recent_live_browser.py`), so a change that breaks the demo's
+story fails in `just test-browser` first, and a play mode for judging the
+page by eye in your own browser:
+
+```bash
+just recent-play          # a sandbox page; the next stage every 20 s
+just recent-play --step   # Enter moves on a stage
+```
+
+The README embeds the supercut as a GitHub upload: after `--publish`, drag
+`docs/assets/demos/supercut.mp4` into the README editor on GitHub and
+replace the old attachment link.
+
 ## Architecture
 
 Start with [dev-docs/application_model.md](dev-docs/application_model.md)
 for the system overview (subsystems, data lifecycle, glossary). For
 the rendering pipeline specifically, see
 [dev-docs/rendering-architecture.md](dev-docs/rendering-architecture.md).
+
+### Themes
+
+HTML output has two themes, `classic` (the default) and `minimal`,
+selected with `--theme` or `CLAUDE_CODE_LOG_THEME`; `default` resolves
+through `utils.DEFAULT_THEME`, so changing the default is a one-line
+change. The user guide is [docs/themes.md](docs/themes.md); the as-built
+reference for the minimal theme — where its parts live, the branch
+(DAG) engine, previews, live updates, performance — starts at
+[dev-docs/minimal-theme.md](dev-docs/minimal-theme.md). Two rules hold
+for every change:
+
+- **Classic message markup stays byte-identical.** Minimal-only
+  template additions are glued inline (`{% if minimal %}…{% endif %}`,
+  no new lines outside the conditional) and minimal-only formatter
+  behaviour is behind `normalize_theme(self.theme) == "minimal"`, so a
+  minimal change never moves a classic message's markup. The embedded
+  CSS and JS the themes share (filter, search, timeline, live update)
+  may change, but only deliberately: say so in the commit, and check at
+  block level (after `just update-snapshot`) that every changed classic
+  line is in `<style>`/`<script>`. The minimal theme's introduction did
+  exactly this once — its shared filter/search/live-update hooks grew
+  classic pages by ~10KB and fixed three timeline behaviours (the Tool
+  toggle governing both tool groups, hiding items whose card is
+  filtered out, `getBoundingClientRect` scrolling) — with no message
+  markup changed.
+- **Timeline and filter parity in every branch mode.** The browser
+  sweep in `test/test_minimal_parity_browser.py` checks every filter
+  toggle × fold depth × branch mode with the timeline open, search and
+  live updates included; extend it when adding a message type.
+
+To compare how long a page takes to load and lay out in each theme, run
+`uv run python scripts/bench_page_load.py` (the minimal theme lays the
+transcript out once, as the DAG grid — dev-docs/minimal-theme.md § 5).
 
 ### Data Flow Overview
 
@@ -286,7 +609,7 @@ Uses Jinja2 templates for HTML generation:
 
 ### Timeline Component
 
-The interactive timeline is implemented in JavaScript within `claude_code_log/templates/components/timeline.html`. When adding new message types or modifying CSS class generation, ensure the timeline's message type detection logic is updated accordingly.
+The interactive timeline is implemented in JavaScript within `claude_code_log/html/templates/components/timeline.html`. When adding new message types or modifying CSS class generation, ensure the timeline's message type detection logic is updated accordingly.
 
 ## Cache System
 
@@ -301,29 +624,67 @@ The cache automatically rebuilds when source files change or cache schema versio
 
 ## Release Process
 
-The project uses automated releases with semantic versioning.
+Releases are tag-driven: pushing a version tag runs
+[`.github/workflows/release.yml`](.github/workflows/release.yml), which
+publishes to PyPI only after a maintainer approves it.
 
-### Quick Release
+### Cutting a release
 
 ```bash
-# Bump version and create release (patch/minor/major)
-just release-prep patch    # Bug fixes
-just release-prep minor    # New features
-just release-prep major    # Breaking changes
+# On main, with a clean tree: bump version, update uv.lock and CHANGELOG.md,
+# commit and tag — all local (patch/minor/major, or an exact version)
+just release-prep minor
 
-# Or specify exact version
-just release-prep 0.4.3
-
-# Preview what would be released
+# Check the notes the GitHub Release will carry, and the commit
 just release-preview
+git show --stat HEAD
 
-# Push to PyPI and create GitHub release
+# Push main and the tag together (--atomic), which starts the workflow
 just release-push
 ```
 
-### GitHub Release Only
+Until the push, `git tag -d X.Y.Z && git reset --hard HEAD~1` undoes it.
 
-```bash
-just github-release          # For latest tag
-just github-release 0.4.2    # For specific version
-```
+### What the workflow does
+
+1. **ci** — refuses a tag whose commit isn't on `main`, then waits for the CI
+   run (`ci.yml`) that the same push started on the release commit, and fails
+   the release if it fails. Nothing is re-run.
+2. **build** — in parallel, checks that the tag, `[project].version`,
+   `uv.lock`'s own `claude-code-log` entry and a `## [X.Y.Z]` CHANGELOG
+   section all agree, then runs `uv build` and extracts the release notes
+   (`scripts/release_notes.py`).
+3. **publish** — once both pass, waits in the `pypi` environment for a
+   required reviewer to **approve the deployment** in the run's page on
+   GitHub, then `uv publish`es.
+4. **github-release** — once PyPI has it, creates the GitHub Release from the
+   notes, with the same wheel and sdist attached.
+
+Publishing uses PyPI **trusted publishing**: PyPI trusts this workflow and the
+`pypi` environment, so no API token exists anywhere. A version, once
+published, is burned — PyPI refuses re-uploads even after a delete, so a
+botched release is fixed by releasing the next number.
+
+`just publish` is the manual escape hatch for when GitHub is down; it needs
+PyPI credentials (e.g. `UV_PUBLISH_TOKEN`) locally.
+
+### Who can release
+
+Pushing a tag needs write access, and on this personally-owned repo every
+collaborator has it — so collaborators *are* the maintainers who can start a
+release. Publishing additionally needs one of the `pypi` environment's
+required reviewers to approve. Before adding a collaborator who shouldn't
+release, note that write access is all-or-nothing here: per-role tag
+restrictions need an organisation-owned repo.
+
+### One-time setup
+
+- **PyPI** → project settings → Publishing → add a GitHub publisher: owner
+  `daaain`, repo `claude-code-log`, workflow `release.yml`, environment `pypi`.
+- **GitHub** → Settings → Environments → `pypi`: add the maintainers as
+  required reviewers (any one approval releases), and limit deployments to
+  tags matching `[0-9]*.[0-9]*.[0-9]*`.
+- **GitHub** → Settings → Rules → Rulesets: the "release tags are immutable"
+  tag ruleset blocks deleting, moving or force-pushing `refs/tags/[0-9]*`, so
+  a published version's tag always names what was released. Releasing a
+  botched version again means the next number, which PyPI requires anyway.

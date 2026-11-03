@@ -35,6 +35,13 @@ def _code(value: str) -> str:
     return f"<code>{escape_html(value)}</code>"
 
 
+def _event_html(event: str) -> str:
+    """A Monitor event's text: inline code for one line, a block for more."""
+    if "\n" in event:
+        return f"<pre><code>{escape_html(event)}</code></pre>"
+    return _code(event)
+
+
 def _format_usage_rows(usage: Optional[TaskNotificationUsage]) -> list[str]:
     """Optional usage stats as `<dt>/<dd>` rows. Skips fields the parser
     didn't capture so older transcripts (or partial completions) don't
@@ -117,7 +124,11 @@ def format_taskoutput_output(output: TaskOutputResult) -> str:
 # ---------------------------------------------------------------------------
 
 
-def format_task_notification_content(content: TaskNotificationMessage) -> str:
+def format_task_notification_content(
+    content: TaskNotificationMessage,
+    include_duplicate: bool = False,
+    preview: bool = False,
+) -> str:
     """Render a ``<task-notification>`` user entry as a metadata card +
     collapsible Markdown body for ``<result>``.
 
@@ -125,7 +136,11 @@ def format_task_notification_content(content: TaskNotificationMessage) -> str:
     (``🔄 Async result • <summary>``). When the renderer's Phase 3
     pass (`_link_async_notifications`) flagged the body as a duplicate
     of the spawning Task's last sidechain sub-assistant, the body
-    collapses to a backlink-only stub instead of doubling the content.
+    collapses to a backlink-only stub instead of doubling the content —
+    unless ``include_duplicate`` (the minimal theme, which shows the answer
+    here, at the async branch's merge row, and not on the spawn). The
+    minimal theme also asks for ``preview``: a Markdown answer longer than a
+    few lines is a two-line preview (``utils.render_markdown_preview``).
     """
     rows: list[str] = []
     if content.task_id:
@@ -158,6 +173,8 @@ def format_task_notification_content(content: TaskNotificationMessage) -> str:
                 f"{escape_html(content.status)}</span>",
             )
         )
+    if content.event:
+        rows.append(_row("Event", _event_html(content.event)))
     rows.extend(_format_usage_rows(content.usage))
     if content.transcript_path:
         rows.append(_row("Transcript", _code(content.transcript_path)))
@@ -168,8 +185,10 @@ def format_task_notification_content(content: TaskNotificationMessage) -> str:
             f'<dl class="teammate-tool-card task-notification-card">'
             f"{''.join(rows)}</dl>"
         )
-    if content.result_text and not content.result_is_duplicate:
+    if content.result_text and (include_duplicate or not content.result_is_duplicate):
         parts.append(
-            render_async_result_body(content.result_text, "task-notification-result")
+            render_async_result_body(
+                content.result_text, "task-notification-result", preview=preview
+            )
         )
     return "".join(parts)

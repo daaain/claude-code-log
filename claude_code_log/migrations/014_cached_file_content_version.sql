@@ -1,0 +1,30 @@
+-- Re-parse when the shape of what we cache changes
+-- Migration: 014
+-- Description: Add a `content_version` column to `cached_files`.
+-- `messages.content` holds zlib(json(entry.model_dump())), so a cached
+-- blob is only as complete as the model that produced it. Freshness
+-- keyed on source mtime, size and the sidecar fingerprint -- all
+-- properties of the file -- and nothing observed the shape of what we
+-- had written. Adding a field to a transcript model therefore left
+-- every unchanged transcript serving a blob without it, indefinitely.
+--
+-- Issue #320 is that bug's first sighting: `imagePasteIds` shipped as a
+-- new field, and on transcripts untouched since, it rehydrated as NULL
+-- while the JSONL plainly carried it -- so image placeholders that had
+-- a recorded association were reported as having none, rendered
+-- literally, and their images detached.
+--
+-- The column stores the digest returned by
+-- `cache.content_schema_version()`, derived from the entry models' own
+-- field names, so a future field moves it without anyone remembering to.
+--
+-- Backward compatibility differs DELIBERATELY from 007 and 011. Those
+-- accept a NULL as "no reason to think we missed anything", because the
+-- column they added described an input we might not have seen. This one
+-- describes the content we wrote: a NULL means the row predates the
+-- check and its completeness is unknown, which is exactly the #320
+-- state. NULL is therefore treated as STALE and the row re-parses once.
+-- That is a one-time full re-parse of an existing cache, and it is the
+-- point of the migration rather than a cost to be avoided.
+
+ALTER TABLE cached_files ADD COLUMN content_version TEXT;

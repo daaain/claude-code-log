@@ -19,6 +19,7 @@ from pygments.formatter import Formatter
 from pygments.formatters import HtmlFormatter
 from pygments.util import ClassNotFound
 
+from ..render_cache import pygments_cache
 from ..renderer_timings import timing_stat
 
 
@@ -89,6 +90,15 @@ def highlight_code_with_pygments(
     Returns:
         HTML string with syntax-highlighted code
     """
+    # Memoized: highlighting is a pure function of these four arguments,
+    # and the same content is highlighted repeatedly within a run — once
+    # for the combined page and again for the session file, plus whenever
+    # the same file is Read more than once. See ``render_cache``.
+    memo_key = (code, file_path, show_linenos, linenostart)
+    cached = pygments_cache.get(memo_key)
+    if cached is not None:
+        return cached
+
     # Get caches (initialized lazily)
     pattern_cache, extension_cache = _init_lexer_caches()
 
@@ -130,7 +140,9 @@ def highlight_code_with_pygments(
 
     # Highlight the code with timing if enabled
     with timing_stat("_pygments_timings"):
-        return str(highlight(code, lexer, formatter))
+        highlighted = str(highlight(code, lexer, formatter))
+    pygments_cache.put(memo_key, highlighted)
+    return highlighted
 
 
 def truncate_highlighted_preview(highlighted_html: str, max_lines: int) -> str:

@@ -28,21 +28,27 @@ from generate_tui_screenshots import Screenshot, generate_screenshots  # noqa: E
 from generate_example_output import generate_example_html  # noqa: E402
 
 
-def _emit_example_output() -> bool:
-    """Render the bundled sample project into the site at examples/transcript.html.
+def _emit_example_output(theme: str = "classic") -> bool:
+    """Render the bundled sample project into the site at examples/.
 
-    Returns True on success. Failures are swallowed (with a warning) so a render
-    hiccup can never block the rest of the docs build.
+    The classic page is ``examples/transcript.html``, the minimal theme's
+    ``examples/transcript-minimal.html``. Returns True on success. Failures
+    are swallowed (with a warning) so a render hiccup can never block the
+    rest of the docs build.
     """
+    name = "transcript.html" if theme == "classic" else f"transcript-{theme}.html"
     try:
         with tempfile.TemporaryDirectory() as tmp:
-            html = generate_example_html(Path(tmp) / "transcript.html")
+            html = generate_example_html(Path(tmp) / "transcript.html", theme)
             data = html.read_bytes()
-        with mkdocs_gen_files.open("examples/transcript.html", "wb") as fh:
+        with mkdocs_gen_files.open(f"examples/{name}", "wb") as fh:
             fh.write(data)
         return True
     except Exception as exc:  # noqa: BLE001 - never let the example break docs
-        print(f"WARNING: example output generation failed: {exc}", file=sys.stderr)
+        print(
+            f"WARNING: example output generation ({theme}) failed: {exc}",
+            file=sys.stderr,
+        )
         return False
 
 
@@ -105,7 +111,7 @@ with mkdocs_gen_files.open("reference/tui.md", "w") as fh:
     fh.write(_build_page())
 
 
-def _build_example_page(generated: bool) -> str:
+def _build_example_page(generated: bool, minimal: bool = False) -> str:
     parts = [
         "# Example output",
         "",
@@ -121,6 +127,16 @@ def _build_example_page(generated: bool) -> str:
         parts += [
             "[Open the full example transcript]"
             "(examples/transcript.html){ .md-button target=_blank }",
+        ]
+        if minimal:
+            parts += [
+                "[Open the example in the minimal theme]"
+                "(examples/transcript-minimal.html){ .md-button target=_blank }",
+                "",
+                "The minimal page is the same transcript rendered with "
+                "`--theme minimal` — see [Themes](themes.md).",
+            ]
+        parts += [
             "",
             '<iframe src="../examples/transcript.html" title="Example transcript" '
             'style="width:100%;height:80vh;border:1px solid var(--md-default-fg-color--lightest);'
@@ -135,5 +151,6 @@ def _build_example_page(generated: bool) -> str:
 
 
 _example_generated = _emit_example_output()
+_minimal_generated = _example_generated and _emit_example_output("minimal")
 with mkdocs_gen_files.open("example.md", "w") as fh:
-    fh.write(_build_example_page(_example_generated))
+    fh.write(_build_example_page(_example_generated, _minimal_generated))

@@ -1,0 +1,1304 @@
+/* The recent sessions page (recent.html): one look in both themes. The
+   colours are the minimal theme's tokens (tokens.css, included before this
+   file), plus the few the page needs of its own, below. Every rule is
+   scoped under body.rc-page. */
+
+:root {
+    --rc-canvas: #f6f7f8; /* the page behind the panel (the panel is --bg) */
+    --rc-bar: #c9cdd2; /* a turn's bar on the strip */
+    --rc-ask: var(--user); /* asked you: orange */
+    --rc-cache: var(--note);
+    --rc-cachebg: #e3ecfb;
+    --rc-future: var(--code);
+    --rc-gridline: var(--rule);
+}
+
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+        --rc-canvas: #0e1013;
+        --rc-bar: #3d434c;
+        --rc-cachebg: #132238;
+    }
+}
+
+:root[data-theme="dark"] {
+    --rc-canvas: #0e1013;
+    --rc-bar: #3d434c;
+    --rc-cachebg: #132238;
+}
+
+body.rc-page {
+    margin: 0;
+    min-height: 100vh;
+    background: var(--rc-canvas);
+    color: var(--fg);
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 20px;
+}
+
+.rc-page *,
+.rc-page *::before,
+.rc-page *::after {
+    box-sizing: border-box;
+}
+
+.rc-page a {
+    color: var(--note);
+}
+
+.rc-page a:hover {
+    color: var(--fg);
+}
+
+.rc-page button {
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+}
+
+.rc-page :focus-visible {
+    outline: 2px solid var(--note);
+    outline-offset: 2px;
+}
+
+.rc-page code {
+    padding: 0 3px;
+    border-radius: 3px;
+    background: var(--code);
+    font: 0.92em var(--mono);
+}
+
+.rc-wrap {
+    max-width: 1240px;
+    margin: 0 auto;
+    padding: 20px 24px 56px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+/* ---------------------------------------------------------- header */
+
+.rc-nav {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+    font-size: 13px;
+}
+
+.rc-nav > a,
+.rc-nav .mn-seg {
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+
+.rc-sp {
+    flex: 1;
+}
+
+/* The Auto / Light / Dark toggle (components/minimal/scheme_toggle.html),
+   styled here rather than through the minimal pages' chrome.css. */
+.rc-page .mn-seg {
+    display: inline-flex;
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    overflow: hidden;
+    background: var(--bg);
+}
+
+.rc-page .mn-seg button {
+    width: 32px;
+    min-height: 30px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.rc-page .mn-seg button + button {
+    border-left: 1px solid var(--rule);
+}
+
+.rc-page .mn-seg button.on {
+    background: var(--fg);
+    color: var(--bg);
+}
+
+.rc-page .mn-seg button:not(.on):hover {
+    color: var(--fg);
+}
+
+.rc-page .mn-seg svg {
+    display: block;
+}
+
+.rc-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 16px 32px;
+}
+
+.rc-head h1 {
+    margin: 0;
+    font-size: 34px;
+    line-height: 40px;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+}
+
+.rc-stats {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: stretch;
+    gap: 6px;
+    font-family: var(--mono);
+}
+
+.rc-filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.rc-filter {
+    min-height: 56px;
+    padding: 6px 14px;
+    border: 0;
+    border-radius: 4px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: center;
+    text-align: left;
+    background: transparent;
+    box-shadow: inset 0 0 0 1px var(--rule);
+    --rc-c: var(--fg);
+    color: var(--muted);
+}
+
+.rc-filter[data-filter="urgent"] {
+    --rc-c: var(--rc-ask);
+    color: var(--rc-c);
+}
+
+.rc-filter[data-filter="cache"] {
+    --rc-c: var(--rc-cache);
+    color: var(--rc-c);
+}
+
+.rc-filter[aria-pressed="true"] {
+    background: var(--rc-c);
+    color: var(--bg);
+    box-shadow: none;
+}
+
+.rc-k {
+    font-size: 11px;
+    line-height: 14px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+}
+
+.rc-filter .rc-n {
+    font-size: 28px;
+    line-height: 34px;
+    font-variant-numeric: tabular-nums;
+    font-weight: 300;
+    color: var(--rc-c);
+}
+
+.rc-filter[data-filter="urgent"] .rc-n,
+.rc-filter[data-filter="cache"] .rc-n {
+    font-weight: 500;
+}
+
+.rc-filter[aria-pressed="true"] .rc-n {
+    color: var(--bg);
+    font-weight: 500;
+}
+
+.rc-updated {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 6px 0 6px 18px;
+    margin-left: 6px;
+    border-left: 1px solid var(--rule);
+    color: var(--muted);
+}
+
+.rc-updated .rc-n {
+    font-size: 28px;
+    line-height: 34px;
+    font-weight: 300;
+    color: var(--fg);
+    font-variant-numeric: tabular-nums;
+}
+
+/* Old data, said in the top bar beside the theme toggle: there, showing
+   or hiding it doesn't move the list. */
+.rc-stale {
+    margin: 0;
+    min-width: 0;
+    /* 18px of line plus 14px: the theme toggle's height. */
+    padding: 7px 10px;
+    border-radius: 4px;
+    background: var(--errbg);
+    color: var(--err);
+    font-weight: 600;
+    line-height: 18px;
+    text-align: right;
+}
+
+.rc-stale[hidden] {
+    display: none;
+}
+
+/* ----------------------------------------------------------- panel */
+
+.rc-panel {
+    --rc-surface: var(--bg); /* what a row is drawn on (see .rc-row) */
+    display: flex;
+    flex-direction: column;
+    border-radius: 8px;
+    background: var(--rc-surface);
+    border: 1px solid var(--rule);
+    overflow: hidden;
+}
+
+.rc-thead {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 0 16px;
+    padding: 6px 16px;
+    border-bottom: 1px solid var(--rule);
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 14px;
+    color: var(--muted);
+}
+
+.rc-th {
+    padding-bottom: 2px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+}
+
+.rc-th-since {
+    flex: 0 0 128px;
+    margin-left: 12px; /* over the rows' block, past their chevron */
+}
+
+.rc-th-session {
+    flex: 1 1 290px;
+}
+
+.rc-axis {
+    flex: 1 1 520px;
+    min-width: 0;
+    position: relative;
+    height: 14px;
+    margin-bottom: 2px;
+}
+
+.rc-axis span {
+    position: absolute;
+    transform: translateX(-50%);
+    white-space: nowrap;
+}
+
+.rc-axis .rc-axis-now {
+    color: var(--fg);
+    font-weight: 600;
+}
+
+.rc-group-toggle {
+    flex: 0 0 104px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 32px;
+    padding: 0 6px;
+    border-radius: 4px;
+    box-shadow: inset 0 0 0 1px var(--rule);
+    color: var(--fg);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.rc-group-toggle input {
+    width: 14px;
+    height: 14px;
+    margin: 0;
+    accent-color: var(--fg);
+}
+
+.rc-group-toggle:focus-within {
+    outline: 2px solid var(--note);
+    outline-offset: 2px;
+}
+
+.rc-group-toggle input:focus-visible {
+    outline: none;
+}
+
+.rc-rows,
+.rc-list {
+    display: flex;
+    flex-direction: column;
+}
+
+.rc-group-h {
+    margin: 0;
+    padding: 14px 16px 6px;
+    border-bottom: 1px solid var(--hair);
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 16px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    background: var(--rc-canvas);
+}
+
+.rc-group-h .rc-group-n {
+    margin-left: 8px;
+    font-weight: 400;
+}
+
+.rc-empty {
+    margin: 0;
+    padding: 28px 16px;
+    color: var(--muted);
+}
+
+.rc-empty[hidden] {
+    display: none;
+}
+
+/* ------------------------------------------------------------- row */
+
+.rc-row {
+    position: relative; /* holds a closing panel's fading copy (.rc-ghost) */
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0 16px;
+    padding: 6px 16px 6px 6px; /* the chevron sits close to the edge */
+    border-bottom: 1px solid var(--hair);
+    /* Opaque, so a row sliding past others (recent.js "motion") covers them. */
+    background: var(--rc-surface);
+}
+
+/* The chevron: says the row opens, and rotates when it is open. A pointer
+   target only; the block next to it is the keyboard control. */
+.rc-chev {
+    flex: 0 0 14px;
+    align-self: stretch;
+    margin-right: -8px; /* sit close to the block it belongs to */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--muted);
+    cursor: pointer;
+}
+
+.rc-chev svg {
+    transition: transform 0.12s ease;
+}
+
+.rc-row[data-open="true"] .rc-chev svg {
+    transform: rotate(90deg);
+}
+
+.rc-chev:hover,
+.rc-row:has(.rc-block:hover) .rc-chev {
+    color: var(--fg);
+}
+
+.rc-block {
+    flex: 0 0 128px;
+    align-self: stretch;
+    min-height: 68px;
+    margin: 0;
+    padding: 8px 12px;
+    border: 0;
+    border-radius: 4px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: flex-start;
+    gap: 2px;
+    text-align: left;
+    background: transparent;
+}
+
+.rc-block-when {
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
+    font-family: var(--mono);
+}
+
+.rc-block-n {
+    font-size: 28px;
+    line-height: 32px;
+    letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;
+    font-weight: 500;
+}
+
+.rc-block-u {
+    font-size: 12px;
+}
+
+/* A weekday and a time ("Fri" "21:14"): smaller, to fit the block. */
+.rc-block-long .rc-block-n {
+    font-size: 22px;
+    letter-spacing: -0.04em;
+}
+
+.rc-block-status {
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 14px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+}
+
+.rc-state-asked .rc-block {
+    background: var(--rc-ask);
+    color: var(--bg);
+}
+
+.rc-state-error .rc-block {
+    background: var(--err);
+    color: var(--bg);
+}
+
+.rc-state-done .rc-block {
+    color: var(--fg);
+    box-shadow: inset 0 0 0 1.5px var(--fg);
+}
+
+.rc-state-busy .rc-block {
+    color: var(--tool);
+}
+
+/* Waiting on its own background work: calm, not your move. */
+.rc-state-waiting .rc-block {
+    color: var(--note);
+    box-shadow: inset 0 0 0 1px var(--note);
+}
+
+.rc-info {
+    flex: 1 1 290px;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 6px 0;
+}
+
+.rc-title {
+    display: block;
+    text-decoration: none;
+    color: var(--fg);
+    font-size: 17px;
+    line-height: 23px;
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.rc-page a.rc-title {
+    color: var(--fg);
+}
+
+.rc-page a.rc-title:hover {
+    text-decoration: underline;
+}
+
+.rc-state-asked .rc-title,
+.rc-state-error .rc-title {
+    font-weight: 600;
+}
+
+.rc-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 10px;
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 16px;
+    color: var(--muted);
+}
+
+.rc-meta-project {
+    color: var(--fg);
+}
+
+.rc-meta-branch {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.rc-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0 6px;
+    border-radius: 3px;
+    background: var(--rc-cachebg);
+    color: var(--rc-cache);
+    font-weight: 600;
+}
+
+/* ----------------------------------------------------- time strip */
+
+.rc-strip {
+    flex: 1 1 520px;
+    min-width: 0;
+    position: relative;
+    height: 64px; /* markers 16-36, background lanes 44-58 */
+    overflow: hidden;
+}
+
+.rc-strip > span,
+.rc-marks > span {
+    position: absolute;
+}
+
+.rc-future {
+    right: 0;
+    top: 0;
+    bottom: 0;
+    background: var(--rc-future);
+}
+
+.rc-grid {
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: var(--rc-gridline);
+}
+
+.rc-band {
+    top: 8px;
+    height: 36px;
+    background: var(--rc-cachebg);
+}
+
+.rc-band-risk {
+    box-shadow: inset 0 0 0 1px var(--rc-cache);
+}
+
+.rc-bar {
+    top: 24px;
+    height: 4px;
+    min-width: 2px;
+    background: var(--rc-bar);
+}
+
+.rc-tick {
+    top: 19px;
+    height: 14px;
+    width: 1px;
+    background: var(--tool);
+}
+
+.rc-marks {
+    position: absolute;
+    inset: 0;
+}
+
+.rc-mk {
+    top: 16px;
+    width: 20px;
+    height: 20px;
+    margin-left: -10px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg);
+    --rc-c: var(--fg);
+    color: var(--rc-c);
+    box-shadow: inset 0 0 0 1.5px var(--rc-c);
+}
+
+.rc-mk svg {
+    display: block;
+}
+
+.rc-dot {
+    top: 23px;
+    width: 6px;
+    height: 6px;
+    margin-left: -3px;
+    border-radius: 1px;
+    --rc-c: var(--fg);
+    background: var(--rc-c);
+}
+
+.rc-k-asst {
+    --rc-c: var(--asst);
+}
+
+.rc-k-ask {
+    --rc-c: var(--rc-ask);
+}
+
+.rc-k-err {
+    --rc-c: var(--err);
+}
+
+.rc-k-task {
+    --rc-c: var(--tool);
+}
+
+.rc-k-wake {
+    --rc-c: var(--note);
+}
+
+/* A wake-up still to come: a dashed outline, not yet happened. */
+.rc-mk.rc-pending {
+    box-shadow: none;
+    outline: 1.5px dashed var(--rc-c);
+    outline-offset: -1.5px;
+}
+
+.rc-mk.rc-k-ask,
+.rc-mk.rc-k-err {
+    background: var(--rc-c);
+    color: var(--bg);
+    box-shadow: none;
+}
+
+.rc-now {
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    margin-left: -1px;
+    background: var(--fg);
+}
+
+.rc-strip-note {
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 14px;
+    color: var(--muted);
+    white-space: nowrap;
+    background: var(--bg);
+    padding: 0 2px;
+}
+
+.rc-earlier {
+    left: 2px;
+    top: 1px;
+}
+
+/* --------------------------------------------- background lanes */
+
+/* One thin line per background command, agent or monitor, packed into
+   up to three lanes under the turn bars (recent.js drawLanes). */
+.rc-bg {
+    height: 2px;
+    min-width: 2px;
+    background: var(--dim);
+}
+
+.rc-bg[data-lane="0"] {
+    top: 44px;
+}
+
+.rc-bg[data-lane="1"] {
+    top: 50px;
+}
+
+.rc-bg[data-lane="2"] {
+    top: 56px;
+}
+
+/* Still running: in the tool colour, with an arrowhead at NOW. */
+.rc-bg-running {
+    background: var(--tool);
+}
+
+.rc-bg-running::after {
+    content: "";
+    position: absolute;
+    right: -4px;
+    top: -3px;
+    border-left: 5px solid var(--tool);
+    border-top: 4px solid transparent;
+    border-bottom: 4px solid transparent;
+}
+
+/* No end recorded: dashed, faded. */
+.rc-bg-lost {
+    background: repeating-linear-gradient(90deg, var(--dim) 0 4px, transparent 4px 7px);
+    opacity: 0.7;
+}
+
+/* The folded lane: several items, drawn as the union of their spans. */
+.rc-bg-more {
+    background: repeating-linear-gradient(90deg, var(--muted) 0 2px, transparent 2px 4px);
+}
+
+.rc-bg-end {
+    --rc-lane: 44px;
+}
+
+.rc-bg-end[data-lane="1"] {
+    --rc-lane: 50px;
+}
+
+.rc-bg-end[data-lane="2"] {
+    --rc-lane: 56px;
+}
+
+.rc-bg-end-completed {
+    top: calc(var(--rc-lane) - 3px);
+    width: 1.5px;
+    height: 8px;
+    margin-left: -1px;
+    background: var(--dim);
+}
+
+.rc-bg-end-stopped {
+    top: calc(var(--rc-lane) - 3px);
+    width: 3px;
+    height: 8px;
+    margin-left: -1.5px;
+    background: var(--muted);
+}
+
+/* Ended with the session (its process exited): a hollow bar. */
+.rc-bg-end-exited {
+    top: calc(var(--rc-lane) - 3px);
+    width: 3px;
+    height: 8px;
+    margin-left: -1.5px;
+    box-sizing: border-box;
+    border: 1px solid var(--muted);
+}
+
+.rc-bg-end-failed {
+    top: calc(var(--rc-lane) - 5px);
+    width: 12px;
+    height: 12px;
+    margin-left: -6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--err);
+}
+
+.rc-bg-end-failed svg {
+    display: block;
+    stroke-width: 2.6;
+}
+
+.rc-bg-more-n {
+    right: 2px;
+    bottom: 0;
+}
+
+.rc-outside {
+    left: 6px;
+    top: 22px;
+}
+
+/* ----------------------------------------------------- copy button */
+
+.rc-copy {
+    flex: 0 0 104px;
+    min-height: 44px;
+    padding: 0 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    border-radius: 4px;
+    border: 1px solid var(--rule);
+    background: transparent;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+}
+
+.rc-page .rc-copy:hover {
+    color: var(--fg);
+    border-color: var(--muted);
+}
+
+.rc-copy.rc-copied {
+    color: var(--tool);
+}
+
+/* ---------------------------------------------------- expanded row */
+
+.rc-x,
+.rc-ghost {
+    flex-basis: 100%;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    padding: 10px 0 20px 22px; /* under the block, past the chevron */
+}
+
+.rc-x[hidden] {
+    display: none;
+}
+
+/* A closing panel's copy, drawn where the panel was while it fades and the
+   rows below slide up over it (recent.js sets its top, left and width). */
+.rc-ghost {
+    position: absolute;
+    margin: 0;
+    pointer-events: none;
+    background: var(--rc-surface);
+}
+
+.rc-x-side {
+    flex: 0 0 128px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 18px;
+}
+
+.rc-x-side dl {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    color: var(--muted);
+}
+
+.rc-x-side dl div {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.rc-x-side dd {
+    margin: 0;
+    color: var(--fg);
+    font-variant-numeric: tabular-nums;
+}
+
+.rc-page .rc-x-link {
+    min-height: 40px;
+    padding: 0 10px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    border: 1px solid var(--rule);
+    text-decoration: none;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    font-size: 11px;
+}
+
+.rc-x-main {
+    flex: 1 1 480px;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding-top: 1px;
+}
+
+/* The last prompt: the time on a line of its own, the Markdown below. */
+.rc-prompt {
+    max-width: 88ch;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 20px;
+    color: var(--muted);
+    overflow-wrap: anywhere;
+}
+
+.rc-prompt-at {
+    color: var(--fg);
+}
+
+.rc-last {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.rc-who {
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 14px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+
+.rc-last-text {
+    margin: 0;
+    max-width: 72ch;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-size: 17px;
+    line-height: 27px;
+    color: var(--fg);
+}
+
+.rc-who-tool .rc-last-text,
+.rc-who-error .rc-last-text {
+    font-family: var(--mono);
+    font-size: 14px;
+    line-height: 22px;
+}
+
+.rc-who-error .rc-last-text {
+    color: var(--err);
+}
+
+/* An open row's background work: one line each, text only. */
+.rc-bgl {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.rc-bgl ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 18px;
+    color: var(--muted);
+    overflow-wrap: anywhere;
+}
+
+.rc-bgl-running {
+    color: var(--tool);
+}
+
+.rc-bgl-wake {
+    color: var(--note);
+}
+
+.rc-bgl-failed {
+    color: var(--err);
+}
+
+.rc-bgl-lost {
+    opacity: 0.75;
+}
+
+/* ------------------------------------------------ rendered Markdown */
+
+/* The last prompt and message as recent.py rendered them. Spacing after
+   the minimal theme's message bodies (layout.css); code and its
+   highlighting from the Pygments sheets the page includes. */
+.rc-md {
+    white-space: normal;
+}
+
+.rc-md > :first-child {
+    margin-top: 0;
+}
+
+.rc-md p {
+    margin: 0;
+}
+
+.rc-md p + p,
+.rc-md :is(ul, ol, pre, .highlight, table, blockquote) + p,
+.rc-md :is(ul, ol, pre, .highlight, table, blockquote) {
+    margin-top: 0.5em;
+    margin-bottom: 0;
+}
+
+.rc-md :is(ul, ol) {
+    padding-left: 1.3em;
+}
+
+.rc-md :is(h1, h2, h3, h4, h5, h6) {
+    margin: 0.6em 0 0.15em;
+    font-size: 1em;
+    line-height: 1.3;
+}
+
+.rc-md :is(h1, h2) {
+    font-size: 1.15em;
+}
+
+.rc-md blockquote {
+    margin-left: 0;
+    margin-right: 0;
+    padding-left: 10px;
+    border-left: 3px solid var(--rule);
+    color: var(--muted);
+}
+
+.rc-md code {
+    font-family: var(--mono);
+    font-size: 0.86em;
+    padding: 0 3px;
+    border-radius: 3px;
+    background: var(--code);
+}
+
+.rc-md pre,
+.rc-md .highlight {
+    border-radius: 4px;
+    background: var(--code);
+}
+
+.rc-md pre {
+    margin-left: 0;
+    margin-right: 0;
+    padding: 6px 10px;
+    font: 13px/1.55 var(--mono);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.rc-md pre code {
+    padding: 0;
+    background: transparent;
+    font-size: inherit;
+}
+
+.rc-md .highlight pre {
+    margin: 0;
+    padding: 6px 10px;
+    background: transparent;
+}
+
+.rc-md table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+    border-collapse: collapse;
+    font-size: 0.9em;
+}
+
+.rc-md :is(th, td) {
+    padding: 2px 8px;
+    border: 1px solid var(--rule);
+}
+
+/* The prompt keeps its quieter look: monospace, muted. */
+.rc-prompt-text {
+    color: var(--muted);
+}
+
+.rc-noreply {
+    margin: 0;
+    color: var(--muted);
+}
+
+/* ---------------------------------------------------------- footer */
+
+.rc-foot {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 18px;
+    align-items: center;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+}
+
+.rc-legend {
+    display: contents;
+}
+
+.rc-lg {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.rc-lg .rc-mk,
+.rc-lg .rc-tick,
+.rc-lg .rc-band,
+.rc-lg .rc-bg {
+    position: relative;
+    top: auto;
+    margin-left: 0;
+}
+
+.rc-lg .rc-bg {
+    display: inline-block;
+    width: 18px;
+    margin-right: 4px;
+}
+
+.rc-lg .rc-tick {
+    display: inline-block;
+}
+
+.rc-lg .rc-band {
+    display: inline-block;
+    width: 18px;
+    height: 14px;
+}
+
+.rc-foot p {
+    margin: 0;
+}
+
+/* ---------------------------------------------------------- narrow */
+
+@media (max-width: 640px) {
+    .rc-wrap {
+        padding: 16px 16px 40px;
+    }
+
+    /* Too narrow to share the bar: the old-data notice takes a line
+       of its own under it. */
+    .rc-stale {
+        order: 1;
+        flex-basis: 100%;
+        text-align: left;
+    }
+
+    .rc-head h1 {
+        font-size: 26px;
+        line-height: 32px;
+    }
+
+    .rc-filter {
+        min-height: 48px;
+        padding: 4px 10px;
+    }
+
+    .rc-filter .rc-n,
+    .rc-updated .rc-n {
+        font-size: 22px;
+        line-height: 28px;
+    }
+
+    /* The filters and Updated wrap as one set, so Updated shares the
+       last filter row, pushed to the right edge. */
+    .rc-stats {
+        flex-basis: 100%;
+    }
+
+    .rc-filters {
+        display: contents;
+    }
+
+    .rc-updated {
+        margin-left: auto;
+        padding: 6px 0;
+        border-left: 0;
+        align-items: flex-end;
+    }
+
+    /* No box around the list: the rows sit on the page's own gutter. */
+    .rc-panel {
+        --rc-surface: var(--rc-canvas);
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        overflow: visible;
+    }
+
+    .rc-row,
+    .rc-thead,
+    .rc-group-h {
+        padding-left: 0;
+        padding-right: 0;
+    }
+
+    .rc-row {
+        gap: 0 10px;
+    }
+
+    .rc-th-session {
+        display: none;
+    }
+
+    .rc-block {
+        flex-basis: 104px;
+        padding: 6px 10px;
+    }
+
+    .rc-block-n {
+        font-size: 22px;
+        line-height: 28px;
+    }
+
+    .rc-info {
+        flex-basis: 150px;
+    }
+
+    .rc-strip,
+    .rc-axis {
+        flex-basis: 100%;
+    }
+
+    /* An open row flattens into the row itself: Transcript beside the
+       copy button, the counts on one line, then the messages. */
+    .rc-x:not([hidden]),
+    .rc-x-side {
+        display: contents;
+    }
+
+    .rc-page .rc-x-link {
+        order: 1;
+        min-height: 44px; /* the copy button's height: one line, a full touch target */
+    }
+
+    .rc-x-side dl {
+        order: 2;
+        flex-basis: 100%;
+        flex-direction: row;
+        flex-wrap: wrap;
+        gap: 2px 16px;
+        margin-top: 10px;
+        font-family: var(--mono);
+        font-size: 12px;
+        line-height: 18px;
+    }
+
+    .rc-x-side dl div {
+        justify-content: flex-start;
+        gap: 6px;
+    }
+
+    .rc-x-main {
+        order: 3;
+        flex-basis: 100%;
+        padding: 10px 0 20px;
+    }
+
+    .rc-th-since {
+        margin-left: 16px; /* over the block: past the chevron and gap */
+    }
+}

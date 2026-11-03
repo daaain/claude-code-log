@@ -13,6 +13,7 @@ import uuid
 from typing import Any, Callable, Optional, cast
 
 from .ansi_colors import convert_ansi_to_html
+from ..json_depth import exceeds_depth
 from ..models import (
     BashInputMessage,
     BashOutputMessage,
@@ -24,6 +25,7 @@ from ..models import (
     IdeSelection,
     ImageContent,
     SlashCommandMessage,
+    SystemReminderContent,
     UserMemoryMessage,
     UserSlashCommandMessage,
     UserTextMessage,
@@ -34,7 +36,7 @@ from .utils import (
     escape_html,
     render_collapsible_code,
     render_markdown_collapsible,
-    render_user_markdown,
+    render_markdown_document,
     render_user_markdown_collapsible,
 )
 
@@ -211,7 +213,7 @@ def format_user_text_content(text: str) -> str:
     escaped_text = escape_html(text)
     raw_block = f"<pre class='user-raw'>{escaped_text}</pre>"
 
-    rendered = render_user_markdown(text)
+    rendered = render_markdown_document(text, user=True)
     if not is_well_formed_html(rendered):
         # Source probably wasn't Markdown — only show the raw view, no
         # toggle. Use the bare <pre> form so styling matches legacy.
@@ -265,6 +267,8 @@ def format_user_text_model_content(
         if isinstance(item, IdeNotificationContent):
             notifications = format_ide_notification_content(item)
             parts.extend(notifications)
+        elif isinstance(item, SystemReminderContent):
+            parts.extend(format_system_reminder_content(item))
         elif isinstance(item, ImageContent):
             parts.append(formatter(item))
         else:  # TextContent
@@ -332,8 +336,10 @@ def extract_embedded_json(text: str) -> "tuple[str, dict[str, Any]]":
                 candidate = "\n".join(lines[i:j])
                 try:
                     parsed: Any = json.loads(candidate)
-                except ValueError:
+                except (ValueError, RecursionError):
                     parsed = None
+                if exceeds_depth(parsed):
+                    parsed = None  # too deep for nested tables: keep the text
                 if isinstance(parsed, (dict, list)) and parsed:
                     placeholder = _json_placeholder()
                     blocks[placeholder] = parsed
@@ -417,6 +423,8 @@ def format_workflow_sidechannel_user_content(
     for item in content.items:
         if isinstance(item, IdeNotificationContent):
             parts.extend(format_ide_notification_content(item))
+        elif isinstance(item, SystemReminderContent):
+            parts.extend(format_system_reminder_content(item))
         elif isinstance(item, ImageContent):
             parts.append(formatter(item))
         else:  # TextContent
@@ -561,6 +569,19 @@ def format_ide_notification_content(content: IdeNotificationContent) -> list[str
         notifications.extend(_format_diagnostic(diagnostic))
 
     return notifications
+
+
+def format_system_reminder_content(content: SystemReminderContent) -> list[str]:
+    """Format ``<system-reminder>`` blocks as annotation HTML.
+
+    One 🤖 annotation block per reminder, reusing the Read-tool reminder styling
+    (see ``.system-reminder`` in pygments_styles.css) but in the user-message
+    context. Escaped — reminder text can contain ``<>``.
+    """
+    return [
+        f"<div class='system-reminder'>🤖 <em>{escape_html(reminder)}</em></div>"
+        for reminder in content.reminders
+    ]
 
 
 # =============================================================================

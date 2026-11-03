@@ -7,9 +7,21 @@ different types of Claude transcript messages are rendered, serving both as a
 test and as documentation for the visual design.
 
 Session 1: Hand-crafted examples showing various formatting scenarios
-Session 2: Auto-generated from dev-docs/messages samples showing all message types
+Session 2: Auto-generated from dev-docs/messages/claude-code samples
+
+Usage:
+    uv run python scripts/generate_style_guide.py
+    uv run python scripts/generate_style_guide.py --theme minimal [--output-dir DIR]
+
+With ``--theme minimal`` the transcript and index guides are rendered in
+that theme (no Markdown, no landing page) into ``--output-dir`` — by
+default a scratch directory, so the committed classic guide in
+``style_guide_output/`` is left alone.
+Open it and switch the page's Auto / Light / Dark toggle to check both
+schemes.
 """
 
+import argparse
 import copy
 import json
 import sys
@@ -373,10 +385,10 @@ def load_jsonl_sample(file_path: Path) -> dict | None:
 
 
 def create_sample_messages_session() -> list[dict]:
-    """Create a session from all message samples in dev-docs/messages.
+    """Create a session from Claude Code samples in dev-docs/messages/claude-code.
 
     This function:
-    1. Loads all .jsonl samples from dev-docs/messages/
+    1. Loads all .jsonl samples from dev-docs/messages/claude-code/
     2. Transforms them in-memory with consistent sessionId, uuid, parentUuid
     3. Orders them logically (user→assistant→tools, sidechain under Task)
     4. Duplicates tools with isSidechain=True (except Task itself)
@@ -385,7 +397,7 @@ def create_sample_messages_session() -> list[dict]:
         List of transformed message dictionaries for a single session
     """
     script_dir = Path(__file__).parent
-    samples_dir = script_dir.parent / "dev-docs" / "messages"
+    samples_dir = script_dir.parent / "dev-docs" / "messages" / "claude-code"
 
     session_id = "sample_messages_session"
     base_time = datetime(2025, 7, 1, 12, 0, 0, tzinfo=timezone.utc)
@@ -644,6 +656,35 @@ def create_sample_messages_session() -> list[dict]:
     return messages
 
 
+def generate_themed_transcript_guide(theme: str, output_dir: Path) -> Path:
+    """Render the transcript and index style guides with a non-classic theme."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory() as temp_dir:
+        jsonl_file = Path(temp_dir) / "style_guide.jsonl"
+        with open(jsonl_file, "w", encoding="utf-8") as f:
+            for entry in create_style_guide_data() + create_sample_messages_session():
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        result = convert_jsonl_to(
+            "html",
+            jsonl_file,
+            output_dir / "transcript_style_guide.html",
+            theme=theme,
+        )
+    print(f"✅ Transcript style guide ({theme} theme) saved to: {result}")
+    index_file = output_dir / "index_style_guide.html"
+    index_file.write_text(
+        generate_projects_index_html(
+            create_index_style_guide_data(),
+            from_date="last week",
+            to_date="today",
+            theme=theme,
+        ),
+        encoding="utf-8",
+    )
+    print(f"✅ Index style guide ({theme} theme) saved to: {index_file}")
+    return result
+
+
 def generate_style_guide():
     """Generate the complete style guide HTML files."""
     script_dir = Path(__file__).parent
@@ -654,13 +695,13 @@ def generate_style_guide():
 
     # Generate transcript style guide with two sessions:
     # Session 1: Hand-crafted examples
-    # Session 2: Auto-generated from dev-docs/messages samples
+    # Session 2: Auto-generated from dev-docs/messages/claude-code samples
     print("  📝 Creating transcript style guide...")
 
     print("    Session 1: Hand-crafted examples...")
     style_guide_data = create_style_guide_data()
 
-    print("    Session 2: Message samples from dev-docs/messages...")
+    print("    Session 2: Message samples from dev-docs/messages/claude-code...")
     sample_messages_data = create_sample_messages_session()
 
     # Combine both sessions
@@ -787,11 +828,11 @@ def generate_style_guide():
 </head>
 <body>
     <h1>🎨 Claude Code Log Style Guide</h1>
-    
+
     <div class="info">
         <strong>About this style guide:</strong> This collection demonstrates how different types of Claude transcript messages are rendered in the HTML viewer. It serves as both visual documentation and a testing reference for developers working on the transcript rendering system.
     </div>
-    
+
     <div class="guide-links">
         <div class="guide-card">
             <div class="guide-title">📝 Transcript Viewer Style Guide</div>
@@ -800,7 +841,7 @@ def generate_style_guide():
             </div>
             <a href="transcript_style_guide.html" class="guide-link">View Transcript Guide</a>
         </div>
-        
+
         <div class="guide-card">
             <div class="guide-title">📂 Project Index Style Guide</div>
             <div class="guide-description">
@@ -809,7 +850,7 @@ def generate_style_guide():
             <a href="index_style_guide.html" class="guide-link">View Index Guide</a>
         </div>
     </div>
-    
+
     <div class="info">
         <strong>Usage:</strong> These style guides are automatically generated from representative test data. They demonstrate the current visual design and can be used to verify that template changes render correctly across all message types.
     </div>
@@ -838,4 +879,28 @@ if __name__ == "__main__":
     # Ensure stdout uses UTF-8 for emoji output when running as a script
     if sys.stdout.encoding != "utf-8" and hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
-    generate_style_guide()
+    parser = argparse.ArgumentParser(
+        description="Generate the transcript and index style guides."
+    )
+    parser.add_argument(
+        "--theme",
+        choices=["classic", "minimal"],
+        default="classic",
+        help="HTML theme for the transcript and index guides (default: classic)",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="Where a non-classic guide is written (default: a scratch dir)",
+    )
+    args = parser.parse_args()
+    if args.theme == "classic":
+        generate_style_guide()
+    else:
+        generate_themed_transcript_guide(
+            args.theme,
+            args.output_dir
+            or Path(tempfile.gettempdir())
+            / f"claude-code-log-style-guide-{args.theme}",
+        )
