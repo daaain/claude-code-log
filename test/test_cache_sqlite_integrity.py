@@ -1,16 +1,24 @@
 #!/usr/bin/env python3
 """Comprehensive SQL-level integrity tests for SQLite cache."""
 
+import ast
 import json
 import shutil
 import sqlite3
 import threading
 import time
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
-from claude_code_log.cache import CacheManager, SessionCacheData
+from claude_code_log.cache import (
+    CacheManager,
+    SessionCacheData,
+    _migrated_db_paths,
+    discard_database_files,
+    is_corrupt_database_error,
+)
 from claude_code_log.models import (
     AssistantMessageModel,
     AssistantTranscriptEntry,
@@ -22,6 +30,8 @@ from claude_code_log.models import (
     UserMessageModel,
     UserTranscriptEntry,
 )
+
+from test.conftest import bump_mtime
 
 
 # Use conftest.py fixtures: isolated_cache_dir, isolated_db_path, isolated_cache_manager
@@ -627,11 +637,226 @@ class TestMessageFileRelationship:
         assert file_row["message_count"] == len(entries)
 
 
+class TestConnectionCensus:
+    """Every connection to the cache database is classified, on purpose.
+
+    `apply_write_pragmas` documents itself as what *every writing* cache
+    connection applies. That is an unconditional claim about the whole
+    package, and prose cannot keep it true: the migration runner was
+    missed when the pragmas were first written, and the FTS index builder
+    was missed again when the runner was fixed — twice, by people looking
+    straight at the problem.
+
+    So the claim is pinned rather than asserted. Adding a `sqlite3.connect`
+    anywhere in the package fails this test until it is classified here,
+    which is the moment to ask whether it writes.
+
+    That sentence is itself unconditional, so the three ways it could
+    quietly become false are closed rather than hoped about — all of which
+    fail *open*, the dangerous direction for a guard whose job is catching
+    an omission. **Count:** a second connection inside an
+    already-classified function is caught because `EXPECTED` pins how many
+    each has, not merely that it has some. **Import shape:** the forms the
+    AST walk cannot see are forbidden outright by
+    `test_no_import_shape_the_census_cannot_see`. **Attribution:** a call
+    at module scope, in a class body, or in a nested function once went
+    uncounted or double-counted — see `_connect_sites`, which now
+    attributes each call exactly once, to its innermost scope.
+    """
+
+    # (module, enclosing function) -> (how many connects there, and why each
+    # is safe). The count is part of the claim: a function that already
+    # connects is exactly where a second, unconfigured connection is most
+    # likely to be added, and `_open_connection`'s legitimate two would
+    # otherwise license any number.
+    EXPECTED: ClassVar[dict[tuple[str, str], tuple[int, str]]] = {
+        ("cache.py", "_open_connection"): (
+            2,
+            "read-only and read-write arms; both run `configure`, "
+            "i.e. _configure_connection",
+        ),
+        ("cache.py", "get_all_cached_projects"): (
+            1,
+            "read-only: one SELECT, then close",
+        ),
+        ("cache.py", "find_session_in_cache"): (1, "read-only: one SELECT, then close"),
+        ("migrations/runner.py", "run_migrations"): (
+            1,
+            "applies apply_write_pragmas",
+        ),
+        ("cli.py", "_build_search_index"): (1, "applies apply_write_pragmas"),
+        ("search.py", "fts5_available"): (
+            1,
+            "in-memory FTS5 capability probe, not the cache; connects to "
+            ":memory: so it answers the build question even when the cache "
+            "file is unreadable (issue #324)",
+        ),
+        ("api.py", "SearchApi.connection"): (
+            1,
+            "mode=ro reader; cannot switch journal modes",
+        ),
+        ("recent.py", "_session_rows"): (
+            1,
+            "mode=ro reader: one SELECT across projects, then close",
+        ),
+    }
+
+    @staticmethod
+    def _is_sqlite_connect(node: ast.AST) -> bool:
+        """Is this node a literal `sqlite3.connect(...)` call?"""
+        return (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "connect"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "sqlite3"
+        )
+
+    def _connect_sites(self) -> dict[tuple[str, str], int]:
+        """Every `sqlite3.connect` in the package, by module and scope.
+
+        Each call is attributed **once**, to its innermost enclosing
+        class/function, or to `<module>` when it sits at module level.
+        Both matter now that the count is part of the claim: walking every
+        function and re-walking its body counted a call in a nested
+        function twice (once for the inner scope, once for the outer), and
+        a module-level connection was not seen at all — which failed open,
+        the direction that lets an unclassified writer ship.
+        """
+        package = Path(__file__).parents[1] / "claude_code_log"
+        found: dict[tuple[str, str], int] = {}
+
+        def visit(node: ast.AST, rel: str, scope: tuple[str, ...]) -> None:
+            """Count this node if it connects, then recurse, deepening
+            `scope` at each class or function so a call is attributed to
+            the innermost one enclosing it."""
+            if self._is_sqlite_connect(node):
+                key = (rel, ".".join(scope) if scope else "<module>")
+                found[key] = found.get(key, 0) + 1
+            for child in ast.iter_child_nodes(node):
+                child_scope = scope
+                if isinstance(
+                    child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+                ):
+                    child_scope = scope + (child.name,)
+                visit(child, rel, child_scope)
+
+        for path in sorted(package.rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            visit(tree, path.relative_to(package).as_posix(), ())
+        return found
+
+    def test_no_import_shape_the_census_cannot_see(self):
+        """Keep the census's own claim true by construction.
+
+        The walk matches `sqlite3.connect(...)` — an attribute call on the
+        name `sqlite3`. `from sqlite3 import connect` and
+        `import sqlite3 as sq` both open connections it cannot see, and both
+        fail *open*: the census stays green while an unclassified writer
+        ships. Widening the matcher to bare `connect(...)` would catch other
+        libraries' connects instead, so forbid the shapes rather than chase
+        them. There are none today, so this costs nothing until someone
+        writes one — at which point the census's docstring would have
+        started lying.
+        """
+        package = Path(__file__).parents[1] / "claude_code_log"
+        offenders: list[str] = []
+        modules = 0
+        for path in sorted(package.rglob("*.py")):
+            modules += 1
+            rel = path.relative_to(package).as_posix()
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if isinstance(node, ast.ImportFrom) and node.module == "sqlite3":
+                    names = ", ".join(a.name for a in node.names)
+                    offenders.append(f"{rel}: from sqlite3 import {names}")
+                elif isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if alias.name == "sqlite3" and alias.asname:
+                            offenders.append(f"{rel}: import sqlite3 as {alias.asname}")
+
+        # The sweep must have looked at something.
+        assert modules >= 10, f"only walked {modules} modules; the sweep is broken"
+
+        assert not offenders, (
+            "sqlite3 imported in a shape TestConnectionCensus cannot see: "
+            f"{offenders}. The census matches `sqlite3.connect(...)` only, so "
+            "these would let an unclassified connection ship unnoticed. Use "
+            "`import sqlite3` and call `sqlite3.connect(...)`."
+        )
+
+    def test_every_connect_site_is_classified(self):
+        """A new `sqlite3.connect` must be classified before it can ship."""
+        found = self._connect_sites()
+
+        # The census must find something, or it is passing on an empty set.
+        assert len(found) >= 5, f"census found too few sites to be working: {found}"
+
+        expected_counts = {key: count for key, (count, _) in self.EXPECTED.items()}
+
+        unclassified = sorted(set(found) - set(expected_counts))
+        assert not unclassified, (
+            "new sqlite3.connect site(s) not classified in "
+            f"TestConnectionCensus.EXPECTED: {unclassified}. If the connection "
+            "writes to the cache database it must apply "
+            "`migrations.runner.apply_write_pragmas` — see that function's "
+            "docstring. If it does not write, say so there."
+        )
+
+        vanished = sorted(set(expected_counts) - set(found))
+        assert not vanished, (
+            f"classified connect site(s) no longer exist: {vanished}. Remove "
+            "them from EXPECTED so the census keeps meaning something."
+        )
+
+        # Compare counts, not just which functions connect. Without this a
+        # second, unconfigured connection added *inside* an already-classified
+        # function passes — and a function that already connects is the most
+        # likely place for one to appear.
+        grew = sorted(
+            (key, expected_counts[key], found[key])
+            for key in expected_counts
+            if found[key] != expected_counts[key]
+        )
+        assert not grew, (
+            "sqlite3.connect count changed in classified function(s) "
+            f"(site, classified, found): {grew}. A new connection in a "
+            "function that already had one is still a new connection: "
+            "classify it by updating the count and the reason."
+        )
+
+
 class TestWALMode:
     """Tests for WAL journal mode."""
 
-    def test_wal_journal_mode_enabled(self, cache_manager):
-        """Verify WAL mode is active."""
+    def test_wal_journal_mode_enabled(self, cache_manager, isolated_db_path: Path):
+        """A cache connection is what puts the database into WAL.
+
+        `journal_mode` persists in the file, and the migration runner now
+        leaves a brand-new database in WAL already
+        (`migrations.runner.apply_write_pragmas`), so reading `wal` back off
+        a fresh cache connection proves only that *someone* set it — this
+        assertion stayed green with `_configure_connection`'s pragmas
+        removed. Forcing the file out of WAL first restores the
+        discrimination: only a connection that applies the pragma itself
+        can bring it back.
+
+        `synchronous` needs no such treatment: it is per-connection, so
+        `test_synchronous_normal` below cannot be satisfied by what another
+        connection did.
+        """
+        with cache_manager._get_connection() as conn:
+            conn.execute("PRAGMA journal_mode = DELETE")
+
+        # Positive control. Leaving WAL requires no other connection to be
+        # open and silently does nothing if one is, which would leave the
+        # file in WAL and make the assertion below pass vacuously again.
+        # Confirm from outside that the file really left WAL.
+        raw = sqlite3.connect(isolated_db_path)
+        try:
+            assert raw.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+        finally:
+            raw.close()
+
         with cache_manager._get_connection() as conn:
             row = conn.execute("PRAGMA journal_mode").fetchone()
             assert row[0] == "wal"
@@ -909,11 +1134,11 @@ class TestLargeDatasetPerformance:
         cache_manager.save_cached_entries(jsonl_file, entries)
 
         # Time filtered loading
-        start = time.time()
+        start = time.monotonic()
         loaded = cache_manager.load_cached_entries_filtered(
             jsonl_file, "2024-01-15", "2024-01-20"
         )
-        elapsed = time.time() - start
+        elapsed = time.monotonic() - start
 
         assert loaded is not None
         assert elapsed < 2.0, f"Query took too long: {elapsed:.2f}s"
@@ -1101,11 +1326,13 @@ class TestFileModificationDetection:
         # Verify cache is valid
         assert cache_manager.is_file_cached(jsonl_file) is True
 
-        # Wait and touch file to change mtime
-        time.sleep(1.1)
+        # Rewrite the file and make it *look* newer than the cached mtime.
+        # See bump_mtime in conftest: sleeping past the 1.0 s threshold is
+        # not reliable, and this states the intent directly.
         jsonl_file.write_text(
             json.dumps(sample_user_entry.model_dump()) + "\n", encoding="utf-8"
         )
+        bump_mtime(jsonl_file)
 
         # Cache should be invalidated
         assert cache_manager.is_file_cached(jsonl_file) is False
@@ -1150,3 +1377,460 @@ class TestMigrationIntegrity:
             ).fetchone()[0]
 
         assert initial_count == final_count
+
+
+class TestCorruptDatabaseRecovery:
+    """A cache file damaged past reading is discarded and rebuilt.
+
+    Written against two real shapes. The first is the reported one: a cache
+    truncated to 11.6 MB while its header still claimed 58.1 MB, on which no
+    statement at all succeeded. The second is what made it *visible* —
+    migration 012's `CREATE INDEX` is the first operation to full-scan
+    `messages`, so damage confined to that table's leaf pages had been sitting
+    unnoticed under earlier versions, which never read those pages.
+    """
+
+    @staticmethod
+    def _populate(cache_dir: Path, db_path: Path, user_entry, assistant_entry) -> None:
+        """Build a real, healthy cache with enough rows to damage."""
+        cache_manager = CacheManager(cache_dir, "1.0.0", db_path=db_path)
+        jsonl_file = cache_dir / "test.jsonl"
+        jsonl_file.write_text(
+            json.dumps(user_entry.model_dump())
+            + "\n"
+            + json.dumps(assistant_entry.model_dump())
+            + "\n",
+            encoding="utf-8",
+        )
+        cache_manager.save_cached_entries(jsonl_file, [user_entry, assistant_entry])
+
+    def test_truncated_database_is_discarded_and_rebuilt(
+        self,
+        isolated_cache_dir,
+        isolated_db_path,
+        sample_user_entry,
+        sample_assistant_entry,
+        capsys,
+    ):
+        """The reported failure: header claims more pages than the file holds."""
+        self._populate(
+            isolated_cache_dir,
+            isolated_db_path,
+            sample_user_entry,
+            sample_assistant_entry,
+        )
+        original_size = isolated_db_path.stat().st_size
+        with open(isolated_db_path, "r+b") as f:
+            f.truncate(original_size // 4)
+
+        # Constructing over the damaged file must succeed, not raise.
+        cache_manager = CacheManager(
+            isolated_cache_dir, "1.0.0", db_path=isolated_db_path
+        )
+
+        assert "corrupt" in capsys.readouterr().out.lower()
+        with cache_manager._get_connection() as conn:
+            assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        # Rebuilt empty rather than carrying damaged rows forward: the project
+        # row exists again, but the messages the old file held are gone, so the
+        # next conversion re-ingests them from the JSONL source.
+        assert cache_manager._project_id is not None
+        with cache_manager._get_connection() as conn:
+            assert conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0] == 0
+            assert conn.execute("SELECT COUNT(*) FROM cached_files").fetchone()[0] == 0
+
+    def test_corrupt_messages_pages_surface_and_heal_during_migration(
+        self,
+        isolated_cache_dir,
+        isolated_db_path,
+        sample_user_entry,
+        sample_assistant_entry,
+        capsys,
+    ):
+        """Damage only a full table scan reaches still heals.
+
+        Models the reported sequence exactly: a cache written by a version
+        that lacked migration 012, damaged in `messages`, then opened by one
+        that has it. The pending `CREATE INDEX` scans the damaged pages and
+        raises where nothing else would.
+        """
+        self._populate(
+            isolated_cache_dir,
+            isolated_db_path,
+            sample_user_entry,
+            sample_assistant_entry,
+        )
+        # Roll the schema back to pre-012 so the index build is pending again.
+        conn = sqlite3.connect(isolated_db_path)
+        conn.execute("PRAGMA journal_mode=DELETE")
+        conn.execute("DELETE FROM _schema_version WHERE version >= 12")
+        for name in (
+            "idx_messages_project_uuid",
+            "idx_messages_project_parent_uuid",
+            "idx_messages_project_request_id",
+            "idx_messages_project_metadata_type",
+            "idx_messages_project_session_ts",
+        ):
+            conn.execute(f"DROP INDEX IF EXISTS {name}")
+        conn.commit()
+        # `dbstat` is a compile-time option (SQLITE_ENABLE_DBSTAT_VTAB) that
+        # some interpreter builds lack, e.g. python-build-standalone's Windows
+        # 3.12.11 / 3.13.7 (SQLite 3.49.1); newer builds carry it.
+        try:
+            pages = [
+                r[0]
+                for r in conn.execute(
+                    "SELECT pageno FROM dbstat WHERE name='messages' AND pagetype='leaf'"
+                )
+            ]
+        except sqlite3.OperationalError as exc:
+            if "no such table: dbstat" not in str(exc):
+                raise
+            conn.close()
+            pytest.skip("this SQLite build lacks the dbstat virtual table")
+        # `dbstat.pageno` counts pages of whatever size this database was
+        # built with, so read it rather than assuming SQLite's 4096 default.
+        page_size = conn.execute("PRAGMA page_size").fetchone()[0]
+        conn.close()
+        assert pages, "expected messages to occupy at least one leaf page"
+        # Overwrite the whole page, not a slice of it. A page holding two small
+        # rows is mostly free space, and cells are laid out from the *end*, so
+        # scribbling near the start damages nothing SQLite reads.
+        with open(isolated_db_path, "r+b") as f:
+            for pageno in pages:
+                f.seek((pageno - 1) * page_size)
+                f.write(b"\xff" * page_size)
+        # `_populate` left this path in the process-level "migrations already
+        # checked" memo, which would skip the pending migration. Real runs meet
+        # this across processes; drop the entry to stand in for a fresh one.
+        _migrated_db_paths.discard(str(isolated_db_path))
+
+        cache_manager = CacheManager(
+            isolated_cache_dir, "1.0.0", db_path=isolated_db_path
+        )
+
+        assert "corrupt" in capsys.readouterr().out.lower()
+        with cache_manager._get_connection() as conn2:
+            assert conn2.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+            applied = [
+                r[0] for r in conn2.execute("SELECT version FROM _schema_version")
+            ]
+        # The migration that failed is applied on the rebuilt database, so the
+        # failure cannot repeat on every subsequent run.
+        assert 12 in applied
+
+    def test_garbage_file_is_replaced(
+        self, isolated_cache_dir, isolated_db_path, capsys
+    ):
+        """A non-database file at the cache path is replaced, not fatal."""
+        isolated_db_path.write_bytes(b"this is not a database" * 500)
+
+        cache_manager = CacheManager(
+            isolated_cache_dir, "1.0.0", db_path=isolated_db_path
+        )
+
+        assert "corrupt" in capsys.readouterr().out.lower()
+        assert cache_manager._project_id is not None
+
+    def test_wal_sidecars_are_removed_with_the_database(self, isolated_db_path):
+        """A stale -wal beside a fresh database is its own route to malformed."""
+        isolated_db_path.write_bytes(b"x")
+        wal = isolated_db_path.with_name(isolated_db_path.name + "-wal")
+        shm = isolated_db_path.with_name(isolated_db_path.name + "-shm")
+        wal.write_bytes(b"x")
+        shm.write_bytes(b"x")
+
+        assert discard_database_files(isolated_db_path) is True
+
+        assert not isolated_db_path.exists()
+        assert not wal.exists()
+        assert not shm.exists()
+
+    def test_empty_file_is_not_treated_as_corruption(
+        self, isolated_cache_dir, isolated_db_path, capsys
+    ):
+        """SQLite adopts a zero-byte file as a new database; don't panic."""
+        isolated_db_path.write_bytes(b"")
+
+        cache_manager = CacheManager(
+            isolated_cache_dir, "1.0.0", db_path=isolated_db_path
+        )
+
+        assert "corrupt" not in capsys.readouterr().out.lower()
+        assert cache_manager._project_id is not None
+
+    def test_read_only_manager_never_deletes_the_database(
+        self,
+        isolated_cache_dir,
+        isolated_db_path,
+        sample_user_entry,
+        sample_assistant_entry,
+    ):
+        """Render workers open read-only and must not delete a shared file.
+
+        Several run concurrently against one database; a worker that reacted
+        to corruption by unlinking it would pull the file out from under its
+        siblings. Degrading to "no cached data" is the contract.
+        """
+        self._populate(
+            isolated_cache_dir,
+            isolated_db_path,
+            sample_user_entry,
+            sample_assistant_entry,
+        )
+        with open(isolated_db_path, "r+b") as f:
+            f.truncate(isolated_db_path.stat().st_size // 4)
+        size_before = isolated_db_path.stat().st_size
+
+        cache_manager = CacheManager(
+            isolated_cache_dir, "1.0.0", db_path=isolated_db_path, read_only=True
+        )
+
+        assert cache_manager._project_id is None
+        assert isolated_db_path.exists()
+        assert isolated_db_path.stat().st_size == size_before
+
+    @pytest.mark.parametrize(
+        "exc,expected",
+        [
+            (sqlite3.DatabaseError("database disk image is malformed"), True),
+            (sqlite3.DatabaseError("file is not a database"), True),
+            (sqlite3.DatabaseError("malformed database schema (message_fts)"), True),
+            # Transient and environmental failures must never delete a cache
+            # that is merely busy, or on a disk that is merely full.
+            (sqlite3.OperationalError("database is locked"), False),
+            (sqlite3.OperationalError("database or disk is full"), False),
+            (sqlite3.OperationalError("no such table: messages"), False),
+            (OSError("permission denied"), False),
+        ],
+    )
+    def test_only_corruption_triggers_a_rebuild(self, exc, expected):
+        assert is_corrupt_database_error(exc) is expected
+
+
+class TestConnectionLease:
+    """`connection_lease`: one connection for a scope, shared across instances.
+
+    The lifecycle guarantees matter more than the speed-up: the leased
+    connection must be closed at scope exit (Windows refuses to delete an
+    open .db/-wal/-shm file, and callers tear temp dirs down right after),
+    must not escape to other threads (sqlite3 connections are thread-bound),
+    and must get out of the way of the corruption rebuild, which deletes
+    the file.
+    """
+
+    @pytest.fixture
+    def two_managers(self, tmp_path):
+        db = tmp_path / "cache.db"
+        dirs = []
+        for name in ("p1", "p2"):
+            d = tmp_path / name
+            d.mkdir()
+            dirs.append(d)
+        return db, [CacheManager(d, "1.0.0", db_path=db) for d in dirs]
+
+    def test_calls_under_a_lease_share_one_connection_across_instances(
+        self, two_managers
+    ):
+        from claude_code_log.cache import connection_lease
+
+        db, (a, b) = two_managers
+        with connection_lease(db):
+            with a._get_connection() as c1, a._get_connection() as c2:
+                assert c1 is c2
+            with b._get_connection() as c3:
+                assert c3 is c1
+            # batch() under a lease reuses it and must not close it on exit.
+            with b.batch():
+                with b._get_connection() as c4:
+                    assert c4 is c1
+            assert c1.execute("SELECT 1").fetchone()[0] == 1
+
+    def test_the_lease_is_closed_on_exit_and_the_files_can_go(self, two_managers):
+        from claude_code_log.cache import connection_lease
+
+        db, (a, _b) = two_managers
+        with connection_lease(db):
+            with a._get_connection() as leased:
+                pass
+        with pytest.raises(sqlite3.ProgrammingError):
+            leased.execute("SELECT 1")
+        # Outside the lease we are back to a connection per call, and it is
+        # a different one.
+        with a._get_connection() as fresh:
+            assert fresh is not leased
+        # The Windows guarantee: nothing holds the files after the scope.
+        shutil.rmtree(db.parent)
+
+    def test_the_lease_is_closed_when_the_scope_raises(self, two_managers):
+        from claude_code_log.cache import connection_lease
+
+        db, (a, _b) = two_managers
+        with pytest.raises(RuntimeError):
+            with connection_lease(db):
+                with a._get_connection() as leased:
+                    pass
+                raise RuntimeError("body failed")
+        with pytest.raises(sqlite3.ProgrammingError):
+            leased.execute("SELECT 1")
+
+    def test_nested_leases_reuse_the_outer_one(self, two_managers):
+        from claude_code_log.cache import connection_lease
+
+        db, (a, _b) = two_managers
+        with connection_lease(db):
+            with a._get_connection() as outer:
+                pass
+            with connection_lease(db):
+                with a._get_connection() as inner:
+                    assert inner is outer
+            # The inner scope must not have closed the outer connection.
+            assert outer.execute("SELECT 1").fetchone()[0] == 1
+
+    def test_a_lease_is_per_thread(self, two_managers):
+        from claude_code_log.cache import connection_lease
+
+        db, (a, _b) = two_managers
+        seen: list = []
+        with connection_lease(db):
+            with a._get_connection() as leased:
+                pass
+
+            def other_thread():
+                with a._get_connection() as conn:
+                    seen.append(conn is leased)
+                    conn.execute("SELECT 1")
+
+            t = threading.Thread(target=other_thread)
+            t.start()
+            t.join()
+        assert seen == [False]
+
+    def test_a_corrupt_database_is_still_rebuilt_under_a_lease(
+        self, tmp_path, sample_user_entry, capsys
+    ):
+        """The lease opens nothing on a corrupt file and the first manager
+        inside the scope deletes and rebuilds it as it always did."""
+        from claude_code_log.cache import connection_lease
+
+        db = tmp_path / "cache.db"
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        # A real database first, so the corruption is a truncation rather
+        # than a file that never was one.
+        cm = CacheManager(proj, "1.0.0", db_path=db)
+        jsonl = proj / "s.jsonl"
+        jsonl.write_text(json.dumps(sample_user_entry.model_dump()), encoding="utf-8")
+        cm.save_cached_entries(jsonl, [sample_user_entry])
+        _migrated_db_paths.discard(str(db))
+        size = db.stat().st_size
+        with open(db, "r+b") as f:
+            f.truncate(size // 4)
+
+        with connection_lease(db):
+            rebuilt = CacheManager(proj, "1.0.0", db_path=db)
+            assert "corrupt" in capsys.readouterr().out.lower()
+            with rebuilt._get_connection() as conn:
+                assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+            assert rebuilt._project_id is not None
+        shutil.rmtree(tmp_path / "proj")
+
+    def test_a_corrupt_table_page_drops_a_held_lease_before_the_rebuild(
+        self, tmp_path, sample_user_entry, capsys
+    ):
+        """The path `_drop_leases` exists for.
+
+        A truncated file fails at the lease's own open, so that case never
+        holds a lease. Garbling only the `projects` table's root page keeps
+        the header intact: the lease opens fine, then the first manager's
+        `_ensure_project_exists` raises on the leased connection, and the
+        rebuild has to close that handle before Windows will let it delete
+        the file. Afterwards the scope's exit must not close it twice.
+        """
+        from claude_code_log.cache import _thread_leases, connection_lease
+
+        db = tmp_path / "cache.db"
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        cm = CacheManager(proj, "1.0.0", db_path=db)
+        jsonl = proj / "s.jsonl"
+        jsonl.write_text(json.dumps(sample_user_entry.model_dump()), encoding="utf-8")
+        cm.save_cached_entries(jsonl, [sample_user_entry])
+        _migrated_db_paths.discard(str(db))
+
+        raw = sqlite3.connect(db)
+        raw.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        page_size = raw.execute("PRAGMA page_size").fetchone()[0]
+        rootpage = raw.execute(
+            "SELECT rootpage FROM sqlite_master WHERE name = 'projects'"
+        ).fetchone()[0]
+        raw.close()
+        with open(db, "r+b") as f:
+            f.seek((rootpage - 1) * page_size)
+            f.write(b"\xff" * page_size)
+
+        with connection_lease(db):
+            assert _thread_leases(), "the lease should open on an intact header"
+            leased = _thread_leases()[(str(db), False)]
+            rebuilt = CacheManager(proj, "1.0.0", db_path=db)
+            assert "corrupt" in capsys.readouterr().out.lower()
+            # The rebuild dropped the lease; the old handle is closed.
+            assert not _thread_leases()
+            with pytest.raises(sqlite3.ProgrammingError):
+                leased.execute("SELECT 1")
+            with rebuilt._get_connection() as conn:
+                assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+            assert rebuilt._project_id is not None
+        # Scope exit found nothing to close, and nothing holds the files.
+        shutil.rmtree(tmp_path / "proj")
+        db.unlink()
+
+    def test_a_lease_survives_a_rebuild_of_another_database(self, two_managers):
+        """`_drop_leases` is keyed by path: dropping one database's lease
+        leaves a lease on a different file untouched."""
+        from claude_code_log.cache import _drop_leases, connection_lease
+
+        db, (a, _b) = two_managers
+        with connection_lease(db):
+            with a._get_connection() as leased:
+                pass
+            _drop_leases(db.parent / "other.db")
+            assert leased.execute("SELECT 1").fetchone()[0] == 1
+
+
+class TestHierarchyPassHoldsOneLease:
+    def test_a_hierarchy_pass_opens_no_per_call_connections(
+        self, tmp_path, monkeypatch, sample_user_entry
+    ):
+        """`process_projects_hierarchy` plans every project under one lease.
+
+        Counting per-instance opens rather than timing: on a 332-project
+        archive the connection-per-call pattern was 3,658 open/close
+        cycles and ~90 s of a 96 s no-change pass on Windows.
+        """
+        from claude_code_log.converter import process_projects_hierarchy
+
+        projects = tmp_path / "projects"
+        for name in ("p1", "p2"):
+            d = projects / name
+            d.mkdir(parents=True)
+            (d / "session-1.jsonl").write_text(
+                json.dumps(sample_user_entry.model_dump()) + "\n", encoding="utf-8"
+            )
+        monkeypatch.setenv("CLAUDE_CODE_LOG_CACHE_PATH", str(tmp_path / "cache.db"))
+
+        opens: list[int] = []
+        real_open = CacheManager._open_configured_connection
+
+        def counting_open(self):
+            opens.append(1)
+            return real_open(self)
+
+        monkeypatch.setattr(CacheManager, "_open_configured_connection", counting_open)
+
+        process_projects_hierarchy(projects, use_cache=True)  # populates
+        opens.clear()
+        process_projects_hierarchy(projects, use_cache=True)  # the steady pass
+        assert opens == [], f"{len(opens)} per-call connections in a leased pass"
+        # And the lease let go: the tree can be deleted (Windows-meaningful).
+        shutil.rmtree(tmp_path / "projects")

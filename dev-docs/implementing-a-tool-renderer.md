@@ -192,7 +192,7 @@ Two safe paths, depending on what you emit:
   through `escape_html()` first (as the input formatter above does with
   `escaped_query`). Never interpolate a raw field into markup.
 - **Rendering markdown** → use `render_markdown` / `render_markdown_collapsible`.
-  Both use mistune with `escape=True`, so raw HTML tags in the body are
+  Both use wenmode with `escape=True`, so raw HTML tags in the body are
   escaped to entities and unsafe link/image schemes (`javascript:`, `data:`)
   are neutralised, while Markdown, code fences and Pygments still render.
 

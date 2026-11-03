@@ -1,7 +1,7 @@
 """Pytest configuration and shared fixtures."""
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Generator, Optional
+from typing import TYPE_CHECKING, Any, Generator, Optional
 
 import pytest
 
@@ -13,6 +13,58 @@ from test.snapshot_serializers import (
     NormalisedHTMLSerializer,
     NormalisedMarkdownSerializer,
 )
+
+
+# ========== Guard: --snapshot-update must not run under xdist parallelism ==========
+# syrupy and pytest-xdist race on the shared ``.ambr`` files when snapshots are
+# updated with more than one worker, on two observed occasions. One raced update
+# silently TRUNCATED ~6000 lines, leaving a structurally-broken file that still
+# passed on the next read — a confirmed corruption. Separately, a parallel update
+# with a stale ``__pycache__`` made an *untouched* fixture appear to regenerate
+# with markup it had never carried; that one's mechanism was never pinned down,
+# but it did not survive a serial re-run with purged bytecode.
+# ``pyproject.toml`` defaults to ``-n auto --dist=worksteal``, so the unsafe
+# combination is the DEFAULT unless this guard stops it. The fix is always to
+# regenerate serially with ``-n0``. See CONTRIBUTING.md.
+
+
+def _snapshot_update_xdist_conflict(
+    *, is_worker: bool, update_snapshots: bool, workers: int
+) -> Optional[str]:
+    """Return an error message if this is an unsafe ``--snapshot-update`` ×
+    xdist-parallel combination, else ``None``.
+
+    Pure and side-effect-free so the decision is unit-testable in isolation;
+    :func:`pytest_configure` wraps it. Only the xdist *controller* gates
+    (``is_worker`` False): a single worker (``workers <= 1``) or ``-n0``
+    (``workers == 0``) writes serially and is safe, and a parallel run that
+    is *not* updating snapshots (``update_snapshots`` False) never writes.
+    """
+    if is_worker or not update_snapshots or workers <= 1:
+        return None
+    return (
+        f"Refusing to run --snapshot-update under pytest-xdist with {workers} "
+        "workers: parallel writes to the shared .ambr snapshot files race and "
+        "can silently truncate snapshot content (one observed run dropped "
+        "~6000 lines), leaving a broken file that still passes on the next "
+        "read. Regenerate serially instead:\n\n"
+        "    uv run pytest <targets> -n0 --snapshot-update\n"
+    )
+
+
+def pytest_configure(config: "Config") -> None:
+    """Fail fast on an unsafe ``--snapshot-update`` × parallel-xdist run.
+
+    Runs in the controller before workers spawn, so a bad invocation aborts
+    with a clear message rather than corrupting ``.ambr`` files.
+    """
+    message = _snapshot_update_xdist_conflict(
+        is_worker=hasattr(config, "workerinput"),
+        update_snapshots=bool(getattr(config.option, "update_snapshots", False)),
+        workers=getattr(config.option, "numprocesses", None) or 0,
+    )
+    if message:
+        raise pytest.UsageError(message)
 
 
 # ========== Collection cost control ==========
@@ -163,7 +215,32 @@ def _browser_user_data_dir(worker_id):
 
 
 @pytest.fixture(scope="session")
-def _persistent_context(playwright, browser_type_launch_args, _browser_user_data_dir):
+def _browser_expect_timeout():
+    """Give web-first assertions room for a starved CI machine.
+
+    Playwright's default is 5 s, which is a budget for *the page*, not for
+    the machine — and browser tests run under ``-n auto``, so a 4-core
+    Windows runner hosts four Chromiums at once. A confirmed failure there
+    (``test_search_unfolds_matches_in_folded_subtrees``, Windows/3.13,
+    green on 3.11 in the same matrix) had Playwright resolving its locator
+    only three times inside the five seconds — ~1.6 s per poll — so the
+    assertion expired while the page was still catching up rather than
+    because anything was wrong with it. Raising the ceiling costs nothing
+    on a passing run: an assertion that will pass still returns as soon as
+    it does.
+    """
+    from playwright.sync_api import expect
+
+    expect.set_options(timeout=20_000)
+
+
+@pytest.fixture(scope="session")
+def _persistent_context(
+    playwright,
+    browser_type_launch_args,
+    _browser_user_data_dir,
+    _browser_expect_timeout,
+):
     """Create a persistent browser context that shares HTTP cache across tests.
 
     This solves flaky CDN loading issues by caching resources like vis-timeline
@@ -197,3 +274,102 @@ def page(context):
     page = context.new_page()
     yield page
     page.close()
+
+
+@pytest.fixture(scope="session")
+def _isolated_browser(playwright, browser_type_launch_args, _browser_expect_timeout):
+    """A plain (non-persistent) browser per worker, for ``isolated_page``."""
+    browser = playwright.chromium.launch(**browser_type_launch_args)
+    yield browser
+    browser.close()
+
+
+@pytest.fixture
+def isolated_page(_isolated_browser):
+    """A page in a fresh context of its own, closed with the test.
+
+    Use it instead of ``page`` for anything that changes the *context*
+    rather than the page — above all ``page.clock.install()``: Playwright's
+    clock belongs to the context, and ``page``'s context is shared by every
+    browser test on the worker, so a fake clock installed there stays
+    installed for the tests that follow. (It did: a recent-sessions test's
+    clock froze ``requestAnimationFrame`` timing for a later search test,
+    which then failed whenever xdist put the two on one worker.)
+    """
+    context = _isolated_browser.new_context(
+        viewport={"width": 1280, "height": 720}, ignore_https_errors=True
+    )
+    page = context.new_page()
+    yield page
+    context.close()
+
+
+# ========== Deterministic mtime changes ==========
+# The cache treats a file as unchanged when its mtime is within 1.0 s of the
+# recorded one (``_cache_row_is_fresh``). Tests used to force a change with
+# ``time.sleep(1.1)``, which leaves only 0.1 s of margin and is not reliable:
+# the filesystem timestamp source can drift from the monotonic clock
+# ``sleep`` uses, and a 1.1 s sleep was measured producing an mtime delta of
+# **0.917 s** on this VM — under the threshold, so the cache saw the file as
+# fresh and the test failed. It reproduced roughly one run in six, in
+# isolation, which had it misread as an xdist flake.
+#
+# Setting the mtime explicitly is both deterministic and instant.
+
+
+def bump_mtime(path: "Path", seconds: float = 10.0) -> float:
+    """Move a file's mtime forward so the cache sees it as modified.
+
+    Returns the new mtime. Prefer this over sleeping: it states the intent
+    ("this file now looks newer than what was cached") instead of hoping a
+    sleep clears a threshold.
+    """
+    import os
+
+    stat = path.stat()
+    new_mtime = stat.st_mtime + seconds
+    os.utime(path, (stat.st_atime, new_mtime))
+    return new_mtime
+
+
+def assert_regenerated(path: "Path", previous_mtime: float) -> None:
+    """Assert a file has been rewritten since ``previous_mtime`` was read.
+
+    Compares for *change*, not for "later". These call sites mean "this is
+    no longer the file from before", and ``>`` only expresses that on a
+    host whose wall clock advances monotonically — this VM's does not (a
+    0.26 s *backwards* jump measured inside a 4-second sample, guest clock
+    sync), so a genuinely regenerated file can carry an *earlier* mtime and
+    fail a ``>`` comparison with no bug behind it. Equality still catches
+    the real failure: a file that was never rewritten keeps its mtime.
+    """
+    assert path.stat().st_mtime != previous_mtime, (
+        f"{path.name} was not regenerated (mtime unchanged)"
+    )
+
+
+def collect_page_errors(page: Any, url: str) -> list[str]:
+    """Collect ``page``'s console errors and uncaught exceptions into a list.
+
+    For live-update tests: a dropped connection on a poll of the page's own
+    ``url`` is skipped, since live_update.js catches and retries it on the
+    next tick by design, yet Chromium still logs it as a console error (seen
+    as ``net::ERR_CONNECTION_FAILED`` on a Windows runner). Only ``net::``
+    failures are skipped — an HTTP error answer to the poll logs as
+    ``Failed to load resource: the server responded with a status of …``
+    and still counts, as do script errors and every other failed load.
+    Attach before navigating.
+    """
+    errors: list[str] = []
+
+    def on_console(message: Any) -> None:
+        if message.type != "error":
+            return
+        source = (message.location or {}).get("url", "")
+        if message.text.startswith("Failed to load resource: net::") and source == url:
+            return
+        errors.append(f"{message.text} ({source})" if source else message.text)
+
+    page.on("console", on_console)
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    return errors

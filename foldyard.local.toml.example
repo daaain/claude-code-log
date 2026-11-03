@@ -1,0 +1,86 @@
+# foldyard per-developer overrides — claude-code-log   (TEMPLATE — copy, don't edit in place)
+#
+#     cp foldyard.local.toml.example foldyard.local.toml
+#
+# The copy is GITIGNORED and yours alone. It is deep-merged OVER the committed
+# foldyard.toml — tables merge key-by-key, so a `keyless` here lands beside the shared
+# `system_prompt` rather than replacing the table. Full resolution order:
+#     explicit env var  →  foldyard.local.toml  →  foldyard.toml  →  built-in default
+# (arrays, including arrays-of-tables like [[inject]], are replaced WHOLESALE — redeclare
+# every entry you still want, not just the new one).
+#
+# What belongs here: anything true of YOU rather than of the project — which agent you pay
+# for, how big your machine is, which port a worktree must land on. Nothing secret: keyless
+# auth stores the real token on the host (~/.foldyard/<project>/host.env), never in the repo
+# and never in the box.
+#
+# This file drives host-side credential injection, so the host runs the copy it ADOPTED:
+# after editing, `fy config adopt` (or answer the prompt at the next `fy up` / `fy box up`).
+
+# ── Turn a shared block OFF: `disabled = true` ───────────────────────────────────────────
+# The merge can otherwise only ADD, and several tables are PRESENCE-gated — declaring
+# [claude] / [codex] / [vscode] / [plugins.<name>] at all IS the opt-in — so blanking their
+# keys doesn't switch them off. `disabled = true` removes the block from the resolved config
+# as if it had never been written; the team keeps it, you don't get it. The case it exists
+# for: the repo commits [codex], you don't have a Codex subscription, and you'd rather not
+# have the CLI installed on box-up, be asked for a credential, or carry a dead codex row in
+# `fy mode`. Works at any depth ([plugins.github] too), and `disabled = false` here puts a
+# block back that the SHARED file disabled. `fy config widenings` lists what you've removed.
+# [codex]
+# disabled = true
+
+# ── Keyless agent auth — the real credential never enters the box ────────────────────────
+# The box gets a DUMMY; the egress proxy swaps in the real token host-side, in flight. Which
+# one you use is personal, which is why it lives here: a `keyless` in the shared file makes
+# every colleague's `fy box up` prompt for a credential they may not have.
+#
+# Claude Code (`fy claude`) — pick ONE:
+#   oauth   — a long-lived OAuth token (sk-ant-oat…) from `claude setup-token` on the host.
+#   api-key — an Anthropic API key (sk-ant-api…) from console.anthropic.com.
+# A TTY `fy box up` prompts once (hidden) and stores it host-side. Then `fy mode claude=on`.
+# Omit `keyless` entirely and you get a plain in-box `claude` login instead.
+# [claude]
+# keyless = "oauth"
+#
+# OpenAI Codex CLI (`fy codex`) — pick ONE:
+#   chatgpt — your ChatGPT subscription: the access token is minted and refreshed host-side
+#             from the host's ~/.codex/auth.json (run `codex login` there once). No key.
+#   api-key — an OpenAI API key (sk-…), captured host-side like Claude's.
+# Then `fy mode codex=on`. Omit `keyless` for a plain in-box `codex login`.
+# `system_prompt` works here exactly as it does for [claude] — Codex takes it as a developer
+# instruction rather than a system prompt, but the effect (a session that starts oriented in
+# this box) is the same. Keep it in the SHARED file if it's about the project, not about you.
+# [codex]
+# keyless = "chatgpt"
+# system_prompt = """
+# …your orientation prompt for `fy codex`.
+# """
+
+# ── Your machine, not the project's ──────────────────────────────────────────────────────
+# The committed sizing suits the project; this suits your laptop. Sizing applies when the VM
+# is CREATED, so changing it later needs `fy machine recreate`.
+# [machine]
+# cpus = 4
+# memory_mib = 8192   # MiB — any whole number
+# disk_gib = 60
+
+# ── Pin a worktree's host-port offset ────────────────────────────────────────────────────
+# A worktree's ports are offset by a deterministic 1..89 hash of its name, so two checkouts
+# never collide. Pin a SMALL fixed offset when a worktree needs a KNOWN port — the usual
+# reason is a third-party service that only redirects to pre-registered callback URLs (an
+# identity provider allowing localhost:3000..3005, say). Every port shifts by the same N, so
+# pinned stacks stay collision-free. Read from the MAIN checkout's file wherever `fy` runs;
+# WT_OFFSET in the environment still wins.
+# [worktree-offsets]
+# my-worktree = 1
+
+# ── A private injector (e.g. your own MCP endpoint) ──────────────────────────────────────
+# Same shape as the [[inject]] tables in foldyard.toml, and it becomes its own on/off mode
+# axis (`fy mode myservice=on`). The token is read host-side from $FY_INJECT_MYSERVICE in
+# ~/.foldyard/<project>/host.env — the box only ever holds a dummy. Add the host to the
+# egress allowlist too (`fy allow add my-host.example.com`), or the proxy refuses it.
+# [[inject]]
+# axis   = "myservice"
+# host   = "my-host.example.com"
+# header = "Authorization"
+# label  = "My private service"

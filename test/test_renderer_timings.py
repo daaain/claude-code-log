@@ -152,7 +152,8 @@ class TestLogTiming:
 
         importlib.reload(rt)
 
-        t_start = time.time()
+        # Same clock the module measures on — see log_timing's docstring.
+        t_start = time.perf_counter()
         time.sleep(0.01)
 
         with rt.log_timing("Test Phase", t_start=t_start):
@@ -179,12 +180,18 @@ class TestTimingStat:
         rt._timing_data["_test_timings"] = []
         rt._timing_data["_current_msg_id"] = "msg-123"
 
+        outer_start = time.perf_counter()
         with rt.timing_stat("_test_timings"):
             time.sleep(0.01)
+        outer_elapsed = time.perf_counter() - outer_start
 
         assert len(rt._timing_data["_test_timings"]) == 1
         duration, msg_id = rt._timing_data["_test_timings"][0]
-        assert duration >= 0.01
+        # Bracketed by an independent reading of the same clock rather
+        # than asserting the sleep's nominal 10ms: a platform's sleep may
+        # wake a hair early, and the property under test is that the
+        # context manager timed the whole block and nothing more.
+        assert 0.005 <= duration <= outer_elapsed
         assert msg_id == "msg-123"
 
     def test_no_tracking_when_disabled(self, monkeypatch: pytest.MonkeyPatch):

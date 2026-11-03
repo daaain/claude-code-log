@@ -41,7 +41,17 @@ def log_timing(
 
     Args:
         phase: Phase name (static string) or callable returning phase name (for dynamic names)
-        t_start: Optional start time for calculating total elapsed time
+        t_start: Optional start reading for the running total. Must come
+            from ``time.perf_counter()`` — this module measures durations
+            on the performance counter, and mixing in a ``time.time()``
+            (or ``time.monotonic()``) reading would print a nonsense
+            total, since the clocks have unrelated epochs.
+
+    ``perf_counter`` rather than ``monotonic`` because the latter is
+    ``GetTickCount64`` on Windows before Python 3.13 — a 15.6ms tick,
+    which quantizes per-message render timings (typically well under a
+    millisecond) to a column of zeroes. ``perf_counter`` is monotonic
+    too, and sub-microsecond on every platform we support.
 
     Example:
         # Static phase name
@@ -56,12 +66,12 @@ def log_timing(
         yield
         return
 
-    t_phase_start = time.time()
+    t_phase_start = time.perf_counter()
 
     try:
         yield
     finally:
-        t_now = time.time()
+        t_now = time.perf_counter()
         phase_time = t_now - t_phase_start
 
         # Evaluate phase name (call if callable, use directly if string)
@@ -100,14 +110,41 @@ def timing_stat(list_name: str) -> Iterator[None]:
         yield
         return
 
-    t_start = time.time()
+    t_start = time.perf_counter()
     try:
         yield
     finally:
-        duration = time.time() - t_start
+        duration = time.perf_counter() - t_start
         if list_name in _timing_data:
             msg_id = _timing_data.get("_current_msg_id", "")
             _timing_data[list_name].append((duration, msg_id))
+
+
+def report_cache_statistics(
+    cache_stats: list[Tuple[str, dict[str, int]]],
+) -> None:
+    """Report memo-cache effectiveness for the pure render leaves.
+
+    Args:
+        cache_stats: List of (name, stats) pairs, where stats is the dict
+                     returned by ``render_cache.ByteBoundedCache.stats()``.
+    """
+    for name, stats in cache_stats:
+        lookups = stats["hits"] + stats["misses"]
+        if not lookups:
+            continue
+        rate = 100.0 * stats["hits"] / lookups
+        extras = [
+            f"{stats[extra_key]} {extra_key}"
+            for extra_key in ("conflicts", "skipped")
+            if stats.get(extra_key)
+        ]
+        skipped_note = f", {', '.join(extras)}" if extras else ""
+        print(
+            f"[TIMING] {name} memo: {stats['hits']}/{lookups} hits ({rate:.0f}%), "
+            f"{stats['entries']} entries, {stats['bytes'] / 1e6:.1f}MB{skipped_note}",
+            flush=True,
+        )
 
 
 def report_timing_statistics(

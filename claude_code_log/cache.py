@@ -1,22 +1,25 @@
 #!/usr/bin/env python3
 """SQLite-based cache management for Claude Code Log."""
 
+import functools
+import hashlib
 import json
 import logging
 import os
 import re
 import sqlite3
+import threading
 import zlib
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, Generator, List, Optional
+from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, get_args
 
 from packaging import version
 from pydantic import BaseModel
 
 from .factories import create_transcript_entry
-from .migrations.runner import run_migrations
+from .migrations.runner import apply_write_pragmas, run_migrations
 from .models import (
     AssistantTranscriptEntry,
     QueueOperationTranscriptEntry,
@@ -41,6 +44,37 @@ class CachedFileInfo(BaseModel):
     message_count: int
 
 
+class CachedFileState(BaseModel):
+    """One file's identity-relevant cached state, for the incremental
+    cache refresh (work/render-format-once.md, stage 4).
+
+    Captured from the messages table *before* a modified file is
+    re-parsed (the parse replaces its rows), so the refresh can compute
+    the append-only check, the coupling closure, and the metadata /
+    attachment count deltas against what the last refresh saw.
+    """
+
+    sessions: set[str] = set()
+    uuids: set[str] = set()
+    parent_uuids: set[str] = set()
+    request_ids: set[str] = set()
+    # Counts by entry type for the classes compute_session_data skips
+    # (summary / ai-title / attachment) — the residual terms of the
+    # total_message_count identity.
+    type_counts: Dict[str, int] = {}
+    # Metadata this file *names*: summary leafUuids (resolve to owner
+    # sessions) and ai-title sessionIds. A summary in one session's file
+    # routinely titles another session, so these sessions' cache rows
+    # must be recomputed when this file changes even though none of
+    # their own entries did.
+    summary_leaf_uuids: set[str] = set()
+    ai_title_sessions: set[str] = set()
+    # SHA-256 of each cached entry's complete serialized model, in source
+    # insertion order. The old sequence must be an exact prefix of the new
+    # one for an incremental refresh to be append-only.
+    row_fingerprints: List[bytes] = []
+
+
 class SessionCacheData(BaseModel):
     """Cached session-level information."""
 
@@ -62,6 +96,18 @@ class SessionCacheData(BaseModel):
     # Teammates feature — set when the session was active in a team.
     # First non-None ``teamName`` of any entry in the session.
     team_name: Optional[str] = None
+    # Migration 010: traversed entries this session owns that
+    # ``compute_session_data`` does not count (attachment / ai-title).
+    # ``None`` marks a row written before the migration — an unknown
+    # basis the incremental refresh must decline on, never a zero.
+    residual_count: Optional[int] = None
+    # Migration 009: warmup-only and empty/agent-only sessions are
+    # persisted with hidden=True instead of being filtered before the
+    # write, so the incremental cache refresh can compute aggregate
+    # deltas over every session's contribution. Read sites that mean
+    # "sessions a human would render" filter these out, preserving the
+    # pre-009 visible set byte-for-byte.
+    hidden: bool = False
 
 
 class HtmlCacheEntry(BaseModel):
@@ -74,6 +120,10 @@ class HtmlCacheEntry(BaseModel):
     )
     message_count: int = 0  # for sanity checking
     library_version: str  # which version generated it
+    # Whether the page carries the combined-transcript back-link, so a run
+    # that changes the answer can mark it stale (migration 013). None for
+    # rows written before that migration, and for outputs with no link.
+    combined_linked: Optional[int] = None
 
 
 class PageCacheData(BaseModel):
@@ -125,10 +175,35 @@ class ProjectCache(BaseModel):
     latest_timestamp: str = ""
 
 
+class SessionSidecar(BaseModel):
+    """Cross-session facts persisted at full-load time (migration 008).
+
+    Compact projections of a full directory load's ``SessionTree``, kept
+    so a later run can regenerate one stale session's file from that
+    session's own JSONL alone (the session-scoped incremental path —
+    ``converter._load_stale_session_transcripts``). Each field answers
+    one question a partial load cannot answer from its own entries:
+
+    - ``parents``: ``{session_id: (parent_session_id, attachment_uuid)}``
+      for every DAG-line attached to a parent session — restores the
+      resume/fork linkage when the parent session isn't loaded.
+    - ``junctions``: ``{uuid: (session_id, [target_session_ids])}`` for
+      every junction point, targets in the tree's chronological order —
+      restores fork markers whose target sessions aren't loaded.
+    - ``dedup_winners``: ``{uuid: winner_session_id}`` for uuids carried
+      by more than one session (resume replay prefixes) — tells a
+      partial load which of its entries the whole-project dedup drops.
+    """
+
+    parents: dict[str, tuple[Optional[str], Optional[str]]]
+    junctions: dict[str, tuple[str, list[str]]]
+    dedup_winners: dict[str, str]
+
+
 # ========== Helper Functions ==========
 
 
-# Lone HIGH surrogates (U+D800–U+DBFF) are not in surrogateescape's
+# Lone TOOL surrogates (U+D800–U+DBFF) are not in surrogateescape's
 # back-mapping range (which only covers low surrogates U+DC80–U+DCFF
 # produced from raw byte decoding), so the surrogateescape-encode step
 # in scrub_surrogates would raise on them. Pre-substitute high
@@ -170,8 +245,65 @@ def scrub_surrogates(s: Optional[str]) -> Optional[str]:
     return s.encode("utf-8", errors="surrogateescape").decode("utf-8", errors="replace")
 
 
+# Compression level for a cached entry's content blob. zlib's default
+# (6) spends most of its time for the last few percent of size, and
+# rewriting a file's rows is the largest item in a watch tick.
+#
+# The size cost is much smaller than a single-file measurement suggests.
+# Over one atypical 207-entry, 40 MB session (~190 KB per entry) level 6
+# takes 183 ms to reach 2.92 MB against level 3's 81 ms to reach 3.44 MB
+# — 18% more bytes. But zlib levels only diverge on large payloads, and a
+# real archive is mostly small entries: across a 49 MB archive's 18,288
+# rows the blobs grow 26.37 MB -> 27.05 MB, i.e. **2.6%**, for a cold
+# conversion 11% faster (6.15 s -> 5.49 s) and a tick ~20% faster.
+#
+# Decompression is unaffected (~50 ms either way) and level-agnostic, so
+# this is backward compatible: rows written at any level still read. The
+# only visible transition is that re-serialising an existing entry
+# changes its blob, hence its row fingerprint, so the first incremental
+# refresh over a level-6 cache declines to a full refresh once and is
+# consistent thereafter.
+CONTENT_COMPRESSION_LEVEL = 3
+
+
+def _combined_link_stale(cached: Optional[int], desired: Optional[bool]) -> bool:
+    """Whether a page's combined back-link state no longer matches reality.
+
+    ``cached`` is the ``html_cache.combined_linked`` column: 1/0 for pages
+    written since migration 013, NULL for anything older. NULL is treated
+    as matching — the page's link state is simply unknown, and marking
+    every pre-013 page stale would re-render every session in every
+    project on upgrade for a cosmetic affordance (the 007/011 precedent).
+
+    ``desired`` is None for callers that aren't rendering session pages.
+
+    Shared by ``is_transcript_stale`` and ``get_stale_sessions``, which
+    are otherwise parallel implementations of the same checks — this is
+    the one place the rule lives, so they cannot drift apart on it.
+    """
+    if cached is None or desired is None:
+        return False
+    return bool(cached) != desired
+
+
+@functools.lru_cache(maxsize=1)
 def get_library_version() -> str:
-    """Get the current library version from package metadata or pyproject.toml."""
+    """Get the current library version from package metadata or pyproject.toml.
+
+    Memoised because it is called *per rendered file* on the staleness
+    path (``is_transcript_stale`` → ``is_html_outdated``), and each call
+    re-parses the installed package metadata through
+    ``importlib.metadata``: 173 calls and 35 ms of a 1.1 s watch tick on
+    a 217-session project, scaling with the session count rather than
+    with anything that changed. An installed version cannot change inside
+    a process, so a one-slot cache is exact; tests that need a different
+    value patch this name on the module, which is unaffected.
+
+    The decorator has to sit directly above this ``def``: a helper once
+    got inserted between the two, which silently moved the memo onto the
+    helper and put the 675-call, 3.3 s re-parse back into every archive
+    pass. ``test_cache.py`` pins the wrapper to this function.
+    """
     # First try to get version from installed package metadata
     try:
         from importlib.metadata import version as get_version
@@ -219,8 +351,115 @@ def get_library_version() -> str:
 # ========== Cache Path Configuration ==========
 
 
-def subagents_fingerprint(jsonl_path: Path) -> str:
-    """Fingerprint of the sidecar inputs that feed spawn discovery (#213).
+class _DirScan:
+    """One directory's sub-agent inputs: its ``agent-*.meta.json`` count and
+    newest whole-second mtime, and each ``agent-<id>.jsonl``'s
+    ``(mtime_ns, size)`` keyed by agent id. ``unstable`` when a file
+    vanished mid-scan."""
+
+    __slots__ = ("meta_count", "meta_newest", "agents", "unstable")
+
+    def __init__(self, directory: Path) -> None:
+        self.meta_count = 0
+        self.meta_newest = 0
+        self.agents: Dict[str, Tuple[int, int]] = {}
+        self.unstable = False
+        if not directory.is_dir():
+            return
+        try:
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    name = entry.name
+                    if not name.startswith("agent-"):
+                        continue
+                    if name.endswith(".meta.json"):
+                        self.meta_count += 1
+                        self.meta_newest = max(
+                            self.meta_newest, int(entry.stat().st_mtime)
+                        )
+                    elif name.endswith(".jsonl"):
+                        st = entry.stat()
+                        self.agents[name[len("agent-") : -len(".jsonl")]] = (
+                            st.st_mtime_ns,
+                            st.st_size,
+                        )
+        except OSError:
+            self.unstable = True
+
+
+class SubagentsSnapshot:
+    """The sub-agent inputs of one transcript's parse, scanned once.
+
+    Taken BEFORE the parse, so the fingerprint it yields describes the
+    world as-of-the-parse (or older): a sidecar or transcript landing
+    mid-parse mismatches on the next read instead of being fingerprinted
+    as covered. The fingerprint itself is built AFTER the parse, because
+    for an agent file in a flat ``subagents/`` dir which sibling
+    transcripts count depends on what the parse spliced — see
+    :meth:`fingerprint`.
+    """
+
+    def __init__(
+        self,
+        jsonl_path: Path,
+        scan: Callable[[Path], _DirScan] = _DirScan,
+    ) -> None:
+        self.own = scan(jsonl_path.parent / jsonl_path.stem / "subagents")
+        self.siblings = (
+            scan(jsonl_path.parent) if jsonl_path.parent.name == "subagents" else None
+        )
+
+    def fingerprint(self, scope: Optional[frozenset[str]] = None) -> str:
+        """``"<count>:<newest int mtime>"`` over the sidecars, then — when
+        agent transcripts count — ``"|<count>:<newest mtime_ns>:<total
+        bytes>"`` over them (size is exact where the mtime may tie inside
+        a second). Sidecars are written once at spawn time, so count +
+        newest mtime captures every addition and removal; transcripts
+        only grow. Empty string when there is nothing.
+
+        ``scope`` narrows the transcripts of the CONTAINING dir (an agent
+        file's siblings) to the agent ids whose entries the parse spliced
+        in — children and, through them, grandchildren. Without it a
+        running agent's append invalidated every sibling's row, so a
+        watch tick re-parsed the whole flat family. A scoped fingerprint
+        always carries its transcript part, suffixed ``"@<sorted ids>"``,
+        so a later check can rebuild the same scope from the stored
+        string (:func:`fingerprint_scope`). ``None`` counts every sibling
+        transcript — the conservative form, and the only one rows written
+        before scoping carry, so they keep matching. The sidecar part is
+        never scoped: a new spawn anywhere in the family may be this
+        file's child, which only a re-parse can tell.
+        """
+        scans = [self.own] if self.siblings is None else [self.own, self.siblings]
+        meta_count = sum(s.meta_count for s in scans)
+        if any(s.unstable for s in scans):
+            # An always-mismatching fingerprint is safe: the next check
+            # re-reads.
+            return f"{meta_count}:unstable"
+        meta_newest = max(s.meta_newest for s in scans)
+        stats = list(self.own.agents.values())
+        if self.siblings is not None:
+            stats += [
+                stat
+                for agent_id, stat in self.siblings.agents.items()
+                if scope is None or agent_id in scope
+            ]
+        if scope is None and not meta_count and not stats:
+            return ""
+        fingerprint = f"{meta_count}:{meta_newest}" if meta_count else ""
+        if stats or scope is not None:
+            newest = max((mtime for mtime, _ in stats), default=0)
+            total = sum(size for _, size in stats)
+            fingerprint += f"|{len(stats)}:{newest}:{total}"
+        if scope is not None:
+            fingerprint += "@" + ",".join(sorted(scope))
+        return fingerprint
+
+
+def subagents_fingerprint(
+    jsonl_path: Path, scope: Optional[frozenset[str]] = None
+) -> str:
+    """Fingerprint of the sub-agent inputs a transcript's parse reads (#213).
 
     Parsing a transcript also reads ``agent-*.meta.json`` sidecars (see
     ``converter._subagent_meta_map``), so they must take part in cache
@@ -228,12 +467,18 @@ def subagents_fingerprint(jsonl_path: Path) -> str:
     (e.g. a still-running agent spawning a child without touching the
     trunk file) would otherwise go unnoticed by the mtime-only check.
 
-    The fingerprint is ``"<count>:<newest int mtime>"`` over the sidecars
-    of the dirs where this transcript's children can live — the sibling
-    ``<stem>/subagents/`` dir, plus the containing dir for agent files
-    (the flat layout puts children next to their parent). Sidecars are
-    written once at spawn time, so count+newest-mtime captures every
-    addition and removal. Empty string when there are none.
+    The same parse splices the agents' own transcripts
+    (``agent-*.jsonl``) into the transcript's cached rows, so those count
+    too: a **running** sub-agent appends to its transcript while the trunk
+    sits idle on the spawning tool_use (a synchronous agent blocks it; an
+    async one runs beside it), and without them a watch kept serving the
+    cached trunk — the agent's lane did not grow until the trunk next
+    changed (work/minimal-theme-dag.md, P7b).
+
+    Scans the dirs where this transcript's children can live — the
+    sibling ``<stem>/subagents/`` dir, plus the containing dir for agent
+    files (the flat layout puts children next to their parent). Format
+    and ``scope``: :meth:`SubagentsSnapshot.fingerprint`.
 
     Deliberately narrower than ``converter._subagent_meta_map``'s scan
     for TRUNK files: the parse also defensively checks the project dir
@@ -241,26 +486,142 @@ def subagents_fingerprint(jsonl_path: Path) -> str:
     fingerprinting it would rescan a potentially large dir on every
     cache read for a theoretical-only input.
     """
-    candidates = [jsonl_path.parent / jsonl_path.stem / "subagents"]
-    if jsonl_path.parent.name == "subagents":
-        candidates.append(jsonl_path.parent)
-    metas: list[Path] = []
-    for directory in candidates:
-        if directory.is_dir():
-            metas.extend(directory.glob("agent-*.meta.json"))
-    if not metas:
-        return ""
-    try:
-        newest = max(int(p.stat().st_mtime) for p in metas)
-    except OSError:
-        # A sidecar vanished mid-scan; treat as unstable so the next
-        # check re-reads (an always-mismatching fingerprint is safe).
-        return f"{len(metas)}:unstable"
-    return f"{len(metas)}:{newest}"
+    return SubagentsSnapshot(jsonl_path).fingerprint(scope)
+
+
+def fingerprint_scope(fingerprint: Optional[str]) -> Optional[frozenset[str]]:
+    """The sibling scope a stored fingerprint was built with, so a freshness
+    check recomputes the same narrowing; ``None`` for an unscoped one."""
+    if not fingerprint or "@" not in fingerprint:
+        return None
+    ids = fingerprint.rsplit("@", 1)[1]
+    return frozenset(ids.split(",")) if ids else frozenset()
+
+
+def spliced_agent_scope(
+    jsonl_path: Path, entries: List[TranscriptEntry]
+) -> Optional[frozenset[str]]:
+    """The scope (:meth:`SubagentsSnapshot.fingerprint`) for an agent file's
+    parse: every agent id other than its own among its sidechain entries —
+    the transcripts the parse spliced in, at any depth, since a child's
+    spliced rows carry its own children's entries. ``None`` for a
+    transcript outside a ``subagents/`` dir, which has no sibling part."""
+    if jsonl_path.parent.name != "subagents":
+        return None
+    own = jsonl_path.stem[len("agent-") :]
+    return frozenset(
+        agent_id
+        for entry in entries
+        if (agent_id := getattr(entry, "agentId", None))
+        and agent_id != own
+        and getattr(entry, "isSidechain", False)
+    )
+
+
+def _fingerprints_match(cached: str, current: str) -> bool:
+    """Compare a stored sub-agent fingerprint with today's.
+
+    Rows written before agent transcripts joined the fingerprint (no
+    ``|`` part) are compared on their sidecar part alone, so an upgrade
+    does not re-parse every cached session at once; such a row picks up
+    the full fingerprint the next time its file is parsed for any other
+    reason (any append to the trunk).
+    """
+    if cached == current:
+        return True
+    if "|" in cached or not cached:
+        return False
+    return current.split("|", 1)[0] == cached
+
+
+# Manual salt for content-shape changes the field names cannot see: a
+# field whose *meaning* or serialized representation changed while keeping
+# its name. Bump it and every cached blob is re-parsed once. Leave it alone
+# for field additions/removals/renames — those move the digest by
+# themselves, which is the point.
+_CONTENT_SCHEMA_SALT = "1"
+
+
+def _nested_models(annotation: object) -> Generator[type[BaseModel], None, None]:
+    """Every Pydantic model reachable through a type annotation.
+
+    Unwraps whatever containers the annotation is wrapped in -- ``Optional``,
+    unions, ``List``, ``Dict`` -- because what matters is which models can end
+    up serialized, not how they are addressed.
+    """
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        yield annotation
+        return
+    for arg in get_args(annotation):
+        yield from _nested_models(arg)
+
+
+def _content_models() -> List[type[BaseModel]]:
+    """Every model whose fields can land in a stored content blob.
+
+    ``model_dump()`` serializes the whole tree, not just the entry's own
+    fields, so a digest over the top-level union members alone leaves the
+    #320 hazard live one level down -- and the content-item models are
+    exactly where new fields actually appear. Measured before this walk
+    existed: adding a field to ``TextContent`` left the digest unmoved.
+
+    Sorted by name so the digest does not depend on traversal order.
+    """
+    seen: Dict[str, type[BaseModel]] = {}
+    queue: List[type[BaseModel]] = list(get_args(TranscriptEntry))
+    while queue:
+        model = queue.pop()
+        key = model.__module__ + "." + model.__qualname__
+        if key in seen:
+            continue
+        seen[key] = model
+        for field in model.model_fields.values():
+            for nested in _nested_models(field.annotation):
+                queue.append(nested)
+    return sorted(seen.values(), key=lambda m: m.__module__ + "." + m.__qualname__)
+
+
+@functools.lru_cache(maxsize=1)
+def content_schema_version() -> str:
+    """Digest of the shape of what we store in ``messages.content``.
+
+    Cached entries are ``zlib(json(entry.model_dump()))``, so a blob is only
+    as complete as the model that produced it. File freshness keys on mtime,
+    size and the sidecar fingerprint — all properties of the *source* — so
+    before this existed, adding a field to a transcript model left every
+    unchanged file serving a blob written without it. The field then read as
+    absent for data that plainly had it (issue #320: ``imagePasteIds``
+    rehydrated as ``None`` on transcripts untouched since before it shipped).
+
+    Deriving the version from the declared field names rather than asking a
+    developer to bump a constant is deliberate: the failure it replaces was
+    exactly a remembered step nobody remembered. Add a field and the digest
+    moves on its own.
+
+    It covers the whole serialized *tree* (``_content_models``), not just the
+    entry types: ``model_dump()`` writes nested models too, so a digest over
+    the top-level union alone would leave the same hazard live one level
+    down — in the content-item models, which is where fields actually get
+    added. Measured while this was still top-level-only: a new field on
+    ``TextContent`` left the digest unmoved.
+
+    Field *names* only — not types or ordering — so the digest is stable
+    across Python and Pydantic versions and cannot mass-invalidate a 3 GB
+    cache on a dependency upgrade. Semantic changes that keep every name are
+    invisible here and are what ``_CONTENT_SCHEMA_SALT`` is for.
+    """
+    parts = [_CONTENT_SCHEMA_SALT]
+    for model in _content_models():
+        parts.append(model.__name__ + ":" + ",".join(sorted(model.model_fields)))
+    digest = hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
+    return digest[:12]
 
 
 def _cache_row_is_fresh(
-    row: sqlite3.Row, source_mtime: float, current_fp: Callable[[], str]
+    row: sqlite3.Row,
+    source_mtime: float,
+    current_fp: Callable[[Optional[frozenset[str]]], str],
+    source_size: Optional[int] = None,
 ) -> bool:
     """Decide whether a cached_files row is still fresh.
 
@@ -270,19 +631,41 @@ def _cache_row_is_fresh(
     check passes (and get_modified_files() can plug in its
     scandir-optimized variant).
 
-    Cache is valid if modification times match (within 1 second
-    tolerance) and the sidecar inputs of spawn discovery (#213) match
-    too — new agent-*.meta.json files appear without touching the
-    source jsonl. Pre-007 rows carry NULL: accept those only when the
-    file has no sidecars today (nothing to miss), so legacy caches
-    don't mass-invalidate while sessions WITH sidecars reparse once.
+    Cache is valid if the size matches, modification times match
+    (within 1 second tolerance), and the sidecar inputs of spawn
+    discovery (#213) match too — new agent-*.meta.json files appear
+    without touching the source jsonl. Pre-007 rows carry a NULL
+    fingerprint: accept those only when the file has no sidecars today
+    (nothing to miss), so legacy caches don't mass-invalidate while
+    sessions WITH sidecars reparse once.
+
+    The size check exists because the mtime tolerance — which is there
+    for coarse filesystem timestamp granularity — hides any write that
+    lands within a second of the mtime recorded at cache time. Appending
+    to a transcript and converting immediately alternates between seeing
+    and missing the change; the last message of a turn can stay stranded
+    indefinitely. Size is exact and free (callers already stat the
+    file), and the combined rule is strictly tightening: it marks more
+    files stale, never fewer. Pre-011 rows carry NULL and fall back to
+    the mtime-only check so a populated cache doesn't mass-invalidate.
     """
+    # Unlike the size and fingerprint columns above, a NULL here is NOT
+    # accepted. Those describe inputs we might have missed; this describes
+    # the completeness of what we wrote, and a NULL means the row was
+    # written before we tracked it -- the issue #320 state exactly. Treat
+    # unknown as stale so it re-parses once.
+    if row["content_version"] != content_schema_version():
+        return False
+    if source_size is not None:
+        cached_size = row["source_size"]
+        if cached_size is not None and cached_size != source_size:
+            return False
     if abs(source_mtime - row["source_mtime"]) >= 1.0:
         return False
     cached_fp = row["subagents_fingerprint"]
     if cached_fp is None:
-        return current_fp() == ""
-    return cached_fp == current_fp()
+        return current_fp(None) == ""
+    return _fingerprints_match(cached_fp, current_fp(fingerprint_scope(cached_fp)))
 
 
 def get_cache_db_path(projects_dir: Path) -> Path:
@@ -302,6 +685,66 @@ def get_cache_db_path(projects_dir: Path) -> Path:
     return projects_dir / "claude-code-log-cache.db"
 
 
+# SQLite error text meaning "this file is damaged past the point of being
+# read at all". Matched on the message because Python funnels every one of
+# them into the same `sqlite3.DatabaseError` — there is no distinct class
+# to catch. Deliberately narrow: "database is locked" and "database or disk
+# is full" are also DatabaseErrors, and neither is a reason to delete a
+# perfectly good cache.
+_CORRUPTION_MARKERS = (
+    # SQLITE_CORRUPT. Observed shape: a cache truncated to 2833 pages while
+    # its header still claimed 14189, which fails every read including
+    # `PRAGMA page_count`. That one came from the virtiofs mount the file
+    # lived on, so it is the filesystem's kind of damage, not the writer's —
+    # expect it to recur wherever the cache sits on a shared/virtualised
+    # mount.
+    "database disk image is malformed",
+    # SQLITE_NOTADB — a garbage or encrypted header.
+    "file is not a database",
+    # A virtual-table declaration in sqlite_master that no longer parses,
+    # e.g. an FTS5 index carrying an option this SQLite build lacks.
+    "malformed database schema",
+)
+
+
+def is_corrupt_database_error(exc: BaseException) -> bool:
+    """Whether ``exc`` says the database file itself is unusable.
+
+    Note a zero-byte file is *not* corruption — SQLite happily adopts one as
+    a new database — so an interrupted create heals on its own.
+    """
+    if not isinstance(exc, sqlite3.DatabaseError):
+        return False
+    message = str(exc).lower()
+    return any(marker in message for marker in _CORRUPTION_MARKERS)
+
+
+def discard_database_files(db_path: Path) -> bool:
+    """Delete a cache database and its WAL sidecars. True if all are gone.
+
+    The sidecars have to go with it: a ``-wal`` left beside a recreated
+    database is a mismatched log, which is its own route back into
+    "malformed". So a surviving sidecar is a failure just as much as a
+    surviving ``.db`` — the caller should run cacheless rather than
+    recreate a database next to a stale log.
+    """
+    paths = (
+        db_path,
+        db_path.with_name(db_path.name + "-wal"),
+        db_path.with_name(db_path.name + "-shm"),
+    )
+    for path in paths:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            # Windows refuses to unlink a file another process still holds
+            # open (WinError 32). Report and let the caller decide.
+            print(f"  Warning: could not delete {path.name}: {e}")
+    return not any(path.exists() for path in paths)
+
+
 # ========== Cache Manager ==========
 
 
@@ -315,6 +758,143 @@ def get_cache_db_path(projects_dir: Path) -> Path:
 _migrated_db_paths: set[str] = set()
 
 
+# ========== Connection lifecycle ==========
+#
+# By default every `CacheManager._get_connection()` opens a connection and
+# closes it on exit, so no handle lingers on the .db/.db-wal/.db-shm files
+# (Windows refuses to delete an open file, and tests tear temp dirs down).
+# That is the right default for a single call and the wrong one for a
+# loop: in WAL mode, closing the *last* connection checkpoints the database
+# and deletes the -wal/-shm files, and the next `connect` + `PRAGMA
+# journal_mode=WAL` creates them again. A hierarchy pass on a 332-project
+# archive did that 3,658 times — 11 opens per project, each the only
+# connection alive — and on Windows against an 890 MB cache the churn was
+# ~90 s of a 96 s pass (41 s in `close` alone). Measured per cycle on that
+# file: 29 ms with nothing else open, 6.7 ms with one idle connection held.
+#
+# `batch()` already fixes this *within* a project build by sharing one
+# connection per instance. A lease is the same idea one level up: one
+# connection for the scope, shared by every instance addressing that
+# database on this thread, closed on scope exit. Same steady pass: 96 s →
+# 5.3 s. Per thread because sqlite3 connections are thread-bound, and the
+# server thread answers requests while the watch thread converts.
+
+
+def _configure_connection(conn: sqlite3.Connection, *, read_only: bool) -> None:
+    """Apply the standard pragmas/row factory to a fresh connection."""
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    if read_only:
+        # A mode=ro connection cannot switch journal modes, and a
+        # reader needs neither pragma: the writing parent already
+        # keeps the database in WAL.
+        return
+    # Shared with the migration runner's own connection — see
+    # apply_write_pragmas for why WAL and synchronous=NORMAL are a pair.
+    apply_write_pragmas(conn)
+
+
+def _open_connection(
+    db_path: Path,
+    *,
+    read_only: bool,
+    configure: Callable[[sqlite3.Connection], None],
+) -> sqlite3.Connection:
+    """Open a connection and run ``configure`` on it, closing it if that fails.
+
+    If a PRAGMA in ``configure`` raises, the just-opened handle is closed
+    before re-raising so it can't leak and lock the .db/.db-wal/.db-shm
+    files — the exact failure mode the connection lifecycle elsewhere is
+    careful to avoid (Windows WinError 32). ``configure`` is a parameter
+    rather than a fixed call so an instance can route through its own
+    (patchable) ``_configure_connection`` hook.
+    """
+    if read_only:
+        # as_uri() percent-encodes the (absolute) path, so URI mode is
+        # safe for paths with spaces or query-ish characters.
+        conn = sqlite3.connect(
+            db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=30.0
+        )
+    else:
+        conn = sqlite3.connect(db_path, timeout=30.0)
+    try:
+        configure(conn)
+    except BaseException:
+        conn.close()
+        raise
+    return conn
+
+
+_LeaseKey = Tuple[str, bool]
+# Thread-local, and safe across the render pools only because both use
+# `multiprocessing.get_context("spawn")`: a forked child would inherit
+# this dict and its sqlite3 handles, which is undefined behaviour. Keep
+# the pools on spawn.
+_leases = threading.local()
+
+
+def _thread_leases() -> Dict[_LeaseKey, sqlite3.Connection]:
+    """This thread's active leases, keyed by (database path, read_only)."""
+    conns: Optional[Dict[_LeaseKey, sqlite3.Connection]] = getattr(
+        _leases, "conns", None
+    )
+    if conns is None:
+        conns = {}
+        _leases.conns = conns
+    return conns
+
+
+def _drop_leases(db_path: Path) -> None:
+    """Close and forget any lease this thread holds on ``db_path``.
+
+    For the corruption-rebuild path, which must delete the file: the
+    enclosing ``connection_lease`` scope then simply has nothing to close.
+    """
+    leases = _thread_leases()
+    for key in [k for k in leases if k[0] == str(db_path)]:
+        leases.pop(key).close()
+
+
+@contextmanager
+def connection_lease(
+    db_path: Path, *, read_only: bool = False
+) -> Generator[None, None, None]:
+    """Hold one connection to ``db_path`` open for the scope, on this thread.
+
+    Every ``CacheManager`` addressing that database from this thread
+    reuses it — ``_get_connection`` and ``batch()`` both yield it and leave
+    the closing to the lease — so a loop over many projects opens one
+    connection instead of one per query. Nesting reuses the outer lease.
+
+    The connection is closed on scope exit, including on exception, so the
+    Windows file-lock guarantee holds at the scope boundary rather than
+    per call. A database that cannot be opened here (typically corrupt)
+    is not the lease's problem: the scope runs without one, and the first
+    ``CacheManager`` inside it reports and rebuilds the file as before.
+    """
+    key: _LeaseKey = (str(db_path), read_only)
+    leases = _thread_leases()
+    if key in leases:
+        yield
+        return
+    try:
+        conn = _open_connection(
+            db_path,
+            read_only=read_only,
+            configure=functools.partial(_configure_connection, read_only=read_only),
+        )
+    except sqlite3.DatabaseError:
+        yield
+        return
+    leases[key] = conn
+    try:
+        yield
+    finally:
+        # `_drop_leases` may already have removed and closed it.
+        if leases.pop(key, None) is not None:
+            conn.close()
+
+
 class CacheManager:
     """SQLite-based cache manager for Claude Code Log."""
 
@@ -323,6 +903,8 @@ class CacheManager:
         project_path: Path,
         library_version: str,
         db_path: Optional[Path] = None,
+        *,
+        read_only: bool = False,
     ):
         """Initialise cache manager for a project.
 
@@ -331,9 +913,18 @@ class CacheManager:
             library_version: Current version of the library for cache invalidation
             db_path: Optional explicit path to the cache database. If not provided,
                 uses CLAUDE_CODE_LOG_CACHE_PATH env var or default location.
+            read_only: Open the cache strictly for reading. Skips the
+                migration run and the project-row upsert, and opens every
+                connection in SQLite's ``mode=ro``, so this instance can
+                never write the shared database. Built for spawned render
+                workers, which would otherwise all race those writes. The
+                project id is looked up rather than created, so a missing
+                database or row degrades to "no cached data" instead of
+                erroring.
         """
         self.project_path = project_path
         self.library_version = library_version
+        self._read_only = read_only
 
         # Priority: explicit db_path > env var > default location
         if db_path:
@@ -348,50 +939,57 @@ class CacheManager:
         # if migrations are ever routed through it.
         self._shared_conn: Optional[sqlite3.Connection] = None
 
-        # Initialise database and ensure project exists
-        self._init_database()
         self._project_id: Optional[int] = None
-        self._ensure_project_exists()
+        if read_only:
+            # Migrations and the project-row upsert both write; a reader
+            # takes the schema and row exactly as the parent process left
+            # them, and only looks its project up.
+            self._lookup_project_id()
+        else:
+            # Initialise database and ensure project exists
+            try:
+                self._init_database()
+                self._ensure_project_exists()
+            except sqlite3.DatabaseError as exc:
+                if not is_corrupt_database_error(exc):
+                    raise
+                self._rebuild_corrupt_database(exc)
 
     def _configure_connection(self, conn: sqlite3.Connection) -> None:
         """Apply the standard pragmas/row factory to a fresh connection."""
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
-        conn.execute("PRAGMA journal_mode = WAL")
-        # synchronous=NORMAL is the recommended pairing for WAL: it keeps
-        # durability across application crashes (only a power/OS crash can lose
-        # the last committed transaction) while skipping an fsync on every
-        # commit. The cache is fully regenerable from the JSONL source, so that
-        # residual risk is acceptable.
-        conn.execute("PRAGMA synchronous = NORMAL")
+        _configure_connection(conn, read_only=self._read_only)
 
     def _open_configured_connection(self) -> sqlite3.Connection:
-        """Open a connection and apply pragmas, closing it if setup fails.
+        """Open a connection and apply pragmas, closing it if setup fails."""
+        return _open_connection(
+            self.db_path,
+            read_only=self._read_only,
+            configure=self._configure_connection,
+        )
 
-        If a PRAGMA in ``_configure_connection`` raises, the just-opened
-        handle is closed before re-raising so it can't leak and lock the
-        .db/.db-wal/.db-shm files — the exact failure mode the connection
-        lifecycle elsewhere is careful to avoid (Windows WinError 32).
-        """
-        conn = sqlite3.connect(self.db_path, timeout=30.0)
-        try:
-            self._configure_connection(conn)
-        except BaseException:
-            conn.close()
-            raise
-        return conn
+    def _leased_connection(self) -> Optional[sqlite3.Connection]:
+        """The connection a `connection_lease` holds for this database on
+        this thread, if any."""
+        return _thread_leases().get((str(self.db_path), self._read_only))
 
     @contextmanager
     def _get_connection(self) -> Generator[sqlite3.Connection, None, None]:
         """Get a database connection with proper settings.
 
         Inside a ``batch()`` scope this yields the shared connection without
-        closing it (the batch owns its lifecycle). Otherwise it opens a fresh
-        connection and closes it on exit — the default, Windows-safe behaviour
-        (no lingering file handle on the .db/.db-wal/.db-shm files).
+        closing it (the batch owns its lifecycle). Under a
+        ``connection_lease`` for this database it yields the leased one,
+        likewise without closing it. Otherwise it opens a fresh connection
+        and closes it on exit — the default, Windows-safe behaviour (no
+        lingering file handle on the .db/.db-wal/.db-shm files).
         """
         if self._shared_conn is not None:
             yield self._shared_conn
+            return
+
+        leased = self._leased_connection()
+        if leased is not None:
+            yield leased
             return
 
         conn = self._open_configured_connection()
@@ -426,6 +1024,17 @@ class CacheManager:
             yield
             return
 
+        leased = self._leased_connection()
+        if leased is not None:
+            # A lease is an outermost batch that spans instances: reuse
+            # its connection and leave the closing to the lease.
+            self._shared_conn = leased
+            try:
+                yield
+            finally:
+                self._shared_conn = None
+            return
+
         # Open+configure first; only publish to _shared_conn once setup has
         # succeeded, so a failed PRAGMA never leaves a half-initialised (and
         # now-closed) handle assigned for other calls to reuse.
@@ -444,6 +1053,68 @@ class CacheManager:
             return
         run_migrations(self.db_path)
         _migrated_db_paths.add(key)
+
+    def _rebuild_corrupt_database(self, exc: sqlite3.DatabaseError) -> None:
+        """Delete an unreadable cache database and build a fresh one.
+
+        The cache is derived data, regenerable in full from the JSONL
+        source, so discarding it costs only the next run's rebuild time —
+        whereas keeping it costs every run, forever. Corruption is sticky:
+        `apply_migration` only records a migration that completed, so a
+        `CREATE INDEX` that hits a damaged page is re-attempted and re-fails
+        on every subsequent invocation.
+
+        Nothing is salvaged first. In the case this was written for, the
+        file was truncated to a fifth of the size its own header claimed,
+        and *no* statement against it succeeded — not even `PRAGMA
+        page_count`. A partial-salvage path would be untested code guarding
+        against a case we have not seen.
+
+        Only reached from the writing constructor. A ``read_only``
+        instance — every spawned render worker — must never delete the
+        database out from under its siblings, and doesn't need to:
+        `_lookup_project_id` already degrades to "no cached data".
+        """
+        print(f"Cache database is corrupt ({exc}): {self.db_path}")
+        # A lease on this thread holds the file open, and Windows refuses
+        # to delete an open file. Drop it first; the rest of the enclosing
+        # scope falls back to a connection per call, which is correct and
+        # merely slower.
+        _drop_leases(self.db_path)
+        if not discard_database_files(self.db_path):
+            # Couldn't remove it, so a retry would just fail the same way.
+            # Re-raise and let the caller degrade to running cacheless.
+            print("  Could not delete it; continuing without a cache.")
+            raise exc
+        # The memo records "migrations already checked for this path", which
+        # the file we just deleted is no longer evidence of.
+        _migrated_db_paths.discard(str(self.db_path))
+        print("  Deleted it and rebuilding from scratch (this run will be slower).")
+        self._init_database()
+        self._ensure_project_exists()
+
+    def _lookup_project_id(self) -> None:
+        """Read-only counterpart of ``_ensure_project_exists``: find, never create.
+
+        No version-compatibility handling either — invalidating on a
+        mismatch is a write, and the (writing) parent that spawned this
+        reader already resolved any mismatch before handing over. Leaves
+        ``_project_id`` as None — reads return "no cached data" — when the
+        database, schema, or row is absent, rather than raising out of a
+        worker's initialiser.
+        """
+        if not self.db_path.exists():
+            return
+        try:
+            with self._get_connection() as conn:
+                row = conn.execute(
+                    "SELECT id FROM projects WHERE project_path = ?",
+                    (str(self.project_path),),
+                ).fetchone()
+        except sqlite3.Error:
+            return
+        if row:
+            self._project_id = row["id"]
 
     def _ensure_project_exists(self) -> None:
         """Ensure project record exists and get its ID."""
@@ -567,7 +1238,8 @@ class CacheManager:
             "_level": None,
             "_operation": None,
             "content": zlib.compress(
-                json.dumps(entry.model_dump(), separators=(",", ":")).encode("utf-8")
+                json.dumps(entry.model_dump(), separators=(",", ":")).encode("utf-8"),
+                CONTENT_COMPRESSION_LEVEL,
             ),
         }
 
@@ -628,7 +1300,9 @@ class CacheManager:
 
         with self._get_connection() as conn:
             row = conn.execute(
-                "SELECT source_mtime, subagents_fingerprint FROM cached_files"
+                "SELECT source_mtime, source_size, subagents_fingerprint,"
+                " content_version"
+                " FROM cached_files"
                 " WHERE project_id = ? AND file_name = ?",
                 (self._project_id, jsonl_path.name),
             ).fetchone()
@@ -636,10 +1310,12 @@ class CacheManager:
         if not row:
             return False
 
+        source_stat = jsonl_path.stat()
         return _cache_row_is_fresh(
             row,
-            jsonl_path.stat().st_mtime,
-            lambda: subagents_fingerprint(jsonl_path),
+            source_stat.st_mtime,
+            lambda scope: subagents_fingerprint(jsonl_path, scope),
+            source_stat.st_size,
         )
 
     def load_cached_entries(self, jsonl_path: Path) -> Optional[List[TranscriptEntry]]:
@@ -726,6 +1402,7 @@ class CacheManager:
         jsonl_path: Path,
         entries: List[TranscriptEntry],
         subagents_fp: Optional[str] = None,
+        source_stat: Optional[os.stat_result] = None,
     ) -> None:
         """Save parsed transcript entries to cache.
 
@@ -735,11 +1412,21 @@ class CacheManager:
         next read and forces a reparse (over-invalidation; computing it
         here at save time would instead validate a parse that never saw
         the late sidecar). Falls back to computing now when omitted.
+
+        ``source_stat`` is the file's identity as of the parse, and is
+        the same argument one level down: a session that grew *while*
+        being read would otherwise be stamped with the size and mtime it
+        reached, marking a cache that is missing those lines as current —
+        and if the file then never changes again, permanently so. Stamped
+        with what was actually parsed, the growth invalidates instead.
         """
         if self._project_id is None:
             return
 
-        source_mtime = jsonl_path.stat().st_mtime
+        if source_stat is None:
+            source_stat = jsonl_path.stat()
+        source_mtime = source_stat.st_mtime
+        source_size = source_stat.st_size
         cached_mtime = datetime.now().timestamp()
         if subagents_fp is None:
             subagents_fp = subagents_fingerprint(jsonl_path)
@@ -750,24 +1437,29 @@ class CacheManager:
             conn.execute(
                 """
                 INSERT INTO cached_files
-                (project_id, file_name, file_path, source_mtime, cached_mtime,
-                 message_count, subagents_fingerprint)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                (project_id, file_name, file_path, source_mtime, source_size,
+                 cached_mtime, message_count, subagents_fingerprint,
+                 content_version)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(project_id, file_name) DO UPDATE SET
                     file_path = excluded.file_path,
                     source_mtime = excluded.source_mtime,
+                    source_size = excluded.source_size,
                     cached_mtime = excluded.cached_mtime,
                     message_count = excluded.message_count,
-                    subagents_fingerprint = excluded.subagents_fingerprint
+                    subagents_fingerprint = excluded.subagents_fingerprint,
+                    content_version = excluded.content_version
                 """,
                 (
                     self._project_id,
                     jsonl_path.name,
                     str(jsonl_path),
                     source_mtime,
+                    source_size,
                     cached_mtime,
                     len(entries),
                     subagents_fp,
+                    content_schema_version(),
                 ),
             )
 
@@ -804,8 +1496,163 @@ class CacheManager:
                 serialized_entries,
             )
 
+            # Keep the full-archive search index in step with the rows we
+            # just replaced, inside the same transaction. This is a no-op
+            # (one sqlite_master lookup) unless someone has run
+            # `claude-code-log serve` and built an index, so users who never
+            # search pay essentially nothing — and those who do never meet a
+            # stale index, because the file's old rows go out with its old
+            # messages rather than waiting for the next server start.
+            from .search import auto_index_enabled, reindex_files
+
+            if auto_index_enabled():
+                reindex_files(conn, [file_id], commit=False)
+
             self._update_last_updated(conn)
             conn.commit()
+
+    def extend_cached_entries(
+        self,
+        jsonl_path: Path,
+        all_entries: List[TranscriptEntry],
+        appended: List[TranscriptEntry],
+        subagents_fp: Optional[str] = None,
+        source_stat: Optional[os.stat_result] = None,
+    ) -> bool:
+        """Insert only ``appended``, leaving the file's existing rows in place.
+
+        ``save_cached_entries`` deletes every row for a file and rewrites
+        it, which costs a ``json.dumps`` + ``zlib.compress`` per entry —
+        310 ms to add one line to a 39.7 MB session, and the largest item
+        in a watch tick (work/watch-mode.md). When the caller can show the
+        new entries are exactly the old ones plus a tail, only the tail
+        needs writing.
+
+        The caller owns that proof (a byte-verified file prefix, plus no
+        agent splicing — see ``load_transcript``); this method owns the
+        one part the caller cannot see, which is whether the *rows*
+        still match what the caller thinks it wrote. Another process may
+        have rewritten them since. Returns False whenever the row count
+        disagrees, and the caller falls back to the full rewrite; that
+        check is why the two stores cannot silently drift apart.
+
+        ``source_stat`` is the file's identity AS OF THE PARSE, for the
+        same reason as ``subagents_fp`` — see ``save_cached_entries``.
+        """
+        if self._project_id is None or not appended:
+            return False
+        expected_existing = len(all_entries) - len(appended)
+        if expected_existing <= 0:
+            return False
+
+        if source_stat is None:
+            source_stat = jsonl_path.stat()
+        if subagents_fp is None:
+            subagents_fp = subagents_fingerprint(jsonl_path)
+
+        with self._get_connection() as conn:
+            # The count and the insert have to be one transaction. Python's
+            # sqlite3 opens one on the first *write*, not on a SELECT, so
+            # without this another writer sharing the cache (a second
+            # `watch`, or a TUI beside one) can append in the window
+            # between them, and both appends land — the row check would
+            # have refused had it seen them. `BEGIN IMMEDIATE` takes the
+            # write lock up front; inside a `batch()` scope the connection
+            # is in a transaction already and that one covers it.
+            own_transaction = not conn.in_transaction
+            if own_transaction:
+                conn.execute("BEGIN IMMEDIATE")
+            try:
+                return self._append_under_lock(
+                    conn,
+                    jsonl_path,
+                    all_entries,
+                    appended,
+                    expected_existing,
+                    source_stat,
+                    subagents_fp,
+                )
+            finally:
+                # A refusal wrote nothing, but it still holds the write
+                # lock this method took; an exception may have written.
+                # Either way, only ever unwind our own transaction — a
+                # rollback inside a `batch()` would discard the caller's.
+                if own_transaction and conn.in_transaction:
+                    conn.rollback()
+
+    def _append_under_lock(
+        self,
+        conn: sqlite3.Connection,
+        jsonl_path: Path,
+        all_entries: List[TranscriptEntry],
+        appended: List[TranscriptEntry],
+        expected_existing: int,
+        source_stat: os.stat_result,
+        subagents_fp: Optional[str],
+    ) -> bool:
+        """The checked append itself, run under the caller's write lock."""
+        row = conn.execute(
+            "SELECT id FROM cached_files WHERE project_id = ? AND file_name = ?",
+            (self._project_id, jsonl_path.name),
+        ).fetchone()
+        if row is None:
+            return False
+        file_id = row["id"]
+
+        count = conn.execute(
+            "SELECT COUNT(*) AS n FROM messages WHERE file_id = ?", (file_id,)
+        ).fetchone()["n"]
+        if count != expected_existing:
+            return False
+
+        conn.execute(
+            """UPDATE cached_files
+               SET file_path = ?, source_mtime = ?, source_size = ?,
+                   cached_mtime = ?, message_count = ?, subagents_fingerprint = ?,
+                   content_version = ?
+               WHERE id = ?""",
+            (
+                str(jsonl_path),
+                source_stat.st_mtime,
+                source_stat.st_size,
+                datetime.now().timestamp(),
+                len(all_entries),
+                subagents_fp,
+                content_schema_version(),
+                file_id,
+            ),
+        )
+        conn.executemany(
+            """
+            INSERT INTO messages (
+                project_id, file_id, type, timestamp, session_id,
+                _uuid, _parent_uuid, _is_sidechain, _user_type, _cwd, _version,
+                _is_meta, _agent_id, _request_id,
+                input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
+                _leaf_uuid, _level, _operation, content
+            ) VALUES (
+                :project_id, :file_id, :type, :timestamp, :session_id,
+                :_uuid, :_parent_uuid, :_is_sidechain, :_user_type, :_cwd, :_version,
+                :_is_meta, :_agent_id, :_request_id,
+                :input_tokens, :output_tokens, :cache_creation_tokens, :cache_read_tokens,
+                :_leaf_uuid, :_level, :_operation, :content
+            )
+            """,
+            [self._serialize_entry(entry, file_id) for entry in appended],
+        )
+
+        # The index still refreshes the whole file: `reindex_files`
+        # deletes and re-adds its rows, and an append-only variant
+        # would need its own correctness argument. Only users who have
+        # built an index pay it, exactly as before.
+        from .search import auto_index_enabled, reindex_files
+
+        if auto_index_enabled():
+            reindex_files(conn, [file_id], commit=False)
+
+        self._update_last_updated(conn)
+        conn.commit()
+        return True
 
     def update_session_cache(self, session_data: Dict[str, SessionCacheData]) -> None:
         """Update cached session information."""
@@ -821,8 +1668,8 @@ class CacheManager:
                         message_count, first_user_message, cwd,
                         total_input_tokens, total_output_tokens,
                         total_cache_creation_tokens, total_cache_read_tokens,
-                        team_name, ai_title
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        team_name, ai_title, hidden, residual_count
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(project_id, session_id) DO UPDATE SET
                         summary = excluded.summary,
                         first_timestamp = excluded.first_timestamp,
@@ -835,7 +1682,9 @@ class CacheManager:
                         total_cache_creation_tokens = excluded.total_cache_creation_tokens,
                         total_cache_read_tokens = excluded.total_cache_read_tokens,
                         team_name = excluded.team_name,
-                        ai_title = excluded.ai_title
+                        ai_title = excluded.ai_title,
+                        hidden = excluded.hidden,
+                        residual_count = excluded.residual_count
                     """,
                     (
                         self._project_id,
@@ -856,6 +1705,8 @@ class CacheManager:
                         data.total_cache_read_tokens,
                         scrub_surrogates(data.team_name),
                         scrub_surrogates(data.ai_title),
+                        1 if data.hidden else 0,
+                        data.residual_count or 0,
                     ),
                 )
 
@@ -904,6 +1755,474 @@ class CacheManager:
             )
             conn.commit()
 
+    def save_session_sidecar(self, sidecar: SessionSidecar) -> None:
+        """Persist the cross-session sidecar (migration 008), wholesale.
+
+        Called at the end of every full directory load, inside the same
+        ``batch()`` scope as the per-file cache writes, so the sidecar is
+        exactly as fresh as ``cached_files``: whenever ``get_modified_files``
+        reports nothing modified, a present sidecar describes the current
+        source tree. Delete + insert in one transaction — a crash leaves
+        either the old sidecar or the new one, never a mix, and the
+        ``sidecar_state`` marker row is only written alongside the rows it
+        vouches for.
+        """
+        if self._project_id is None or self._read_only:
+            return
+
+        with self._get_connection() as conn:
+            pid = self._project_id
+            conn.execute("DELETE FROM session_parents WHERE project_id = ?", (pid,))
+            conn.execute("DELETE FROM junction_uuids WHERE project_id = ?", (pid,))
+            conn.execute("DELETE FROM dedup_winners WHERE project_id = ?", (pid,))
+            conn.executemany(
+                """INSERT INTO session_parents
+                   (project_id, session_id, parent_session_id, attachment_uuid)
+                   VALUES (?, ?, ?, ?)""",
+                [
+                    (pid, sid, parent, attachment)
+                    for sid, (parent, attachment) in sidecar.parents.items()
+                ],
+            )
+            conn.executemany(
+                """INSERT INTO junction_uuids
+                   (project_id, uuid, session_id, target_session_id, seq)
+                   VALUES (?, ?, ?, ?, ?)""",
+                [
+                    (pid, uuid, session_id, target, seq)
+                    for uuid, (session_id, targets) in sidecar.junctions.items()
+                    for seq, target in enumerate(targets)
+                ],
+            )
+            conn.executemany(
+                """INSERT INTO dedup_winners (project_id, uuid, winner_session_id)
+                   VALUES (?, ?, ?)""",
+                [(pid, uuid, winner) for uuid, winner in sidecar.dedup_winners.items()],
+            )
+            conn.execute(
+                """INSERT INTO sidecar_state (project_id, populated_at)
+                   VALUES (?, ?)
+                   ON CONFLICT(project_id) DO UPDATE SET
+                       populated_at = excluded.populated_at""",
+                (pid, datetime.now().isoformat()),
+            )
+            conn.commit()
+
+    def load_session_sidecar(self) -> Optional[SessionSidecar]:
+        """Load the cross-session sidecar, or None when never populated.
+
+        ``None`` (no ``sidecar_state`` row — e.g. a cache built before
+        migration 008, or a project never fully loaded since) tells the
+        caller to decline the session-scoped path and fall back to a full
+        load, which repopulates the sidecar. An *empty* sidecar with a
+        state row is a valid answer: most projects have no cross-session
+        coupling at all.
+        """
+        if self._project_id is None:
+            return None
+
+        with self._get_connection() as conn:
+            pid = self._project_id
+            state = conn.execute(
+                "SELECT 1 FROM sidecar_state WHERE project_id = ?", (pid,)
+            ).fetchone()
+            if state is None:
+                return None
+
+            parents: dict[str, tuple[Optional[str], Optional[str]]] = {}
+            for row in conn.execute(
+                """SELECT session_id, parent_session_id, attachment_uuid
+                   FROM session_parents WHERE project_id = ?""",
+                (pid,),
+            ):
+                parents[row["session_id"]] = (
+                    row["parent_session_id"],
+                    row["attachment_uuid"],
+                )
+
+            junctions: dict[str, tuple[str, list[str]]] = {}
+            for row in conn.execute(
+                """SELECT uuid, session_id, target_session_id
+                   FROM junction_uuids WHERE project_id = ?
+                   ORDER BY uuid, seq""",
+                (pid,),
+            ):
+                entry = junctions.setdefault(row["uuid"], (row["session_id"], []))
+                entry[1].append(row["target_session_id"])
+
+            dedup_winners: dict[str, str] = {}
+            for row in conn.execute(
+                "SELECT uuid, winner_session_id FROM dedup_winners WHERE project_id = ?",
+                (pid,),
+            ):
+                dedup_winners[row["uuid"]] = row["winner_session_id"]
+
+        return SessionSidecar(
+            parents=parents, junctions=junctions, dedup_winners=dedup_winners
+        )
+
+    def get_session_file_map(self) -> Dict[str, set[str]]:
+        """``{session_id: {file_name, ...}}`` from the cached messages table.
+
+        Which source files hold each session's entries. Usually 1:1 with
+        the ``<session-id>.jsonl`` naming, but not always — real archives
+        contain files whose entries span two sessions (a continuation
+        written into the previous session's file), and sessions with no
+        file of their own. The session-scoped incremental path loads by
+        this map instead of by filename stem for exactly that reason.
+
+        Entries with a NULL session_id (summaries) are skipped; agent
+        file rows are included and it is the caller's business to know
+        that ``agent-*`` files load via trunk-file recursion.
+        """
+        if self._project_id is None:
+            return {}
+
+        result: Dict[str, set[str]] = {}
+        with self._get_connection() as conn:
+            for row in conn.execute(
+                """SELECT DISTINCT m.session_id, cf.file_name
+                   FROM messages m JOIN cached_files cf ON m.file_id = cf.id
+                   WHERE m.project_id = ? AND m.session_id IS NOT NULL""",
+                (self._project_id,),
+            ):
+                result.setdefault(row["session_id"], set()).add(row["file_name"])
+        return result
+
+    # ----- Incremental cache refresh queries (stage 4) -----------------
+    # All of these are metadata projections over the messages table —
+    # the point is answering coupling/identity questions *without*
+    # materializing entries. See work/render-format-once.md, stage-4
+    # design, for who consumes what.
+
+    _IN_CHUNK = 500
+
+    _RESIDUAL_TYPES = ("summary", "ai-title", "attachment")
+
+    def get_cached_file_names(self) -> set[str]:
+        """Every file name the cache has rows for (trunk + agent files)."""
+        if self._project_id is None:
+            return set()
+        with self._get_connection() as conn:
+            return {
+                row["file_name"]
+                for row in conn.execute(
+                    "SELECT file_name FROM cached_files WHERE project_id = ?",
+                    (self._project_id,),
+                )
+            }
+
+    def get_file_states(self, file_names: List[str]) -> Dict[str, CachedFileState]:
+        """Identity-relevant cached state per file (see CachedFileState).
+
+        Files without cached rows simply have no key in the result —
+        that is the "new file" signature.
+
+        Resolves names to ``file_id`` first and filters the messages
+        table on that, rather than joining ``cached_files`` and filtering
+        on ``file_name``. The join form gives SQLite no indexed way in:
+        it falls back to ``idx_messages_project_timestamp`` and walks
+        every row in the project, which on a real archive is ~16 ms a
+        call to read a handful of files. Filtering on ``file_id`` uses
+        ``idx_messages_file`` and the same call measures 0.0 ms.
+        """
+        result: Dict[str, CachedFileState] = {}
+        if self._project_id is None or not file_names:
+            return result
+        with self._get_connection() as conn:
+            names_by_id: Dict[int, str] = {}
+            for i in range(0, len(file_names), self._IN_CHUNK):
+                chunk = file_names[i : i + self._IN_CHUNK]
+                placeholders = ",".join("?" * len(chunk))
+                for row in conn.execute(
+                    f"""SELECT id, file_name FROM cached_files
+                        WHERE project_id = ? AND file_name IN ({placeholders})""",
+                    (self._project_id, *chunk),
+                ):
+                    names_by_id[row["id"]] = row["file_name"]
+
+            file_ids = sorted(names_by_id)
+            for i in range(0, len(file_ids), self._IN_CHUNK):
+                chunk_ids = file_ids[i : i + self._IN_CHUNK]
+                placeholders = ",".join("?" * len(chunk_ids))
+                # Ordering within a file is what matters — row_fingerprints
+                # is positional — and `file_id, id` gives it.
+                for row in conn.execute(
+                    f"""SELECT file_id, session_id, _uuid, _parent_uuid,
+                               _request_id, type, _leaf_uuid, content
+                        FROM messages
+                        WHERE file_id IN ({placeholders})
+                        ORDER BY file_id, id""",
+                    chunk_ids,
+                ):
+                    state = result.setdefault(
+                        names_by_id[row["file_id"]], CachedFileState()
+                    )
+                    state.row_fingerprints.append(
+                        hashlib.sha256(bytes(row["content"])).digest()
+                    )
+                    row_type = row["type"]
+                    if row_type == "summary":
+                        if row["_leaf_uuid"]:
+                            state.summary_leaf_uuids.add(row["_leaf_uuid"])
+                    elif row_type == "ai-title":
+                        if row["session_id"]:
+                            state.ai_title_sessions.add(row["session_id"])
+                    if row["session_id"]:
+                        state.sessions.add(row["session_id"])
+                    if row["_uuid"]:
+                        state.uuids.add(row["_uuid"])
+                    if row["_parent_uuid"]:
+                        state.parent_uuids.add(row["_parent_uuid"])
+                    if row["_request_id"]:
+                        state.request_ids.add(row["_request_id"])
+                    if row_type in self._RESIDUAL_TYPES:
+                        state.type_counts[row_type] = (
+                            state.type_counts.get(row_type, 0) + 1
+                        )
+
+            # A cached file whose rows are all filtered (e.g. an empty
+            # file) still needs a key, or it would read as "new". The
+            # name resolution above already enumerated exactly those
+            # files, so no second query is needed.
+            for name in names_by_id.values():
+                result.setdefault(name, CachedFileState())
+        return result
+
+    def get_parent_uuid_dependents(self, uuids: List[str]) -> Dict[str, set[str]]:
+        """Return sessions whose entries reference any named parent UUID.
+
+        This is the inverse edge of :meth:`get_uuid_owners`. A newly added
+        UUID can resolve an orphan already cached in an untouched file, so
+        the incremental DAG closure needs both directions.
+        """
+        result: Dict[str, set[str]] = {}
+        if self._project_id is None or not uuids:
+            return result
+        with self._get_connection() as conn:
+            for i in range(0, len(uuids), self._IN_CHUNK):
+                chunk = uuids[i : i + self._IN_CHUNK]
+                placeholders = ",".join("?" * len(chunk))
+                # `session_id IS NOT NULL` is filtered in Python, not SQL:
+                # as a SQL predicate it lets the planner satisfy the query
+                # with the (project_id, session_id, …) index as a range
+                # scan over every session-bearing row, instead of seeking
+                # the handful of uuids asked for. See `get_uuid_owners`.
+                for row in conn.execute(
+                    f"""SELECT _parent_uuid, session_id FROM messages
+                        WHERE project_id = ? AND _parent_uuid IN ({placeholders})""",
+                    (self._project_id, *chunk),
+                ):
+                    if row["session_id"] is not None:
+                        result.setdefault(row["_parent_uuid"], set()).add(
+                            row["session_id"]
+                        )
+        return result
+
+    def get_uuid_owners(self, uuids: List[str]) -> Dict[str, set[Tuple[str, str]]]:
+        """``{uuid: {(session_id, entry_type), ...}}`` across the project.
+
+        The coupling-closure query: which sessions hold copies of these
+        uuids (dedup partners / attachment-point owners), and of what
+        entry type (the attachment-dedup decline guard).
+        """
+        result: Dict[str, set[Tuple[str, str]]] = {}
+        if self._project_id is None or not uuids:
+            return result
+        with self._get_connection() as conn:
+            for i in range(0, len(uuids), self._IN_CHUNK):
+                chunk = uuids[i : i + self._IN_CHUNK]
+                placeholders = ",".join("?" * len(chunk))
+                # The `session_id IS NOT NULL` filter is applied in Python
+                # rather than SQL, and the difference is not cosmetic: as a
+                # SQL predicate SQLite can satisfy it from
+                # `idx_messages_project_session_ts` as a range scan —
+                # walking every session-bearing row in the project — and
+                # prefers that to seeking the uuids actually asked for.
+                # Measured on a 38,706-row archive, 500 uuids: **17.2 ms
+                # with the predicate in SQL, 0.9 ms without**.
+                for row in conn.execute(
+                    f"""SELECT _uuid, session_id, type FROM messages
+                        WHERE project_id = ? AND _uuid IN ({placeholders})""",
+                    (self._project_id, *chunk),
+                ):
+                    if row["session_id"] is not None:
+                        result.setdefault(row["_uuid"], set()).add(
+                            (row["session_id"], row["type"])
+                        )
+        return result
+
+    def get_request_id_entries(
+        self, rids: List[str]
+    ) -> Dict[str, set[Tuple[str, str]]]:
+        """``{request_id: {(uuid, session_id), ...}}`` across the project.
+
+        The refresh's token-attribution guard needs the uuid alongside
+        the session: a requestId spanning sessions via *the same* uuid
+        is a dedup-resolved replay (only the winner's copy survives to
+        be counted), while distinct uuids mean genuinely independent
+        surviving copies whose D1 attribution depends on global order.
+        """
+        result: Dict[str, set[Tuple[str, str]]] = {}
+        if self._project_id is None or not rids:
+            return result
+        with self._get_connection() as conn:
+            for i in range(0, len(rids), self._IN_CHUNK):
+                chunk = rids[i : i + self._IN_CHUNK]
+                placeholders = ",".join("?" * len(chunk))
+                # Filtered in Python for the reason `get_uuid_owners` gives.
+                for row in conn.execute(
+                    f"""SELECT _request_id, _uuid, session_id FROM messages
+                        WHERE project_id = ? AND _request_id IN ({placeholders})""",
+                    (self._project_id, *chunk),
+                ):
+                    if row["session_id"] is not None:
+                        result.setdefault(row["_request_id"], set()).add(
+                            (row["_uuid"] or "", row["session_id"])
+                        )
+        return result
+
+    def get_session_request_ids(self, session_ids: List[str]) -> set[str]:
+        """Every requestId carried by entries of the named sessions."""
+        result: set[str] = set()
+        if self._project_id is None or not session_ids:
+            return result
+        with self._get_connection() as conn:
+            for i in range(0, len(session_ids), self._IN_CHUNK):
+                chunk = session_ids[i : i + self._IN_CHUNK]
+                placeholders = ",".join("?" * len(chunk))
+                for row in conn.execute(
+                    f"""SELECT DISTINCT _request_id FROM messages
+                        WHERE project_id = ? AND session_id IN ({placeholders})
+                          AND _request_id IS NOT NULL""",
+                    (self._project_id, *chunk),
+                ):
+                    result.add(row["_request_id"])
+        return result
+
+    def get_metadata_target_files(self) -> List[Tuple[str, Optional[str], str]]:
+        """Summary / ai-title rows as ``(type, target, file_name)``.
+
+        ``target`` is the summary's leafUuid (resolve to a session via
+        ``get_uuid_owners``) or the ai-title's session_id. The refresh
+        uses this to pull files holding cross-file metadata for closure
+        sessions, so a partial ``prepare_session_summaries`` sees the
+        same rows the full load would.
+        """
+        result: List[Tuple[str, Optional[str], str]] = []
+        if self._project_id is None:
+            return result
+        with self._get_connection() as conn:
+            for row in conn.execute(
+                """SELECT m.type, m._leaf_uuid, m.session_id, cf.file_name
+                   FROM messages m JOIN cached_files cf ON m.file_id = cf.id
+                   WHERE m.project_id = ? AND m.type IN ('summary', 'ai-title')""",
+                (self._project_id,),
+            ):
+                target = (
+                    row["_leaf_uuid"] if row["type"] == "summary" else row["session_id"]
+                )
+                result.append((row["type"], target, row["file_name"]))
+        return result
+
+    def get_all_session_rows(self) -> Dict[str, SessionCacheData]:
+        """Every persisted session row, hidden ones included.
+
+        The delta basis for the incremental refresh's aggregate
+        arithmetic — unlike ``get_cached_project_data``, which serves
+        render-facing consumers and filters ``hidden = 0``.
+        """
+        result: Dict[str, SessionCacheData] = {}
+        if self._project_id is None:
+            return result
+        with self._get_connection() as conn:
+            for row in conn.execute(
+                "SELECT * FROM sessions WHERE project_id = ?",
+                (self._project_id,),
+            ):
+                result[row["session_id"]] = SessionCacheData(
+                    session_id=row["session_id"],
+                    summary=row["summary"],
+                    ai_title=row["ai_title"] if "ai_title" in row.keys() else None,
+                    first_timestamp=row["first_timestamp"],
+                    last_timestamp=row["last_timestamp"],
+                    message_count=row["message_count"],
+                    first_user_message=row["first_user_message"],
+                    cwd=row["cwd"],
+                    total_input_tokens=row["total_input_tokens"],
+                    total_output_tokens=row["total_output_tokens"],
+                    total_cache_creation_tokens=row["total_cache_creation_tokens"],
+                    total_cache_read_tokens=row["total_cache_read_tokens"],
+                    team_name=row["team_name"] if "team_name" in row.keys() else None,
+                    hidden=bool(row["hidden"]),
+                    residual_count=row["residual_count"],
+                )
+        return result
+
+    def merge_session_sidecar(
+        self,
+        parent_updates: Dict[str, Optional[Tuple[Optional[str], Optional[str]]]],
+        junction_replacements: Dict[str, Tuple[str, List[str]]],
+        winner_upserts: Dict[str, str],
+    ) -> None:
+        """Targeted sidecar maintenance for the incremental refresh.
+
+        Unlike ``save_session_sidecar`` (wholesale delete + insert on a
+        full load), this touches only the named facts: parent rows are
+        replaced per session (None value = ensure absent), junction rows
+        are replaced per uuid with the given ordered target list, winner
+        rows are upserted per uuid. Everything else stands — the stage-4
+        design's argument is that untouched facts remain valid under the
+        append-only precondition. One transaction; ``sidecar_state`` is
+        refreshed so the marker's timestamp reflects the merge.
+        """
+        if self._project_id is None or self._read_only:
+            return
+        with self._get_connection() as conn:
+            pid = self._project_id
+            for sid, value in parent_updates.items():
+                conn.execute(
+                    "DELETE FROM session_parents"
+                    " WHERE project_id = ? AND session_id = ?",
+                    (pid, sid),
+                )
+                if value is not None:
+                    conn.execute(
+                        """INSERT INTO session_parents
+                           (project_id, session_id, parent_session_id,
+                            attachment_uuid)
+                           VALUES (?, ?, ?, ?)""",
+                        (pid, sid, value[0], value[1]),
+                    )
+            for uuid, (owner_sid, targets) in junction_replacements.items():
+                conn.execute(
+                    "DELETE FROM junction_uuids WHERE project_id = ? AND uuid = ?",
+                    (pid, uuid),
+                )
+                for seq, target in enumerate(targets):
+                    conn.execute(
+                        """INSERT INTO junction_uuids
+                           (project_id, uuid, session_id, target_session_id, seq)
+                           VALUES (?, ?, ?, ?, ?)""",
+                        (pid, uuid, owner_sid, target, seq),
+                    )
+            for uuid, winner in winner_upserts.items():
+                conn.execute(
+                    """INSERT INTO dedup_winners (project_id, uuid, winner_session_id)
+                       VALUES (?, ?, ?)
+                       ON CONFLICT(project_id, uuid) DO UPDATE SET
+                           winner_session_id = excluded.winner_session_id""",
+                    (pid, uuid, winner),
+                )
+            conn.execute(
+                """INSERT INTO sidecar_state (project_id, populated_at)
+                   VALUES (?, ?)
+                   ON CONFLICT(project_id) DO UPDATE SET
+                       populated_at = excluded.populated_at""",
+                (pid, datetime.now().isoformat()),
+            )
+            conn.commit()
+
     def get_working_directories(self) -> List[str]:
         """Get list of working directories associated with this project.
 
@@ -918,7 +2237,8 @@ class CacheManager:
     def _get_working_directories(self, conn: sqlite3.Connection) -> List[str]:
         """get_working_directories() on an already-open connection."""
         rows = conn.execute(
-            "SELECT DISTINCT cwd FROM sessions WHERE project_id = ? AND cwd IS NOT NULL",
+            "SELECT DISTINCT cwd FROM sessions"
+            " WHERE project_id = ? AND cwd IS NOT NULL AND hidden = 0",
             (self._project_id,),
         ).fetchall()
         return [row["cwd"] for row in rows]
@@ -940,7 +2260,8 @@ class CacheManager:
 
         with self._get_connection() as conn:
             rows = conn.execute(
-                "SELECT file_name, source_mtime, subagents_fingerprint"
+                "SELECT file_name, source_mtime, source_size,"
+                " subagents_fingerprint, content_version"
                 " FROM cached_files WHERE project_id = ?",
                 (self._project_id,),
             ).fetchall()
@@ -951,12 +2272,22 @@ class CacheManager:
         # non-empty fingerprint without any per-file stat probes.
         subdir_names: Dict[Path, set[str]] = {}
 
-        def current_fp(jsonl_file: Path) -> str:
+        # A flat subagents/ dir is every one of its agent files' sibling
+        # dir: scan it once per check, not once per agent file.
+        dir_scans: Dict[Path, _DirScan] = {}
+
+        def scan(directory: Path) -> _DirScan:
+            found = dir_scans.get(directory)
+            if found is None:
+                found = dir_scans[directory] = _DirScan(directory)
+            return found
+
+        def current_fp(jsonl_file: Path, scope: Optional[frozenset[str]]) -> str:
             parent = jsonl_file.parent
             if parent.name == "subagents":
                 # Agent file in a subagents dir: its sidecars sit next to
                 # it, so the full fingerprint scan is required.
-                return subagents_fingerprint(jsonl_file)
+                return SubagentsSnapshot(jsonl_file, scan).fingerprint(scope)
             names = subdir_names.get(parent)
             if names is None:
                 try:
@@ -965,7 +2296,11 @@ class CacheManager:
                 except OSError:
                     names = set[str]()
                 subdir_names[parent] = names
-            return subagents_fingerprint(jsonl_file) if jsonl_file.stem in names else ""
+            return (
+                subagents_fingerprint(jsonl_file, scope)
+                if jsonl_file.stem in names
+                else ""
+            )
 
         modified: List[Path] = []
         for jsonl_file in jsonl_files:
@@ -975,7 +2310,8 @@ class CacheManager:
                 continue
 
             try:
-                source_mtime = jsonl_file.stat().st_mtime
+                # One stat serves both checks — st_size rides along free.
+                source_stat = jsonl_file.stat()
             except OSError:
                 # Missing file: same outcome as is_file_cached()'s
                 # exists() check returning False.
@@ -983,7 +2319,10 @@ class CacheManager:
                 continue
 
             if not _cache_row_is_fresh(
-                row, source_mtime, lambda file=jsonl_file: current_fp(file)
+                row,
+                source_stat.st_mtime,
+                lambda scope, file=jsonl_file: current_fp(file, scope),
+                source_stat.st_size,
             ):
                 modified.append(jsonl_file)
 
@@ -1019,7 +2358,8 @@ class CacheManager:
 
             # Get sessions
             session_rows = conn.execute(
-                "SELECT * FROM sessions WHERE project_id = ?", (self._project_id,)
+                "SELECT * FROM sessions WHERE project_id = ? AND hidden = 0",
+                (self._project_id,),
             ).fetchall()
 
             sessions: Dict[str, SessionCacheData] = {}
@@ -1091,6 +2431,14 @@ class CacheManager:
             # earlier have the caveat text baked into first_user_message
             # for affected sessions.
             "1.4.0": "1.5.0",
+            # 1.7.0 fixed the teammate prompt-hash fallback, which only
+            # looked at ``Task`` tool_uses and so never fired for the
+            # ``Agent`` spawn tool current Claude Code uses. Every cache
+            # built up to and including 1.6.0 has the *unlinked* entry
+            # list baked in — the subagent transcripts are simply absent
+            # from them, and nothing about the source files changes to
+            # trigger a reparse.
+            "1.6.0": "1.7.0",
         }
 
         cache_ver = version.parse(cache_version)
@@ -1127,7 +2475,8 @@ class CacheManager:
             ).fetchone()
 
             session_count = conn.execute(
-                "SELECT COUNT(*) as cnt FROM sessions WHERE project_id = ?",
+                "SELECT COUNT(*) as cnt FROM sessions"
+                " WHERE project_id = ? AND hidden = 0",
                 (self._project_id,),
             ).fetchone()
 
@@ -1152,7 +2501,8 @@ class CacheManager:
 
         with self._get_connection() as conn:
             row = conn.execute(
-                """SELECT html_path, generated_at, source_session_id, message_count, library_version
+                """SELECT html_path, generated_at, source_session_id, message_count,
+                          library_version, combined_linked
                    FROM html_cache
                    WHERE project_id = ? AND html_path = ?""",
                 (self._project_id, html_path),
@@ -1167,6 +2517,7 @@ class CacheManager:
             source_session_id=row["source_session_id"],
             message_count=row["message_count"] or 0,
             library_version=row["library_version"],
+            combined_linked=row["combined_linked"],
         )
 
     def update_html_cache(
@@ -1174,22 +2525,31 @@ class CacheManager:
         html_path: str,
         session_id: Optional[str],
         message_count: int,
+        combined_linked: Optional[bool] = None,
     ) -> None:
-        """Update or insert HTML cache entry."""
+        """Update or insert HTML cache entry.
+
+        ``combined_linked`` records whether the page was rendered with the
+        combined-transcript back-link, so that a later run which changes
+        that answer can mark the page stale (migration 013). None leaves
+        the column NULL — the pre-013 state, read back as "already
+        matching" — and is right for outputs that have no such link.
+        """
         if self._project_id is None:
             return
 
         with self._get_connection() as conn:
             conn.execute(
                 """INSERT INTO html_cache
-                   (project_id, html_path, generated_at, source_session_id, message_count, library_version)
-                   VALUES (?, ?, ?, ?, ?, ?)
+                   (project_id, html_path, generated_at, source_session_id, message_count, library_version, combined_linked)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(project_id, html_path)
                    DO UPDATE SET
                        generated_at = excluded.generated_at,
                        source_session_id = excluded.source_session_id,
                        message_count = excluded.message_count,
-                       library_version = excluded.library_version""",
+                       library_version = excluded.library_version,
+                       combined_linked = excluded.combined_linked""",
                 (
                     self._project_id,
                     html_path,
@@ -1197,6 +2557,7 @@ class CacheManager:
                     session_id,
                     message_count,
                     self.library_version,
+                    None if combined_linked is None else int(combined_linked),
                 ),
             )
             conn.commit()
@@ -1206,6 +2567,8 @@ class CacheManager:
         html_path: str,
         session_id: Optional[str] = None,
         output_dir: Optional[Path] = None,
+        combined_linked: Optional[bool] = None,
+        theme: str = "default",
     ) -> tuple[bool, str]:
         """Check if a rendered output file needs regeneration.
 
@@ -1222,6 +2585,16 @@ class CacheManager:
                 the source project directory (legacy in-place layout);
                 ``--output`` runs must pass their destination or the file
                 check reports ``file_missing`` forever.
+            combined_linked: Whether a session page rendered now would
+                carry the combined back-link (see
+                ``converter.combined_link_available``). A page rendered
+                with the other answer is stale. None skips the check.
+            theme: The HTML theme a page rendered now would carry
+                (``utils.THEME_CHOICES``; Markdown callers pass the
+                resolved ``utils.output_theme``). Themes share
+                filenames, so the file's generator stamp is what tells
+                them apart: a file stamped with another theme reports
+                ``file_version_mismatch``.
 
         Returns:
             Tuple of (is_stale: bool, reason: str)
@@ -1240,11 +2613,14 @@ class CacheManager:
         if html_cache.library_version != self.library_version:
             return True, "version_mismatch"
 
+        if _combined_link_stale(html_cache.combined_linked, combined_linked):
+            return True, "combined_link_changed"
+
         # Check if file exists and has correct version
         actual_file = (output_dir or self.project_path) / html_path
         if not actual_file.exists():
             return True, "file_missing"
-        if is_html_outdated(actual_file):
+        if is_html_outdated(actual_file, theme):
             return True, "file_version_mismatch"
 
         with self._get_connection() as conn:
@@ -1252,7 +2628,7 @@ class CacheManager:
                 # For individual session HTML: check if session message count changed
                 row = conn.execute(
                     """SELECT message_count FROM sessions
-                       WHERE project_id = ? AND session_id = ?""",
+                       WHERE project_id = ? AND session_id = ? AND hidden = 0""",
                     (self._project_id, session_id),
                 ).fetchone()
 
@@ -1283,6 +2659,8 @@ class CacheManager:
         variant: str = "",
         ext: str = "html",
         output_dir: Optional[Path] = None,
+        combined_linked: Optional[bool] = None,
+        theme: str = "default",
     ) -> List[tuple[str, str]]:
         """Get list of sessions whose rendered file needs regeneration.
 
@@ -1297,6 +2675,14 @@ class CacheManager:
                 every run and the project re-renders forever.
             output_dir: Where the rendered files live (``--output`` runs);
                 defaults to the source project directory.
+            combined_linked: Whether a session page rendered now would
+                carry the combined back-link (see
+                ``converter.combined_link_available``). A page rendered
+                with the other answer is stale. None skips the check, for
+                callers that don't render session pages.
+            theme: The HTML theme the session pages would be rendered in
+                now; a page stamped with another theme is stale
+                (``file_version_mismatch``), as in ``is_transcript_stale``.
 
         Returns:
             List of (session_id, reason) tuples for sessions needing regeneration
@@ -1304,15 +2690,37 @@ class CacheManager:
         if self._project_id is None:
             return []
 
+        from .renderer import is_html_outdated
+
         stale_sessions: List[tuple[str, str]] = []
+        base_dir = output_dir or self.project_path
 
         with self._get_connection() as conn:
-            # Get all sessions
+            # Both tables are read whole, once, rather than per session.
+            # `is_transcript_stale` issues two queries per call, so a
+            # project with many sessions spent most of this function in
+            # SQLite round-trips for rows it was going to read anyway
+            # (work/watch-mode.md, C15). The per-session logic below is a
+            # faithful inline of that method — same order of checks, same
+            # reason strings — minus the queries.
             session_rows = conn.execute(
-                """SELECT session_id, last_timestamp FROM sessions
-                   WHERE project_id = ?""",
+                """SELECT session_id, message_count FROM sessions
+                   WHERE project_id = ? AND hidden = 0""",
                 (self._project_id,),
             ).fetchall()
+            html_rows = conn.execute(
+                """SELECT html_path, message_count, library_version, combined_linked
+                   FROM html_cache WHERE project_id = ?""",
+                (self._project_id,),
+            ).fetchall()
+            html_cache = {
+                r["html_path"]: (
+                    r["message_count"] or 0,
+                    r["library_version"],
+                    r["combined_linked"],
+                )
+                for r in html_rows
+            }
 
             for row in session_rows:
                 session_id = row["session_id"]
@@ -1325,12 +2733,29 @@ class CacheManager:
                     continue
 
                 html_path = f"session-{session_id}{variant}.{ext}"
-
-                is_stale, reason = self.is_transcript_stale(
-                    html_path, session_id, output_dir=output_dir
-                )
-                if is_stale:
-                    stale_sessions.append((session_id, reason))
+                cached = html_cache.get(html_path)
+                if cached is None:
+                    stale_sessions.append((session_id, "not_cached"))
+                    continue
+                cached_count, cached_version, cached_linked = cached
+                if cached_version != self.library_version:
+                    stale_sessions.append((session_id, "version_mismatch"))
+                    continue
+                if _combined_link_stale(cached_linked, combined_linked):
+                    stale_sessions.append((session_id, "combined_link_changed"))
+                    continue
+                actual_file = base_dir / html_path
+                if not actual_file.exists():
+                    stale_sessions.append((session_id, "file_missing"))
+                    continue
+                if is_html_outdated(actual_file, theme):
+                    stale_sessions.append((session_id, "file_version_mismatch"))
+                    continue
+                # `session_not_found` cannot arise here — the candidate
+                # list *is* the sessions table — so only the count check
+                # remains of `is_transcript_stale`'s session branch.
+                if row["message_count"] != cached_count:
+                    stale_sessions.append((session_id, "session_updated"))
 
         return stale_sessions
 
@@ -1350,7 +2775,7 @@ class CacheManager:
 
         with self._get_connection() as conn:
             cached_rows = conn.execute(
-                "SELECT session_id FROM sessions WHERE project_id = ?",
+                "SELECT session_id FROM sessions WHERE project_id = ? AND hidden = 0",
                 (self._project_id,),
             ).fetchall()
 
@@ -1376,7 +2801,7 @@ class CacheManager:
 
         with self._get_connection() as conn:
             session_rows = conn.execute(
-                "SELECT * FROM sessions WHERE project_id = ?",
+                "SELECT * FROM sessions WHERE project_id = ? AND hidden = 0",
                 (self._project_id,),
             ).fetchall()
 
@@ -1478,7 +2903,7 @@ class CacheManager:
 
         Args:
             page_number: Page number (1-indexed).
-            variant_suffix: Detail/compact variant infix (e.g. ``""``,
+            variant_suffix: Depth/compact variant infix (e.g. ``""``,
                 ``".low"``, ``".low.compact"``). Each variant has its
                 own pagination cache row.
         """
@@ -1593,7 +3018,7 @@ class CacheManager:
         """Update or insert page cache entry.
 
         Args:
-            variant_suffix: Detail/compact variant infix (e.g. ``""``,
+            variant_suffix: Depth/compact variant infix (e.g. ``""``,
                 ``".low"``). Each variant owns its own cache row; the
                 UNIQUE constraint is on (project_id, variant_suffix,
                 page_number).
@@ -1675,19 +3100,31 @@ class CacheManager:
         page_size_config: int,
         variant_suffix: str = "",
         output_dir: Optional[Path] = None,
+        expected_session_ids: Optional[List[str]] = None,
+        theme: str = "default",
     ) -> tuple[bool, str]:
         """Check if a page needs regeneration.
 
         Args:
             page_number: The page number to check.
             page_size_config: The current page size configuration.
-            variant_suffix: Detail/compact variant infix; each variant's
+            variant_suffix: Depth/compact variant infix; each variant's
                 cache is checked independently.
             output_dir: Directory the rendered page lives in. Defaults to
                 the source project directory (legacy in-place layout);
                 ``--output`` runs must pass their destination or the file
                 check reports ``file_missing`` forever (mirrors
                 ``is_transcript_stale``).
+            expected_session_ids: The sessions this page should hold on
+                *this* run, in render order. Every other check below reads
+                the page's *cached* membership, so without this a page whose
+                membership changed while its previously-held sessions stayed
+                untouched reports ``up_to_date`` (see ``sessions_changed``).
+            theme: The HTML theme the page would be rendered in now; a page
+                stamped with another theme is stale
+                (``file_version_mismatch``). Page rows are shared between
+                themes (themes don't change filenames), so the stamp is the
+                only theme-aware check.
 
         Returns:
             Tuple of (is_stale: bool, reason: str)
@@ -1713,8 +3150,25 @@ class CacheManager:
         actual_file = (output_dir or self.project_path) / page_data.html_path
         if not actual_file.exists():
             return True, "file_missing"
-        if is_html_outdated(actual_file):
+        if is_html_outdated(actual_file, theme):
             return True, "file_version_mismatch"
+
+        # Check if the page's *membership* changed. The caller recomputes the
+        # session→page assignment from scratch every run, so a page can gain,
+        # lose, or reorder sessions while every session it previously held is
+        # byte-for-byte untouched:
+        #   - a brand-new session lands on the partially-filled last page;
+        #   - a session imported with older timestamps sorts into the middle,
+        #     shifting the contents of every page after it.
+        # All the checks below (and above) read only the *cached* membership,
+        # so they see nothing amiss and report `up_to_date` — the new sessions
+        # then never get rendered into any page, and the combined output stays
+        # frozen until the HTML is deleted by hand (issue #308).
+        if (
+            expected_session_ids is not None
+            and list(expected_session_ids) != page_data.session_ids
+        ):
+            return True, "sessions_changed"
 
         # Check if any session on this page has changed
         with self._get_connection() as conn:

@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-import functools
 import html as _html
 import json
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
-import mistune
-from mistune.renderers.markdown import MarkdownRenderer as _MistuneMarkdownRenderer
+from wenmode.nodes import Html, Text
 
 from ..cache import get_library_version
 from ..html.utils import (
@@ -24,6 +22,7 @@ from ..utils import (
     format_timestamp,
     generate_unified_diff,
     is_safe_web_url,
+    split_websearch_queries,
     strip_error_tags,
 )
 from ..models import (
@@ -33,13 +32,14 @@ from ..models import (
     BashOutputMessage,
     CommandOutputMessage,
     CompactedSummaryMessage,
-    DetailLevel,
+    RenderingDepth,
     HookAttachmentMessage,
     HookSummaryMessage,
     ImageContent,
     SessionHeaderMessage,
     SlashCommandMessage,
     SystemMessage,
+    SystemReminderContent,
     TaskNotificationMessage,
     TeammateMessage,
     TextContent,
@@ -54,6 +54,7 @@ from ..models import (
     # Tool input types
     AskUserQuestionInput,
     BashInput,
+    DeleteInput,
     EditInput,
     ExitPlanModeInput,
     GlobInput,
@@ -72,6 +73,7 @@ from ..models import (
     TeamDeleteInput,
     TodoWriteInput,
     ToolUseContent,
+    ToolExecutionInput,
     SkillInput,
     WebSearchInput,
     ArtifactInput,
@@ -93,6 +95,7 @@ from ..models import (
     # Tool output types
     AskUserQuestionOutput,
     BashOutput,
+    DeleteOutput,
     EditOutput,
     ExitPlanModeOutput,
     GlobOutput,
@@ -106,6 +109,7 @@ from ..models import (
     TeamCreateOutput,
     TeamDeleteOutput,
     ToolResultContent,
+    ToolExecutionOutput,
     WebSearchOutput,
     ArtifactOutput,
     WebFetchOutput,
@@ -177,6 +181,25 @@ def _inline_code(value: str) -> str:
     return f"{fence}{pad}{value}{pad}{fence}"
 
 
+def _italic_paragraphs(text: str) -> str:
+    """Italicise each paragraph of a teammate message's framing text.
+
+    The text around ``<teammate-message>`` blocks is the harness's
+    framing, not message content. A paragraph that already carries
+    emphasis or code markers (``*``, ``_``, backtick) is left as is,
+    since wrapping it could break or swallow that markup.
+    """
+    paragraphs = re.split(r"\n\s*\n", text.strip())
+    out: list[str] = []
+    for para in paragraphs:
+        para = para.strip()
+        if para and not any(c in para for c in "*_`"):
+            out.append(f"*{para}*")
+        elif para:
+            out.append(para)
+    return "\n\n".join(out)
+
+
 def _teammate_marker(name: str, color: Optional[str]) -> str:
     """Return a `🟢 name` marker for a teammate in Markdown output."""
     circle = _COLOR_CIRCLE.get((color or "").lower(), _COLOR_CIRCLE["default"])
@@ -219,15 +242,27 @@ def _session_anchor(session_or_id: "SessionHeaderMessage | str") -> str:
     return f"session-{sid[:8]}"
 
 
-class _TagProtectingMarkdownRenderer(_MistuneMarkdownRenderer):
-    """Mistune re-emitter that neutralises raw HTML tokens.
+def _protect_html_tags(text: str) -> str:
+    """Neutralise raw HTML in Markdown text, leaving every other byte as is.
 
-    Mistune's stock ``MarkdownRenderer`` round-trips a parsed Markdown
-    document back to Markdown text. We inherit it and override the two
-    HTML hooks — ``inline_html`` (tags like ``<br>``, ``<script>``) and
-    ``block_html`` (block-level HTML chunks) — to emit the token's raw
-    content HTML-escaped to entities instead of passing the tag through
-    verbatim.
+    Mirrors the HTML renderer's ``escape=True`` policy for user content:
+    tags that a user typed (``<script>``, ``<details>``, bare ``<br>``,
+    …) are rendered as literal text in any downstream Markdown viewer
+    rather than interpreted as HTML. Without this, a permissive viewer
+    could execute ``<script>`` or interpret ``<iframe>`` — the HTML
+    output escapes them via wenmode's ``escape=True``; the Markdown
+    output delegates to the viewer, so we need to neutralise tags at
+    emission time.
+
+    Parses the text with wenmode (source positions on) and splices an
+    entity-escaped copy over the byte range of every raw-HTML node,
+    inline or block. Because the parser already distinguishes raw HTML
+    from inline code spans (``` `x <br> y` ```), fenced blocks and
+    indented code blocks, all of those — and everything else: emphasis,
+    escapes, autolinks, fence characters — survive byte for byte. A
+    ``<`` in plain text that could open a tag for a lax viewer
+    (``<svg/onload=…>`` is not an HTML tag to the parser; ``&lt;script&gt;``
+    decodes to plain text) gets the same entity treatment.
 
     Escaping to entities sidesteps the class of edge cases that any
     backtick-wrapping strategy has to contend with (stray backticks in
@@ -238,47 +273,40 @@ class _TagProtectingMarkdownRenderer(_MistuneMarkdownRenderer):
     like GitHub correctly display the tag text. Either way the tag
     itself never reaches the HTML output as live markup.
     """
-
-    def inline_html(self, token: dict[str, Any], state: Any) -> str:
-        return _html.escape(token.get("raw", ""))
-
-    def block_html(self, token: dict[str, Any], state: Any) -> str:
-        return _html.escape(token.get("raw", ""))
-
-
-@functools.lru_cache(maxsize=1)
-def _get_tag_protecting_markdown() -> mistune.Markdown:
-    """Cache the mistune pipeline used by :func:`_protect_html_tags`."""
-    return mistune.create_markdown(renderer=_TagProtectingMarkdownRenderer())
-
-
-def _protect_html_tags(text: str) -> str:
-    """Wrap raw HTML/XML tags in inline code backticks.
-
-    Mirrors the HTML renderer's ``escape=True`` policy for user content:
-    tags that a user typed (``<script>``, ``<details>``, bare ``<br>``,
-    …) are rendered as literal text in any downstream Markdown viewer
-    rather than interpreted as HTML. Without this, a permissive viewer
-    could execute ``<script>`` or interpret ``<iframe>`` — the HTML
-    output escapes them via mistune's ``escape=True``; the Markdown
-    output delegates to the viewer, so we need to neutralise tags at
-    emission time.
-
-    Parses the text with mistune and re-emits it through a
-    tag-protecting renderer. Because the parser already distinguishes
-    raw HTML from inline code spans (``` `x <br> y` ```), fenced blocks,
-    and indented code blocks, all of those are preserved unchanged and
-    only the actual HTML tokens are wrapped. The round-trip may apply
-    minor cosmetic normalisation (e.g. indented HTML becomes a fenced
-    block), which is acceptable since the goal is tag-neutralisation,
-    not byte-for-byte source preservation.
-    """
     if not text:
         return text
-    # `mistune.Markdown.__call__` is typed as returning a union of `str`
-    # and a token list; with a renderer set it always returns a string.
-    rendered = _get_tag_protecting_markdown()(text)
-    return str(rendered).rstrip("\n")
+    from ..markdown_plugins import walk_nodes, position_parser
+
+    edits: list[tuple[int, int, str]] = []
+    for node in walk_nodes(position_parser().parse(text)):
+        if node.position is None:
+            continue
+        start, end = node.position.start, node.position.end
+        if isinstance(node, Html):
+            edits.append((start, end, _html.escape(text[start:end])))
+        elif isinstance(node, Text):
+            for m in _TAG_LIKE_LT_RE.finditer(text, start, end):
+                edits.append((m.start(), m.end(), "&lt;"))
+    if not edits:
+        return text.rstrip("\n")
+    out: list[str] = []
+    last = 0
+    for start, end, replacement in sorted(edits):
+        if start < last:
+            continue  # nested inside an already-replaced range
+        out.append(text[last:start])
+        out.append(replacement)
+        last = end
+    out.append(text[last:])
+    return "".join(out).rstrip("\n")
+
+
+# A Markdown thematic break (horizontal rule) on its own line.
+_THEMATIC_BREAK_RE = re.compile(r"(?:([-*_])[ \t]*)(?:\1[ \t]*){2,}")
+
+# A ``<`` that a lax HTML parser could take as a tag start: letter, ``/``,
+# ``!`` or ``?`` next. ``x < 3`` and ``<=`` are left alone.
+_TAG_LIKE_LT_RE = re.compile(r"<(?=[A-Za-z/!?])")
 
 
 def safe_markdown_inline(text: str) -> str:
@@ -302,7 +330,7 @@ def safe_markdown_inline(text: str) -> str:
     Pass only the text FRAGMENT (the label/title/heading text), not a composed
     ``[label](url)`` — the destination is preserved by the caller.
 
-    Gated on a literal ``<`` (the only char that can open a tag): the mistune
+    Gated on a literal ``<`` (the only char that can open a tag): the wenmode
     round-trip in ``_protect_html_tags`` re-normalises markdown escaping
     (``\\*\\*`` → ``\\**``), so a fragment with no tag must pass through
     byte-identical (no churn, no collateral mangling). Markdown-appropriate
@@ -463,7 +491,6 @@ class MarkdownRenderer(Renderer):
         super().__init__()
         self.image_export_mode = image_export_mode
         self._output_dir: Path | None = None
-        self._image_counter = 0
         self._ctx: RenderingContext | None = None
         # session_id -> {teammate_id -> color}, snapshotted at render
         # start. Scoped to avoid cross-session contamination in
@@ -498,7 +525,7 @@ class MarkdownRenderer(Renderer):
     def _linkify_shas(self, text: str) -> str:
         """Substitute resolvable git SHAs with Markdown links (issue #156).
 
-        The Markdown output emits text bodies directly (no mistune
+        The Markdown output emits text bodies directly (no wenmode
         round-trip), so it can't lean on the inline-parser plugin used
         by the HTML side. Mirrors the plugin's behaviour by scanning
         raw text and emitting ``[sha](url)`` only when the resolver
@@ -552,12 +579,10 @@ class MarkdownRenderer(Renderer):
         """Format image based on export mode."""
         from ..image_export import export_image
 
-        self._image_counter += 1
         src = export_image(
             image,
             self.image_export_mode,
             output_dir=self._output_dir,
-            counter=self._image_counter,
         )
         if src is None:
             return "[Image]"
@@ -621,11 +646,19 @@ class MarkdownRenderer(Renderer):
           only if at least min_len characters
         - If over max_len, continues to end of current word
         - Adds "…" if truncated
+        - Skips leading YAML front matter (as the rendering does) and
+          horizontal-rule lines: neither says what the message is about.
+          A message with nothing else gets no excerpt.
         """
-        # Get first non-empty line
+        from ..frontmatter import split_frontmatter
+
+        split = split_frontmatter(text)
+        if split is not None:
+            text = split[1]
+        # Get first non-empty line that isn't a horizontal rule
         for line in text.split("\n"):
             line = line.strip()
-            if not line:
+            if not line or _THEMATIC_BREAK_RE.fullmatch(line):
                 continue
 
             # Check for early sentence endings (but enforce minimum length)
@@ -828,7 +861,7 @@ class MarkdownRenderer(Renderer):
         """Format → user text as Markdown when clean, else fenced code.
 
         Mirrors the HTML renderer's dual-view gate: try rendering the
-        text as Markdown; if mistune produces well-formed HTML the
+        text as Markdown; if wenmode produces well-formed HTML the
         source was recognisable Markdown (or plain text that happens not
         to conflict with Markdown syntax), so emit the raw text inline
         (headings/bold/lists render naturally downstream). Otherwise
@@ -840,7 +873,18 @@ class MarkdownRenderer(Renderer):
         """
         parts: list[str] = []
         for item in content.items:
-            if isinstance(item, ImageContent):
+            if isinstance(item, SystemReminderContent):
+                # Blockquote each reminder so extracting it out of the text does
+                # not drop content that previously rendered inline in Markdown.
+                # Protect raw HTML-like tags first (same posture as the
+                # TextContent path below): a reminder containing e.g. <script>
+                # must not survive as live HTML in generated Markdown.
+                for reminder in item.reminders:
+                    safe_reminder = _protect_html_tags(reminder)
+                    lines = safe_reminder.splitlines() or [safe_reminder]
+                    quoted = "\n".join(f"> {line}" for line in lines)
+                    parts.append(f"> 🤖 *System reminder:*\n{quoted}")
+            elif isinstance(item, ImageContent):
                 parts.append(self._format_image(item))
             elif isinstance(item, TextContent):
                 if item.text.strip():
@@ -850,9 +894,12 @@ class MarkdownRenderer(Renderer):
                         # fenced fallback below stays untouched (it's
                         # literally a code block — SHAs in there should
                         # not become links, mirroring the HTML side
-                        # where the mistune plugin doesn't fire inside
+                        # where the SHA-link transform doesn't fire inside
                         # codespans / fenced code).
-                        parts.append(_protect_html_tags(self._linkify_shas(item.text)))
+                        frontmatter, body = self._split_frontmatter(item.text)
+                        parts.append(
+                            frontmatter + _protect_html_tags(self._linkify_shas(body))
+                        )
                     else:
                         parts.append(self._code_fence(item.text))
         return "\n\n".join(parts)
@@ -975,11 +1022,11 @@ class MarkdownRenderer(Renderer):
         session_colors = self._colors_for(message)
         parts: list[str] = []
         if content.leading_text:
-            parts.append(content.leading_text)
+            parts.append(_italic_paragraphs(_protect_html_tags(content.leading_text)))
         for block in content.blocks:
             parts.append(self._format_teammate_block_markdown(block, session_colors))
         if content.trailing_text:
-            parts.append(content.trailing_text)
+            parts.append(_italic_paragraphs(_protect_html_tags(content.trailing_text)))
         return "\n\n".join(p for p in parts if p)
 
     def _format_teammate_block_markdown(
@@ -999,7 +1046,18 @@ class MarkdownRenderer(Renderer):
         body = block.body.strip()
         if not body:
             return header
-        return f"{header}\n\n{self._quote(body)}"
+        # Data bodies (JSON payloads, ``key: value`` lines) use the same
+        # key/value rendering as tool params; prose stays as written, its
+        # front matter (if any) shown as data.
+        params = block.body_params()
+        if params is not None:
+            body = self._render_params(params)
+        else:
+            frontmatter, rest = self._split_frontmatter(body)
+            body = frontmatter + rest
+        # The body comes from another session: neutralise raw HTML as for
+        # user text.
+        return f"{header}\n\n{self._quote(_protect_html_tags(body))}"
 
     # -------------------------------------------------------------------------
     # Assistant Content Formatters
@@ -1019,7 +1077,8 @@ class MarkdownRenderer(Renderer):
                     # before quoting so the substitution happens on
                     # the natural text shape (a leading "> " would
                     # confuse the word-boundary regex anchor).
-                    parts.append(self._quote(self._linkify_shas(item.text)))
+                    frontmatter, body = self._split_frontmatter(item.text)
+                    parts.append(self._quote(frontmatter + self._linkify_shas(body)))
         return "\n\n".join(parts)
 
     def format_ThinkingMessage(
@@ -1029,8 +1088,8 @@ class MarkdownRenderer(Renderer):
         # SHA-linkify before quoting so the substitution sees a clean
         # word boundary (a leading ``> `` would confuse the regex
         # anchor) and parity with the HTML side — assistant thinking
-        # there flows through the mistune pipeline which already
-        # has the SHA plugin registered.
+        # there flows through the wenmode pipeline, whose SHA-link
+        # transform does the same job.
         quoted = self._quote(self._linkify_shas(content.thinking))
         return self._collapsible("Thinking...", quoted)
 
@@ -1063,6 +1122,10 @@ class MarkdownRenderer(Renderer):
         content = self._code_fence(input.content, self._lang_from_path(input.file_path))
         return self._collapsible(summary, content)
 
+    def format_DeleteInput(self, _input: DeleteInput, _: TemplateMessage) -> str:
+        """The deleted path is already carried by the title."""
+        return ""
+
     def format_EditInput(self, input: EditInput, _: TemplateMessage) -> str:
         """Format → '```diff\\n...\\n```'."""
         # Diff is visible; result goes in collapsible in format_EditOutput
@@ -1074,7 +1137,8 @@ class MarkdownRenderer(Renderer):
         # All diffs visible; result goes in collapsible in format_EditOutput
         parts: list[str] = []
         for i, edit in enumerate(input.edits, 1):
-            parts.append(f"**Edit {i}:**")
+            path = f" — `{edit.file_path}`" if edit.file_path else ""
+            parts.append(f"**Edit {i}{path}:**")
             diff_text = generate_unified_diff(edit.old_string, edit.new_string)
             parts.append(self._code_fence(diff_text, "diff"))
         return "\n\n".join(parts)
@@ -1124,10 +1188,12 @@ class MarkdownRenderer(Renderer):
         # Title contains "Exiting plan mode", body is empty
         return ""
 
-    def format_WebSearchInput(self, _input: WebSearchInput, _: TemplateMessage) -> str:
-        """Format → '' (query shown in title)."""
-        # Query is shown in the title, body is empty
-        return ""
+    def format_WebSearchInput(self, input: WebSearchInput, _: TemplateMessage) -> str:
+        """Format → parallel queries as a list; single query stays title-only."""
+        queries = split_websearch_queries(input.query)
+        if len(queries) == 1:
+            return ""
+        return "\n".join(f"- {safe_markdown_inline(query)}" for query in queries)
 
     def format_WebFetchInput(self, input: WebFetchInput, _: TemplateMessage) -> str:
         """Format → '' (url in title, prompt if long)."""
@@ -1228,14 +1294,56 @@ class MarkdownRenderer(Renderer):
             parts.append(self._code_fence(script, "js"))
         return "\n\n".join(parts)
 
+    def format_ToolExecutionInput(
+        self, input: ToolExecutionInput, _: TemplateMessage
+    ) -> str:
+        """Render opaque Codex JavaScript without Workflow semantics."""
+        return self._code_fence(input.script, "js")
+
+    def format_ToolExecutionOutput(
+        self, output: ToolExecutionOutput, _: TemplateMessage
+    ) -> str:
+        """Render transport status followed by labelled result emissions."""
+        parts = [output.status]
+        for index, item in enumerate(output.items, 1):
+            parts.append(f"**Result {index}:**")
+            item_type = item.get("type")
+            text = item.get("text")
+            if item_type in {"input_text", "output_text", "text"} and isinstance(
+                text, str
+            ):
+                try:
+                    decoded: Any = json.loads(text)
+                except (ValueError, RecursionError):
+                    parts.append(self._code_fence(text))
+                else:
+                    parts.append(
+                        self._code_fence(
+                            json.dumps(decoded, indent=2, ensure_ascii=False), "json"
+                        )
+                    )
+            else:
+                parts.append(
+                    self._code_fence(
+                        json.dumps(item, indent=2, ensure_ascii=False), "json"
+                    )
+                )
+        return "\n\n".join(parts)
+
+    def title_ToolExecutionInput(
+        self, _input: ToolExecutionInput, _: TemplateMessage
+    ) -> str:
+        """Title opaque Codex JavaScript distinctly from Workflow."""
+        return "⚙️ ToolExecution"
+
     def format_WorkflowPhaseMessage(
         self, content: WorkflowPhaseMessage, _: TemplateMessage
     ) -> str:
-        """Format → a spliced workflow phase card body: detail + agent count
+        """Format → a spliced workflow phase card body: depth + agent count
         (issue #174 PR3). The phase title is the heading (``title_content``)."""
         bits: list[str] = []
-        if content.detail:
-            bits.append(_protect_html_tags(content.detail))
+        if content.depth:
+            bits.append(_protect_html_tags(content.depth))
         if content.agent_count:
             unit = "agent" if content.agent_count == 1 else "agents"
             bits.append(f"_{content.agent_count} {unit}_")
@@ -1489,20 +1597,26 @@ class MarkdownRenderer(Renderer):
         duplicate of the spawning Task's last sub-assistant, the body
         is dropped and only metadata + a "Spawn" reference remains so
         the Markdown reader still has navigation context without
-        doubling the result content. At ``DetailLevel.LOW`` the
+        doubling the result content. At ``RenderingDepth.AGENT`` the
         whole card is "ghosted" (returns ``""``) — paired with
         ``title_TaskNotificationMessage`` returning ``""`` too,
         ``_render_message``'s "no title, no content" elision drops
         the entry from the rendered output without touching
         ``ctx.messages``.
         """
-        if self.detail == DetailLevel.LOW and content.result_is_duplicate:
+        if self.depth == RenderingDepth.AGENT and content.result_is_duplicate:
             return ""
         lines: list[str] = []
         if content.task_id:
             lines.append(f"- **Task ID:** `{content.task_id}`")
         if content.status:
             lines.append(f"- **Status:** `{content.status}`")
+        event_block = ""
+        if content.event and "\n" in content.event:
+            lines.append("- **Event:**")
+            event_block = self._code_fence(content.event)
+        elif content.event:
+            lines.append(f"- **Event:** {_inline_code(content.event)}")
         usage = content.usage
         if usage is not None:
             if usage.total_tokens is not None:
@@ -1518,6 +1632,8 @@ class MarkdownRenderer(Renderer):
                 f"- **Spawn:** ↱ Task `#d-{content.spawning_task_message_index}`"
             )
         head = "\n".join(lines)
+        if event_block:
+            head = f"{head}\n\n{event_block}"
         if content.result_text and not content.result_is_duplicate:
             body = self._collapsible("Result", content.result_text)
             return f"{head}\n\n{body}" if head else body
@@ -1542,6 +1658,30 @@ class MarkdownRenderer(Renderer):
             )
         return rendered
 
+    def _split_frontmatter(self, text: str) -> tuple[str, str]:
+        """Take YAML front matter off the top of a Markdown body.
+
+        Returns the front matter rendered as data, with its trailing blank
+        line, and the body after it; ``("", text)`` when there is none.
+        Spliced in raw, a downstream viewer would read the closing fence
+        as a setext underline, as the HTML renderer used to. A mapping
+        renders as tool params do, anything else as a YAML code block;
+        either way raw HTML is neutralised, since the block is transcript
+        content (a backtick in a value can end its code span).
+        """
+        from ..frontmatter import RawFrontmatter, load_frontmatter, split_frontmatter
+
+        split = split_frontmatter(text)
+        if split is None:
+            return "", text
+        source, body = split
+        value = load_frontmatter(source)
+        if isinstance(value, RawFrontmatter):
+            rendered = self._code_fence(source.rstrip(), "yaml")
+        else:
+            rendered = _protect_html_tags(self._render_params(value))
+        return f"{rendered}\n\n", body
+
     def _render_params(self, params: dict[str, Any]) -> str:
         """Render parameters as a markdown key/value list."""
         if not params:
@@ -1554,13 +1694,15 @@ class MarkdownRenderer(Renderer):
                 formatted = json.dumps(value, indent=2, ensure_ascii=False)
                 lines.append(f"**{key}:**")
                 lines.append(self._code_fence(formatted, "json"))
-            elif isinstance(value, str) and len(value) > 100:
-                # Long string - render as code block
+            elif isinstance(value, str) and (len(value) > 100 or "\n" in value):
+                # Long or multi-line string - render as code block (a line
+                # break inside a code span would let the rest render as
+                # Markdown, e.g. a "# Heading" line)
                 lines.append(f"**{key}:**")
                 lines.append(self._code_fence(value))
             else:
-                # Simple value - inline
-                lines.append(f"**{key}:** `{value}`")
+                # Simple value - inline, in a span its backticks can't close
+                lines.append(f"**{key}:** {_inline_code(str(value))}")
         return "\n\n".join(lines)
 
     # -------------------------------------------------------------------------
@@ -1576,6 +1718,10 @@ class MarkdownRenderer(Renderer):
 
     def format_WriteOutput(self, output: WriteOutput, _: TemplateMessage) -> str:
         """Format → '✓ Wrote N bytes'."""
+        return f"✓ {output.message}"
+
+    def format_DeleteOutput(self, output: DeleteOutput, _: TemplateMessage) -> str:
+        """Format → deletion status line."""
         return f"✓ {output.message}"
 
     def format_EditOutput(self, output: EditOutput, _: TemplateMessage) -> str:
@@ -1644,7 +1790,9 @@ class MarkdownRenderer(Renderer):
         ``_link_async_notifications``; emit it as a second collapsible
         block so the spawn carries the actual agent answer.
         """
-        parts: list[str] = [self._collapsible("Report", self._quote(output.result))]
+        parts: list[str] = []
+        if output.result:
+            parts.append(self._collapsible("Report", self._quote(output.result)))
         if output.async_final_answer:
             parts.append(
                 self._collapsible(
@@ -1944,6 +2092,10 @@ class MarkdownRenderer(Renderer):
             return f"🧠 Write memory `{memory_short_path(input.file_path)}`"
         return f"✍️  Write `{Path(input.file_path).name}`"
 
+    def title_DeleteInput(self, input: DeleteInput, _: TemplateMessage) -> str:
+        """Title → '🗑️ Delete `filename`'."""
+        return f"🗑️ Delete `{Path(input.file_path).name}`"
+
     def title_EditInput(self, input: EditInput, _: TemplateMessage) -> str:
         """Title → '✏️  Edit `filename`', or '🧠 Edit memory `short-path`' for
         an auto-memory path (#192)."""
@@ -2024,11 +2176,11 @@ class MarkdownRenderer(Renderer):
         """Title → '🔄 Async result · *<summary>*' for an async-agent
         completion notification (issue #90).
 
-        Empty at ``DetailLevel.LOW`` for duplicate-flagged
+        Empty at ``RenderingDepth.AGENT`` for duplicate-flagged
         notifications — pairs with
         ``format_TaskNotificationMessage`` to "ghost" the entry.
         """
-        if self.detail == DetailLevel.LOW and content.result_is_duplicate:
+        if self.depth == RenderingDepth.AGENT and content.result_is_duplicate:
             return ""
         if content.summary:
             return f"🔄 Async result · *{self._escape_stars(content.summary)}*"
@@ -2054,7 +2206,9 @@ class MarkdownRenderer(Renderer):
 
     def title_WebSearchInput(self, input: WebSearchInput, _: TemplateMessage) -> str:
         """Title → '🔎 WebSearch `query`'."""
-        return f"🔎 WebSearch `{input.query}`"
+        queries = split_websearch_queries(input.query)
+        summary = f"{queries[0]} (...)" if len(queries) > 1 else input.query
+        return f"🔎 WebSearch `{summary}`"
 
     def title_WebFetchInput(self, input: WebFetchInput, _: TemplateMessage) -> str:
         """Title → '🌐 WebFetch `url`' (truncated if > 60 chars)."""
@@ -2232,7 +2386,7 @@ class MarkdownRenderer(Renderer):
             parts.append(content)
             content = None  # Don't output again below
 
-        # Heading with title (skip if empty)
+        # Heading with title (skip if empty; the body still renders below)
         title = self.title_content(msg)
         if title:
             # Track the *rendered* heading category, not `msg_type`: a
@@ -2273,9 +2427,14 @@ class MarkdownRenderer(Renderer):
                     if ts_line:
                         parts.append(ts_line)
 
-            # Format content (if not already output above)
-            if content:
-                parts.append(content)
+        # Format content (if not already output above). An empty title
+        # suppresses the heading, never the body: a non-error tool result
+        # titles itself ``""`` on purpose, and when it stands alone (orphan,
+        # or its tool_use ghosted by ``--depth``) the body is all there is.
+        # HTML keeps it too. Ghosted entries return ``""`` from both title
+        # and format, so they still elide.
+        if content:
+            parts.append(content)
 
         # Format paired message bodies (middle then last, when present).
         # Triples (slash-command META → CMD → OUT) deliver three bodies
@@ -2333,7 +2492,6 @@ class MarkdownRenderer(Renderer):
     ) -> str:
         """Body of ``generate`` running inside the SHA-resolver context."""
         self._output_dir = output_dir
-        self._image_counter = 0
         self._last_heading_category: Optional[str] = None
         # Per-message timestamp date-on-change state (issue #160).
         # Reset each generate() so reusing a renderer across pages /
@@ -2347,7 +2505,7 @@ class MarkdownRenderer(Renderer):
         root_messages, session_nav, ctx = generate_template_messages(
             messages,
             session_tree=session_tree,
-            detail=self.detail,
+            depth=self.depth,
             no_recaps=self.no_recaps,
         )
         self._ctx = ctx
@@ -2397,13 +2555,13 @@ class MarkdownRenderer(Renderer):
             or (msg.sessionId or "").startswith(agent_prefix)
         ]
         # Back-link points at the same variant's combined file so users
-        # don't bounce between detail levels when navigating. Suppressed
+        # don't bounce between depth levels when navigating. Suppressed
         # under `--combined no` where the combined file is never written.
         if cache_manager is not None and not suppress_combined_link:
             from ..utils import variant_suffix as _variant_suffix
 
             suffix = _variant_suffix(
-                self.detail, self.compact, "md", self.no_timestamps, self.no_recaps
+                self.depth, self.compact, "md", self.no_timestamps, self.no_recaps
             )
             combined_link = f"combined_transcripts{suffix}.md"
         else:
@@ -2422,6 +2580,7 @@ class MarkdownRenderer(Renderer):
         from_date: Optional[str] = None,
         to_date: Optional[str] = None,
         expand_paths_tree: bool = False,
+        provider_label: Optional[str] = None,
     ) -> str:
         """Generate a Markdown projects index page.
 
@@ -2434,8 +2593,11 @@ class MarkdownRenderer(Renderer):
                 `file`) path. Each directory level becomes a bullet,
                 with sessions as nested leaf bullets. Falls back to the
                 flat per-project layout otherwise.
+            provider_label: Provider name for the title (None → Claude).
         """
-        title = title_for_projects_index(project_summaries, from_date, to_date)
+        title = title_for_projects_index(
+            project_summaries, from_date, to_date, provider_label
+        )
         template_projects, template_summary = prepare_projects_index(project_summaries)
 
         parts = [f"<!-- Generated by claude-code-log v{get_library_version()} -->", ""]

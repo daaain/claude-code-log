@@ -1,3 +1,13 @@
+/* Link to the archive-wide search page (index + transcript pages) */
+.archive-search-link {
+    margin: 0.5em 0 1.5em;
+}
+
+.archive-search-link-hint {
+    font-size: 0.85em;
+    opacity: 0.7;
+}
+
 /* Search Bar Styles */
 .search-container {
     position: relative;
@@ -49,6 +59,19 @@
     font-size: 0.85em;
     font-family: inherit;
     transition: all 0.2s;
+    /* Load-bearing for `type="search"` inputs (the archive-search page):
+       WebKit renders those as a native searchfield that ignores padding and
+       border-radius, so the pill collapses into a bare rectangle. */
+    -webkit-appearance: none;
+    appearance: none;
+}
+
+/* The native clear affordance duplicates our own `.search-clear` button and
+   sits in the same corner. */
+.search-input::-webkit-search-cancel-button,
+.search-input::-webkit-search-decoration {
+    -webkit-appearance: none;
+    appearance: none;
 }
 
 .search-input:focus {
@@ -110,6 +133,7 @@
     display: flex;
     gap: 12px;
     font-size: 0.75em;
+    margin-top: 6px;
 }
 
 .search-option-inline {
@@ -149,6 +173,25 @@
 .search-nav-btn:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+}
+
+/* Keyboard shortcut labels inside the prev/next buttons */
+.search-nav-btn .search-kbd {
+    font-family: inherit;
+    font-size: 0.85em;
+    color: var(--text-muted);
+    margin-left: 2px;
+}
+
+/* Search-as-filter (transcript pages): messages that don't match an active
+   search are hidden; ancestors of matches ("Show context" mode) stay visible
+   but dimmed so the matches themselves stand out. */
+.message.search-hidden {
+    display: none;
+}
+
+.message.search-context {
+    opacity: 0.55;
 }
 
 /* Search Match Highlighting */
@@ -200,7 +243,9 @@
     padding: 20px;
     background-color: var(--white-dimmed);
     border-radius: 8px;
-    box-shadow: -7px -7px 10px #eeeeee44, 7px 7px 10px #00000011;
+    box-shadow:
+        -7px -7px 10px #eeeeee44,
+        7px 7px 10px #00000011;
     border-left: var(--white-dimmed) 1px solid;
     border-top: var(--white-dimmed) 1px solid;
     border-bottom: #00000017 1px solid;
@@ -274,7 +319,9 @@
     border-radius: 6px;
     cursor: pointer;
     transition: all 0.2s;
-    box-shadow: -3px -3px 5px #eeeeee22, 3px 3px 5px #00000008;
+    box-shadow:
+        -3px -3px 5px #eeeeee22,
+        3px 3px 5px #00000008;
     border-left: #ffffff44 1px solid;
     border-top: #ffffff44 1px solid;
     border-bottom: #00000012 1px solid;
@@ -284,7 +331,9 @@
 .search-result-item:hover {
     background-color: #ffffff99;
     transform: translateY(-1px);
-    box-shadow: -5px -5px 8px #eeeeee33, 5px 5px 8px #00000012;
+    box-shadow:
+        -5px -5px 8px #eeeeee33,
+        5px 5px 8px #00000012;
 }
 
 .search-result-item a {
@@ -347,14 +396,22 @@
 }
 
 .search-loading::after {
-    content: '...';
+    content: "...";
     animation: dots 1.5s infinite;
 }
 
 @keyframes dots {
-    0%, 20% { content: '.'; }
-    40% { content: '..'; }
-    60%, 100% { content: '...'; }
+    0%,
+    20% {
+        content: ".";
+    }
+    40% {
+        content: "..";
+    }
+    60%,
+    100% {
+        content: "...";
+    }
 }
 
 /* Keyboard shortcut hint */

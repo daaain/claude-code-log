@@ -1,0 +1,17 @@
+[
+  {
+    "type": "event_msg",
+    "payload": {
+      "type": "user_message",
+      "message": "List the synthetic files."
+    }
+  },
+  {
+    "type": "response_item",
+    "payload": {
+      "type": "message",
+      "role": "user",
+      "content": [{"type": "input_text", "text": "List the synthetic files."}]
+    }
+  }
+]

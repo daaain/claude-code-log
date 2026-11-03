@@ -12,7 +12,7 @@ Part of the thematic formatter organization:
 import html
 
 from .ansi_colors import convert_ansi_to_html
-from .utils import render_markdown
+from .utils import render_markdown_document
 from ..models import (
     AwaySummaryMessage,
     HookAttachmentMessage,
@@ -120,8 +120,8 @@ def format_hook_attachment_content(content: HookAttachmentMessage) -> str:
 
     Surfaces the hook command, exit code, duration and any
     stdout/stderr/blocking-error text. Folded by default; visible only
-    at full detail (post-render filter drops HookAttachmentMessage at
-    HIGH and below alongside HookSummaryMessage).
+    at HOOK depth (post-render filter drops HookAttachmentMessage at
+    TOOL and below alongside HookSummaryMessage).
 
     Args:
         content: HookAttachmentMessage with parsed hook payload.
@@ -215,7 +215,7 @@ def format_away_summary_content(content: AwaySummaryMessage) -> str:
     Returns:
         Rendered markdown HTML.
     """
-    return render_markdown(content.text)
+    return render_markdown_document(content.text)
 
 
 def _team_badge(team_name: str) -> str:
@@ -258,7 +258,7 @@ def format_session_header_content(content: SessionHeaderMessage) -> str:
         # Fork-point back-reference. ``&#x2442;`` is the fork glyph; the
         # optional summary suffix names the fork. When the fork point isn't
         # resolvable to a visible message (``parent_message_index`` None —
-        # e.g. a content-less system node ghosted at reduced detail, #233),
+        # e.g. a content-less system node ghosted at reduced depth, #233),
         # render it as plain text rather than a dangling anchor that would
         # jump to the wrong place (previously the session header, ``#msg-d-2``).
         if content.parent_session_summary:

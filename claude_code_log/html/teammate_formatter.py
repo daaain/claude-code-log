@@ -16,8 +16,7 @@ fragments styled by ``components/teammate_styles.css``.
 
 from __future__ import annotations
 
-import json
-from typing import Any, Iterable, Optional
+from typing import Iterable, Optional
 
 from ..models import (
     SendMessageInput,
@@ -37,7 +36,12 @@ from ..models import (
     TeammateMessage,
     TeammateMessageBlock,
 )
-from .utils import escape_html, render_markdown, render_markdown_collapsible
+from .tool_formatters import render_params_table
+from .utils import (
+    escape_html,
+    render_markdown_collapsible,
+    render_markdown_document,
+)
 
 # Palette names the CSS recognises (kept in sync with teammate_styles.css).
 _PALETTE: frozenset[str] = frozenset(
@@ -175,12 +179,17 @@ def _format_teammate_block(
     if not body_text:
         body_html = ""
     else:
-        # Some teammate notifications come through as JSON payloads
-        # (e.g. ``{"type":"idle_notification",...}``) rather than
-        # markdown prose. Render those as a compact key:value list so
-        # they read as data, not as a code blob.
-        json_html = _try_render_json_body(body_text)
-        body_html = json_html if json_html is not None else render_markdown(body_text)
+        # Data bodies (``idle_notification`` JSON payloads, ``key: value``
+        # lines) go through the generic params renderer: Markdown for
+        # string values, folds for long and nested ones, escaped as for
+        # tool input. Prose stays Markdown, as a whole document: front
+        # matter at its top shows as data.
+        params = block.body_params()
+        body_html = (
+            render_params_table(params)
+            if params is not None
+            else render_markdown_document(body_text)
+        )
 
     return (
         f'<div class="{class_attr}"{style}>'
@@ -188,49 +197,6 @@ def _format_teammate_block(
         f'<div class="teammate-body">{body_html}</div>'
         f"</div>"
     )
-
-
-def _try_render_json_body(text: str) -> Optional[str]:
-    """If *text* parses as a JSON object, render it as a key:value list.
-
-    Returns None when the body isn't JSON, isn't an object, or is too
-    nested to surface usefully — the caller falls back to Markdown.
-    Cheap pre-check (`{`/`}` framing) keeps the parser off the typical
-    Markdown path.
-    """
-    if not (text.startswith("{") and text.endswith("}")):
-        return None
-    try:
-        parsed = json.loads(text)
-    except (json.JSONDecodeError, ValueError):
-        return None
-    if not isinstance(parsed, dict):
-        return None
-    parsed_dict: dict[str, Any] = parsed  # pyright: ignore[reportUnknownVariableType]
-    rows: list[str] = []
-    for key, value in parsed_dict.items():
-        rows.append(
-            f"<dt>{escape_html(str(key))}</dt><dd>{_format_json_scalar(value)}</dd>"
-        )
-    if not rows:
-        return None
-    return f'<dl class="teammate-json">{"".join(rows)}</dl>'
-
-
-def _format_json_scalar(value: Any) -> str:
-    """Render a JSON scalar (or nested structure) as inline HTML.
-
-    Strings get a ``<code>`` wrapper; other scalars are stringified.
-    Nested dicts/lists fall back to a compact JSON dump in a ``<code>``
-    so the output stays one-row-per-key.
-    """
-    if isinstance(value, str):
-        return f"<code>{escape_html(value)}</code>"
-    if isinstance(value, bool) or value is None:
-        return f"<code>{escape_html(str(value).lower() if value is not None else 'null')}</code>"
-    if isinstance(value, (int, float)):
-        return f"<code>{escape_html(str(value))}</code>"
-    return f"<code>{escape_html(json.dumps(value, separators=(', ', ': ')))}</code>"
 
 
 # ---------------------------------------------------------------------------
@@ -472,11 +438,14 @@ def format_sendmessage_output(
 def format_task_input_teammate_extras(
     input_: TaskInput,
     teammate_colors: Optional[dict[str, str]] = None,
+    include_run: bool = True,
 ) -> str:
     """Return a small HTML fragment surfacing teammate-spawn fields on Task.
 
     Empty string when no teammate fields are present — callers can append
-    this fragment to the existing Task rendering.
+    this fragment to the existing Task rendering. ``include_run`` off drops
+    the ``Run background`` row (the minimal theme, whose call line carries
+    the ``[async …]`` marker instead).
     """
     rows: list[tuple[str, str]] = []
     if input_.name:
@@ -486,7 +455,7 @@ def format_task_input_teammate_extras(
         rows.append(("Team", escape_html(input_.team_name)))
     if input_.mode:
         rows.append(("Mode", escape_html(input_.mode)))
-    if input_.run_in_background:
+    if input_.run_in_background and include_run:
         rows.append(("Run", "background"))
     if not rows:
         return ""
@@ -496,15 +465,18 @@ def format_task_input_teammate_extras(
 def format_task_output_teammate_extras(
     output: TaskOutput,
     teammate_colors: Optional[dict[str, str]] = None,
+    include_agent_id: bool = True,
 ) -> str:
     """Return a fragment for teammate metadata on a Task tool_result.
 
     Pulls fields from both ``output.metadata`` (parsed from the tail) and
-    the teammate-linkage fields on TaskOutput itself.
+    the teammate-linkage fields on TaskOutput itself. ``include_agent_id``
+    off drops the Agent row (the minimal theme's async spawn, whose
+    notification card shows the id as its Task ID).
     """
     rows: list[tuple[str, str]] = []
     meta = output.metadata
-    if meta and meta.agent_id:
+    if meta and meta.agent_id and include_agent_id:
         rows.append(("Agent", f"<code>{escape_html(meta.agent_id)}</code>"))
     if meta and meta.worktree_path:
         rows.append(("Worktree", f"<code>{escape_html(meta.worktree_path)}</code>"))

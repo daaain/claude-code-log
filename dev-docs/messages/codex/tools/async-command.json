@@ -1,0 +1,41 @@
+[
+  {
+    "type": "response_item",
+    "payload": {
+      "type": "function_call",
+      "name": "exec_command",
+      "arguments": "{\"cmd\":\"pytest -q\"}",
+      "call_id": "call-async-001"
+    }
+  },
+  {
+    "type": "response_item",
+    "payload": {
+      "type": "function_call_output",
+      "call_id": "call-async-001",
+      "output": "Script running with cell ID synthetic-cell"
+    }
+  },
+  {
+    "type": "response_item",
+    "payload": {
+      "type": "function_call",
+      "name": "wait",
+      "arguments": "{\"cell_id\":\"synthetic-cell\"}",
+      "call_id": "call-wait-001"
+    }
+  },
+  {
+    "type": "response_item",
+    "payload": {
+      "type": "function_call_output",
+      "call_id": "call-wait-001",
+      "output": [
+        {
+          "type": "input_text",
+          "text": "{\"output\":\"2 passed\\n\",\"exit_code\":0,\"wall_time_seconds\":0.2}"
+        }
+      ]
+    }
+  }
+]

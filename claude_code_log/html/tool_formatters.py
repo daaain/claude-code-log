@@ -22,6 +22,8 @@ from collections.abc import Iterable
 from typing import Any, Optional, cast
 
 from .utils import (
+    ANSWER_INLINE_CHARS,
+    ANSWER_INLINE_LINES,
     escape_html,
     is_markdown_path,
     is_memory_path,
@@ -30,11 +32,18 @@ from .utils import (
     render_file_content_collapsible,
     render_markdown_collapsible,
     render_markdown_inline,
+    render_markdown_preview,
     render_user_markdown,
     render_user_markdown_collapsible,
     resolve_memory_body_links,
 )
-from ..utils import ARTIFACT_FAVICON_TEXT_MAX, is_safe_web_url, strip_error_tags
+from ..json_depth import exceeds_depth
+from ..utils import (
+    ARTIFACT_FAVICON_TEXT_MAX,
+    is_safe_web_url,
+    split_websearch_queries,
+    strip_error_tags,
+)
 from ..workflow import resolve_workflow_header, resolve_workflow_script
 from ..models import (
     AskUserQuestionInput,
@@ -43,6 +52,8 @@ from ..models import (
     AskUserQuestionOutput,
     BashInput,
     BashOutput,
+    DeleteInput,
+    DeleteOutput,
     EditInput,
     EditOutput,
     CronCreateInput,
@@ -67,6 +78,8 @@ from ..models import (
     TaskStopOutput,
     TodoWriteInput,
     ToolResultContent,
+    ToolExecutionInput,
+    ToolExecutionOutput,
     WebSearchInput,
     WebSearchOutput,
     ArtifactInput,
@@ -283,8 +296,12 @@ def format_websearch_input(search_input: WebSearchInput) -> str:
     Only shows the query if it exceeds 100 chars (truncated in title).
     Otherwise returns empty since the full query is already in the title.
     """
+    queries = split_websearch_queries(search_input.query)
+    if len(queries) > 1:
+        items = "".join(f"<li>{escape_html(query)}</li>" for query in queries)
+        return f'<ul class="websearch-queries">{items}</ul>'
     if len(search_input.query) <= 100:
-        return ""  # Full query shown in title
+        return ""
     escaped_query = escape_html(search_input.query)
     return f'<div class="websearch-query">{escaped_query}</div>'
 
@@ -312,6 +329,14 @@ def _websearch_as_markdown(output: WebSearchOutput) -> str:
     return "\n".join(parts)
 
 
+def _web_source_anchors(refs: list[str]) -> str:
+    """Expose safe Codex web result handles as linkable card anchors."""
+    return "".join(
+        f"<span id='web-ref-{escape_html(ref)}' class='web-result-anchor'></span>"
+        for ref in refs
+    )
+
+
 def format_websearch_output(output: WebSearchOutput) -> str:
     """Format WebSearch tool result as collapsible markdown.
 
@@ -322,7 +347,8 @@ def format_websearch_output(output: WebSearchOutput) -> str:
     markdown block, rendered as collapsible content.
     """
     markdown_content = _websearch_as_markdown(output)
-    return render_markdown_collapsible(markdown_content, "websearch-results")
+    rendered = render_markdown_collapsible(markdown_content, "websearch-results")
+    return f"{_web_source_anchors(output.source_refs)}{rendered}"
 
 
 # -- TodoWrite Tool -----------------------------------------------------------
@@ -488,7 +514,12 @@ def format_write_output(output: WriteOutput) -> str:
         HTML string with the acknowledgment message
     """
     escaped_message = escape_html(output.message)
-    return f"<pre>{escaped_message} ...</pre>"
+    return f"<pre>{escaped_message}</pre>"
+
+
+def format_delete_output(output: DeleteOutput) -> str:
+    """Format a Delete tool result as its status line."""
+    return f"<pre>{escape_html(output.message)}</pre>"
 
 
 def format_bash_output(output: BashOutput) -> str:
@@ -562,7 +593,9 @@ def format_taskstop_output(output: TaskStopOutput) -> str:
     return "".join(parts)
 
 
-def format_task_output(output: TaskOutput) -> str:
+def format_task_output(
+    output: TaskOutput, include_async_answer: bool = True, preview: bool = False
+) -> str:
     """Format Task tool result as HTML with markdown rendering.
 
     For async-spawned Tasks (issue #90), ``output.result`` is just the
@@ -575,12 +608,29 @@ def format_task_output(output: TaskOutput) -> str:
 
     Args:
         output: Parsed TaskOutput with agent's response
+        include_async_answer: render the folded async answer (the minimal
+            theme shows it on the notification card instead)
+        preview: the minimal theme's short preview for an answer longer
+            than a few lines (``utils.render_markdown_preview``, P8) instead
+            of the 20-line threshold
 
     Returns:
         HTML string with markdown rendered in collapsible section
     """
-    parts: list[str] = [render_markdown_collapsible(output.result, "task-result")]
-    if output.async_final_answer:
+    parts: list[str] = []
+    if output.result:
+        if preview:
+            parts.append(
+                render_markdown_preview(
+                    output.result,
+                    "task-result",
+                    ANSWER_INLINE_LINES,
+                    ANSWER_INLINE_CHARS,
+                )
+            )
+        else:
+            parts.append(render_markdown_collapsible(output.result, "task-result"))
+    if output.async_final_answer and include_async_answer:
         parts.append(
             '<div class="task-async-answer-label">'
             "Result <small>(from async notification)</small>"
@@ -706,14 +756,47 @@ def format_write_input(write_input: WriteInput) -> str:
     )
 
 
+def format_delete_input(_delete_input: DeleteInput) -> str:
+    """The deleted path is already carried by the tool title."""
+    return ""
+
+
 # -- Edit Tools (Edit/Multiedit) ----------------------------------------------
 
 
-def format_edit_input(edit_input: EditInput) -> str:
+# The minimal theme previews a diff longer than this many lines (P8), and
+# a Bash command longer than this many lines, like any other long block.
+_MINIMAL_LONG_LINES = 12
+_MINIMAL_PREVIEW_LINES = 3
+
+_DIFF_LINE = "<div class='diff-line"
+
+
+def collapse_long_diff(diff_html: str) -> str:
+    """The minimal theme's preview of a long diff (P8).
+
+    ``render_single_diff`` output with more than ``_MINIMAL_LONG_LINES``
+    lines becomes the shared ``<details>`` preview (``render_collapsible_code``)
+    — its first lines in the summary, clipped by the theme's CSS, and the
+    whole diff in the body; a shorter diff is returned unchanged. Classic
+    output never calls this: it shows every diff in full.
+    """
+    parts = diff_html.split(_DIFF_LINE)
+    count = len(parts) - 1
+    if count <= _MINIMAL_LONG_LINES:
+        return diff_html
+    preview = parts[0] + "".join(
+        _DIFF_LINE + part for part in parts[1 : 1 + _MINIMAL_PREVIEW_LINES]
+    )
+    return render_collapsible_code(preview + "</div>", diff_html, count)
+
+
+def format_edit_input(edit_input: EditInput, collapse: bool = False) -> str:
     """Format Edit tool use content as a diff view with intra-line highlighting.
 
     Args:
         edit_input: Typed EditInput with old_string, new_string, replace_all.
+        collapse: preview a long diff (the minimal theme, ``collapse_long_diff``)
     Note: File path is now shown in the header, so we skip it here.
     """
     html_parts = ["<div class='edit-tool-content'>"]
@@ -724,17 +807,21 @@ def format_edit_input(edit_input: EditInput) -> str:
         )
 
     # Use shared diff rendering helper
-    html_parts.append(render_single_diff(edit_input.old_string, edit_input.new_string))
+    diff = render_single_diff(edit_input.old_string, edit_input.new_string)
+    html_parts.append(collapse_long_diff(diff) if collapse else diff)
     html_parts.append("</div>")
 
     return "".join(html_parts)
 
 
-def format_multiedit_input(multiedit_input: MultiEditInput) -> str:
+def format_multiedit_input(
+    multiedit_input: MultiEditInput, collapse: bool = False
+) -> str:
     """Format Multiedit tool use content showing multiple diffs.
 
     Args:
         multiedit_input: Typed MultiEditInput with file_path and list of edits.
+        collapse: preview each long diff (the minimal theme)
     """
     escaped_path = escape_html(multiedit_input.file_path)
 
@@ -748,10 +835,13 @@ def format_multiedit_input(multiedit_input: MultiEditInput) -> str:
 
     # Render each edit as a diff - edits are typed EditItem objects
     for idx, edit in enumerate(multiedit_input.edits, 1):
+        path = f" — {escape_html(edit.file_path)}" if edit.file_path else ""
         html_parts.append(
-            f"<div class='multiedit-item'><div class='multiedit-item-header'>Edit #{idx}</div>"
+            f"<div class='multiedit-item'><div class='multiedit-item-header'>"
+            f"Edit #{idx}{path}</div>"
         )
-        html_parts.append(render_single_diff(edit.old_string, edit.new_string))
+        diff = render_single_diff(edit.old_string, edit.new_string)
+        html_parts.append(collapse_long_diff(diff) if collapse else diff)
         html_parts.append("</div>")
 
     html_parts.append("</div>")
@@ -761,17 +851,30 @@ def format_multiedit_input(multiedit_input: MultiEditInput) -> str:
 # -- Bash Tool ----------------------------------------------------------------
 
 
-def format_bash_input(bash_input: BashInput) -> str:
+def format_bash_input(bash_input: BashInput, collapse: bool = False) -> str:
     """Format Bash tool use content in VS Code extension style.
 
     Args:
         bash_input: Typed BashInput with command, description, timeout, etc.
+        collapse: preview a command longer than ``_MINIMAL_LONG_LINES`` lines
+            (a heredoc, an inline script) — the minimal theme (P8)
     Note: Description is now shown in the header, so we skip it here.
     """
     escaped_command = escape_html(bash_input.command)
 
     html_parts = ["<div class='bash-tool-content'>"]
-    html_parts.append(f"<pre class='bash-tool-command'>{escaped_command}</pre>")
+    lines = bash_input.command.splitlines()
+    if collapse and len(lines) > _MINIMAL_LONG_LINES:
+        preview = escape_html("\n".join(lines[:_MINIMAL_PREVIEW_LINES]))
+        html_parts.append(
+            render_collapsible_code(
+                f"<pre class='bash-tool-command'>{preview}</pre>",
+                f"<pre class='bash-tool-command'>{escaped_command}</pre>",
+                len(lines),
+            )
+        )
+    else:
+        html_parts.append(f"<pre class='bash-tool-command'>{escaped_command}</pre>")
     html_parts.append("</div>")
 
     return "".join(html_parts)
@@ -793,6 +896,22 @@ def format_task_input(task_input: TaskInput) -> str:
     preview of the first few lines to keep the transcript vertically compact.
     """
     return render_markdown_collapsible(task_input.prompt, "task-prompt")
+
+
+# A prompt this short (in characters) on at most two lines reads in full on
+# the minimal theme's spawn row; anything longer becomes a preview.
+_SPAWN_PROMPT_INLINE_CHARS = 160
+
+
+def format_task_prompt_preview(prompt: str) -> str:
+    """The minimal theme's spawn prompt (P7c compact spawn rows).
+
+    A short prompt (at most two lines and ``_SPAWN_PROMPT_INLINE_CHARS``
+    characters) renders inline as ``format_task_input`` does; a longer one
+    always becomes the shared collapsible preview of its first two
+    non-blank lines (``utils.render_markdown_preview``).
+    """
+    return render_markdown_preview(prompt, "task-prompt", 2, _SPAWN_PROMPT_INLINE_CHARS)
 
 
 # -- WebFetch Tool ------------------------------------------------------------
@@ -856,7 +975,8 @@ def format_webfetch_output(output: WebFetchOutput) -> str:
     # Render the result as markdown in a collapsible section
     content_html = render_markdown_collapsible(output.result, "webfetch-result")
 
-    return f"{badge_html}{content_html}"
+    anchors = _web_source_anchors(output.source_refs)
+    return f"{anchors}{badge_html}{content_html}"
 
 
 # -- Artifact Tool ------------------------------------------------------------
@@ -1401,7 +1521,10 @@ def _json_result_table_html(raw_content: str) -> Optional[str]:
         return None
     try:
         parsed = json.loads(raw_content)
-    except ValueError:
+    except (ValueError, RecursionError):
+        return None
+    if exceeds_depth(parsed):
+        # Too deep for nested tables: keep the text rendering.
         return None
     if isinstance(parsed, dict) and parsed:
         container = cast("dict[Any, Any]", parsed)
@@ -1692,16 +1815,64 @@ def format_workflow_input(workflow_input: WorkflowToolInput) -> str:
     return f"{prefix}{body}"
 
 
+def format_tool_execution_input(tool_input: ToolExecutionInput) -> str:
+    """Render opaque Codex JavaScript without Workflow-specific semantics."""
+    return render_file_content_collapsible(
+        tool_input.script,
+        "tool-execution.js",
+        "tool-execution-script",
+        line_threshold=12,
+        preview_line_count=6,
+    )
+
+
+def format_tool_execution_output(output: ToolExecutionOutput) -> str:
+    """Render transport status followed by a table of emitted results."""
+    parts = [
+        "<div class='tool-execution-status'>"
+        + "<br>".join(escape_html(line) for line in output.status.splitlines())
+        + "</div>"
+    ]
+    rows: list[str] = []
+    for index, item in enumerate(output.items, 1):
+        item_type = item.get("type")
+        text = item.get("text")
+        if item_type in {"input_text", "output_text", "text"} and isinstance(text, str):
+            content: str | list[dict[str, Any]] = text
+        else:
+            content = [item]
+        rendered = format_tool_result_content_raw(
+            ToolResultContent(
+                type="tool_result",
+                tool_use_id="tool-execution",
+                content=content,
+            )
+        )
+        rows.append(
+            "<tr>"
+            f"<th scope='row' class='tool-execution-result-label'>Result {index}</th>"
+            f"<td class='tool-execution-result-value'>{rendered}</td>"
+            "</tr>"
+        )
+    if rows:
+        parts.append(
+            "<table class='tool-execution-results'>"
+            f"<tbody>{''.join(rows)}</tbody>"
+            "</table>"
+        )
+    return "".join(parts)
+
+
 # -- Workflow run tree: phase + agent cards (issue #174 PR3) -------------------
 
 
 def format_workflow_phase_content(content: WorkflowPhaseMessage) -> str:
-    """Format a spliced workflow *phase* card body: the phase ``detail`` plus
+    """Format a spliced workflow *phase* card body: the phase ``depth`` plus
     its agent count. The phase title is the card heading (``title_content``)."""
     parts: list[str] = []
-    if content.detail:
+    if content.depth:
         parts.append(
-            f"<span class='workflow-phase-detail'>{escape_html(content.detail)}</span>"
+            f"<span class='workflow-phase-detail'>{escape_html(content.depth)}</span>"
         )
     if content.agent_count:
         unit = "agent" if content.agent_count == 1 else "agents"
@@ -1786,6 +1957,7 @@ __all__ = [
     "format_todowrite_input",
     "format_read_input",
     "format_write_input",
+    "format_delete_input",
     "format_edit_input",
     "format_multiedit_input",
     "format_bash_input",
@@ -1797,6 +1969,8 @@ __all__ = [
     "format_artifact_output",
     "format_webfetch_input",
     "format_workflow_input",
+    "format_tool_execution_input",
+    "format_tool_execution_output",
     "format_workflow_phase_content",
     "format_workflow_agent_content",
     "format_monitor_input",
@@ -1807,6 +1981,7 @@ __all__ = [
     # Tool output formatters (called by HtmlRenderer.format_{OutputClass})
     "format_read_output",
     "format_write_output",
+    "format_delete_output",
     "format_edit_output",
     "format_bash_output",
     "format_task_output",

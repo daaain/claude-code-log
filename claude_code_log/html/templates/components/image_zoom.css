@@ -1,0 +1,92 @@
+/* Click-to-zoom dialog for message images (image_zoom.js), both themes.
+   The dialog is a transparent layer over the whole viewport: the frame,
+   sized by the script to the image at fit-to-frame (at most 90% of the
+   viewport each way), is centred in it, and the × sits in the viewport's
+   top-right corner, in the margin the 90% leaves. A click on the layer
+   outside the frame is a click on the dialog itself, which closes it. The
+   UA's dialog padding, border, background and max sizes are reset here.
+   It renders in the top layer, above every sticky bar, without a z-index. */
+img.cc-zoomable {
+    cursor: zoom-in;
+}
+
+/* inset, not 100vw/100vh: those include the page's scrollbar, which would
+   put the × underneath it. A modal dialog is fixed, so inset spans exactly
+   the visible viewport. */
+dialog.cc-zoom {
+    box-sizing: border-box;
+    inset: 0;
+    width: auto;
+    height: auto;
+    max-width: none;
+    max-height: none;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    overflow: hidden;
+    background: transparent;
+}
+
+/* Only while open: a closed dialog must keep the UA's display: none. */
+dialog.cc-zoom[open] {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+dialog.cc-zoom::backdrop {
+    background: rgba(0, 0, 0, 0.6);
+}
+
+.cc-zoom-frame {
+    position: relative;
+    flex: none;
+    overflow: hidden;
+    background: var(--bg, #ffffff);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+    border-radius: 4px;
+    touch-action: none;
+    outline: none;
+}
+
+/* Laid out at its natural size; the script places and scales it with a
+   transform from the top-left corner. */
+.cc-zoom-frame > img {
+    position: absolute;
+    top: 0;
+    left: 0;
+    max-width: none;
+    max-height: none;
+    transform-origin: 0 0;
+    user-select: none;
+    -webkit-user-drag: none;
+}
+
+.cc-zoom-frame.cc-zoom-pannable {
+    cursor: grab;
+}
+
+.cc-zoom-frame.cc-zoom-panning {
+    cursor: grabbing;
+}
+
+.cc-zoom-close {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 1px solid var(--border-light, #e0e0e0);
+    border-radius: 50%;
+    background: var(--bg, #ffffff);
+    color: var(--text-primary, #333);
+    font: 18px/1 var(--font-ui, system-ui, sans-serif);
+    cursor: pointer;
+    opacity: 0.85;
+}
+
+.cc-zoom-close:hover,
+.cc-zoom-close:focus-visible {
+    opacity: 1;
+}

@@ -5,19 +5,30 @@ import faulthandler
 import logging
 import os
 import signal
+import sqlite3
 import sys
+import threading
+import time
+import traceback
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 import click
 from git import Repo, InvalidGitRepositoryError
 
+from .watch import (
+    DEFAULT_MAX_LATENCY,
+    DEFAULT_POLL_INTERVAL,
+    DEFAULT_QUIET_PERIOD,
+)
 from .converter import (
     RegenerationReport,
     convert_jsonl_to,
     convert_jsonl_to_html,
     ensure_fresh_cache,
     generate_single_session_file,
+    render_normalized_session_file,
+    render_provider_wholesale,
     get_file_extension,
     get_index_filename,
     process_projects_hierarchy,
@@ -28,7 +39,66 @@ from .cache import (
     get_all_cached_projects,
     get_cache_db_path,
     get_library_version,
+    is_corrupt_database_error,
 )
+from .migrations.runner import apply_write_pragmas
+from .models import RenderingDepth
+from .render_pool import resolve_render_jobs
+from .search import (
+    ENV_INDEX_FIELDS,
+    ENV_SEARCH_FIELDS,
+    SEARCH_FIELDS,
+)
+from .utils import (
+    DEFAULT_THEME,
+    THEME_CHOICES,
+    THEME_ENV_VAR,
+    normalize_theme,
+)
+
+
+# `--theme` is shared by `convert`, `serve` and `watch`. No Click default and
+# no Click `envvar`: `_resolve_theme` applies the precedence itself (flag >
+# $CLAUDE_CODE_LOG_THEME > built-in default) so a bad environment value gets
+# an error that names the variable rather than a confusing "--theme" one.
+THEME_HELP = (
+    "HTML theme: classic (current look), minimal, or default (the built-in "
+    f"default, currently {DEFAULT_THEME}). Overrides ${THEME_ENV_VAR}. "
+    "HTML-only. Themes write the same filenames, so switching theme "
+    "regenerates every output."
+)
+
+
+def _theme_option(func: Any) -> Any:
+    return click.option(
+        "--theme",
+        type=click.Choice(THEME_CHOICES, case_sensitive=False),
+        default=None,
+        help=THEME_HELP,
+    )(func)
+
+
+def _resolve_theme(theme: Optional[str]) -> str:
+    """Resolve the HTML theme: ``--theme`` > ``$CLAUDE_CODE_LOG_THEME`` > default.
+
+    Returns a resolved name (``classic``/``minimal``, never ``default``).
+    An explicit ``--theme`` (``default`` included) always wins over the
+    environment; an unknown environment value is an error, not a silent
+    fallback. An empty variable counts as unset.
+    """
+    if theme is not None:
+        return normalize_theme(theme)
+    raw = os.environ.get(THEME_ENV_VAR, "")
+    if not raw.strip():
+        return DEFAULT_THEME
+    try:
+        return normalize_theme(raw)
+    except ValueError:
+        raise click.UsageError(
+            f"{THEME_ENV_VAR}={raw!r} is not a valid theme; choose one of: "
+            f"classic (current look), minimal, or default (the built-in "
+            f"default, currently {DEFAULT_THEME})."
+        ) from None
 
 
 # Output values that mean "stream the rendered document to stdout" (issue
@@ -88,6 +158,226 @@ def _render_to_stdout(
     click.echo(f"Successfully converted {input_path} to stdout", err=True)
 
 
+def _render_provider_input_file(
+    provider_name: str,
+    input_path: Path,
+    output: "Optional[Path]",
+    output_format: str,
+    image_export_mode: "Optional[str]",
+    depth: RenderingDepth,
+    compact: bool,
+    no_timestamps: bool,
+    no_recaps: bool,
+    open_browser: bool,
+    theme: str = DEFAULT_THEME,
+) -> None:
+    """Render a single provider session file handed in as an INPUT_PATH.
+
+    Shared by the explicit ``--provider <p> <file>`` path and the no-flag
+    auto-detected-rollout path. Fails LOUDLY if a provider claimed the file but
+    it yields no renderable messages, so a rollout can never fall through to a
+    near-empty page (the silent-empty gap).
+    """
+    from .providers import discover_providers
+    from .utils import output_path_is_file
+
+    # A directory INPUT_PATH is a mini sessions root and is routed to the
+    # wholesale walker by the dispatcher before it reaches here, so this helper
+    # only ever sees a single rollout file.
+    selected = discover_providers().get_provider(provider_name)
+    if selected is None:
+        raise click.UsageError(f"Unknown provider: {provider_name}")
+    messages = list(selected.load_session_from_path(input_path))
+    if not messages:
+        raise click.UsageError(
+            f"{input_path} was detected as a {provider_name} session but produced "
+            "no renderable messages; it may be truncated or malformed."
+        )
+    # generate_session filters entries by sessionId, so the render key MUST be
+    # the session's own id (the thread id carried on the entries), not the
+    # filename stem — a mismatch silently drops every message (the empty-page bug).
+    session_key = messages[0].sessionId or input_path.stem
+    title = f"{provider_name.title()}: {session_key}"
+
+    def render(destination: Path) -> Path:
+        return render_normalized_session_file(
+            messages,
+            session_key,
+            destination,
+            output_format,
+            title,
+            image_export_mode,
+            depth,
+            compact,
+            no_timestamps,
+            no_recaps,
+            theme=theme,
+        )
+
+    extension = get_file_extension(output_format)
+    if _is_stdout_target(output):
+        _render_to_stdout(
+            input_path,
+            lambda tmpdir: render(tmpdir / f"session.{extension}"),
+        )
+        return
+    filename = f"session-{session_key}.{extension}"
+    if output is None:
+        destination = Path.cwd() / filename
+    elif output_path_is_file(output):
+        destination = output
+    else:
+        destination = output / filename
+    output_path = render(destination)
+    click.echo(f"Successfully rendered {provider_name} session to {output_path}")
+    if open_browser:
+        click.launch(str(output_path))
+
+
+def _resolve_provider_output_root(provider_name: str, output: "Optional[Path]") -> Path:
+    """Resolve where a provider wholesale run writes its project hierarchy.
+
+    An explicit ``-o DIR`` wins (a file-shaped ``-o`` is rejected — wholesale
+    writes many files). Otherwise the default is ``<provider_home>/claude-code-log/``
+    (DECIDED #4: the sessions tree stays pristine, so output never lands inside
+    it). If the provider has no discoverable home, there is nowhere to default
+    to — fail loudly asking for ``-o``.
+    """
+    from .providers import discover_providers
+    from .utils import output_path_is_file
+
+    if output is not None:
+        if output_path_is_file(output):
+            raise click.UsageError(
+                f"provider wholesale rendering writes many files; pass -o as a "
+                f"directory, not a file ({output})."
+            )
+        return output
+    provider = discover_providers().get_provider(provider_name)
+    data_dir = provider.get_data_dir() if provider is not None else None
+    if data_dir is None:
+        raise click.UsageError(
+            f"no {provider_name} home found to place output; pass -o DIR to "
+            "choose an output directory."
+        )
+    return data_dir / "claude-code-log"
+
+
+def _run_provider_wholesale(
+    provider_name: str,
+    sessions_root: "Optional[Path]",
+    output: "Optional[Path]",
+    output_format: str,
+    image_export_mode: "Optional[str]",
+    depth: RenderingDepth,
+    compact: bool,
+    no_timestamps: bool,
+    no_recaps: bool,
+    write_combined: bool,
+    write_individual: bool,
+    from_date: "Optional[str]",
+    to_date: "Optional[str]",
+    no_cache: bool,
+    clear_cache: bool,
+    clear_output: bool,
+    open_browser: bool,
+    expand_paths: bool,
+    filter_path: "Optional[str]",
+    theme: str = DEFAULT_THEME,
+) -> None:
+    """Render a whole provider sessions tree into a project hierarchy.
+
+    ``sessions_root`` None walks the provider's own data dir; a directory
+    (an INPUT_PATH dir, or ``--projects-dir``) selects a mini sessions root.
+
+    ``--clear-cache`` / ``--clear-output`` are scoped to the provider output
+    root so the pristine sessions tree is never touched (DECIDED #4). Mirroring
+    the Claude path, they clear-and-exit on their own, but when a date filter is
+    also given they clear then fall through to REGENERATE the filtered view
+    (else ``--clear-output --from-date`` would leave an empty directory).
+    """
+    output_root = _resolve_provider_output_root(provider_name, output)
+
+    dated = from_date is not None or to_date is not None
+    if clear_cache:
+        _clear_provider_cache(output_root)
+        if not dated:
+            return
+    if clear_output:
+        _clear_provider_output(output_root, output_format)
+        if not dated:
+            return
+
+    index_path = render_provider_wholesale(
+        provider_name,
+        sessions_root,
+        output_root,
+        from_date=from_date,
+        to_date=to_date,
+        output_format=output_format,
+        image_export_mode=image_export_mode,
+        depth=depth,
+        compact=compact,
+        no_timestamps=no_timestamps,
+        no_recaps=no_recaps,
+        theme=theme,
+        write_combined=write_combined,
+        write_individual=write_individual,
+        use_cache=not no_cache,
+        expand_paths=expand_paths,
+        filter_path=filter_path,
+        silent=False,
+    )
+    if open_browser:
+        click.launch(str(index_path))
+
+
+def _clear_provider_cache(output_root: Path) -> None:
+    """Delete the provider wholesale cache DB (and its WAL/SHM sidecars) under
+    the output root. Never touches the sessions tree — the DB lives beside the
+    generated output, not inside the sources."""
+    from .cache import get_cache_db_path
+
+    db = get_cache_db_path(output_root)
+    removed = False
+    for path in (db, db.with_name(db.name + "-wal"), db.with_name(db.name + "-shm")):
+        if path.exists():
+            try:
+                path.unlink()
+                removed = True
+            except OSError as exc:
+                click.echo(f"  Warning: failed to delete {path}: {exc}")
+    click.echo(
+        f"Cleared provider cache database: {db}"
+        if removed
+        else f"No provider cache database at {db}."
+    )
+
+
+def _clear_provider_output(output_root: Path, output_format: str) -> None:
+    """Remove generated output files under the provider output root only.
+
+    Scoped by known generated filenames (index + per-project
+    ``combined_transcripts*`` / ``session-*``), so unrelated files — and every
+    file in the sessions tree, which lives elsewhere — are left untouched."""
+    file_ext = get_file_extension(output_format)
+    removed = 0
+    if output_root.is_dir():
+        index_file = output_root / get_index_filename(output_format)
+        if index_file.exists():
+            index_file.unlink()
+            removed += 1
+        for project_dir in output_root.iterdir():
+            if not project_dir.is_dir():
+                continue
+            for generated in _list_generated_outputs(project_dir, file_ext):
+                generated.unlink()
+                removed += 1
+    click.echo(
+        f"Cleared {removed} generated {file_ext.upper()} file(s) under {output_root}."
+    )
+
+
 def _install_stack_dump_signal() -> None:
     """Make ``kill -USR1 <pid>`` print the live Python stack to stderr.
 
@@ -99,7 +389,7 @@ def _install_stack_dump_signal() -> None:
     if sigusr1 is None:
         return
     try:
-        faulthandler.register(sigusr1, all_threads=True, chain=False)
+        faulthandler.register(sigusr1, all_threads=True, chain=False)  # ty: ignore[possibly-missing-attribute]
     except (RuntimeError, ValueError, OSError):
         # E.g. signal already taken, no-tty environments, or platforms
         # where faulthandler.register raises. Diagnostics shouldn't
@@ -139,7 +429,7 @@ def _discover_projects(
 
 
 def _launch_tui_with_cache_check(
-    project_path: Path, is_archived: bool = False
+    project_path: Path, is_archived: bool = False, theme: str = DEFAULT_THEME
 ) -> Optional[str]:
     """Launch TUI with proper cache checking and user feedback."""
     click.echo("Checking cache and loading session data...")
@@ -189,7 +479,7 @@ def _launch_tui_with_cache_check(
 
     from .tui import run_session_browser
 
-    result = run_session_browser(project_path, is_archived=is_archived)
+    result = run_session_browser(project_path, is_archived=is_archived, theme=theme)
     return result
 
 
@@ -578,7 +868,75 @@ def _validate_git_link_template(template: str) -> None:
         )
 
 
-@click.command()
+class DefaultCommandGroup(click.Group):
+    """A group that falls back to a default subcommand.
+
+    The CLI was a single flat command for its whole life, so
+    ``claude-code-log``, ``claude-code-log some/file.jsonl`` and
+    ``claude-code-log --from-date yesterday`` all have to keep working
+    unchanged. Anything whose first argument isn't a registered subcommand
+    is therefore rewritten as ``<default_command> <args...>``.
+
+    A path that collides with a subcommand name can be forced through with
+    ``--``: ``claude-code-log -- serve``.
+    """
+
+    default_command = "convert"
+
+    def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
+        if args and args[0] == "--":
+            # Explicit escape hatch: everything after `--` is the default
+            # command's arguments, even if it looks like a subcommand name.
+            args = [self.default_command] + args[1:]
+        elif not args or args[0] not in self.commands:
+            # No args at all, an INPUT_PATH, or an option like --help /
+            # --version / --from-date: all belong to the default command.
+            # Sending --help there is deliberate — it keeps the familiar
+            # full option list, and `convert`'s epilog advertises the
+            # subcommands (see _default_command_epilog).
+            args = [self.default_command] + args
+        return super().parse_args(ctx, args)
+
+
+def _subcommand_epilog(group: click.Group) -> str:
+    """Build the default command's epilog from what's actually registered.
+
+    The group's own help is unreachable (``parse_args`` always rewrites to a
+    subcommand), so the subcommand list has to appear in the default
+    command's ``--help`` or subcommands would be undiscoverable. Deriving it
+    from ``group.commands`` keeps it from advertising commands that don't
+    exist. Called at the bottom of the module, once everything is registered.
+    """
+    others = [
+        (name, cmd)
+        for name, cmd in sorted(group.commands.items())
+        if name != DefaultCommandGroup.default_command
+    ]
+    if not others:
+        return ""
+    width = max(len(name) for name, _ in others)
+    # The leading \b stops Click's formatter rewrapping the block, so the
+    # command list keeps its alignment.
+    lines = ["\b", "Subcommands:"]
+    lines += [
+        f"  {name:<{width}}  {(cmd.short_help or cmd.help or '').splitlines()[0]}"
+        for name, cmd in others
+    ]
+    lines += [
+        "",
+        "Run 'claude-code-log <subcommand> --help' for its options. Any "
+        "other invocation runs the conversion described above.",
+    ]
+    return "\n".join(lines)
+
+
+@click.group(cls=DefaultCommandGroup)
+@click.version_option(version=get_library_version(), prog_name="claude-code-log")
+def main() -> None:
+    """Convert Claude transcript JSONL files to HTML or Markdown."""
+
+
+@main.command(name="convert")
 @click.version_option(version=get_library_version(), prog_name="claude-code-log")
 @click.argument("input_path", type=click.Path(path_type=Path), required=False)
 @click.option(
@@ -658,7 +1016,8 @@ def _validate_git_link_template(template: str) -> None:
         "Control combined-vs-individual transcript generation: "
         "'yes' = both combined and per-session files (default for --all-projects); "
         "'no' = only per-session files (recommended for Obsidian / vault use — "
-        "combined is dead weight); "
+        "combined is dead weight; note a prior 'yes' run's combined files are "
+        "not deleted, use --clear-output to sweep them); "
         "'only' = only the combined file (= --no-individual-sessions). "
         "When unset, defaults to 'no' under --expand-paths (Obsidian mode), "
         "else 'yes'."
@@ -722,8 +1081,17 @@ def _validate_git_link_template(template: str) -> None:
     help=(
         "Worker processes for converting projects in --all-projects mode "
         "(default: CPU count; 1 disables parallelism). Peak memory scales "
-        "with jobs × the largest stale project."
+        "with jobs x the largest stale project. Also caps the per-project "
+        "render fan-out, which is on by default and controlled by "
+        "$CLAUDE_CODE_LOG_RENDER_JOBS (1 or 'off' to disable, auto, or a "
+        "worker count)."
     ),
+)
+@click.option(
+    "--provider",
+    default=None,
+    metavar="NAME",
+    help="Load a single session from a registered provider (for example, codex).",
 )
 @click.option(
     "--session-id",
@@ -731,19 +1099,38 @@ def _validate_git_link_template(template: str) -> None:
     help="Export a single session by ID (full ID or prefix). Project path is optional — looks up the session globally via cache.",
 )
 @click.option(
+    "--depth",
+    type=click.Choice(
+        ["session", "user", "assistant", "agent", "tool", "hook"],
+        case_sensitive=False,
+    ),
+    default=None,
+    help=(
+        "How deep into the message hierarchy to render "
+        "(session > user > assistant > agent > tool > hook); output stops "
+        "at the named level. DEFAULT: tool. "
+        "session: session structure only (headers/nav); "
+        "user: user prompts and steering only; "
+        "assistant: user + assistant messages; "
+        "agent: + sub-agents and key tool signals; "
+        "tool: + tools, cleaned of system/hook noise (default); "
+        "hook: everything, including hooks and system notices. "
+        "Mutually exclusive with the deprecated --detail."
+    ),
+)
+@click.option(
     "--detail",
     type=click.Choice(
         ["full", "high", "low", "minimal", "user-only"], case_sensitive=False
     ),
-    default="full",
+    default=None,
     help=(
-        "Detail level for output. "
-        "full: everything; "
-        "high: detailed but cleaned (no system/hook noise); "
-        "low: interaction-focused + key signals; "
-        "minimal: user + assistant messages only; "
-        "user-only: only user prompts and steering (for feeding to "
-        "downstream agents, e.g. building a requirements doc)."
+        "DEPRECATED (removed in 2.0) — prefer --depth. Detail level for "
+        "output. full (=--depth hook): everything; "
+        "high (=--depth tool): detailed but cleaned (no system/hook noise); "
+        "low (=--depth agent): interaction-focused + key signals; "
+        "minimal (=--depth assistant): user + assistant messages only; "
+        "user-only (=--depth user): only user prompts and steering."
     ),
 )
 @click.option(
@@ -782,12 +1169,13 @@ def _validate_git_link_template(template: str) -> None:
     is_flag=True,
     help=(
         "Suppress '※ recap' (away-summary) messages. Recaps are otherwise "
-        "shown at every detail level — they are themselves a high-level "
+        "shown at every depth level — they are themselves a high-level "
         "summary of activity (#179). Use this to get a 'really user-only' "
-        "view (--detail user-only --no-recaps) or to drop the recap/agent "
-        "redundancy at --detail minimal."
+        "view (--depth user --no-recaps) or to drop the recap/agent "
+        "redundancy at --depth assistant."
     ),
 )
+@_theme_option
 @click.option(
     "--debug",
     is_flag=True,
@@ -795,7 +1183,7 @@ def _validate_git_link_template(template: str) -> None:
     help="Show full traceback on errors.",
 )
 @click.pass_context
-def main(
+def convert(
     ctx: click.Context,
     input_path: Optional[Path],
     output: Optional[Path],
@@ -816,12 +1204,15 @@ def main(
     image_export_mode: Optional[str],
     page_size: int,
     jobs: Optional[int],
+    provider: Optional[str],
     session_id: Optional[str],
-    detail: str,
+    depth: Optional[str],
+    detail: Optional[str],
     compact: bool,
     git_link: Optional[str],
     no_timestamps: bool,
     no_recaps: bool,
+    theme: Optional[str],
     debug: bool,
 ) -> None:
     """Convert Claude transcript JSONL files to HTML or Markdown.
@@ -843,6 +1234,99 @@ def main(
 
     # Configure logging to show warnings and above
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
+
+    # Flag > $CLAUDE_CODE_LOG_THEME > built-in default; a bad env value is a
+    # usage error here, before any work starts.
+    resolved_theme = _resolve_theme(theme)
+
+    # Provider mode has three sub-modes:
+    #   * export     — `--session-id <id>`: render one session by id
+    #   * single-file — INPUT_PATH is a rollout FILE: render that one session
+    #   * wholesale  — no id, and no INPUT_PATH (or an INPUT_PATH directory):
+    #                  walk the whole sessions tree into a project hierarchy
+    # Each rejects the flags that don't apply to it LOUDLY (never a silent
+    # no-op); the matrix in test_codex_cli.py pins which combos are legal.
+    provider_wholesale = (
+        provider is not None
+        and session_id is None
+        and (input_path is None or input_path.is_dir())
+    )
+    if provider is not None:
+        # Validate the provider name up front so an unknown one is a clean
+        # UsageError (exit 2), consistent with the other flag errors, instead of
+        # surfacing later as a broad-except "Error converting file" (exit 1).
+        from .providers import discover_providers as _discover_providers
+
+        _known = _discover_providers().get_all_providers()
+        if provider not in _known:
+            raise click.UsageError(
+                f"Unknown provider: {provider}. Available providers: "
+                f"{', '.join(_known) or 'none'}."
+            )
+        if input_path is not None and session_id is not None:
+            raise click.UsageError(
+                "--provider with an INPUT_PATH renders that path; drop "
+                "--session-id (or drop the INPUT_PATH to export a session by id)."
+            )
+        # The TUI is always illegal in provider mode (provider TUI support is out
+        # of scope, tracked in the backlog). --expand-paths/--filter-path used to
+        # be always-illegal too ("Claude-only projection semantics"), but they are
+        # well-defined for wholesale: provider projects are synthetic group-by-cwd,
+        # so the group key IS the real cwd and the flat name expands unambiguously.
+        # They stay illegal for single-session export (one session has no
+        # multi-project projection to apply).
+        conflicts: list[str] = []
+        if tui:
+            conflicts.append("--tui")
+        if provider_wholesale:
+            # Wholesale honors --expand-paths/--filter-path (Obsidian projection),
+            # --combined, date range, -o/-f, --open-browser, and the cache flags
+            # (--no-cache/--clear-cache/--clear-output). Only pagination
+            # (--page-size) and job-parallelism (--jobs) remain deferred, so reject
+            # those loudly rather than accept-and-ignore.
+            if jobs is not None:
+                conflicts.append("--jobs")
+            if (
+                ctx.get_parameter_source("page_size")
+                is not click.core.ParameterSource.DEFAULT
+            ):
+                conflicts.append("--page-size")
+        else:
+            # export / single-file render one session; the wholesale-only flags
+            # (multi-project hierarchy + projection, pagination, date range, cache)
+            # don't apply.
+            for enabled, flag in (
+                (expand_paths, "--expand-paths"),
+                (filter_path is not None, "--filter-path"),
+                (all_projects, "--all-projects"),
+                (projects_dir is not None, "--projects-dir"),
+                (no_individual_sessions, "--no-individual-sessions"),
+                (from_date is not None, "--from-date"),
+                (to_date is not None, "--to-date"),
+                (no_cache, "--no-cache"),
+                (clear_cache, "--clear-cache"),
+                (clear_output, "--clear-output"),
+            ):
+                if enabled:
+                    conflicts.append(flag)
+            for parameter, flag in (
+                ("combined", "--combined"),
+                ("page_size", "--page-size"),
+            ):
+                if (
+                    ctx.get_parameter_source(parameter)
+                    is not click.core.ParameterSource.DEFAULT
+                ):
+                    conflicts.append(flag)
+        if conflicts:
+            detail = (
+                "provider wholesale rendering"
+                if provider_wholesale
+                else "provider single-session rendering (--session-id / a rollout file)"
+            )
+            raise click.UsageError(
+                f"--provider does not support {', '.join(conflicts)} with {detail}."
+            )
 
     # Resolve --combined default and back-compat with --no-individual-sessions.
     # `--combined` semantics:
@@ -896,20 +1380,31 @@ def main(
     # through the single-file path which doesn't honour these flags).
     from .utils import output_path_is_file as _output_path_is_file
 
+    # Provider wholesale honours --expand-paths/--filter-path (it defaults its
+    # own output root and forwards the flags), so the Claude-path "these are
+    # no-ops here" warnings would LIE for it — announce "ignoring" for a run that
+    # actually projects. Exempt provider_wholesale from both; keep them verbatim
+    # for every other mode, where they remain correct.
     will_run_all_projects = all_projects or input_path is None
     if (expand_paths or filter_path) and tui:
         click.echo(
             "Warning: --expand-paths / --filter-path are ignored in --tui mode.",
             err=True,
         )
-    elif (expand_paths or filter_path) and not will_run_all_projects:
+    elif (
+        (expand_paths or filter_path)
+        and not will_run_all_projects
+        and not provider_wholesale
+    ):
         click.echo(
             "Warning: --expand-paths / --filter-path require --all-projects "
             "(or omitting INPUT_PATH); ignoring.",
             err=True,
         )
-    elif (expand_paths or filter_path) and (
-        output is None or _output_path_is_file(output)
+    elif (
+        (expand_paths or filter_path)
+        and not provider_wholesale
+        and (output is None or _output_path_is_file(output))
     ):
         click.echo(
             "Warning: --expand-paths / --filter-path require --output to be a "
@@ -988,12 +1483,174 @@ def main(
             f"--format {output_format}.",
             err=True,
         )
+    # `--theme` is HTML-only. Only an explicit flag warns: the environment
+    # variable is a standing preference and shouldn't nag Markdown runs.
+    if theme is not None and output_format != "html":
+        click.echo(
+            f"Warning: --theme is HTML-only; ignoring under --format {output_format}.",
+            err=True,
+        )
 
-    from .models import DetailLevel
+    from .models import DEFAULT_DEPTH, DETAIL_ALIASES, RenderingDepth
 
-    detail_level = DetailLevel(detail.lower())
+    # Resolve the RenderingDepth from --depth (preferred) or the deprecated
+    # --detail (#159). Both default to None so an explicit choice is
+    # detectable; they are mutually exclusive. The --depth names ARE the
+    # RenderingDepth values; --detail's legacy names map via DETAIL_ALIASES.
+    if depth is not None and detail is not None:
+        raise click.UsageError(
+            "--depth and --detail are mutually exclusive; --detail is the "
+            "deprecated alias — prefer --depth."
+        )
+    if detail is not None:
+        click.echo(
+            "Warning: --detail is deprecated and will be removed in 2.0; "
+            "prefer --depth (session|user|assistant|agent|tool|hook).",
+            err=True,
+        )
+        depth_level = DETAIL_ALIASES[detail.lower()]
+    elif depth is not None:
+        depth_level = RenderingDepth(depth.lower())
+    else:
+        depth_level = DEFAULT_DEPTH
 
     try:
+        if provider is not None:
+            from .providers import SessionInfo, discover_providers
+
+            # Wholesale: no --session-id, and either no INPUT_PATH (walk the
+            # provider's data dir) or an INPUT_PATH directory / --projects-dir
+            # (a mini sessions root). Renders the whole project hierarchy.
+            if provider_wholesale:
+                sessions_root = (
+                    input_path
+                    if input_path is not None
+                    else projects_dir
+                    if projects_dir is not None
+                    else None
+                )
+                _run_provider_wholesale(
+                    provider,
+                    sessions_root,
+                    output,
+                    output_format,
+                    image_export_mode,
+                    depth_level,
+                    compact,
+                    no_timestamps,
+                    no_recaps,
+                    write_combined,
+                    write_individual,
+                    from_date,
+                    to_date,
+                    no_cache,
+                    clear_cache,
+                    clear_output,
+                    open_browser,
+                    expand_paths,
+                    filter_path,
+                    theme=resolved_theme,
+                )
+                return
+
+            # Explicit --provider with an INPUT_PATH FILE renders that file
+            # directly (distinct from --session-id export below). The fence
+            # guarantees not both id and INPUT_PATH are set.
+            if input_path is not None:
+                _render_provider_input_file(
+                    provider,
+                    input_path,
+                    output,
+                    output_format,
+                    image_export_mode,
+                    depth_level,
+                    compact,
+                    no_timestamps,
+                    no_recaps,
+                    open_browser,
+                    theme=resolved_theme,
+                )
+                return
+
+            assert session_id is not None  # fence guarantees this in export mode
+            provider_session_id = session_id
+            registry = discover_providers()
+            selected = registry.get_provider(provider)
+            if selected is None:
+                raise ValueError(f"Unknown provider: {provider}")
+            if not selected.is_available():
+                raise ValueError(f"Provider {provider} is not available")
+
+            sessions_by_id: dict[str, list[SessionInfo]] = {}
+            for info in selected.discover_sessions():
+                sessions_by_id.setdefault(info.session_id, []).append(info)
+            if provider_session_id in sessions_by_id:
+                if len(sessions_by_id[provider_session_id]) != 1:
+                    raise ValueError(
+                        f"Duplicate session ID '{provider_session_id}' for provider {provider}"
+                    )
+                matched_id = provider_session_id
+            else:
+                matches = sorted(
+                    sid for sid in sessions_by_id if sid.startswith(provider_session_id)
+                )
+                if not matches:
+                    raise ValueError(
+                        f"Session '{provider_session_id}' not found for provider {provider}"
+                    )
+                if len(matches) > 1:
+                    raise ValueError(
+                        f"Ambiguous session ID prefix '{provider_session_id}' matches: "
+                        + ", ".join(matches)
+                    )
+                matched_id = matches[0]
+
+            if len(sessions_by_id[matched_id]) != 1:
+                raise ValueError(
+                    f"Duplicate session ID '{matched_id}' for provider {provider}"
+                )
+
+            info = sessions_by_id[matched_id][0]
+            messages = list(selected.load_session(matched_id))
+            title = info.title or f"{provider.title()}: Session {matched_id[:8]}"
+
+            def render_provider(destination: Path) -> Path:
+                return render_normalized_session_file(
+                    messages,
+                    matched_id,
+                    destination,
+                    output_format,
+                    title,
+                    image_export_mode,
+                    depth_level,
+                    compact,
+                    no_timestamps,
+                    no_recaps,
+                    theme=resolved_theme,
+                )
+
+            if _is_stdout_target(output):
+                _render_to_stdout(
+                    Path(f"{provider}:{matched_id}"),
+                    lambda tmpdir: render_provider(
+                        tmpdir / f"session.{get_file_extension(output_format)}"
+                    ),
+                )
+                return
+
+            filename = f"session-{matched_id}.{get_file_extension(output_format)}"
+            if output is None:
+                destination = Path.cwd() / filename
+            elif _output_path_is_file(output):
+                destination = output
+            else:
+                destination = output / filename
+            output_path = render_provider(destination)
+            click.echo(f"Successfully exported {provider} session to {output_path}")
+            if open_browser:
+                click.launch(str(output_path))
+            return
+
         # Handle TUI mode
         if tui:
             # Handle default case for TUI - use projects_dir or default ~/.claude/projects
@@ -1023,7 +1680,9 @@ def main(
 
                 if len(project_dirs) == 1 and not archived_projects:
                     # Only one project, open it directly
-                    result = _launch_tui_with_cache_check(project_dirs[0])
+                    result = _launch_tui_with_cache_check(
+                        project_dirs[0], theme=resolved_theme
+                    )
                     if result == "back_to_projects":
                         # User wants to see project selector even though there's only one project
                         from .tui import run_project_selector
@@ -1042,7 +1701,9 @@ def main(
 
                             is_archived = selected_project in archived_projects
                             result = _launch_tui_with_cache_check(
-                                selected_project, is_archived=is_archived
+                                selected_project,
+                                is_archived=is_archived,
+                                theme=resolved_theme,
                             )
                             if result != "back_to_projects":
                                 # User quit normally
@@ -1053,7 +1714,9 @@ def main(
                     click.echo(
                         f"Found project matching current directory: {matching_projects[0].name}"
                     )
-                    result = _launch_tui_with_cache_check(matching_projects[0])
+                    result = _launch_tui_with_cache_check(
+                        matching_projects[0], theme=resolved_theme
+                    )
                     if result == "back_to_projects":
                         # User wants to see project selector
                         from .tui import run_project_selector
@@ -1072,7 +1735,9 @@ def main(
 
                             is_archived = selected_project in archived_projects
                             result = _launch_tui_with_cache_check(
-                                selected_project, is_archived=is_archived
+                                selected_project,
+                                is_archived=is_archived,
+                                theme=resolved_theme,
                             )
                             if result != "back_to_projects":
                                 # User quit normally
@@ -1094,14 +1759,16 @@ def main(
 
                         is_archived = selected_project in archived_projects
                         result = _launch_tui_with_cache_check(
-                            selected_project, is_archived=is_archived
+                            selected_project,
+                            is_archived=is_archived,
+                            theme=resolved_theme,
                         )
                         if result != "back_to_projects":
                             # User quit normally
                             return
             else:
                 # Single project directory
-                _launch_tui_with_cache_check(input_path)
+                _launch_tui_with_cache_check(input_path, theme=resolved_theme)
                 return
 
         # Handle --session-id: export a single session by ID
@@ -1156,10 +1823,11 @@ def main(
                         tmpdir / f"session.{get_file_extension(output_format)}",
                         False,  # use_cache: one-off stream, don't touch cache
                         "embedded",  # inline images; the temp dir is discarded
-                        detail=detail_level,
+                        depth=depth_level,
                         compact=compact,
                         no_timestamps=no_timestamps,
                         no_recaps=no_recaps,
+                        theme=resolved_theme,
                     ),
                 )
                 return
@@ -1171,10 +1839,11 @@ def main(
                 output,
                 not no_cache,
                 image_export_mode,
-                detail=detail_level,
+                depth=depth_level,
                 compact=compact,
                 no_timestamps=no_timestamps,
                 no_recaps=no_recaps,
+                theme=resolved_theme,
             )
             click.echo(f"Successfully exported session to {output_path}")
             if open_browser:
@@ -1228,7 +1897,7 @@ def main(
                 output_format,
                 image_export_mode,
                 page_size=page_size,
-                detail=detail_level,
+                depth=depth_level,
                 compact=compact,
                 output_dir=output_dir_for_projects,
                 expand_paths=expand_paths,
@@ -1236,6 +1905,7 @@ def main(
                 write_combined=write_combined,
                 no_timestamps=no_timestamps,
                 no_recaps=no_recaps,
+                theme=resolved_theme,
                 jobs=jobs,
             )
 
@@ -1254,6 +1924,55 @@ def main(
             if open_browser:
                 click.launch(str(output_path))
             return
+
+        # Provider auto-detection (silent-empty pin): a rollout handed as an
+        # INPUT_PATH must route to the provider pipeline, not the Claude parser,
+        # which skips every record and renders a near-empty page. A single file
+        # renders that session; a DIRECTORY of rollouts renders the whole tree
+        # via the wholesale walker — either way it never falls to the empty parse.
+        if provider is None and input_path.exists():
+            from .providers import discover_providers
+
+            detected = discover_providers().detect_provider_for_path(input_path)
+            if detected is not None:
+                if input_path.is_dir():
+                    _run_provider_wholesale(
+                        detected,
+                        input_path,
+                        output,
+                        output_format,
+                        image_export_mode,
+                        depth_level,
+                        compact,
+                        no_timestamps,
+                        no_recaps,
+                        write_combined,
+                        write_individual,
+                        from_date,
+                        to_date,
+                        no_cache,
+                        clear_cache,
+                        clear_output,
+                        open_browser,
+                        expand_paths,
+                        filter_path,
+                        theme=resolved_theme,
+                    )
+                    return
+                _render_provider_input_file(
+                    detected,
+                    input_path,
+                    output,
+                    output_format,
+                    image_export_mode,
+                    depth_level,
+                    compact,
+                    no_timestamps,
+                    no_recaps,
+                    open_browser,
+                    theme=resolved_theme,
+                )
+                return
 
         # Original single file/directory processing logic
         should_convert = False
@@ -1302,12 +2021,13 @@ def main(
                     silent=True,
                     image_export_mode="embedded",
                     page_size=page_size,
-                    detail=detail_level,
+                    depth=depth_level,
                     compact=compact,
                     update_cache=False,
                     write_combined=True,
                     no_timestamps=no_timestamps,
                     no_recaps=no_recaps,
+                    theme=resolved_theme,
                     force_regenerate=True,
                 ),
             )
@@ -1329,7 +2049,7 @@ def main(
             not no_cache,
             image_export_mode=image_export_mode,
             page_size=page_size,
-            detail=detail_level,
+            depth=depth_level,
             compact=compact,
             # User's `-o` path is a one-off export, not a cached artifact:
             # don't occupy a cache slot keyed by an arbitrary destination.
@@ -1337,6 +2057,7 @@ def main(
             write_combined=write_combined,
             no_timestamps=no_timestamps,
             no_recaps=no_recaps,
+            theme=resolved_theme,
             # An explicit `-o` *file* always regenerates: the version-marker
             # skip only knows the embedded version, not which source produced
             # the file, so it would keep stale content at a user-chosen path
@@ -1347,6 +2068,15 @@ def main(
             # with output=None anyway, so its skip is never forced.
             force_regenerate=output is not None and _output_path_is_file(output),
             report=report,
+            # A single-project conversion has the whole machine to itself,
+            # so `--jobs` is the cap for its render fan-out. Whether that
+            # fan-out runs at all is decided by
+            # $CLAUDE_CODE_LOG_RENDER_JOBS, which is off by default —
+            # `render_jobs=None` consults it, and the min() keeps an
+            # explicit `--jobs` as the ceiling.
+            render_jobs=(
+                min(jobs, resolve_render_jobs(None)) if jobs is not None else None
+            ),
         )
         # Report only work actually done this run. On a pure skip the converter
         # already printed its "... is current, skipping regeneration" line, so
@@ -1399,6 +2129,594 @@ def main(
 
             traceback.print_exc()
         sys.exit(1)
+
+
+# Registered last, once every subcommand exists, so the default command's
+# --help advertises exactly the subcommands that are really available.
+@main.command(name="serve")
+@click.option(
+    "--port",
+    type=int,
+    default=8010,
+    show_default=True,
+    help="Port to listen on. Use 0 to pick a free one.",
+)
+@click.option(
+    "--projects-dir",
+    type=click.Path(path_type=Path, file_okay=False),
+    help=(
+        "Projects directory to serve. Defaults to ~/.claude/projects "
+        "(the same directory the conversion uses)."
+    ),
+)
+@click.option(
+    "--no-convert",
+    is_flag=True,
+    default=False,
+    help=(
+        "Skip the startup conversion and serve whatever HTML is already "
+        "there. Faster to start; pages may be stale."
+    ),
+)
+@click.option(
+    "--open-browser",
+    is_flag=True,
+    default=False,
+    help="Open the index page in a browser once the server is up.",
+)
+@click.option(
+    "--search-fields",
+    envvar=ENV_SEARCH_FIELDS,
+    help=(
+        "Which field groups archive search looks in by default. "
+        f"Groups: {', '.join(SEARCH_FIELDS)}. Accepts an absolute list "
+        "('text,thinking'), 'all'/'none', or deltas against the default "
+        "('+tool_result', '-thinking'). Default excludes tool_result: it is "
+        "69% of a typical archive's text and mostly file dumps. "
+        f"Env: {ENV_SEARCH_FIELDS}."
+    ),
+)
+@click.option(
+    "--index-fields",
+    envvar=ENV_INDEX_FIELDS,
+    help=(
+        "Which field groups get indexed at all. Defaults to everything, so "
+        "enabling a group at search time never needs a reindex. Narrowing "
+        "this shrinks the index (dropping tool_result took a real 253 MB "
+        f"index to 94 MB) but forces a rebuild. Env: {ENV_INDEX_FIELDS}."
+    ),
+)
+@click.option(
+    "--reindex",
+    is_flag=True,
+    default=False,
+    help="Rebuild the search index from scratch instead of updating it.",
+)
+@click.option(
+    "--no-index",
+    is_flag=True,
+    default=False,
+    help=(
+        "Start without building or updating the search index. The search "
+        "page will report the index as unavailable."
+    ),
+)
+@click.option(
+    "--watch",
+    "watch_sources",
+    is_flag=True,
+    default=False,
+    help=(
+        "Keep the served pages current: re-convert whenever a transcript "
+        "changes, in the background. Reload a page to see new messages."
+    ),
+)
+@_theme_option
+def serve(
+    port: int,
+    projects_dir: Optional[Path],
+    no_convert: bool,
+    open_browser: bool,
+    search_fields: Optional[str],
+    index_fields: Optional[str],
+    reindex: bool,
+    no_index: bool,
+    watch_sources: bool,
+    theme: Optional[str],
+) -> None:
+    """Serve the projects directory over loopback, with full-archive search.
+
+    The generated HTML stays canonical and keeps working from `file://`;
+    this adds an origin, which is what full-archive search needs in order to
+    reach the SQLite cache.
+    """
+    from .api import SearchApi
+    from .search import (
+        DEFAULT_INDEX_FIELDS,
+        DEFAULT_SEARCH_FIELDS,
+        fts5_available,
+        parse_field_spec,
+    )
+    from .server import ArchiveServer
+
+    resolved_theme = _resolve_theme(theme)
+    projects_path = projects_dir or get_default_projects_dir()
+    if not projects_path.exists():
+        click.echo(f"Error: projects directory not found: {projects_path}", err=True)
+        sys.exit(1)
+
+    try:
+        resolved_search_fields = parse_field_spec(search_fields, DEFAULT_SEARCH_FIELDS)
+        resolved_index_fields = parse_field_spec(index_fields, DEFAULT_INDEX_FIELDS)
+    except ValueError as exc:
+        raise click.UsageError(str(exc)) from exc
+
+    if not no_convert:
+        # Same conversion the default command runs, so the pages being served
+        # are current. --no-convert skips it for a fast start.
+        click.echo(f"Refreshing {projects_path}...")
+        process_projects_hierarchy(projects_path, silent=True, theme=resolved_theme)
+
+    db_path = get_cache_db_path(projects_path)
+    if not no_index:
+        _build_search_index(db_path, resolved_index_fields, rebuild=reindex)
+    elif not db_path.exists():
+        click.echo("No cache database found; search will be unavailable.", err=True)
+
+    api = SearchApi(db_path, default_fields=resolved_search_fields)
+    server = ArchiveServer(
+        projects_path, api_routes=api.routes(), host="127.0.0.1", port=port
+    )
+    click.echo(f"Serving {projects_path}")
+    click.echo(f"  {server.url}/index.html")
+    click.echo(f"  {server.url}/search.html")
+    if not no_index and not fts5_available():
+        click.echo(
+            "  (this SQLite has no FTS5, so archive search is unavailable)", err=True
+        )
+    click.echo("Press Ctrl+C to stop.")
+
+    if open_browser:
+        click.launch(f"{server.url}/index.html")
+
+    watch_stop: Optional[threading.Event] = None
+    watch_thread: Optional[threading.Thread] = None
+    if watch_sources:
+        from .watch import WatchEngine
+        from .entry_store import ParsedEntryStore, entry_store_enabled
+
+        # One store for the whole serve, not one per tick, for the same
+        # reason `watch` owns one: it lets a tick resume its parse from
+        # the bytes the previous tick already read. Only the *inline*
+        # conversion path takes it (see `_convert_plan_inline`), which is
+        # the steady state here -- one live project stale per tick means
+        # `resolved_jobs == 1` and no pool.
+        serve_store = ParsedEntryStore() if entry_store_enabled() else None
+
+        def reconvert(_changed: set[Path]) -> None:
+            # The server never renders. It re-runs the ordinary conversion
+            # and lets the pages on disk stay canonical, so a page served
+            # over http and the same file opened from file:// can never
+            # disagree.
+            #
+            # `write_combined=False` for the same reason the `watch`
+            # command defaults to it: regenerating the combined pages is
+            # what forces a tick to reload the project rather than just
+            # the session that grew. Measured on a 302-session/373MB
+            # archive, one appended line cost 7.6s with the combined
+            # pages and 0.7s without. The combined pages written by the
+            # startup conversion below stay on disk and keep serving --
+            # they just stop tracking the live session until the next
+            # restart, which is the trade `watch` already makes.
+            process_projects_hierarchy(
+                projects_path,
+                silent=True,
+                write_combined=False,
+                entry_store=serve_store,
+                theme=resolved_theme,
+            )
+
+        def report(exc: BaseException) -> None:
+            click.echo(f"  watch: conversion failed: {exc!r}", err=True)
+
+        engine = WatchEngine([projects_path], reconvert, on_error=report)
+        # Prime before starting the thread so the baseline is taken at a
+        # known moment rather than whenever the thread gets scheduled.
+        engine.prime()
+        watch_stop = threading.Event()
+        watch_thread = engine.run_in_thread(watch_stop)
+        click.echo(
+            "  watching for changes (reload a session page to see new messages;"
+            " combined pages refresh on restart)"
+        )
+
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        click.echo("\nStopping...")
+    finally:
+        if watch_stop is not None:
+            watch_stop.set()
+        if watch_thread is not None:
+            watch_thread.join(timeout=5)
+        server.stop()
+
+
+def _report_corrupt_cache(exc: BaseException, db_path: Path) -> None:
+    """Report a damaged cache database to stderr with recovery advice."""
+    click.echo(f"Cache database is corrupt ({exc}): {db_path}", err=True)
+    click.echo(
+        "  Search is unavailable. Re-run without --no-convert to rebuild the cache.",
+        err=True,
+    )
+
+
+def _build_search_index(
+    db_path: Path, index_fields: tuple[str, ...], *, rebuild: bool
+) -> None:
+    """Bring the FTS index up to date, with a progress bar.
+
+    Blocking rather than backgrounded, deliberately. A full build is ~50 s
+    for a 532k-message archive and only happens once; keeping it in the
+    foreground avoids two problems a background build would create — SQLite
+    has a single writer, so it would contend with the converter, and a
+    partially built index returns *wrong* answers (a silent subset) rather
+    than slow ones.
+    """
+    from .search import ensure_index, fts5_available
+
+    if not db_path.exists():
+        click.echo("No cache database found; search will be unavailable.", err=True)
+        return
+
+    conn = sqlite3.connect(db_path)
+    try:
+        # Readability first, capability second. `fts5_available` now probes an
+        # in-memory database, so it answers the build question even when this
+        # file is unreadable — which is the point of #324, and also why the
+        # file has to be asked about separately here: the pragmas below and
+        # `ensure_index` both write, so an unreadable cache must be turned
+        # away before them rather than by their errors.
+        try:
+            conn.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchone()
+        except sqlite3.DatabaseError as e:
+            if not is_corrupt_database_error(e):
+                raise
+            _report_corrupt_cache(e, db_path)
+            return
+        if not fts5_available():
+            click.echo(
+                "This SQLite build has no FTS5; archive search is unavailable.",
+                err=True,
+            )
+            return
+        # A writer to the cache database, like the migration runner and every
+        # CacheManager connection — and one that commits once per transcript
+        # file, so at SQLite's default synchronous=FULL the build pays an
+        # fsync per file. The index is rebuildable from the same JSONL as the
+        # cache, so NORMAL's residual risk (a power/OS crash losing the last
+        # commits, which only costs the resumed backfill some ground) is the
+        # same trade made everywhere else.
+        #
+        # After the readability check above, not before: `journal_mode = WAL`
+        # writes to the database header and raises on a corrupt cache. The
+        # `SELECT 1 FROM sqlite_master` probe above catches corruption early
+        # and degrades gracefully; setting the pragmas first turned this into
+        # an unhandled DatabaseError and prevented `--no-convert` on a corrupt
+        # cache from starting.
+        apply_write_pragmas(conn)
+        bar: Optional[Any] = None
+
+        def report(done: int, total: int) -> None:
+            nonlocal bar
+            if total == 0:
+                return
+            if bar is None:
+                bar = click.progressbar(
+                    length=total, label="Indexing transcripts for search"
+                )
+                bar.__enter__()
+            bar.update(1)
+
+        try:
+            status = ensure_index(
+                conn, index_fields=index_fields, progress=report, rebuild=rebuild
+            )
+        except sqlite3.DatabaseError as e:
+            if not is_corrupt_database_error(e):
+                raise
+            # The ordinary conversion heals a corrupt cache when it builds a
+            # CacheManager, so the only way to arrive here is --no-convert,
+            # which skipped it. Don't delete the database behind the user's
+            # back on the one flag that asked us to touch nothing; serving
+            # the pages without search beats refusing to start.
+            if bar is not None:
+                bar.__exit__(None, None, None)
+            _report_corrupt_cache(e, db_path)
+            return
+        if bar is not None:
+            bar.__exit__(None, None, None)
+            click.echo(
+                f"Search index ready: {status.indexed_messages:,} messages "
+                f"({', '.join(status.fields)})."
+            )
+    finally:
+        conn.close()
+
+
+@main.command(name="watch")
+@click.argument(
+    "input_path",
+    type=click.Path(exists=True, path_type=Path, file_okay=False),
+    required=False,
+)
+@click.option(
+    "-o",
+    "--output",
+    type=click.Path(path_type=Path),
+    help=(
+        "Output destination, as for `convert`. Pair with --format md to "
+        "keep an Obsidian vault current."
+    ),
+)
+@click.option(
+    "-f",
+    "--format",
+    "output_format",
+    type=click.Choice(["html", "md", "markdown"]),
+    default="html",
+    show_default=True,
+    help="Output format.",
+)
+@click.option(
+    "--combined",
+    type=click.Choice(["yes", "no", "only"]),
+    default="no",
+    show_default=True,
+    help=(
+        "As for `convert`, but defaulting to 'no'. Per-session files are "
+        "what a watch is for, and skipping the combined page is what lets "
+        "a tick regenerate just the changed session instead of reloading "
+        "the whole project."
+    ),
+)
+@click.option(
+    "--projects-dir",
+    type=click.Path(exists=True, path_type=Path, file_okay=False),
+    help="Projects directory (default: ~/.claude/projects/).",
+)
+@click.option(
+    "--all-projects",
+    is_flag=True,
+    default=False,
+    help=(
+        "Watch every project instead of one. Off by default: a tick over a "
+        "large archive is far more expensive than over a single project."
+    ),
+)
+@click.option(
+    "--interval",
+    type=float,
+    default=DEFAULT_POLL_INTERVAL,
+    show_default=True,
+    help="Seconds between filesystem polls.",
+)
+@click.option(
+    "--quiet-period",
+    type=float,
+    default=DEFAULT_QUIET_PERIOD,
+    show_default=True,
+    help=(
+        "Seconds of no further change before converting. Claude Code writes "
+        "several entries per turn; without this every one would trigger its "
+        "own render."
+    ),
+)
+@click.option(
+    "--max-latency",
+    type=float,
+    default=DEFAULT_MAX_LATENCY,
+    show_default=True,
+    help=(
+        "Convert anyway after this long, so an unbroken stream of appends "
+        "still surfaces instead of starving behind the quiet period."
+    ),
+)
+@_theme_option
+@click.option("--debug", is_flag=True, default=False, help="Show full tracebacks.")
+def watch(
+    input_path: Optional[Path],
+    output: Optional[Path],
+    output_format: str,
+    combined: str,
+    projects_dir: Optional[Path],
+    all_projects: bool,
+    interval: float,
+    quiet_period: float,
+    max_latency: float,
+    theme: Optional[str],
+    debug: bool,
+) -> None:
+    """Re-convert transcripts as they change, until interrupted.
+
+    Points at one project by default -- the one for the current directory
+    if it has transcripts, otherwise the given INPUT_PATH. Watching the
+    whole archive is available via --all-projects but is rarely what you
+    want: a tick's cost scales with the project, and only one project is
+    ever being written to.
+
+    The generated files on disk stay canonical, so anything that reloads
+    them picks the changes up: an editor or Obsidian for Markdown, a
+    browser refresh for HTML.
+    """
+    from .watch import WatchEngine
+
+    resolved_theme = _resolve_theme(theme)
+    if theme is not None and output_format != "html":
+        click.echo(
+            f"Warning: --theme is HTML-only; ignoring under --format {output_format}.",
+            err=True,
+        )
+    projects_path = projects_dir or get_default_projects_dir()
+    root = _resolve_watch_root(input_path, projects_path, all_projects)
+    if root is None:
+        # `raise` rather than `sys.exit` so the type checkers can see that
+        # `root` is a Path from here on.
+        raise SystemExit(1)
+
+    fmt = "markdown" if output_format == "md" else output_format
+    write_combined = combined != "no"
+    individual = combined != "only"
+
+    # One store for the whole watch, not one per tick: it lets each tick
+    # resume its parse from the bytes the previous tick already read,
+    # instead of re-reading a growing session's whole history every time
+    # a line lands (entry_store.py, work/watch-mode.md Fix B). Only the
+    # single-project path takes one — `--all-projects` re-converts a
+    # hierarchy and has no single growing file to follow.
+    from .entry_store import ParsedEntryStore, entry_store_enabled
+
+    store = ParsedEntryStore() if (entry_store_enabled() and not all_projects) else None
+    # Likewise one memo of recent-session summaries for the whole watch:
+    # each tick rewrites recent-data.js, re-reading only the sessions that
+    # changed since the last (recent.RecentMemo).
+    from .recent import RecentMemo
+
+    recent_memo = RecentMemo()
+
+    def refresh_recent() -> None:
+        """Keep the recent-sessions page's data current.
+
+        A one-project watch never rewrites the index, so the archive's
+        ``recent.html`` would freeze at the last full run. Its data file
+        is cheap to rebuild (one cache query, plus the entries of the
+        recent sessions that changed since the last tick: ``recent_memo``
+        keeps the rest), so it is rewritten after every tick — but only in the
+        default layout, where the page sits next to the projects and the
+        watched project's cache is the archive's.
+        """
+        if output is not None or output_format != "html":
+            return
+        if root.parent.resolve() != projects_path.resolve():
+            return
+        from . import recent
+
+        try:
+            recent.write_recent_data(
+                projects_path,
+                projects_path,
+                memo=recent_memo,
+                session_pages=individual,
+            )
+        except Exception as exc:
+            click.echo(f"  recent sessions not refreshed: {exc!r}", err=True)
+
+    def convert(_changed: set[Path]) -> None:
+        started = time.monotonic()
+        if all_projects:
+            process_projects_hierarchy(
+                root,
+                silent=True,
+                output_format=fmt,
+                output_dir=output,
+                write_combined=write_combined,
+                generate_individual_sessions=individual,
+                theme=resolved_theme,
+            )
+        else:
+            convert_jsonl_to(
+                fmt,
+                root,
+                # `output_root` is the directory form; leaving output_path
+                # unset lets the converter derive the filenames, which is
+                # what keeps the destination-aware freshness check working.
+                output_root=output,
+                silent=True,
+                write_combined=write_combined,
+                generate_individual_sessions=individual,
+                entry_store=store,
+                theme=resolved_theme,
+            )
+            refresh_recent()
+        click.echo(
+            f"  {time.strftime('%H:%M:%S')}  converted in "
+            f"{time.monotonic() - started:.2f}s"
+        )
+
+    def report(exc: BaseException) -> None:
+        if debug:
+            traceback.print_exc()
+        click.echo(f"  conversion failed: {exc!r}", err=True)
+
+    engine = WatchEngine(
+        [root],
+        convert,
+        poll_interval=interval,
+        quiet_period=quiet_period,
+        max_latency=max_latency,
+        on_error=report,
+    )
+
+    click.echo(f"Watching {root}")
+    click.echo("Press Ctrl+C to stop.")
+    # Convert once up front so the output is current before the first
+    # change, then prime -- priming after means our own output writes are
+    # already in the baseline and can't trigger a spurious first tick.
+    #
+    # A failure here is a misconfigured watch, not a transient one: the
+    # root doesn't exist, or `--all-projects` was pointed at a single
+    # project rather than an archive. `report` is for the per-tick case
+    # where the loop should carry on; this one is fatal, and gets the
+    # same one-line diagnosis `convert` gives rather than a traceback.
+    try:
+        convert(set())
+    except Exception as e:
+        if debug:
+            traceback.print_exc()
+        click.echo(f"Error: {e}", err=True)
+        raise SystemExit(1)
+    engine.prime()
+    try:
+        engine.run()
+    except KeyboardInterrupt:
+        click.echo("\nStopping.")
+    click.echo(
+        f"{engine.stats.conversions} conversions, "
+        f"{engine.stats.polls} polls, {engine.stats.errors} errors."
+    )
+
+
+def _resolve_watch_root(
+    input_path: Optional[Path], projects_path: Path, all_projects: bool
+) -> Optional[Path]:
+    """Pick the directory to watch, or report why we can't.
+
+    Order: an explicit path wins; --all-projects means the hierarchy;
+    otherwise the project for the current directory, which is what someone
+    running this alongside a live session almost always means.
+    """
+    if input_path is not None:
+        return input_path
+    if all_projects:
+        return projects_path
+
+    from .utils import real_path_to_project_dirname
+
+    encoded = real_path_to_project_dirname(Path.cwd())
+    candidate = projects_path / encoded
+    if candidate.is_dir():
+        return candidate
+
+    click.echo(
+        f"No transcripts found for the current directory ({Path.cwd()}).\n"
+        f"  Looked for: {candidate}\n"
+        "  Pass a project directory explicitly, or use --all-projects.",
+        err=True,
+    )
+    return None
+
+
+convert.epilog = _subcommand_epilog(main)
 
 
 if __name__ == "__main__":

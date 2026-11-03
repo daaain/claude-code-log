@@ -1,6 +1,6 @@
 [project]
 name = "claude-code-log"
-version = "1.5.0"
+version = "1.7.0"
 description = "Convert Claude Code transcript JSONL files to HTML"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -20,12 +20,14 @@ dependencies = [
     "dateparser>=1.2.2",
     "pydantic>=2.12.0",
     "jinja2>=3.1.6",
-    "mistune>=3.1.4",
+    "wenmode>=0.15.2,<0.16",
     "toml>=0.10.2",
     "textual>=6.5.0",
     "packaging>=25.0",
-    "gitpython>=3.1.45",
+    "gitpython>=3.1.52",
     "pygments>=2.19.2",
+    "quickjs-ng>=0.15.1.1,<0.16",
+    "pyyaml>=6.0.3",
 ]
 
 [project.urls]
@@ -51,6 +53,26 @@ asyncio_default_fixture_loop_scope = "function"
 # through the queue). Override with `-n0 --dist=no` for serial runs, or with
 # `--dist=no --pdb` for debugging (worksteal distribution must be disabled).
 addopts = "-n auto --dist=worksteal"
+# Per-test wall-clock ceiling. Nothing here is remotely slow — the slowest
+# test measured 5.6s (a browser one) and the slowest non-browser 4.5s — so
+# 300s never fires on healthy work. Its job is the pathological case: a test
+# that wedges used to hang `just ci` indefinitely (one observed browser-suite
+# hang under xdist sat for 75+ minutes with zero CPU in both pytest and
+# Chromium before it was killed, and never reproduced afterwards), which
+# reads as "CI is still running" rather than as a failure. Now it fails.
+# `thread` rather than the default `signal`: SIGALRM only lands when the main
+# thread is running Python, so it can't break a hang inside a C extension or
+# a blocked driver pipe — exactly the shape of hang worth catching. The
+# thread method dumps every thread's stack before killing the process. Under
+# xdist that dump goes to the killed worker's stderr and is swallowed, so the
+# run reports `worker 'gwN' crashed while running <nodeid>` — which still
+# names the hung test, the fact that was missing last time. Re-run that one
+# test with `-n0` to get the stacks.
+# Caveat: the timer covers a test item (setup, call, teardown), not
+# *session*-scoped fixture teardown, so a hang in e.g. closing the shared
+# browser context after the last test would still wedge.
+timeout = 300
+timeout_method = "thread"
 markers = [
     "tui: TUI tests using Textual framework (requires isolated event loop)",
     "browser: Browser integration tests using Playwright (requires Chromium)",
@@ -63,6 +85,13 @@ markers = [
 [tool.ty.environment]
 # Use custom stubs for untyped libraries
 extra-paths = ["stubs"]
+# Check against all platforms (mirrors pyright's pythonPlatform = "All") rather
+# than the host, so ty is deterministic regardless of who runs it. POSIX-only
+# stdlib members used behind runtime guards (faulthandler.register,
+# signal.SIGUSR1, os.mkfifo) then read as "possibly missing on win32" and carry
+# a targeted `# ty: ignore[possibly-missing-attribute]` at each guarded site,
+# instead of being hard `unresolved-attribute` errors on a Windows host (#276).
+python-platform = "all"
 
 [tool.ty.src]
 # docs/gen_pages.py is a build-time mkdocs-gen-files script: it imports
@@ -130,6 +159,9 @@ precision = 2
 directory = "htmlcov"
 
 [dependency-groups]
+demos = [
+    "imageio-ffmpeg>=0.6.0",
+]
 dev = [
     "pytest>=8.3.5",
     "pytest-asyncio>=0.25.3",
@@ -146,6 +178,16 @@ dev = [
     # the canonical example for third-party plugin authors. See
     # test/_plugins/clmail/README.md.
     "claude-code-log-clmail-test",
+    "pytest-timeout>=2.3.1",
+]
+
+# Optional JS lint for the templates' scripts (`just lint-js`). oxlint is a
+# self-contained Rust binary: no Node. This PyPI package repackages the
+# official oxc-project release (packaging: github.com/dhruvkb/oxc-py), so
+# it is pinned exactly and bumped deliberately.
+js = [
+    "oxfmt==0.69.0",
+    "oxlint==1.84.0",
 ]
 
 docs = [

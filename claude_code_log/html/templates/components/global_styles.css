@@ -21,6 +21,11 @@
     --session-bg-dimmed: #e8f4fd66;
     --ide-notification-dimmed: #d2d6d966;
 
+    /* Where the resume-session button sits in the floating stack. Named
+     * because its toast is positioned beside it and must follow it when
+     * the stack is reordered. */
+    --resume-btn-bottom: 380px;
+
     /* Fully transparent variants (88 = ~53% opacity) */
     --highlight-semi: #e3f2fd88;
     --error-semi: #ffebee88;
@@ -86,6 +91,19 @@
     --text-muted: #666;
     --text-secondary: #495057;
     --fold-color: #888;
+    --accent-color: #6c757d;
+
+    /* Code/tool palette used by pygments_styles.css (Pygments blocks,
+       Read/Write/MultiEdit tool content, system reminders) and by the
+       collapsible tool-result summary in message_styles.css. */
+    --color-bg-secondary: #f6f8fa;
+    --color-bg-tertiary: #eef1f4;
+    --color-blue: #1e6fd9;
+    --color-green: #2e7d32;
+    --color-purple: #7b1fa2;
+    --color-border-dim: #d0d7de;
+    --color-text-dim: #8c959f;
+    --color-text-secondary: #57606a;
 
     /* Border colors */
     --border-light: #e0e0e0;
@@ -100,8 +118,10 @@
     --message-padding: 1em;
 
     /* Font families */
-    --font-monospace: 'Fira Code', 'Monaco', 'Consolas', 'SF Mono', 'Inconsolata', 'Droid Sans Mono', 'Source Code Pro', 'Ubuntu Mono', 'Cascadia Code', 'Menlo', monospace;
-    --font-ui: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-monospace:
+        "Fira Code", "Monaco", "Consolas", "SF Mono", "Inconsolata", "Droid Sans Mono", "Source Code Pro",
+        "Ubuntu Mono", "Cascadia Code", "Menlo", monospace;
+    --font-ui: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
 body {
@@ -110,7 +130,19 @@ body {
     max-width: 1200px;
     margin: 0 auto;
     padding: 10px;
-    background: linear-gradient(90deg, #f3d6d2, #f1dcce, #f0e4ca, #eeecc7, #e3ecc3, #d5eac0, #c6e8bd, #b9e6bc, #b6e3c5, #b3e1cf);
+    background: linear-gradient(
+        90deg,
+        #f3d6d2,
+        #f1dcce,
+        #f0e4ca,
+        #eeecc7,
+        #e3ecc3,
+        #d5eac0,
+        #c6e8bd,
+        #b9e6bc,
+        #b6e3c5,
+        #b3e1cf
+    );
     color: var(--text-primary);
 }
 
@@ -130,7 +162,6 @@ code {
     font-family: var(--font-monospace);
     line-height: 1.5;
 }
-
 
 pre {
     background-color: #12121212;
@@ -153,7 +184,9 @@ pre {
     background-color: #ffffff66;
     border-radius: 8px;
     padding: 16px;
-    box-shadow: -7px -7px 10px #eeeeee44, 7px 7px 10px #00000011;
+    box-shadow:
+        -7px -7px 10px #eeeeee44,
+        7px 7px 10px #00000011;
     border-left: #ffffff66 1px solid;
     border-top: #ffffff66 1px solid;
     border-bottom: #00000017 1px solid;
@@ -161,7 +194,9 @@ pre {
 }
 
 .card-base:hover {
-    box-shadow: -10px -10px 15px #eeeeee66, 10px 10px 15px #00000022;
+    box-shadow:
+        -10px -10px 15px #eeeeee66,
+        10px 10px 15px #00000022;
     transform: translateY(-1px);
     transition: all 0.2s ease;
 }
@@ -217,7 +252,9 @@ pre {
     align-items: center;
     justify-content: center;
     box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2);
-    transition: background-color 0.3s, transform 0.2s;
+    transition:
+        background-color 0.3s,
+        transform 0.2s;
     z-index: 1000;
     text-decoration: none;
 }
@@ -248,13 +285,12 @@ pre {
     bottom: 200px;
 }
 
+/* Text-labelled floating buttons ("uuid", "md") keep the round shape
+ * and size of the emoji ones; only the label typography differs. */
 .debug-toggle.floating-btn {
     bottom: 260px;
-    border-radius: 6px;
-    width: 38px;
-    height: 28px;
-    font-size: 0.65em;
-    font-family: 'SFMono-Regular', Consolas, monospace;
+    font-size: 0.7em;
+    font-family: "SFMono-Regular", Consolas, monospace;
     font-weight: 600;
 }
 
@@ -289,6 +325,33 @@ pre {
     display: block;
 }
 
+/* Footnotes: wenmode emits a GitHub-style "Footnotes" heading for
+ * screen readers; keep it out of the visual flow like GitHub does. */
+.markdown .sr-only,
+.user-md .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+}
+
+/* Blockquotes in any rendered Markdown (wenmode otherwise emits an
+ * unstyled <blockquote> indistinguishable from surrounding text).
+ * `.markdown` covers every rendered-Markdown surface — assistant text,
+ * thinking, tool results, teammate messages, system output; `.user-md`
+ * covers user prose, which uses its own wrapper class. */
+.user-md blockquote,
+.markdown blockquote {
+    border-left: 4px solid #cdcdcd;
+    padding-left: 1em;
+    margin-left: 1em;
+}
+
 .user-content .user-raw {
     display: none;
 }
@@ -299,7 +362,7 @@ pre {
     right: 2px;
     padding: 1px 6px;
     font-size: 0.7em;
-    font-family: 'SFMono-Regular', Consolas, monospace;
+    font-family: "SFMono-Regular", Consolas, monospace;
     background: transparent;
     border: 1px solid #ccc;
     border-radius: 3px;
@@ -336,18 +399,56 @@ body.show-raw-user .user-content:not([data-user-view="md"]) .user-raw {
 }
 
 .user-view-global.floating-btn {
-    bottom: 300px;
-    border-radius: 6px;
-    width: 38px;
-    height: 28px;
-    font-size: 0.65em;
-    font-family: 'SFMono-Regular', Consolas, monospace;
+    bottom: 320px;
+    font-size: 0.7em;
+    font-family: "SFMono-Regular", Consolas, monospace;
     font-weight: 600;
 }
 
 .user-view-global.floating-btn.active {
     background-color: #d4e8f7;
     color: #333;
+}
+
+/* Resume-session button (single-session pages only): copies the
+ * `pushd … && claude -r <session-id>` command to the clipboard. */
+.resume-session.floating-btn {
+    bottom: var(--resume-btn-bottom);
+}
+
+/* Transient confirmation shown after the resume command is copied.
+ * Opaque background (not the `…-dimmed` variant the buttons use) so
+ * the transcript text underneath doesn't bleed through the message.
+ *
+ * Sits to the *left* of its own button, centred on it: stacking it above
+ * the buttons meant every new one added to the stack pushed the toast up
+ * too, over buttons it has nothing to do with. Anchoring it beside the
+ * button it belongs to keeps that a one-number change
+ * (`--resume-btn-bottom`), and the column to the left is empty.
+ *
+ * The centring is height-agnostic — bottom edge at the button's middle,
+ * then shifted down by half the toast's own height — because the message
+ * wraps to one or two lines depending on the viewport. */
+.resume-toast {
+    position: fixed;
+    right: calc(20px + 50px + 12px); /* button right + width + gap */
+    bottom: calc(var(--resume-btn-bottom) + 25px);
+    transform: translateY(50%);
+    max-width: min(320px, calc(100vw - 120px));
+    padding: 8px 12px;
+    background-color: #e8f4fd;
+    color: var(--text-muted);
+    border-radius: 6px;
+    box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2);
+    font-size: 0.8em;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s;
+    z-index: 1000;
+}
+
+.resume-toast.visible {
+    opacity: 1;
 }
 
 @media (max-width: 1280px) {

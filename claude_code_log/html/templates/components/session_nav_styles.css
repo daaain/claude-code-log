@@ -4,7 +4,9 @@
     border-radius: 8px;
     padding: 16px;
     margin-bottom: 24px;
-    box-shadow: -7px -7px 10px #eeeeee44, 7px 7px 10px #00000011;
+    box-shadow:
+        -7px -7px 10px #eeeeee44,
+        7px 7px 10px #00000011;
     border-left: var(--white-dimmed) 1px solid;
     border-top: var(--white-dimmed) 1px solid;
     border-bottom: #00000017 1px solid;
@@ -51,7 +53,7 @@
 
 /* Child session hierarchy */
 .session-nav-item.session-child {
-    border-left: 3px solid var(--accent-color, #6c757d);
+    border-left: 3px solid var(--accent-color);
     padding-left: 8px;
 }
 

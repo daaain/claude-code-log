@@ -34,7 +34,7 @@ from claude_code_log.factories.tool_factory import (
 from claude_code_log.models import (
     AssistantTextMessage,
     AssistantTranscriptEntry,
-    DetailLevel,
+    RenderingDepth,
     MessageMeta,
     TaskNotificationMessage,
     TaskNotificationUsage,
@@ -213,6 +213,196 @@ class TestCreateTaskNotificationMessage:
         assert msg.usage == TaskNotificationUsage(
             total_tokens=100, tool_uses=None, duration_ms=None
         )
+
+
+# ---------------------------------------------------------------------------
+# <usage> in its XML form, and monitor <event>s
+# ---------------------------------------------------------------------------
+
+
+def _notification(inner: str) -> str:
+    return f"<task-notification>\n<task-id>t1</task-id>\n{inner}\n</task-notification>"
+
+
+class TestNotificationUsageAndEvents:
+    """Current Claude Code writes ``<usage>`` as child tags, not the older
+    ``key: value`` lines; and a Monitor's events carry their text in
+    ``<event>``. Both were dropped silently before."""
+
+    def test_xml_usage_with_subagent_tokens(self) -> None:
+        msg = create_task_notification_message(
+            _meta(),
+            _notification(
+                "<status>completed</status>\n"
+                "<usage><subagent_tokens>104863</subagent_tokens>"
+                "<tool_uses>30</tool_uses><duration_ms>351871</duration_ms></usage>"
+            ),
+        )
+        assert msg is not None
+        assert msg.usage == TaskNotificationUsage(
+            total_tokens=104863, tool_uses=30, duration_ms=351871
+        )
+
+    def test_xml_usage_with_total_tokens_and_extra_counters(self) -> None:
+        msg = create_task_notification_message(
+            _meta(),
+            _notification(
+                "<usage><total_tokens>500</total_tokens><tool_uses>3</tool_uses>"
+                "<duration_ms>1200</duration_ms><agent_count>4</agent_count>"
+                "<agents_done>4</agents_done></usage>"
+            ),
+        )
+        assert msg is not None
+        assert msg.usage == TaskNotificationUsage(
+            total_tokens=500, tool_uses=3, duration_ms=1200
+        )
+
+    def test_legacy_usage_lines_still_parse(self) -> None:
+        msg = create_task_notification_message(
+            _meta(),
+            _notification(
+                "<usage>total_tokens: 7\ntool_uses: 1\nduration_ms: 9</usage>"
+            ),
+        )
+        assert msg is not None
+        assert msg.usage == TaskNotificationUsage(
+            total_tokens=7, tool_uses=1, duration_ms=9
+        )
+
+    def test_monitor_event_text_is_kept(self) -> None:
+        msg = create_task_notification_message(
+            _meta(),
+            _notification(
+                '<summary>Monitor event: "CI run"</summary>\n'
+                "<event>step 3 passed</event>"
+            ),
+        )
+        assert msg is not None
+        assert msg.event == "step 3 passed"
+        assert msg.summary == 'Monitor event: "CI run"'
+
+    def test_an_event_quoting_result_or_usage_tags_stays_intact(self) -> None:
+        """An event is whatever the monitored command printed: tags in it
+        are its text, not the notification's own blocks."""
+        printed = "log: <result>ok</result> <usage><tool_uses>9</tool_uses></usage>"
+        msg = create_task_notification_message(
+            _meta(),
+            _notification(
+                f'<summary>Monitor event: "log"</summary>\n<event>{printed}</event>'
+            ),
+        )
+        assert msg is not None
+        assert msg.event == printed
+        assert msg.result_text == ""
+        assert msg.usage is None
+
+    def test_an_event_quoting_header_tags_does_not_set_them(self) -> None:
+        msg = create_task_notification_message(
+            _meta(),
+            _notification("<event>saw <status>failed</status> in the log</event>"),
+        )
+        assert msg is not None
+        assert msg.status == ""
+        assert msg.event == "saw <status>failed</status> in the log"
+
+    def test_a_result_quoting_an_event_tag_is_not_an_event(self) -> None:
+        msg = create_task_notification_message(
+            _meta(),
+            _notification(
+                "<status>completed</status>\n"
+                "<result>Monitors print <event>a line</event> each.</result>"
+            ),
+        )
+        assert msg is not None
+        assert msg.event == ""
+        assert msg.result_text == "Monitors print <event>a line</event> each."
+
+    def test_an_event_quoting_its_own_tag_stays_whole(self) -> None:
+        """The real block is the only one of its kind, so it closes at the
+        last closing tag: a quoted inner one is text."""
+        printed = "a <event>x</event> then <status>failed</status>"
+        msg = create_task_notification_message(
+            _meta(),
+            _notification(f"<status>completed</status>\n<event>{printed}</event>"),
+        )
+        assert msg is not None
+        assert msg.event == printed
+        assert msg.status == "completed"
+
+    def test_a_result_quoting_its_own_closing_tag_stays_whole(self) -> None:
+        answer = "Wrap it as <result>…</result> and you're done."
+        msg = create_task_notification_message(
+            _meta(),
+            _notification(f"<status>completed</status>\n<result>{answer}</result>"),
+        )
+        assert msg is not None
+        assert msg.result_text == answer
+
+    def test_an_event_keeps_its_whitespace(self) -> None:
+        """An event is the command's output, verbatim: indentation and
+        trailing spaces are part of it."""
+        msg = create_task_notification_message(
+            _meta(), _notification("<event>    indented line  </event>")
+        )
+        assert msg is not None
+        assert msg.event == "    indented line  "
+
+    def test_a_real_result_and_usage_beside_an_event_still_parse(self) -> None:
+        msg = create_task_notification_message(
+            _meta(),
+            _notification(
+                "<event>line</event>\n<result>Done.</result>\n"
+                "<usage><subagent_tokens>5</subagent_tokens></usage>"
+            ),
+        )
+        assert msg is not None
+        assert (msg.event, msg.result_text) == ("line", "Done.")
+        assert msg.usage is not None and msg.usage.total_tokens == 5
+
+    def test_html_card_shows_usage_and_event(self) -> None:
+        from claude_code_log.html.async_formatter import (
+            format_task_notification_content,
+        )
+
+        one_line = create_task_notification_message(
+            _meta(),
+            _notification(
+                "<event>exit <b>1</b></event>\n"
+                "<usage><subagent_tokens>1234</subagent_tokens></usage>"
+            ),
+        )
+        assert one_line is not None
+        html = format_task_notification_content(one_line)
+        assert "<dt>Event</dt><dd><code>exit &lt;b&gt;1&lt;/b&gt;</code></dd>" in html
+        assert "<dt>Tokens</dt><dd><code>1,234</code></dd>" in html
+
+        several = create_task_notification_message(
+            _meta(), _notification("<event>line one\nline two</event>")
+        )
+        assert several is not None
+        assert "<pre><code>line one\nline two</code></pre>" in (
+            format_task_notification_content(several)
+        )
+
+    def test_markdown_card_shows_the_event(self) -> None:
+        from typing import Any, cast
+
+        from claude_code_log.markdown.renderer import MarkdownRenderer
+
+        renderer = MarkdownRenderer()
+        one_line = create_task_notification_message(
+            _meta(), _notification("<event>step 3 passed</event>")
+        )
+        several = create_task_notification_message(
+            _meta(), _notification("<event>line one\nline two</event>")
+        )
+        assert one_line is not None and several is not None
+        assert (
+            "- **Event:** `step 3 passed`"
+            in renderer.format_TaskNotificationMessage(one_line, cast(Any, None))
+        )
+        md = renderer.format_TaskNotificationMessage(several, cast(Any, None))
+        assert "line one\nline two" in md and "```" in md
 
 
 # ---------------------------------------------------------------------------
@@ -483,12 +673,12 @@ class TestAsyncAgentsRenderingPipeline:
         assert sum(walk(r) for r in roots) == 1
 
 
-class TestAsyncAgentsDetailLevels:
+class TestAsyncAgentsRenderingDepths:
     """Detail-level invariants for the async-agent fold (issue #90).
 
     Plan A (mail #2620 → #2622): the spawn-fold sources from the
     notification's ``result_text`` (not from the sidechain assistant),
-    so it survives the LOW detail level where ``_filter_by_detail``
+    so it survives the LOW depth level where ``_filter_by_depth``
     has stripped sidechain entries before the renderer ever runs.
     At MINIMAL / USER_ONLY the spawning Task tool_result itself is
     filtered out post-render — there's nothing to fold onto, so the
@@ -523,17 +713,17 @@ class TestAsyncAgentsDetailLevels:
                 return tm.content
         return None
 
-    def _render_at(self, detail: DetailLevel) -> tuple:
+    def _render_at(self, depth: RenderingDepth) -> tuple:
         messages = load_transcript(MAIN_JSONL, cache_manager=None, silent=True)
-        return generate_template_messages(messages, detail=detail)
+        return generate_template_messages(messages, depth=depth)
 
     @pytest.mark.parametrize(
-        "detail",
-        [DetailLevel.FULL, DetailLevel.HIGH, DetailLevel.LOW],
+        "depth",
+        [RenderingDepth.HOOK, RenderingDepth.TOOL, RenderingDepth.AGENT],
     )
-    def test_fold_present_when_spawn_target_kept(self, detail: DetailLevel) -> None:
+    def test_fold_present_when_spawn_target_kept(self, depth: RenderingDepth) -> None:
         """At FULL/HIGH/LOW the spawning Task tool_result survives the
-        detail filters, so the notification's ``result_text`` is folded
+        depth filters, so the notification's ``result_text`` is folded
         onto its ``async_final_answer``.
 
         Regression guard for the "fold lost at --detail low" report:
@@ -541,14 +731,14 @@ class TestAsyncAgentsDetailLevels:
         being present; LOW strips sidechain entries, so the fold went
         missing despite the spawn surviving.
         """
-        _roots, _nav, ctx = self._render_at(detail)
+        _roots, _nav, ctx = self._render_at(depth)
 
         spawn_output = self._spawning_task_output(ctx)
         assert spawn_output is not None, (
-            f"spawning Task tool_result missing at detail={detail.value}"
+            f"spawning Task tool_result missing at depth={depth.value}"
         )
         assert spawn_output.async_final_answer is not None, (
-            f"async_final_answer not folded at detail={detail.value}"
+            f"async_final_answer not folded at depth={depth.value}"
         )
         assert FINAL_ANSWER_NEEDLE in spawn_output.async_final_answer
 
@@ -557,10 +747,10 @@ class TestAsyncAgentsDetailLevels:
         ``result_is_duplicate`` and wired with a spawn backlink. The
         formatter still emits the full metadata card — keeping it for
         transcript fidelity is the documented FULL/HIGH behavior."""
-        for detail in (DetailLevel.FULL, DetailLevel.HIGH):
-            _roots, _nav, ctx = self._render_at(detail)
+        for depth in (RenderingDepth.HOOK, RenderingDepth.TOOL):
+            _roots, _nav, ctx = self._render_at(depth)
             notif = self._notification(ctx)
-            assert notif is not None, f"notification missing at {detail.value}"
+            assert notif is not None, f"notification missing at {depth.value}"
             assert notif.result_is_duplicate is True
             assert notif.spawning_task_message_index is not None
 
@@ -578,7 +768,7 @@ class TestAsyncAgentsDetailLevels:
         from claude_code_log.html.renderer import HtmlRenderer
         from claude_code_log.markdown.renderer import MarkdownRenderer
 
-        _roots, _nav, ctx = self._render_at(DetailLevel.LOW)
+        _roots, _nav, ctx = self._render_at(RenderingDepth.AGENT)
         notif = self._notification(ctx)
         assert notif is not None, (
             "notification should remain in ctx.messages even when ghosted"
@@ -596,26 +786,61 @@ class TestAsyncAgentsDetailLevels:
         )
 
         for renderer in (HtmlRenderer(), MarkdownRenderer()):
-            renderer.detail = DetailLevel.LOW
+            renderer.depth = RenderingDepth.AGENT
             assert renderer.format_TaskNotificationMessage(notif, tm_notif) == ""
             assert renderer.title_TaskNotificationMessage(notif, tm_notif) == ""
 
+    def test_duplicate_notification_titled_at_low_in_minimal(self) -> None:
+        """The minimal theme keeps every notification's body — it is the
+        async branch's merge row — so at LOW a duplicate-flagged one keeps
+        its title too, rather than showing an unlabelled answer card.
+        Classic still ghosts both."""
+        from claude_code_log.html.renderer import HtmlRenderer
+
+        _roots, _nav, ctx = self._render_at(RenderingDepth.AGENT)
+        notif = self._notification(ctx)
+        assert notif is not None
+        assert notif.result_is_duplicate is True
+        tm_notif = next(
+            tm
+            for tm in ctx.messages
+            if tm is not None
+            and isinstance(tm.content, TaskNotificationMessage)
+            and tm.content.task_id == ASYNC_AGENT_ID
+        )
+
+        minimal = HtmlRenderer()
+        minimal.depth = RenderingDepth.AGENT
+        minimal.theme = "minimal"
+        assert minimal.format_TaskNotificationMessage(notif, tm_notif) != ""
+        assert minimal.title_TaskNotificationMessage(notif, tm_notif).startswith(
+            "🔄 Async result"
+        )
+
+        classic = HtmlRenderer()
+        classic.depth = RenderingDepth.AGENT
+        classic.theme = "classic"
+        assert classic.format_TaskNotificationMessage(notif, tm_notif) == ""
+        assert classic.title_TaskNotificationMessage(notif, tm_notif) == ""
+
     @pytest.mark.parametrize(
-        "detail",
-        [DetailLevel.MINIMAL, DetailLevel.USER_ONLY],
+        "depth",
+        [RenderingDepth.ASSISTANT, RenderingDepth.USER],
     )
-    def test_fold_skipped_when_spawn_target_filtered(self, detail: DetailLevel) -> None:
+    def test_fold_skipped_when_spawn_target_filtered(
+        self, depth: RenderingDepth
+    ) -> None:
         """At MINIMAL/USER_ONLY the post-render filter drops every
         ``ToolResultMessage`` (only user/assistant text survives). The
         spawn fold is skipped so the notification body remains the
         only surviving copy of the agent's answer.
         """
-        _roots, _nav, ctx = self._render_at(detail)
+        _roots, _nav, ctx = self._render_at(depth)
 
         # Spawning Task tool_result was filtered out post-render.
         spawn_output = self._spawning_task_output(ctx)
         assert spawn_output is None, (
-            f"Task tool_result should be filtered at detail={detail.value}"
+            f"Task tool_result should be filtered at depth={depth.value}"
         )
 
         # Notification card still in ctx; body is NOT marked duplicate
@@ -623,6 +848,6 @@ class TestAsyncAgentsDetailLevels:
         notif = self._notification(ctx)
         assert notif is not None
         assert notif.result_is_duplicate is False, (
-            f"notification body must remain visible at detail={detail.value}"
+            f"notification body must remain visible at depth={depth.value}"
         )
         assert FINAL_ANSWER_NEEDLE in notif.result_text

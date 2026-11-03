@@ -414,9 +414,9 @@ class TestCachePerformanceIntegration:
         assert output1.exists()
 
         # Second run (with cache)
-        start_time = time.time()
+        start_time = time.monotonic()
         output2 = convert_jsonl_to_html(input_path=project_dir, use_cache=True)
-        second_run_time = time.time() - start_time
+        second_run_time = time.monotonic() - start_time
         assert output2.exists()
 
         # Second run should be faster (though this is not always guaranteed in tests)

@@ -1,0 +1,52 @@
+{
+  // oxfmt formats the JS, CSS, JSON and YAML; `just fmt-js` runs it, and
+  // `just fmt-check` checks. See "Formatting" in CONTRIBUTING.md.
+  // Comments here must sit on lines of their own: scripts/fmt_templates.py
+  // reads this file too.
+  "printWidth": 120,
+  "tabWidth": 4,
+  "singleQuote": true,
+  "trailingComma": "none",
+  "arrowParens": "avoid",
+  "overrides": [
+    {
+      "files": ["*.css"],
+      "options": { "singleQuote": false }
+    },
+    {
+      "files": ["*.yml", "*.yaml"],
+      "options": { "tabWidth": 2, "singleQuote": false }
+    },
+    {
+      "files": ["*.json", "*.jsonc"],
+      "options": { "tabWidth": 2 }
+    },
+    {
+      "files": ["**/.vscode/settings.json"],
+      "options": { "tabWidth": 4 }
+    }
+  ],
+  "ignorePatterns": [
+    // Markdown and TOML stay as written (oxfmt collapses TOML arrays that
+    // `uv add` expands again).
+    "**/*.md",
+    "**/*.toml",
+    // Data, generated output and plans.
+    "test/test_data/**",
+    "test/__snapshots__/**",
+    "dev-docs/messages/**",
+    "site/**",
+    "work/**",
+    "scripts/style_guide_output/**",
+    // Read line by line by scripts/generate_minimal_pygments_css.py, which
+    // generates the second one.
+    "claude_code_log/html/templates/components/pygments_styles.css",
+    "claude_code_log/html/templates/components/minimal/pygments_dark.css",
+    // Jinja inside: formatted by scripts/fmt_templates.py instead.
+    "claude_code_log/html/templates/components/minimal/chrome.css",
+    "claude_code_log/html/templates/components/minimal/layout.css",
+    "claude_code_log/html/templates/components/minimal/minimal.js",
+    "claude_code_log/html/templates/components/minimal/pages.js",
+    "claude_code_log/html/templates/components/minimal/theme_init.js"
+  ]
+}

@@ -123,10 +123,10 @@ class TestWorkflowMetaParsing:
         assert parse_workflow_meta(script) == ("demo", "A demo", ["Map", "Synthesize"])
 
     def test_bracket_in_phase_detail_does_not_truncate_phases(self) -> None:
-        # N1 regression: a ']' inside a phase detail must not cut the list short.
+        # N1 regression: a ']' inside a phase depth must not cut the list short.
         script = (
             "export const meta = {\n"
-            "  phases: [{ title: 'Scan', detail: 'grep [logs]' }, { title: 'Fix' }],\n"
+            "  phases: [{ title: 'Scan', depth: 'grep [logs]' }, { title: 'Fix' }],\n"
             "}\n"
         )
         assert parse_workflow_meta(script)[2] == ["Scan", "Fix"]
@@ -824,7 +824,7 @@ class TestSingleFileWorkflowRender:
 
     def test_single_file_html_shows_workflow_tree(self, tmp_path: Path) -> None:
         from claude_code_log.converter import convert_jsonl_to
-        from claude_code_log.models import DetailLevel
+        from claude_code_log.models import RenderingDepth
 
         out = tmp_path / "single.html"
         convert_jsonl_to(
@@ -834,7 +834,7 @@ class TestSingleFileWorkflowRender:
             use_cache=False,
             update_cache=False,
             silent=True,
-            detail=DetailLevel.HIGH,
+            depth=RenderingDepth.TOOL,
         )
         html = out.read_text(encoding="utf-8", errors="replace")
         # Same rendered-card markers as the directory path.

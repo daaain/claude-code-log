@@ -10,27 +10,35 @@ cli *ARGS:
 # the pytest-playwright plugin — it imports playwright (~1s) per xdist worker on
 # Windows (spawned workers re-import). See work/xdist-import-cost.md.
 test:
-    uv run pytest -p no:playwright -m "not (tui or browser or benchmark)" -v
+    uv run pytest -p no:playwright -m "not (tui or browser or benchmark)" -q
 
 # Run benchmark tests serially for stable measurements (outputs to GITHUB_STEP_SUMMARY in CI). DEBUG_TIMING enables coverage of renderer_timings.py
 test-benchmark:
-    CLAUDE_CODE_LOG_DEBUG_TIMING=1 uv run pytest -n0 -m benchmark -v
+    CLAUDE_CODE_LOG_DEBUG_TIMING=1 uv run pytest -n0 -m benchmark -q
 
-# Update snapshot tests (runs serially for deterministic file ordering)
+# Update snapshot tests. Encodes the whole procedure from CONTRIBUTING
+# ("Snapshot Testing"), because doing only part of it has twice produced a
+# damaged .ambr: purge stale bytecode, regenerate SERIALLY (-n0; a parallel
+# --snapshot-update once silently truncated ~6000 lines), then re-run
+# read-only to prove the committed file matches what the code renders.
+# A healthy result is purely additive -- "+N/-0".
 update-snapshot:
-    uv run pytest -n0 -m snapshot --snapshot-update -v
+    find . -name __pycache__ -type d -prune -exec rm -rf {} +
+    uv run pytest -n0 -m snapshot --snapshot-update -q
+    @echo "--- verifying the regenerated snapshots read back clean ---"
+    uv run pytest -n0 -m snapshot -q
 
 # Run TUI tests (requires isolated event loop)
 test-tui:
-    uv run pytest -m tui -v
+    uv run pytest -m tui -q
 
 # Run browser tests (requires Chromium)
 test-browser:
-    uv run pytest -m browser -v
+    uv run pytest -m browser -q
 
 # Run integration tests with realistic JSONL data
 test-integration:
-    uv run pytest -m integration -v
+    uv run pytest -m integration -q
 
 # Run all tests in sequence (separated to avoid event loop conflicts)
 test-all:
@@ -38,15 +46,15 @@ test-all:
     set -e  # Exit on first failure
     echo "🧪 Running all tests in sequence..."
     echo "📦 Running unit tests..."
-    uv run pytest -p no:playwright -m "not (tui or browser or integration or benchmark)" -v
+    uv run pytest -p no:playwright -m "not (tui or browser or integration or benchmark)" -q
     echo "🖥️  Running TUI tests..."
-    uv run pytest -m tui -v
+    uv run pytest -m tui -q
     echo "🌐 Running browser tests..."
-    uv run pytest -m browser -v
+    uv run pytest -m browser -q
     echo "🔄 Running integration tests..."
-    uv run pytest -m integration -v
+    uv run pytest -m integration -q
     echo "📊 Running benchmark tests..."
-    CLAUDE_CODE_LOG_DEBUG_TIMING=1 uv run pytest -n0 -m benchmark -v
+    CLAUDE_CODE_LOG_DEBUG_TIMING=1 uv run pytest -n0 -m benchmark -q
     echo "✅ All tests completed!"
 
 # Run tests with coverage (all categories)
@@ -55,15 +63,15 @@ test-cov:
     set -e  # Exit on first failure
     echo "📊 Running all tests with coverage..."
     echo "📦 Running unit tests with coverage..."
-    uv run pytest -p no:playwright -m "not (tui or browser or integration or benchmark)" --cov=claude_code_log --cov-report=xml --cov-report=html --cov-report=term -v
+    uv run pytest -p no:playwright -m "not (tui or browser or integration or benchmark)" --cov=claude_code_log --cov-report=xml --cov-report=html --cov-report=term -q
     echo "🖥️  Running TUI tests with coverage append..."
-    uv run pytest -m tui --cov=claude_code_log --cov-append --cov-report=xml --cov-report=html --cov-report=term -v
+    uv run pytest -m tui --cov=claude_code_log --cov-append --cov-report=xml --cov-report=html --cov-report=term -q
     echo "🌐 Running browser tests with coverage append..."
-    uv run pytest -m browser --cov=claude_code_log --cov-append --cov-report=xml --cov-report=html --cov-report=term -v
+    uv run pytest -m browser --cov=claude_code_log --cov-append --cov-report=xml --cov-report=html --cov-report=term -q
     echo "🔄 Running integration tests with coverage append..."
-    uv run pytest -m integration --cov=claude_code_log --cov-append --cov-report=xml --cov-report=html --cov-report=term -v
+    uv run pytest -m integration --cov=claude_code_log --cov-append --cov-report=xml --cov-report=html --cov-report=term -q
     echo "📊 Running benchmark tests with coverage append..."
-    CLAUDE_CODE_LOG_DEBUG_TIMING=1 uv run pytest -n0 -m benchmark --cov=claude_code_log --cov-append --cov-report=xml --cov-report=html --cov-report=term -v
+    CLAUDE_CODE_LOG_DEBUG_TIMING=1 uv run pytest -n0 -m benchmark --cov=claude_code_log --cov-append --cov-report=xml --cov-report=html --cov-report=term -q
     echo "✅ All tests with coverage completed!"
 
 format:
@@ -78,24 +86,54 @@ typecheck:
 ty:
     uv run ty check
 
-ci: format test-all lint typecheck ty
+# Lint the templates' JavaScript with oxlint (installs the optional `js`
+# group). Warnings fail it. Extra arguments go to oxlint; `--keep` keeps
+# the staged copy.
+lint-js *ARGS:
+    uv run --group js python scripts/lint_js.py {{ ARGS }}
+
+# Format the JS, CSS, JSON and YAML with oxfmt (installs the optional `js`
+# group); the template components holding Jinja go through
+# scripts/fmt_templates.py. Configured in .oxfmtrc.json.
+fmt-js:
+    uv run --group js oxfmt
+    uv run --group js python scripts/fmt_templates.py
+
+# Check that formatting, writing nothing. Both checks run, so every file
+# that needs formatting is listed.
+fmt-check:
+    #!/usr/bin/env bash
+    status=0
+    uv run --group js oxfmt --check || status=1
+    uv run --group js python scripts/fmt_templates.py --check || status=1
+    exit $status
+
+# Fail-fast order: format and lint take seconds, ty is faster than pyright, the full test suite runs last
+ci: format lint lint-js fmt-check ty typecheck test-all
 
 # Regenerate the auto-generated TUI docs assets (screenshots) into docs/assets/tui
 docs-gen:
     uv run python scripts/generate_tui_screenshots.py docs/assets/tui
 
 # Serve the documentation site locally with live reload (http://127.0.0.1:8000)
+# `--group docs` pulls in the docs-only deps (mkdocs et al.) on demand — the
+# group is not synced by a plain `uv run`, so run it here rather than relying
+# on a prior `uv sync --group docs`.
 docs-serve:
-    DISABLE_MKDOCS_2_WARNING=true uv run mkdocs serve
+    DISABLE_MKDOCS_2_WARNING=true uv run --group docs mkdocs serve
 
 # Build the documentation site (strict: fails on broken links/nav)
 docs-build:
-    DISABLE_MKDOCS_2_WARNING=true uv run mkdocs build --strict
+    DISABLE_MKDOCS_2_WARNING=true uv run --group docs mkdocs build --strict
 
 build:
     -rm dist/*
     uv build
 
+# The NORMAL path is the tag-driven release workflow (.github/workflows/release.yml
+# — trusted publishing after a maintainer approves, no token anywhere). This one
+# needs PyPI credentials (e.g. UV_PUBLISH_TOKEN) on this machine.
+# Publish dist/ to PyPI from a laptop — the manual escape hatch
 publish:
     uv publish
 
@@ -128,12 +166,20 @@ render-test-data:
 style-guide:
     uv run python scripts/generate_style_guide.py
 
-# Release a new version - e.g. `just release-prep 0.2.5` or `just release-prep minor`
+# Everything here is local: `git tag -d X.Y.Z && git reset --hard HEAD~1` undoes it.
+# Bump, changelog, commit and tag a release - e.g. `just release-prep 0.2.5` or `just release-prep minor`
 release-prep version_or_bump:
     #!/usr/bin/env bash
     set -euo pipefail
 
     echo "🚀 Starting release process"
+
+    # The tag has to name a commit on main: one cut on a branch and then
+    # squash-merged would point at a commit main never has.
+    if [[ "$(git branch --show-current)" != main ]]; then
+        echo "❌ Error: Release from main (on '$(git branch --show-current)')"
+        exit 1
+    fi
 
     if [[ -n $(git status --porcelain) ]]; then
         echo "❌ Error: There are uncommitted changes. Please commit or stash them first."
@@ -224,129 +270,36 @@ release-prep version_or_bump:
     git tag "$VERSION" -m "Release $VERSION"
 
     echo "🎉 Release $VERSION created successfully!"
-    echo "📦 You can now run 'just release-push' to publish to PyPI and GitHub"
+    echo "🔍 Check it with 'just release-preview' and 'git show --stat HEAD'"
+    echo "📦 Then run 'just release-push' to start the release workflow"
 
+# Nothing is published until a maintainer approves the `pypi` deployment in the
+# run — and once it is, PyPI never lets that version number be reused.
+# Push the release commit and tag, starting the release workflow (.github/workflows/release.yml)
 release-push:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    LAST_TAG=$(git tag --sort=-version:refname | head -n 1 || echo "")
-
-    echo "📦 Build and publish package $LAST_TAG"
-    just build
-    just publish
-
-    echo "⬆️  Pushing commit to origin"
-    git push origin main
-
-    echo "🏷️  Pushing tag $LAST_TAG"
-    git push origin $LAST_TAG
-
-    echo "🚀 Creating GitHub release"
-    just github-release
-
-# Create a GitHub release from the latest tag or a specific version
-github-release version="":
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    # Determine which tag to use
-    if [[ -n "{{ version }}" ]]; then
-        TARGET_TAG="{{ version }}"
-        echo "📦 Creating GitHub release for specified version: $TARGET_TAG"
-    else
-        TARGET_TAG=$(git tag --sort=-version:refname | head -n 1)
-        if [[ -z "$TARGET_TAG" ]]; then
-            echo "❌ Error: No tags found"
-            exit 1
-        fi
-        echo "📦 Creating GitHub release for latest tag: $TARGET_TAG"
-    fi
-
-    # Verify the tag exists
-    if ! git rev-parse "$TARGET_TAG" >/dev/null 2>&1; then
-        echo "❌ Error: Tag $TARGET_TAG does not exist"
+    # It pushes the local main, so the release commit has to be on it.
+    if [[ "$(git branch --show-current)" != main ]]; then
+        echo "❌ Error: Release from main (on '$(git branch --show-current)')"
         exit 1
     fi
 
-    # Get all tags sorted by version for finding the previous tag
-    ALL_TAGS=$(git tag --sort=-version:refname)
-
-    # Find the previous tag relative to TARGET_TAG
-    PREVIOUS_TAG=""
-    FOUND_TARGET=false
-    while IFS= read -r tag; do
-        if [[ "$FOUND_TARGET" == true ]]; then
-            PREVIOUS_TAG="$tag"
-            break
-        fi
-        if [[ "$tag" == "$TARGET_TAG" ]]; then
-            FOUND_TARGET=true
-        fi
-    done <<< "$ALL_TAGS"
-
-    echo "📝 Extracting release notes for $TARGET_TAG from CHANGELOG.md"
-
-    # Extract the release notes for this version from CHANGELOG.md
-    # This looks for the section starting with ## [$TARGET_TAG] and extracts until the next ## or end of file
-    RELEASE_NOTES_FILE=$(mktemp)
-    awk -v tag="$TARGET_TAG" '
-        /^## \[/ { 
-            if (found && started) exit; 
-            if (index($0, "[" tag "]") > 0) {
-                found=1;
-                next;
-            }
-        }
-        found && !started && /^$/ { started=1; next }
-        found && started && /^## \[/ { exit }
-        found && started { print }
-    ' CHANGELOG.md > "$RELEASE_NOTES_FILE"
-
-    # Check if we found any release notes
-    if [[ ! -s "$RELEASE_NOTES_FILE" ]]; then
-        echo "⚠️  Warning: No release notes found for $TARGET_TAG in CHANGELOG.md"
-        echo "Creating release with minimal notes..."
-        echo "Release $TARGET_TAG" > "$RELEASE_NOTES_FILE"
+    TAG=$(git tag --sort=-version:refname | head -n 1)
+    if [[ "$(git rev-parse HEAD)" != "$(git rev-parse "$TAG^{commit}")" ]]; then
+        echo "❌ Error: HEAD is not the latest tag ($TAG) — run 'just release-prep' first"
+        exit 1
     fi
 
-    # Add a link to the full changelog if we have a previous tag
-    if [[ -n "$PREVIOUS_TAG" ]]; then
-        echo "" >> "$RELEASE_NOTES_FILE"
-        echo "**Full Changelog**: https://github.com/daaain/claude-code-log/compare/$PREVIOUS_TAG...$TARGET_TAG" >> "$RELEASE_NOTES_FILE"
-    fi
+    # --atomic: both or neither — a tag pushed without its commit would name
+    # one main doesn't have.
+    echo "⬆️  Pushing main and tag $TAG to origin"
+    git push --atomic origin main "$TAG"
 
-    # Check if the release already exists
-    if gh release view "$TARGET_TAG" &>/dev/null; then
-        echo "⚠️  Release $TARGET_TAG already exists. Updating it..."
-        gh release edit "$TARGET_TAG" \
-            --title "Release $TARGET_TAG" \
-            --notes-file "$RELEASE_NOTES_FILE"
-    else
-        echo "🎉 Creating new GitHub release for $TARGET_TAG"
-        gh release create "$TARGET_TAG" \
-            --title "Release $TARGET_TAG" \
-            --notes-file "$RELEASE_NOTES_FILE"
-    fi
-
-    # Check if we have built artifacts to upload (only for current/latest releases)
-    if [[ -z "{{ version }}" ]] || [[ "$TARGET_TAG" == $(git tag --sort=-version:refname | head -n 1) ]]; then
-        if [[ -f "dist/claude_code_log-${TARGET_TAG#v}.tar.gz" ]]; then
-            echo "📦 Uploading source distribution"
-            gh release upload "$TARGET_TAG" "dist/claude_code_log-${TARGET_TAG#v}.tar.gz" --clobber
-        fi
-
-        if [[ -f "dist/claude_code_log-${TARGET_TAG#v}-py3-none-any.whl" ]]; then
-            echo "📦 Uploading wheel distribution"
-            gh release upload "$TARGET_TAG" "dist/claude_code_log-${TARGET_TAG#v}-py3-none-any.whl" --clobber
-        fi
-        # The example transcript showcase is published to the docs site
-        # (see docs/gen_pages.py), not attached to releases.
-    fi
-
-    rm "$RELEASE_NOTES_FILE"
-    echo "✅ GitHub release created/updated successfully!"
-    echo "🔗 View it at: https://github.com/daaain/claude-code-log/releases/tag/$TARGET_TAG"
+    echo "⏳ The release workflow waits for CI on the release commit, then for a maintainer"
+    echo "   to approve the PyPI deployment; the GitHub Release follows PyPI:"
+    echo "🔗 https://github.com/daaain/claude-code-log/actions/workflows/release.yml"
 
 # Helper command to preview what would be in the GitHub release
 release-preview version="":
@@ -377,18 +330,7 @@ release-preview version="":
     fi
 
     echo ""
-    awk -v tag="$TARGET_TAG" '
-        /^## \[/ { 
-            if (found && started) exit; 
-            if (index($0, "[" tag "]") > 0) {
-                found=1;
-                next;
-            }
-        }
-        found && !started && /^$/ { started=1; next }
-        found && started && /^## \[/ { exit }
-        found && started { print }
-    ' CHANGELOG.md
+    uv run --no-project python scripts/release_notes.py "$TARGET_TAG"
 
 # Render the showcase example transcript from bundled sample data into
 # test_output/ for local preview. The docs build publishes its own copy to the
@@ -404,3 +346,13 @@ clear-cache:
     just cli --clear-html
 
 regen-all: backup render-test-data style-guide cli example
+
+# Play the recent sessions demo's stages against a sandbox page you open
+# yourself (scripts/demos/recent_play.py); e.g. `just recent-play --step`
+recent-play *ARGS:
+    uv run python scripts/demos/recent_play.py {{ARGS}}
+
+# Re-record the demo videos (scripts/demos/record.py) into .demos/;
+# e.g. `just demos --only branches`, or `just demos --publish` to update the docs
+demos *ARGS:
+    uv run --group demos python scripts/demos/record.py {{ARGS}}

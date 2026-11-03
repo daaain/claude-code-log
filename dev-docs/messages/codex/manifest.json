@@ -1,0 +1,16 @@
+{
+  "families": {
+    "session metadata": "session/session_meta.json",
+    "turn context": "lifecycle/turn-context.json",
+    "visible message pairs": "messages/visible-pair.json",
+    "environment context": "messages/environment-context.json",
+    "user shell command": "messages/user-shell-command.json",
+    "reasoning summary": "reasoning/summary.json",
+    "structured tool call": "tools/function-call.json",
+    "exec wrapper": "tools/exec-wrapper.json",
+    "async command": "tools/async-command.json",
+    "web run": "tools/web-run.json",
+    "thread spawn": "collaboration/thread-spawn.json",
+    "collaboration tools": "collaboration/agent-tools.json"
+  }
+}

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Tests for caching functionality."""
 
+import sqlite3
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
@@ -21,6 +22,8 @@ from claude_code_log.models import (
     UsageInfo,
     TextContent,
 )
+
+from test.conftest import bump_mtime
 
 
 @pytest.fixture
@@ -180,11 +183,10 @@ class TestCacheManager:
         cache_manager.save_cached_entries(jsonl_path, sample_entries)
         assert cache_manager.is_file_cached(jsonl_path)
 
-        # Modify file
-        import time
-
-        time.sleep(1.1)  # Ensure different mtime (increase to be more reliable)
+        # Modify file, then make it look newer than the cached mtime
+        # (see bump_mtime in conftest — sleeping past the threshold flakes).
         jsonl_path.write_text("modified content", encoding="utf-8")
+        bump_mtime(jsonl_path)
 
         # Cache should be invalidated
         assert not cache_manager.is_file_cached(jsonl_path)
@@ -578,6 +580,45 @@ class TestCacheManager:
         assert stats["total_cached_messages"] == 50
 
 
+class TestReadOnlyCacheManager:
+    """read_only=True is what spawned render workers construct: it must
+    see the parent's data but be physically unable to write the shared DB."""
+
+    def test_reads_existing_project_without_writing(
+        self, temp_project_dir, mock_version
+    ):
+        writer = CacheManager(temp_project_dir, mock_version)
+        writer.update_project_aggregates(
+            total_message_count=5,
+            total_input_tokens=50,
+            total_output_tokens=100,
+            total_cache_creation_tokens=0,
+            total_cache_read_tokens=0,
+            earliest_timestamp="2023-01-01T10:00:00Z",
+            latest_timestamp="2023-01-01T20:00:00Z",
+        )
+
+        reader = CacheManager(temp_project_dir, mock_version, read_only=True)
+        assert reader._project_id == writer._project_id
+        cached = reader.get_cached_project_data()
+        assert cached is not None
+        assert cached.total_message_count == 5
+
+    def test_connections_reject_writes(self, temp_project_dir, mock_version):
+        CacheManager(temp_project_dir, mock_version)  # create the DB
+        reader = CacheManager(temp_project_dir, mock_version, read_only=True)
+        with pytest.raises(sqlite3.OperationalError):
+            with reader._get_connection() as conn:
+                conn.execute("DELETE FROM projects")
+
+    def test_missing_database_degrades_to_no_data(self, temp_project_dir, mock_version):
+        reader = CacheManager(temp_project_dir, mock_version, read_only=True)
+        assert reader._project_id is None
+        assert reader.get_cached_project_data() is None
+        # Construction must not have created the database as a side effect.
+        assert not reader.db_path.exists()
+
+
 class TestLibraryVersion:
     """Test library version detection."""
 
@@ -634,9 +675,14 @@ class TestCacheVersionCompatibility:
         assert cache_manager._is_cache_version_compatible("1.0.5") is True
 
     def test_major_version_increase_is_compatible(self, temp_project_dir):
-        """Test that major version increases are compatible by default."""
+        """Test that major version increases are compatible by default.
+
+        The cache version has to sit *above* every declared breaking
+        boundary, otherwise this exercises a breaking rule rather than
+        the default path (1.6.0 became such a boundary in 1.7.0).
+        """
         cache_manager = CacheManager(temp_project_dir, "2.0.0")
-        assert cache_manager._is_cache_version_compatible("1.5.0") is True
+        assert cache_manager._is_cache_version_compatible("1.7.0") is True
 
     def test_version_downgrade_is_compatible(self, temp_project_dir):
         """Test that version downgrades are compatible by default."""
@@ -935,3 +981,30 @@ class TestCachePathEnvVar:
         # get_all_cached_projects without explicit path uses env var (empty db)
         projects_env = get_all_cached_projects(projects_dir)
         assert len(projects_env) == 0  # env_db doesn't have any projects
+
+
+class TestLibraryVersionMemo:
+    """`get_library_version` must stay memoised, and on the right function.
+
+    The `@functools.lru_cache` sits directly above the `def`; a helper once
+    got inserted between the two, which silently moved the memo onto the
+    helper and put a per-session package-metadata re-parse back into every
+    archive pass (675 calls, 3.3 s on a 332-project archive).
+    """
+
+    def test_get_library_version_is_memoised(self):
+        from claude_code_log import cache as cachemod
+
+        assert hasattr(cachemod.get_library_version, "cache_info"), (
+            "get_library_version lost its lru_cache: check the decorator is "
+            "directly above its def"
+        )
+        cachemod.get_library_version.cache_clear()
+        cachemod.get_library_version()
+        cachemod.get_library_version()
+        assert cachemod.get_library_version.cache_info().hits == 1
+
+    def test_the_memo_did_not_land_on_a_neighbour(self):
+        from claude_code_log import cache as cachemod
+
+        assert not hasattr(cachemod._combined_link_stale, "cache_info")

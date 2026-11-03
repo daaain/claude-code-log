@@ -1,0 +1,114 @@
+---
+name: update-tools-coverage
+description: Refresh dev-docs/tools-coverage.md against the upstream Claude Code tools reference and the Codex app-server item schema. Use when checkpointing tool-renderer/provider coverage, after adding/removing a renderer or Codex adapter, or when either upstream taxonomy may have changed.
+---
+
+# Update Tool Coverage
+
+Keeps [`dev-docs/tools-coverage.md`](../../../dev-docs/tools-coverage.md) in
+sync with the upstream contracts and our implementation:
+
+1. **Upstream** — the documented tool list at
+   <https://code.claude.com/docs/en/tools-reference>.
+2. **Us** — `TOOL_INPUT_MODELS` / `TOOL_OUTPUT_PARSERS` in
+   [`claude_code_log/factories/tool_factory.py`](../../../claude_code_log/factories/tool_factory.py).
+3. **Codex** — the installed version's generated app-server `ThreadItem`
+   schema, plus the rollout adapters in `providers/codex.py`,
+   `providers/codex_tools.py`, and `providers/codex_quickjs.py`.
+
+The doc grades each documented tool **Full** (typed input + typed output),
+**Input only** (typed input, generic output), or **Generic** (no registry
+entry → params-table + raw-`<pre>` fallback), and separately lists tools we
+support that upstream no longer documents (renames like `Task`→`Agent`,
+supersessions like `MultiEdit`, legacy aliases, undocumented features).
+
+## Claude Code procedure
+
+1. **Fetch the upstream tool names.** WebFetch the reference and ask only
+   for the tool-table names (the page is ~80 KB; a targeted prompt keeps it
+   manageable):
+
+   > WebFetch `https://code.claude.com/docs/en/tools-reference` —
+   > "List the exact tool names in the main tools table, one per line.
+   > Names only, no descriptions."
+
+   Note any tool the page marks deprecated/renamed — that's a candidate for
+   the second table.
+
+2. **Compute the truth mechanically.** Feed those names to the bundled
+   helper (run from the repo root; `uv run` is required so `pydantic`
+   resolves — bare `python3` fails with `ModuleNotFoundError: pydantic`):
+
+   ```bash
+   printf 'Agent Artifact AskUserQuestion ... Write' \
+     | uv run python .claude/skills/update-tools-coverage/check_coverage.py
+   ```
+
+   It prints each tool's support level, the totals, the "we register but
+   upstream doesn't document" set, and — if the doc exists — a **drift
+   report** (missing / mismatched / stale rows). If it says `in sync [OK]` and
+   the upstream name set is unchanged, there is nothing to do.
+
+3. **Reconcile the doc.** Apply the helper's output to
+   `dev-docs/tools-coverage.md`:
+   - Move rows between the two tables as tools enter/leave the upstream list —
+     **never delete** a row for a tool we still register. A tool leaving the
+     reference moves to the "no longer documented" table (it's history a
+     transcript viewer must still render); it does not lose support.
+   - Fix any support-level the drift report flags.
+   - Update the **totals line** and the **snapshot date** in the intro
+     (`snapshot YYYY-MM-DD`).
+   - The **Notes column is hand-maintained** — carry notes forward; only the
+     support level is machine-derived.
+
+4. **Re-run the helper** to confirm `in sync [OK]`.
+
+## Codex procedure
+
+Codex function/MCP/plugin names are open-ended, so do not try to create a
+closed upstream function-name list. Check two separate tables instead:
+
+1. Generate the public semantic item schema for the installed Codex version:
+
+   ```bash
+   codex --version
+   codex app-server generate-json-schema --out /tmp/codex-app-server-schema
+   ```
+
+2. Read `definitions.ThreadItem.oneOf` in
+   `/tmp/codex-app-server-schema/codex_app_server_protocol.v2.schemas.json`.
+   Reconcile added/removed variants with "Codex provider coverage / Public
+   item families" and update its version, date, and totals.
+   Run the local drift checker after editing:
+
+   ```bash
+   uv run python .claude/skills/update-tools-coverage/check_codex_coverage.py \
+     /tmp/codex-app-server-schema/codex_app_server_protocol.v2.schemas.json
+   ```
+
+3. Reconcile concrete call mappings with `_canonicalize()` in
+   `providers/codex_tools.py`, result/batch reconstruction in
+   `providers/codex.py`, and the `test/test_codex_*` contracts.
+4. Reconcile the "`exec` JavaScript analysis" section with the QuickJS
+   report → batch mapper in `providers/codex_quickjs.py` (`_build_batch`).
+   Unsupported scripts fall back to the raw-script `ToolExecution` card;
+   there is no legacy recognizer fallback to document.
+
+The generated schema is version-specific and the rollout format is not a
+public wire contract. State both facts in the documentation snapshot.
+
+## Guardrails
+
+- **Generic is a feature, not a gap.** Unknown / `mcp__*` / plugin tools
+  *should* fall back to generic rendering. Only type a tool when it's common
+  or carries structure worth surfacing — see
+  [`implementing-a-tool-renderer.md`](../../../dev-docs/implementing-a-tool-renderer.md)
+  (or the `tool-renderer` skill) to actually add one.
+- **Undocumented ≠ obsolete.** The reference table isn't a full census of
+  what lands in a JSONL file (e.g. `TeamCreate`/`TeamDelete` are typed both
+  sides but never appeared upstream). Keep those under "no longer /never
+  documented" with a note, not removed.
+- **Dead models.** `GlobOutput` / `GrepOutput` exist in `models.py` but no
+  parser constructs them, so `Glob`/`Grep` are **Input only**. If a future
+  change wires up a parser, they graduate to Full automatically — the helper
+  will show the flip.

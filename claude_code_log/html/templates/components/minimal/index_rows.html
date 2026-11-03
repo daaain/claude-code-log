@@ -1,0 +1,37 @@
+{#- Minimal theme: a project on the index page (index.html), never rendered
+    for the classic theme.
+
+    One compact row per project — name, then dim mono metadata (sessions,
+    messages, tokens, date range) — instead of a card. A project with
+    sessions is a <details>: the row is its summary (the name stays a link
+    to the combined transcript), and opening it lists the sessions in the
+    transcript's row language: a time gutter, a dot on a rail, the session's
+    title and first prompt.
+
+    The classes the index page's session finder reads are kept
+    (components/search.html, buildSearchIndex): `.project-card`,
+    `.project-name a`, `.project-stats`, and per session `.session-link`
+    with `.session-preview` and `.session-link-meta`. Dates are rendered in
+    UTC and localised by pages.js (`data-mn-from` / `data-mn-ts`). -#}
+{% macro mn_project_row(project) -%}
+{%- set mn_rows = mn_index_sessions(project) -%}
+{%- set mn_span = mn_project_when(project) -%}
+<div class='project-card mn-project{% if project.is_archived %} archived{% endif %}'>
+            {% if mn_rows %}<details class='mn-pdetails'><summary class='mn-prow'>{% else %}<div class='mn-prow'>{% endif -%}
+            <span class='project-name'>{% if project.combined_suppressed %}<span class='project-name-text'>{{ project.display_name }}</span>{% else %}<a href='{{ project.html_file }}'>{{ project.display_name }}</a>{% endif %}{% if project.is_archived %}<span class='mn-pill archived-badge'>archived</span>{% endif %}</span>
+            <span class='project-stats mn-pmeta' title='{{ mn_project_tooltip(project) }}'>{{ mn_project_meta(project) | join(' · ') }}{% if mn_span %} · <span class='mn-when' data-mn-from='{{ mn_span.start }}'{% if mn_span.end %} data-mn-to='{{ mn_span.end }}'{% endif %}>{{ mn_span.text }}</span>{% endif %}</span>
+            {%- if project.html_variants is defined and project.html_variants|length > 1 %}
+            <span class='project-variants mn-pextra'>{% for variant in project.html_variants %}<a class='variant-link' href='{{ variant.file }}'>{{ variant.label }}</a>{% endfor %}</span>
+            {%- endif %}
+            {%- if project.team_names %}
+            <span class='project-teams mn-pextra'>{% if project.team_names|length == 1 %}team{% else %}teams{% endif %} {% for team in project.team_names %}<code>{{ team }}</code>{% if not loop.last %} {% endif %}{% endfor %}</span>
+            {%- endif %}
+            {% if mn_rows %}</summary>
+            <div class='mn-sessions'>
+                {%- for row in mn_rows %}
+                <a class='session-link mn-srow' href='{{ row.href }}'><span class='mn-sgut'{% if row.timestamp %} data-mn-ts='{{ row.timestamp }}'{% if row.timestamp_end %} data-mn-to='{{ row.timestamp_end }}'{% endif %}{% endif %}{% if row.range %} title='{{ row.range }} (UTC)'{% endif %}><span class='mn-sd'>{{ row.date }}</span><span class='mn-st'>{{ row.time }}</span></span><span class='mn-sbody'>{% if row.title %}<span class='session-link-title'>{{ row.title }}</span>{% endif %}<span class='session-preview'>{{ row.preview }}</span><span class='session-link-meta'>{{ row.meta | join(' · ') }}</span></span></a>
+                {%- endfor %}
+            </div>
+            </details>{% else %}</div>{% endif %}
+        </div>
+{%- endmacro %}
