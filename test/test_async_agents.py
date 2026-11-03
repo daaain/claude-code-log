@@ -281,6 +281,54 @@ class TestNotificationUsageAndEvents:
         assert msg.event == "step 3 passed"
         assert msg.summary == 'Monitor event: "CI run"'
 
+    def test_an_event_quoting_result_or_usage_tags_stays_intact(self) -> None:
+        """An event is whatever the monitored command printed: tags in it
+        are its text, not the notification's own blocks."""
+        printed = "log: <result>ok</result> <usage><tool_uses>9</tool_uses></usage>"
+        msg = create_task_notification_message(
+            _meta(),
+            _notification(
+                f'<summary>Monitor event: "log"</summary>\n<event>{printed}</event>'
+            ),
+        )
+        assert msg is not None
+        assert msg.event == printed
+        assert msg.result_text == ""
+        assert msg.usage is None
+
+    def test_an_event_quoting_header_tags_does_not_set_them(self) -> None:
+        msg = create_task_notification_message(
+            _meta(),
+            _notification("<event>saw <status>failed</status> in the log</event>"),
+        )
+        assert msg is not None
+        assert msg.status == ""
+        assert msg.event == "saw <status>failed</status> in the log"
+
+    def test_a_result_quoting_an_event_tag_is_not_an_event(self) -> None:
+        msg = create_task_notification_message(
+            _meta(),
+            _notification(
+                "<status>completed</status>\n"
+                "<result>Monitors print <event>a line</event> each.</result>"
+            ),
+        )
+        assert msg is not None
+        assert msg.event == ""
+        assert msg.result_text == "Monitors print <event>a line</event> each."
+
+    def test_a_real_result_and_usage_beside_an_event_still_parse(self) -> None:
+        msg = create_task_notification_message(
+            _meta(),
+            _notification(
+                "<event>line</event>\n<result>Done.</result>\n"
+                "<usage><subagent_tokens>5</subagent_tokens></usage>"
+            ),
+        )
+        assert msg is not None
+        assert (msg.event, msg.result_text) == ("line", "Done.")
+        assert msg.usage is not None and msg.usage.total_tokens == 5
+
     def test_html_card_shows_usage_and_event(self) -> None:
         from claude_code_log.html.async_formatter import (
             format_task_notification_content,

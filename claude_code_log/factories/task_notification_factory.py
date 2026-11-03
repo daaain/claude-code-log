@@ -55,13 +55,16 @@ _NOTIFICATION_RE = re.compile(
 # so the renderer can backlink the notification's Task ID value to the
 # original tool_use card (#142). Older notifications didn't carry it,
 # so the absence is benign — the dict get below returns None.
-# ``event`` is a Monitor's: one notification per line its command prints,
-# carrying the line (no status; the summary just names the monitor).
 _FIELD_RE = re.compile(
-    r"<(?P<tag>task-id|tool-use-id|status|summary|event)>(?P<body>.*?)</(?P=tag)>",
+    r"<(?P<tag>task-id|tool-use-id|status|summary)>(?P<body>.*?)</(?P=tag)>",
     re.DOTALL,
 )
-_RESULT_RE = re.compile(r"<result>\s*(?P<body>.*?)\s*</result>", re.DOTALL)
+# The free-text blocks: an agent's ``<result>`` (its Markdown answer) and a
+# Monitor's ``<event>`` (one notification per line its command prints; no
+# status, and the summary only names the monitor). Either can quote any tag.
+_FREE_TEXT_RE = re.compile(
+    r"<(?P<tag>result|event)>\s*(?P<body>.*?)\s*</(?P=tag)>", re.DOTALL
+)
 _USAGE_RE = re.compile(r"<usage>\s*(?P<body>.*?)\s*</usage>", re.DOTALL)
 
 # ``Full transcript available at: <path>`` trailer outside the
@@ -111,6 +114,17 @@ def _parse_usage(body: str) -> TaskNotificationUsage:
     )
 
 
+def _take_free_text(body: str) -> tuple[dict[str, str], str]:
+    """``({tag: text}, rest)``: the ``<result>`` and ``<event>`` blocks,
+    each taken out where it first opens, and the body without them."""
+    taken: dict[str, str] = {}
+    rest = body
+    while (match := _FREE_TEXT_RE.search(rest)) and match.group("tag") not in taken:
+        taken[match.group("tag")] = match.group("body")
+        rest = rest[: match.start()] + rest[match.end() :]
+    return taken, rest
+
+
 def create_task_notification_message(
     meta: MessageMeta, text: str
 ) -> Optional[TaskNotificationMessage]:
@@ -128,24 +142,23 @@ def create_task_notification_message(
 
     body = notification.group("body")
 
-    # Extract ``<result>`` and ``<usage>`` first, then strip their full
-    # match text from the search surface before scanning for the
-    # single-tag header fields. ``<result>`` bodies are agent-authored
-    # markdown and frequently contain literal HTML/XML — a
-    # ``<summary>demo</summary>`` snippet inside ``<result>`` would
-    # otherwise clobber the real notification ``<summary>`` field
-    # (and similarly for ``<status>`` / ``<task-id>``), poisoning the
-    # downstream fold/dedup path.
-    result_match = _RESULT_RE.search(body)
-    result_text = result_match.group("body") if result_match else ""
+    # Take the free-text blocks out first, then search what is left for
+    # ``<usage>`` and the single-tag header fields. ``<result>`` bodies are
+    # agent-authored markdown and frequently contain literal HTML/XML, and
+    # an ``<event>`` is whatever the monitored command printed — a
+    # ``<summary>demo</summary>`` (or a ``<usage>``) inside either would
+    # otherwise clobber the real field, poisoning the downstream
+    # fold/dedup path. Whichever block opens first is the real one; a
+    # second tag of the same kind is part of its text, never a field.
+    free_text, rest = _take_free_text(body)
+    result_text = free_text.get("result", "")
 
-    usage_match = _USAGE_RE.search(body)
+    usage_match = _USAGE_RE.search(rest)
     usage = _parse_usage(usage_match.group("body")) if usage_match else None
 
-    header_body = body
-    for block_match in (result_match, usage_match):
-        if block_match is not None:
-            header_body = header_body.replace(block_match.group(0), "", 1)
+    header_body = rest
+    if usage_match is not None:
+        header_body = header_body.replace(usage_match.group(0), "", 1)
 
     fields: dict[str, str] = {}
     for match in _FIELD_RE.finditer(header_body):
@@ -166,7 +179,7 @@ def create_task_notification_message(
         task_id=fields.get("task-id", ""),
         status=fields.get("status", ""),
         summary=fields.get("summary", ""),
-        event=fields.get("event", ""),
+        event=free_text.get("event", ""),
         result_text=result_text,
         usage=usage,
         transcript_path=transcript_path,
