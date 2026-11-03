@@ -954,3 +954,28 @@ def test_a_memo_forgets_sessions_that_leave_the_list(
     # Past the window, neither session is listed any more.
     build_recent_payload(projects, now=NOW + timedelta(days=WINDOW_DAYS + 1), memo=memo)
     assert len(memo) == 0
+
+
+def test_a_memo_sees_an_entry_the_session_row_does_not_count(
+    tmp_path: Path,
+) -> None:
+    """A notification delivered as an attachment ends work, but the
+    session row doesn't count attachments: neither its last update nor
+    its message count moves. The memo must still notice it."""
+    projects = tmp_path / "projects"
+    s = _Session("cccc3333-bg", cwd="/home/u/code/foldyard")
+    s.prompt(40, "Run it in the background.")
+    s.tool(30, command="sleep 99", tool_use_result={"backgroundTaskId": "b1"})
+    s.reply(29, "Started.")
+    project = _project(projects, "-home-u-code-foldyard", s)
+    process_projects_hierarchy(projects, silent=True)
+    memo = RecentMemo()
+    running = build_recent_payload(projects, now=NOW, memo=memo)
+    assert running["sessions"][0]["bg"][0][1] is None
+
+    # Delivered mid-turn, as an attachment: the session row skips those.
+    s.notify(20, "b1", "killed", "was stopped", mid_turn=True)
+    s.write(project / f"{s.session_id}.jsonl")
+    process_projects_hierarchy(projects, silent=True)
+    stopped = build_recent_payload(projects, now=NOW, memo=memo)
+    assert stopped["sessions"][0]["bg"][0][1:4] == [_ms_ago(20), "bash", "stopped"]

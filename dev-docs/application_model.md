@@ -1685,14 +1685,18 @@ the index; `watch --all-projects` gets the page from the hierarchy run.
 The loop keeps one `recent.RecentMemo` for its life. A session's
 `SessionSummary` (`read_session`: every turn, its background work, the
 rendered last prompt and message) is a function of its entries alone, so
-the memo keeps it keyed on the session row's `(last_timestamp,
-message_count)`, and a tick re-reads only the sessions whose row moved;
+the memo keeps it keyed on a fingerprint of exactly the cached rows
+`load_session_entries` reads — their count and highest id, fetched in
+the session-rows query through `idx_messages_project_session_ts` — and a
+tick re-reads only the sessions whose fingerprint moved. (Not the session
+row's `last_timestamp` / `message_count`: those skip attachments, and an
+attachment can end background work.)
 the clock (`SessionSummary.at`: the turn horizon, which background items
 and wake-ups are shown) is applied on every build, so a kept summary
 never serves a stale horizon. Sessions that leave the list are dropped.
 Reading entries back from the cache is nearly all of a build's cost: on
 a real archive a tick's rewrite went from 0.53s (9 sessions, 22k
-entries) to 6ms.
+entries) to about 10ms.
 
 ---
 

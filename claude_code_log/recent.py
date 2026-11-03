@@ -531,9 +531,12 @@ def read_session(entries: Iterable[TranscriptEntry]) -> SessionSummary:
     )
 
 
-#: What a session's cached row says about its entries: when it last
-#: changed and how many messages it has. A new entry moves both.
-_MemoKey = tuple[Optional[str], Optional[int]]
+#: A fingerprint of the cached entries a session's summary is read from:
+#: how many there are and the highest row id. Any insert (an appended
+#: entry, a rewritten file) moves the id; the session row's own count and
+#: last update would not do, since they skip attachments, and an
+#: attachment can end background work.
+_MemoKey = tuple[Optional[int], Optional[int]]
 
 
 class RecentMemo:
@@ -543,7 +546,7 @@ class RecentMemo:
     session's entries back from the cache is nearly all of a build's
     cost; most recent sessions haven't changed since the last tick. So
     the loop owns one memo, and a build re-reads only the sessions whose
-    cached row (last update, message count) moved. The clock is not part
+    cached entries changed (see ``_MemoKey``). The clock is not part
     of the summary — :meth:`SessionSummary.at` applies it on every build
     — so a kept summary never serves a stale horizon. Sessions that leave
     the list are dropped, which bounds the memo by the page's own limit.
@@ -621,10 +624,21 @@ def _session_rows(db_path: Path, cutoff_iso: str, limit: int) -> list[sqlite3.Ro
     conn = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     try:
+        # entry_count / entry_max_id fingerprint exactly the rows
+        # load_session_entries reads (the RecentMemo key): the session
+        # row's own counts skip attachments, which can end background
+        # work, and any insert moves MAX(id). Index-only, via
+        # idx_messages_project_session_ts.
         return conn.execute(
             """SELECT s.session_id, s.summary, s.ai_title, s.first_timestamp,
                       s.last_timestamp, s.message_count, s.first_user_message,
-                      s.cwd, p.project_path
+                      s.cwd, p.project_path,
+                      (SELECT COUNT(*) FROM messages m
+                        WHERE m.project_id = s.project_id
+                          AND m.session_id = s.session_id) AS entry_count,
+                      (SELECT MAX(m.id) FROM messages m
+                        WHERE m.project_id = s.project_id
+                          AND m.session_id = s.session_id) AS entry_max_id
                FROM sessions s JOIN projects p ON p.id = s.project_id
                WHERE s.hidden = 0 AND s.last_timestamp >= ?
                ORDER BY s.last_timestamp DESC
@@ -685,7 +699,7 @@ def build_recent_payload(
 
             summary = (
                 memo.summary(
-                    session_id, (row["last_timestamp"], row["message_count"]), read
+                    session_id, (row["entry_count"], row["entry_max_id"]), read
                 )
                 if memo is not None
                 else read()
