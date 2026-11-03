@@ -216,6 +216,118 @@ class TestCreateTaskNotificationMessage:
 
 
 # ---------------------------------------------------------------------------
+# <usage> in its XML form, and monitor <event>s
+# ---------------------------------------------------------------------------
+
+
+def _notification(inner: str) -> str:
+    return f"<task-notification>\n<task-id>t1</task-id>\n{inner}\n</task-notification>"
+
+
+class TestNotificationUsageAndEvents:
+    """Current Claude Code writes ``<usage>`` as child tags, not the older
+    ``key: value`` lines; and a Monitor's events carry their text in
+    ``<event>``. Both were dropped silently before."""
+
+    def test_xml_usage_with_subagent_tokens(self) -> None:
+        msg = create_task_notification_message(
+            _meta(),
+            _notification(
+                "<status>completed</status>\n"
+                "<usage><subagent_tokens>104863</subagent_tokens>"
+                "<tool_uses>30</tool_uses><duration_ms>351871</duration_ms></usage>"
+            ),
+        )
+        assert msg is not None
+        assert msg.usage == TaskNotificationUsage(
+            total_tokens=104863, tool_uses=30, duration_ms=351871
+        )
+
+    def test_xml_usage_with_total_tokens_and_extra_counters(self) -> None:
+        msg = create_task_notification_message(
+            _meta(),
+            _notification(
+                "<usage><total_tokens>500</total_tokens><tool_uses>3</tool_uses>"
+                "<duration_ms>1200</duration_ms><agent_count>4</agent_count>"
+                "<agents_done>4</agents_done></usage>"
+            ),
+        )
+        assert msg is not None
+        assert msg.usage == TaskNotificationUsage(
+            total_tokens=500, tool_uses=3, duration_ms=1200
+        )
+
+    def test_legacy_usage_lines_still_parse(self) -> None:
+        msg = create_task_notification_message(
+            _meta(),
+            _notification(
+                "<usage>total_tokens: 7\ntool_uses: 1\nduration_ms: 9</usage>"
+            ),
+        )
+        assert msg is not None
+        assert msg.usage == TaskNotificationUsage(
+            total_tokens=7, tool_uses=1, duration_ms=9
+        )
+
+    def test_monitor_event_text_is_kept(self) -> None:
+        msg = create_task_notification_message(
+            _meta(),
+            _notification(
+                '<summary>Monitor event: "CI run"</summary>\n'
+                "<event>step 3 passed</event>"
+            ),
+        )
+        assert msg is not None
+        assert msg.event == "step 3 passed"
+        assert msg.summary == 'Monitor event: "CI run"'
+
+    def test_html_card_shows_usage_and_event(self) -> None:
+        from claude_code_log.html.async_formatter import (
+            format_task_notification_content,
+        )
+
+        one_line = create_task_notification_message(
+            _meta(),
+            _notification(
+                "<event>exit <b>1</b></event>\n"
+                "<usage><subagent_tokens>1234</subagent_tokens></usage>"
+            ),
+        )
+        assert one_line is not None
+        html = format_task_notification_content(one_line)
+        assert "<dt>Event</dt><dd><code>exit &lt;b&gt;1&lt;/b&gt;</code></dd>" in html
+        assert "<dt>Tokens</dt><dd><code>1,234</code></dd>" in html
+
+        several = create_task_notification_message(
+            _meta(), _notification("<event>line one\nline two</event>")
+        )
+        assert several is not None
+        assert "<pre><code>line one\nline two</code></pre>" in (
+            format_task_notification_content(several)
+        )
+
+    def test_markdown_card_shows_the_event(self) -> None:
+        from typing import Any, cast
+
+        from claude_code_log.markdown.renderer import MarkdownRenderer
+
+        renderer = MarkdownRenderer()
+        one_line = create_task_notification_message(
+            _meta(), _notification("<event>step 3 passed</event>")
+        )
+        several = create_task_notification_message(
+            _meta(), _notification("<event>line one\nline two</event>")
+        )
+        assert one_line is not None and several is not None
+        assert (
+            "- **Event:** `step 3 passed`"
+            in renderer.format_TaskNotificationMessage(one_line, cast(Any, None))
+        )
+        md = renderer.format_TaskNotificationMessage(several, cast(Any, None))
+        assert "line one\nline two" in md and "```" in md
+
+
+# ---------------------------------------------------------------------------
 # parse_taskoutput_output
 # ---------------------------------------------------------------------------
 

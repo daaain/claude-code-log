@@ -55,8 +55,10 @@ _NOTIFICATION_RE = re.compile(
 # so the renderer can backlink the notification's Task ID value to the
 # original tool_use card (#142). Older notifications didn't carry it,
 # so the absence is benign — the dict get below returns None.
+# ``event`` is a Monitor's: one notification per line its command prints,
+# carrying the line (no status; the summary just names the monitor).
 _FIELD_RE = re.compile(
-    r"<(?P<tag>task-id|tool-use-id|status|summary)>(?P<body>.*?)</(?P=tag)>",
+    r"<(?P<tag>task-id|tool-use-id|status|summary|event)>(?P<body>.*?)</(?P=tag)>",
     re.DOTALL,
 )
 _RESULT_RE = re.compile(r"<result>\s*(?P<body>.*?)\s*</result>", re.DOTALL)
@@ -69,8 +71,13 @@ _TRANSCRIPT_RE = re.compile(
     re.MULTILINE,
 )
 
-# Lines inside <usage> follow ``key: value`` shape, one per line.
+# Inside <usage>, older Claude Code wrote ``key: value`` lines; current
+# versions write child tags (``<subagent_tokens>N</subagent_tokens>…``).
 _USAGE_LINE_RE = re.compile(r"^\s*(\w+)\s*:\s*(.+?)\s*$", re.MULTILINE)
+_USAGE_TAG_RE = re.compile(r"<(\w+)>\s*([^<]*?)\s*</\1>")
+# The token count's name in each form. Other keys (a workflow's
+# ``agent_count``, ``agents_done``, …) are not usage and are ignored.
+_TOKEN_KEYS = ("total_tokens", "subagent_tokens")
 
 
 def has_task_notification(text: str) -> bool:
@@ -79,20 +86,26 @@ def has_task_notification(text: str) -> bool:
 
 
 def _parse_usage(body: str) -> TaskNotificationUsage:
-    """Parse the ``key: value`` lines inside a ``<usage>`` block.
+    """Parse a ``<usage>`` block, in either form.
 
-    Unknown keys are ignored; values that don't parse as ``int`` are
-    skipped (each known field is integer-shaped in practice).
+    Child tags (current) take the place of ``key: value`` lines (older);
+    the token count is ``subagent_tokens`` in the one and
+    ``total_tokens`` in the other. Unknown keys are ignored; values that
+    don't parse as ``int`` are skipped (each known field is
+    integer-shaped in practice).
     """
+    pairs = _USAGE_TAG_RE.findall(body) or [
+        (m.group(1), m.group(2)) for m in _USAGE_LINE_RE.finditer(body)
+    ]
     fields: dict[str, int] = {}
-    for match in _USAGE_LINE_RE.finditer(body):
-        key = match.group(1)
+    for key, value in pairs:
         try:
-            fields[key] = int(match.group(2))
+            fields[key] = int(value)
         except ValueError:
             continue
+    tokens = next((fields[k] for k in _TOKEN_KEYS if k in fields), None)
     return TaskNotificationUsage(
-        total_tokens=fields.get("total_tokens"),
+        total_tokens=tokens,
         tool_uses=fields.get("tool_uses"),
         duration_ms=fields.get("duration_ms"),
     )
@@ -153,6 +166,7 @@ def create_task_notification_message(
         task_id=fields.get("task-id", ""),
         status=fields.get("status", ""),
         summary=fields.get("summary", ""),
+        event=fields.get("event", ""),
         result_text=result_text,
         usage=usage,
         transcript_path=transcript_path,

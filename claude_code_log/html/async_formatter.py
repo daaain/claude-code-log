@@ -35,6 +35,13 @@ def _code(value: str) -> str:
     return f"<code>{escape_html(value)}</code>"
 
 
+def _event_html(event: str) -> str:
+    """A Monitor event's text: inline code for one line, a block for more."""
+    if "\n" in event:
+        return f"<pre><code>{escape_html(event)}</code></pre>"
+    return _code(event)
+
+
 def _format_usage_rows(usage: Optional[TaskNotificationUsage]) -> list[str]:
     """Optional usage stats as `<dt>/<dd>` rows. Skips fields the parser
     didn't capture so older transcripts (or partial completions) don't
@@ -166,6 +173,8 @@ def format_task_notification_content(
                 f"{escape_html(content.status)}</span>",
             )
         )
+    if content.event:
+        rows.append(_row("Event", _event_html(content.event)))
     rows.extend(_format_usage_rows(content.usage))
     if content.transcript_path:
         rows.append(_row("Transcript", _code(content.transcript_path)))

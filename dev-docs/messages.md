@@ -371,6 +371,7 @@ class TaskNotificationMessage(MessageContent):
     task_id: str
     status: str               # "completed", "failed", …
     summary: str              # Agent "<description>" completed
+    event: str                # a Monitor event's text ("" otherwise)
     result_text: str          # the agent's final answer body
     usage: Optional[TaskNotificationUsage]
     transcript_path: Optional[str]   # "Full transcript available at: …"
@@ -379,6 +380,17 @@ class TaskNotificationMessage(MessageContent):
     result_is_duplicate: bool = False
     spawning_task_message_index: Optional[int] = None
 ```
+
+`<usage>` comes in two forms, and `_parse_usage` reads both: older
+Claude Code wrote `key: value` lines (`total_tokens: N` …), current
+versions write child tags (`<subagent_tokens>N</subagent_tokens>
+<tool_uses>N</tool_uses><duration_ms>N</duration_ms>`; a few carry
+`<total_tokens>` instead, and a workflow adds counters such as
+`<agent_count>`, which are ignored). Both token names land in
+`TaskNotificationUsage.total_tokens`. A Monitor sends one notification
+per line its command prints, with no status, the line in `<event>` and a
+summary that only names the monitor; the card shows that text as an
+*Event* row (a code block when it spans lines).
 
 The `result_text` is the canonical source for the spawn-fold —
 `_link_async_notifications` copies it onto
