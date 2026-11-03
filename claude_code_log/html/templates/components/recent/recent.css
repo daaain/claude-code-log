@@ -247,7 +247,8 @@ body.rc-page {
 .rc-stale {
     margin: 0;
     min-width: 0;
-    padding: 5px 10px;
+    /* 18px of line plus 14px: the theme toggle's height. */
+    padding: 7px 10px;
     border-radius: 4px;
     background: var(--errbg);
     color: var(--err);
