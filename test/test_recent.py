@@ -11,7 +11,7 @@ import json
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import pytest
 
@@ -19,6 +19,9 @@ from claude_code_log.converter import load_transcript, process_projects_hierarch
 from claude_code_log.recent import (
     RECENT_DATA,
     RECENT_PAGE,
+    BG_CAP_MINUTES,
+    SNIPPET_CHARS,
+    WAKE_GRACE_MINUTES,
     TURN_HORIZON_HOURS,
     asks_you,
     build_recent_payload,
@@ -88,8 +91,20 @@ class _Session:
             **extra,
         )
 
-    def tool(self, minutes_ago: float, name: str = "Bash", **inputs: Any) -> None:
+    def tool(
+        self,
+        minutes_ago: float,
+        name: str = "Bash",
+        result: bool = True,
+        result_text: str = "ok",
+        tool_use_result: Any = None,
+        sidechain: bool = False,
+        **inputs: Any,
+    ) -> str:
+        """A tool call and (unless ``result`` is False) its result; the
+        call's id, for a notification's ``tool-use-id``."""
         tool_id = f"tool-{self._n}"
+        side: dict[str, Any] = {"isSidechain": True} if sidechain else {}
         self._base(
             "assistant",
             minutes_ago,
@@ -103,16 +118,83 @@ class _Session:
                     {"type": "tool_use", "id": tool_id, "name": name, "input": inputs}
                 ],
             },
+            **side,
         )
+        if not result:
+            return tool_id
+        extra: dict[str, Any] = dict(side)
+        if tool_use_result is not None:
+            extra["toolUseResult"] = tool_use_result
         self._base(
             "user",
             minutes_ago - 0.1,
             message={
                 "role": "user",
                 "content": [
-                    {"type": "tool_result", "tool_use_id": tool_id, "content": "ok"}
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": tool_id,
+                        "content": result_text,
+                    }
                 ],
             },
+            **extra,
+        )
+        return tool_id
+
+    def notify(
+        self,
+        minutes_ago: float,
+        task_id: str,
+        status: Optional[str] = None,
+        summary: str = "",
+        event: Optional[str] = None,
+        mid_turn: bool = False,
+        preamble: bool = False,
+        queued_only: bool = False,
+    ) -> None:
+        """A ``<task-notification>``: a user entry when it arrives while
+        Claude is idle, a ``queued_command`` attachment mid-turn, or only
+        a ``queue-operation`` (queued, never delivered)."""
+        fields = f"<task-id>{task_id}</task-id>"
+        if status:
+            fields += f"\n<status>{status}</status>"
+        if summary:
+            fields += f"\n<summary>{summary}</summary>"
+        if event:
+            fields += f"\n<event>{event}</event>"
+        body = f"<task-notification>\n{fields}\n</task-notification>"
+        if preamble:
+            body = "[SYSTEM NOTIFICATION - NOT USER INPUT]\n" + body
+        if queued_only:
+            self._base(
+                "queue-operation", minutes_ago, operation="enqueue", content=body
+            )
+        elif mid_turn:
+            self._base(
+                "attachment",
+                minutes_ago,
+                attachment={
+                    "type": "queued_command",
+                    "commandMode": "task-notification",
+                    "prompt": body,
+                },
+            )
+        else:
+            self._base("user", minutes_ago, message={"role": "user", "content": body})
+
+    def wake_fire(
+        self, minutes_ago: float, content: str = "Claude resuming /loop wakeup"
+    ) -> None:
+        """A wake-up firing: the system entry, then its meta prompt."""
+        self._base(
+            "system", minutes_ago, content=content, subtype="scheduled_task_fire"
+        )
+        self._base(
+            "user",
+            minutes_ago,
+            isMeta=True,
+            message={"role": "user", "content": "check on the CI run"},
         )
 
     def write(self, path: Path) -> Path:
@@ -154,8 +236,8 @@ def test_a_reply_that_asks_is_your_move(tmp_path: Path) -> None:
     assert info["state"] == "asked"
     assert [t[2] for t in info["turns"]] == ["ask"]
     assert info["last"]["who"] == "claude"
-    assert info["last"]["text"].endswith("shard L2?")
-    assert info["lastPrompt"]["text"] == "Fix the stale cache."
+    assert info["last"]["html"].endswith("shard L2?</p>\n")
+    assert info["lastPrompt"]["html"] == "<p>Fix the stale cache.</p>\n"
     assert info["toolCount"] == 1 and len(info["tools"]) == 1
     assert info["branch"] == "feature-x"
 
@@ -202,7 +284,7 @@ def test_a_prompt_with_no_reply_yet_is_the_agents_move(tmp_path: Path) -> None:
     info = s.summary(tmp_path)
     assert info["state"] == "busy"
     assert info["last"] is None
-    assert info["lastPrompt"]["text"] == "Now the second part."
+    assert info["lastPrompt"]["html"] == "<p>Now the second part.</p>\n"
 
 
 def test_only_the_final_turn_can_be_open(tmp_path: Path) -> None:
@@ -230,8 +312,10 @@ def test_injected_user_bodies_are_not_prompts(tmp_path: Path) -> None:
     s.prompt(19, "<local-command-stdout>ok</local-command-stdout>")
     s.prompt(18, "Meta body", isMeta=True)
     info = s.summary(tmp_path)
-    assert info["turnCount"] == 1
-    assert info["lastPrompt"]["text"] == "Real prompt."
+    # None is a prompt; the notification (delivered while Claude was
+    # idle) starts a turn of its own, the rest just continue it.
+    assert [t[5] for t in info["turns"]] == ["you", "task"]
+    assert info["lastPrompt"]["html"] == "<p>Real prompt.</p>\n"
 
 
 def test_sidechain_entries_are_left_out(tmp_path: Path) -> None:
@@ -256,6 +340,445 @@ def test_turns_older_than_the_horizon_are_counted_not_listed(tmp_path: Path) -> 
     assert info["turnCount"] == 2
     assert len(info["turns"]) == 1
     assert info["earlierTurns"] == 1
+
+
+def test_the_last_prompt_and_reply_carry_rendered_markdown(tmp_path: Path) -> None:
+    """Rendered by the session pages' pipeline: Markdown becomes markup,
+    raw HTML in the transcript stays text."""
+    s = _Session()
+    s.prompt(30, "Fix **this** <img src=x onerror=alert(1)>")
+    s.reply(29, "Done:\n\n- `just test` passes\n\n<script>alert(2)</script>")
+    info = s.summary(tmp_path)
+    prompt_html = info["lastPrompt"]["html"]
+    assert "<strong>this</strong>" in prompt_html
+    assert "<img" not in prompt_html and "&lt;img" in prompt_html
+    last_html = info["last"]["html"]
+    assert "<li><code>just test</code> passes</li>" in last_html
+    assert "<script>" not in last_html and "&lt;script&gt;" in last_html
+    # Lean: the rendered form replaces the text, it doesn't sit beside it.
+    assert "text" not in info["last"] and "text" not in info["lastPrompt"]
+
+
+def test_tool_and_error_lines_are_not_markdown(tmp_path: Path) -> None:
+    s = _Session()
+    s.prompt(30, "Run it.")
+    s.tool(2, command="echo **not bold**")
+    last = s.summary(tmp_path)["last"]
+    assert "html" not in last
+    assert last["text"] == "Bash · echo **not bold**"
+
+
+def test_each_turn_carries_snippets_of_its_prompt_and_end(tmp_path: Path) -> None:
+    long_reply = "word " * 200
+    s = _Session()
+    s.prompt(30, "First\n\n   prompt.")
+    s.reply(29, "First reply.")
+    s.prompt(20, "Second prompt.")
+    s.tool(19, command="just test")
+    s.reply(18, long_reply)
+    turns = s.summary(tmp_path)["turns"]
+    assert turns[0][3:] == ["First prompt.", "First reply.", "you"]
+    assert turns[1][3] == "Second prompt."
+    assert len(turns[1][4]) <= SNIPPET_CHARS and turns[1][4].endswith("…")
+
+
+def test_an_implicit_turn_has_no_prompt_snippet(tmp_path: Path) -> None:
+    s = _Session()
+    s.reply(10, "Resumed and carried on.")
+    assert s.summary(tmp_path)["turns"][0][3] is None
+
+
+ASK_INPUT: dict[str, Any] = {
+    "questions": [
+        {
+            "question": "Which renderer should we use?",
+            "header": "Renderer",
+            "multiSelect": False,
+            "options": [
+                {"label": "Server-side", "description": "The wenmode pipeline."},
+                {"label": "Client-side", "description": ""},
+            ],
+        },
+        {
+            "question": "Where does the chevron go?",
+            "header": "Chevron",
+            "multiSelect": False,
+            "options": [{"label": "Left", "description": "Its own column."}],
+        },
+    ]
+}
+
+
+def test_an_unanswered_question_tool_asks_you(tmp_path: Path) -> None:
+    """Claude waits on AskUserQuestion until you answer: your move, with
+    the questions and their options as the last message."""
+    s = _Session()
+    s.prompt(30, "Plan the change.")
+    s.tool(25, "AskUserQuestion", result=False, **ASK_INPUT)
+    info = s.summary(tmp_path)
+    assert info["state"] == "asked"
+    assert info["turns"][-1][2] == "ask"
+    assert info["turns"][-1][4].startswith("Which renderer should we use?")
+    last = info["last"]
+    assert last["who"] == "question"
+    assert last["html"].startswith("<p>Which renderer should we use?</p>")
+    assert "Where does the chevron go?" in last["html"]
+    assert "<strong>Server-side</strong> — The wenmode pipeline." in last["html"]
+    assert "<strong>Client-side</strong></li>" in last["html"]
+
+
+def test_an_answered_question_tool_keeps_the_turn_going(tmp_path: Path) -> None:
+    s = _Session()
+    s.prompt(30, "Plan the change.")
+    s.tool(25, "AskUserQuestion", **ASK_INPUT)
+    assert s.summary(tmp_path)["state"] == "busy"
+
+
+def test_a_malformed_question_tool_is_an_ordinary_tool_call(tmp_path: Path) -> None:
+    s = _Session()
+    s.prompt(30, "Plan the change.")
+    s.tool(25, "AskUserQuestion", result=False, questions="oops")
+    info = s.summary(tmp_path)
+    assert info["state"] == "busy"
+    assert info["last"] == {
+        "at": info["last"]["at"],
+        "who": "tool",
+        "text": "AskUserQuestion",
+    }
+
+
+def test_a_plan_awaiting_approval_asks_you(tmp_path: Path) -> None:
+    """ExitPlanMode waits on your approval: your move, the plan as the
+    last message."""
+    s = _Session()
+    s.prompt(30, "Plan the refactor.")
+    s.tool(20, "ExitPlanMode", result=False, plan="## Plan\n\n1. Split `recent.py`")
+    info = s.summary(tmp_path)
+    assert info["state"] == "asked"
+    assert info["turns"][-1][2] == "ask"
+    assert info["turns"][-1][4] == "## Plan 1. Split `recent.py`"
+    last = info["last"]
+    assert last["who"] == "plan"
+    assert "<h2" in last["html"] and "<code>recent.py</code>" in last["html"]
+
+
+def test_an_approved_plan_keeps_the_turn_going(tmp_path: Path) -> None:
+    s = _Session()
+    s.prompt(30, "Plan the refactor.")
+    s.tool(20, "ExitPlanMode", plan="## Plan")
+    assert s.summary(tmp_path)["state"] == "busy"
+
+
+def test_a_plan_without_its_text_still_asks_you(tmp_path: Path) -> None:
+    """Some versions keep the plan in a file, not the tool input."""
+    s = _Session()
+    s.prompt(30, "Plan the refactor.")
+    s.tool(20, "ExitPlanMode", result=False)
+    info = s.summary(tmp_path)
+    assert info["state"] == "asked"
+    assert info["last"]["who"] == "plan"
+    assert "approve" in info["last"]["html"]
+
+
+# ---- background work ------------------------------------------------
+
+
+def _ms_ago(minutes: float) -> int:
+    return NOW_MS - int(minutes * 60000)
+
+
+BG_RESULT = (
+    "Command running in background with ID: b1. Output is being written to:"
+    " /tmp/tasks/b1.output"
+)
+
+
+def test_background_command_pairs_with_its_notification(tmp_path: Path) -> None:
+    """A notification delivered while Claude is idle ends the work and
+    starts a turn of its own, labelled with what reported."""
+    s = _Session()
+    s.prompt(40, "Run the tests in the background.")
+    s.tool(
+        30,
+        command="just test",
+        description="Run the unit tests",
+        run_in_background=True,
+        result_text=BG_RESULT,
+        tool_use_result={"stdout": "", "backgroundTaskId": "b1"},
+    )
+    s.reply(29, "Started; I'll report back.")
+    summary = 'Background command "Run the unit tests" completed (exit code 0)'
+    s.notify(20, "b1", "completed", summary)
+    s.reply(19, "All tests pass.")
+    info = s.summary(tmp_path)
+    assert info["bg"] == [
+        [_ms_ago(30), _ms_ago(20), "bash", "completed", "Run the unit tests", None]
+    ]
+    assert [t[5] for t in info["turns"]] == ["you", "task"]
+    assert info["turns"][1][3] == summary
+    assert info["turnCount"] == 2
+    # Your last prompt is still the one you typed.
+    assert "Run the tests" in info["lastPrompt"]["html"]
+    assert info["state"] == "done"
+
+
+def test_an_auto_backgrounded_command_is_found_by_its_text(tmp_path: Path) -> None:
+    s = _Session()
+    s.prompt(40, "Run the slow suite.")
+    s.tool(
+        30,
+        command="just test-all\necho done",
+        result_text=(
+            "Command did not complete within its 300s timeout and was moved"
+            " to the background (ID: bx9). Output is being written to: /tmp/x"
+        ),
+    )
+    s.reply(29, "It's still going.")
+    assert s.summary(tmp_path)["bg"] == [
+        [_ms_ago(30), None, "bash", None, "just test-all", None]
+    ]
+
+
+def test_an_async_agent_without_a_notification_has_no_end(tmp_path: Path) -> None:
+    s = _Session()
+    s.prompt(40, "Survey the transcripts.")
+    s.tool(
+        30,
+        "Agent",
+        description="Survey transcripts",
+        prompt="...",
+        tool_use_result={"isAsync": True, "status": "async_launched", "agentId": "a1"},
+    )
+    s.reply(29, "The survey is running.")
+    info = s.summary(tmp_path)
+    assert info["bg"] == [
+        [_ms_ago(30), None, "agent", None, "Survey transcripts", None]
+    ]
+    # The transcript state; the page decides it is "waiting".
+    assert info["state"] == "done"
+
+
+def test_an_agents_interim_notification_is_not_its_end(tmp_path: Path) -> None:
+    s = _Session()
+    s.prompt(40, "Survey.")
+    s.tool(
+        30,
+        "Agent",
+        description="Survey",
+        tool_use_result={"status": "async_launched", "agentId": "a1"},
+    )
+    s.reply(29, "Running.")
+    s.notify(
+        20,
+        "a1",
+        "completed",
+        'Agent "Survey" is waiting on its own background work',
+        mid_turn=True,
+    )
+    assert s.summary(tmp_path)["bg"][0][1:4] == [None, "agent", None]
+
+
+def test_a_notification_mid_turn_ends_work_without_a_new_turn(tmp_path: Path) -> None:
+    s = _Session()
+    s.prompt(40, "Build and keep going.")
+    s.tool(
+        30,
+        command="just build",
+        tool_use_result={"backgroundTaskId": "b2"},
+    )
+    s.notify(25, "b2", "failed", "failed with exit code 2", mid_turn=True)
+    s.reply(24, "The build failed; fixing.")
+    info = s.summary(tmp_path)
+    assert info["bg"][0][1:4] == [_ms_ago(25), "bash", "failed"]
+    assert [t[5] for t in info["turns"]] == ["you"]
+
+
+def test_a_notification_with_a_preamble_is_not_a_prompt(tmp_path: Path) -> None:
+    s = _Session()
+    s.prompt(40, "Run it.")
+    s.tool(30, command="just test", tool_use_result={"backgroundTaskId": "b3"})
+    s.reply(29, "Started.")
+    s.notify(20, "b3", "completed", "completed (exit code 0)", preamble=True)
+    s.reply(19, "Done.")
+    info = s.summary(tmp_path)
+    assert "Run it." in info["lastPrompt"]["html"]
+    assert [t[5] for t in info["turns"]] == ["you", "task"]
+    assert info["bg"][0][3] == "completed"
+
+
+def test_a_notification_only_queued_still_ends_work(tmp_path: Path) -> None:
+    """The session closed before it was delivered: the work still ended."""
+    s = _Session()
+    s.prompt(40, "Run it.")
+    s.tool(30, command="sleep 99", tool_use_result={"backgroundTaskId": "b7"})
+    s.reply(29, "Started.")
+    s.notify(
+        20,
+        "b7",
+        "killed",
+        'Background command "sleep 99" was stopped',
+        queued_only=True,
+    )
+    info = s.summary(tmp_path)
+    assert info["bg"][0][1:4] == [_ms_ago(20), "bash", "stopped"]
+    assert [t[5] for t in info["turns"]] == ["you"]
+
+
+def test_command_output_that_looks_like_a_launch_is_not_one(tmp_path: Path) -> None:
+    """Only the harness's own launch message names an id: a foreground
+    command printing similar words (a source file, a log) launched
+    nothing."""
+    s = _Session()
+    s.prompt(40, "Show me the model.")
+    s.tool(
+        30, command="cat models.py", result_text="class X:\n    agentId: Optional[str]"
+    )
+    s.tool(
+        29,
+        command="grep -r background log.txt",
+        result_text="log: Command running in background with ID: zz1 (old run)",
+    )
+    s.tool(
+        28,
+        "Agent",
+        description="Sync agent",
+        result_text="Here is the summary. agentId: abc (for reference)",
+    )
+    s.reply(27, "Here it is.")
+    assert s.summary(tmp_path)["bg"] == []
+
+
+def test_monitors_end_by_status_or_expiry_not_by_events(tmp_path: Path) -> None:
+    s = _Session()
+    s.prompt(60, "Watch CI and the logs.")
+    s.tool(
+        50,
+        "Monitor",
+        command="gh run watch",
+        description="CI run",
+        tool_use_result={"taskId": "m1", "timeoutMs": 1800000, "persistent": False},
+    )
+    s.tool(
+        49,
+        "Monitor",
+        command="tail -f log",
+        description="Server log",
+        result_text="Monitor started (task m2, timeout 600000ms). You will be notified",
+    )
+    s.tool(
+        48,
+        "Monitor",
+        description="Forever",
+        tool_use_result={"taskId": "m3", "persistent": True},
+    )
+    s.reply(47, "Watching.")
+    s.notify(40, "m1", summary='Monitor event: "CI run"', event="step 3 passed")
+    s.notify(
+        35,
+        "m2",
+        summary='Monitor event: "Server log"',
+        event="[Monitor timed out — re-arm if needed.]",
+    )
+    info = s.summary(tmp_path)
+    by_label = {b[4]: b for b in info["bg"]}
+    assert by_label["CI run"][1:4] == [None, "monitor", None]
+    assert by_label["CI run"][5] == _ms_ago(50) + 1800000
+    assert by_label["Server log"][1:4] == [_ms_ago(35), "monitor", "completed"]
+    assert by_label["Forever"][5] is None
+
+
+def test_task_stop_and_kill_shell_stop_work(tmp_path: Path) -> None:
+    s = _Session()
+    s.prompt(60, "Run two things.")
+    s.tool(50, command="sleep 1000", tool_use_result={"backgroundTaskId": "b4"})
+    s.tool(49, command="sleep 2000", tool_use_result={"backgroundTaskId": "b5"})
+    s.tool(40, "TaskStop", task_id="b4")
+    s.tool(39, "KillShell", shell_id="b5")
+    s.reply(38, "Stopped both.")
+    assert [b[1:4] for b in s.summary(tmp_path)["bg"]] == [
+        [_ms_ago(40), "bash", "stopped"],
+        [_ms_ago(39), "bash", "stopped"],
+    ]
+
+
+def test_a_pending_wake_up_and_its_firing(tmp_path: Path) -> None:
+    fire_at = _ms_ago(10)
+    s = _Session()
+    s.prompt(40, "Keep an eye on CI.")
+    s.tool(
+        30,
+        "ScheduleWakeup",
+        delaySeconds=1200,
+        reason="check the CI run",
+        prompt="check on the CI run",
+        tool_use_result={"scheduledFor": fire_at, "clampedDelaySeconds": 1200},
+    )
+    s.reply(29, "I'll check back in 20 minutes.")
+    pending = s.summary(tmp_path)
+    assert pending["wakes"] == [[fire_at, "check the CI run"]]
+    s.wake_fire(10)
+    s.reply(9, "CI is green.")
+    fired = s.summary(tmp_path)
+    assert fired["wakes"] == []
+    assert [t[5] for t in fired["turns"]] == ["you", "wake"]
+    assert fired["turns"][1][3] == "check the CI run"
+
+
+def test_a_wake_up_from_its_text_and_a_stop_cancelling_it(tmp_path: Path) -> None:
+    s = _Session()
+    s.prompt(40, "Loop.")
+    s.tool(
+        30,
+        "ScheduleWakeup",
+        delaySeconds=600,
+        reason="poll",
+        result_text="Next wakeup scheduled for 16:22:00 (in 600s). Nothing more",
+    )
+    s.reply(29, "Waiting.")
+    assert s.summary(tmp_path)["wakes"] == [[_ms_ago(30) + 600000, "poll"]]
+    s.tool(
+        25,
+        "ScheduleWakeup",
+        stop=True,
+        tool_use_result={"stopped": True, "scheduledFor": 0},
+    )
+    s.reply(24, "Stopped the loop.")
+    assert s.summary(tmp_path)["wakes"] == []
+
+
+def test_a_sidechains_background_work_is_its_own(tmp_path: Path) -> None:
+    s = _Session()
+    s.prompt(40, "Delegate.")
+    s.tool(30, command="x", tool_use_result={"backgroundTaskId": "b9"}, sidechain=True)
+    s.reply(29, "Delegated.")
+    assert s.summary(tmp_path)["bg"] == []
+
+
+def test_background_work_reaches_the_payload_through_the_cache(tmp_path: Path) -> None:
+    projects = tmp_path / "projects"
+    s = _Session("cccc3333-bg", cwd="/home/u/code/foldyard")
+    s.prompt(40, "Run it in the background.")
+    s.tool(30, command="just test", tool_use_result={"backgroundTaskId": "b1"})
+    s.reply(29, "Started.")
+    s.notify(20, "b1", "completed", "completed (exit code 0)")
+    s.reply(19, "Passed.")
+    s.tool(
+        18,
+        "ScheduleWakeup",
+        reason="recheck",
+        tool_use_result={"scheduledFor": _ms_ago(5)},
+    )
+    s.reply(17, "Checking again later.")
+    s.wake_fire(5)
+    s.reply(4, "Still green.")
+    _project(projects, "-home-u-code-foldyard", s)
+    process_projects_hierarchy(projects, silent=True)
+    payload = build_recent_payload(projects, now=NOW)
+    assert payload["bgCapMinutes"] == BG_CAP_MINUTES
+    assert payload["wakeGraceMinutes"] == WAKE_GRACE_MINUTES
+    session = payload["sessions"][0]
+    assert session["bg"][0][1:4] == [_ms_ago(20), "bash", "completed"]
+    assert [t[5] for t in session["turns"]] == ["you", "task", "wake"]
 
 
 def test_payload_json_cannot_end_a_script_element() -> None:

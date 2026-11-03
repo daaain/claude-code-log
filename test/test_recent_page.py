@@ -7,6 +7,8 @@ file transcript text can't break out of, and the refresh hook it calls.
 
 from __future__ import annotations
 
+import re
+
 import json
 from pathlib import Path
 from typing import Any
@@ -100,8 +102,20 @@ def test_page_carries_its_chrome() -> None:
     assert "fonts.googleapis" not in html
 
 
-def test_runtime_never_writes_markup() -> None:
-    """Transcript text reaches the page through textContent only."""
+def test_runtime_writes_markup_only_from_rendered_fields() -> None:
+    """Transcript text reaches the page through textContent, except the
+    payload's ``html`` fields (Markdown rendered by the session pages'
+    escaping pipeline), which go in through one helper and nowhere else.
+    """
     source = (COMPONENTS / "recent.js").read_text(encoding="utf-8")
-    for sink in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write"):
+    for sink in ("outerHTML", "insertAdjacentHTML", "document.write"):
         assert sink not in source, sink
+    assert source.count("innerHTML") == 1
+    assert "node.innerHTML = html;" in source
+    # (A bare "renderedMarkdown()" is the header comment naming it.)
+    calls = [c for c in re.findall(r"renderedMarkdown\(([^)]*)\)", source) if c]
+    # The definition, then every call passes a payload html field.
+    assert calls[0] == "cls, html"
+    assert calls[1:], "renderedMarkdown is never called"
+    for args in calls[1:]:
+        assert re.search(r"\.html$", args.strip()), args

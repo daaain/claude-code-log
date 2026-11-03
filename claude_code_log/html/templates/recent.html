@@ -7,9 +7,14 @@
     <meta name='viewport' content='width=device-width, initial-scale=1.0'>
     <title>Recent sessions</title>
     {#- One look in both themes: the minimal theme's tokens, and the page's own
-        stylesheet. The stored light/dark choice applies before first paint. #}
+        stylesheet. The stored light/dark choice applies before first paint.
+        The Pygments sheets colour code in the rendered Markdown of an open
+        row; body.theme-minimal points the light one at the tokens, and is
+        the ancestor the dark one is scoped under. #}
     <style>
 {% include 'components/minimal/tokens.css' %}
+{% include 'components/pygments_styles.css' %}
+{% include 'components/minimal/pygments_dark.css' %}
 {% include 'components/recent/recent.css' %}
     </style>
     <script>
@@ -17,7 +22,7 @@
     </script>
 </head>
 
-<body class='rc-page'>
+<body class='rc-page theme-minimal'>
     <div class='rc-wrap'>
         <nav class='rc-nav' aria-label='Pages'>
             <a href='index.html'>← All projects</a>

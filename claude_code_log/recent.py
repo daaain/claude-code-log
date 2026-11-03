@@ -22,6 +22,8 @@ Payload shape (all times are epoch milliseconds, UTC)::
       "generatedAt": 1793465000000,
       "windowDays": 3,
       "cacheTtlMinutes": 60,
+      "bgCapMinutes": 60,
+      "wakeGraceMinutes": 5,
       "sessions": [
         {
           "id": "8b04d7c2-...", "short": "8b04d7c2",
@@ -32,19 +34,38 @@ Payload shape (all times are epoch milliseconds, UTC)::
           "firstAt": ..., "lastAt": ...,
           "state": "asked" | "error" | "done" | "busy",
           "messages": 96, "turnCount": 3, "toolCount": 41,
-          "turns": [[startMs, endMs, "asst" | "ask" | "err" | "open"], ...],
+          "turns": [[startMs, endMs, "asst" | "ask" | "err" | "open",
+                     promptSnippet | null, endSnippet | null,
+                     "you" | "task" | "wake"], ...],
+          "bg": [[startMs, endMs | null, "bash" | "agent" | "monitor",
+                  "completed" | "failed" | "stopped" | null, label,
+                  expiresAtMs | null], ...],
+          "wakes": [[atMs, label], ...],
           "earlierTurns": 0,
           "tools": [ms, ...],
-          "lastPrompt": {"at": ms, "text": "..."} | null,
-          "last": {"at": ms, "who": "claude" | "tool" | "error",
-                   "text": "..."} | null
+          "lastPrompt": {"at": ms, "html": "..."} | null,
+          "last": {"at": ms, "who": "claude" | "question" | "plan",
+                   "html": "..."}
+                | {"at": ms, "who": "tool" | "error", "text": "..."}
+                | null
         }
       ]
     }
 
 ``turns`` holds only the turns that ended within :data:`TURN_HORIZON_HOURS`
 (the strip shows less than that); ``earlierTurns`` counts the rest, so
-the page can say "+N earlier turns" without carrying them.
+the page can say "+N earlier turns" without carrying them. Each turn's
+snippets (the start of its prompt, and of how it ended) are what the
+strip's markers show on hover; an implicit turn has no prompt.
+
+``html`` is the text rendered as Markdown by the session pages'
+pipeline (:func:`claude_code_log.html.utils.render_markdown`, which
+escapes raw HTML and refuses unsafe link schemes), so it is no more
+trusted than a session page's message body. The prompt and Claude's
+own text carry it in place of ``text``; a tool line or an error stays
+plain ``text``. An unanswered ``AskUserQuestion`` or ``ExitPlanMode``
+is Claude waiting on you: its questions and options (``question``) or
+its plan (``plan``) become the last message and the turn ends ``ask``.
 """
 
 from __future__ import annotations
@@ -53,17 +74,22 @@ import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterable, Optional
+from typing import Any, Callable, Iterable, Optional, cast
 
 from .cache import CacheManager, get_cache_db_path, get_library_version
+from .background_work import BackgroundWork
 from .models import (
     AssistantTranscriptEntry,
+    AttachmentTranscriptEntry,
+    QueueOperationTranscriptEntry,
+    SystemTranscriptEntry,
     TextContent,
     ToolResultContent,
     ToolUseContent,
     TranscriptEntry,
     UserTranscriptEntry,
 )
+from .html.utils import render_markdown, render_user_markdown
 from .utils import get_project_display_name
 
 RECENT_PAGE = "recent.html"
@@ -84,6 +110,16 @@ CACHE_TTL_MINUTES = 60
 MAX_LAST_CHARS = 6000
 MAX_PROMPT_CHARS = 1500
 MAX_TITLE_CHARS = 200
+#: A marker's hover text: the start of the turn's prompt or its end.
+SNIPPET_CHARS = 200
+#: Background items (commands, agents, monitors) kept per session.
+MAX_BG_ITEMS = 60
+#: Work with no end on record counts as running for this long after the
+#: session's last entry (a monitor's own expiry can end it sooner): a
+#: transcript can't tell work still running from work that died with it.
+BG_CAP_MINUTES = 60
+#: A wake-up this long past its time without firing was missed.
+WAKE_GRACE_MINUTES = 5
 
 # User-turn bodies Claude Code injects that are not something you typed.
 _NOT_A_PROMPT_PREFIXES = (
@@ -95,6 +131,8 @@ _NOT_A_PROMPT_PREFIXES = (
     "<system-reminder>",
 )
 _API_ERROR_PREFIX = "API Error"
+_NOTIFICATION_TAG = "<task-notification>"
+_WAKE_FIRE = "scheduled_task_fire"
 
 
 def _ms(timestamp: Optional[str]) -> Optional[int]:
@@ -115,24 +153,75 @@ def _clip(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
+def _snippet(text: Optional[str]) -> Optional[str]:
+    """One line of hover text: whitespace folded, clipped."""
+    if not text:
+        return None
+    return _clip(" ".join(text.split()), SNIPPET_CHARS) or None
+
+
+def _entry_text(entry: UserTranscriptEntry) -> str:
+    return "\n".join(
+        item.text for item in entry.message.content if isinstance(item, TextContent)
+    ).strip()
+
+
 def _user_text(entry: UserTranscriptEntry) -> Optional[str]:
     """The text of a user entry that is a real prompt, else None.
 
     Tool results, meta entries and the bodies Claude Code injects
-    (command output, caveats, task notifications) are not prompts.
+    (command output, caveats, task notifications) are not prompts. A
+    notification can follow a preamble, so it is searched for.
     """
     if entry.isMeta:
         return None
-    parts: list[str] = []
-    for item in entry.message.content:
-        if isinstance(item, ToolResultContent):
-            return None
-        if isinstance(item, TextContent):
-            parts.append(item.text)
-    text = "\n".join(parts).strip()
-    if not text or text.startswith(_NOT_A_PROMPT_PREFIXES):
+    if any(isinstance(item, ToolResultContent) for item in entry.message.content):
+        return None
+    text = _entry_text(entry)
+    if not text or text.startswith(_NOT_A_PROMPT_PREFIXES) or _NOTIFICATION_TAG in text:
         return None
     return text
+
+
+def _new_turn(
+    at: int, origin: str, prompt: Optional[str] = None, trigger: Optional[str] = None
+) -> dict[str, Any]:
+    """A turn: started by your ``prompt`` (origin ``you``), or by
+    background work reporting (``task``) or a wake-up (``wake``), whose
+    ``trigger`` says what."""
+    return {
+        "start": at,
+        "end": at,
+        "origin": origin,
+        "prompt": prompt,
+        "trigger": trigger,
+        "tools": [],
+        "last": None,
+        "end_kind": "open",
+    }
+
+
+def _queued_notification(
+    entry: AttachmentTranscriptEntry | QueueOperationTranscriptEntry,
+) -> Optional[str]:
+    """A notification that ends work without starting a turn: delivered
+    mid-turn (a ``queued_command`` attachment), or only queued (a
+    ``queue-operation``; a session closed before delivering it)."""
+    if isinstance(entry, QueueOperationTranscriptEntry):
+        if entry.operation != "enqueue":
+            return None
+        content = entry.content
+        text = (
+            content
+            if isinstance(content, str)
+            else "\n".join(i.text for i in content or [] if isinstance(i, TextContent))
+        )
+    else:
+        if entry.attachment.get("type") != "queued_command":
+            return None
+        prompt = entry.attachment.get("prompt")
+        text = prompt if isinstance(prompt, str) else ""
+    return text if _NOTIFICATION_TAG in text else None
 
 
 def _tool_line(item: ToolUseContent) -> str:
@@ -147,6 +236,69 @@ def _tool_line(item: ToolUseContent) -> str:
     if isinstance(description, str) and description.strip():
         return f"{item.name} · {_clip(description, 160)}"
     return item.name
+
+
+def _dicts(value: Any) -> list[dict[str, Any]]:
+    """The mappings in a JSON list (anything else in it, or a non-list, is
+    dropped): tool inputs are whatever the model wrote."""
+    if not isinstance(value, list):
+        return []
+    items = cast(list[Any], value)
+    return [cast(dict[str, Any], item) for item in items if isinstance(item, dict)]
+
+
+def _nonblank(value: Any) -> Optional[str]:
+    """A string with something in it, stripped; else None."""
+    return (value.strip() or None) if isinstance(value, str) else None
+
+
+def _questions_markdown(data: dict[str, Any]) -> Optional[str]:
+    """An ``AskUserQuestion`` call's questions and options, as Markdown.
+
+    None when the input has no usable question, so a malformed call
+    stays an ordinary tool call.
+    """
+    blocks: list[str] = []
+    for question in _dicts(data.get("questions")):
+        text = _nonblank(question.get("question"))
+        if text is None:
+            continue
+        options: list[str] = []
+        for option in _dicts(question.get("options")):
+            label = _nonblank(option.get("label"))
+            if label is None:
+                continue
+            description = _nonblank(option.get("description"))
+            line = f"- **{label}**"
+            if description:
+                line += f" — {' '.join(description.split())}"
+            options.append(line)
+        blocks.append(text)
+        if options:
+            blocks.append("\n".join(options))
+    return "\n\n".join(blocks) or None
+
+
+#: Who wrote a last message that is Markdown (the rest are plain lines).
+_MARKDOWN_AUTHORS = frozenset({"claude", "question", "plan"})
+#: ExitPlanMode's input carries no plan when it lives in a plan file.
+_PLAN_FALLBACK = "The plan is ready for you to approve."
+
+
+def _waits_on_you(item: ToolUseContent) -> Optional[tuple[str, str]]:
+    """``(who, Markdown)`` for a tool call that waits on you, else None.
+
+    ``AskUserQuestion`` (its questions and options) and ``ExitPlanMode``
+    (the plan) hold the turn until you answer; a malformed question call
+    is an ordinary tool call.
+    """
+    data = item.input or {}
+    if item.name == "AskUserQuestion":
+        questions = _questions_markdown(data)
+        return ("question", questions) if questions else None
+    if item.name == "ExitPlanMode":
+        return ("plan", _nonblank(data.get("plan")) or _PLAN_FALLBACK)
+    return None
 
 
 def asks_you(text: str) -> bool:
@@ -176,58 +328,101 @@ def summarise_session(
     current: Optional[dict[str, Any]] = None
     branch: Optional[str] = None
     cwd: Optional[str] = None
+    background = BackgroundWork()
 
     for entry in entries:
-        if not isinstance(entry, (UserTranscriptEntry, AssistantTranscriptEntry)):
-            continue
-        if entry.isSidechain:
+        if not isinstance(
+            entry,
+            (
+                UserTranscriptEntry,
+                AssistantTranscriptEntry,
+                SystemTranscriptEntry,
+                AttachmentTranscriptEntry,
+                QueueOperationTranscriptEntry,
+            ),
+        ):
             continue
         at = _ms(entry.timestamp)
         if at is None:
             continue
+        if isinstance(entry, QueueOperationTranscriptEntry):
+            queued = _queued_notification(entry)
+            if queued is not None:
+                background.notified(queued, at)
+            continue
+        if entry.isSidechain:
+            continue
+
+        if isinstance(entry, SystemTranscriptEntry):
+            if entry.subtype == _WAKE_FIRE:
+                label = background.fired(at) or entry.content
+                current = _new_turn(at, "wake", trigger=label)
+                turns.append(current)
+            continue
+        if isinstance(entry, AttachmentTranscriptEntry):
+            queued = _queued_notification(entry)
+            if queued is not None:
+                # Mid-turn: it ends work, but the turn is already going.
+                background.notified(queued, at)
+            continue
+
         branch = entry.gitBranch or branch
         cwd = entry.cwd or cwd
 
         if isinstance(entry, UserTranscriptEntry):
+            results = [
+                i for i in entry.message.content if isinstance(i, ToolResultContent)
+            ]
+            for result in results:
+                # A toolUseResult describes the entry's one result.
+                structured = entry.toolUseResult if len(results) == 1 else None
+                background.tool_result(result, structured, at)
             prompt = _user_text(entry)
             if prompt is not None:
-                current = {
-                    "start": at,
-                    "end": at,
-                    "prompt": prompt,
-                    "tools": [],
-                    "last": None,
-                    "end_kind": "open",
-                }
+                current = _new_turn(at, "you", prompt=prompt)
+                turns.append(current)
+                continue
+            text = "" if results or entry.isMeta else _entry_text(entry)
+            if _NOTIFICATION_TAG in text:
+                # Delivered while Claude was idle: it starts a turn.
+                reported = background.notified(text, at)
+                label = next((n.label for n in reported if n.label), None)
+                current = _new_turn(at, "task", trigger=label)
                 turns.append(current)
                 continue
             if current is None:
                 continue
             # A tool result (or injected body) keeps the turn going.
             current["end"] = max(current["end"], at)
-            if any(isinstance(i, ToolResultContent) for i in entry.message.content):
+            if results:
                 current["end_kind"] = "open"
             continue
 
         if current is None:
             # Assistant output before any prompt (a resumed or forked
             # session's head): start an implicit turn so it still counts.
-            current = {
-                "start": at,
-                "end": at,
-                "prompt": None,
-                "tools": [],
-                "last": None,
-                "end_kind": "open",
-            }
+            current = _new_turn(at, "you")
             turns.append(current)
         current["end"] = max(current["end"], at)
         synthetic = entry.message.model == "<synthetic>"
         for item in entry.message.content:
             if isinstance(item, ToolUseContent):
                 current["tools"].append(at)
-                current["last"] = {"at": at, "who": "tool", "text": _tool_line(item)}
-                current["end_kind"] = "open"
+                background.tool_call(item, at)
+                waiting = _waits_on_you(item)
+                if waiting is not None:
+                    # Waiting on your answer or approval; its tool result
+                    # (a user entry) reopens the turn once you give it.
+                    who, text = waiting
+                    current["last"] = {"at": at, "who": who, "text": text}
+                    current["end_kind"] = "ask"
+                else:
+                    current["last"] = {
+                        "at": at,
+                        "who": "tool",
+                        "text": _tool_line(item),
+                    }
+                    current["end_kind"] = "open"
             elif isinstance(item, TextContent) and item.text.strip():
                 text = item.text.strip()
                 if synthetic or text.startswith(_API_ERROR_PREFIX):
@@ -262,27 +457,62 @@ def summarise_session(
         "state": state,
         "turnCount": len(turns),
         "toolCount": sum(len(t["tools"]) for t in turns),
-        "turns": [[t["start"], t["end"], t["end_kind"]] for t in shown],
+        "turns": [
+            [
+                t["start"],
+                t["end"],
+                t["end_kind"],
+                _snippet(t["prompt"] or t["trigger"]),
+                _snippet(t["last"]["text"]) if t["last"] else None,
+                t["origin"],
+            ]
+            for t in shown
+        ],
         "earlierTurns": len(turns) - len(shown),
         "tools": tools,
-        "lastPrompt": (
-            {
-                "at": last_prompt["start"],
-                "text": _clip(last_prompt["prompt"], MAX_PROMPT_CHARS),
-            }
-            if last_prompt
-            else None
+        "bg": background.items(horizon, MAX_BG_ITEMS),
+        "wakes": background.pending_wakes(horizon),
+        "lastPrompt": _rendered(
+            last_prompt["start"] if last_prompt else 0,
+            last_prompt["prompt"] if last_prompt else None,
+            MAX_PROMPT_CHARS,
+            render_user_markdown,
         ),
         "last": (
-            {
-                "at": last["at"],
-                "who": last["who"],
-                "text": _clip(last["text"], MAX_LAST_CHARS),
-            }
+            _rendered(
+                last["at"],
+                last["text"],
+                MAX_LAST_CHARS,
+                render_markdown if last["who"] in _MARKDOWN_AUTHORS else None,
+                who=last["who"],
+            )
             if last
             else None
         ),
     }
+
+
+def _rendered(
+    at: int,
+    text: Optional[str],
+    limit: int,
+    render: Optional[Callable[[str], str]],
+    **extra: str,
+) -> Optional[dict[str, Any]]:
+    """``{"at", [who], "html"}`` for a prompt or last message, or
+    ``{"at", [who], "text"}`` when it isn't Markdown (``render`` None).
+
+    One or the other, never both: the page shows one, and the data file
+    is reloaded every few seconds. The text is clipped first, so the
+    Markdown rendered is the text shown; a fence the clip leaves open
+    simply runs to the end.
+    """
+    if not text:
+        return None
+    clipped = _clip(text, limit)
+    if render is None:
+        return {"at": at, **extra, "text": clipped}
+    return {"at": at, **extra, "html": render(clipped)}
 
 
 def _worktree(cwd: Optional[str], project: str) -> Optional[str]:
@@ -394,6 +624,8 @@ def build_recent_payload(
                 "turns": info["turns"],
                 "earlierTurns": info["earlierTurns"],
                 "tools": info["tools"],
+                "bg": info["bg"],
+                "wakes": info["wakes"],
                 "lastPrompt": info["lastPrompt"],
                 "last": info["last"],
             }
@@ -404,6 +636,8 @@ def build_recent_payload(
         "generatedAt": now_ms,
         "windowDays": WINDOW_DAYS,
         "cacheTtlMinutes": CACHE_TTL_MINUTES,
+        "bgCapMinutes": BG_CAP_MINUTES,
+        "wakeGraceMinutes": WAKE_GRACE_MINUTES,
         "sessions": sessions,
     }
 

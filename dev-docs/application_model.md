@@ -1602,16 +1602,57 @@ everything is derived from rows the cache already holds, so archived
 sessions work too. A turn runs from a prompt you typed (`_user_text`
 excludes tool results, meta entries and injected bodies such as task
 notifications and command output) to the last entry before the next
-one, and ends `ask` (the last reply's last line ends with `?`), `err` (a
-`<synthetic>` reply or `API Error…` text), `open` (the final turn ends on
-a tool call or result) or `asst`. The session's state follows its final
+one, and ends `ask` (the last reply's last line ends with `?`, or a
+call that waits on you has no result yet: `AskUserQuestion`, whose
+questions and options `_questions_markdown` writes out as the last
+message, `who: "question"`, or `ExitPlanMode`, whose plan becomes it,
+`who: "plan"`; see `_waits_on_you`), `err` (a `<synthetic>` reply or `API Error…` text), `open` (the
+final turn ends on a tool call or result) or `asst`. The session's state follows its final
 turn: `asked`, `error`, `busy` or `done`. Sidechain entries are skipped.
 Only turns that ended within `TURN_HORIZON_HOURS` (24) are sent; the rest
-are counted in `earlierTurns`.
+are counted in `earlierTurns`. Each sent turn carries `SNIPPET_CHARS`
+(200) of its prompt and of how it ended, which the strip's markers show
+on hover. The last prompt, and the last message when Claude wrote it,
+carry `html` *in place of* `text` (the data file is reloaded every 15 s,
+so it holds one form, not both): the clipped text rendered by
+`render_user_markdown` / `render_markdown`, the session pages' escaping
+pipeline (§ 2.17). Tool lines and errors stay plain `text`.
 
 These are **transcript states, not liveness**: nothing here can tell an
-agent that stopped from one waiting quietly. Background work (async
-agents, monitors, `ScheduleWakeup`) is not modelled yet.
+agent that stopped from one waiting quietly.
+
+**Background work.** [`background_work.BackgroundWork`](../claude_code_log/background_work.py)
+collects what a session ran in the background as `summarise_session`
+feeds it entries; its module docstring records how each kind shows up in
+real transcripts. Background commands, async agents and monitors are
+found by the id their tool result names (`toolUseResult.backgroundTaskId`
+/ `agentId` / `taskId`, or the same id in the result text; Bash by its
+result, since a command that outlives its timeout is backgrounded
+without the flag), and end at the `<task-notification>` naming that id
+with a final status, a `TaskStop`/`KillShell`/`KillBash` on it, or (a
+monitor) an expiry event. Notifications are found by search, not prefix
+(some open with a `[SYSTEM NOTIFICATION …]` preamble), in user entries
+and in `queued_command` attachments. Pending wake-ups come from
+`ScheduleWakeup`'s `toolUseResult.scheduledFor` (exactly the fire time)
+and leave at the `system` entry with subtype `scheduled_task_fire`
+nearest them; a `{stop: true}` call cancels them. Cron jobs are not
+drawn.
+
+A notification delivered while Claude is idle (a user entry) and a
+wake-up firing each **start a turn** (`origin` `task` / `wake`, the turn
+tuple's sixth field), labelled with what reported or the wake-up's
+reason; a notification mid-turn (an attachment) only ends its work. Your
+last prompt stays the last one you typed. The payload carries
+`bg: [[start, end|null, kind, status|null, label, expiresAt|null]]`,
+`wakes: [[at, label]]` and the policy constants `bgCapMinutes`
+(60) and `wakeGraceMinutes` (5). The page applies them against its own
+clock, so a data file that stops changing still ages: work with no end
+recorded counts as running until the session's last entry plus the cap
+(or a monitor's expiry, if sooner), then shows as *no end recorded*; a
+wake-up is pending until its time plus the grace. A session whose
+transcript state is `done` but which has running work or a pending
+wake-up is shown as **waiting** (`background`), which leaves the *your
+move* filter.
 
 **Writing.** `converter._write_recent_page` runs after the index on every
 HTML hierarchy run. It takes each session's link from the index's own
@@ -1629,7 +1670,15 @@ rows, filters and scroll. Keeping data out of the page also makes the
 page identical from run to run, which the parallel-vs-sequential output
 test relies on; only the data file carries the time it was written (the
 page's staleness notice reads it). Row content is built with DOM APIs and
-`textContent` only: titles and messages are untrusted transcript text. `cli.watch` calls `recent.write_recent_data` after each
+`textContent`: titles and messages are untrusted transcript text. The one
+exception is the payload's `html` fields, which go in through a single
+helper (`renderedMarkdown` in `recent.js`) and nowhere else; they carry
+exactly the trust of a session page's message body, since the same
+pipeline escaped them. `test_recent_page.py` pins both halves: one
+`innerHTML`, fed only from `.html` fields. The page includes both
+Pygments sheets, and its `<body>` carries `theme-minimal` so the classic
+sheet reads the minimal tokens and the dark sheet's scope matches.
+`cli.watch` calls `recent.write_recent_data` after each
 single-project tick (default layout only: no `--output`, and the watched
 project inside the projects directory), since that path never rewrites
 the index; `watch --all-projects` gets the page from the hierarchy run.

@@ -15,25 +15,43 @@ file: no server is involved.
 ## What a row shows
 
 - **How long ago it last changed, and whose move it is.** The block at the
-  start of the row says *asked you* (the last reply ends on a question),
-  *error* (an API error was the last entry), *finished* (the turn ended
-  with nothing asked) or *mid-turn* (the last entry is a tool call or
-  result, or a prompt with no reply yet).
+  start of the row says *asked you* (the last reply ends on a question,
+  or Claude is waiting on an answer to its questions or on your approval
+  of its plan), *error* (an API error was the last entry), *finished* (the
+  turn ended with nothing asked), *background* (it finished, but work it
+  started in the background is still running or a wake-up is due) or
+  *mid-turn* (the last entry is a tool call or result, or a prompt with
+  no reply yet).
 - **The title, project, worktree and branch**, with a link to the session's
   own page.
-- **A strip of the last six hours and the next one.** Each turn is a bar
+- **A strip of the last four hours and the next one.** Each turn is a bar
   from your prompt to the agent's last entry, with its tool calls as thin
   ticks and a marker for how it ended. Where markers would crowd, the
-  earlier ones shrink to dots; hover one for its time. Turns from before
-  the strip's window are counted at its left edge.
+  earlier ones shrink to dots. Hover a marker for its time and the start
+  of that turn's prompt, or of how it ended. Turns from before the
+  strip's window are counted at its left edge. A turn Claude started by
+  itself (background work reporting back, or a wake-up firing) begins
+  with a bell or an alarm clock instead of the prompt marker.
+- **Background work.** Background commands, agents and monitors are thin
+  lines under the turns, from launch to their end: a tick when they
+  completed, a cross when they failed, a bar when they were stopped, and
+  an arrow at *now* while they are still running. Work that never
+  reported its end is drawn dashed. Lines that don't overlap share a lane;
+  past three lanes, the rest fold into the third as *+N more*. A pending
+  wake-up is an alarm clock at the time it is due, often in the hour
+  ahead.
 - **The cache countdown.** The prompt cache lasts an hour from the last
   update, drawn as a pale band. From 45 minutes on, the row says how many
   minutes are left: reply soon and the next turn still reads the cached
   context.
 
-Press the block to open the row: the turn, tool-call and message counts on
-the left, and your last prompt and the agent's last message in full on the
-right.
+Press the block (or the chevron beside it) to open the row: the turn,
+tool-call and message counts on the left, and your last prompt and the
+agent's last message on the right, rendered as Markdown. When Claude is
+waiting on you, the last message is what it is waiting on: its questions
+with their options, or the plan it wants approved. Below it, a
+*Background* list names every piece of background work with its times
+and how it ended, running ones first.
 
 The numbers at the top filter the list (*your move* is everything that
 asked you, errored or finished); *by project* groups the rows.
@@ -42,7 +60,10 @@ asked you, errored or finished); *by project* groups the rows.
     A transcript cannot tell an agent that stopped from one waiting
     quietly, so these states are about whose move it is, not about whether
     anything is still running. A *mid-turn* session may have died; one
-    that *finished* may still be open in a terminal.
+    that *finished* may still be open in a terminal. The same goes for
+    background work: work with no end recorded counts as running for an
+    hour after the session's last entry (a monitor stops sooner if its
+    timeout says so), and after that it is shown as *no end recorded*.
 
 ## Keeping it current
 

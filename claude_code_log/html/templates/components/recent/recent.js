@@ -11,7 +11,11 @@
 // times are redrawn against the clock.
 //
 // Every string in the payload comes from a transcript: it reaches the page
-// through textContent and setAttribute only, never as markup.
+// through textContent and setAttribute only, never as markup. The one
+// exception is the payload's `html` fields — the last prompt and message
+// rendered as Markdown by recent.py with the session pages' pipeline, which
+// escapes raw HTML in the transcript — and those go in through
+// renderedMarkdown() alone.
 (function () {
     'use strict';
 
@@ -19,7 +23,7 @@
     const RELOAD_MS = 15000;
     const TICK_MS = 30000;
     const STALE_MS = 2 * 60000;
-    const BEFORE_MS = 6 * 3600000; // the strip shows 6 h back...
+    const BEFORE_MS = 4 * 3600000; // the strip shows 4 h back...
     const AFTER_MS = 3600000; // ...and 1 h ahead
     const SPAN_MS = BEFORE_MS + AFTER_MS;
     const NOW_PCT = (BEFORE_MS / SPAN_MS) * 100;
@@ -28,19 +32,36 @@
     const STORE_KEY = 'claude-code-log:recent';
     const SVG_NS = 'http://www.w3.org/2000/svg';
 
+    // The block's words for each state. The payload sends the first four
+    // (from the transcript); 'waiting' is the page's own: a finished turn
+    // with background work still running or a wake-up still to come.
     const STATES = {
         asked: 'asked you',
         error: 'error',
         done: 'finished',
-        busy: 'mid-turn'
+        busy: 'mid-turn',
+        waiting: 'background'
     };
-    const WHO = { claude: 'Claude', tool: 'Tool call', error: 'Error' };
+    const TRANSCRIPT_STATES = ['asked', 'error', 'done', 'busy'];
+    const BG_KINDS = { bash: 'Bash', agent: 'Agent', monitor: 'Monitor' };
+    const BG_ENDS = ['completed', 'failed', 'stopped'];
+    const MAX_LANES = 3; // background lanes on the strip; the rest fold into the last
+    const LANE_GAP_PCT = 0.6; // room between two items sharing a lane
+    const MAX_BG_LISTED = 12; // background items in an open row's list
+    const WHO = {
+        claude: 'Claude',
+        question: 'Claude asked',
+        plan: 'Plan to approve',
+        tool: 'Tool call',
+        error: 'Error'
+    };
     const FILTERS = {
         all: function () {
             return true;
         },
-        move: function (s) {
-            return s.state === 'asked' || s.state === 'error' || s.state === 'done';
+        move: function (s, ctx) {
+            const st = effectiveState(s, ctx);
+            return st === 'asked' || st === 'error' || st === 'done';
         },
         urgent: function (s) {
             return s.state === 'asked' || s.state === 'error';
@@ -56,7 +77,13 @@
         err: 'M8 4v4.5M8 11.3v.2',
         branch: 'M4 5v6M12 7.5c0 2.5-3 2.5-6.5 4',
         clock: 'M8 4.5V8l2.5 1.5',
-        copy: 'M11 5V3.5A1.5 1.5 0 0 0 9.5 2h-6A1.5 1.5 0 0 0 2 3.5v6A1.5 1.5 0 0 0 3.5 11H5'
+        copy: 'M11 5V3.5A1.5 1.5 0 0 0 9.5 2h-6A1.5 1.5 0 0 0 2 3.5v6A1.5 1.5 0 0 0 3.5 11H5',
+        chevron: 'M6 3.5 10.5 8 6 12.5',
+        // a bell: background work reported back
+        task: 'M4.5 11V7.5a3.5 3.5 0 0 1 7 0V11l1 1.5h-9zM6.8 14.2h2.4',
+        // an alarm clock: a wake-up
+        wake: 'M8 4.5a4.5 4.5 0 1 0 0 9a4.5 4.5 0 1 0 0-9M8 6.8V9l1.4 1M2.8 4.3 4.6 2.8M13.2 4.3l-1.8-1.5',
+        x: 'M4.5 4.5l7 7M11.5 4.5l-7 7'
     };
 
     // ---- clock -----------------------------------------------------
@@ -114,6 +141,52 @@
         return Math.max(1, Math.ceil((s.lastAt + ctx.ttl * 60000 - ctx.now) / 60000));
     }
 
+    // ---- background work -------------------------------------------
+    // The transcript can't say whether work is still running, only that
+    // nothing reported its end. Such an item counts as running until its
+    // own expiry (a monitor's timeout) or bgCap after the session's last
+    // entry, whichever is first, judged against this page's clock so an
+    // old data file still ages; past that it has 'no end recorded'.
+    function bgLimit(item, s, ctx) {
+        const cap = s.lastAt + ctx.bgCap * 60000;
+        return item.expires !== null ? Math.min(item.expires, cap) : cap;
+    }
+    function bgStatus(item, s, ctx) {
+        if (item.end !== null) return item.status;
+        return ctx.now < bgLimit(item, s, ctx) ? 'running' : 'lost';
+    }
+    // Where an item's line stops: its end, else now or its limit.
+    function bgEnd(item, s, ctx) {
+        return item.end !== null ? item.end : Math.min(bgLimit(item, s, ctx), ctx.now);
+    }
+    function bgRunning(s, ctx) {
+        return s.bg.filter(function (item) {
+            return bgStatus(item, s, ctx) === 'running';
+        }).length;
+    }
+    // Wake-ups still to come (a missed one, past its grace, is dropped).
+    function pendingWakes(s, ctx) {
+        return s.wakes.filter(function (w) {
+            return ctx.now < w.at + ctx.wakeGrace * 60000;
+        });
+    }
+    // The transcript state, or 'waiting' for a finished turn that is
+    // waiting on its own background work. A question, an error or a turn
+    // under way stays what it is.
+    function effectiveState(s, ctx) {
+        if (s.state !== 'done') return s.state;
+        return bgRunning(s, ctx) > 0 || pendingWakes(s, ctx).length > 0 ? 'waiting' : 'done';
+    }
+    function bgName(item) {
+        return BG_KINDS[item.kind] + (item.label ? ' “' + item.label + '”' : '');
+    }
+    // "14:02 – running", "14:02 – no end recorded", "14:02–14:20 · failed"
+    function bgSpan(item, status) {
+        if (status === 'running') return hhmm(item.start) + ' – running';
+        if (status === 'lost') return hhmm(item.start) + ' – no end recorded';
+        return hhmm(item.start) + '–' + hhmm(item.end) + ' · ' + status;
+    }
+
     // ---- payload ---------------------------------------------------
     function num(value) {
         const n = Number(value);
@@ -142,7 +215,7 @@
             title: str(raw.title) || str(raw.short),
             href: safeHref(raw.href),
             lastAt: num(raw.lastAt),
-            state: Object.prototype.hasOwnProperty.call(STATES, raw.state) ? raw.state : 'done',
+            state: TRANSCRIPT_STATES.indexOf(raw.state) >= 0 ? raw.state : 'done',
             messages: num(raw.messages),
             turnCount: num(raw.turnCount),
             toolCount: num(raw.toolCount),
@@ -151,12 +224,49 @@
                     return Array.isArray(t) && t.length >= 2;
                 })
                 .map(function (t) {
-                    return [num(t[0]), num(t[1]), str(t[2]) || 'asst'];
+                    // [start, end, how it ended, what started it, how it
+                    // ended (snippets), who started it: you | task | wake]
+                    const origin = t[5] === 'task' || t[5] === 'wake' ? t[5] : 'you';
+                    return [num(t[0]), num(t[1]), str(t[2]) || 'asst', str(t[3]), str(t[4]), origin];
+                }),
+            // [start, end|null, kind, status|null, label, expiresAt|null]
+            bg: (Array.isArray(raw.bg) ? raw.bg : [])
+                .filter(function (b) {
+                    return Array.isArray(b) && b.length >= 3;
+                })
+                .map(function (b) {
+                    const end = b[1] === null || b[1] === undefined ? null : num(b[1]);
+                    return {
+                        start: num(b[0]),
+                        end: end,
+                        kind: BG_KINDS[b[2]] ? b[2] : 'bash',
+                        status: end !== null && BG_ENDS.indexOf(b[3]) >= 0 ? b[3] : end !== null ? 'completed' : null,
+                        label: str(b[4]),
+                        expires: b[5] === null || b[5] === undefined ? null : num(b[5])
+                    };
+                })
+                .sort(function (a, b) {
+                    return a.start - b.start;
+                }),
+            // [at, label]: wake-ups not yet fired
+            wakes: (Array.isArray(raw.wakes) ? raw.wakes : [])
+                .filter(function (w) {
+                    return Array.isArray(w) && w.length >= 1;
+                })
+                .map(function (w) {
+                    return { at: num(w[0]), label: str(w[1]) };
                 }),
             earlierTurns: num(raw.earlierTurns),
             tools: (Array.isArray(raw.tools) ? raw.tools : []).map(num),
-            lastPrompt: prompt ? { at: num(prompt.at), text: str(prompt.text) } : null,
-            last: last ? { at: num(last.at), who: WHO[last.who] ? last.who : 'claude', text: str(last.text) } : null
+            lastPrompt: prompt ? { at: num(prompt.at), html: str(prompt.html) } : null,
+            last: last
+                ? {
+                      at: num(last.at),
+                      who: WHO[last.who] ? last.who : 'claude',
+                      text: str(last.text),
+                      html: str(last.html)
+                  }
+                : null
         };
     }
     function cleanPayload(raw) {
@@ -173,6 +283,8 @@
             generatedAt: num(raw.generatedAt),
             windowDays: num(raw.windowDays) || 3,
             ttl: num(raw.cacheTtlMinutes) || 60,
+            bgCap: num(raw.bgCapMinutes) || 60,
+            wakeGrace: num(raw.wakeGraceMinutes) || 5,
             sessions: sessions
         };
     }
@@ -240,6 +352,14 @@
             svg.appendChild(path);
         });
         return svg;
+    }
+    // The one place markup enters the page: a payload `html` field, which
+    // recent.py rendered with the session pages' escaping Markdown pipeline
+    // (never a transcript string itself; test_recent_page.py holds this).
+    function renderedMarkdown(cls, html) {
+        const node = el('div', 'rc-md ' + cls);
+        node.innerHTML = html;
+        return node;
     }
     function markerIcon(kind) {
         const svg = icon([ICON[kind]], 12);
@@ -345,6 +465,9 @@
             s.tools.forEach(function (ms) {
                 if (ms >= win.start && ms <= win.end) nodes.push(span('rc-tick', win.pct(ms)));
             });
+            drawLanes(s, ctx).forEach(function (node) {
+                nodes.push(node);
+            });
             const earlier =
                 s.earlierTurns +
                 s.turns.filter(function (t) {
@@ -354,10 +477,14 @@
                 nodes.push(el('span', 'rc-strip-note rc-earlier', '◂ +' + plural(earlier, 'earlier turn')));
             }
             const lastTurn = s.turns.length ? s.turns[s.turns.length - 1] : null;
+            const running = bgRunning(s, ctx);
+            const wakes = pendingWakes(s, ctx);
             label =
                 plural(s.turnCount, 'turn') +
                 (lastTurn ? ', the last ending ' + hhmm(lastTurn[1]) : '') +
-                (s.lastAt + ttlMs > ctx.now ? '; cache warm until ' + hhmm(s.lastAt + ttlMs) : '');
+                (s.lastAt + ttlMs > ctx.now ? '; cache warm until ' + hhmm(s.lastAt + ttlMs) : '') +
+                (running ? '; ' + plural(running, 'background task') + ' running' : '') +
+                (wakes.length ? '; wakes up at ' + hhmm(wakes[0].at) : '');
         } else {
             nodes.push(
                 el(
@@ -378,14 +505,118 @@
         nodes.push(span('rc-now', NOW_PCT));
         strip.replaceChildren(...nodes);
         strip.setAttribute('aria-label', label);
-        row.events = inWindow ? markerEvents(s, shown, win) : [];
+        row.events = inWindow ? markerEvents(s, shown, ctx) : [];
         row.markWidth = -1;
     }
-    function markerEvents(s, shown, win) {
+    // The background lanes: each item a thin line on the first lane free
+    // at its start (so work done one after another shares a lane), at
+    // most MAX_LANES of them; when more are needed, the last lane carries
+    // the rest as the union of their spans, with a "+N more" note.
+    function drawLanes(s, ctx) {
+        const win = ctx.win;
+        const laneEnds = [];
+        const placed = [];
+        s.bg.forEach(function (item) {
+            const status = bgStatus(item, s, ctx);
+            const end = bgEnd(item, s, ctx);
+            if (end < win.start || item.start > win.end) return;
+            const left = win.pct(Math.max(item.start, win.start));
+            const right = win.pct(Math.min(end, win.end));
+            let lane = laneEnds.findIndex(function (laneEnd) {
+                return laneEnd + LANE_GAP_PCT <= left;
+            });
+            if (lane < 0) {
+                lane = laneEnds.length;
+                laneEnds.push(0);
+            }
+            laneEnds[lane] = right;
+            placed.push({ item: item, status: status, left: left, right: right, lane: lane, ends: end <= win.end });
+        });
+        const folded = laneEnds.length > MAX_LANES;
+        const nodes = [];
+        const overflow = [];
+        placed.forEach(function (p) {
+            if (folded && p.lane >= MAX_LANES - 1) {
+                overflow.push(p);
+                return;
+            }
+            const line = span('rc-bg rc-bg-' + p.status, p.left, p.right - p.left);
+            line.dataset.lane = String(p.lane);
+            line.title = bgName(p.item) + ' · ' + bgSpan(p.item, p.status);
+            nodes.push(line);
+            if (p.ends && BG_ENDS.indexOf(p.status) >= 0) {
+                const end = span('rc-bg-end rc-bg-end-' + p.status, p.right);
+                end.dataset.lane = String(p.lane);
+                if (p.status === 'failed') end.appendChild(icon([ICON.x], 11));
+                nodes.push(end);
+            }
+        });
+        if (overflow.length) {
+            const lane = String(MAX_LANES - 1);
+            const tip =
+                '+' +
+                overflow.length +
+                ' more: ' +
+                overflow
+                    .slice(0, 8)
+                    .map(function (p) {
+                        return bgName(p.item);
+                    })
+                    .join(', ') +
+                (overflow.length > 8 ? ', …' : '');
+            overflow.sort(function (a, b) {
+                return a.left - b.left;
+            });
+            let run = null;
+            overflow.concat([null]).forEach(function (p) {
+                if (p && run && p.left <= run.right + LANE_GAP_PCT) {
+                    run.right = Math.max(run.right, p.right);
+                    return;
+                }
+                if (run) {
+                    const line = span('rc-bg rc-bg-more', run.left, run.right - run.left);
+                    line.dataset.lane = lane;
+                    line.title = tip;
+                    nodes.push(line);
+                }
+                run = p ? { left: p.left, right: p.right } : null;
+            });
+            const note = el('span', 'rc-strip-note rc-bg-more-n', '+' + overflow.length + ' more');
+            note.title = tip;
+            nodes.push(note);
+        }
+        return nodes;
+    }
+
+    // What started a turn: a prompt you typed, background work reporting
+    // back, or a wake-up.
+    const ORIGIN = {
+        you: { kind: 'prompt', tip: 'You' },
+        task: { kind: 'task', tip: 'Background work reported' },
+        wake: { kind: 'wake', tip: 'Woke up' }
+    };
+    function markerEvents(s, shown, ctx) {
+        const win = ctx.win;
         const events = [];
         const final = s.turns[s.turns.length - 1];
+        pendingWakes(s, ctx).forEach(function (w) {
+            if (w.at < win.start) return;
+            // Clamped to the strip's end; the tooltip has the time.
+            events.push({
+                at: Math.min(w.at, win.end),
+                time: w.at,
+                kind: 'wake',
+                pending: true,
+                keep: true,
+                tip: 'Wakes up',
+                snippet: w.label
+            });
+        });
         shown.forEach(function (t) {
-            if (t[0] >= win.start) events.push({ at: t[0], kind: 'prompt', keep: false, tip: 'You' });
+            if (t[0] >= win.start) {
+                const origin = ORIGIN[t[5]];
+                events.push({ at: t[0], kind: origin.kind, keep: false, tip: origin.tip, snippet: t[3] });
+            }
             const kind = t[2];
             if (kind === 'open' || t[1] < win.start || t[1] > win.end) return;
             const isLast = t === final;
@@ -401,7 +632,8 @@
                 at: t[1],
                 kind: kind === 'ask' || kind === 'err' ? kind : 'asst',
                 keep: isLast || kind === 'ask' || kind === 'err',
-                tip: tip
+                tip: tip,
+                snippet: t[4]
             });
         });
         events.sort(function (a, b) {
@@ -422,9 +654,9 @@
             const x = (pct / 100) * width;
             const full = e.keep || x - lastFull >= MARK_GAP_PX;
             if (full) lastFull = x;
-            const node = el('span', (full ? 'rc-mk' : 'rc-dot') + ' rc-k-' + e.kind);
+            const node = el('span', (full ? 'rc-mk' : 'rc-dot') + ' rc-k-' + e.kind + (e.pending ? ' rc-pending' : ''));
             node.style.left = pct + '%';
-            node.title = e.tip + ' · ' + hhmm(e.at);
+            node.title = e.tip + ' · ' + hhmm(e.time || e.at) + (e.snippet ? '\n' + e.snippet : '');
             if (full) node.appendChild(markerIcon(e.kind));
             return node;
         });
@@ -473,6 +705,14 @@
         row.el.setAttribute('role', 'listitem');
         row.el.dataset.id = id;
 
+        // The chevron says the row opens; it is a pointer target only (the
+        // block is the control keyboards and screen readers use), so a row
+        // doesn't gain a second tab stop.
+        row.chev = el('span', 'rc-chev');
+        row.chev.setAttribute('aria-hidden', 'true');
+        row.chev.appendChild(icon([ICON.chevron], 14));
+        row.chev.addEventListener('click', toggle);
+
         row.block = el('button', 'rc-block');
         row.block.type = 'button';
         row.block.setAttribute('aria-controls', 'rc-x-' + id);
@@ -482,12 +722,13 @@
         whenEl.append(row.blockN, row.blockU);
         row.blockStatus = el('span', 'rc-block-status');
         row.block.append(whenEl, row.blockStatus);
-        row.block.addEventListener('click', function () {
+        function toggle() {
             if (state.expanded.has(id)) state.expanded.delete(id);
             else state.expanded.add(id);
             save();
             applyExpanded(row);
-        });
+        }
+        row.block.addEventListener('click', toggle);
 
         row.info = el('div', 'rc-info');
         row.strip = el('div', 'rc-strip');
@@ -518,13 +759,14 @@
         row.panel.id = 'rc-x-' + id;
         row.panel.hidden = true;
 
-        row.el.append(row.block, row.info, row.strip, row.copy, row.panel);
+        row.el.append(row.chev, row.block, row.info, row.strip, row.copy, row.panel);
         return row;
     }
 
     function applyExpanded(row) {
         const open = state.expanded.has(row.id);
         setAttr(row.block, 'aria-expanded', open ? 'true' : 'false');
+        setAttr(row.el, 'data-open', open ? 'true' : 'false');
         if (row.panel.hidden === open) row.panel.hidden = !open;
         if (row.label) {
             setAttr(row.block, 'aria-label', (open ? 'Hide' : 'Show') + ' the last message of ' + row.label);
@@ -582,7 +824,12 @@
             s.href,
             s.lastPrompt,
             s.last,
-            new Date(ctx.now).toDateString()
+            new Date(ctx.now).toDateString(),
+            s.bg,
+            s.bg.map(function (item) {
+                return bgStatus(item, s, ctx);
+            }),
+            pendingWakes(s, ctx)
         ]);
         if (row.sigs.panel === sig) return;
         row.sigs.panel = sig;
@@ -606,10 +853,10 @@
         }
         const main = el('div', 'rc-x-main');
         if (s.lastPrompt) {
-            const prompt = el('p', 'rc-prompt');
+            const prompt = el('div', 'rc-prompt');
             prompt.append(
                 el('span', 'rc-prompt-at', '› ' + when(s.lastPrompt.at, ctx.now)),
-                document.createTextNode('  ' + s.lastPrompt.text)
+                renderedMarkdown('rc-prompt-text', s.lastPrompt.html)
             );
             main.appendChild(prompt);
         }
@@ -617,15 +864,63 @@
             const last = el('div', 'rc-last rc-who-' + s.last.who);
             last.append(
                 el('span', 'rc-who', WHO[s.last.who] + ' · ' + when(s.last.at, ctx.now)),
-                el('p', 'rc-last-text', s.last.text)
+                s.last.html ? renderedMarkdown('rc-last-text', s.last.html) : el('p', 'rc-last-text', s.last.text)
             );
             main.appendChild(last);
         } else {
             main.appendChild(el('p', 'rc-noreply', 'No reply yet.'));
         }
+        const background = backgroundList(s, ctx);
+        if (background) main.appendChild(background);
         refocus(row.panel, function () {
             row.panel.replaceChildren(side, main);
         });
+    }
+
+    // An open row's list of its background work: what is running first,
+    // then wake-ups still to come, then the rest by start. Text only:
+    // the labels are transcript text.
+    function backgroundList(s, ctx) {
+        const wakes = pendingWakes(s, ctx);
+        if (!s.bg.length && !wakes.length) return null;
+        const items = s.bg.map(function (item) {
+            return { item: item, status: bgStatus(item, s, ctx) };
+        });
+        const running = items.filter(function (x) {
+            return x.status === 'running';
+        });
+        const rest = items.filter(function (x) {
+            return x.status !== 'running';
+        });
+        const lines = running
+            .map(function (x) {
+                return bgLine(x);
+            })
+            .concat(
+                wakes.map(function (w) {
+                    return { text: 'Wakes up ' + hhmm(w.at) + (w.label ? ' · ' + w.label : ''), cls: 'rc-bgl-wake' };
+                }),
+                rest.map(function (x) {
+                    return bgLine(x);
+                })
+            );
+        const box = el('div', 'rc-bgl');
+        box.appendChild(el('span', 'rc-who', 'Background'));
+        const list = el('ul');
+        lines.slice(0, MAX_BG_LISTED).forEach(function (line) {
+            list.appendChild(el('li', line.cls, line.text));
+        });
+        if (lines.length > MAX_BG_LISTED) {
+            list.appendChild(el('li', 'rc-bgl-more', '+' + (lines.length - MAX_BG_LISTED) + ' more'));
+        }
+        box.appendChild(list);
+        return box;
+    }
+    function bgLine(x) {
+        const parts = [BG_KINDS[x.item.kind]];
+        if (x.item.label) parts.push(x.item.label);
+        parts.push(bgSpan(x.item, x.status));
+        return { text: parts.join(' · '), cls: 'rc-bgl-' + x.status };
     }
 
     // Replace a part's content, putting focus back on its counterpart if
@@ -642,13 +937,14 @@
 
     function updateRow(row, s, ctx) {
         row.short = s.short;
-        row.el.className = 'rc-row rc-state-' + s.state;
+        const shownState = effectiveState(s, ctx);
+        row.el.className = 'rc-row rc-state-' + shownState;
         const t = since(s.lastAt, ctx.now);
         setText(row.blockN, t.n);
         setText(row.blockU, t.u);
         row.block.classList.toggle('rc-block-long', t.u !== 'min' && t.u !== 'h');
-        setText(row.blockStatus, STATES[s.state]);
-        row.label = s.title + ', ' + STATES[s.state] + ', updated ' + ago(s.lastAt, ctx.now);
+        setText(row.blockStatus, STATES[shownState]);
+        row.label = s.title + ', ' + STATES[shownState] + ', updated ' + ago(s.lastAt, ctx.now);
         applyExpanded(row);
         drawInfo(row, s, ctx);
         const stripSig = JSON.stringify([
@@ -660,7 +956,11 @@
             s.tools,
             s.earlierTurns,
             s.turnCount,
-            s.messages
+            s.messages,
+            s.bg,
+            s.wakes,
+            ctx.bgCap,
+            ctx.wakeGrace
         ]);
         if (row.sigs.strip !== stripSig) {
             row.sigs.strip = stripSig;
@@ -695,7 +995,13 @@
         const payload = state.payload;
         if (!payload) return;
         const now = clock();
-        const ctx = { now: now, ttl: payload.ttl, win: stripCtx(now) };
+        const ctx = {
+            now: now,
+            ttl: payload.ttl,
+            bgCap: payload.bgCap,
+            wakeGrace: payload.wakeGrace,
+            win: stripCtx(now)
+        };
         const scrollY = window.scrollY;
 
         filterEls.forEach(function (button) {
@@ -836,7 +1142,10 @@
             item(mark('ask'), 'asked you'),
             item(mark('err'), 'error'),
             item(el('span', 'rc-tick'), 'tool call'),
-            item(band, 'prompt cache warm')
+            item(band, 'prompt cache warm'),
+            item(el('span', 'rc-bg rc-bg-running'), 'background work'),
+            item(mark('task'), 'work reported'),
+            item(mark('wake'), 'wake-up')
         );
     })();
 
