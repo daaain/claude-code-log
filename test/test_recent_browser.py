@@ -104,7 +104,11 @@ def _hhmm(page: Page, ms: int) -> str:
 
 
 @pytest.mark.browser
-def test_reload_picks_up_new_sessions_in_place(page: Page, tmp_path: Path) -> None:
+def test_reload_picks_up_new_sessions_in_place(
+    isolated_page: Page, tmp_path: Path
+) -> None:
+    # It installs a clock, which belongs to the context: a fresh one.
+    page = isolated_page
     first = _payload(
         [_session("aaaa1111", 4 * MIN, "asked"), _session("bbbb2222", 37 * MIN)]
     )
@@ -602,7 +606,9 @@ def test_crowded_markers_shrink_to_dots(page: Page, tmp_path: Path) -> None:
 
 
 @pytest.mark.browser
-def test_stale_notice_and_empty_state(page: Page, tmp_path: Path) -> None:
+def test_stale_notice_and_empty_state(isolated_page: Page, tmp_path: Path) -> None:
+    # It installs a clock, which belongs to the context: a fresh one.
+    page = isolated_page
     stale = _payload([], generated_at=NOW - 5 * MIN)
     fresh = _payload([_session("ffff6666", 1 * MIN)])
     page.clock.install()
