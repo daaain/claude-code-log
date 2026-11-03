@@ -6336,8 +6336,12 @@ def _plan_project(
     # Fast staleness check (mtime comparison only). Exclude agent
     # files - they are loaded via session references, not directly.
     jsonl_files = trunk_jsonl_files(project_dir)
-    # Valid session IDs are from existing JSONL files (file stem = session ID)
+    # Valid session IDs start from existing JSONL filename stems, then are
+    # resolved through the cache's recorded source files so renamed and
+    # multi-session JSONLs are not mistaken for deleted (archived) sources.
     valid_session_ids = {f.stem for f in jsonl_files}
+    if cache_manager:
+        valid_session_ids = cache_manager.get_existing_session_ids(valid_session_ids)
     modified_files = (
         cache_manager.get_modified_files(jsonl_files) if cache_manager else []
     )
