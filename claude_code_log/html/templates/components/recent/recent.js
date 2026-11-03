@@ -702,6 +702,173 @@
         return Promise.resolve(fallback());
     }
 
+    // ---- motion ----------------------------------------------------
+    // Changes to the list animate by FLIP: measure where the rows are
+    // drawn, make the change (the layout jumps straight to its end), then
+    // play each part back from where it was. The rows animate only
+    // transform, opacity and clip-path, so no frame needs their layout and
+    // the browser can run them off the main thread while a refresh is
+    // parsed and drawn. The one exception is the list's own height, which
+    // carries the card's bottom edge and the legend below along with the
+    // rows instead of jumping (nothing in the list depends on it).
+    // Every part's motion comes from the one before/after measurement, so
+    // a row sliding up the list and the rows an opening row pushes down
+    // can't disagree, and a change mid-motion measures where things are
+    // drawn then and carries on from there. Only what is on screen moves;
+    // with reduced motion asked for, nothing does.
+    const MOTION_MIN_MS = 180;
+    const MOTION_MAX_MS = 400;
+    const MOTION_MS_PER_PX = 0.25; // a longer way takes a little longer
+    const MOTION_EASING = 'cubic-bezier(0.2, 0, 0, 1)';
+    const reducedMotion = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
+    const motions = new Set();
+    let fresh = []; // parts drawn anew during a change: they fade in
+
+    function motionOn() {
+        return typeof Element.prototype.animate === 'function' && !(reducedMotion && reducedMotion.matches);
+    }
+    function motionMs(px) {
+        return Math.round(Math.min(MOTION_MAX_MS, MOTION_MIN_MS + Math.abs(px) * MOTION_MS_PER_PX));
+    }
+    function play(node, keyframes, ms, done) {
+        const anim = node.animate(keyframes, { duration: ms, easing: MOTION_EASING });
+        motions.add(anim);
+        function end() {
+            motions.delete(anim);
+            if (done) done();
+        }
+        anim.onfinish = end;
+        anim.oncancel = end;
+    }
+    function fadeIn(node, ms) {
+        play(node, [{ opacity: 0 }, { opacity: 0, offset: 0.25 }, { opacity: 1 }], ms);
+    }
+    // How much of a row a running reveal still clips off its bottom.
+    function clippedOff(node) {
+        const m = /inset\(([^)]*)\)/.exec(getComputedStyle(node).clipPath || '');
+        if (!m) return 0;
+        const v = m[1].trim().split(/\s+/).map(parseFloat);
+        return (v.length > 2 ? v[2] : v[0]) || 0;
+    }
+    // Where each row and group heading is drawn: transforms included, and
+    // the height it shows (less a reveal's clip) while it is moving.
+    function measure() {
+        const out = new Map();
+        const moving = motions.size > 0;
+        rowsEl.querySelectorAll('.rc-row, .rc-group-h').forEach(function (node) {
+            const r = node.getBoundingClientRect();
+            out.set(node, { top: r.top, height: r.height - (moving ? clippedOff(node) : 0) });
+        });
+        return out;
+    }
+    function onScreen(box) {
+        return box.top < window.innerHeight && box.top + box.height > 0;
+    }
+    // The boxes a part is drawn as: itself or, under display: contents
+    // (an open row at phone width), its children's.
+    function boxes(node) {
+        if (getComputedStyle(node).display !== 'contents') return [node];
+        return Array.prototype.concat.apply([], Array.from(node.children).map(boxes));
+    }
+    // A closing row's panel, left drawn where it was (inert, unseen by
+    // assistive tech) while it fades and the rows below slide up over it.
+    // At phone width the panel has no box of its own, and simply goes.
+    function ghostOf(row) {
+        const panel = row.panel;
+        if (panel.hidden || getComputedStyle(panel).display === 'contents') return null;
+        const ghost = panel.cloneNode(true);
+        ghost.removeAttribute('id');
+        ghost.className = 'rc-ghost';
+        ghost.setAttribute('aria-hidden', 'true');
+        ghost.inert = true;
+        ghost.style.top = panel.offsetTop + 'px';
+        ghost.style.left = panel.offsetLeft + 'px';
+        ghost.style.width = panel.offsetWidth + 'px';
+        return ghost;
+    }
+
+    // Make `change` and animate what it moved. `opts.opened` / `opts.closed`
+    // name a row whose panel it opens or closes.
+    function flip(change, opts) {
+        opts = opts || {};
+        fresh = [];
+        if (!motionOn()) {
+            change();
+            fresh = [];
+            return;
+        }
+        const before = measure();
+        const listWas = rowsEl.getBoundingClientRect();
+        const ghost = opts.closed ? ghostOf(opts.closed) : null;
+        Array.from(motions).forEach(function (anim) {
+            anim.cancel();
+        });
+        rowsEl.querySelectorAll('.rc-ghost').forEach(function (node) {
+            node.remove();
+        });
+        change();
+        const after = measure();
+        let longest = 0;
+        function move(node, keyframes, ms, done) {
+            longest = Math.max(longest, ms);
+            play(node, keyframes, ms, done);
+        }
+        after.forEach(function (now, node) {
+            const was = before.get(node);
+            if (!onScreen(now) && !(was && onScreen(was))) return;
+            if (!was) {
+                fadeIn(node, MOTION_MIN_MS);
+                return;
+            }
+            const dy = was.top - now.top;
+            const grew = now.height - was.height;
+            const from = {};
+            const to = {};
+            if (Math.abs(dy) >= 0.5) {
+                from.transform = 'translateY(' + dy + 'px)';
+                to.transform = 'none';
+                // A row moving up is drawn above the rows it passes (only
+                // an update moves a row up the list; the rest shift down)
+                // and above a closing panel's copy.
+                if (dy > 0) from.zIndex = to.zIndex = '1';
+            }
+            if (grew >= 0.5) {
+                from.clipPath = 'inset(0px 0px ' + grew + 'px 0px)';
+                to.clipPath = 'inset(0px 0px 0px 0px)';
+            }
+            if (Object.keys(from).length) move(node, [from, to], motionMs(Math.max(Math.abs(dy), grew)));
+        });
+        if (opts.opened) {
+            const box = after.get(opts.opened.el);
+            if (box && onScreen(box)) {
+                const ms = motionMs(box.height - before.get(opts.opened.el).height);
+                boxes(opts.opened.panel).forEach(function (node) {
+                    fadeIn(node, ms);
+                });
+            }
+        }
+        if (ghost) {
+            opts.closed.el.appendChild(ghost);
+            move(ghost, [{ opacity: 1 }, { opacity: 0 }], motionMs(ghost.offsetHeight), function () {
+                ghost.remove();
+            });
+        }
+        const listNow = rowsEl.getBoundingClientRect();
+        const longer = listNow.height - listWas.height;
+        const edge = { top: listWas.top + Math.min(listWas.height, listNow.height), height: Math.abs(longer) };
+        if (Math.abs(longer) >= 0.5 && onScreen(edge)) {
+            play(
+                rowsEl,
+                [{ height: listWas.height + 'px' }, { height: listNow.height + 'px' }],
+                longest || motionMs(longer)
+            );
+        }
+        fresh.forEach(function (node) {
+            if (node.isConnected && onScreen(node.getBoundingClientRect())) fadeIn(node, MOTION_MIN_MS);
+        });
+        fresh = [];
+    }
+
     function makeRow(id) {
         const row = { id: id, sigs: {} };
         row.el = el('div', 'rc-row');
@@ -726,10 +893,16 @@
         row.blockStatus = el('span', 'rc-block-status');
         row.block.append(whenEl, row.blockStatus);
         function toggle() {
-            if (state.expanded.has(id)) state.expanded.delete(id);
-            else state.expanded.add(id);
-            save();
-            applyExpanded(row);
+            const opening = !state.expanded.has(id);
+            flip(
+                function () {
+                    if (opening) state.expanded.add(id);
+                    else state.expanded.delete(id);
+                    save();
+                    applyExpanded(row);
+                },
+                opening ? { opened: row } : { closed: row }
+            );
         }
         row.block.addEventListener('click', toggle);
 
@@ -836,6 +1009,15 @@
         ]);
         if (row.sigs.panel === sig) return;
         row.sigs.panel = sig;
+        // The panel is redrawn whole; in an open row, the prompt or last
+        // message that is new since it was last drawn fades in.
+        const promptSig = JSON.stringify(s.lastPrompt);
+        const lastSig = JSON.stringify(s.last);
+        const newPrompt = row.sigs.prompt !== undefined && row.sigs.prompt !== promptSig;
+        const newLast = row.sigs.last !== undefined && row.sigs.last !== lastSig;
+        const shown = state.expanded.has(row.id);
+        row.sigs.prompt = promptSig;
+        row.sigs.last = lastSig;
         const side = el('div', 'rc-x-side');
         const dl = el('dl');
         [
@@ -862,6 +1044,7 @@
                 renderedMarkdown('rc-prompt-text', s.lastPrompt.html)
             );
             main.appendChild(prompt);
+            if (shown && newPrompt) fresh.push(prompt);
         }
         if (s.last) {
             const last = el('div', 'rc-last rc-who-' + s.last.who);
@@ -870,6 +1053,7 @@
                 s.last.html ? renderedMarkdown('rc-last-text', s.last.html) : el('p', 'rc-last-text', s.last.text)
             );
             main.appendChild(last);
+            if (shown && newLast) fresh.push(last);
         } else {
             main.appendChild(el('p', 'rc-noreply', 'No reply yet.'));
         }
@@ -994,9 +1178,19 @@
     }
 
     // ---- render ----------------------------------------------------
-    function render() {
+    // A refresh or the clock animates what it moves; the first draw, and
+    // choosing a filter or grouping (`instant`), redraw at once.
+    function render(instant) {
+        if (!state.payload) return;
+        if (!lastCtx || instant) {
+            draw();
+            fresh = [];
+        } else {
+            flip(draw);
+        }
+    }
+    function draw() {
         const payload = state.payload;
-        if (!payload) return;
         const now = clock();
         const ctx = {
             now: now,
@@ -1104,13 +1298,13 @@
         button.addEventListener('click', function () {
             state.filter = button.getAttribute('data-filter');
             save();
-            render();
+            render(true);
         });
     });
     groupEl.addEventListener('change', function () {
         state.group = groupEl.checked;
         save();
-        render();
+        render(true);
     });
     let resizeFrame = 0;
     window.addEventListener('resize', function () {

@@ -264,10 +264,11 @@ body.rc-page {
 /* ----------------------------------------------------------- panel */
 
 .rc-panel {
+    --rc-surface: var(--bg); /* what a row is drawn on (see .rc-row) */
     display: flex;
     flex-direction: column;
     border-radius: 8px;
-    background: var(--bg);
+    background: var(--rc-surface);
     border: 1px solid var(--rule);
     overflow: hidden;
 }
@@ -390,12 +391,15 @@ body.rc-page {
 /* ------------------------------------------------------------- row */
 
 .rc-row {
+    position: relative; /* holds a closing panel's fading copy (.rc-ghost) */
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     gap: 0 16px;
     padding: 6px 16px 6px 6px; /* the chevron sits close to the edge */
     border-bottom: 1px solid var(--hair);
+    /* Opaque, so a row sliding past others (recent.js "motion") covers them. */
+    background: var(--rc-surface);
 }
 
 /* The chevron: says the row opens, and rotates when it is open. A pointer
@@ -851,7 +855,8 @@ body.rc-page {
 
 /* ---------------------------------------------------- expanded row */
 
-.rc-x {
+.rc-x,
+.rc-ghost {
     flex-basis: 100%;
     display: flex;
     flex-wrap: wrap;
@@ -861,6 +866,15 @@ body.rc-page {
 
 .rc-x[hidden] {
     display: none;
+}
+
+/* A closing panel's copy, drawn where the panel was while it fades and the
+   rows below slide up over it (recent.js sets its top, left and width). */
+.rc-ghost {
+    position: absolute;
+    margin: 0;
+    pointer-events: none;
+    background: var(--rc-surface);
 }
 
 .rc-x-side {
@@ -1208,6 +1222,7 @@ body.rc-page {
 
     /* No box around the list: the rows sit on the page's own gutter. */
     .rc-panel {
+        --rc-surface: var(--rc-canvas);
         border: 0;
         border-radius: 0;
         background: transparent;

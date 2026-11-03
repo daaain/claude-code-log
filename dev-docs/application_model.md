@@ -1705,6 +1705,27 @@ pipeline escaped them. `test_recent_page.py` pins both halves: one
 `innerHTML`, fed only from `.html` fields. The page includes both
 Pygments sheets, and its `<body>` carries `theme-minimal` so the classic
 sheet reads the minimal tokens and the dark sheet's scope matches.
+
+**Motion.** Opening or closing a row, and a refresh or clock tick that
+moves rows, animate by FLIP (`flip` in `recent.js`): measure every row
+and group heading as drawn, make the change, measure again, then play
+each part back from where it was with the Web Animations API. A move is
+a `transform` (a row moving up is drawn above the rows it passes), a row
+that grew is revealed by `clip-path`, and a new row or an open row's new
+prompt or last message fades in (`drawPanel` marks those parts; the rest
+of the redrawn panel doesn't fade). A closing panel goes at once; an
+inert, `aria-hidden` copy (`.rc-ghost`) stays drawn where it was and fades
+while the rows below slide up over it, which is why rows carry an opaque
+background (`--rc-surface`). Rows animate only paint properties; the one
+layout-driven animation is the list's own height, so the card's edge and
+the legend move with the rows. Every motion comes from one before/after
+measurement, so a mid-motion change measures what is drawn (a running
+reveal's clip included) and carries on from there. Only parts on screen
+move, the first draw and filter/grouping changes are instant, and
+`prefers-reduced-motion` turns it all off. `test_recent_browser.py` reads
+`document.getAnimations()` straight after a synchronous
+`window.__cclRecent(payload)` to pin which part animates what.
+
 `cli.watch` calls `recent.write_recent_data` after each
 single-project tick (default layout only: no `--output`, and the watched
 project inside the projects directory), since that path never rewrites

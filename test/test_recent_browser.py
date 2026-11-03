@@ -720,3 +720,220 @@ def test_phone_layout_saves_rows(page: Page, tmp_path: Path) -> None:
         assert widths[0] <= widths[1], widths
     finally:
         page.set_viewport_size({"width": 1280, "height": 720})
+
+
+# ---- motion ------------------------------------------------------------
+# Changes animate by FLIP (recent.js "motion"): the layout jumps to its end
+# state and transform / opacity / clip-path play each part back from where
+# it was drawn. window.__cclRecent(payload) redraws synchronously, so a
+# test can hand the page a refresh and read document.getAnimations() in
+# the same task, before any of it has run.
+
+# The page's own animations (CSS transitions, like the chevron's, aside):
+# for each, the row it is in, the target's classes and what it animates.
+_MOTIONS = """() => document.getAnimations()
+    .filter((a) => a.constructor === Animation)
+    .map((a) => {
+        const t = a.effect.target;
+        const row = t.closest('.rc-row');
+        const props = new Set();
+        a.effect.getKeyframes().forEach((k) => Object.keys(k).forEach((p) => props.add(p)));
+        ['offset', 'computedOffset', 'easing', 'composite'].forEach((p) => props.delete(p));
+        return {
+            row: row ? row.dataset.id.slice(0, 8) : null,
+            cls: t.getAttribute('class') || '',
+            props: [...props].sort(),
+        };
+    })"""
+_SETTLE = (
+    "() => Promise.all(document.getAnimations()"
+    ".map((a) => a.finished.catch(() => null)))"
+)
+# Paint-only properties: nothing that needs a layout per frame. The one
+# exception is the list's own height (the card's edge and the legend).
+_PAINT_ONLY = {"transform", "opacity", "clipPath", "zIndex"}
+
+
+def _motions(page: Page, script: str = "", arg: Any = None) -> list[dict[str, Any]]:
+    """Run `script` (a function body taking `arg`), then list the motions."""
+    return page.evaluate(
+        f"(arg) => {{ {script}; return ({_MOTIONS})(); }}",
+        arg,
+    )
+
+
+def _click(sid: str) -> str:
+    return f"document.querySelector('.rc-row[data-id^={sid}] .rc-block').click()"
+
+
+def _settle(page: Page) -> None:
+    page.evaluate(_SETTLE)
+    assert _motions(page) == []
+    expect(page.locator(".rc-ghost")).to_have_count(0)
+
+
+def _on(motions: list[dict[str, Any]], sid: str, cls: str = "rc-row") -> set[str]:
+    """What the motions on `sid`'s element of class `cls` animate."""
+    props: set[str] = set()
+    for m in motions:
+        if m["row"] == sid and cls in m["cls"].split():
+            props.update(m["props"])
+    return props
+
+
+def _only_paint(motions: list[dict[str, Any]]) -> None:
+    for m in motions:
+        allowed = _PAINT_ONLY | ({"height"} if m["cls"] == "rc-rows" else set())
+        assert set(m["props"]) <= allowed, m
+
+
+@pytest.mark.browser
+def test_opening_and_closing_a_row_animate(page: Page, tmp_path: Path) -> None:
+    sessions = [
+        _session("aaaa1111", 2 * MIN),
+        _session("bbbb2222", 5 * MIN),
+        _session("cccc3333", 9 * MIN),
+    ]
+    page.goto(_write(tmp_path, _payload(sessions)))
+    expect(page.locator(".rc-row")).to_have_count(3)
+    # The first draw is not animated.
+    _settle(page)
+
+    opening = _motions(page, _click("aaaa1111"))
+    _only_paint(opening)
+    # The row is revealed by a clip as it grows (it doesn't move), its
+    # panel fades in, and the rows below slide down to make room.
+    assert _on(opening, "aaaa1111") == {"clipPath"}, opening
+    assert _on(opening, "aaaa1111", "rc-x") == {"opacity"}, opening
+    assert "transform" in _on(opening, "bbbb2222"), opening
+    assert "transform" in _on(opening, "cccc3333"), opening
+    # The list's height carries the card's edge and the legend along.
+    assert any(m["cls"] == "rc-rows" for m in opening), opening
+    _settle(page)
+    expect(_row(page, "aaaa1111").locator(".rc-x")).to_be_visible()
+
+    closing = _motions(page, _click("aaaa1111"))
+    _only_paint(closing)
+    # The panel itself goes at once; a copy of it stays drawn, out of the
+    # page's reach, fading while the rows below slide up over it.
+    expect(_row(page, "aaaa1111").locator(".rc-x")).to_be_hidden()
+    ghost = _row(page, "aaaa1111").locator(".rc-ghost")
+    expect(ghost).to_have_count(1)
+    expect(ghost).to_have_attribute("aria-hidden", "true")
+    assert ghost.get_attribute("id") is None
+    assert _on(closing, "aaaa1111", "rc-ghost") == {"opacity"}, closing
+    assert "transform" in _on(closing, "bbbb2222"), closing
+    _settle(page)
+    expect(page.locator(".rc-x:visible")).to_have_count(0)
+
+
+@pytest.mark.browser
+def test_a_refresh_slides_rows_to_their_new_places(page: Page, tmp_path: Path) -> None:
+    sessions = [
+        _session("aaaa1111", 2 * MIN),
+        _session("bbbb2222", 5 * MIN),
+        _session("cccc3333", 9 * MIN),
+    ] + [_session(f"f{i:03d}0000", (20 + i) * MIN) for i in range(20)]
+    page.goto(_write(tmp_path, _payload(sessions)))
+    expect(page.locator(".rc-row")).to_have_count(23)
+    _settle(page)
+
+    # cccc3333 is updated (it jumps to the top) and a new session arrives.
+    moved = [_session("dddd4444", 0), _session("cccc3333", 1 * MIN)] + sessions[:2]
+    refresh = _payload(moved + sessions[3:])
+    motions = _motions(page, "window.__cclRecent(arg)", refresh)
+    _only_paint(motions)
+    rows = page.locator(".rc-row")
+    expect(rows.nth(0)).to_have_attribute("data-id", re.compile("^dddd4444"))
+    expect(rows.nth(1)).to_have_attribute("data-id", re.compile("^cccc3333"))
+    # The new row fades in; the one that jumped slides up past the others,
+    # drawn above them; the ones it passed slide down.
+    assert _on(motions, "dddd4444") == {"opacity"}, motions
+    assert _on(motions, "cccc3333") == {"transform", "zIndex"}, motions
+    assert _on(motions, "aaaa1111") == {"transform"}, motions
+    # Only what is on screen moves: the last rows were never in view.
+    animated = {m["row"] for m in motions}
+    assert "f0190000" not in animated, animated
+    assert len(animated) < 23, animated
+    _settle(page)
+
+    # Choosing a filter or grouping redraws at once.
+    page.get_by_role("button", name="your move").click()
+    assert _motions(page) == []
+    page.locator("#rc-group").check()
+    assert _motions(page) == []
+
+
+@pytest.mark.browser
+def test_a_refresh_fades_in_only_the_new_message(page: Page, tmp_path: Path) -> None:
+    sessions = [_session("aaaa1111", 2 * MIN), _session("bbbb2222", 5 * MIN)]
+    page.goto(_write(tmp_path, _payload(sessions)))
+    _row(page, "aaaa1111").locator(".rc-block").click()
+    _settle(page)
+
+    # Same prompt, a longer reply: the row grows, the reply fades in, the
+    # rest of the panel (prompt, counts) stays as it is.
+    reply = "Reply from aaaa1111\n\n" + "\n\n".join(f"Paragraph {i}" for i in range(6))
+    longer = _session(
+        "aaaa1111",
+        2 * MIN,
+        last={"at": NOW - 2 * MIN, "who": "claude", "html": render_markdown(reply)},
+    )
+    motions = _motions(page, "window.__cclRecent(arg)", _payload([longer, sessions[1]]))
+    _only_paint(motions)
+    assert _on(motions, "aaaa1111", "rc-last") == {"opacity"}, motions
+    assert _on(motions, "aaaa1111", "rc-prompt") == set(), motions
+    assert _on(motions, "aaaa1111", "rc-x") == set(), motions
+    assert _on(motions, "aaaa1111") == {"clipPath"}, motions
+    assert "transform" in _on(motions, "bbbb2222"), motions
+    _settle(page)
+    expect(_row(page, "aaaa1111").locator(".rc-last-text")).to_contain_text(
+        "Paragraph 5"
+    )
+
+    # A refresh that changes nothing moves nothing.
+    assert (
+        _motions(page, "window.__cclRecent(arg)", _payload([longer, sessions[1]])) == []
+    )
+
+
+@pytest.mark.browser
+def test_a_change_mid_motion_carries_on_and_settles(page: Page, tmp_path: Path) -> None:
+    sessions = [_session("aaaa1111", 2 * MIN), _session("bbbb2222", 5 * MIN)]
+    page.goto(_write(tmp_path, _payload(sessions)))
+    _settle(page)
+    # Open, close and refresh in one go: each takes over from the last.
+    swapped = _payload([_session("bbbb2222", 1 * MIN), sessions[0]])
+    motions = _motions(
+        page,
+        _click("aaaa1111") + ";" + _click("aaaa1111") + "; window.__cclRecent(arg)",
+        swapped,
+    )
+    _only_paint(motions)
+    # The refresh dropped the close's leftover copy of the panel.
+    expect(page.locator(".rc-ghost")).to_have_count(0)
+    _settle(page)
+    expect(_row(page, "aaaa1111").locator(".rc-block")).to_have_attribute(
+        "aria-expanded", "false"
+    )
+    expect(page.locator(".rc-x:visible")).to_have_count(0)
+    # Nothing is left drawn away from where it is laid out.
+    offsets = page.evaluate(
+        "[...document.querySelectorAll('.rc-row')].map((r) =>"
+        " [getComputedStyle(r).transform, getComputedStyle(r).clipPath])"
+    )
+    assert all(o == ["none", "none"] for o in offsets), offsets
+
+
+@pytest.mark.browser
+def test_reduced_motion_moves_nothing(page: Page, tmp_path: Path) -> None:
+    page.emulate_media(reduced_motion="reduce")
+    sessions = [_session("aaaa1111", 2 * MIN), _session("bbbb2222", 5 * MIN)]
+    page.goto(_write(tmp_path, _payload(sessions)))
+    assert _motions(page, _click("aaaa1111")) == []
+    expect(_row(page, "aaaa1111").locator(".rc-x")).to_be_visible()
+    swapped = _payload([_session("bbbb2222", 1 * MIN), sessions[0]])
+    assert _motions(page, "window.__cclRecent(arg)", swapped) == []
+    assert _motions(page, _click("aaaa1111")) == []
+    expect(page.locator(".rc-ghost")).to_have_count(0)
+    expect(_row(page, "aaaa1111").locator(".rc-x")).to_be_hidden()

@@ -75,7 +75,10 @@ The page refreshes itself. A page opened as a file can't fetch anything,
 but it can load a script, so the data lives in `recent-data.js` beside
 it, and the page reloads that file every 15 seconds and redraws its rows
 without losing what you have open. Times and the cache countdown keep
-moving between reloads.
+moving between reloads. A row that moves up the list slides to its new
+place, an open row grows or shrinks smoothly as its last message changes,
+and a newly arrived message fades in (unless your system asks for reduced
+motion).
 
 To have something to reload, keep the data file current:
 
