@@ -347,6 +347,11 @@ clear-cache:
 
 regen-all: backup render-test-data style-guide cli example
 
+# Play the recent sessions demo's stages against a sandbox page you open
+# yourself (scripts/demos/recent_play.py); e.g. `just recent-play --step`
+recent-play *ARGS:
+    uv run python scripts/demos/recent_play.py {{ARGS}}
+
 # Re-record the demo videos (scripts/demos/record.py) into .demos/;
 # e.g. `just demos --only branches`, or `just demos --publish` to update the docs
 demos *ARGS:

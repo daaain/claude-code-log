@@ -1726,6 +1726,17 @@ move, the first draw and filter/grouping changes are instant, and
 `document.getAnimations()` straight after a synchronous
 `window.__cclRecent(payload)` to pin which part animates what.
 
+**End to end.** `test/recent_live_fixture.py` (`RecentLive`) writes
+sessions in four projects as real JSONL, one in each state the page tells
+apart, and moves them on stage by stage (a tool call, a finish, a
+question, a new session, background work reporting back), converting each
+stage with the full run. `test/test_recent_live_browser.py` opens the
+page from disk and checks each stage's order, states and counts; the
+fixture's `wait_for_stage` prompts the page to reload its data file with
+a `visibilitychange` instead of waiting for its 15 s tick. The same
+stages are the recent sessions demo chapter and beat and `just
+recent-play`.
+
 `cli.watch` calls `recent.write_recent_data` after each
 single-project tick (default layout only: no `--output`, and the watched
 project inside the projects directory), since that path never rewrites

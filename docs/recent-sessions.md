@@ -12,6 +12,11 @@ open ~/.claude/projects/recent.html
 It is written on every full run, in both themes, and works opened as a
 file: no server is involved.
 
+<video controls muted playsinline preload="metadata" width="100%" src="../assets/demos/7-recent.mp4"></video>
+
+<!-- Chapter 7 of the demo videos (scripts/demos/record.py, chapter_recent);
+     `just demos --only recent --publish` re-records it. -->
+
 ## What a row shows
 
 - **How long ago it last changed, and whose move it is.** The block at the
