@@ -15,6 +15,8 @@ from typing import Any, Optional
 
 import pytest
 
+import claude_code_log.recent as recent_module
+
 from claude_code_log.converter import load_transcript, process_projects_hierarchy
 from claude_code_log.cache import CacheManager
 from claude_code_log.recent import (
@@ -1016,6 +1018,36 @@ def _project(projects: Path, name: str, session: _Session) -> Path:
     project.mkdir(parents=True)
     session.write(project / f"{session.session_id}.jsonl")
     return project
+
+
+def test_a_project_name_that_fails_once_is_tried_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Naming a project reads its cache; if that fails for one row, the
+    # next row of the same project tries again rather than taking the
+    # page down on a name that was never stored.
+    projects = tmp_path / "projects"
+    project = projects / "-home-u-code-foldyard"
+    project.mkdir(parents=True)
+    for sid, ago in (("aaaa1111-new", 10), ("bbbb2222-older", 20)):
+        s = _Session(sid, cwd="/home/u/code/foldyard")
+        s.prompt(ago, "Go.")
+        s.reply(ago - 1, "Done.")
+        s.write(project / f"{sid}.jsonl")
+    process_projects_hierarchy(projects, silent=True)
+    real = recent_module.get_project_display_name
+    failed: list[bool] = []
+
+    def flaky(*args: Any) -> str:
+        if not failed:
+            failed.append(True)
+            raise OSError("cache busy")
+        return real(*args)
+
+    monkeypatch.setattr(recent_module, "get_project_display_name", flaky)
+    payload = build_recent_payload(projects, now=NOW)
+    assert [s["id"] for s in payload["sessions"]] == ["bbbb2222-older"]
+    assert payload["sessions"][0]["project"] == "foldyard"
 
 
 @pytest.fixture

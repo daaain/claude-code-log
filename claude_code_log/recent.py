@@ -767,14 +767,17 @@ def build_recent_payload(
         key = str(project_path)
         session_id = row["session_id"]
         try:
-            if key not in managers:
-                managers[key] = CacheManager(
+            manager = managers.get(key)
+            if manager is None:
+                manager = CacheManager(
                     project_path, get_library_version(), db_path, read_only=True
                 )
+                # Kept only once named, so a failure here leaves both
+                # unset and the project's next row tries again.
                 names[key] = get_project_display_name(
-                    project_path.name, managers[key].get_working_directories()
+                    project_path.name, manager.get_working_directories()
                 )
-            manager = managers[key]
+                managers[key] = manager
 
             def read(manager: CacheManager = manager) -> SessionSummary:
                 return read_session(manager.load_session_entries(session_id))
