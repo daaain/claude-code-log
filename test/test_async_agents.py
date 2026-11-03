@@ -317,6 +317,36 @@ class TestNotificationUsageAndEvents:
         assert msg.event == ""
         assert msg.result_text == "Monitors print <event>a line</event> each."
 
+    def test_an_event_quoting_its_own_tag_stays_whole(self) -> None:
+        """The real block is the only one of its kind, so it closes at the
+        last closing tag: a quoted inner one is text."""
+        printed = "a <event>x</event> then <status>failed</status>"
+        msg = create_task_notification_message(
+            _meta(),
+            _notification(f"<status>completed</status>\n<event>{printed}</event>"),
+        )
+        assert msg is not None
+        assert msg.event == printed
+        assert msg.status == "completed"
+
+    def test_a_result_quoting_its_own_closing_tag_stays_whole(self) -> None:
+        answer = "Wrap it as <result>…</result> and you're done."
+        msg = create_task_notification_message(
+            _meta(),
+            _notification(f"<status>completed</status>\n<result>{answer}</result>"),
+        )
+        assert msg is not None
+        assert msg.result_text == answer
+
+    def test_an_event_keeps_its_whitespace(self) -> None:
+        """An event is the command's output, verbatim: indentation and
+        trailing spaces are part of it."""
+        msg = create_task_notification_message(
+            _meta(), _notification("<event>    indented line  </event>")
+        )
+        assert msg is not None
+        assert msg.event == "    indented line  "
+
     def test_a_real_result_and_usage_beside_an_event_still_parse(self) -> None:
         msg = create_task_notification_message(
             _meta(),

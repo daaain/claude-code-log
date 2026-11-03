@@ -61,10 +61,10 @@ _FIELD_RE = re.compile(
 )
 # The free-text blocks: an agent's ``<result>`` (its Markdown answer) and a
 # Monitor's ``<event>`` (one notification per line its command prints; no
-# status, and the summary only names the monitor). Either can quote any tag.
-_FREE_TEXT_RE = re.compile(
-    r"<(?P<tag>result|event)>\s*(?P<body>.*?)\s*</(?P=tag)>", re.DOTALL
-)
+# status, and the summary only names the monitor). Either can quote any
+# tag, its own included, so a block runs to the *last* closing tag of its
+# kind (greedy): a notification has one of each at most.
+_FREE_TEXT_RE = re.compile(r"<(?P<tag>result|event)>(?P<body>.*)</(?P=tag)>", re.DOTALL)
 _USAGE_RE = re.compile(r"<usage>\s*(?P<body>.*?)\s*</usage>", re.DOTALL)
 
 # ``Full transcript available at: <path>`` trailer outside the
@@ -116,11 +116,18 @@ def _parse_usage(body: str) -> TaskNotificationUsage:
 
 def _take_free_text(body: str) -> tuple[dict[str, str], str]:
     """``({tag: text}, rest)``: the ``<result>`` and ``<event>`` blocks,
-    each taken out where it first opens, and the body without them."""
+    each taken out where it first opens, and the body without them.
+
+    A result is Markdown, trimmed; an event is the command's output, kept
+    verbatim (its indentation is part of it).
+    """
     taken: dict[str, str] = {}
     rest = body
     while (match := _FREE_TEXT_RE.search(rest)) and match.group("tag") not in taken:
-        taken[match.group("tag")] = match.group("body")
+        text = match.group("body")
+        taken[match.group("tag")] = (
+            text.strip() if match.group("tag") == "result" else text
+        )
         rest = rest[: match.start()] + rest[match.end() :]
     return taken, rest
 

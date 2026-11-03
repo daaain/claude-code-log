@@ -392,8 +392,11 @@ per line its command prints, with no status, the line in `<event>` and a
 summary that only names the monitor; the card shows that text as an
 *Event* row (a code block when it spans lines). `<event>` and `<result>` are free
 text (a command's output, an agent's Markdown) and can quote any tag, so
-the parser takes them out first, each where it first opens, and only then
-searches the rest for `<usage>` and the header fields.
+the parser takes them out first, each where it first opens and running
+to the last closing tag of its kind (a notification has one of each, so
+a quoted inner tag is text), and only then searches the rest for
+`<usage>` and the header fields. A result is trimmed; an event is kept
+verbatim, indentation included.
 
 The `result_text` is the canonical source for the spawn-fold —
 `_link_async_notifications` copies it onto
