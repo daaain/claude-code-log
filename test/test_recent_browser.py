@@ -638,10 +638,16 @@ def test_stale_notice_and_empty_state(isolated_page: Page, tmp_path: Path) -> No
     expect(notice).to_be_visible()
     expect(notice).to_contain_text("Data from 5 min ago")
     expect(notice).to_contain_text("claude-code-log watch")
+    # It sits in the top bar, beside the theme toggle, so showing or
+    # hiding it doesn't move the list.
+    expect(page.locator(".rc-nav #rc-stale")).to_have_count(1)
+    before = page.locator(".rc-panel").bounding_box()
     (tmp_path / "recent-data.js").write_text(recent_data_js(fresh), encoding="utf-8")
     page.clock.run_for(16000)
     expect(page.locator(".rc-row")).to_have_count(1)
     expect(notice).to_be_hidden()
+    after = page.locator(".rc-panel").bounding_box()
+    assert before and after and after["y"] == before["y"]
     expect(page.locator("#rc-empty")).to_be_hidden()
 
 

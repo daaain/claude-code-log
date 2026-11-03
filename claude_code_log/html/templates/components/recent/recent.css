@@ -82,9 +82,16 @@ body.rc-page {
 
 .rc-nav {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 12px;
+    gap: 8px 12px;
     font-size: 13px;
+}
+
+.rc-nav > a,
+.rc-nav .mn-seg {
+    flex-shrink: 0;
+    white-space: nowrap;
 }
 
 .rc-sp {
@@ -235,13 +242,18 @@ body.rc-page {
     font-variant-numeric: tabular-nums;
 }
 
+/* Old data, said in the top bar beside the theme toggle: there, showing
+   or hiding it doesn't move the list. */
 .rc-stale {
     margin: 0;
-    padding: 10px 14px;
+    min-width: 0;
+    padding: 5px 10px;
     border-radius: 4px;
     background: var(--errbg);
     color: var(--err);
     font-weight: 600;
+    line-height: 18px;
+    text-align: right;
 }
 
 .rc-stale[hidden] {
@@ -1150,6 +1162,14 @@ body.rc-page {
 @media (max-width: 640px) {
     .rc-wrap {
         padding: 16px 16px 40px;
+    }
+
+    /* Too narrow to share the bar: the old-data notice takes a line
+       of its own under it. */
+    .rc-stale {
+        order: 1;
+        flex-basis: 100%;
+        text-align: left;
     }
 
     .rc-head h1 {

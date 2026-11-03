@@ -27,6 +27,7 @@
         <nav class='rc-nav' aria-label='Pages'>
             <a href='index.html'>← All projects</a>
             <span class='rc-sp'></span>
+            <p class='rc-stale' id='rc-stale' role='status' hidden></p>
             {% include 'components/minimal/scheme_toggle.html' %}
         </nav>
 
@@ -42,8 +43,6 @@
                 <div class='rc-updated'><span class='rc-k'>updated</span><span class='rc-n' id='rc-updated'>–</span></div>
             </div>
         </header>
-
-        <p class='rc-stale' id='rc-stale' role='status' hidden></p>
 
         <main class='rc-panel'>
             <div class='rc-thead'>
