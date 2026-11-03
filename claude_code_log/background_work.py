@@ -19,7 +19,10 @@ How each kind shows up (surveyed across real transcripts):
   ``<status>``, or a ``TaskStop`` / ``KillShell`` / ``KillBash`` on the
   id. A monitor's events are notifications without a status; its expiry
   is an event whose text says so. An agent can report an interim
-  "waiting on its own background work" before its real end.
+  "waiting on its own background work" before its real end. When it
+  then reports by ``SubagentHandback``, the notification that follows
+  keeps that interim summary; only its result says the report was
+  delivered, and that is the end.
 - **Wake-ups.** ``ScheduleWakeup``'s ``toolUseResult.scheduledFor`` is
   exactly when it fires (or the result text gives the delay); a
   ``{stop: true}`` call cancels what is pending. The firing is a
@@ -57,7 +60,8 @@ _NOTIFICATION_RE = re.compile(
     r"<task-notification>\s*(?P<body>.*?)\s*</task-notification>", re.DOTALL
 )
 _FIELD_RE = re.compile(
-    r"<(?P<tag>task-id|status|summary|event)>(?P<body>.*?)</(?P=tag)>", re.DOTALL
+    r"<(?P<tag>task-id|status|summary|event|result)>(?P<body>.*?)</(?P=tag)>",
+    re.DOTALL,
 )
 # Launch ids in result text, for results without a structured
 # toolUseResult: only the harness's own launch message, at the start of
@@ -83,6 +87,7 @@ _MONITOR_EXPIRES_RE = re.compile(r"expires in (?P<min>\d+)m\b")
 _WAKE_IN_RE = re.compile(r"Next wakeup scheduled for [\d:]+ \(in (?P<s>\d+)s\)")
 _MONITOR_EXPIRED_PREFIXES = ("[Monitor timed out", "[Monitor expired")
 _INTERIM = "is waiting on its own background work"
+_HANDED_BACK = "report was delivered to you"
 
 
 @dataclass
@@ -93,11 +98,21 @@ class Notification:
     status: Optional[str]
     summary: Optional[str]
     event: Optional[str]
+    result: Optional[str] = None
 
     @property
     def label(self) -> Optional[str]:
         """What it says happened: the summary, else the event."""
         return self.summary or self.event
+
+    @property
+    def interim(self) -> bool:
+        """An agent saying it is waiting on its own work, not ending.
+        After a hand-back the summary still says so, but the result
+        says the report was delivered: that one is the end."""
+        return _INTERIM in (self.summary or "") and _HANDED_BACK not in (
+            self.result or ""
+        )
 
 
 def notifications(text: str) -> list[Notification]:
@@ -114,6 +129,7 @@ def notifications(text: str) -> list[Notification]:
                 status=fields.get("status") or None,
                 summary=fields.get("summary") or None,
                 event=fields.get("event") or None,
+                result=fields.get("result") or None,
             )
         )
     return found
@@ -224,7 +240,7 @@ class BackgroundWork:
                     self._ended(work, at, "completed")
                 continue
             final = _FINAL.get(note.status)
-            if final is None or _INTERIM in (note.summary or ""):
+            if final is None or note.interim:
                 continue
             self._ended(work, at, final)
         return found

@@ -1633,7 +1633,10 @@ found by the id their tool result names (`toolUseResult.backgroundTaskId`
 result, since a command that outlives its timeout is backgrounded
 without the flag), and end at the `<task-notification>` naming that id
 with a final status, a `TaskStop`/`KillShell`/`KillBash` on it, or (a
-monitor) an expiry event. Notifications are found by search, not prefix
+monitor) an expiry event. An agent's "waiting on its own background
+work" notification is interim, but when that agent later reports by
+`SubagentHandback`, the final notification keeps the same summary, so
+only its `<result>` (the report "was delivered to you") marks the end. Notifications are found by search, not prefix
 (some open with a `[SYSTEM NOTIFICATION …]` preamble), in user entries
 and in `queued_command` attachments. Pending wake-ups come from
 `ScheduleWakeup`'s `toolUseResult.scheduledFor` (exactly the fire time)

@@ -152,6 +152,7 @@ class _Session:
         status: Optional[str] = None,
         summary: str = "",
         event: Optional[str] = None,
+        result: Optional[str] = None,
         mid_turn: bool = False,
         preamble: bool = False,
         queued_only: bool = False,
@@ -166,6 +167,8 @@ class _Session:
             fields += f"\n<summary>{summary}</summary>"
         if event:
             fields += f"\n<event>{event}</event>"
+        if result:
+            fields += f"\n<result>{result}</result>"
         body = f"<task-notification>\n{fields}\n</task-notification>"
         if preamble:
             body = "[SYSTEM NOTIFICATION - NOT USER INPUT]\n" + body
@@ -629,6 +632,47 @@ def test_an_agents_interim_notification_is_not_its_end(tmp_path: Path) -> None:
         mid_turn=True,
     )
     assert s.summary(tmp_path)["bg"][0][1:4] == [None, "agent", None]
+
+
+def test_an_agents_hand_back_notification_is_its_end(tmp_path: Path) -> None:
+    """An agent that waited on its own work reports by hand-back; the
+    notification that follows still carries the interim summary, but
+    its result says the report was delivered, so the agent is done."""
+    s = _Session()
+    s.prompt(40, "Survey.")
+    s.tool(
+        30,
+        "Agent",
+        description="Survey",
+        tool_use_result={"status": "async_launched", "agentId": "a1"},
+    )
+    s.reply(29, "Running.")
+    interim = 'Agent "Survey" is waiting on its own background work'
+    s.notify(
+        20,
+        "a1",
+        "completed",
+        interim,
+        result=(
+            "This agent has not reported yet: it is waiting on its own"
+            " background work and will deliver its report through"
+            " SubagentHandback when that finishes."
+        ),
+        mid_turn=True,
+    )
+    s.notify(
+        10,
+        "a1",
+        "completed",
+        interim,
+        result=(
+            'This agent\'s report was delivered to you as a message from "a1"'
+            " (its SubagentHandback call). Read it there; it is not repeated"
+            " here."
+        ),
+        mid_turn=True,
+    )
+    assert s.summary(tmp_path)["bg"][0][1:4] == [_ms_ago(10), "agent", "completed"]
 
 
 def test_a_notification_mid_turn_ends_work_without_a_new_turn(tmp_path: Path) -> None:
