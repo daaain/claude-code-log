@@ -16,6 +16,7 @@ from typing import Any, Optional
 import pytest
 
 from claude_code_log.converter import load_transcript, process_projects_hierarchy
+from claude_code_log.cache import CacheManager
 from claude_code_log.recent import (
     RECENT_DATA,
     RECENT_PAGE,
@@ -23,6 +24,8 @@ from claude_code_log.recent import (
     SNIPPET_CHARS,
     WAKE_GRACE_MINUTES,
     TURN_HORIZON_HOURS,
+    WINDOW_DAYS,
+    RecentMemo,
     asks_you,
     build_recent_payload,
     payload_json,
@@ -862,3 +865,92 @@ def test_write_recent_data_refreshes_the_data_file(archive: Path) -> None:
     assert [s["id"] for s in _data_payload(archive / RECENT_DATA)["sessions"]] == [
         "aaaa1111-recent"
     ]
+
+
+# ---- reuse between watch ticks ------------------------------------------
+
+
+@pytest.fixture
+def two_sessions(tmp_path: Path) -> tuple[Path, _Session, _Session]:
+    projects = tmp_path / "projects"
+    first = _Session("aaaa1111-first", cwd="/home/u/code/foldyard")
+    first.prompt(30, "First.")
+    first.reply(29, "Done.")
+    second = _Session("bbbb2222-second", cwd="/home/u/code/other")
+    second.prompt(20, "Second.")
+    second.reply(19, "Done.")
+    _project(projects, "-home-u-code-foldyard", first)
+    _project(projects, "-home-u-code-other", second)
+    process_projects_hierarchy(projects, silent=True)
+    return projects, first, second
+
+
+def _count_loads(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    loaded: list[str] = []
+    original = CacheManager.load_session_entries
+
+    def counting(self: CacheManager, session_id: str) -> list[Any]:
+        loaded.append(session_id)
+        return original(self, session_id)
+
+    monkeypatch.setattr(CacheManager, "load_session_entries", counting)
+    return loaded
+
+
+def test_a_memo_reuses_unchanged_sessions(
+    two_sessions: tuple[Path, _Session, _Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    projects, _first, second = two_sessions
+    loaded = _count_loads(monkeypatch)
+    memo = RecentMemo()
+    cold = build_recent_payload(projects, now=NOW, memo=memo)
+    assert sorted(loaded) == ["aaaa1111-first", "bbbb2222-second"]
+
+    loaded.clear()
+    warm = build_recent_payload(projects, now=NOW, memo=memo)
+    assert loaded == []
+    assert warm == cold
+
+    # One session grows: only it is read again.
+    second.prompt(5, "And another thing.")
+    second.reply(4, "Done too.")
+    second.write(projects / "-home-u-code-other" / f"{second.session_id}.jsonl")
+    process_projects_hierarchy(projects, silent=True)
+    loaded.clear()
+    grown = build_recent_payload(projects, now=NOW, memo=memo)
+    assert loaded == ["bbbb2222-second"]
+    assert grown["sessions"][0]["turnCount"] == 2
+
+
+def test_a_memoised_summary_still_follows_the_clock(
+    two_sessions: tuple[Path, _Session, _Session],
+) -> None:
+    """The memo holds what the transcript says; the clock (the turn
+    horizon) is applied on every build."""
+    projects, _first, _second = two_sessions
+    memo = RecentMemo()
+    now = build_recent_payload(projects, now=NOW, memo=memo)
+    # The horizon lands between the two sessions' last turns (29 and
+    # 19 minutes before NOW).
+    later = build_recent_payload(
+        projects,
+        now=NOW + timedelta(hours=TURN_HORIZON_HOURS) - timedelta(minutes=22),
+        memo=memo,
+    )
+    by_id = {s["id"]: s for s in later["sessions"]}
+    assert len(now["sessions"][1]["turns"]) == 1
+    assert by_id["aaaa1111-first"]["turns"] == []
+    assert by_id["aaaa1111-first"]["earlierTurns"] == 1
+    assert len(by_id["bbbb2222-second"]["turns"]) == 1
+
+
+def test_a_memo_forgets_sessions_that_leave_the_list(
+    two_sessions: tuple[Path, _Session, _Session],
+) -> None:
+    projects, _first, _second = two_sessions
+    memo = RecentMemo()
+    build_recent_payload(projects, now=NOW, memo=memo)
+    assert len(memo) == 2
+    # Past the window, neither session is listed any more.
+    build_recent_payload(projects, now=NOW + timedelta(days=WINDOW_DAYS + 1), memo=memo)
+    assert len(memo) == 0

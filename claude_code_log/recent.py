@@ -13,7 +13,8 @@ sibling ``recent-data.js`` that calls ``window.__cclRecent(payload)``.
 The page re-adds that script every few seconds and redraws its rows.
 :func:`write_recent_data` rewrites the file; it is cheap (one query for
 the session rows, then each recent session's entries from the cache), so
-the watch loop calls it after every tick.
+the watch loop calls it after every tick, keeping a :class:`RecentMemo`
+so a tick re-reads only the sessions that changed.
 
 Payload shape (all times are epoch milliseconds, UTC)::
 
@@ -72,6 +73,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional, cast
@@ -313,10 +315,65 @@ def asks_you(text: str) -> bool:
     return lines[-1].rstrip("*_`)]\"'”’ ").endswith("?")
 
 
+@dataclass(frozen=True)
+class SessionSummary:
+    """What a session's entries say, before the clock is applied.
+
+    Every turn, the background work, the state and the last prompt and
+    message (already rendered): the costly part of a session's row, and
+    a function of its entries alone, so a :class:`RecentMemo` can keep
+    it between builds. :meth:`at` applies the clock (which turns,
+    background items and wake-ups fall inside the horizon) and is cheap.
+    """
+
+    branch: Optional[str]
+    cwd: Optional[str]
+    state: str
+    turns: list[dict[str, Any]]
+    background: BackgroundWork
+    last_prompt: Optional[dict[str, Any]]
+    last: Optional[dict[str, Any]]
+
+    def at(self, now_ms: int) -> dict[str, Any]:
+        """The session's row data as of ``now_ms``."""
+        horizon = now_ms - TURN_HORIZON_HOURS * 3600 * 1000
+        shown = [t for t in self.turns if t["end"] >= horizon]
+        return {
+            "branch": self.branch,
+            "cwd": self.cwd,
+            "state": self.state,
+            "turnCount": len(self.turns),
+            "toolCount": sum(len(t["tools"]) for t in self.turns),
+            "turns": [
+                [
+                    t["start"],
+                    t["end"],
+                    t["end_kind"],
+                    _snippet(t["prompt"] or t["trigger"]),
+                    _snippet(t["last"]["text"]) if t["last"] else None,
+                    t["origin"],
+                ]
+                for t in shown
+            ],
+            "earlierTurns": len(self.turns) - len(shown),
+            "tools": [ms for t in shown for ms in t["tools"]][-MAX_TOOL_TICKS:],
+            "bg": self.background.items(horizon, MAX_BG_ITEMS),
+            "wakes": self.background.pending_wakes(horizon),
+            "lastPrompt": self.last_prompt,
+            "last": self.last,
+        }
+
+
 def summarise_session(
     entries: Iterable[TranscriptEntry], *, now_ms: int
 ) -> dict[str, Any]:
-    """Turns, tool calls, the last prompt and message, and a state.
+    """Turns, tool calls, the last prompt and message, and a state, as of
+    ``now_ms`` (see :func:`read_session`)."""
+    return read_session(entries).at(now_ms)
+
+
+def read_session(entries: Iterable[TranscriptEntry]) -> SessionSummary:
+    """Read a session's entries into its :class:`SessionSummary`.
 
     A turn runs from a prompt you typed to the last entry before the next
     one. How it ended: ``ask`` (Claude's last text asks you something),
@@ -445,40 +502,22 @@ def summarise_session(
             final["end_kind"], "done"
         )
 
-    horizon = now_ms - TURN_HORIZON_HOURS * 3600 * 1000
-    shown = [t for t in turns if t["end"] >= horizon]
-    tools = [ms for t in shown for ms in t["tools"]][-MAX_TOOL_TICKS:]
     last_prompt = next((t for t in reversed(turns) if t["prompt"]), None)
     last = final["last"] if final is not None else None
 
-    return {
-        "branch": branch,
-        "cwd": cwd,
-        "state": state,
-        "turnCount": len(turns),
-        "toolCount": sum(len(t["tools"]) for t in turns),
-        "turns": [
-            [
-                t["start"],
-                t["end"],
-                t["end_kind"],
-                _snippet(t["prompt"] or t["trigger"]),
-                _snippet(t["last"]["text"]) if t["last"] else None,
-                t["origin"],
-            ]
-            for t in shown
-        ],
-        "earlierTurns": len(turns) - len(shown),
-        "tools": tools,
-        "bg": background.items(horizon, MAX_BG_ITEMS),
-        "wakes": background.pending_wakes(horizon),
-        "lastPrompt": _rendered(
+    return SessionSummary(
+        branch=branch,
+        cwd=cwd,
+        state=state,
+        turns=turns,
+        background=background,
+        last_prompt=_rendered(
             last_prompt["start"] if last_prompt else 0,
             last_prompt["prompt"] if last_prompt else None,
             MAX_PROMPT_CHARS,
             render_user_markdown,
         ),
-        "last": (
+        last=(
             _rendered(
                 last["at"],
                 last["text"],
@@ -489,7 +528,47 @@ def summarise_session(
             if last
             else None
         ),
-    }
+    )
+
+
+#: What a session's cached row says about its entries: when it last
+#: changed and how many messages it has. A new entry moves both.
+_MemoKey = tuple[Optional[str], Optional[int]]
+
+
+class RecentMemo:
+    """:class:`SessionSummary` objects kept between payload builds.
+
+    ``watch`` rewrites the data file after every tick, and reading a
+    session's entries back from the cache is nearly all of a build's
+    cost; most recent sessions haven't changed since the last tick. So
+    the loop owns one memo, and a build re-reads only the sessions whose
+    cached row (last update, message count) moved. The clock is not part
+    of the summary — :meth:`SessionSummary.at` applies it on every build
+    — so a kept summary never serves a stale horizon. Sessions that leave
+    the list are dropped, which bounds the memo by the page's own limit.
+    """
+
+    def __init__(self) -> None:
+        self._kept: dict[str, tuple[_MemoKey, SessionSummary]] = {}
+
+    def __len__(self) -> int:
+        return len(self._kept)
+
+    def summary(
+        self, session_id: str, key: _MemoKey, read: Callable[[], SessionSummary]
+    ) -> SessionSummary:
+        kept = self._kept.get(session_id)
+        if kept is not None and kept[0] == key:
+            return kept[1]
+        summary = read()
+        self._kept[session_id] = (key, summary)
+        return summary
+
+    def keep_only(self, session_ids: Iterable[str]) -> None:
+        wanted = set(session_ids)
+        for session_id in [s for s in self._kept if s not in wanted]:
+            del self._kept[session_id]
 
 
 def _rendered(
@@ -564,6 +643,7 @@ def build_recent_payload(
     now: Optional[datetime] = None,
     href_for: Optional[Callable[[Path, str], Optional[str]]] = None,
     db_path: Optional[Path] = None,
+    memo: Optional[RecentMemo] = None,
 ) -> dict[str, Any]:
     """The page's data: the recently updated sessions across every project.
 
@@ -572,6 +652,8 @@ def build_recent_payload(
     it the default layout's ``<project dir>/session-<id>.html`` is used.
     A link to a page that wasn't written is harmless: the row still
     shows, and the browser reports a missing file only if it is followed.
+    With a ``memo`` (``watch`` keeps one), sessions unchanged since the
+    last build aren't read again.
     """
     now = now or datetime.now(timezone.utc)
     now_ms = int(now.timestamp() * 1000)
@@ -587,6 +669,7 @@ def build_recent_payload(
     for row in rows:
         project_path = Path(row["project_path"])
         key = str(project_path)
+        session_id = row["session_id"]
         try:
             if key not in managers:
                 managers[key] = CacheManager(
@@ -595,14 +678,24 @@ def build_recent_payload(
                 names[key] = get_project_display_name(
                     project_path.name, managers[key].get_working_directories()
                 )
-            entries = managers[key].load_session_entries(row["session_id"])
+            manager = managers[key]
+
+            def read(manager: CacheManager = manager) -> SessionSummary:
+                return read_session(manager.load_session_entries(session_id))
+
+            summary = (
+                memo.summary(
+                    session_id, (row["last_timestamp"], row["message_count"]), read
+                )
+                if memo is not None
+                else read()
+            )
         except Exception:
             # One unreadable project must not take the page down.
             continue
-        info = summarise_session(entries, now_ms=now_ms)
+        info = summary.at(now_ms)
         project = names[key]
         title = row["ai_title"] or row["summary"] or row["first_user_message"] or ""
-        session_id = row["session_id"]
         href = (href_for or _default_href)(project_path, session_id)
         sessions.append(
             {
@@ -630,6 +723,9 @@ def build_recent_payload(
                 "last": info["last"],
             }
         )
+
+    if memo is not None:
+        memo.keep_only(row["session_id"] for row in rows)
 
     return {
         "v": 1,
@@ -669,16 +765,19 @@ def write_recent_data(
     *,
     payload: Optional[dict[str, Any]] = None,
     now: Optional[datetime] = None,
+    memo: Optional[RecentMemo] = None,
 ) -> Optional[dict[str, Any]]:
     """Rewrite ``recent-data.js`` next to ``recent.html``, if that page exists.
 
     Returns the payload written, or None when there is no page to feed
     (a single-file conversion, or an output tree without the index).
+    ``memo`` carries session summaries over from the previous call (see
+    :class:`RecentMemo`).
     """
     from .utils import atomic_write_text
 
     if not (index_dir / RECENT_PAGE).exists():
         return None
-    payload = payload or build_recent_payload(projects_dir, now=now)
+    payload = payload or build_recent_payload(projects_dir, now=now, memo=memo)
     atomic_write_text(index_dir / RECENT_DATA, recent_data_js(payload))
     return payload

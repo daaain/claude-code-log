@@ -2577,14 +2577,21 @@ def watch(
     from .entry_store import ParsedEntryStore, entry_store_enabled
 
     store = ParsedEntryStore() if (entry_store_enabled() and not all_projects) else None
+    # Likewise one memo of recent-session summaries for the whole watch:
+    # each tick rewrites recent-data.js, re-reading only the sessions that
+    # changed since the last (recent.RecentMemo).
+    from .recent import RecentMemo
+
+    recent_memo = RecentMemo()
 
     def refresh_recent() -> None:
         """Keep the recent-sessions page's data current.
 
         A one-project watch never rewrites the index, so the archive's
         ``recent.html`` would freeze at the last full run. Its data file
-        is cheap to rebuild (one cache query plus the recent sessions'
-        entries), so it is rewritten after every tick — but only in the
+        is cheap to rebuild (one cache query, plus the entries of the
+        recent sessions that changed since the last tick: ``recent_memo``
+        keeps the rest), so it is rewritten after every tick — but only in the
         default layout, where the page sits next to the projects and the
         watched project's cache is the archive's.
         """
@@ -2592,10 +2599,10 @@ def watch(
             return
         if root.parent.resolve() != projects_path.resolve():
             return
-        from .recent import write_recent_data
+        from . import recent
 
         try:
-            write_recent_data(projects_path, projects_path)
+            recent.write_recent_data(projects_path, projects_path, memo=recent_memo)
         except Exception as exc:
             click.echo(f"  recent sessions not refreshed: {exc!r}", err=True)
 
