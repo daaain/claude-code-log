@@ -692,6 +692,11 @@ def _default_href(project_dir: Path, session_id: str) -> str:
     return f"{project_dir.name}/session-{session_id}.html"
 
 
+def _no_href(_project_dir: Path, _session_id: str) -> None:
+    """No session page was written, so there is nothing to link to."""
+    return None
+
+
 def _session_rows(db_path: Path, cutoff_iso: str, limit: int) -> list[sqlite3.Row]:
     """The newest visible session rows across every project.
 
@@ -869,18 +874,25 @@ def write_recent_data(
     payload: Optional[dict[str, Any]] = None,
     now: Optional[datetime] = None,
     memo: Optional[RecentMemo] = None,
+    session_pages: bool = True,
 ) -> Optional[dict[str, Any]]:
     """Rewrite ``recent-data.js`` next to ``recent.html``, if that page exists.
 
     Returns the payload written, or None when there is no page to feed
     (a single-file conversion, or an output tree without the index).
     ``memo`` carries session summaries over from the previous call (see
-    :class:`RecentMemo`).
+    :class:`RecentMemo`). Without ``session_pages`` (``--combined only``)
+    the rows link nowhere, since there is no session page to link to.
     """
     from .utils import atomic_write_text
 
     if not (index_dir / RECENT_PAGE).exists():
         return None
-    payload = payload or build_recent_payload(projects_dir, now=now, memo=memo)
+    payload = payload or build_recent_payload(
+        projects_dir,
+        now=now,
+        href_for=None if session_pages else _no_href,
+        memo=memo,
+    )
     atomic_write_text(index_dir / RECENT_DATA, recent_data_js(payload))
     return payload

@@ -23,7 +23,7 @@ file: no server is involved.
   *mid-turn* (the last entry is a tool call or result, or a prompt with
   no reply yet).
 - **The title, project, worktree and branch**, with a link to the session's
-  own page.
+  own page (none with `--combined only`, which writes no session pages).
 - **A strip of the last four hours and the next one.** Each turn is a bar
   from your prompt to the agent's last entry, with its tool calls as thin
   ticks and a marker for how it ended. Where markers would crowd, the

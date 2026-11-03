@@ -8,6 +8,7 @@ the wiring actually converts.
 import json
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 from claude_code_log.cli import _resolve_watch_root, main
@@ -157,6 +158,46 @@ class TestWatchCommand:
         assert len(memos) == 3, result.output
         assert isinstance(memos[0], recent_mod.RecentMemo)
         assert all(m is memos[0] for m in memos)
+
+    @pytest.mark.parametrize(("combined", "pages"), [("yes", True), ("only", False)])
+    def test_the_refresh_links_rows_only_to_pages_it_writes(
+        self, tmp_path: Path, monkeypatch, combined: str, pages: bool
+    ) -> None:
+        """`--combined only` writes no session pages, so the recent page's
+        rows get no link to one."""
+        projects = tmp_path / "projects"
+        proj = projects / "-tmp-demo"
+        proj.mkdir(parents=True)
+        sid = "11111111-2222-3333-4444-555555555555"
+        (proj / f"{sid}.jsonl").write_text(_entry("u0", "hello", sid), encoding="utf-8")
+        (projects / "recent.html").write_text("page", encoding="utf-8")
+
+        import claude_code_log.recent as recent_mod
+        import claude_code_log.watch as watch_mod
+
+        seen: list[object] = []
+
+        def spy(index_dir, projects_dir, **kwargs):
+            seen.append(kwargs.get("session_pages"))
+
+        monkeypatch.setattr(recent_mod, "write_recent_data", spy)
+        monkeypatch.setattr(
+            watch_mod.WatchEngine, "run", lambda engine, stop=None: None
+        )
+        result = CliRunner().invoke(
+            main,
+            [
+                "watch",
+                str(proj),
+                "--projects-dir",
+                str(projects),
+                "--combined",
+                combined,
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert seen == [pages], result.output
 
     def test_an_unresolvable_target_exits_nonzero(
         self, tmp_path: Path, monkeypatch

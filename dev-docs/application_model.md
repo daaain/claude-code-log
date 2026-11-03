@@ -1683,6 +1683,9 @@ HTML hierarchy run. It takes each session's link from the index's own
 `sessions[].file` entries, so `--output`, `--expand-paths` and variant
 filenames resolve as the index's do, and writes `recent-data.js` then
 `recent.html`. A failure there is reported and never fails the run.
+Under `--combined only` the rows get no link: the index still names each
+session's file, but nothing writes it. The watch's per-tick refresh
+(`recent.write_recent_data`) follows the same rule with `session_pages`.
 
 **Self-refresh on `file://`.** A page opened as a file cannot `fetch`
 (see `live_update.js`), but it can add a `<script>`. So `recent.html`

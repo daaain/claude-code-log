@@ -2602,7 +2602,12 @@ def watch(
         from . import recent
 
         try:
-            recent.write_recent_data(projects_path, projects_path, memo=recent_memo)
+            recent.write_recent_data(
+                projects_path,
+                projects_path,
+                memo=recent_memo,
+                session_pages=individual,
+            )
         except Exception as exc:
             click.echo(f"  recent sessions not refreshed: {exc!r}", err=True)
 

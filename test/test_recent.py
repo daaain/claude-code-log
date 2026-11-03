@@ -1118,6 +1118,28 @@ def test_write_recent_data_refreshes_the_data_file(archive: Path) -> None:
     ]
 
 
+def test_without_session_pages_rows_have_no_link(
+    archive: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # `--combined only` writes no session pages, so a row links nowhere
+    # rather than to a page that doesn't exist: on the full run, and on
+    # the watch's own refresh.
+    real = recent_module.build_recent_payload
+
+    def at_now(projects_dir: Path, **kwargs: Any) -> dict[str, Any]:
+        kwargs.setdefault("now", NOW)
+        return real(projects_dir, **kwargs)
+
+    monkeypatch.setattr(recent_module, "build_recent_payload", at_now)
+    process_projects_hierarchy(archive, silent=True, generate_individual_sessions=False)
+    assert [s["href"] for s in _data_payload(archive / RECENT_DATA)["sessions"]] == [
+        None
+    ]
+    payload = write_recent_data(archive, archive, now=NOW, session_pages=False)
+    assert payload is not None
+    assert [s["href"] for s in payload["sessions"]] == [None]
+
+
 # ---- reuse between watch ticks ------------------------------------------
 
 
