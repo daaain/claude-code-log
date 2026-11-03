@@ -1655,7 +1655,25 @@ last prompt stays the last one you typed. The payload carries
 clock, so a data file that stops changing still ages: work with no end
 recorded counts as running until the session's last entry plus the cap
 (or a monitor's expiry, if sooner), then shows as *no end recorded*; a
-wake-up is pending until its time plus the grace. A session whose
+wake-up is pending until its time plus the grace.
+
+**The process exiting.** `/exit` (or any way out) writes no entry, only a
+trailing `cost-state` line: no uuid and no timestamp, so the parser drops
+it (`SILENT_SKIP_TYPES`) and the cache never holds it. `recent.session_exit`
+reads it from the session file's tail instead, on every build and outside
+the `RecentMemo` (the line doesn't move the memo key). The process has
+exited when a `cost-state` comes after every entry with a uuid (and every
+queued notification); only metadata lines follow an exit that stuck,
+while a resume adds entries. The exit is dated `startTime + totalDuration`,
+but never before the session's last entry, because a resumed session's
+figures can add up to an earlier time. `SessionSummary.at(now, exited_at)`
+then settles the row: work with no end ends `exited` at the exit (the page
+shows *ended with the session*), pending wake-ups are dropped, and an open
+final turn is over (`busy` becomes `done`). Only the last exit counts. If
+a session was resumed after an earlier exit, the work that exit killed
+keeps the usual cap.
+
+A session whose
 transcript state is `done` but which has running work or a pending
 wake-up is shown as **waiting** (`background`), which leaves the *your
 move* filter.

@@ -39,8 +39,8 @@ Payload shape (all times are epoch milliseconds, UTC)::
                      promptSnippet | null, endSnippet | null,
                      "you" | "task" | "wake"], ...],
           "bg": [[startMs, endMs | null, "bash" | "agent" | "monitor",
-                  "completed" | "failed" | "stopped" | null, label,
-                  expiresAtMs | null], ...],
+                  "completed" | "failed" | "stopped" | "exited" | null,
+                  label, expiresAtMs | null], ...],
           "wakes": [[atMs, label], ...],
           "earlierTurns": 0,
           "tools": [ms, ...],
@@ -67,16 +67,23 @@ own text carry it in place of ``text``; a tool line or an error stays
 plain ``text``. An unanswered ``AskUserQuestion`` or ``ExitPlanMode``
 is Claude waiting on you: its questions and options (``question``) or
 its plan (``plan``) become the last message and the turn ends ``ask``.
+
+When the session's process has exited (:func:`session_exit`), nothing is
+still running: work with no end on record ends ``exited`` at the exit,
+pending wake-ups are dropped, and a turn left mid-way is over. The exit
+is not in the cache (its line has no uuid), so it is read from the
+session file's tail on every build, outside the memo.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterable, Optional, cast
+from typing import Any, Callable, Iterable, Iterator, Optional, cast
 
 from .cache import CacheManager, get_cache_db_path, get_library_version
 from .background_work import BackgroundWork
@@ -136,6 +143,12 @@ _NOT_A_PROMPT_PREFIXES = (
 _API_ERROR_PREFIX = "API Error"
 _NOTIFICATION_TAG = "<task-notification>"
 _WAKE_FIRE = "scheduled_task_fire"
+#: The line Claude Code writes as its process exits (see session_exit).
+_EXIT_LINE = "cost-state"
+#: A session file's tail is read this much at a time, up to the limit:
+#: the exit is nearly always the last line, under some metadata at most.
+_TAIL_CHUNK = 16 * 1024
+_TAIL_LIMIT = 1024 * 1024
 
 
 def _ms(timestamp: Optional[str]) -> Optional[int]:
@@ -335,21 +348,31 @@ class SessionSummary:
     last_prompt: Optional[dict[str, Any]]
     last: Optional[dict[str, Any]]
 
-    def at(self, now_ms: int) -> dict[str, Any]:
-        """The session's row data as of ``now_ms``."""
+    def at(self, now_ms: int, exited_at: Optional[int] = None) -> dict[str, Any]:
+        """The session's row data as of ``now_ms``; ``exited_at`` when its
+        process has exited (:func:`session_exit`), which settles what was
+        still going: a turn mid-way is over, and so is its work."""
         horizon = now_ms - TURN_HORIZON_HOURS * 3600 * 1000
         shown = [t for t in self.turns if t["end"] >= horizon]
+        exited = exited_at is not None
+        final = self.turns[-1] if self.turns else None
+
+        def end_kind(turn: dict[str, Any]) -> str:
+            if exited and turn is final and turn["end_kind"] == "open":
+                return "asst"
+            return turn["end_kind"]
+
         return {
             "branch": self.branch,
             "cwd": self.cwd,
-            "state": self.state,
+            "state": "done" if exited and self.state == "busy" else self.state,
             "turnCount": len(self.turns),
             "toolCount": sum(len(t["tools"]) for t in self.turns),
             "turns": [
                 [
                     t["start"],
                     t["end"],
-                    t["end_kind"],
+                    end_kind(t),
                     _snippet(t["prompt"] or t["trigger"]),
                     _snippet(t["last"]["text"]) if t["last"] else None,
                     t["origin"],
@@ -358,11 +381,62 @@ class SessionSummary:
             ],
             "earlierTurns": len(self.turns) - len(shown),
             "tools": [ms for t in shown for ms in t["tools"]][-MAX_TOOL_TICKS:],
-            "bg": self.background.items(horizon, MAX_BG_ITEMS),
-            "wakes": self.background.pending_wakes(horizon),
+            "bg": self.background.items(horizon, MAX_BG_ITEMS, exited_at),
+            "wakes": [] if exited else self.background.pending_wakes(horizon),
             "lastPrompt": self.last_prompt,
             "last": self.last,
         }
+
+
+def _lines_from_end(path: Path) -> Iterator[bytes]:
+    """The file's lines, last first, up to :data:`_TAIL_LIMIT` bytes
+    back (the line cut there is yielded as a fragment)."""
+    with path.open("rb") as handle:
+        pos = handle.seek(0, os.SEEK_END)
+        floor = max(0, pos - _TAIL_LIMIT)
+        rest = b""
+        while pos > floor:
+            size = min(_TAIL_CHUNK, pos - floor)
+            pos -= size
+            handle.seek(pos)
+            lines = (handle.read(size) + rest).split(b"\n")
+            rest = lines[0]
+            yield from reversed(lines[1:])
+        yield rest
+
+
+def session_exit(path: Path, *, not_before: int) -> Optional[int]:
+    """When the session's process exited, if its file says it has.
+
+    Claude Code records ``/exit`` (or any way out) with nothing but a
+    ``cost-state`` line, written as the process goes: no uuid, no
+    timestamp. An entry after it (a uuid, or a queued notification)
+    means the session was resumed; only metadata lines (``last-prompt``,
+    ``mode`` …) follow an exit that stuck. Its ``startTime`` plus
+    ``totalDuration`` dates the exit, but a resumed session's can add up
+    to a time before its own entries, so the exit is never earlier than
+    ``not_before`` (the session's last entry). None while it runs, and
+    when the file is missing or says nothing either way.
+    """
+    try:
+        for line in _lines_from_end(path):
+            try:
+                data = json.loads(line)
+            except ValueError:
+                continue  # a blank line, a fragment, a line still being written
+            if not isinstance(data, dict):
+                continue
+            data = cast(dict[str, Any], data)
+            if data.get("type") == _EXIT_LINE:
+                start, ran = data.get("startTime"), data.get("totalDuration")
+                if isinstance(start, int) and isinstance(ran, int):
+                    return max(start + ran, not_before)
+                return not_before
+            if "uuid" in data or data.get("type") == "queue-operation":
+                return None
+    except OSError:
+        return None
+    return None
 
 
 def summarise_session(
@@ -715,7 +789,11 @@ def build_recent_payload(
         except Exception:
             # One unreadable project must not take the page down.
             continue
-        info = summary.at(now_ms)
+        exited_at = session_exit(
+            project_path / f"{session_id}.jsonl",
+            not_before=_ms(row["last_timestamp"]) or 0,
+        )
+        info = summary.at(now_ms, exited_at)
         project = names[key]
         title = row["ai_title"] or row["summary"] or row["first_user_message"] or ""
         href = (href_for or _default_href)(project_path, session_id)

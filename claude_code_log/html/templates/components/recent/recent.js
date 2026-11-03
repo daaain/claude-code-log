@@ -44,7 +44,9 @@
     };
     const TRANSCRIPT_STATES = ['asked', 'error', 'done', 'busy'];
     const BG_KINDS = { bash: 'Bash', agent: 'Agent', monitor: 'Monitor' };
-    const BG_ENDS = ['completed', 'failed', 'stopped'];
+    const BG_ENDS = ['completed', 'failed', 'stopped', 'exited'];
+    // How an end reads, where the status's own word won't do.
+    const BG_END_TEXT = { exited: 'ended with the session' };
     const MAX_LANES = 3; // background lanes on the strip; the rest fold into the last
     const LANE_GAP_PCT = 0.6; // room between two items sharing a lane
     const MAX_BG_LISTED = 12; // background items in an open row's list
@@ -180,11 +182,12 @@
     function bgName(item) {
         return BG_KINDS[item.kind] + (item.label ? ' “' + item.label + '”' : '');
     }
-    // "14:02 – running", "14:02 – no end recorded", "14:02–14:20 · failed"
+    // "14:02 – running", "14:02 – no end recorded", "14:02–14:20 · failed",
+    // "14:02–14:20 · ended with the session" (its process exited)
     function bgSpan(item, status) {
         if (status === 'running') return hhmm(item.start) + ' – running';
         if (status === 'lost') return hhmm(item.start) + ' – no end recorded';
-        return hhmm(item.start) + '–' + hhmm(item.end) + ' · ' + status;
+        return hhmm(item.start) + '–' + hhmm(item.end) + ' · ' + (BG_END_TEXT[status] || status);
     }
 
     // ---- payload ---------------------------------------------------

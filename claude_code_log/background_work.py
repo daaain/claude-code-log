@@ -257,15 +257,23 @@ class BackgroundWork:
         return nearest.label
 
     # ---- reading ------------------------------------------------------
-    def items(self, horizon: int, limit: int) -> list[list[Any]]:
+    def items(
+        self, horizon: int, limit: int, exited_at: Optional[int] = None
+    ) -> list[list[Any]]:
         """``[start, end, kind, status, label, expiresAt]`` for the work
-        not over before ``horizon``, oldest first, at most ``limit``."""
-        shown = [w for w in self._work.values() if w.end is None or w.end >= horizon]
-        shown.sort(key=lambda w: w.start)
-        return [
-            [w.start, w.end, w.kind, w.status, w.label, w.expires]
-            for w in shown[-limit:]
-        ]
+        not over before ``horizon``, oldest first, at most ``limit``.
+
+        After the session's process exited (``exited_at``), work with no
+        end on record ended with it: Claude Code stops its background
+        work on the way out, and says so only by leaving no end."""
+        rows: list[list[Any]] = []
+        for w in sorted(self._work.values(), key=lambda w: w.start):
+            end, status = w.end, w.status
+            if end is None and exited_at is not None:
+                end, status = exited_at, "exited"
+            if end is None or end >= horizon:
+                rows.append([w.start, end, w.kind, status, w.label, w.expires])
+        return rows[-limit:]
 
     def pending_wakes(self, horizon: int) -> list[list[Any]]:
         """``[at, label]`` for the wake-ups yet to fire."""

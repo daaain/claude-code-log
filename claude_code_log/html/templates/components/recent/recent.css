@@ -773,6 +773,16 @@ body.rc-page {
     background: var(--muted);
 }
 
+/* Ended with the session (its process exited): a hollow bar. */
+.rc-bg-end-exited {
+    top: calc(var(--rc-lane) - 3px);
+    width: 3px;
+    height: 8px;
+    margin-left: -1.5px;
+    box-sizing: border-box;
+    border: 1px solid var(--muted);
+}
+
 .rc-bg-end-failed {
     top: calc(var(--rc-lane) - 5px);
     width: 12px;

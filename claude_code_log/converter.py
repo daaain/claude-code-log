@@ -132,6 +132,10 @@ SILENT_SKIP_TYPES: frozenset[str] = frozenset(
         # claude.ai page. No uuid; fully redundant with the Artifact
         # tool_result (same path and URL), which is rendered.
         "frame-link",
+        # Written as the process exits: {startTime, totalDuration,
+        # totalCostUSD, modelUsage, ...}, no uuid or timestamp. The recent
+        # sessions page reads it from the file's tail (recent.session_exit).
+        "cost-state",
     }
 )
 

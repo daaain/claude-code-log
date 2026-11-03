@@ -34,9 +34,10 @@ file: no server is involved.
   with a bell or an alarm clock instead of the prompt marker.
 - **Background work.** Background commands, agents and monitors are thin
   lines under the turns, from launch to their end: a tick when they
-  completed, a cross when they failed, a bar when they were stopped, and
-  an arrow at *now* while they are still running. Work that never
-  reported its end is drawn dashed. Lines that don't overlap share a lane;
+  completed, a cross when they failed, a bar when they were stopped, a
+  hollow bar when they ended with the session (you quit Claude Code while
+  they ran), and an arrow at *now* while they are still running. Work
+  that never reported its end is drawn dashed. Lines that don't overlap share a lane;
   past three lanes, the rest fold into the third as *+N more*. A pending
   wake-up is an alarm clock at the time it is due, often in the hour
   ahead.
@@ -64,6 +65,9 @@ asked you, errored or finished); *by project* groups the rows.
     background work: work with no end recorded counts as running for an
     hour after the session's last entry (a monitor stops sooner if its
     timeout says so), and after that it is shown as *no end recorded*.
+    The exception is quitting: when Claude Code exits, it leaves one last
+    line in the transcript, so a session you quit is never *mid-turn* or
+    *waiting*, and the work it left running *ended with the session*.
 
 ## Keeping it current
 

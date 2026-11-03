@@ -519,6 +519,24 @@ def test_lost_work_and_wake_markers(page: Page, tmp_path: Path) -> None:
 
 
 @pytest.mark.browser
+def test_work_that_ended_with_the_session_says_so(page: Page, tmp_path: Path) -> None:
+    """The session's process exited with the work still going: it ends
+    there, with a mark of its own, and the row is no longer waiting."""
+    bg = [[NOW - 30 * MIN, NOW - 10 * MIN, "bash", "exited", "Watch PR", None]]
+    page.goto(_write(tmp_path, _payload([_session("ffff6666", 10 * MIN, bg=bg)])))
+    row = _row(page, "ffff6666")
+    expect(row.locator(".rc-bg-end-exited")).to_have_count(1)
+    expect(row.locator(".rc-bg-running")).to_have_count(0)
+    row.locator(".rc-block").click()
+    expect(row.locator(".rc-bgl li")).to_have_text(
+        [
+            f"Bash · Watch PR · {_hhmm(page, NOW - 30 * MIN)}–"
+            f"{_hhmm(page, NOW - 10 * MIN)} · ended with the session"
+        ]
+    )
+
+
+@pytest.mark.browser
 def test_background_list_orders_running_first(page: Page, tmp_path: Path) -> None:
     bg = [
         [NOW - 50 * MIN, NOW - 40 * MIN, "bash", "completed", "build", None],

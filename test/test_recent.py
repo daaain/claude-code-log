@@ -29,7 +29,9 @@ from claude_code_log.recent import (
     asks_you,
     build_recent_payload,
     payload_json,
+    read_session,
     recent_data_js,
+    session_exit,
     summarise_session,
     write_recent_data,
 )
@@ -56,7 +58,10 @@ class _Session:
         entry: dict[str, Any] = {
             "type": kind,
             "timestamp": _iso(minutes_ago),
-            "parentUuid": self.lines[-1]["uuid"] if self.lines else None,
+            "parentUuid": next(
+                (line["uuid"] for line in reversed(self.lines) if "uuid" in line),
+                None,
+            ),
             "isSidechain": False,
             "userType": "external",
             "cwd": self.cwd,
@@ -202,6 +207,27 @@ class _Session:
             isMeta=True,
             message={"role": "user", "content": "check on the CI run"},
         )
+
+    def exit(self, minutes_ago: float, ran_minutes: float = 120) -> None:
+        """The ``cost-state`` line Claude Code writes as its process exits
+        (no uuid, no timestamp): its start and duration date the exit."""
+        end = _ms_ago(minutes_ago)
+        self.lines.append(
+            {
+                "type": "cost-state",
+                "sessionId": self.session_id,
+                "totalCostUSD": 1.5,
+                "totalDuration": int(ran_minutes * 60000),
+                "startTime": end - int(ran_minutes * 60000),
+            }
+        )
+
+    def metadata(self) -> None:
+        """Trailing metadata lines, written after an exit as before it."""
+        self.lines.append(
+            {"type": "last-prompt", "lastPrompt": "x", "sessionId": self.session_id}
+        )
+        self.lines.append({"type": "mode", "mode": "normal"})
 
     def write(self, path: Path) -> Path:
         path.write_text(
@@ -878,6 +904,105 @@ def test_background_work_reaches_the_payload_through_the_cache(tmp_path: Path) -
     assert [t[5] for t in session["turns"]] == ["you", "task", "wake"]
 
 
+# ---- the process exiting ---------------------------------------------
+
+
+def test_a_trailing_cost_state_dates_the_exit(tmp_path: Path) -> None:
+    s = _Session()
+    s.prompt(40, "Watch CI.")
+    s.reply(30, "Watching.")
+    s.exit(10)
+    s.metadata()
+    path = s.write(tmp_path / "s.jsonl")
+    assert session_exit(path, not_before=_ms_ago(30)) == _ms_ago(10)
+
+
+def test_an_exit_is_never_dated_before_the_last_entry(tmp_path: Path) -> None:
+    """A resumed session's start and duration can add up to a time
+    before its own entries: the exit is at least the last entry."""
+    s = _Session()
+    s.prompt(40, "Watch CI.")
+    s.reply(30, "Watching.")
+    s.exit(500)
+    path = s.write(tmp_path / "s.jsonl")
+    assert session_exit(path, not_before=_ms_ago(30)) == _ms_ago(30)
+
+
+def test_entries_after_a_cost_state_mean_it_was_resumed(tmp_path: Path) -> None:
+    s = _Session()
+    s.prompt(40, "Watch CI.")
+    s.exit(35)
+    s.prompt(20, "Back again.")
+    s.metadata()
+    path = s.write(tmp_path / "s.jsonl")
+    assert session_exit(path, not_before=_ms_ago(20)) is None
+
+
+def test_no_cost_state_or_no_file_is_no_exit(tmp_path: Path) -> None:
+    s = _Session()
+    s.prompt(40, "Watch CI.")
+    s.metadata()
+    path = s.write(tmp_path / "s.jsonl")
+    assert session_exit(path, not_before=0) is None
+    assert session_exit(tmp_path / "missing.jsonl", not_before=0) is None
+
+
+def test_the_exit_is_found_past_a_long_tail(tmp_path: Path) -> None:
+    """Metadata after the exit can outgrow one read of the tail."""
+    s = _Session()
+    s.reply(30, "Watching.")
+    s.exit(10)
+    s.lines.append({"type": "last-prompt", "lastPrompt": "x" * 50000})
+    path = s.write(tmp_path / "s.jsonl")
+    assert session_exit(path, not_before=0) == _ms_ago(10)
+
+
+def _exited_watch(tmp_path: Path) -> dict[str, Any]:
+    s = _Session()
+    s.prompt(60, "Watch the PR.")
+    s.tool(50, command="gh pr checks", tool_use_result={"backgroundTaskId": "b1"})
+    s.tool(48, command="just test", tool_use_result={"backgroundTaskId": "b2"})
+    s.notify(45, "b2", "completed", "completed (exit code 0)", mid_turn=True)
+    s.tool(
+        44,
+        "ScheduleWakeup",
+        reason="recheck",
+        tool_use_result={"scheduledFor": _ms_ago(-20)},
+    )
+    s.tool(40, command="gh pr view", result=False)
+    entries = load_transcript(s.write(tmp_path / "s.jsonl"), silent=True)
+    return read_session(entries).at(NOW_MS, exited_at=_ms_ago(30))
+
+
+def test_an_exit_ends_the_work_still_running(tmp_path: Path) -> None:
+    info = _exited_watch(tmp_path)
+    assert [b[1:4] for b in info["bg"]] == [
+        [_ms_ago(30), "bash", "exited"],
+        [_ms_ago(45), "bash", "completed"],
+    ]
+    assert info["wakes"] == []
+
+
+def test_an_exit_mid_turn_finishes_the_turn(tmp_path: Path) -> None:
+    info = _exited_watch(tmp_path)
+    assert info["state"] == "done"
+    assert info["turns"][-1][2] == "asst"
+
+
+def test_an_exit_reaches_the_payload_from_the_session_file(tmp_path: Path) -> None:
+    projects = tmp_path / "projects"
+    s = _Session("dddd4444-exit", cwd="/home/u/code/foldyard")
+    s.prompt(40, "Watch the PR.")
+    s.tool(30, command="gh pr checks", tool_use_result={"backgroundTaskId": "b1"})
+    s.reply(29, "Watching.")
+    s.exit(10)
+    s.metadata()
+    _project(projects, "-home-u-code-foldyard", s)
+    process_projects_hierarchy(projects, silent=True)
+    session = build_recent_payload(projects, now=NOW)["sessions"][0]
+    assert session["bg"][0][1:4] == [_ms_ago(10), "bash", "exited"]
+
+
 def test_payload_json_cannot_end_a_script_element() -> None:
     payload = {"sessions": [{"title": "</script><img src=x onerror=alert(1)>"}]}
     text = payload_json(payload)
@@ -1073,3 +1198,26 @@ def test_a_memo_sees_an_entry_the_session_row_does_not_count(
     process_projects_hierarchy(projects, silent=True)
     stopped = build_recent_payload(projects, now=NOW, memo=memo)
     assert stopped["sessions"][0]["bg"][0][1:4] == [_ms_ago(20), "bash", "stopped"]
+
+
+def test_a_memoised_summary_still_sees_the_exit(
+    two_sessions: tuple[Path, _Session, _Session],
+) -> None:
+    """The exit line isn't cached, so it leaves the memo's key alone:
+    it is read from the file on every build."""
+    projects, _first, second = two_sessions
+    memo = RecentMemo()
+    second.prompt(15, "Watch it.")
+    second.tool(14, command="gh pr checks", result=False)
+    second.write(projects / "-home-u-code-other" / f"{second.session_id}.jsonl")
+    process_projects_hierarchy(projects, silent=True)
+    assert (
+        build_recent_payload(projects, now=NOW, memo=memo)["sessions"][0]["state"]
+        == "busy"
+    )
+    second.exit(5)
+    second.write(projects / "-home-u-code-other" / f"{second.session_id}.jsonl")
+    assert (
+        build_recent_payload(projects, now=NOW, memo=memo)["sessions"][0]["state"]
+        == "done"
+    )
