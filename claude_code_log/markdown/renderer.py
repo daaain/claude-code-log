@@ -1611,6 +1611,12 @@ class MarkdownRenderer(Renderer):
             lines.append(f"- **Task ID:** `{content.task_id}`")
         if content.status:
             lines.append(f"- **Status:** `{content.status}`")
+        event_block = ""
+        if content.event and "\n" in content.event:
+            lines.append("- **Event:**")
+            event_block = self._code_fence(content.event)
+        elif content.event:
+            lines.append(f"- **Event:** {_inline_code(content.event)}")
         usage = content.usage
         if usage is not None:
             if usage.total_tokens is not None:
@@ -1626,6 +1632,8 @@ class MarkdownRenderer(Renderer):
                 f"- **Spawn:** ↱ Task `#d-{content.spawning_task_message_index}`"
             )
         head = "\n".join(lines)
+        if event_block:
+            head = f"{head}\n\n{event_block}"
         if content.result_text and not content.result_is_duplicate:
             body = self._collapsible("Result", content.result_text)
             return f"{head}\n\n{body}" if head else body

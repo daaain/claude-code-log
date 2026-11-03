@@ -1066,6 +1066,10 @@ class TaskNotificationMessage(MessageContent):
         </task-notification>
         Full transcript available at: /tmp/.../tasks/a8b740b.output
 
+    (Current Claude Code writes ``<usage>`` as child tags instead —
+    ``<subagent_tokens>…</subagent_tokens><tool_uses>…`` — and a Monitor's
+    notifications carry an ``<event>``; see ``task_notification_factory``.)
+
     The ``result`` body usually duplicates the last sub-assistant
     message in the spawned agent's sidechain — Phase 3 of the
     async-agents plan folds it into the spawning Task's tool_result so
@@ -1075,6 +1079,9 @@ class TaskNotificationMessage(MessageContent):
     task_id: str = ""
     status: str = ""
     summary: str = ""
+    # A Monitor event's text (the line its command printed); empty for
+    # any other notification.
+    event: str = ""
     result_text: str = ""
     usage: Optional[TaskNotificationUsage] = None
     transcript_path: Optional[str] = None
