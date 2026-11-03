@@ -14,8 +14,6 @@ These formatters take tool-specific input/output data and generate
 HTML for display in transcripts.
 """
 
-import base64
-import binascii
 import json
 import re
 from collections.abc import Iterable
@@ -37,6 +35,7 @@ from .utils import (
     render_user_markdown_collapsible,
     resolve_memory_body_links,
 )
+from ..image_export import is_safe_image_source
 from ..json_depth import exceeds_depth
 from ..utils import (
     ARTIFACT_FAVICON_TEXT_MAX,
@@ -1600,22 +1599,10 @@ def format_tool_result_content_raw(tool_result: ToolResultContent) -> str:
                 source = cast(dict[str, Any], item.get("source", {}))
                 if source:
                     media_type: str = str(source.get("media_type", "image/png"))
-                    # Restrict to safe image types to prevent XSS via SVG
-                    allowed_media_types = {
-                        "image/png",
-                        "image/jpeg",
-                        "image/gif",
-                        "image/webp",
-                    }
-                    if media_type not in allowed_media_types:
-                        continue
                     data: str = str(source.get("data", ""))
-                    if data:
-                        # Validate base64 data to prevent corruption/injection
-                        try:
-                            base64.b64decode(data, validate=True)
-                        except (binascii.Error, ValueError):
-                            continue
+                    # Same gate as user/assistant images: allowlisted
+                    # (non-SVG) type and strictly-valid base64.
+                    if data and is_safe_image_source(media_type, data):
                         data_url = f"data:{media_type};base64,{data}"
                         image_html_parts.append(
                             f'<img src="{escape_html(data_url)}" alt="Tool result image" '
