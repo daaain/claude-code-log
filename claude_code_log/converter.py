@@ -4927,9 +4927,23 @@ def ensure_fresh_cache_detailed(
             sidecar_required=True,
         )
 
-        # Update cache with fresh data
+        # Update cache with fresh data. A date-filtered load derives these
+        # rows from its window only, so it must not finish a refresh an
+        # earlier run left pending; nor does it start one: on a project
+        # that was not pending, it restores the flag its own entry writes
+        # set (an interrupted filtered refresh never gets here).
+        # ``cached_project_data`` was read before this refresh's first
+        # entry write. Limit, shared with every clearing write: another
+        # process's refresh that sets the flag and fails while this one
+        # runs is cleared here; closing that needs a write generation, not
+        # a boolean.
+        was_pending = (
+            cached_project_data is not None and cached_project_data.refresh_pending
+        )
         _update_cache_with_session_data(
-            cache_manager, messages, complete=not (from_date or to_date)
+            cache_manager,
+            messages,
+            complete=not (from_date or to_date) or not was_pending,
         )
     return CacheRefresh.FULL
 
@@ -4968,8 +4982,8 @@ def _update_cache_with_session_data(
     cache_manager.update_session_cache(sessions_cache_data)
 
     aggregates = compute_project_aggregates(messages)
-    # ``complete=False`` for a date-filtered load: rows derived from a
-    # window must not clear ``refresh_pending``.
+    # ``complete=False`` leaves ``refresh_pending`` set: a date-filtered
+    # load of a project an earlier refresh left pending.
     cache_manager.update_project_aggregates(**aggregates, complete=complete)
 
 
@@ -5964,9 +5978,12 @@ def render_provider_wholesale(
                 # ``has_provider_token_totals``.
                 if has_provider_token_totals:
                     project_aggregates.update(project_token_totals)
-                cache.update_project_aggregates(
-                    **project_aggregates, complete=not (from_date or to_date)
-                )
+                # Clears refresh_pending even after a filtered load: v1
+                # re-parses every rollout and recomputes every session row
+                # each run, and is_transcript_stale catches a filtered
+                # render, so the flag would only add a re-render to every
+                # filtered run (it saves entries, which set it, each run).
+                cache.update_project_aggregates(**project_aggregates)
             session_counts = {
                 sid: sd.message_count for sid, sd in merged_session_data.items()
             }
@@ -7194,10 +7211,10 @@ def _process_projects_hierarchy(
                 project_dir, cache_manager, from_date, to_date, silent=silent
             )
             # Ensure cache is populated with session data (including working directories)
+            # Reached only without a project row, so no refresh is pending
+            # here and the default ``complete`` is right even when filtered.
             if cache_manager:
-                _update_cache_with_session_data(
-                    cache_manager, messages, complete=not (from_date or to_date)
-                )
+                _update_cache_with_session_data(cache_manager, messages)
             if from_date or to_date:
                 messages = filter_messages_by_date(messages, from_date, to_date)
 

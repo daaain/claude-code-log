@@ -259,10 +259,13 @@ the renders, and every later run reported the project as cached while
 its renders lacked the new messages. Since migration 015, every entry
 write sets `projects.refresh_pending` in its own transaction and
 `update_project_aggregates`, the last write of a complete refresh,
-clears it. Only an unfiltered refresh does: a date-filtered one derives
-its session rows and aggregates from the entries in its window, so it
-passes `complete=False` and leaves the flag for the next unfiltered
-run. An unfiltered refresh, on either path, writes the session
+clears it. A date-filtered refresh derives its session rows and
+aggregates from the entries in its window, so it never finishes a
+pending refresh (it passes `complete=False` and leaves the flag for the
+next unfiltered run), but it doesn't start one either: on a project
+that was not pending it restores the flag its own entry writes set.
+Codex projects are the exception, cleared by any run, since their
+renders re-parse every rollout. An unfiltered refresh, on either path, writes the session
 rows and the cross-session sidecar (§ 2.12) before it, and does not
 pass over a sidecar write it loses: the rolled-back write leaves the old
 sidecar in place, which the closing write would otherwise vouch for.

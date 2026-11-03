@@ -1934,8 +1934,9 @@ class CacheManager:
         the ``refresh_pending`` flag those entry writes set (migration
         015). Call it only once those match every entry row written.
         A date-filtered refresh derives its rows from the entries in its
-        window only, so it passes ``complete=False`` and leaves the flag
-        for the next unfiltered refresh to clear.
+        window only, so when the project was already pending it passes
+        ``complete=False`` and leaves the flag for the next unfiltered
+        refresh to clear.
         """
         if self._project_id is None:
             return

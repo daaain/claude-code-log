@@ -614,7 +614,7 @@ The tool implements a SQLite-based caching system for performance:
   an oversized WAL before it starts and truncates the WAL when it ends. A
   refresh that fails part-way leaves `projects.refresh_pending` set, and the
   next unfiltered run refreshes that project in full (a date-filtered run
-  leaves the flag set). A pass that loses a project
+  never finishes a pending refresh, nor starts one). A pass that loses a project
   ends with a count of the failed projects, and the CLI exits 1
 - **Performance**: 10-100x faster loading for large projects
 

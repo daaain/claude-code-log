@@ -524,3 +524,38 @@ def test_a_date_filtered_run_does_not_finish_a_pending_refresh(
         not in (project / f"session-{sid}.md").read_text(encoding="utf-8")
     ]
     assert stale == [], "the late messages were never rendered"
+
+
+def test_a_date_filtered_run_does_not_start_a_pending_refresh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A filtered run on a healthy project leaves the flag clear.
+
+    Its entry writes set the flag like any other; left set, every later
+    filtered run would treat the project as changed and pay a full load,
+    with no failure to repair.
+    """
+    project = _build_project(tmp_path)
+    projects_dir = project.parent
+    monkeypatch.setenv("CLAUDE_CODE_LOG_CACHE_PATH", str(tmp_path / "cache.db"))
+    _run(projects_dir)
+    files = sorted(project.glob("*.jsonl"))
+    late = _turn(SESSIONS[0], 1, _late_marker(SESSIONS[0]))
+    for entry in late:
+        entry["timestamp"] = entry["timestamp"].replace("01-01", "01-02")
+    _append(project / f"{SESSIONS[0]}.jsonl", late)
+    # Control: the change is seen, so the filtered run writes its entries.
+    assert CacheManager(project, get_library_version()).get_modified_files(files)
+
+    process_projects_hierarchy(
+        projects_dir,
+        output_format="md",
+        write_combined=False,
+        jobs=1,
+        from_date="2025-12-31",
+        to_date="2026-01-01",
+    )
+    manager = CacheManager(project, get_library_version())
+    data = manager.get_cached_project_data()
+    assert data is not None and not data.refresh_pending
+    assert manager.get_modified_files(files) == []
