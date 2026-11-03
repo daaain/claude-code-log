@@ -613,7 +613,8 @@ The tool implements a SQLite-based caching system for performance:
   locked out is retried after the pool rather than failed. A pass compacts
   an oversized WAL before it starts and truncates the WAL when it ends. A
   refresh that fails part-way leaves `projects.refresh_pending` set, and the
-  next run refreshes that project in full. A pass that loses a project
+  next unfiltered run refreshes that project in full (a date-filtered run
+  leaves the flag set). A pass that loses a project
   ends with a count of the failed projects, and the CLI exits 1
 - **Performance**: 10-100x faster loading for large projects
 

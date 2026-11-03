@@ -457,3 +457,70 @@ def test_a_sidecar_that_cannot_be_written_is_dropped_not_trusted(
     assert reference is not None and resumed in reference.parents
     repaired = CacheManager(project, get_library_version()).load_session_sidecar()
     assert repaired == reference
+
+
+@pytest.mark.parametrize(
+    "inject",
+    [_fail_second_file_write, _fail_session_rows_write],
+    ids=["second-file-write", "session-rows-write"],
+)
+def test_a_date_filtered_run_does_not_finish_a_pending_refresh(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    inject: Callable[[pytest.MonkeyPatch, List[str]], None],
+) -> None:
+    """Only a complete, unfiltered refresh may clear ``refresh_pending``.
+
+    A date-filtered run reloads just the entries in its window, so the
+    session rows and aggregates it derives describe that subset. Clearing
+    the flag on them would leave every file looking current to the next
+    unfiltered run, which then never renders the messages outside the
+    window.
+    """
+    project = _build_project(tmp_path)
+    projects_dir = project.parent
+    monkeypatch.setenv("CLAUDE_CODE_LOG_CACHE_PATH", str(tmp_path / "cache.db"))
+    _run(projects_dir)
+    # The late turn a day later: the cache layer filters by whole days.
+    for sid in SESSIONS:
+        late = _turn(sid, 1, _late_marker(sid))
+        for entry in late:
+            entry["timestamp"] = entry["timestamp"].replace("01-01", "01-02")
+        _append(project / f"{sid}.jsonl", late)
+
+    fired: List[str] = []
+    capsys.readouterr()
+    with monkeypatch.context() as m:
+        inject(m, fired)
+        m.setattr(converter, "is_busy_database_error", _never_busy)
+        _run(projects_dir)
+    out = capsys.readouterr().out
+    # Control: the refresh failed and left the flag set.
+    assert fired.count("LOCKED") == 1
+    assert "projects failed" in out, out
+    pending = CacheManager(project, get_library_version()).get_cached_project_data()
+    assert pending is not None and pending.refresh_pending
+
+    # A window holding only the first day, not the late turn.
+    process_projects_hierarchy(
+        projects_dir,
+        output_format="md",
+        write_combined=False,
+        jobs=1,
+        from_date="2025-12-31",
+        to_date="2026-01-01",
+    )
+    after = CacheManager(project, get_library_version()).get_cached_project_data()
+    assert after is not None and after.refresh_pending, (
+        "a date-filtered run cleared the flag"
+    )
+
+    _run(projects_dir)
+    stale = [
+        sid
+        for sid in SESSIONS
+        if _late_marker(sid)
+        not in (project / f"session-{sid}.md").read_text(encoding="utf-8")
+    ]
+    assert stale == [], "the late messages were never rendered"

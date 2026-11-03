@@ -4928,12 +4928,16 @@ def ensure_fresh_cache_detailed(
         )
 
         # Update cache with fresh data
-        _update_cache_with_session_data(cache_manager, messages)
+        _update_cache_with_session_data(
+            cache_manager, messages, complete=not (from_date or to_date)
+        )
     return CacheRefresh.FULL
 
 
 def _update_cache_with_session_data(
-    cache_manager: CacheManager, messages: list[TranscriptEntry]
+    cache_manager: CacheManager,
+    messages: list[TranscriptEntry],
+    complete: bool = True,
 ) -> None:
     """Update cache with session and project aggregate data.
 
@@ -4964,7 +4968,9 @@ def _update_cache_with_session_data(
     cache_manager.update_session_cache(sessions_cache_data)
 
     aggregates = compute_project_aggregates(messages)
-    cache_manager.update_project_aggregates(**aggregates)
+    # ``complete=False`` for a date-filtered load: rows derived from a
+    # window must not clear ``refresh_pending``.
+    cache_manager.update_project_aggregates(**aggregates, complete=complete)
 
 
 def _attach_session_residuals(
@@ -5958,7 +5964,9 @@ def render_provider_wholesale(
                 # ``has_provider_token_totals``.
                 if has_provider_token_totals:
                     project_aggregates.update(project_token_totals)
-                cache.update_project_aggregates(**project_aggregates)
+                cache.update_project_aggregates(
+                    **project_aggregates, complete=not (from_date or to_date)
+                )
             session_counts = {
                 sid: sd.message_count for sid, sd in merged_session_data.items()
             }
@@ -7187,7 +7195,9 @@ def _process_projects_hierarchy(
             )
             # Ensure cache is populated with session data (including working directories)
             if cache_manager:
-                _update_cache_with_session_data(cache_manager, messages)
+                _update_cache_with_session_data(
+                    cache_manager, messages, complete=not (from_date or to_date)
+                )
             if from_date or to_date:
                 messages = filter_messages_by_date(messages, from_date, to_date)
 

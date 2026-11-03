@@ -1925,6 +1925,7 @@ class CacheManager:
         total_cache_read_tokens: int,
         earliest_timestamp: str,
         latest_timestamp: str,
+        complete: bool = True,
     ) -> None:
         """Update project-level aggregate information.
 
@@ -1932,6 +1933,9 @@ class CacheManager:
         the session rows and sidecar derived from them, so it also clears
         the ``refresh_pending`` flag those entry writes set (migration
         015). Call it only once those match every entry row written.
+        A date-filtered refresh derives its rows from the entries in its
+        window only, so it passes ``complete=False`` and leaves the flag
+        for the next unfiltered refresh to clear.
         """
         if self._project_id is None:
             return
@@ -1948,7 +1952,7 @@ class CacheManager:
                     earliest_timestamp = ?,
                     latest_timestamp = ?,
                     last_updated = ?,
-                    refresh_pending = 0
+                    refresh_pending = CASE WHEN ? THEN 0 ELSE refresh_pending END
                 WHERE id = ?
                 """,
                 (
@@ -1960,6 +1964,7 @@ class CacheManager:
                     earliest_timestamp,
                     latest_timestamp,
                     datetime.now().isoformat(),
+                    complete,
                     self._project_id,
                 ),
             )
