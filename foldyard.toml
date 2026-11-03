@@ -26,43 +26,48 @@ prefix = "claude-code-log"
 #   app = "app"                # the app service (fy shell target)
 #   app_port = "WEB_PORT"      # [ports] key shown in the TUI + opened by `fy open`
 #   compose = ["compose.yml"]  # compose files in -f order, relative to this dir
+# A floor, not a pin: `fy` refuses to run in this checkout below it. Raise it in the same
+# commit as a setting that needs it — an older `fy` silently ignores keys it doesn't know.
+min_foldyard_version = "0.4.0"
+
+[project.foldyard_version_reasons]
+"0.4.0" = "egress-proxy security fixes (0.3.2); renamed [machine] firewall / [proxy] enforce keys; box shows host timezone"
 
 [machine]
 # A rootless VM that mounts ONLY this repo. Default here is the Lima backend + an in-VM
-# egress WALL: fail-closed, so the box's only way out is the host's allowlisting proxy
+# egress FIREWALL: fail-closed, so the box's only way out is the host's allowlisting proxy
 # (below). Sizing applies at FIRST creation; to resize later: `foldyard machine recreate`.
 #   backend = "podman"  # the single shared podman machine — no concurrent per-project
-#                       # VMs, and no in-VM wall (egress is the host-side proxy + gvproxy)
-#   backend = "native"  # host podman directly (no VM) — weakest isolation, shared kernel
-#   wall = false        # lima but COOPERATIVE-only: the box uses the proxy, but nothing
-#                       # stops a process that ignores it (the wall makes it fail-closed)
+#                       # VMs, and no in-VM firewall (egress is the host-side proxy + gvproxy)
+#   firewall = false    # lima but COOPERATIVE-only: the box uses the proxy, but nothing
+#                       # stops a process that ignores it (the firewall makes it fail-closed)
 backend = "lima"
-wall = true
+firewall = true
 name = "claude-code-log"
 cpus = 8
 memory_mib = 16384   # MiB — any whole number
 disk_gib = 60
 
 # Egress proxy. Declaring [proxy] routes the box's egress through the host proxy — REQUIRED
-# by the wall (which otherwise leaves the box with no way out). ENFORCING from the start:
+# by the firewall (which otherwise leaves the box with no way out). ENFORCING from the start:
 # a host you haven't granted is refused, and the recommendations below are how the box
 # still builds anyway (you're offered them, one yes each, before the first build). To watch
 # rather than block while you discover a new dependency's egress:
-#     fy allow wall off                     # observe only — everything through, all logged
-#     fy allow wall on                      # back to enforcing
+#     fy allow enforce off                  # observe only — everything through, all logged
+#     fy allow enforce on                   # back to enforcing
 # Grants are deliberately NOT config: they live in the host-side allow-store, outside the
-# repo mount, so the box can't widen its own wall by editing a file it can write. Blocked
-# hosts show live in `fy tui`, where one keypress grants them (and its Network Log's wall
-# pane manages grants + these offers). `default_deny` here only SEEDS the first answer —
-# `fy allow wall` is the switch from then on. Any keyless host (below) is ALWAYS allowed
+# repo mount, so the box can't widen its own allowlist by editing a file it can write. Blocked
+# hosts show live in `fy tui`, where one keypress grants them (and its Network Log's allowlist
+# pane manages grants + these offers). `enforce` here only SEEDS the first answer —
+# `fy allow enforce` is the switch from then on. Any keyless host (below) is ALWAYS allowed
 # implicitly — never list it.
 [proxy]
-default_deny = true
+enforce = true
 # The repo can RECOMMEND hosts (this is how a team SHARES its allowlist): each entry is
 # OFFERED per host at `fy up`/`fy box up`/`fy allow sync`, and nothing is granted without
 # that yes — repo config asks, the host answers. (`fy allow sync --yes` takes them all at
 # once, for an unattended setup with no terminal to answer on.) These cover box bootstrap,
-# so the wall above comes up working after one round of consented yeses; the agents below
+# so the firewall above comes up working after one round of consented yeses; the agents below
 # add their own install hosts to the same offer when you uncomment one. Add your project's
 # own hosts WITH a why (the why is shown at the decision moment).
 recommend = [
@@ -82,7 +87,10 @@ recommend = [
   { host = "unpkg.com", why = "vis-timeline, loaded by generated transcript pages (the browser test suite renders them)" },
   { host = "downloads.claude.ai", why = "claude --upgrade / claude plugin — public CDN of signed release artefacts (NOT the keyless host; api.anthropic.com is implicit)" },
 ]
-# passthrough = ["@all"]   # hosts tunnelled UN-decrypted under capture=on (the toolchain)
+# passthrough = ["@jvm", "@linux"]   # the default since 0.4.0: hosts tunnelled UN-decrypted;
+#                                    # everything else (uv, npm, git, playwright…) is decrypted
+#                                    # + logged. A cert error naming `mitmproxy` means a tool
+#                                    # needs its bundle here (or `["@all"]` for the old behaviour)
 
 # ── Agents — uncomment ONE, then `fy box up` (step 2) ────────────────────────────────────
 # Claude Code (`fy claude`). Declaring [claude] installs it on box-up + mounts its persisted
@@ -214,7 +222,7 @@ install = "apt-get install -y --no-install-recommends just"
 # `uv run pyright` (the `just ci` typecheck leg) needs a Node runtime: the pyright PyPI
 # package is a thin wrapper that BUNDLES the pyright JS inside its wheel and prefers a
 # global `node` from PATH (PYRIGHT_PYTHON_GLOBAL_NODE defaults on). Without one it falls
-# back to nodeenv, which fetches a node tarball from nodejs.org — denied by the wall.
+# back to nodeenv, which fetches a node tarball from nodejs.org — denied by the allowlist.
 # Debian's nodejs (v20) satisfies it outright, so this is the whole fix: no npm, no
 # registry.npmjs.org grant (only the PYRIGHT_PYTHON_FORCE_VERSION escape hatch would npm-
 # install a non-bundled version), and the wrapper's update check uses the already-granted
