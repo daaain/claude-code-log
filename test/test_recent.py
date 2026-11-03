@@ -321,6 +321,56 @@ def test_injected_user_bodies_are_not_prompts(tmp_path: Path) -> None:
     assert info["lastPrompt"]["html"] == "<p>Real prompt.</p>\n"
 
 
+def _compact(s: _Session, minutes_ago: float) -> None:
+    """A compaction as Claude Code writes it: the boundary, then the
+    summary as a user entry, then context attachments."""
+    s._base(
+        "system",
+        minutes_ago,
+        content="Conversation compacted",
+        subtype="compact_boundary",
+        isMeta=False,
+    )
+    s.prompt(
+        minutes_ago,
+        "This session is being continued from a previous conversation that ran"
+        " out of context. The summary below covers the earlier portion of the"
+        " conversation.\n\nSummary: ...",
+        isCompactSummary=True,
+        isVisibleInTranscriptOnly=True,
+    )
+    s._base("attachment", minutes_ago, attachment={"type": "environment"})
+
+
+def test_an_idle_compaction_is_not_a_turn(tmp_path: Path) -> None:
+    """Claude Code can compact a session while it waits for you: the
+    summary it writes is not a prompt, and the session stays finished."""
+    s = _Session()
+    s.prompt(120, "Commit the work.")
+    s.reply(110, "Committed.")
+    _compact(s, 55)
+    info = s.summary(tmp_path)
+    assert info["state"] == "done"
+    assert info["turnCount"] == 1
+    assert info["turns"][0][1] == _ms_ago(110)  # not stretched to the compaction
+    assert info["lastPrompt"]["html"] == "<p>Commit the work.</p>\n"
+    assert info["last"]["html"] == "<p>Committed.</p>\n"
+
+
+def test_a_mid_turn_compaction_continues_the_turn(tmp_path: Path) -> None:
+    s = _Session()
+    s.prompt(60, "Refactor the parser.")
+    s.tool(50, command="just test")
+    _compact(s, 45)
+    s.tool(40, command="just test")
+    s.reply(35, "Refactored; the tests pass.")
+    info = s.summary(tmp_path)
+    assert info["state"] == "done"
+    assert info["turnCount"] == 1
+    assert info["toolCount"] == 2
+    assert info["turns"][0][:2] == [_ms_ago(60), _ms_ago(35)]
+
+
 def test_sidechain_entries_are_left_out(tmp_path: Path) -> None:
     s = _Session()
     s.prompt(30, "Delegate it.")

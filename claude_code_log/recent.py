@@ -80,6 +80,7 @@ from typing import Any, Callable, Iterable, Optional, cast
 
 from .cache import CacheManager, get_cache_db_path, get_library_version
 from .background_work import BackgroundWork
+from .factories.user_factory import COMPACTED_SUMMARY_PREFIX
 from .models import (
     AssistantTranscriptEntry,
     AttachmentTranscriptEntry,
@@ -434,6 +435,13 @@ def read_session(entries: Iterable[TranscriptEntry]) -> SessionSummary:
                 # A toolUseResult describes the entry's one result.
                 structured = entry.toolUseResult if len(results) == 1 else None
                 background.tool_result(result, structured, at)
+            if not results and _entry_text(entry).startswith(COMPACTED_SUMMARY_PREFIX):
+                # A compaction's summary, written as a user entry: not a
+                # prompt, and not activity either (Claude Code compacts
+                # idle sessions too), so the turn neither starts nor
+                # stretches. After a mid-turn compaction, Claude's next
+                # entries carry on the turn they belong to.
+                continue
             prompt = _user_text(entry)
             if prompt is not None:
                 current = _new_turn(at, "you", prompt=prompt)

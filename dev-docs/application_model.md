@@ -1602,7 +1602,10 @@ everything is derived from rows the cache already holds, so archived
 sessions work too. A turn runs from a prompt you typed (`_user_text`
 excludes tool results, meta entries and injected bodies such as task
 notifications and command output) to the last entry before the next
-one, and ends `ask` (the last reply's last line ends with `?`, or a
+one; a compaction's summary (`COMPACTED_SUMMARY_PREFIX`) is skipped
+outright, neither a prompt nor activity, since Claude Code also compacts
+idle sessions and the summary would otherwise be a turn with no reply
+(*mid-turn*) or stretch the last bar across the idle gap. A turn ends `ask` (the last reply's last line ends with `?`, or a
 call that waits on you has no result yet: `AskUserQuestion`, whose
 questions and options `_questions_markdown` writes out as the last
 message, `who: "question"`, or `ExitPlanMode`, whose plan becomes it,
