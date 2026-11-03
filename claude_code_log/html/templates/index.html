@@ -41,7 +41,9 @@
     {% include 'components/search.html' %}
 
     {% if minimal %}<a class='mn-archive-link' href='search.html' title='Full-text search across every message of every project (needs claude-code-log serve)'>Search all transcripts</a>
-    </nav>{% else %}{{ render_archive_search_link('search.html') }}{% endif %}
+    <a class='mn-archive-link mn-recent-link' href='recent.html' title='Recently active sessions across every project, newest update first'>Recent sessions</a>
+    </nav>{% else %}{{ render_archive_search_link('search.html') }}
+    <p class='archive-search-link recent-sessions-link'><a href='recent.html'>🕒 Recent sessions across all projects…</a> <span class='archive-search-link-hint'>(newest update first; keeps itself current while <code>claude-code-log watch</code> runs)</span></p>{% endif %}
 
     {% if not minimal %}<div class='summary'>
         <div class='summary-stats'>

@@ -10,7 +10,7 @@ The minimal theme in motion, recorded from a synthetic archive by `scripts/demos
 
 ## Walkthrough
 
-Six short chapters, 2:11 in all.
+Seven short chapters, 2:47 in all.
 
 ### Your archive
 
@@ -47,3 +47,9 @@ In-page search, including steps that are folded away.
 With `serve --watch`, an open page follows a session as it runs.
 
 <video controls muted playsinline preload="metadata" width="100%" src="../assets/demos/6-live.mp4"></video>
+
+### Recent sessions
+
+Every session in every project on one page, newest update first, kept current.
+
+<video controls muted playsinline preload="metadata" width="100%" src="../assets/demos/7-recent.mp4"></video>

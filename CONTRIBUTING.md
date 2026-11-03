@@ -519,6 +519,19 @@ supercut and the walkthrough. The data is synthetic and committed
 the videos re-record identically anywhere. To show a new feature, add a
 `@scene` and list it in `CHAPTERS` or `SUPERCUT`.
 
+The recent sessions chapter and beat are driven by
+`test/recent_live_fixture.py`: sessions in four projects, written as real
+JSONL and moved on stage by stage, each stage converted by the real full
+run. The same stages are an end-to-end browser test
+(`test/test_recent_live_browser.py`), so a change that breaks the demo's
+story fails in `just test-browser` first, and a play mode for judging the
+page by eye in your own browser:
+
+```bash
+just recent-play          # a sandbox page; the next stage every 20 s
+just recent-play --step   # Enter moves on a stage
+```
+
 The README embeds the supercut as a GitHub upload: after `--publish`, drag
 `docs/assets/demos/supercut.mp4` into the README editor on GitHub and
 replace the old attachment link.

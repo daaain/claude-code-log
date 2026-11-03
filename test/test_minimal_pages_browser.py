@@ -210,7 +210,7 @@ class TestChoiceCarriesOver:
         expect(page.locator("html")).to_have_attribute("data-theme", "dark")
 
         page.goto(f"{server.url}/index.html")
-        page.locator(".mn-archive-link").click()
+        page.locator(".mn-archive-link[href='search.html']").click()
         page.wait_for_load_state()
         assert page.url.endswith("/search.html")
         expect(page.locator("html")).to_have_attribute("data-theme", "dark")
@@ -260,7 +260,7 @@ class TestRows:
         expect(panel).to_be_visible()
         expect(panel.locator(".search-result-item").first).to_be_visible()
         # The archive link stays on the finder's line, above the results.
-        link = page.locator(".mn-archive-link").bounding_box()
+        link = page.locator(".mn-archive-link[href='search.html']").bounding_box()
         results = panel.bounding_box()
         assert link is not None and results is not None
         assert link["y"] < results["y"]

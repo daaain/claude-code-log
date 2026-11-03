@@ -26,43 +26,49 @@ prefix = "claude-code-log"
 #   app = "app"                # the app service (fy shell target)
 #   app_port = "WEB_PORT"      # [ports] key shown in the TUI + opened by `fy open`
 #   compose = ["compose.yml"]  # compose files in -f order, relative to this dir
+# A floor, not a pin: `fy` refuses to run in this checkout below it. Raise it in the same
+# commit as a setting that needs it — an older `fy` silently ignores keys it doesn't know.
+min_foldyard_version = "0.5.0"
+
+[project.foldyard_version_reasons]
+"0.5.0" = "[box].packages: system packages baked into a cached image layer instead of installed by every fresh box"
+"0.4.0" = "egress-proxy security fixes (0.3.2); renamed [machine] firewall / [proxy] enforce keys; box shows host timezone"
 
 [machine]
 # A rootless VM that mounts ONLY this repo. Default here is the Lima backend + an in-VM
-# egress WALL: fail-closed, so the box's only way out is the host's allowlisting proxy
+# egress FIREWALL: fail-closed, so the box's only way out is the host's allowlisting proxy
 # (below). Sizing applies at FIRST creation; to resize later: `foldyard machine recreate`.
 #   backend = "podman"  # the single shared podman machine — no concurrent per-project
-#                       # VMs, and no in-VM wall (egress is the host-side proxy + gvproxy)
-#   backend = "native"  # host podman directly (no VM) — weakest isolation, shared kernel
-#   wall = false        # lima but COOPERATIVE-only: the box uses the proxy, but nothing
-#                       # stops a process that ignores it (the wall makes it fail-closed)
+#                       # VMs, and no in-VM firewall (egress is the host-side proxy + gvproxy)
+#   firewall = false    # lima but COOPERATIVE-only: the box uses the proxy, but nothing
+#                       # stops a process that ignores it (the firewall makes it fail-closed)
 backend = "lima"
-wall = true
+firewall = true
 name = "claude-code-log"
 cpus = 8
 memory_mib = 16384   # MiB — any whole number
 disk_gib = 60
 
 # Egress proxy. Declaring [proxy] routes the box's egress through the host proxy — REQUIRED
-# by the wall (which otherwise leaves the box with no way out). ENFORCING from the start:
+# by the firewall (which otherwise leaves the box with no way out). ENFORCING from the start:
 # a host you haven't granted is refused, and the recommendations below are how the box
 # still builds anyway (you're offered them, one yes each, before the first build). To watch
 # rather than block while you discover a new dependency's egress:
-#     fy allow wall off                     # observe only — everything through, all logged
-#     fy allow wall on                      # back to enforcing
+#     fy allow enforce off                  # observe only — everything through, all logged
+#     fy allow enforce on                   # back to enforcing
 # Grants are deliberately NOT config: they live in the host-side allow-store, outside the
-# repo mount, so the box can't widen its own wall by editing a file it can write. Blocked
-# hosts show live in `fy tui`, where one keypress grants them (and its Network Log's wall
-# pane manages grants + these offers). `default_deny` here only SEEDS the first answer —
-# `fy allow wall` is the switch from then on. Any keyless host (below) is ALWAYS allowed
+# repo mount, so the box can't widen its own allowlist by editing a file it can write. Blocked
+# hosts show live in `fy tui`, where one keypress grants them (and its Network Log's allowlist
+# pane manages grants + these offers). `enforce` here only SEEDS the first answer —
+# `fy allow enforce` is the switch from then on. Any keyless host (below) is ALWAYS allowed
 # implicitly — never list it.
 [proxy]
-default_deny = true
+enforce = true
 # The repo can RECOMMEND hosts (this is how a team SHARES its allowlist): each entry is
 # OFFERED per host at `fy up`/`fy box up`/`fy allow sync`, and nothing is granted without
 # that yes — repo config asks, the host answers. (`fy allow sync --yes` takes them all at
 # once, for an unattended setup with no terminal to answer on.) These cover box bootstrap,
-# so the wall above comes up working after one round of consented yeses; the agents below
+# so the firewall above comes up working after one round of consented yeses; the agents below
 # add their own install hosts to the same offer when you uncomment one. Add your project's
 # own hosts WITH a why (the why is shown at the decision moment).
 recommend = [
@@ -72,7 +78,7 @@ recommend = [
   { host = "pypi.org", why = "uv/pip — box bootstrap + deps" },
   { host = "*.pypi.org", why = "uv/pip mirrors" },
   { host = "files.pythonhosted.org", why = "uv/pip package downloads" },
-  { host = "deb.debian.org", why = "apt — [[box.tools]] system packages" },
+  { host = "deb.debian.org", why = "apt — the [box].packages layer's system packages" },
   { host = "registry-1.docker.io", why = "box image build — base image manifest/blobs" },
   { host = "auth.docker.io", why = "box image build — Docker Hub auth token" },
   { host = "production.cloudfront.docker.com", why = "box image build — Docker Hub blob CDN" },
@@ -82,7 +88,10 @@ recommend = [
   { host = "unpkg.com", why = "vis-timeline, loaded by generated transcript pages (the browser test suite renders them)" },
   { host = "downloads.claude.ai", why = "claude --upgrade / claude plugin — public CDN of signed release artefacts (NOT the keyless host; api.anthropic.com is implicit)" },
 ]
-# passthrough = ["@all"]   # hosts tunnelled UN-decrypted under capture=on (the toolchain)
+# passthrough = ["@jvm", "@linux"]   # the default since 0.4.0: hosts tunnelled UN-decrypted;
+#                                    # everything else (uv, npm, git, playwright…) is decrypted
+#                                    # + logged. A cert error naming `mitmproxy` means a tool
+#                                    # needs its bundle here (or `["@all"]` for the old behaviour)
 
 # ── Agents — uncomment ONE, then `fy box up` (step 2) ────────────────────────────────────
 # Claude Code (`fy claude`). Declaring [claude] installs it on box-up + mounts its persisted
@@ -170,77 +179,90 @@ tui = { raw_output_mode = false }
 [box]
 # Shared named volumes mounted into the box at a $HOME-relative path, so they survive box
 # recreation. Playwright's browser bundle is ~900 MB — without this, every fresh box
-# re-downloads it through the proxy. The apt volume pairs with the apt-keepcache step
-# below: downloaded .debs land in ~/.cache/apt, so a rebuilt box installs its tools from
-# cache instead of re-downloading from deb.debian.org. The uv volumes spare the wheel
-# downloads AND the uv-managed Python (the Debian slim base ships none — uv provisions its
-# own from python-build-standalone) on every rebuild.
+# re-downloads it through the proxy. The uv volumes spare the wheel downloads AND the
+# uv-managed Python (the Debian slim base ships none — uv provisions its own from
+# python-build-standalone) on every rebuild. No apt cache: system packages are a baked image
+# layer (`packages` below), so a rebuilt box doesn't fetch them at all.
 caches = [
   { volume = "devbox_playwright", path = ".cache/ms-playwright" },
-  { volume = "devbox_apt", path = ".cache/apt" },
   { volume = "devbox_uv", path = ".cache/uv" },
   { volume = "devbox_uv_python", path = ".local/share/uv" },
 ]
 shadow_volumes = [".venv"]                      # masks the host bind mount at that subpath
-warmup = [{ dir = ".", run = "uv sync" }]       # populate it — it starts empty
-env = { UV_LINK_MODE = "copy" }                 # venv volume ≠ cache volume ⇒ no hardlinks
+# Populate it — it starts empty. FROZEN: the lockfile is on the shared mount, and a resolving
+# install would rewrite the host's tree as root.
+warmup = [{ dir = ".", run = "uv sync --frozen" }]
+# UV_LINK_MODE: the venv volume is a different filesystem from the cache volume, so uv's
+# default hardlink import fails cross-device. UV_FROZEN: a bare `uv run` (or `uv run --group
+# demos`, which `just demos` is) would otherwise re-resolve and REWRITE uv.lock against this
+# box's interpreter — marker churn that lands in whatever commit follows. The box can't push,
+# so it has no business re-locking; when a dep really changes, `uv lock` deliberately.
+env = { UV_LINK_MODE = "copy", UV_FROZEN = "1" }
 
-# Consumer tools installed once per fresh box, as MONITORED steps (reported ✓/✗). They run
-# as root, in the checkout, before the deps warm-up. The box is Debian (foldyard's generic
-# base, debian:trixie-slim), so apt pulls everything from the one allowlisted
-# deb.debian.org.
+# System packages, baked ONCE into a cached layer on the box image (`<tag>-packages`) rather
+# than reinstalled by every fresh box's bootstrap; rebuilt when this list or the base image
+# changes, or by `fy box build`. The box is Debian trixie (foldyard's packaged generic base),
+# so these are Debian's names, all from the one allowlisted deb.debian.org. Each, and why:
+#   • just — this project's documented entry point: CLAUDE.md and CONTRIBUTING.md route every
+#     workflow through it (`just ci` before pushing, `just test`, `just docs-build`, `just
+#     demos`), so without it the box can't follow its own instructions.
+#   • nodejs — `uv run pyright` (the `just ci` typecheck leg) needs a Node runtime: the
+#     pyright PyPI package BUNDLES the pyright JS in its wheel and prefers a global `node`
+#     from PATH. Without one it falls back to nodeenv, which fetches a node tarball from
+#     nodejs.org — denied by the allowlist. Debian's nodejs (v20) satisfies it outright.
+#   • the rest — what `playwright install-deps chromium` would install on Debian 13: its
+#     `tools` list (xvfb and the fonts pages and the demo videos render with) and its
+#     `chromium` list (the browser's shared libraries), as Playwright's nativeDeps declares
+#     them for the version uv.lock pins. Listed here so they are baked, not apt-installed on
+#     every box; test/test_foldyard_config.py fails when a Playwright bump needs one that is
+#     missing, which is what calling install-deps used to guarantee.
+packages = [
+  "just",
+  "nodejs",
+  # playwright install-deps chromium — tools
+  "xvfb",
+  "fonts-noto-color-emoji",
+  "fonts-unifont",
+  "libfontconfig1",
+  "libfreetype6",
+  "xfonts-scalable",
+  "fonts-liberation",
+  "fonts-ipafont-gothic",
+  "fonts-wqy-zenhei",
+  "fonts-tlwg-loma-otf",
+  "fonts-freefont-ttf",
+  # playwright install-deps chromium — chromium
+  "libasound2t64",
+  "libatk-bridge2.0-0t64",
+  "libatk1.0-0t64",
+  "libatspi2.0-0t64",
+  "libcairo2",
+  "libcups2t64",
+  "libdbus-1-3",
+  "libdrm2",
+  "libgbm1",
+  "libglib2.0-0t64",
+  "libnspr4",
+  "libnss3",
+  "libpango-1.0-0",
+  "libx11-6",
+  "libxcb1",
+  "libxcomposite1",
+  "libxdamage1",
+  "libxext6",
+  "libxfixes3",
+  "libxkbcommon0",
+  "libxrandr2",
+]
 
-# Keep downloaded .debs (apt normally discards them, and the slim image ships a docker-clean
-# hook that deletes them on sight) in ~/.cache/apt, where the devbox_apt volume in [box]
-# caches above persists them across box recreations. A rebuilt box then installs its tools
-# from cache, with only index revalidation touching the (allowlisted) mirror. Ends with the
-# `apt-get update` the install steps below rely on — the slim image ships no package index.
-# Must stay ABOVE the apt install steps — [[box.tools]] run in order.
-[[box.tools]]
-name = "apt-keepcache"
-check = "grep -qs 'fy-keepcache' /etc/apt/apt.conf.d/90fy-keepcache"
-install = "mkdir -p /root/.cache/apt/archives/partial && rm -f /etc/apt/apt.conf.d/docker-clean && printf '// fy-keepcache\\nDir::Cache::Archives \"/root/.cache/apt/archives\";\\nAPT::Keep-Downloaded-Packages \"true\";\\n' > /etc/apt/apt.conf.d/90fy-keepcache && apt-get update"
-
-# `just` is this project's documented entry point: CLAUDE.md and CONTRIBUTING.md route every
-# workflow through it (`just ci` before pushing, `just test`, `just docs-build`), so without
-# it the box can't follow its own instructions — and the recipes below name it too. Debian
-# trixie packages it, so this is a plain apt install: no cargo build, no prebuilt binary
-# fetched past the proxy.
-[[box.tools]]
-name = "just"
-check = "command -v just"
-install = "apt-get install -y --no-install-recommends just"
-
-# `uv run pyright` (the `just ci` typecheck leg) needs a Node runtime: the pyright PyPI
-# package is a thin wrapper that BUNDLES the pyright JS inside its wheel and prefers a
-# global `node` from PATH (PYRIGHT_PYTHON_GLOBAL_NODE defaults on). Without one it falls
-# back to nodeenv, which fetches a node tarball from nodejs.org — denied by the wall.
-# Debian's nodejs (v20) satisfies it outright, so this is the whole fix: no npm, no
-# registry.npmjs.org grant (only the PYRIGHT_PYTHON_FORCE_VERSION escape hatch would npm-
-# install a non-bundled version), and the wrapper's update check uses the already-granted
-# pypi.org JSON API with a 1s timeout that fails silent. Verified in-box: apt nodejs alone
-# takes `uv run pyright` from the nodeenv RuntimeError to a clean run.
-[[box.tools]]
-name = "nodejs-for-pyright"
-check = "command -v node"
-install = "apt-get install -y --no-install-recommends nodejs"
-
-# Browser tests (`just test-browser`, `uv run pytest -m browser`) need Chromium's shared
-# libraries in the box. On Debian, `playwright install-deps` is the supported path: playwright
-# itself owns the apt list for the browser build the lockfile pins, so a Chromium bump can't
-# silently outgrow a hand-maintained library list. The check names a few marker
-# libraries so a warm box skips the apt round-trip.
-[[box.tools]]
-name = "chromium-system-libs"
-check = "dpkg -s libnspr4 libnss3 libgbm1 libatomic1 > /dev/null 2>&1"
-install = "uv run --frozen playwright install-deps chromium"
+# Tools installed once per fresh box, as MONITORED steps (reported ✓/✗). They run as root, in
+# the checkout, before the deps warm-up. A distro package belongs in `packages` above instead.
 
 # Browser binaries, from the version of playwright uv.lock pins (NOT a floating `uvx
 # playwright` — the browser build number is tied to the library version). `--frozen` keeps
-# uv from rewriting the lockfile on the host bind mount, and the sync it does here doubles
-# as the venv warm-up. `check = "false"` means always run: `playwright install` is idempotent
-# and cheap once the cache volume above is warm, and re-running is what picks up a new
-# browser build when the playwright pin moves.
+# uv from rewriting the lockfile on the host bind mount. `check = "false"` means always run:
+# `playwright install` is idempotent and cheap once the devbox_playwright cache volume above
+# is warm, and re-running is what picks up a new browser build when the playwright pin moves.
 [[box.tools]]
 name = "playwright-chromium"
 check = "false"

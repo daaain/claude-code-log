@@ -276,6 +276,34 @@ def page(context):
     page.close()
 
 
+@pytest.fixture(scope="session")
+def _isolated_browser(playwright, browser_type_launch_args, _browser_expect_timeout):
+    """A plain (non-persistent) browser per worker, for ``isolated_page``."""
+    browser = playwright.chromium.launch(**browser_type_launch_args)
+    yield browser
+    browser.close()
+
+
+@pytest.fixture
+def isolated_page(_isolated_browser):
+    """A page in a fresh context of its own, closed with the test.
+
+    Use it instead of ``page`` for anything that changes the *context*
+    rather than the page — above all ``page.clock.install()``: Playwright's
+    clock belongs to the context, and ``page``'s context is shared by every
+    browser test on the worker, so a fake clock installed there stays
+    installed for the tests that follow. (It did: a recent-sessions test's
+    clock froze ``requestAnimationFrame`` timing for a later search test,
+    which then failed whenever xdist put the two on one worker.)
+    """
+    context = _isolated_browser.new_context(
+        viewport={"width": 1280, "height": 720}, ignore_https_errors=True
+    )
+    page = context.new_page()
+    yield page
+    context.close()
+
+
 # ========== Deterministic mtime changes ==========
 # The cache treats a file as unchanged when its mtime is within 1.0 s of the
 # recorded one (``_cache_row_is_fresh``). Tests used to force a change with

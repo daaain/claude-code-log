@@ -695,6 +695,10 @@ class TestConnectionCensus:
             1,
             "mode=ro reader; cannot switch journal modes",
         ),
+        ("recent.py", "_session_rows"): (
+            1,
+            "mode=ro reader: one SELECT across projects, then close",
+        ),
     }
 
     @staticmethod

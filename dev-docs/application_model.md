@@ -42,6 +42,7 @@ for user-facing operations docs see [`docs/`](../docs/).
 | Intra-project render fan-out | [`render_pool.py`](../claude_code_log/render_pool.py) (mechanism) + [`render_dispatch.py`](../claude_code_log/render_dispatch.py) (policy) | inlined below (§ 2.10) |
 | Diagnosing hangs (SIGUSR1) | [`cli.py`](../claude_code_log/cli.py) `_install_stack_dump_signal` | inlined below (§ 2.11) |
 | Watch mode / live page updates | [`watch.py`](../claude_code_log/watch.py), `html/templates/components/live_update.js` | inlined below (§ 2.15); design in [`work/watch-mode.md`](../work/watch-mode.md); user-facing in [`docs/live-updates.md`](../docs/live-updates.md) |
+| Recent sessions page (`recent.html`) | [`recent.py`](../claude_code_log/recent.py) (data), `converter._write_recent_page`, `cli.watch` (refresh), `html/templates/recent.html` + `components/recent/` | inlined below (§ 2.18); user-facing in [`docs/recent-sessions.md`](../docs/recent-sessions.md) |
 | Adding a new tool renderer | [`factories/tool_factory.py`](../claude_code_log/factories/tool_factory.py), `html/tool_formatters.py` | [implementing-a-tool-renderer.md](implementing-a-tool-renderer.md) (how-to) |
 | Which tools have a specialized renderer or provider adapter | `TOOL_INPUT_MODELS` / `TOOL_OUTPUT_PARSERS` in [`factories/tool_factory.py`](../claude_code_log/factories/tool_factory.py), plus provider adapters | [tools-coverage.md](tools-coverage.md) (Claude and Codex status vs. upstream references) |
 | Plugin system (third-party message transformers) | [`plugins.py`](../claude_code_log/plugins.py), [`factories/priorities.py`](../claude_code_log/factories/priorities.py), `Renderer._dispatch_format` | [plugins.md](plugins.md) |
@@ -1582,6 +1583,179 @@ bugs found during the migration and added the `soft_break` and
 `test/test_markdown_rendering.py` pins each of those behaviours, and
 `work/wenmode-evaluation.md` records the method for re-measuring a
 bump against real transcripts.
+
+### 2.18 Recent sessions page
+
+`recent.html` sits next to `index.html` and lists the sessions updated in
+the last `WINDOW_DAYS` (3) across every project, newest first, at most
+`MAX_SESSIONS` (60). It is a separate page rather than a view of the
+index because it carries per-session turn data and last messages, ticks
+in the browser, and goes stale on its own schedule; the index only links
+to it (one line in each theme).
+
+**Data.** [`recent.build_recent_payload`](../claude_code_log/recent.py)
+runs one query over the shared cache — `sessions JOIN projects`,
+`hidden = 0`, newest `last_timestamp` first — then loads each listed
+session's entries from the cache (`CacheManager.load_session_entries`,
+read-only) and summarises them in `summarise_session`. No schema change:
+everything is derived from rows the cache already holds, so archived
+sessions work too. A turn runs from a prompt you typed (`_user_text`
+excludes tool results, meta entries and injected bodies such as task
+notifications and command output) to the last entry before the next
+one; a compaction's summary (`COMPACTED_SUMMARY_PREFIX`) is skipped
+outright, neither a prompt nor activity, since Claude Code also compacts
+idle sessions and the summary would otherwise be a turn with no reply
+(*mid-turn*) or stretch the last bar across the idle gap. A turn ends `ask` (the last reply's last line ends with `?`, or a
+call that waits on you has no result yet: `AskUserQuestion`, whose
+questions and options `_questions_markdown` writes out as the last
+message, `who: "question"`, or `ExitPlanMode`, whose plan becomes it,
+`who: "plan"`; see `_waits_on_you`), `err` (a `<synthetic>` reply or `API Error…` text), `open` (the
+final turn ends on a tool call or result) or `asst`. The session's state follows its final
+turn: `asked`, `error`, `busy` or `done`. Sidechain entries are skipped.
+Only turns that ended within `TURN_HORIZON_HOURS` (24) are sent; the rest
+are counted in `earlierTurns`. Each sent turn carries `SNIPPET_CHARS`
+(200) of its prompt and of how it ended, which the strip's markers show
+on hover. The last prompt, and the last message when Claude wrote it,
+carry `html` *in place of* `text` (the data file is reloaded every 15 s,
+so it holds one form, not both): the clipped text rendered by
+`render_user_markdown` / `render_markdown`, the session pages' escaping
+pipeline (§ 2.17). Tool lines and errors stay plain `text`.
+
+These are **transcript states, not liveness**: nothing here can tell an
+agent that stopped from one waiting quietly.
+
+**Background work.** [`background_work.BackgroundWork`](../claude_code_log/background_work.py)
+collects what a session ran in the background as `summarise_session`
+feeds it entries; its module docstring records how each kind shows up in
+real transcripts. Background commands, async agents and monitors are
+found by the id their tool result names (`toolUseResult.backgroundTaskId`
+/ `agentId` / `taskId`, or the same id in the result text; Bash by its
+result, since a command that outlives its timeout is backgrounded
+without the flag), and end at the `<task-notification>` naming that id
+with a final status, a `TaskStop`/`KillShell`/`KillBash` on it, or (a
+monitor) an expiry event. An agent's "waiting on its own background
+work" notification is interim, but when that agent later reports by
+`SubagentHandback`, the final notification keeps the same summary, so
+only its `<result>` (the report "was delivered to you") marks the end. Notifications are found by search, not prefix
+(some open with a `[SYSTEM NOTIFICATION …]` preamble), in user entries
+and in `queued_command` attachments. Pending wake-ups come from
+`ScheduleWakeup`'s `toolUseResult.scheduledFor` (exactly the fire time)
+and leave at the `system` entry with subtype `scheduled_task_fire`
+nearest them; a `{stop: true}` call cancels them. Cron jobs are not
+drawn.
+
+A notification delivered while Claude is idle (a user entry) and a
+wake-up firing each **start a turn** (`origin` `task` / `wake`, the turn
+tuple's sixth field), labelled with what reported or the wake-up's
+reason; a notification mid-turn (an attachment) only ends its work. Your
+last prompt stays the last one you typed. The payload carries
+`bg: [[start, end|null, kind, status|null, label, expiresAt|null]]`,
+`wakes: [[at, label]]` and the policy constants `bgCapMinutes`
+(60) and `wakeGraceMinutes` (5). The page applies them against its own
+clock, so a data file that stops changing still ages: work with no end
+recorded counts as running until the session's last entry plus the cap
+(or a monitor's expiry, if sooner), then shows as *no end recorded*; a
+wake-up is pending until its time plus the grace.
+
+**The process exiting.** `/exit` (or any way out) writes no entry, only a
+trailing `cost-state` line: no uuid and no timestamp, so the parser drops
+it (`SILENT_SKIP_TYPES`) and the cache never holds it. `recent.session_exit`
+reads it from the session file's tail instead, on every build and outside
+the `RecentMemo` (the line doesn't move the memo key). The process has
+exited when a `cost-state` comes after every entry with a uuid (and every
+queued notification); only metadata lines follow an exit that stuck,
+while a resume adds entries. The exit is dated `startTime + totalDuration`,
+but never before the session's last entry, because a resumed session's
+figures can add up to an earlier time. `SessionSummary.at(now, exited_at)`
+then settles the row: work with no end ends `exited` at the exit (the page
+shows *ended with the session*), pending wake-ups are dropped, and an open
+final turn is over (`busy` becomes `done`). Only the last exit counts. If
+a session was resumed after an earlier exit, the work that exit killed
+keeps the usual cap.
+
+A session whose
+transcript state is `done` but which has running work or a pending
+wake-up is shown as **waiting** (`background`), which leaves the *your
+move* filter.
+
+**Writing.** `converter._write_recent_page` runs after the index on every
+HTML hierarchy run. It takes each session's link from the index's own
+`sessions[].file` entries, so `--output`, `--expand-paths` and variant
+filenames resolve as the index's do, and writes `recent-data.js` then
+`recent.html`. A failure there is reported and never fails the run.
+Under `--combined only` the rows get no link: the index still names each
+session's file, but nothing writes it. The watch's per-tick refresh
+(`recent.write_recent_data`) follows the same rule with `session_pages`.
+
+**Self-refresh on `file://`.** A page opened as a file cannot `fetch`
+(see `live_update.js`), but it can add a `<script>`. So `recent.html`
+holds no data at all: it loads `recent-data.js` with a plain script tag
+on open, then re-adds `<script src="recent-data.js?t=…">` every 15 s. The
+file calls `window.__cclRecent(payload)` (its JSON made by `payload_json`,
+which escapes `<`), and the page redraws its rows in place, keeping open
+rows, filters and scroll. Keeping data out of the page also makes the
+page identical from run to run, which the parallel-vs-sequential output
+test relies on; only the data file carries the time it was written (the
+page's staleness notice reads it). Row content is built with DOM APIs and
+`textContent`: titles and messages are untrusted transcript text. The one
+exception is the payload's `html` fields, which go in through a single
+helper (`renderedMarkdown` in `recent.js`) and nowhere else; they carry
+exactly the trust of a session page's message body, since the same
+pipeline escaped them. `test_recent_page.py` pins both halves: one
+`innerHTML`, fed only from `.html` fields. The page includes both
+Pygments sheets, and its `<body>` carries `theme-minimal` so the classic
+sheet reads the minimal tokens and the dark sheet's scope matches.
+
+**Motion.** Opening or closing a row, and a refresh or clock tick that
+moves rows, animate by FLIP (`flip` in `recent.js`): measure every row
+and group heading as drawn, make the change, measure again, then play
+each part back from where it was with the Web Animations API. A move is
+a `transform` (a row moving up is drawn above the rows it passes), a row
+that grew is revealed by `clip-path`, and a new row or an open row's new
+prompt or last message fades in (`drawPanel` marks those parts; the rest
+of the redrawn panel doesn't fade). A closing panel goes at once; an
+inert, `aria-hidden` copy (`.rc-ghost`) stays drawn where it was and fades
+while the rows below slide up over it, which is why rows carry an opaque
+background (`--rc-surface`). Rows animate only paint properties; the one
+layout-driven animation is the list's own height, so the card's edge and
+the legend move with the rows. Every motion comes from one before/after
+measurement, so a mid-motion change measures what is drawn (a running
+reveal's clip included) and carries on from there. Only parts on screen
+move, the first draw and filter/grouping changes are instant, and
+`prefers-reduced-motion` turns it all off. `test_recent_browser.py` reads
+`document.getAnimations()` straight after a synchronous
+`window.__cclRecent(payload)` to pin which part animates what.
+
+**End to end.** `test/recent_live_fixture.py` (`RecentLive`) writes
+sessions in four projects as real JSONL, one in each state the page tells
+apart, and moves them on stage by stage (a tool call, a finish, a
+question, a new session, background work reporting back), converting each
+stage with the full run. `test/test_recent_live_browser.py` opens the
+page from disk and checks each stage's order, states and counts; the
+fixture's `wait_for_stage` prompts the page to reload its data file with
+a `visibilitychange` instead of waiting for its 15 s tick. The same
+stages are the recent sessions demo chapter and beat and `just
+recent-play`.
+
+`cli.watch` calls `recent.write_recent_data` after each
+single-project tick (default layout only: no `--output`, and the watched
+project inside the projects directory), since that path never rewrites
+the index; `watch --all-projects` gets the page from the hierarchy run.
+The loop keeps one `recent.RecentMemo` for its life. A session's
+`SessionSummary` (`read_session`: every turn, its background work, the
+rendered last prompt and message) is a function of its entries alone, so
+the memo keeps it keyed on a fingerprint of exactly the cached rows
+`load_session_entries` reads — their count and highest id, fetched in
+the session-rows query through `idx_messages_project_session_ts` — and a
+tick re-reads only the sessions whose fingerprint moved. (Not the session
+row's `last_timestamp` / `message_count`: those skip attachments, and an
+attachment can end background work.)
+the clock (`SessionSummary.at`: the turn horizon, which background items
+and wake-ups are shown) is applied on every build, so a kept summary
+never serves a stale horizon. Sessions that leave the list are dropped.
+Reading entries back from the cache is nearly all of a build's cost: on
+a real archive a tick's rewrite went from 0.53s (9 sessions, 22k
+entries) to about 10ms.
 
 ---
 

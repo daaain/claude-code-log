@@ -19861,6 +19861,7 @@
       </span>
   </p>
   
+      <p class='archive-search-link recent-sessions-link'><a href='recent.html'>🕒 Recent sessions across all projects…</a> <span class='archive-search-link-hint'>(newest update first; keeps itself current while <code>claude-code-log watch</code> runs)</span></p>
   
       <div class='summary'>
           <div class='summary-stats'>
@@ -21832,6 +21833,10 @@
       -webkit-mask: var(--mn-icon) center / 13px 13px no-repeat;
       mask: var(--mn-icon) center / 13px 13px no-repeat;
       --mn-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round'%3E%3Ccircle cx='7' cy='7' r='4.5'/%3E%3Cpath d='M10.5 10.5 14 14M5 7h4M7 5v4'/%3E%3C/svg%3E");
+  }
+  
+  .mn-index .mn-recent-link::before {
+      --mn-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round'%3E%3Ccircle cx='8' cy='8' r='6'/%3E%3Cpath d='M8 4.5V8l2.5 1.5'/%3E%3C/svg%3E");
   }
   
   /* The finder's results: a list under the bar, not a card. Last in the
@@ -57250,6 +57255,10 @@
       --mn-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round'%3E%3Ccircle cx='7' cy='7' r='4.5'/%3E%3Cpath d='M10.5 10.5 14 14M5 7h4M7 5v4'/%3E%3C/svg%3E");
   }
   
+  .mn-index .mn-recent-link::before {
+      --mn-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round'%3E%3Ccircle cx='8' cy='8' r='6'/%3E%3Cpath d='M8 4.5V8l2.5 1.5'/%3E%3C/svg%3E");
+  }
+  
   /* The finder's results: a list under the bar, not a card. Last in the
      bar, whatever the markup order, so the archive link stays on the
      finder's line. */
@@ -59042,6 +59051,7 @@
   </script>
   
       <a class='mn-archive-link' href='search.html' title='Full-text search across every message of every project (needs claude-code-log serve)'>Search all transcripts</a>
+      <a class='mn-archive-link mn-recent-link' href='recent.html' title='Recently active sessions across every project, newest update first'>Recent sessions</a>
       </nav>
   
       
@@ -61266,6 +61276,10 @@
       --mn-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round'%3E%3Ccircle cx='7' cy='7' r='4.5'/%3E%3Cpath d='M10.5 10.5 14 14M5 7h4M7 5v4'/%3E%3C/svg%3E");
   }
   
+  .mn-index .mn-recent-link::before {
+      --mn-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round'%3E%3Ccircle cx='8' cy='8' r='6'/%3E%3Cpath d='M8 4.5V8l2.5 1.5'/%3E%3C/svg%3E");
+  }
+  
   /* The finder's results: a list under the bar, not a card. Last in the
      bar, whatever the markup order, so the archive link stays on the
      finder's line. */
@@ -63058,6 +63072,7 @@
   </script>
   
       <a class='mn-archive-link' href='search.html' title='Full-text search across every message of every project (needs claude-code-log serve)'>Search all transcripts</a>
+      <a class='mn-archive-link mn-recent-link' href='recent.html' title='Recently active sessions across every project, newest update first'>Recent sessions</a>
       </nav>
   
       
