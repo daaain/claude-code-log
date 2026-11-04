@@ -212,6 +212,32 @@ class TestExportImageSecurity:
         assert "<script>" not in html
         assert '"><script' not in html
 
+    _BREAKOUT_SRC = 'data:image/png;base64,AAAA"><script>alert(1)</script>'
+
+    def test_assistant_sink_escapes_src(self, monkeypatch: pytest.MonkeyPatch):
+        """The escaping layer on its own: with the gate bypassed, a quote in
+        the src still cannot close the attribute."""
+        import claude_code_log.html.assistant_formatters as formatters
+
+        monkeypatch.setattr(
+            formatters, "export_image", lambda *a, **k: self._BREAKOUT_SRC
+        )
+        html = formatters.format_image_content(_image("image/png"))
+        assert "<script>" not in html
+        assert 'src="data:image/png;base64,AAAA&quot;&gt;&lt;script&gt;' in html
+
+    def test_renderer_sink_escapes_src(self, monkeypatch: pytest.MonkeyPatch):
+        """Same for the renderer's export-mode-aware sink."""
+        import claude_code_log.image_export as image_export
+        from claude_code_log.html.renderer import HtmlRenderer
+
+        monkeypatch.setattr(
+            image_export, "export_image", lambda *a, **k: self._BREAKOUT_SRC
+        )
+        html = HtmlRenderer()._format_image(_image("image/png"))
+        assert "<script>" not in html
+        assert 'src="data:image/png;base64,AAAA&quot;&gt;&lt;script&gt;' in html
+
 
 class TestReferencedModeAcrossRenderPasses:
     """Regression: the combined and per-session passes share one images/ dir.
