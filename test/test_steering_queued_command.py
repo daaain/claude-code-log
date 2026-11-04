@@ -676,7 +676,7 @@ class TestSteeringPasteIds:
         # (`:first-child`, `--text-secondary`) *before* any message content — so
         # the ordering assertion below compared two CSS offsets and was true
         # whatever the resolver did.
-        alpha, beta = _image_block("ZZBLOCKALPHAZZ"), _image_block("ZZBLOCKBETAZZ")
+        alpha, beta = _image_block("ZZBLOCKALPHAZZZZ"), _image_block("ZZBLOCKBETAZZZZZ")
         html = _render(
             [
                 _user("u1", None, "start"),

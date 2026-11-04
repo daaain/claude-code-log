@@ -244,11 +244,11 @@ class TestParseUserMessageContentRegular:
         """
         first = ImageContent(
             type="image",
-            source=ImageSource(type="base64", media_type="image/png", data="first"),
+            source=ImageSource(type="base64", media_type="image/png", data="first000"),
         )
         second = ImageContent(
             type="image",
-            source=ImageSource(type="base64", media_type="image/png", data="second"),
+            source=ImageSource(type="base64", media_type="image/png", data="second00"),
         )
         content_list: list[ContentItem] = [
             first,

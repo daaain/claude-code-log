@@ -430,8 +430,8 @@ class TestFieldSurvivesParsing:
     ) -> dict[str, object]:
         if content is None:
             content = [
-                self._block(f"ZZFIRSTZZ{_PNG_1X1}"),
-                self._block(f"ZZSECONDZZ{_PNG_1X1}"),
+                self._block(f"ZZFIRSTZZZZZ{_PNG_1X1}"),
+                self._block(f"ZZSECONDZZZZ{_PNG_1X1}"),
                 {"type": "text", "text": "look at [Image #2]"},
             ]
         return {

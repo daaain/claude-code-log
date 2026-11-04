@@ -36,6 +36,7 @@ class TestPluginApiReExports:
             "safe_markdown_inline",
             "is_safe_web_url",
             "safe_markdown_link_target",
+            "is_safe_image_source",
         ):
             assert hasattr(plugins, name), name
             assert name in plugins.__all__, name
@@ -60,6 +61,20 @@ class TestPluginApiReExports:
         assert not is_safe_web_url("file:///etc/passwd")
         assert not is_safe_web_url("HTTP://example.com")  # fails closed, by design
         assert not is_safe_web_url("")
+
+    def test_is_safe_image_source_behaviour(self):
+        from claude_code_log.plugins import is_safe_image_source
+
+        png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGBgAAAABQABpfZFQAAAAABJRU5ErkJggg=="
+        for media_type in ("image/png", "image/jpeg", "image/gif", "image/webp"):
+            assert is_safe_image_source(media_type, png), media_type
+        # SVG is scriptable; anything off the allowlist fails closed (#277).
+        assert not is_safe_image_source("image/svg+xml", png)
+        assert not is_safe_image_source('png"><script>alert(1)</script>', png)
+        assert not is_safe_image_source("IMAGE/PNG", png)
+        # Strict base64: a quote or angle bracket in the data is rejected.
+        assert not is_safe_image_source("image/png", 'AAAA"><script>')
+        assert not is_safe_image_source("image/png", "!!!not-base64!!!")
 
     def test_safe_markdown_link_target_behaviour(self):
         from claude_code_log.plugins import safe_markdown_link_target

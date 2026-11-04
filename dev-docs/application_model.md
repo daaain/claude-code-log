@@ -566,6 +566,17 @@ format-agnostic: HTML and Markdown both call into it. Three modes
 - `referenced` — write the image to disk next to the output and
   embed a `src=` reference.
 
+`embedded` and `referenced` both refuse an image unless
+`is_safe_image_source` passes: the media type must be PNG, JPEG, GIF
+or WebP (never the scriptable `image/svg+xml`) and the data strictly
+valid base64, otherwise the image degrades to the placeholder. The
+transcript's `media_type` and `data` are untrusted (an image can come
+back from a tool, an MCP server or a web page), and a crafted
+`media_type` used to break out of the `<img src>` attribute (issue
+#277); the HTML sinks also `escape_html` the final `src`. Tool-result
+images go through the same gate, and plugins get it from
+`claude_code_log.plugins` ([plugins.md § 4.2](plugins.md#42-security-conscious-rendering)).
+
 Default is `embedded` for HTML (single self-contained file) and
 `referenced` for Markdown (keeps the `.md` text small and lets
 images live as separate PNGs alongside).
