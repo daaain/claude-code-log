@@ -37,14 +37,13 @@ import subprocess
 import sys
 import threading
 import time
-import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import FunctionType
 from typing import Any, Callable, Optional
 
-from playwright.sync_api import Route, sync_playwright
+from playwright.sync_api import sync_playwright
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -587,24 +586,6 @@ def beat_outro(d: Director, stage: Stage) -> None:
 # ---- running -------------------------------------------------------------------
 
 
-def _cdn_cache(cache: Path) -> Callable[[Route], None]:
-    """Serve unpkg requests (vis-timeline) from a local cache: recordings stop
-    depending on the network, and browsers that distrust an intercepting
-    proxy still get the timeline."""
-
-    def handle(route: Route) -> None:
-        url = route.request.url
-        target = cache / re.sub(r"[^A-Za-z0-9._-]", "_", url)
-        if not target.exists():
-            cache.mkdir(parents=True, exist_ok=True)
-            with urllib.request.urlopen(url, timeout=30) as response:
-                target.write_bytes(response.read())
-        kind = "text/css" if url.endswith(".css") else "application/javascript"
-        route.fulfill(body=target.read_bytes(), content_type=kind)
-
-    return handle
-
-
 def record_clip(
     browser,
     stage: Stage,
@@ -616,7 +597,6 @@ def record_clip(
     context = browser.new_context(
         viewport=viewport, device_scale_factor=scale(viewport)
     )
-    context.route("https://unpkg.com/**", _cdn_cache(workdir / "cdn"))
     try:
         director = Director(context, workdir / "frames")
         run(director, stage)

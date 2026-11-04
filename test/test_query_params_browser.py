@@ -1,5 +1,6 @@
 """Playwright-based tests for query parameter functionality in the browser."""
 
+import shutil
 import tempfile
 import re
 from pathlib import Path
@@ -18,6 +19,9 @@ class TestQueryParamsBrowser:
     def setup_method(self):
         """Set up test fixtures."""
         self.temp_files: List[Path] = []
+        # Private folder per test: pages and their assets/ sidecar land
+        # here, not in the shared system temp dir.
+        self.temp_dir = Path(tempfile.mkdtemp())
 
     def teardown_method(self):
         """Clean up temporary files."""
@@ -26,17 +30,20 @@ class TestQueryParamsBrowser:
                 temp_file.unlink()
             except FileNotFoundError:
                 pass
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def _create_temp_html(self, messages: List[TranscriptEntry], title: str) -> Path:
         """Create a temporary HTML file for testing."""
-        html_content = generate_html(messages, title)
-
         # Create temporary file securely
         with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".html", delete=False, encoding="utf-8"
+            mode="w",
+            suffix=".html",
+            delete=False,
+            encoding="utf-8",
+            dir=self.temp_dir,
         ) as f:
-            f.write(html_content)
             temp_file = Path(f.name)
+            f.write(generate_html(messages, title, output_dir=temp_file.parent))
         self.temp_files.append(temp_file)
 
         return temp_file

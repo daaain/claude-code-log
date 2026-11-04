@@ -230,7 +230,9 @@ def _write_jsonl(path: Path, entries: list[dict[str, Any]]) -> Path:
 
 def _render(tmp_path: Path, theme: str = "minimal") -> Path:
     source = _write_jsonl(tmp_path / "p4.jsonl", _turn_entries())
-    html = generate_html(load_transcript(source, silent=True), "P4", theme=theme)
+    html = generate_html(
+        load_transcript(source, silent=True), "P4", theme=theme, output_dir=tmp_path
+    )
     out = tmp_path / f"p4-{theme}.html"
     out.write_text(html, encoding="utf-8")
     return out
@@ -240,7 +242,10 @@ def _render_nested(tmp_path: Path) -> Path:
     entries = load_transcript(NESTED_TRUNK, silent=True)
     _integrate_agent_entries(entries)
     out = tmp_path / "nested-minimal.html"
-    out.write_text(generate_html(entries, "Nested", theme="minimal"), encoding="utf-8")
+    out.write_text(
+        generate_html(entries, "Nested", theme="minimal", output_dir=tmp_path),
+        encoding="utf-8",
+    )
     return out
 
 
@@ -823,7 +828,10 @@ class TestSearchWithoutStorage:
         page.on("pageerror", lambda err: errors.append(str(err)))
         page.add_init_script(BLOCK_STORAGE)
         html = generate_html(
-            load_transcript(REPRESENTATIVE, silent=True), "Blocked", theme=theme
+            load_transcript(REPRESENTATIVE, silent=True),
+            "Blocked",
+            theme=theme,
+            output_dir=tmp_path,
         )
         out = tmp_path / f"blocked-{theme}.html"
         out.write_text(html, encoding="utf-8")

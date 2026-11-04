@@ -38,6 +38,8 @@
     "site/**",
     "work/**",
     "scripts/style_guide_output/**",
+    // Vendored third-party builds, pinned by checksum in PROVENANCE.md.
+    "claude_code_log/html/assets/vendor/**",
     // Read line by line by scripts/generate_minimal_pygments_css.py, which
     // generates the second one.
     "claude_code_log/html/templates/components/pygments_styles.css",

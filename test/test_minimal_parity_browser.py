@@ -320,9 +320,10 @@ class TestParitySweep:
         assert page.evaluate("window.scrollY") == 0  # nothing navigated
 
 
-# Console messages that are not the page's fault: the timeline's library is
-# fetched from unpkg (spec § 1.1), which a sandbox may block.
-BENIGN = ("unpkg.com", "net::ERR_", "Failed to load resource")
+# Console messages that are not the page's fault. The timeline's library is
+# a local sidecar now (issue #278), so nothing is expected here; the tuple
+# stays as the place to list one if a future dependency needs it.
+BENIGN: tuple[str, ...] = ()
 
 
 class TestSmoke:

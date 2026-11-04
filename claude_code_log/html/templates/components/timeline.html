@@ -2,6 +2,7 @@
 <!-- vis-timeline integration for transcript visualization -->
 
 <div id="timeline-container"
+    data-vis-js="{{ timeline_js_src | default('') }}" data-vis-css="{{ timeline_css_src | default('') }}"
     style="display: none; position: sticky; top: 0; z-index: 100; width: 100vw; margin-left: calc(-50vw + 50%); overflow: hidden; min-height: 150px; max-height: 80vh;">
     <div id="timeline-visualization" style="height: calc(100% - 8px); width: 100%;"></div>
     <div id="timeline-resize-handle"
@@ -517,34 +518,54 @@
             console.log('Timeline initialized with', items.length, 'items and', groups.length, 'groups');
         }
 
-        // Load vis-timeline library dynamically
+        // Load vis-timeline library dynamically. The promise is kept, so a
+        // second click waits on the same load, and dropped on failure, so a
+        // later click retries (once the assets/ folder is back).
+        let visTimelineLoad = null;
+
         function loadVisTimeline() {
-            return new Promise((resolve, reject) => {
-                if (window.vis && window.vis.Timeline) {
-                    resolve();
-                    return;
-                }
+            if (!visTimelineLoad) {
+                visTimelineLoad = startVisTimelineLoad().catch(error => {
+                    visTimelineLoad = null;
+                    throw error;
+                });
+            }
+            return visTimelineLoad;
+        }
 
-                console.log('Loading vis-timeline from CDN...');
+        // Vendored, never a CDN (issue #278): the renderer wrote vis-timeline
+        // into the assets/ folder beside this page and put the relative paths
+        // on the container. A page rendered with nowhere to write that folder
+        // has empty paths.
+        function startVisTimelineLoad() {
+            const container = document.getElementById('timeline-container');
+            const jsSrc = container.dataset.visJs;
+            const cssSrc = container.dataset.visCss;
+            if (!jsSrc || !cssSrc) {
+                return Promise.reject(new Error('no-assets'));
+            }
 
-                // Load CSS first
-                const link = document.createElement('link');
-                link.rel = 'stylesheet';
-                link.href = 'https://unpkg.com/vis-timeline/styles/vis-timeline-graph2d.min.css';
-                document.head.appendChild(link);
+            console.log('Loading vis-timeline from', jsSrc);
 
-                // Load JavaScript
-                const script = document.createElement('script');
-                script.src = 'https://unpkg.com/vis-timeline/standalone/umd/vis-timeline-graph2d.min.js';
-                script.onload = () => {
-                    console.log('vis-timeline loaded successfully');
-                    resolve();
+            // Both files must arrive: without its stylesheet the timeline
+            // opens unstyled. Each element is removed again if it fails, so
+            // a retry starts clean.
+            const load = (tag, attrs) => new Promise((resolve, reject) => {
+                const el = document.createElement(tag);
+                Object.assign(el, attrs);
+                el.onload = resolve;
+                el.onerror = () => {
+                    el.remove();
+                    reject(new Error('Failed to load ' + (attrs.src || attrs.href)));
                 };
-                script.onerror = () => {
-                    console.error('Failed to load vis-timeline');
-                    reject(new Error('Failed to load vis-timeline'));
-                };
-                document.head.appendChild(script);
+                document.head.appendChild(el);
+            });
+            const css = load('link', { rel: 'stylesheet', href: cssSrc });
+            const js = window.vis && window.vis.Timeline
+                ? Promise.resolve()
+                : load('script', { src: jsSrc });
+            return Promise.all([css, js]).then(() => {
+                console.log('vis-timeline loaded successfully');
             });
         }
 
@@ -573,7 +594,9 @@
                     }, 100);
                 }).catch(error => {
                     console.error('Error loading timeline:', error);
-                    alert('Failed to load timeline. Please check your internet connection.');
+                    alert(error.message === 'no-assets'
+                        ? 'The timeline is unavailable: this page was rendered without an output folder, so its timeline library was never written.'
+                        : 'Failed to load the timeline library. It is loaded from the assets/ folder next to this page, so keep that folder with the HTML file.');
                     container.style.display = 'none';
                     button.classList.remove('active');
                     button.title = 'Show timeline';

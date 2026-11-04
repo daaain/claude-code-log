@@ -6,6 +6,7 @@ filter toggle behaves as a cross-cutting modifier — like ``sidechain`` — so 
 can both *hide* memory noise from the tool stream and *isolate* memory-only.
 """
 
+import shutil
 import tempfile
 from pathlib import Path
 from typing import List
@@ -25,6 +26,9 @@ MEMORY_SIDECHAIN_FIXTURE = _DATA / "memory_sidechain.jsonl"
 class TestMemoryFilterBrowser:
     def setup_method(self):
         self.temp_files: List[Path] = []
+        # Private folder per test: pages and their assets/ sidecar land
+        # here, not in the shared system temp dir.
+        self.temp_dir = Path(tempfile.mkdtemp())
 
     def teardown_method(self):
         for f in self.temp_files:
@@ -32,15 +36,19 @@ class TestMemoryFilterBrowser:
                 f.unlink()
             except FileNotFoundError:
                 pass
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def _html(self, title: str, fixture: Path = MEMORY_FIXTURE) -> Path:
         messages = load_transcript(fixture)
-        html_content = generate_html(messages, title)
         with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".html", delete=False, encoding="utf-8"
+            mode="w",
+            suffix=".html",
+            delete=False,
+            encoding="utf-8",
+            dir=self.temp_dir,
         ) as f:
-            f.write(html_content)
             temp_file = Path(f.name)
+            f.write(generate_html(messages, title, output_dir=temp_file.parent))
         self.temp_files.append(temp_file)
         return temp_file
 

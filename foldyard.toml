@@ -85,7 +85,6 @@ recommend = [
   { host = "ghcr.io", why = "box image build — the uv binary image layer" },
   { host = "pkg-containers.githubusercontent.com", why = "box image build — ghcr.io blob storage" },
   { host = "cdn.playwright.dev", why = "playwright browser bundles" },
-  { host = "unpkg.com", why = "vis-timeline, loaded by generated transcript pages (the browser test suite renders them)" },
   { host = "downloads.claude.ai", why = "claude --upgrade / claude plugin — public CDN of signed release artefacts (NOT the keyless host; api.anthropic.com is implicit)" },
 ]
 # passthrough = ["@jvm", "@linux"]   # the default since 0.4.0: hosts tunnelled UN-decrypted;
