@@ -43,7 +43,10 @@ TOOLBAR_IDS = (
 
 def _render(tmp_path: Path, source: Path, name: str = "minimal.html") -> Path:
     html = generate_html(
-        load_transcript(source, silent=True), "Minimal", theme="minimal"
+        load_transcript(source, silent=True),
+        "Minimal",
+        theme="minimal",
+        output_dir=tmp_path,
     )
     out = tmp_path / name
     out.write_text(html, encoding="utf-8")

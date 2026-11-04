@@ -102,7 +102,10 @@ def _open_timeline(
     jsonl = tmp_path / "t.jsonl"
     jsonl.write_text("\n".join(json.dumps(e) for e in entries) + "\n", encoding="utf-8")
     html = tmp_path / "t.html"
-    html.write_text(generate_html(load_transcript(jsonl), "Tooltips"), encoding="utf-8")
+    html.write_text(
+        generate_html(load_transcript(jsonl), "Tooltips", output_dir=tmp_path),
+        encoding="utf-8",
+    )
 
     page.goto(f"file://{html}")
     # The persistent browser context shares localStorage across file://

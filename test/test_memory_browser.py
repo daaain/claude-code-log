@@ -35,12 +35,11 @@ class TestMemoryFilterBrowser:
 
     def _html(self, title: str, fixture: Path = MEMORY_FIXTURE) -> Path:
         messages = load_transcript(fixture)
-        html_content = generate_html(messages, title)
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".html", delete=False, encoding="utf-8"
         ) as f:
-            f.write(html_content)
             temp_file = Path(f.name)
+            f.write(generate_html(messages, title, output_dir=temp_file.parent))
         self.temp_files.append(temp_file)
         return temp_file
 

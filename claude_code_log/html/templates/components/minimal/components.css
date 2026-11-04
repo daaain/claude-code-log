@@ -1326,7 +1326,7 @@ body.theme-minimal {
 /* ---------------------------------------------------------- timeline */
 
 /* Container and labels read the --timeline-* properties set above. The
-   rest is vis-timeline's own stylesheet (loaded from unpkg after ours,
+   rest is vis-timeline's own stylesheet (loaded from assets/ after ours,
    hence the extra .theme-minimal specificity, and !important where the
    classic overrides already use it). */
 .theme-minimal #timeline-container {

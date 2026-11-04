@@ -51,7 +51,8 @@ def _render(source: Path, out: Path, title: str) -> Path:
     renderer = HtmlRenderer()
     renderer.theme = "minimal"
     out.write_text(
-        renderer.generate(entries, title, session_tree=tree), encoding="utf-8"
+        renderer.generate(entries, title, output_dir=out.parent, session_tree=tree),
+        encoding="utf-8",
     )
     return out
 

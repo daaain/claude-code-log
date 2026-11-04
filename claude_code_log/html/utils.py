@@ -16,6 +16,8 @@ HTML-specific output.
 import functools
 import html
 import json
+import logging
+import os
 import re
 import shutil
 from pathlib import Path
@@ -1147,59 +1149,56 @@ def get_template_environment() -> Environment:
 # session / combined / paginated pages.
 VENDOR_ASSETS_DIRNAME = "assets"
 
-# The vendored files that a timeline-bearing page needs, resolved from
-# the package's ``assets/vendor`` directory (see that dir's
-# ``PROVENANCE.md``). Vendored rather than CDN-loaded so generated HTML
-# stays fully offline and leaks no request to a third party (issue #278).
-_VENDOR_ASSET_FILES = (
-    "vis-timeline-graph2d.min.js",
-    "vis-timeline-graph2d.min.css",
-)
+# The vendored vis-timeline build, resolved from the package's
+# ``assets/vendor`` directory (see that dir's ``PROVENANCE.md``). Vendored
+# rather than CDN-loaded so generated HTML stays fully offline and leaks
+# no request to a third party (issue #278). The version is part of each
+# file name: an upgrade writes new files instead of comparing old ones,
+# and a page rendered by an older release keeps pointing at the build it
+# was rendered against.
+VIS_TIMELINE_VERSION = "8.5.1"
+VIS_TIMELINE_JS = f"vis-timeline-graph2d-{VIS_TIMELINE_VERSION}.min.js"
+VIS_TIMELINE_CSS = f"vis-timeline-graph2d-{VIS_TIMELINE_VERSION}.min.css"
+_VENDOR_ASSET_FILES = (VIS_TIMELINE_JS, VIS_TIMELINE_CSS)
 
 
 def _vendor_source_dir() -> Path:
     return Path(__file__).parent / "assets" / "vendor"
 
 
-def ensure_vendor_assets(output_dir: Path) -> None:
-    """Copy vendored front-end assets into ``output_dir/assets`` once.
+def ensure_vendor_assets(output_dir: Path) -> bool:
+    """Copy the vendored front-end assets into ``output_dir/assets``.
 
-    Idempotent: skips any file already present with a matching size, so
-    re-rendering a project doesn't rewrite the 530 KB timeline bundle on
-    every run. Called by the HTML renderer whenever it renders a
-    timeline-bearing page into a real output directory; string-only
-    renders (no output dir) simply don't get the sidecar, and the
-    timeline's ``script.onerror`` handler degrades gracefully if the
-    asset is absent.
+    Called by the HTML renderer for every page it renders into a real
+    output directory, so it is cheap when there is nothing to do: a file
+    already present at the source's size is left alone (the versioned
+    name means same name + same size is the same build). Writes go through
+    a pid-named temp file and ``os.replace``, because render-pool workers
+    rendering one project's pages all call this at once, and a plain copy
+    could let one worker's page load another's half-written bundle.
+
+    Returns False instead of raising when the directory can't be written:
+    the page still renders, and its timeline reports the missing library
+    when opened. String-only renders (no output dir) never call this.
     """
     src_dir = _vendor_source_dir()
     dest_dir = output_dir / VENDOR_ASSETS_DIRNAME
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    for name in _VENDOR_ASSET_FILES:
-        src = src_dir / name
-        dest = dest_dir / name
-        if dest.exists() and dest.stat().st_size == src.stat().st_size:
-            continue
-        shutil.copyfile(src, dest)
-
-
-@functools.lru_cache(maxsize=1)
-def read_vendor_timeline_inline() -> tuple[str, str]:
-    """Return the vendored vis-timeline ``(js, css)`` for inlining.
-
-    Used only on the no-output-directory render path (e.g. the
-    ``generate_html`` convenience API), where there is nowhere to write
-    a sidecar so the assets must be embedded directly in the page to
-    keep a single self-contained file working (issue #278).
-
-    The JS has any ``</script`` sequence neutralised to ``<\\/script``
-    so it can't break out of the inline ``<script>`` tag. The current
-    vendored build contains none, but a future upgrade might; this makes
-    the inline path safe regardless. Cached because the 530 KB read
-    would otherwise repeat on every string render.
-    """
-    src_dir = _vendor_source_dir()
-    js = (src_dir / "vis-timeline-graph2d.min.js").read_text(encoding="utf-8")
-    css = (src_dir / "vis-timeline-graph2d.min.css").read_text(encoding="utf-8")
-    js = js.replace("</script", "<\\/script")
-    return js, css
+    try:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        for name in _VENDOR_ASSET_FILES:
+            src = src_dir / name
+            dest = dest_dir / name
+            if dest.is_file() and dest.stat().st_size == src.stat().st_size:
+                continue
+            tmp = dest_dir / f".{name}.{os.getpid()}.tmp"
+            try:
+                shutil.copyfile(src, tmp)
+                os.replace(tmp, dest)
+            finally:
+                tmp.unlink(missing_ok=True)
+    except OSError as exc:
+        logging.getLogger(__name__).warning(
+            "Could not write timeline assets to %s: %s", dest_dir, exc
+        )
+        return False
+    return True

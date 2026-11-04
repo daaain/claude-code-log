@@ -30,11 +30,10 @@ class TestTimelineBrowser:
 
     def _create_temp_html(self, messages: List[TranscriptEntry], title: str) -> Path:
         """Create a temporary HTML file for testing."""
-        html_content = generate_html(messages, title)
-
         # Create temporary file (using NamedTemporaryFile to avoid deprecated mktemp)
         with tempfile.NamedTemporaryFile(suffix=".html", delete=False) as f:
             temp_file = Path(f.name)
+        html_content = generate_html(messages, title, output_dir=temp_file.parent)
         temp_file.write_text(html_content, encoding="utf-8")
         self.temp_files.append(temp_file)
 
@@ -826,9 +825,11 @@ class TestTimelineBrowser:
         card.
         """
         messages = load_transcript(Path("test/test_data/sidechain.jsonl"))
-        html = generate_html(messages, "Timeline Tool Filter", theme=theme)
         with tempfile.NamedTemporaryFile(suffix=".html", delete=False) as f:
             temp_file = Path(f.name)
+        html = generate_html(
+            messages, "Timeline Tool Filter", theme=theme, output_dir=temp_file.parent
+        )
         temp_file.write_text(html, encoding="utf-8")
         self.temp_files.append(temp_file)
 
@@ -1307,3 +1308,58 @@ class TestTimelineBrowser:
         assert len(timestamp_errors) == 0, (
             f"Should not have timestamp conversion errors: {timestamp_errors}"
         )
+
+
+@pytest.mark.browser
+class TestTimelineVendoredLibrary:
+    """The library comes from the ``assets/`` sidecar, never a CDN (#278)."""
+
+    def test_converted_project_loads_timeline_from_sidecar(
+        self, page: Page, tmp_path: Path
+    ):
+        """End to end through the real converter, on a paginated project: the
+        path the first version of this change broke. Every request the page
+        makes must stay on ``file://``."""
+        import shutil
+
+        from claude_code_log.converter import convert_jsonl_to
+
+        project = tmp_path / "project"
+        project.mkdir()
+        for name in ("representative_messages.jsonl", "edge_cases.jsonl"):
+            shutil.copy(Path("test/test_data") / name, project / name)
+        convert_jsonl_to("html", project, silent=True, page_size=1)
+
+        requests: list[str] = []
+        page.on("request", lambda request: requests.append(request.url))
+        for html in sorted(project.glob("*.html")):
+            page.goto(html.as_uri())
+            page.locator("#toggleTimeline").click()
+            page.wait_for_selector(".vis-timeline", timeout=10000)
+        assert requests and all(url.startswith("file://") for url in requests), [
+            url for url in requests if not url.startswith("file://")
+        ]
+        assert any(url.endswith(".min.js") for url in requests)
+
+    def test_page_without_sidecar_says_what_is_missing(
+        self, page: Page, tmp_path: Path
+    ):
+        html = tmp_path / "bare.html"
+        html.write_text(
+            generate_html(
+                load_transcript(Path("test/test_data/representative_messages.jsonl")),
+                "Bare",
+            ),
+            encoding="utf-8",
+        )
+        dialogs: list[str] = []
+        page.on(
+            "dialog", lambda dialog: (dialogs.append(dialog.message), dialog.dismiss())
+        )
+        page.goto(html.as_uri())
+        page.locator("#toggleTimeline").click()
+        expect(page.locator("#toggleTimeline")).to_have_attribute(
+            "title", "Show timeline"
+        )
+        assert dialogs and "assets/" in dialogs[0]
+        expect(page.locator("#timeline-container")).to_be_hidden()

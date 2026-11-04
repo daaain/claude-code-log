@@ -29,14 +29,12 @@ class TestQueryParamsBrowser:
 
     def _create_temp_html(self, messages: List[TranscriptEntry], title: str) -> Path:
         """Create a temporary HTML file for testing."""
-        html_content = generate_html(messages, title)
-
         # Create temporary file securely
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".html", delete=False, encoding="utf-8"
         ) as f:
-            f.write(html_content)
             temp_file = Path(f.name)
+            f.write(generate_html(messages, title, output_dir=temp_file.parent))
         self.temp_files.append(temp_file)
 
         return temp_file

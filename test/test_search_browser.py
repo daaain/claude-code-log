@@ -37,10 +37,11 @@ class TestSearchBrowser:
         self, messages: List[TranscriptEntry], title: str, theme: str = "classic"
     ) -> Path:
         """Create a temporary HTML file for testing."""
-        html_content = generate_html(messages, title, theme=theme)
-
         with tempfile.NamedTemporaryFile(suffix=".html", delete=False) as f:
             temp_file = Path(f.name)
+        html_content = generate_html(
+            messages, title, theme=theme, output_dir=temp_file.parent
+        )
         temp_file.write_text(html_content, encoding="utf-8")
         self.temp_files.append(temp_file)
 

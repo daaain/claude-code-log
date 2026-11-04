@@ -276,8 +276,9 @@ your time zone; hover one for the full date and time.
 ### Offline, and without JavaScript
 
 The theme uses your system's fonts and loads nothing from the network. The
-one exception is the timeline, which — as in the classic theme — fetches
-its charting library from unpkg the first time you open it.
+timeline's charting library — in both themes — ships with claude-code-log
+and is written to an `assets/` folder next to the HTML files; keep that
+folder with the pages if you move or share them.
 
 Without JavaScript the page still reads correctly: branches are shown
 nested under the message that spawned them, and long blocks keep their

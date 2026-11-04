@@ -201,8 +201,9 @@ def browser_type_launch_args(browser_type_launch_args):
 def _browser_user_data_dir(worker_id):
     """Create a per-worker directory for browser user data (enables HTTP caching).
 
-    Uses a fixed directory in the project that persists across test runs,
-    allowing vis-timeline CDN resources to remain cached between runs.
+    Uses a fixed directory in the project that persists across test runs.
+    (It was introduced to keep vis-timeline cached from its CDN; the library
+    is a local sidecar now, issue #278.)
     Each xdist worker gets its own subdirectory to avoid Chromium lock conflicts.
     """
     # Use a fixed cache directory that persists across runs
@@ -243,8 +244,9 @@ def _persistent_context(
 ):
     """Create a persistent browser context that shares HTTP cache across tests.
 
-    This solves flaky CDN loading issues by caching resources like vis-timeline
-    after the first load.
+    Introduced to cache vis-timeline from its CDN, which the timeline no longer
+    uses (issue #278); tests still share this one context, and its
+    ``file://`` localStorage, so they clear what they rely on.
     """
     browser_type = playwright.chromium
     context = browser_type.launch_persistent_context(

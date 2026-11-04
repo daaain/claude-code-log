@@ -1835,26 +1835,25 @@ class HtmlRenderer(Renderer):
         # Set output directory for image export (used in "referenced" mode)
         self._output_dir = output_dir
 
-        # Vendored timeline assets (issue #278), fully offline either way:
-        #  - With an output directory, drop vis-timeline's JS/CSS into a
-        #    sibling ``assets/`` dir once and point the template at the
-        #    relative path (small pages; the multi-file default).
-        #  - Without an output directory (bare-string render, e.g. the
-        #    ``generate_html`` convenience API), there is nowhere to put a
-        #    sidecar, so inline the JS/CSS directly into the page so a
-        #    single self-contained file still has a working timeline.
-        timeline_asset_base: Optional[str] = None
-        timeline_inline_js: Optional[str] = None
-        timeline_inline_css: Optional[str] = None
+        # The timeline's vendored vis-timeline (issue #278) is a sidecar:
+        # written once into ``<output_dir>/assets/`` and loaded from there
+        # on the first Timeline click, so pages stay small and nothing is
+        # fetched from a CDN. A bare-string render (no output directory)
+        # has nowhere to put it and gets empty sources; its timeline says
+        # the library is missing when opened.
+        timeline_js_src = ""
+        timeline_css_src = ""
         if output_dir is not None:
-            from .utils import ensure_vendor_assets, VENDOR_ASSETS_DIRNAME
+            from .utils import (
+                VENDOR_ASSETS_DIRNAME,
+                VIS_TIMELINE_CSS,
+                VIS_TIMELINE_JS,
+                ensure_vendor_assets,
+            )
 
-            ensure_vendor_assets(output_dir)
-            timeline_asset_base = VENDOR_ASSETS_DIRNAME
-        else:
-            from .utils import read_vendor_timeline_inline
-
-            timeline_inline_js, timeline_inline_css = read_vendor_timeline_inline()
+            if ensure_vendor_assets(output_dir):
+                timeline_js_src = f"{VENDOR_ASSETS_DIRNAME}/{VIS_TIMELINE_JS}"
+                timeline_css_src = f"{VENDOR_ASSETS_DIRNAME}/{VIS_TIMELINE_CSS}"
 
         if not title:
             title = "Claude Transcript"
@@ -1933,9 +1932,8 @@ class HtmlRenderer(Renderer):
                     is_session_header=is_session_header,
                     page_info=page_info,
                     page_stats=page_stats,
-                    timeline_asset_base=timeline_asset_base,
-                    timeline_inline_js=timeline_inline_js,
-                    timeline_inline_css=timeline_inline_css,
+                    timeline_js_src=timeline_js_src,
+                    timeline_css_src=timeline_css_src,
                     resume_command=resume_command,
                     archive_search_link=archive_search_link,
                     theme=theme,
@@ -2068,6 +2066,7 @@ def generate_html(
     page_stats: Optional[dict[str, Any]] = None,
     session_tree: Optional["SessionTree"] = None,
     theme: str = DEFAULT_THEME,
+    output_dir: Optional[Path] = None,
 ) -> str:
     """Generate HTML from transcript messages using Jinja2 templates.
 
@@ -2081,6 +2080,9 @@ def generate_html(
         page_stats: Optional page statistics (message_count, date_range, token_summary).
         session_tree: Optional pre-built SessionTree (avoids rebuilding DAG).
         theme: HTML theme (``utils.THEMES``).
+        output_dir: Directory the page will be written into. The timeline's
+            library is written there as an ``assets/`` sidecar; without it
+            the page renders but its timeline can't load.
     """
     renderer = HtmlRenderer()
     renderer.theme = normalize_theme(theme)
@@ -2088,6 +2090,7 @@ def generate_html(
         messages,
         title,
         combined_transcript_link,
+        output_dir=output_dir,
         page_info=page_info,
         page_stats=page_stats,
         session_tree=session_tree,
@@ -2100,11 +2103,17 @@ def generate_session_html(
     title: Optional[str] = None,
     cache_manager: Optional["CacheManager"] = None,
     theme: str = DEFAULT_THEME,
+    output_dir: Optional[Path] = None,
 ) -> str:
-    """Generate HTML for a single session using Jinja2 templates."""
+    """Generate HTML for a single session using Jinja2 templates.
+
+    ``output_dir`` is as for ``generate_html``.
+    """
     renderer = HtmlRenderer()
     renderer.theme = normalize_theme(theme)
-    return renderer.generate_session(messages, session_id, title, cache_manager)
+    return renderer.generate_session(
+        messages, session_id, title, cache_manager, output_dir
+    )
 
 
 def generate_projects_index_html(

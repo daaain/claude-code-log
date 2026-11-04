@@ -583,6 +583,23 @@ images, so the last pass to run overwrote the other's files. Content
 addressing is also what lets referenced-mode renders use the fragment
 store (§ 2.9) and the render fan-out (§ 2.10).
 
+**The timeline library is a sidecar too.** vis-timeline ships in the
+package (`html/assets/vendor/`, pinned with checksums in its
+`PROVENANCE.md`), and `HtmlRenderer.generate` copies it into an
+`assets/` folder beside every page it renders into an output directory
+(`ensure_vendor_assets` in `html/utils.py`); the page puts the relative
+paths on `#timeline-container` and loads them on the first Timeline
+click. Like referenced images, this needs the output directory, so it
+holds in every write path (combined, paginated, session files, workers,
+`--expand-paths`, `-o file.html`), and each output directory gets its own
+copy. A bare-string render (`generate_html()` without `output_dir`) gets
+empty paths, and its timeline reports the missing library rather than
+fetching one. File names carry the library version, so an upgrade adds
+files instead of overwriting them; writes are temp file + `os.replace`
+because the render fan-out's workers all ensure the folder at once. The
+library used to come from unpkg, unpinned, the one network request a
+generated page made (issue #278).
+
 ### 2.8 Performance profiling
 
 [`renderer_timings.py`](../claude_code_log/renderer_timings.py)

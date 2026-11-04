@@ -47,10 +47,15 @@ Object.defineProperty(window, 'localStorage', {
 def _render(tmp_path: Path, source: Path, theme: str = "minimal") -> Path:
     if source.is_dir():
         messages, tree = load_directory_transcripts(source, silent=True)
-        html = generate_html(messages, "Components", session_tree=tree, theme=theme)
+        html = generate_html(
+            messages, "Components", session_tree=tree, theme=theme, output_dir=tmp_path
+        )
     else:
         html = generate_html(
-            load_transcript(source, silent=True), "Components", theme=theme
+            load_transcript(source, silent=True),
+            "Components",
+            theme=theme,
+            output_dir=tmp_path,
         )
     out = tmp_path / f"{source.stem}-{theme}.html"
     out.write_text(html, encoding="utf-8")

@@ -763,7 +763,7 @@ The smoke test in the same file renders the demo and three real projects
 and clicks through every colour scheme × fold depth × branch mode, takes
 one lane through interleaved → column → strip → column → interleaved from
 its own controls and opens the timeline, failing on any page error or
-console error (other than a blocked unpkg fetch) and on any broken
+console error and on any broken
 invariant above.
 
 ## 12. Lane attributes

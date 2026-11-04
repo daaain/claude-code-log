@@ -2,6 +2,7 @@
 <!-- vis-timeline integration for transcript visualization -->
 
 <div id="timeline-container"
+    data-vis-js="{{ timeline_js_src | default('') }}" data-vis-css="{{ timeline_css_src | default('') }}"
     style="display: none; position: sticky; top: 0; z-index: 100; width: 100vw; margin-left: calc(-50vw + 50%); overflow: hidden; min-height: 150px; max-height: 80vh;">
     <div id="timeline-visualization" style="height: calc(100% - 8px); width: 100%;"></div>
     <div id="timeline-resize-handle"
@@ -9,15 +10,6 @@
         <div style="width: 40px; height: 3px; border-radius: 2px;"></div>
     </div>
 </div>
-
-{# Inline vis-timeline (issue #278) only when there is no output directory
-   to hold a sidecar — keeps a bare-string / single-file render's timeline
-   working offline. The content is our own vendored asset, not transcript
-   data, and its </script sequences are neutralised in Python. #}
-{%- if timeline_inline_js | default(none) %}
-<style id="vis-timeline-inline-css">{{ timeline_inline_css | safe }}</style>
-<script id="vis-timeline-inline-js">{{ timeline_inline_js | safe }}</script>
-{%- endif %}
 
 <script id="timeline-script">
     // Timeline functionality - inline for self-contained HTML
@@ -534,39 +526,29 @@
                     return;
                 }
 
-                // Vendored, offline-first (issue #278) — never a CDN.
-                // Two shapes depending on how the page was rendered:
-                //  - sidecar: the Python renderer wrote vis-timeline's
-                //    JS/CSS into a sibling `assets/` dir and passes the
-                //    relative base; we load from there.
-                //  - inline: no output directory existed (bare-string
-                //    render), so the JS/CSS were embedded directly below
-                //    and are already present when this runs.
-                {%- set _asset_base = timeline_asset_base | default(none) %}
-                {%- set _inline_js = timeline_inline_js | default(none) %}
-                {% if _inline_js %}
-                // Inline mode: the vis-timeline <script>/<style> were
-                // emitted into the page (see below), so the library is
-                // already defined. Nothing to fetch.
-                if (window.vis && window.vis.Timeline) {
-                    isTimelineLoaded = true;
-                    resolve();
-                } else {
-                    reject(new Error('Inlined vis-timeline did not initialise'));
+                // Vendored, never a CDN (issue #278): the renderer wrote
+                // vis-timeline into the assets/ folder beside this page and
+                // put the relative paths on the container. A page rendered
+                // with nowhere to write that folder has empty paths.
+                const container = document.getElementById('timeline-container');
+                const jsSrc = container.dataset.visJs;
+                const cssSrc = container.dataset.visCss;
+                if (!jsSrc || !cssSrc) {
+                    reject(new Error('This page was rendered without its timeline assets'));
+                    return;
                 }
-                {% else %}
-                const assetBase = {{ ((_asset_base ~ '/') if _asset_base else '') | tojson }};
-                console.log('Loading vis-timeline from', assetBase || '(no local asset base)');
+
+                console.log('Loading vis-timeline from', jsSrc);
 
                 // Load CSS first
                 const link = document.createElement('link');
                 link.rel = 'stylesheet';
-                link.href = assetBase + 'vis-timeline-graph2d.min.css';
+                link.href = cssSrc;
                 document.head.appendChild(link);
 
                 // Load JavaScript
                 const script = document.createElement('script');
-                script.src = assetBase + 'vis-timeline-graph2d.min.js';
+                script.src = jsSrc;
                 script.onload = () => {
                     console.log('vis-timeline loaded successfully');
                     resolve();
@@ -576,7 +558,6 @@
                     reject(new Error('Failed to load vis-timeline'));
                 };
                 document.head.appendChild(script);
-                {% endif %}
             });
         }
 
@@ -605,7 +586,7 @@
                     }, 100);
                 }).catch(error => {
                     console.error('Error loading timeline:', error);
-                    alert('Failed to load timeline. Please check your internet connection.');
+                    alert('Failed to load the timeline library. It is loaded from the assets/ folder next to this page, so keep that folder with the HTML file.');
                     container.style.display = 'none';
                     button.classList.remove('active');
                     button.title = 'Show timeline';
