@@ -6,6 +6,7 @@ match navigation, Escape-to-clear, option persistence, and timeline sync.
 """
 
 import re
+import shutil
 import tempfile
 from pathlib import Path
 from typing import List
@@ -24,6 +25,9 @@ class TestSearchBrowser:
     def setup_method(self):
         """Set up test fixtures."""
         self.temp_files: List[Path] = []
+        # Private folder per test: pages and their assets/ sidecar land
+        # here, not in the shared system temp dir.
+        self.temp_dir = Path(tempfile.mkdtemp())
 
     def teardown_method(self):
         """Clean up temporary files."""
@@ -32,12 +36,15 @@ class TestSearchBrowser:
                 temp_file.unlink()
             except FileNotFoundError:
                 pass
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def _create_temp_html(
         self, messages: List[TranscriptEntry], title: str, theme: str = "classic"
     ) -> Path:
         """Create a temporary HTML file for testing."""
-        with tempfile.NamedTemporaryFile(suffix=".html", delete=False) as f:
+        with tempfile.NamedTemporaryFile(
+            suffix=".html", delete=False, dir=self.temp_dir
+        ) as f:
             temp_file = Path(f.name)
         html_content = generate_html(
             messages, title, theme=theme, output_dir=temp_file.parent

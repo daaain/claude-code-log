@@ -1,0 +1,4 @@
+# Vendored third-party builds are pinned by SHA-256 in their PROVENANCE.md:
+# check them out byte for byte (no CRLF conversion on Windows).
+claude_code_log/html/assets/vendor/*.min.js -text
+claude_code_log/html/assets/vendor/*.min.css -text

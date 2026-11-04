@@ -586,7 +586,7 @@ store (§ 2.9) and the render fan-out (§ 2.10).
 **The timeline library is a sidecar too.** vis-timeline ships in the
 package (`html/assets/vendor/`, pinned with checksums in its
 `PROVENANCE.md`), and `HtmlRenderer.generate` copies it into an
-`assets/` folder beside every page it renders into an output directory
+`assets/` folder, with its license, beside every page it renders into an output directory
 (`ensure_vendor_assets` in `html/utils.py`); the page puts the relative
 paths on `#timeline-container` and loads them on the first Timeline
 click. Like referenced images, this needs the output directory, so it

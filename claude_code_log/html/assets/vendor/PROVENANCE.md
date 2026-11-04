@@ -14,7 +14,10 @@ timeline loads them from there the first time it is opened.
 - **Package:** `vis-timeline` (vis-timeline and vis-graph2d)
 - **Version:** 8.5.1
 - **Homepage:** https://visjs.github.io/vis-timeline/
-- **License:** MIT / Apache-2.0 (dual) — see the upstream project.
+- **License:** MIT / Apache-2.0 (dual). Upstream's `LICENSE.md`,
+  `LICENSE.MIT.txt` and `LICENSE.Apache-2.0.txt` (tag `v8.5.1`) are bundled,
+  concatenated, as `vis-timeline-8.5.1.LICENSE.txt`, which is copied into
+  every `assets/` folder with the library.
 - **Source URLs (unpkg, pinned):**
   - `https://unpkg.com/vis-timeline@8.5.1/standalone/umd/vis-timeline-graph2d.min.js`
   - `https://unpkg.com/vis-timeline@8.5.1/styles/vis-timeline-graph2d.min.css`
@@ -30,7 +33,8 @@ older release keeps loading the build it was rendered against.
 67273f3f1bfc5fee585494e8b8818d7cad98c229737488bc56f140547badc1f5  vis-timeline-graph2d-8.5.1.min.css
 ```
 
-`test/test_vendor_assets.py` checks the committed files against these.
+`test/test_vendor_assets.py` checks the committed files against these, and
+`.gitattributes` keeps Git for Windows from converting their line endings.
 
 ### Re-verifying / upgrading
 
@@ -42,6 +46,6 @@ curl -sL https://unpkg.com/vis-timeline@8.5.1/styles/vis-timeline-graph2d.min.cs
 ```
 
 To upgrade: download both files for the new version into this directory under
-the new versioned names, delete the old ones, bump `VIS_TIMELINE_VERSION` in
+the new versioned names, rebuild the license file from the new tag, delete the old ones, bump `VIS_TIMELINE_VERSION` in
 `claude_code_log/html/utils.py`, and update the version, URLs and checksums
 above.

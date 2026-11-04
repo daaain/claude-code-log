@@ -21,6 +21,7 @@ from claude_code_log.html.utils import (
     VENDOR_ASSETS_DIRNAME,
     VIS_TIMELINE_CSS,
     VIS_TIMELINE_JS,
+    VIS_TIMELINE_LICENSE,
     VIS_TIMELINE_VERSION,
     ensure_vendor_assets,
 )
@@ -47,6 +48,13 @@ class TestVendoredFiles:
             actual = hashlib.sha256((VENDOR_DIR / name).read_bytes()).hexdigest()
             assert actual == digest, name
 
+    def test_license_travels_with_the_bundle(self):
+        """MIT and Apache-2.0 both require the notice to ship with copies."""
+        text = (VENDOR_DIR / VIS_TIMELINE_LICENSE).read_text(encoding="utf-8")
+        assert "Permission is hereby granted, free of charge" in text  # MIT
+        assert "Apache License" in text and "Version 2.0, January 2004" in text
+        assert "vis.js contributors" in text
+
     def test_file_names_carry_the_version(self):
         assert VIS_TIMELINE_VERSION in VIS_TIMELINE_JS
         assert VIS_TIMELINE_VERSION in VIS_TIMELINE_CSS
@@ -58,12 +66,13 @@ class TestVendoredFiles:
 class TestEnsureVendorAssets:
     def test_copies_the_bundle(self, tmp_path: Path):
         assert ensure_vendor_assets(tmp_path)
-        for name in (VIS_TIMELINE_JS, VIS_TIMELINE_CSS):
+        names = [VIS_TIMELINE_JS, VIS_TIMELINE_CSS, VIS_TIMELINE_LICENSE]
+        for name in names:
             copied = tmp_path / VENDOR_ASSETS_DIRNAME / name
             assert copied.read_bytes() == (VENDOR_DIR / name).read_bytes()
         # No temp files left behind.
         assert sorted(p.name for p in (tmp_path / VENDOR_ASSETS_DIRNAME).iterdir()) == (
-            sorted([VIS_TIMELINE_JS, VIS_TIMELINE_CSS])
+            sorted(names)
         )
 
     def test_present_files_are_not_rewritten(self, tmp_path: Path):

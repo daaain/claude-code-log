@@ -1159,7 +1159,10 @@ VENDOR_ASSETS_DIRNAME = "assets"
 VIS_TIMELINE_VERSION = "8.5.1"
 VIS_TIMELINE_JS = f"vis-timeline-graph2d-{VIS_TIMELINE_VERSION}.min.js"
 VIS_TIMELINE_CSS = f"vis-timeline-graph2d-{VIS_TIMELINE_VERSION}.min.css"
-_VENDOR_ASSET_FILES = (VIS_TIMELINE_JS, VIS_TIMELINE_CSS)
+# Upstream's MIT and Apache-2.0 texts: both licenses require the notice to
+# travel with copies, so it is copied into every assets/ folder with them.
+VIS_TIMELINE_LICENSE = f"vis-timeline-{VIS_TIMELINE_VERSION}.LICENSE.txt"
+_VENDOR_ASSET_FILES = (VIS_TIMELINE_JS, VIS_TIMELINE_CSS, VIS_TIMELINE_LICENSE)
 
 
 def _vendor_source_dir() -> Path:

@@ -1,6 +1,7 @@
 """Playwright-based tests for timeline functionality in the browser."""
 
 import json
+import shutil
 import tempfile
 import re
 from pathlib import Path
@@ -19,6 +20,9 @@ class TestTimelineBrowser:
     def setup_method(self):
         """Set up test fixtures."""
         self.temp_files: List[Path] = []
+        # Private folder per test: pages and their assets/ sidecar land
+        # here, not in the shared system temp dir.
+        self.temp_dir = Path(tempfile.mkdtemp())
 
     def teardown_method(self):
         """Clean up temporary files."""
@@ -27,11 +31,14 @@ class TestTimelineBrowser:
                 temp_file.unlink()
             except FileNotFoundError:
                 pass
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def _create_temp_html(self, messages: List[TranscriptEntry], title: str) -> Path:
         """Create a temporary HTML file for testing."""
         # Create temporary file (using NamedTemporaryFile to avoid deprecated mktemp)
-        with tempfile.NamedTemporaryFile(suffix=".html", delete=False) as f:
+        with tempfile.NamedTemporaryFile(
+            suffix=".html", delete=False, dir=self.temp_dir
+        ) as f:
             temp_file = Path(f.name)
         html_content = generate_html(messages, title, output_dir=temp_file.parent)
         temp_file.write_text(html_content, encoding="utf-8")
@@ -825,7 +832,9 @@ class TestTimelineBrowser:
         card.
         """
         messages = load_transcript(Path("test/test_data/sidechain.jsonl"))
-        with tempfile.NamedTemporaryFile(suffix=".html", delete=False) as f:
+        with tempfile.NamedTemporaryFile(
+            suffix=".html", delete=False, dir=self.temp_dir
+        ) as f:
             temp_file = Path(f.name)
         html = generate_html(
             messages, "Timeline Tool Filter", theme=theme, output_dir=temp_file.parent
@@ -1361,5 +1370,42 @@ class TestTimelineVendoredLibrary:
         expect(page.locator("#toggleTimeline")).to_have_attribute(
             "title", "Show timeline"
         )
-        assert dialogs and "assets/" in dialogs[0]
+        assert dialogs and "rendered without an output folder" in dialogs[0]
         expect(page.locator("#timeline-container")).to_be_hidden()
+
+    def test_missing_stylesheet_fails_and_a_later_click_retries(
+        self, page: Page, tmp_path: Path
+    ):
+        """Without its CSS the timeline would open unstyled: the load fails
+        instead, and once the file is back the next click opens it."""
+        from claude_code_log.html.utils import VENDOR_ASSETS_DIRNAME, VIS_TIMELINE_CSS
+
+        html = tmp_path / "page.html"
+        html.write_text(
+            generate_html(
+                load_transcript(Path("test/test_data/representative_messages.jsonl")),
+                "Retry",
+                output_dir=tmp_path,
+            ),
+            encoding="utf-8",
+        )
+        css = tmp_path / VENDOR_ASSETS_DIRNAME / VIS_TIMELINE_CSS
+        moved = css.with_name("moved.css")
+        css.rename(moved)
+
+        dialogs: list[str] = []
+        page.on(
+            "dialog", lambda dialog: (dialogs.append(dialog.message), dialog.dismiss())
+        )
+        page.goto(html.as_uri())
+        toggle = page.locator("#toggleTimeline")
+        toggle.click()
+        expect(toggle).to_have_attribute("title", "Show timeline")
+        assert dialogs and "keep that folder" in dialogs[0]
+        expect(page.locator("#timeline-container")).to_be_hidden()
+
+        moved.rename(css)
+        toggle.click()
+        page.wait_for_selector(".vis-timeline", timeout=10000)
+        expect(page.locator("#timeline-container")).to_be_visible()
+        assert len(dialogs) == 1
