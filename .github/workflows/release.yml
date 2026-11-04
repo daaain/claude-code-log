@@ -33,7 +33,7 @@ jobs:
   # only asked to approve once the release commit's CI is green, and a red run
   # fails the release before anyone is asked.
   ci:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     permissions:
       actions: read
@@ -81,7 +81,7 @@ jobs:
           echo "✓ CI passed"
 
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -129,7 +129,7 @@ jobs:
 
   publish:
     needs: [ci, build]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     environment: pypi
     permissions:
@@ -147,7 +147,7 @@ jobs:
   # along, byte-identical to what PyPI has.
   github-release:
     needs: publish
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       contents: write
