@@ -1030,6 +1030,54 @@ def checkpoint_wal(
             conn.close()
 
 
+def catch_up_search_index(db_path: Path) -> int:
+    """Bring an existing search index up to date after a hierarchy pass.
+
+    The pass's entry writes leave the index alone (see
+    `search.index_maintenance_deferred`), so this is where the files they
+    rewrote get re-indexed: once, serially, on this thread's lease when
+    there is one, after the pool has exited — so the tokenising never
+    holds the write lock against a sibling. Returns the number of files
+    refreshed; 0 when no index exists or maintenance is switched off
+    (`CLAUDE_CODE_LOG_SEARCH_AUTO_INDEX=0`).
+
+    The index is derived data that the next pass heals (its entries stay
+    behind their cache rows until re-extracted), so no error here is
+    worth failing the pass over: the pages are written already. A cache
+    busy with another process's writer, a full disk, a damaged index and
+    an undecodable blob are all reported with the same warning and
+    return 0 — unlike an entry write, where the same error fails that
+    one project's save and nothing else.
+    """
+    from .search import auto_index_enabled, catch_up_index
+
+    if not auto_index_enabled() or not db_path.exists():
+        return 0
+    leased = _thread_leases().get((str(db_path), False))
+    try:
+        conn = leased or _open_connection(
+            db_path,
+            read_only=False,
+            configure=functools.partial(_configure_connection, read_only=False),
+        )
+    except sqlite3.Error:
+        return 0
+    try:
+        return catch_up_index(conn)
+    # ValueError covers what `search.decode_entry` raises past zlib: a blob
+    # that decompresses but is not UTF-8 (UnicodeDecodeError) or not JSON
+    # (JSONDecodeError) — both subclasses, neither a zlib.error.
+    except (sqlite3.Error, zlib.error, ValueError) as exc:
+        print(
+            "Warning: the search index was not brought up to date "
+            f"({exc}); the next run or `serve` start will do it."
+        )
+        return 0
+    finally:
+        if leased is None:
+            conn.close()
+
+
 def trim_oversized_wal(
     db_path: Path, *, announce: Callable[[str], None] = print
 ) -> Optional[int]:
@@ -1711,9 +1759,16 @@ class CacheManager:
             # search pay essentially nothing — and those who do never meet a
             # stale index, because the file's old rows go out with its old
             # messages rather than waiting for the next server start.
-            from .search import auto_index_enabled, reindex_files
+            # Inside a hierarchy pass the tokenising would run under the
+            # write lock in every worker, so the pass defers it to one
+            # catch-up at its end (`catch_up_search_index`).
+            from .search import (
+                auto_index_enabled,
+                index_maintenance_deferred,
+                reindex_files,
+            )
 
-            if auto_index_enabled():
+            if auto_index_enabled() and not index_maintenance_deferred():
                 reindex_files(conn, [file_id], commit=False)
 
             self._mark_entries_written(conn)
@@ -1849,10 +1904,15 @@ class CacheManager:
         # The index still refreshes the whole file: `reindex_files`
         # deletes and re-adds its rows, and an append-only variant
         # would need its own correctness argument. Only users who have
-        # built an index pay it, exactly as before.
-        from .search import auto_index_enabled, reindex_files
+        # built an index pay it, exactly as before — and a hierarchy
+        # pass defers it to its end, as `save_cached_entries` does.
+        from .search import (
+            auto_index_enabled,
+            index_maintenance_deferred,
+            reindex_files,
+        )
 
-        if auto_index_enabled():
+        if auto_index_enabled() and not index_maintenance_deferred():
             reindex_files(conn, [file_id], commit=False)
 
         self._mark_entries_written(conn)

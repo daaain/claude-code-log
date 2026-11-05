@@ -160,6 +160,12 @@ The index is derived data: deleting the cache rebuilds both.
 Once an index exists, ordinary `claude-code-log` runs keep it up to date —
 you don't have to restart the server to search new conversations.
 
+A run over all projects re-indexes the transcripts it rewrote at its end,
+once, after the per-project workers have finished: done inside each
+worker's cache writes it held the cache's single write lock while
+tokenising, and the other workers waited. Converting a single file or
+directory re-indexes as it writes, as before.
+
 That costs about 25% extra on a conversion in which *every* transcript
 changed (3.3 s → 4.1 s over 7,516 messages); a normal run touches a handful
 of files and the difference isn't noticeable. Nothing is added for people

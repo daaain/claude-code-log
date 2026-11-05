@@ -952,6 +952,318 @@ def test_conversion_does_not_create_an_index_for_non_users(tmp_path: Path) -> No
         conn.close()
 
 
+# ---------------------------------------------------------------------------
+# Maintenance deferred to the end of a hierarchy pass
+# ---------------------------------------------------------------------------
+
+
+def test_catch_up_index_refreshes_new_changed_and_removed_files(
+    cache: sqlite3.Connection,
+) -> None:
+    """The end-of-pass catch-up does what `ensure_index` does for an index
+    that already exists: new files in, rewritten files replaced, vanished
+    files out — and reports how many it touched."""
+    from claude_code_log.search import catch_up_index
+
+    ensure_index(cache)
+    assert catch_up_index(cache) == 0, "an unchanged cache has nothing to catch up"
+
+    # A rewritten file: new rows, re-stamped cached_mtime (what the cache does).
+    cache.execute("DELETE FROM messages WHERE file_id = 1")
+    _add_message(cache, 30, 1, 1, _assistant("now mentions mercurial"), uuid="uuid-30")
+    cache.execute("UPDATE cached_files SET cached_mtime = 12345.678 WHERE id = 1")
+    # A new file.
+    cache.execute(
+        "INSERT INTO cached_files(id, project_id, file_name, file_path, "
+        "source_mtime, cached_mtime, message_count) "
+        "VALUES(3, 1, 'f3.jsonl', '/tmp/f3.jsonl', 0, 1.0, 1)"
+    )
+    _add_message(cache, 20, 1, 3, _assistant("a brand new file"), uuid="uuid-20")
+    # A vanished file.
+    cache.execute("DELETE FROM messages WHERE file_id = 2")
+    cache.execute("DELETE FROM cached_files WHERE id = 2")
+    cache.commit()
+
+    assert catch_up_index(cache) == 3, "one rewritten, one new, one vanished"
+    assert count_matches(cache, "mercurial") == 1
+    assert count_matches(cache, "brand") == 1
+    assert count_matches(cache, "pydantic") == 0, "stale or vanished rows survived"
+    assert index_status(cache).indexed_messages == 2
+    assert catch_up_index(cache) == 0
+
+
+def test_catch_up_index_without_an_index_builds_nothing(
+    cache: sqlite3.Connection,
+) -> None:
+    """Catching up is maintenance of an index someone built; it never creates one."""
+    from claude_code_log.search import catch_up_index
+
+    assert catch_up_index(cache) == 0
+    row = cache.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (FTS_TABLE,),
+    ).fetchone()
+    assert row is None
+
+
+def test_deferred_index_maintenance_is_scoped() -> None:
+    from claude_code_log.search import (
+        deferred_index_maintenance,
+        index_maintenance_deferred,
+    )
+
+    assert not index_maintenance_deferred()
+    with deferred_index_maintenance():
+        assert index_maintenance_deferred()
+        with deferred_index_maintenance():
+            assert index_maintenance_deferred()
+        assert index_maintenance_deferred(), "an inner scope ended the outer one"
+    assert not index_maintenance_deferred()
+
+
+def _report_deferred() -> bool:
+    from claude_code_log.search import index_maintenance_deferred
+
+    return index_maintenance_deferred()
+
+
+def test_project_pool_workers_defer_index_maintenance() -> None:
+    """A project worker never tokenises under the cache's write lock: the
+    pool's initializer defers the index work to the parent's catch-up."""
+    import multiprocessing
+    from concurrent.futures import ProcessPoolExecutor
+
+    from claude_code_log.converter import _init_project_worker  # pyright: ignore[reportPrivateUsage]
+    from claude_code_log.write_queue import WriteTurns
+
+    ctx = multiprocessing.get_context("spawn")
+    with ProcessPoolExecutor(
+        max_workers=1,
+        mp_context=ctx,
+        initializer=_init_project_worker,
+        initargs=(WriteTurns(ctx),),
+    ) as pool:
+        assert pool.submit(_report_deferred).result(timeout=60) is True
+
+
+def test_a_hierarchy_pass_maintains_the_index_after_the_pool_not_inside_the_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The guarantee of `test_a_normal_conversion_keeps_an_existing_index_current`
+    is kept by one catch-up at the end of the pass, not by every entry
+    write re-indexing its file inside the write transaction (where the
+    tokenising held the database's single write lock, in every worker).
+    With the catch-up stubbed out, the pass must leave the index stale."""
+    from claude_code_log import converter
+    from claude_code_log.cache import get_cache_db_path
+    from claude_code_log.converter import process_projects_hierarchy
+
+    projects = tmp_path / "projects"
+    project = projects / "-home-u-proj"
+    project.mkdir(parents=True)
+    jsonl = project / "session.jsonl"
+    jsonl.write_text(_entry_line("the first version mentions kangaroo"))
+    process_projects_hierarchy(projects, silent=True)
+
+    db_path = get_cache_db_path(projects)
+    conn = sqlite3.connect(db_path)
+    ensure_index(conn)
+    assert count_matches(conn, "kangaroo") == 1
+    conn.close()
+
+    calls: list[Path] = []
+
+    def record(path: Path) -> int:
+        calls.append(path)
+        return 0
+
+    monkeypatch.setattr(converter, "catch_up_search_index", record)
+
+    jsonl.write_text(_entry_line("the second version mentions platypus"))
+    bump_mtime(jsonl)
+    process_projects_hierarchy(projects, silent=True)
+
+    assert calls == [db_path], "the pass did not run one catch-up on its cache"
+    conn = sqlite3.connect(db_path)
+    try:
+        assert count_matches(conn, "platypus") == 0, (
+            "the entry write maintained the index itself"
+        )
+        assert count_matches(conn, "kangaroo") == 1
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(zlib.error("incorrect header check"), id="zlib"),
+        pytest.param(
+            sqlite3.OperationalError("database or disk is full"), id="disk-full"
+        ),
+        pytest.param(
+            sqlite3.DatabaseError("database disk image is malformed"), id="malformed"
+        ),
+    ],
+)
+def test_a_catch_up_error_does_not_fail_the_pass(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    error: Exception,
+) -> None:
+    """The index is derived data that the next pass heals, so an error
+    while catching it up is a warning: the pass returns, loses no project,
+    and still checkpoints the WAL."""
+    from claude_code_log import converter, search
+    from claude_code_log.cache import get_cache_db_path
+    from claude_code_log.converter import process_projects_hierarchy
+
+    projects = tmp_path / "projects"
+    project = projects / "-home-u-proj"
+    project.mkdir(parents=True)
+    jsonl = project / "session.jsonl"
+    jsonl.write_text(_entry_line("the first version mentions kangaroo"))
+    process_projects_hierarchy(projects, silent=True)
+    db_path = get_cache_db_path(projects)
+    conn = sqlite3.connect(db_path)
+    ensure_index(conn)
+    conn.close()
+
+    checkpoints: list[Path] = []
+    monkeypatch.setattr(
+        converter, "checkpoint_wal", lambda path: checkpoints.append(path)
+    )
+    real_catch_up = search.catch_up_index
+
+    def failing(conn: sqlite3.Connection) -> int:
+        raise error
+
+    monkeypatch.setattr(search, "catch_up_index", failing)
+    jsonl.write_text(_entry_line("the second version mentions platypus"))
+    bump_mtime(jsonl)
+    failed: list[str] = []
+    process_projects_hierarchy(projects, silent=True, failed_projects=failed)
+
+    assert failed == []
+    assert checkpoints == [db_path], "the WAL checkpoint was skipped"
+    assert "search index was not brought up to date" in capsys.readouterr().out
+
+    # Nothing changed on disk, but the file's index entry is behind its
+    # cache row, so the next pass's catch-up heals it.
+    monkeypatch.setattr(search, "catch_up_index", real_catch_up)
+    process_projects_hierarchy(projects, silent=True)
+    conn = sqlite3.connect(db_path)
+    try:
+        assert count_matches(conn, "platypus") == 1
+        assert count_matches(conn, "kangaroo") == 0
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize(
+    "blob",
+    [
+        pytest.param(zlib.compress(b"\xff\xfe\x00 not utf-8"), id="not-utf8"),
+        pytest.param(zlib.compress(b"{not json"), id="not-json"),
+    ],
+)
+def test_an_undecodable_blob_in_the_catch_up_does_not_fail_the_pass(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    blob: bytes,
+) -> None:
+    """A blob that decompresses but is not UTF-8 JSON raises a ValueError
+    (UnicodeDecodeError, JSONDecodeError) from `decode_entry`, not a
+    zlib.error: the same warning, the pass returns and still checkpoints,
+    and the next pass that rewrites the file heals the index."""
+    from claude_code_log import converter
+    from claude_code_log.cache import get_cache_db_path
+    from claude_code_log.converter import process_projects_hierarchy
+
+    projects = tmp_path / "projects"
+    project = projects / "-home-u-proj"
+    project.mkdir(parents=True)
+    jsonl = project / "session.jsonl"
+    jsonl.write_text(_entry_line("the first version mentions kangaroo"))
+    process_projects_hierarchy(projects, silent=True)
+    db_path = get_cache_db_path(projects)
+    conn = sqlite3.connect(db_path)
+    ensure_index(conn)
+    # The file's cache row moved past its index entry (what an entry write
+    # does), and one of its blobs cannot be decoded.
+    conn.execute(
+        "UPDATE messages SET content = ? WHERE id = "
+        "(SELECT min(id) FROM messages WHERE file_id = 1)",
+        (blob,),
+    )
+    conn.execute("UPDATE cached_files SET cached_mtime = cached_mtime + 1 WHERE id = 1")
+    conn.commit()
+    conn.close()
+
+    checkpoints: list[Path] = []
+    monkeypatch.setattr(
+        converter, "checkpoint_wal", lambda path: checkpoints.append(path)
+    )
+    failed: list[str] = []
+    process_projects_hierarchy(projects, silent=True, failed_projects=failed)
+
+    assert failed == []
+    assert checkpoints == [db_path], "the WAL checkpoint was skipped"
+    assert "search index was not brought up to date" in capsys.readouterr().out
+
+    jsonl.write_text(_entry_line("the second version mentions platypus"))
+    bump_mtime(jsonl)
+    process_projects_hierarchy(projects, silent=True)
+    conn = sqlite3.connect(db_path)
+    try:
+        assert count_matches(conn, "platypus") == 1
+        assert count_matches(conn, "kangaroo") == 0
+    finally:
+        conn.close()
+
+
+def test_catch_up_index_tolerates_a_file_indexed_since_its_snapshot(
+    cache: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A contentless FTS5 table accepts a duplicate rowid without complaint,
+    so a file another process indexed between the catch-up's snapshot and
+    its transaction must have its rows cleared before being re-added, or
+    its tokens count twice."""
+    from contextlib import contextmanager
+
+    from claude_code_log import search
+
+    ensure_index(cache)
+    cache.execute(
+        "INSERT INTO cached_files(id, project_id, file_name, file_path, "
+        "source_mtime, cached_mtime, message_count) "
+        "VALUES(3, 1, 'f3.jsonl', '/tmp/f3.jsonl', 0, 1.0, 1)"
+    )
+    _add_message(cache, 20, 1, 3, _assistant("a brand new file"), uuid="uuid-20")
+
+    real_write_transaction = search.write_transaction
+    raced = False
+
+    @contextmanager
+    def racing(conn: sqlite3.Connection):
+        nonlocal raced
+        if not raced:
+            raced = True
+            # Another process indexes the same new file and commits, after
+            # our snapshot and before our transaction.
+            reindex_files(conn, [3])
+        with real_write_transaction(conn):
+            yield
+
+    monkeypatch.setattr(search, "write_transaction", racing)
+    search.catch_up_index(cache)
+
+    assert raced
+    assert count_matches(cache, "brand") == 1, "the file's tokens were indexed twice"
+
+
 def _entry_line(text: str) -> str:
     """One user message as a JSONL line."""
     return (

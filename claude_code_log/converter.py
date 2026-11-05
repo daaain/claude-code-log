@@ -59,6 +59,7 @@ from .render_dispatch import build_render_pool, dispatch_render_units
 from .cache import (
     CacheManager,
     SessionCacheData,
+    catch_up_search_index,
     checkpoint_wal,
     connection_lease,
     get_all_cached_projects,
@@ -6507,6 +6508,16 @@ def _plan_project(
     )
 
 
+def _init_project_worker(turns: Optional[WriteTurns]) -> None:
+    """The project pool's initializer: the pass-wide write queue, and no
+    search-index work under the write lock (the parent catches up once
+    the pool has exited — `catch_up_search_index`)."""
+    from .search import defer_index_maintenance
+
+    install_write_turns(turns)
+    defer_index_maintenance()
+
+
 def _convert_project_worker(
     worker_args: Dict[str, Any],
 ) -> "tuple[str, float, Optional[str], bool]":
@@ -6573,6 +6584,8 @@ def process_projects_hierarchy(
     it, so a caller can tell a complete pass from one that lost projects
     (the CLI exits non-zero on the latter).
     """
+    from .search import deferred_index_maintenance
+
     lease = (
         connection_lease(get_cache_db_path(projects_path))
         if use_cache
@@ -6583,33 +6596,45 @@ def process_projects_hierarchy(
             # Inside the lease, so the connection that recovers the log
             # is the one the pass then keeps.
             trim_oversized_wal(get_cache_db_path(projects_path))
-        result = _process_projects_hierarchy(
-            projects_path=projects_path,
-            from_date=from_date,
-            to_date=to_date,
-            use_cache=use_cache,
-            generate_individual_sessions=generate_individual_sessions,
-            output_format=output_format,
-            image_export_mode=image_export_mode,
-            silent=silent,
-            page_size=page_size,
-            depth=depth,
-            compact=compact,
-            output_dir=output_dir,
-            expand_paths=expand_paths,
-            filter_path=filter_path,
-            write_combined=write_combined,
-            no_timestamps=no_timestamps,
-            no_recaps=no_recaps,
-            theme=theme,
-            jobs=jobs,
-            entry_store=entry_store,
-            failed_projects=failed_projects,
-        )
+        # No entry write of this pass re-indexes its file for search —
+        # not in the pool (its initializer defers too) and not inline
+        # here: that is tokenising under the database's single write
+        # lock. The pass catches the index up once, below.
+        with deferred_index_maintenance():
+            result = _process_projects_hierarchy(
+                projects_path=projects_path,
+                from_date=from_date,
+                to_date=to_date,
+                use_cache=use_cache,
+                generate_individual_sessions=generate_individual_sessions,
+                output_format=output_format,
+                image_export_mode=image_export_mode,
+                silent=silent,
+                page_size=page_size,
+                depth=depth,
+                compact=compact,
+                output_dir=output_dir,
+                expand_paths=expand_paths,
+                filter_path=filter_path,
+                write_combined=write_combined,
+                no_timestamps=no_timestamps,
+                no_recaps=no_recaps,
+                theme=theme,
+                jobs=jobs,
+                entry_store=entry_store,
+                failed_projects=failed_projects,
+            )
         if use_cache:
-            # The pass's workers have all exited, so this is the moment the
-            # WAL can be reset — see `checkpoint_wal` (issue #332).
-            checkpoint_wal(get_cache_db_path(projects_path))
+            # The pass's workers have all exited: the files they rewrote
+            # are re-indexed for search now, serially, with no sibling
+            # waiting on the lock — and then the WAL can be reset, see
+            # `checkpoint_wal` (issue #332). The catch-up reports its own
+            # failures; the `finally` is for whatever it did not foresee,
+            # so the checkpoint is never the casualty of the index.
+            try:
+                catch_up_search_index(get_cache_db_path(projects_path))
+            finally:
+                checkpoint_wal(get_cache_db_path(projects_path))
         return result
 
 
@@ -7069,7 +7094,7 @@ def _process_projects_hierarchy(
             with ProcessPoolExecutor(
                 max_workers=resolved_jobs,
                 mp_context=ctx,
-                initializer=install_write_turns,
+                initializer=_init_project_worker,
                 initargs=(WriteTurns(ctx),),
             ) as pool:
                 future_to_plan = {
