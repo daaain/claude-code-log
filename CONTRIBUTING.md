@@ -623,7 +623,12 @@ The tool implements a SQLite-based caching system for performance:
   turns through a fair cross-process queue (`write_queue.py`), so none gives
   up on a sibling. Workers write only rows: an existing search index is
   caught up once at the end of the pass, by the parent, not inside each
-  worker's write transaction. Against other processes connections wait 30 s
+  worker's write transaction. One pass at a time per cache file: a pass
+  holds a lock (`<cache>.pass-lock`, `pass_lock.py`) for its whole run,
+  catch-up included, so a second `claude-code-log` or a `serve --watch`
+  tick over the same archive waits for it instead of contending
+  (`CLAUDE_CODE_LOG_PASS_LOCK=<seconds>` bounds the wait, `=0` disables
+  the lock). Against other processes connections wait 30 s
   (`CLAUDE_CODE_LOG_CACHE_TIMEOUT` overrides, in seconds), and a project
   locked out is retried after the pool rather than failed. A pass compacts
   an oversized WAL before it starts and truncates the WAL when it ends. A

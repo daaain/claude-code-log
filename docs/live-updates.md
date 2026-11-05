@@ -114,6 +114,13 @@ page notices on its next poll.
 Raise `--quiet-period` if conversions feel too frequent on a large
 project; lower `--interval` if you want changes noticed sooner.
 
+A `serve --watch` or `watch --all-projects` tick and a plain
+`claude-code-log` run over the same archive take turns rather than
+racing for the cache: whichever starts second waits for the first to
+finish (and says so after a couple of seconds), then runs — usually to
+find the work already done. `CLAUDE_CODE_LOG_PASS_LOCK=<seconds>` bounds
+that wait; `CLAUDE_CODE_LOG_PASS_LOCK=0` turns the lock off.
+
 Switching `--theme` rewrites every page in the new theme on the first
 tick — including a combined page that `--combined no` would otherwise
 leave alone, so its session pages never link back into a page of the

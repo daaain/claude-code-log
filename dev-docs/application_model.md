@@ -215,6 +215,31 @@ in the parent) is the open lever if that worst case ever matters. A
 single file or directory conversion (`convert_jsonl_to` with no pass
 around it) still re-indexes inside the write, where nothing competes
 for the lock. `CLAUDE_CODE_LOG_SEARCH_AUTO_INDEX=0` switches both off.
+The queue is per pass, so two *passes* over one cache — a second CLI
+run, or a `serve --watch` tick while a CLI run refreshes the same
+archive — are, to each other, one tight-loop writer each, and the
+unfair polling above applies between them (it is also the realistic
+way two refreshes of one project overlap and clear each other's
+`refresh_pending`). So `process_projects_hierarchy` first takes the
+**pass lock** ([`pass_lock.py`](../claude_code_log/pass_lock.py)): an
+exclusive transaction on a sidecar SQLite file beside the cache
+(`<cache>.pass-lock`), held around the WAL trim, the conversions, the
+index catch-up and the checkpoint, and released with the holder's
+process (nothing stale to clean after a kill). A second pass waits,
+announces what it is waiting for after 2 s, then runs and usually
+finds the work done;
+`CLAUDE_CODE_LOG_PASS_LOCK=<seconds>` bounds the wait (then
+`PassLockTimeout`, nothing converted) and `=0` disables the lock.
+Re-entrant within a process, which `serve`'s startup pass plus watch
+ticks rely on. Outside the gate, by design: the TUI's writes and a
+single-file `convert_jsonl_to` are short transactions with the
+ordinary busy timeout, as before. `test_pass_lock.py` pins the
+waiting, the bound, the switch and two concurrent passes serialising.
+Measured on the 32 largest projects of a real archive (every file
+re-saved, two passes started together at `--jobs 8`): without the lock
+each pass took ~872 s and the pair re-saved 1.4x the files; with it the
+first ran alone in 552 s and the second, after waiting, found every
+project current in 0.2 s.
 `serve` takes the same `--jobs` as the main command. A pool-level failure (e.g. a library caller without the
 `if __name__ == "__main__"` guard `spawn` needs) degrades to inline
 sequential processing with a warning rather than aborting.
