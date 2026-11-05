@@ -6628,9 +6628,13 @@ def process_projects_hierarchy(
             # The pass's workers have all exited: the files they rewrote
             # are re-indexed for search now, serially, with no sibling
             # waiting on the lock — and then the WAL can be reset, see
-            # `checkpoint_wal` (issue #332).
-            catch_up_search_index(get_cache_db_path(projects_path))
-            checkpoint_wal(get_cache_db_path(projects_path))
+            # `checkpoint_wal` (issue #332). The catch-up reports its own
+            # failures; the `finally` is for whatever it did not foresee,
+            # so the checkpoint is never the casualty of the index.
+            try:
+                catch_up_search_index(get_cache_db_path(projects_path))
+            finally:
+                checkpoint_wal(get_cache_db_path(projects_path))
         return result
 
 

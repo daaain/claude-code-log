@@ -732,9 +732,11 @@ def ensure_index(
     )
 
     for done, file_id in enumerate(todo, start=1):
-        if file_id in indexed_files:
-            # Re-indexing a changed file: clear its old rows first.
-            _delete_file_rows(conn, file_id)
+        # Clear the file's old rows first — unconditionally, not only when
+        # the snapshot above knew the file: another process may have
+        # indexed it since, and a contentless FTS5 table accepts the
+        # duplicate rowids without a word. A no-op when there are none.
+        _delete_file_rows(conn, file_id)
         _index_file(conn, file_id, fields, insert_sql)
         conn.execute(
             f"INSERT INTO {FILES_TABLE}"
@@ -875,8 +877,11 @@ def catch_up_index(conn: sqlite3.Connection) -> int:
                 conn.execute(f"DELETE FROM {FILES_TABLE} WHERE file_id = ?", (file_id,))
     for file_id in todo:
         with write_transaction(conn):
-            if file_id in indexed_files:
-                _delete_file_rows(conn, file_id)
+            # Inside the transaction and unconditional: the snapshot above
+            # is stale by the time the lock is held, and a file another
+            # process indexed meanwhile would otherwise get its rowids
+            # inserted twice (which a contentless table does not refuse).
+            _delete_file_rows(conn, file_id)
             _index_file(conn, file_id, fields, insert_sql)
             message_count, mtime = current_files[file_id]
             conn.execute(

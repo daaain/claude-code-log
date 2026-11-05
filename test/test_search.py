@@ -1094,6 +1094,113 @@ def test_a_hierarchy_pass_maintains_the_index_after_the_pool_not_inside_the_writ
         conn.close()
 
 
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(zlib.error("incorrect header check"), id="zlib"),
+        pytest.param(
+            sqlite3.OperationalError("database or disk is full"), id="disk-full"
+        ),
+        pytest.param(
+            sqlite3.DatabaseError("database disk image is malformed"), id="malformed"
+        ),
+    ],
+)
+def test_a_catch_up_error_does_not_fail_the_pass(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    error: Exception,
+) -> None:
+    """The index is derived data that the next pass heals, so an error
+    while catching it up is a warning: the pass returns, loses no project,
+    and still checkpoints the WAL."""
+    from claude_code_log import converter, search
+    from claude_code_log.cache import get_cache_db_path
+    from claude_code_log.converter import process_projects_hierarchy
+
+    projects = tmp_path / "projects"
+    project = projects / "-home-u-proj"
+    project.mkdir(parents=True)
+    jsonl = project / "session.jsonl"
+    jsonl.write_text(_entry_line("the first version mentions kangaroo"))
+    process_projects_hierarchy(projects, silent=True)
+    db_path = get_cache_db_path(projects)
+    conn = sqlite3.connect(db_path)
+    ensure_index(conn)
+    conn.close()
+
+    checkpoints: list[Path] = []
+    monkeypatch.setattr(
+        converter, "checkpoint_wal", lambda path: checkpoints.append(path)
+    )
+    real_catch_up = search.catch_up_index
+
+    def failing(conn: sqlite3.Connection) -> int:
+        raise error
+
+    monkeypatch.setattr(search, "catch_up_index", failing)
+    jsonl.write_text(_entry_line("the second version mentions platypus"))
+    bump_mtime(jsonl)
+    failed: list[str] = []
+    process_projects_hierarchy(projects, silent=True, failed_projects=failed)
+
+    assert failed == []
+    assert checkpoints == [db_path], "the WAL checkpoint was skipped"
+    assert "search index was not brought up to date" in capsys.readouterr().out
+
+    # Nothing changed on disk, but the file's index entry is behind its
+    # cache row, so the next pass's catch-up heals it.
+    monkeypatch.setattr(search, "catch_up_index", real_catch_up)
+    process_projects_hierarchy(projects, silent=True)
+    conn = sqlite3.connect(db_path)
+    try:
+        assert count_matches(conn, "platypus") == 1
+        assert count_matches(conn, "kangaroo") == 0
+    finally:
+        conn.close()
+
+
+def test_catch_up_index_tolerates_a_file_indexed_since_its_snapshot(
+    cache: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A contentless FTS5 table accepts a duplicate rowid without complaint,
+    so a file another process indexed between the catch-up's snapshot and
+    its transaction must have its rows cleared before being re-added, or
+    its tokens count twice."""
+    from contextlib import contextmanager
+
+    from claude_code_log import search
+
+    ensure_index(cache)
+    cache.execute(
+        "INSERT INTO cached_files(id, project_id, file_name, file_path, "
+        "source_mtime, cached_mtime, message_count) "
+        "VALUES(3, 1, 'f3.jsonl', '/tmp/f3.jsonl', 0, 1.0, 1)"
+    )
+    _add_message(cache, 20, 1, 3, _assistant("a brand new file"), uuid="uuid-20")
+
+    real_write_transaction = search.write_transaction
+    raced = False
+
+    @contextmanager
+    def racing(conn: sqlite3.Connection):
+        nonlocal raced
+        if not raced:
+            raced = True
+            # Another process indexes the same new file and commits, after
+            # our snapshot and before our transaction.
+            reindex_files(conn, [3])
+        with real_write_transaction(conn):
+            yield
+
+    monkeypatch.setattr(search, "write_transaction", racing)
+    search.catch_up_index(cache)
+
+    assert raced
+    assert count_matches(cache, "brand") == 1, "the file's tokens were indexed twice"
+
+
 def _entry_line(text: str) -> str:
     """One user message as a JSONL line."""
     return (

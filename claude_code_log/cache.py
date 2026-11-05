@@ -1041,9 +1041,13 @@ def catch_up_search_index(db_path: Path) -> int:
     refreshed; 0 when no index exists or maintenance is switched off
     (`CLAUDE_CODE_LOG_SEARCH_AUTO_INDEX=0`).
 
-    A cache busy with another process's writer is not worth failing the
-    pass over: the pages are written, and the next pass or `serve` start
-    catches the index up. That case is reported and returns 0.
+    The index is derived data that the next pass heals (its entries stay
+    behind their cache rows until re-extracted), so no error here is
+    worth failing the pass over: the pages are written already. A cache
+    busy with another process's writer, a full disk, a damaged index and
+    an undecodable blob are all reported with the same warning and
+    return 0 — unlike an entry write, where the same error fails that
+    one project's save and nothing else.
     """
     from .search import auto_index_enabled, catch_up_index
 
@@ -1060,9 +1064,7 @@ def catch_up_search_index(db_path: Path) -> int:
         return 0
     try:
         return catch_up_index(conn)
-    except sqlite3.OperationalError as exc:
-        if not is_busy_database_error(exc):
-            raise
+    except (sqlite3.Error, zlib.error) as exc:
         print(
             "Warning: the search index was not brought up to date "
             f"({exc}); the next run or `serve` start will do it."
