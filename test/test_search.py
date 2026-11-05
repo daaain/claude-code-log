@@ -952,6 +952,148 @@ def test_conversion_does_not_create_an_index_for_non_users(tmp_path: Path) -> No
         conn.close()
 
 
+# ---------------------------------------------------------------------------
+# Maintenance deferred to the end of a hierarchy pass
+# ---------------------------------------------------------------------------
+
+
+def test_catch_up_index_refreshes_new_changed_and_removed_files(
+    cache: sqlite3.Connection,
+) -> None:
+    """The end-of-pass catch-up does what `ensure_index` does for an index
+    that already exists: new files in, rewritten files replaced, vanished
+    files out — and reports how many it touched."""
+    from claude_code_log.search import catch_up_index
+
+    ensure_index(cache)
+    assert catch_up_index(cache) == 0, "an unchanged cache has nothing to catch up"
+
+    # A rewritten file: new rows, re-stamped cached_mtime (what the cache does).
+    cache.execute("DELETE FROM messages WHERE file_id = 1")
+    _add_message(cache, 30, 1, 1, _assistant("now mentions mercurial"), uuid="uuid-30")
+    cache.execute("UPDATE cached_files SET cached_mtime = 12345.678 WHERE id = 1")
+    # A new file.
+    cache.execute(
+        "INSERT INTO cached_files(id, project_id, file_name, file_path, "
+        "source_mtime, cached_mtime, message_count) "
+        "VALUES(3, 1, 'f3.jsonl', '/tmp/f3.jsonl', 0, 1.0, 1)"
+    )
+    _add_message(cache, 20, 1, 3, _assistant("a brand new file"), uuid="uuid-20")
+    # A vanished file.
+    cache.execute("DELETE FROM messages WHERE file_id = 2")
+    cache.execute("DELETE FROM cached_files WHERE id = 2")
+    cache.commit()
+
+    assert catch_up_index(cache) == 3, "one rewritten, one new, one vanished"
+    assert count_matches(cache, "mercurial") == 1
+    assert count_matches(cache, "brand") == 1
+    assert count_matches(cache, "pydantic") == 0, "stale or vanished rows survived"
+    assert index_status(cache).indexed_messages == 2
+    assert catch_up_index(cache) == 0
+
+
+def test_catch_up_index_without_an_index_builds_nothing(
+    cache: sqlite3.Connection,
+) -> None:
+    """Catching up is maintenance of an index someone built; it never creates one."""
+    from claude_code_log.search import catch_up_index
+
+    assert catch_up_index(cache) == 0
+    row = cache.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (FTS_TABLE,),
+    ).fetchone()
+    assert row is None
+
+
+def test_deferred_index_maintenance_is_scoped() -> None:
+    from claude_code_log.search import (
+        deferred_index_maintenance,
+        index_maintenance_deferred,
+    )
+
+    assert not index_maintenance_deferred()
+    with deferred_index_maintenance():
+        assert index_maintenance_deferred()
+        with deferred_index_maintenance():
+            assert index_maintenance_deferred()
+        assert index_maintenance_deferred(), "an inner scope ended the outer one"
+    assert not index_maintenance_deferred()
+
+
+def _report_deferred() -> bool:
+    from claude_code_log.search import index_maintenance_deferred
+
+    return index_maintenance_deferred()
+
+
+def test_project_pool_workers_defer_index_maintenance() -> None:
+    """A project worker never tokenises under the cache's write lock: the
+    pool's initializer defers the index work to the parent's catch-up."""
+    import multiprocessing
+    from concurrent.futures import ProcessPoolExecutor
+
+    from claude_code_log.converter import _init_project_worker  # pyright: ignore[reportPrivateUsage]
+    from claude_code_log.write_queue import WriteTurns
+
+    ctx = multiprocessing.get_context("spawn")
+    with ProcessPoolExecutor(
+        max_workers=1,
+        mp_context=ctx,
+        initializer=_init_project_worker,
+        initargs=(WriteTurns(ctx),),
+    ) as pool:
+        assert pool.submit(_report_deferred).result(timeout=60) is True
+
+
+def test_a_hierarchy_pass_maintains_the_index_after_the_pool_not_inside_the_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The guarantee of `test_a_normal_conversion_keeps_an_existing_index_current`
+    is kept by one catch-up at the end of the pass, not by every entry
+    write re-indexing its file inside the write transaction (where the
+    tokenising held the database's single write lock, in every worker).
+    With the catch-up stubbed out, the pass must leave the index stale."""
+    from claude_code_log import converter
+    from claude_code_log.cache import get_cache_db_path
+    from claude_code_log.converter import process_projects_hierarchy
+
+    projects = tmp_path / "projects"
+    project = projects / "-home-u-proj"
+    project.mkdir(parents=True)
+    jsonl = project / "session.jsonl"
+    jsonl.write_text(_entry_line("the first version mentions kangaroo"))
+    process_projects_hierarchy(projects, silent=True)
+
+    db_path = get_cache_db_path(projects)
+    conn = sqlite3.connect(db_path)
+    ensure_index(conn)
+    assert count_matches(conn, "kangaroo") == 1
+    conn.close()
+
+    calls: list[Path] = []
+
+    def record(path: Path) -> int:
+        calls.append(path)
+        return 0
+
+    monkeypatch.setattr(converter, "catch_up_search_index", record)
+
+    jsonl.write_text(_entry_line("the second version mentions platypus"))
+    bump_mtime(jsonl)
+    process_projects_hierarchy(projects, silent=True)
+
+    assert calls == [db_path], "the pass did not run one catch-up on its cache"
+    conn = sqlite3.connect(db_path)
+    try:
+        assert count_matches(conn, "platypus") == 0, (
+            "the entry write maintained the index itself"
+        )
+        assert count_matches(conn, "kangaroo") == 1
+    finally:
+        conn.close()
+
+
 def _entry_line(text: str) -> str:
     """One user message as a JSONL line."""
     return (

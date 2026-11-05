@@ -186,6 +186,35 @@ Uncontended, the queue plus `BEGIN IMMEDIATE` add ~10 µs to the smallest
 write (`update_html_cache`, 46 → 56 µs) and nothing measurable to a
 session save; whole passes are unchanged at `--jobs 1` and within ~4%
 on a pooled incremental pass, the price of strict turn-taking.
+The queue makes waiting safe; it does not shorten the holds, and the
+longest thing a worker did while holding the lock was not the row
+insert but maintaining the search index: `save_cached_entries` called
+`search.reindex_files` inside its write transaction, so once an index
+exists every rewritten file was decompressed and tokenised under the
+lock (3.4 s of an 11.2 s save on the largest session measured, 122 MB
+/ 46k entries), in every worker, with the rest of the pool queued
+behind it. So a hierarchy pass **defers index maintenance**
+(`search.deferred_index_maintenance` in the parent,
+`search.defer_index_maintenance` in the pool initializer
+`_init_project_worker`): the entry writes leave the index alone, and
+after `_process_projects_hierarchy` returns — pool exited, hold-backs
+and retries done — `cache.catch_up_search_index` re-indexes the files
+whose `cached_files.cached_mtime` moved, one short transaction per
+file on the pass's leased connection, before the WAL checkpoint. What
+this buys is shorter holds, not a shorter pass: on 32 large projects
+(9 GB, 3,201 transcripts all touched, index present, `--jobs 16`) the
+parallel phase went from 555 s to 230 s and the longest
+`save_cached_entries` from 44.8 s to 15.2 s (p90 6.8 s → 2.8 s), but
+the serial catch-up then took ~305 s, so the whole run was 555 s
+against 536 s. The tokenising is the same work wherever it lands; in
+the workers it was paid under the lock, and a hold that long is what
+pushes a writer in *another* process (the TUI, a second `serve`) past
+its 30 s budget. On the daily shape — a handful of files changed —
+the catch-up is seconds. Parallelising it (extract in workers, insert
+in the parent) is the open lever if that worst case ever matters. A
+single file or directory conversion (`convert_jsonl_to` with no pass
+around it) still re-indexes inside the write, where nothing competes
+for the lock. `CLAUDE_CODE_LOG_SEARCH_AUTO_INDEX=0` switches both off.
 `serve` takes the same `--jobs` as the main command. A pool-level failure (e.g. a library caller without the
 `if __name__ == "__main__"` guard `spawn` needs) degrades to inline
 sequential processing with a warning rather than aborting.

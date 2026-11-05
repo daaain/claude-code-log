@@ -38,6 +38,7 @@ import json
 import re
 import sqlite3
 import zlib
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterable, Iterator, Optional, Sequence, cast
@@ -46,6 +47,7 @@ from typing import Any, Callable, Iterable, Iterator, Optional, Sequence, cast
 # cycle. The name is prefixed to keep it visually separate from the index
 # internals defined below — it answers a cache-file question, not an FTS one.
 from .cache import is_corrupt_database_error as _is_corrupt_database_error
+from .cache import write_transaction
 
 # ---------------------------------------------------------------------------
 # Field groups
@@ -779,6 +781,118 @@ def auto_index_enabled() -> bool:
     return value.strip().lower() not in ("0", "false", "no", "off")
 
 
+# Depth of `deferred_index_maintenance` scopes in this process. A pool
+# worker's initializer sets it for the worker's whole life.
+_deferred_depth = 0
+
+
+def index_maintenance_deferred() -> bool:
+    """Whether entry writes should leave the index to a later `catch_up_index`.
+
+    Inside a hierarchy pass the answer is yes, in the parent and in every
+    project worker: re-indexing a file means decompressing and tokenising
+    its messages, and done inside the entry write it runs under the cache
+    database's single write lock — the longest thing any writer did while
+    holding it (3.4 s of an 11.2 s save on the largest session measured),
+    and in a pool it lengthened every sibling's wait. The pass catches up
+    once at its end instead, on the parent's connection, with the pool
+    gone. Outside a pass (a single-file conversion, the TUI) nothing is
+    deferred and the entry write maintains the index as before.
+    """
+    return _deferred_depth > 0
+
+
+def defer_index_maintenance() -> None:
+    """Defer index maintenance for the rest of this process's life.
+
+    For a pool worker's initializer: the worker only ever runs pass
+    conversions, and the parent's catch-up covers them all.
+    """
+    global _deferred_depth
+    _deferred_depth += 1
+
+
+@contextmanager
+def deferred_index_maintenance() -> Iterator[None]:
+    """Defer index maintenance for the scope (nests; the outermost restores)."""
+    global _deferred_depth
+    _deferred_depth += 1
+    try:
+        yield
+    finally:
+        _deferred_depth -= 1
+
+
+def catch_up_index(conn: sqlite3.Connection) -> int:
+    """Bring an existing index up to date with `cached_files`; return the
+    number of files touched (re-indexed, added or removed).
+
+    The end-of-pass counterpart of `reindex_files`: every file the pass
+    rewrote has a new `cached_files.cached_mtime`, so the same comparison
+    `ensure_index` makes finds them, and vanished files take their rows
+    with them. Builds nothing when no index exists, and leaves an index
+    whose table cannot DELETE to the next `ensure_index`, which rebuilds
+    it (the same rule `reindex_files` follows).
+
+    One transaction per file, opened with the cache's `write_transaction`
+    so each hold on the write lock is one file's tokenising and an
+    interrupted catch-up resumes where it stopped.
+    """
+    if not _index_exists(conn) or not _index_delete_supported(conn):
+        return 0
+    fields = indexed_fields(conn)
+    if not fields:
+        return 0
+
+    indexed_files = {
+        int(row[0]): float(row[1] or 0.0)
+        for row in conn.execute(f"SELECT file_id, cached_mtime FROM {FILES_TABLE}")
+    }
+    current_files = {
+        int(row[0]): (int(row[1] or 0), float(row[2] or 0.0))
+        for row in conn.execute(
+            "SELECT id, message_count, cached_mtime FROM cached_files"
+        )
+    }
+    gone = set(indexed_files) - set(current_files)
+    todo = [
+        file_id
+        for file_id, (_, mtime) in current_files.items()
+        if file_id not in indexed_files or abs(indexed_files[file_id] - mtime) >= 1e-6
+    ]
+    if not gone and not todo:
+        return 0
+
+    placeholders = ",".join("?" * (len(fields) + 1))
+    insert_sql = (
+        f"INSERT INTO {FTS_TABLE}(rowid, {', '.join(fields)}) VALUES({placeholders})"
+    )
+    now = datetime.now(timezone.utc).isoformat()
+    if gone:
+        with write_transaction(conn):
+            for file_id in gone:
+                _delete_file_rows(conn, file_id)
+                conn.execute(f"DELETE FROM {FILES_TABLE} WHERE file_id = ?", (file_id,))
+    for file_id in todo:
+        with write_transaction(conn):
+            if file_id in indexed_files:
+                _delete_file_rows(conn, file_id)
+            _index_file(conn, file_id, fields, insert_sql)
+            message_count, mtime = current_files[file_id]
+            conn.execute(
+                f"INSERT INTO {FILES_TABLE}"
+                "(file_id, indexed_at, message_count, cached_mtime) "
+                "VALUES(?, ?, ?, ?) ON CONFLICT(file_id) DO UPDATE SET "
+                "indexed_at = excluded.indexed_at, "
+                "message_count = excluded.message_count, "
+                "cached_mtime = excluded.cached_mtime",
+                (file_id, now, message_count, mtime),
+            )
+    with write_transaction(conn):
+        _refresh_indexed_count(conn)
+    return len(todo) + len(gone)
+
+
 def reindex_files(
     conn: sqlite3.Connection,
     file_ids: Sequence[int],
@@ -793,7 +907,10 @@ def reindex_files(
     run `serve` pay one `sqlite_master` lookup and nothing else.
 
     Cheap enough for that path: ~180 ms for the largest file in an 8 GB
-    archive, and only files the cache actually rewrote are touched.
+    archive, and only files the cache actually rewrote are touched. Not
+    for a hierarchy pass, though: there the entry write holds the
+    database's single write lock, so the pass defers to `catch_up_index`
+    (see `index_maintenance_deferred`).
 
     Pass `commit=False` to join the caller's transaction rather than
     committing on its own.
