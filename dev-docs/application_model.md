@@ -230,11 +230,19 @@ announces what it is waiting for after 2 s, then runs and usually
 finds the work done;
 `CLAUDE_CODE_LOG_PASS_LOCK=<seconds>` bounds the wait (then
 `PassLockTimeout`, nothing converted) and `=0` disables the lock.
-Re-entrant within a process, which `serve`'s startup pass plus watch
-ticks rely on. Outside the gate, by design: the TUI's writes and a
+Re-entrant within a process (process-wide, not per thread), though
+nothing nests today: `serve` finishes its startup pass before its watch
+thread ticks. The lock is keyed on the resolved cache path, so a
+symlinked cache shares it. It degrades rather than fails: a lock file
+that cannot be created (read-only directory), is not SQLite (junk), or
+cannot be written (another user's; a read-only `BEGIN EXCLUSIVE`
+excludes nobody, which one rolled-back write inside the transaction
+makes surface) is announced by name and the pass runs without the
+lock. Outside the gate, by design: the TUI's writes and a
 single-file `convert_jsonl_to` are short transactions with the
 ordinary busy timeout, as before. `test_pass_lock.py` pins the
-waiting, the bound, the switch and two concurrent passes serialising.
+waiting, the bound, the switch, the three degrade cases, the symlink
+and two concurrent passes serialising.
 Measured on the 32 largest projects of a real archive (every file
 re-saved, two passes started together at `--jobs 8`): without the lock
 each pass took ~872 s and the pair re-saved 1.4x the files; with it the

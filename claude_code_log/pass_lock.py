@@ -22,11 +22,19 @@ unbounded by default; ``CLAUDE_CODE_LOG_PASS_LOCK=<seconds>`` bounds it
 (a pass that runs out of patience fails with `PassLockTimeout`), and
 ``=0`` disables the lock altogether.
 
-Re-entrant within a process: a pass already holding the lock does not
-wait on itself (``serve`` runs its startup pass and then ticks from a
-watch thread, never both at once). The TUI's writes and a single-file
-``convert_jsonl_to`` are short transactions outside any pass; they keep
-the ordinary busy timeout and are not gated here.
+Re-entrant within a process — process-wide, not per thread: a pass
+started while this process already holds the lock does not wait on
+itself. Nothing nests today (``serve`` finishes its startup pass before
+its watch thread starts ticking), so this is a guard against a future
+caller, not something the server relies on. The TUI's writes and a
+single-file ``convert_jsonl_to`` are short transactions outside any
+pass; they keep the ordinary busy timeout and are not gated here.
+
+The lock degrades rather than fails: when the lock file cannot be
+created (a read-only directory), is not a SQLite file (junk written
+there), or cannot be written (another user's file — a read-only
+``BEGIN EXCLUSIVE`` excludes nobody, so holding one would only pretend),
+the pass says so, names the file, and runs without the lock.
 """
 
 from __future__ import annotations
@@ -53,7 +61,12 @@ class PassLockTimeout(RuntimeError):
 
 
 def pass_lock_path(db_path: Path) -> Path:
-    """The lock file for ``db_path``: beside it, ``<name>.pass-lock``."""
+    """The lock file for ``db_path``: beside it, ``<name>.pass-lock``.
+
+    Keyed on the resolved path, so a cache reached through a symlink has
+    the same lock as the cache reached directly.
+    """
+    db_path = Path(db_path).resolve()
     return db_path.with_name(db_path.name + ".pass-lock")
 
 
@@ -101,6 +114,12 @@ def _acquire(
         while True:
             try:
                 conn.execute("BEGIN EXCLUSIVE")
+                # A file this process cannot write opens read-only, and a
+                # read-only exclusive transaction takes no lock at all. One
+                # write inside the transaction makes that surface here, as
+                # `attempt to write a readonly database`; it is rolled back
+                # with the lock, so the file stays empty.
+                conn.execute("PRAGMA user_version = 1")
                 return conn
             except sqlite3.OperationalError as exc:
                 if not is_busy_database_error(exc):
@@ -137,8 +156,9 @@ def pass_lock(
     Waits for another process's pass to finish (announcing that after
     ``notice_after`` seconds), re-enters freely within this process, and
     is a no-op when disabled by the environment — or when the lock file
-    cannot be created at all (a read-only directory), which is announced
-    rather than allowed to fail a pass that could otherwise run.
+    cannot be used (not creatable, not a database, not writable), which
+    is announced rather than allowed to fail a pass that could otherwise
+    run.
     """
     enabled, budget = _wait_budget()
     if not enabled:
@@ -162,7 +182,10 @@ def pass_lock(
 
     try:
         conn = _acquire(path, budget, notice_after, announce)
-    except sqlite3.OperationalError as exc:
+    except sqlite3.DatabaseError as exc:
+        # OperationalError (cannot create or write the file) and its parent
+        # DatabaseError (`file is not a database`): without the lock, not
+        # without the pass.
         announce(
             f"Warning: could not take the pass lock at {path} ({exc}); "
             "running without it"

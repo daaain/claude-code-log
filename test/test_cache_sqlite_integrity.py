@@ -702,7 +702,8 @@ class TestConnectionCensus:
         ("pass_lock.py", "_acquire"): (
             1,
             "the sidecar `<cache>.pass-lock` file, not the cache database: "
-            "holds `BEGIN EXCLUSIVE` as the pass lock and never writes a row",
+            "holds `BEGIN EXCLUSIVE` as the pass lock; its one write (a "
+            "`user_version` probe that surfaces a read-only file) is rolled back",
         ),
     }
 

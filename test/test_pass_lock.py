@@ -12,6 +12,7 @@ from __future__ import annotations
 import multiprocessing
 import os
 import sqlite3
+import sys
 import time
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
@@ -177,6 +178,97 @@ def test_waiting_is_announced_with_the_lock_file(
     out = capsys.readouterr().out
     assert "another claude-code-log pass" in out
     assert str(pass_lock_path(db_path)) in out
+
+
+def test_a_symlinked_cache_shares_its_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The lock is keyed on the resolved cache path: a pass reaching the
+    cache through a symlink waits on the pass holding it by its real path,
+    instead of taking a lock of its own beside the link."""
+    real = tmp_path / "real"
+    real.mkdir()
+    db_path = real / "cache.db"
+    db_path.write_bytes(b"")
+    link_dir = tmp_path / "link"
+    try:
+        link_dir.symlink_to(real, target_is_directory=True)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"cannot create a symlink here: {exc}")
+    linked_db = link_dir / "cache.db"
+    assert pass_lock_path(linked_db) == pass_lock_path(db_path)
+
+    pool, released, future = _spawn_holder(db_path)
+    try:
+        monkeypatch.setenv(ENV_PASS_LOCK, "0.3")
+        with pytest.raises(PassLockTimeout):
+            with pass_lock(linked_db):
+                pass
+    finally:
+        released.set()
+        future.result(timeout=60)
+        pool.shutdown(wait=True)
+
+
+_not_root = pytest.mark.skipif(
+    hasattr(os, "geteuid") and os.geteuid() == 0,  # pragma: no cover
+    reason="root ignores file modes",
+)
+
+
+def _degraded(announced: list[str], path: Path) -> bool:
+    return any("running without it" in m and str(path) in m for m in announced)
+
+
+def test_a_lock_file_that_is_not_a_database_is_announced_and_bypassed(
+    tmp_path: Path,
+) -> None:
+    """Junk in `<cache>.pass-lock` must not fail every pass from then on:
+    the pass says so, names the file, and runs without the lock."""
+    db_path = tmp_path / "cache.db"
+    lock_path = pass_lock_path(db_path)
+    lock_path.write_bytes(b"not a database\n" * 10)
+    announced: list[str] = []
+    with pass_lock(db_path, announce=announced.append):
+        pass
+    assert _degraded(announced, lock_path), announced
+
+
+@_not_root
+def test_a_read_only_lock_file_is_announced_and_bypassed(tmp_path: Path) -> None:
+    """A lock file this process cannot write (another user's, say) opens
+    read-only, and a read-only `BEGIN EXCLUSIVE` excludes nobody — so the
+    pass must not pretend to hold the lock: it announces and runs without."""
+    db_path = tmp_path / "cache.db"
+    lock_path = pass_lock_path(db_path)
+    with pass_lock(db_path):
+        pass  # creates the (empty) lock file
+    lock_path.chmod(0o444)
+    try:
+        announced: list[str] = []
+        with pass_lock(db_path, announce=announced.append):
+            pass
+        assert _degraded(announced, lock_path), announced
+    finally:
+        lock_path.chmod(0o644)
+
+
+@_not_root
+@pytest.mark.skipif(sys.platform == "win32", reason="directory modes are POSIX")
+def test_a_read_only_directory_is_announced_and_bypassed(tmp_path: Path) -> None:
+    """No lock file can be created beside the cache: announced, bypassed."""
+    cache_dir = tmp_path / "ro"
+    cache_dir.mkdir()
+    db_path = cache_dir / "cache.db"
+    cache_dir.chmod(0o555)
+    try:
+        announced: list[str] = []
+        with pass_lock(db_path, announce=announced.append):
+            pass
+        assert _degraded(announced, pass_lock_path(db_path)), announced
+        assert not pass_lock_path(db_path).exists()
+    finally:
+        cache_dir.chmod(0o755)
 
 
 def _entry_line(text: str) -> str:
