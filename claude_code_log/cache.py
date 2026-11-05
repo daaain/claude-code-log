@@ -1064,7 +1064,10 @@ def catch_up_search_index(db_path: Path) -> int:
         return 0
     try:
         return catch_up_index(conn)
-    except (sqlite3.Error, zlib.error) as exc:
+    # ValueError covers what `search.decode_entry` raises past zlib: a blob
+    # that decompresses but is not UTF-8 (UnicodeDecodeError) or not JSON
+    # (JSONDecodeError) — both subclasses, neither a zlib.error.
+    except (sqlite3.Error, zlib.error, ValueError) as exc:
         print(
             "Warning: the search index was not brought up to date "
             f"({exc}); the next run or `serve` start will do it."

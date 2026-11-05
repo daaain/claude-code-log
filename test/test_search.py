@@ -1161,6 +1161,69 @@ def test_a_catch_up_error_does_not_fail_the_pass(
         conn.close()
 
 
+@pytest.mark.parametrize(
+    "blob",
+    [
+        pytest.param(zlib.compress(b"\xff\xfe\x00 not utf-8"), id="not-utf8"),
+        pytest.param(zlib.compress(b"{not json"), id="not-json"),
+    ],
+)
+def test_an_undecodable_blob_in_the_catch_up_does_not_fail_the_pass(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    blob: bytes,
+) -> None:
+    """A blob that decompresses but is not UTF-8 JSON raises a ValueError
+    (UnicodeDecodeError, JSONDecodeError) from `decode_entry`, not a
+    zlib.error: the same warning, the pass returns and still checkpoints,
+    and the next pass that rewrites the file heals the index."""
+    from claude_code_log import converter
+    from claude_code_log.cache import get_cache_db_path
+    from claude_code_log.converter import process_projects_hierarchy
+
+    projects = tmp_path / "projects"
+    project = projects / "-home-u-proj"
+    project.mkdir(parents=True)
+    jsonl = project / "session.jsonl"
+    jsonl.write_text(_entry_line("the first version mentions kangaroo"))
+    process_projects_hierarchy(projects, silent=True)
+    db_path = get_cache_db_path(projects)
+    conn = sqlite3.connect(db_path)
+    ensure_index(conn)
+    # The file's cache row moved past its index entry (what an entry write
+    # does), and one of its blobs cannot be decoded.
+    conn.execute(
+        "UPDATE messages SET content = ? WHERE id = "
+        "(SELECT min(id) FROM messages WHERE file_id = 1)",
+        (blob,),
+    )
+    conn.execute("UPDATE cached_files SET cached_mtime = cached_mtime + 1 WHERE id = 1")
+    conn.commit()
+    conn.close()
+
+    checkpoints: list[Path] = []
+    monkeypatch.setattr(
+        converter, "checkpoint_wal", lambda path: checkpoints.append(path)
+    )
+    failed: list[str] = []
+    process_projects_hierarchy(projects, silent=True, failed_projects=failed)
+
+    assert failed == []
+    assert checkpoints == [db_path], "the WAL checkpoint was skipped"
+    assert "search index was not brought up to date" in capsys.readouterr().out
+
+    jsonl.write_text(_entry_line("the second version mentions platypus"))
+    bump_mtime(jsonl)
+    process_projects_hierarchy(projects, silent=True)
+    conn = sqlite3.connect(db_path)
+    try:
+        assert count_matches(conn, "platypus") == 1
+        assert count_matches(conn, "kangaroo") == 0
+    finally:
+        conn.close()
+
+
 def test_catch_up_index_tolerates_a_file_indexed_since_its_snapshot(
     cache: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
 ) -> None:
