@@ -150,7 +150,43 @@ cross-project `index.html` is written last). Workers
 run silent; the parent prints one progress line per project as results
 arrive. All workers share the WAL-mode SQLite cache DB — each writes
 only its own project's rows, and WAL serialises the short write
-transactions. A pool-level failure (e.g. a library caller without the
+transactions. Serialised is not the same as fair, though. SQLite does
+not queue writers: one that finds the lock taken polls with a growing
+back-off, and whoever is awake when it frees takes it, so a worker that
+has just committed tends to win again. Measured with eight processes doing
+back-to-back short write transactions for 20 s, the worst-off waited the
+full 20 s for a single turn — no long transaction required — and issue
+#332 lost 23 of 57 projects to `database is locked` this way. (A plain
+cross-process mutex is no better: the releaser re-acquires before a woken
+waiter runs.) So the pool shares one **fair write queue**
+([`write_queue.py`](../claude_code_log/write_queue.py)): a ticket lock
+the parent creates and each project worker installs as the pool's
+initializer. Every cache write goes through `cache.write_transaction`,
+which takes a turn, opens `BEGIN IMMEDIATE`, writes and commits. The same
+measurement under it gave every worker 90-91 transactions and a worst
+wait of 0.41 s. Inside a pass, then, no worker gives up on a sibling; the
+busy timeout (30 s, `$CLAUDE_CODE_LOG_CACHE_TIMEOUT`) only bites while a
+turn holder waits on a writer in *another* process (a TUI, a second
+`serve`). For that case a locked-out project is *deferred*, not failed:
+it prints `cache busy, will retry` and is converted again inline after the
+pool and the held-back projects have finished. Only a second lock-out is
+reported as a failure. Outside a pool no queue is installed and the turn
+is free. A worker that dies holding its turn (an OOM kill) leaves its
+siblings queued behind it, and `ProcessPoolExecutor` can miss that death
+under `spawn` — it starts workers on demand, and its manager thread may be
+waiting on a sentinel list that predates the dead one (reproduced on
+CPython 3.11: dead worker, exit code set, pool reporting healthy), so it
+only notices when another result arrives, which here is never. The pool is
+therefore drained through `write_queue.as_completed_watching_workers`,
+which checks the workers itself between results and, on any abrupt exit,
+terminates the rest and raises `BrokenProcessPool` into the inline
+fallback. The parent never installs a queue, so that fallback cannot meet
+the stuck one. `test_write_queue.py` pins it.
+Uncontended, the queue plus `BEGIN IMMEDIATE` add ~10 µs to the smallest
+write (`update_html_cache`, 46 → 56 µs) and nothing measurable to a
+session save; whole passes are unchanged at `--jobs 1` and within ~4%
+on a pooled incremental pass, the price of strict turn-taking.
+`serve` takes the same `--jobs` as the main command. A pool-level failure (e.g. a library caller without the
 `if __name__ == "__main__"` guard `spawn` needs) degrades to inline
 sequential processing with a warning rather than aborting.
 
@@ -212,6 +248,42 @@ cache row, the session is reparsed. The schema-version row also
 invalidates the entire HTML cache when migrations bump the version,
 since rendered output may have changed even when source data hasn't.
 
+**A refresh that stops part-way is redone, not trusted.** A refresh
+commits each file's entry rows in a transaction of its own, then writes
+the session rows and project aggregates derived from them. Staleness
+reads both halves: a file is modified when its `cached_files` row is
+older than the file, and a rendered session is stale when its `sessions`
+row disagrees with the `html_cache` row of its last render. So a refresh
+that stopped in between (a write lost to `database is locked`, issue
+#332, or a kill) left the files current and the session rows as old as
+the renders, and every later run reported the project as cached while
+its renders lacked the new messages. Since migration 015, every entry
+write sets `projects.refresh_pending` in its own transaction and
+`update_project_aggregates`, the last write of a complete refresh,
+clears it. A date-filtered refresh derives its session rows and
+aggregates from the entries in its window, so it never finishes a
+pending refresh (it passes `complete=False` and leaves the flag for the
+next unfiltered run), but it doesn't start one either: on a project
+that was not pending it restores the flag its own entry writes set.
+Codex projects are the exception, cleared by any run, since their
+renders re-parse every rollout. An unfiltered refresh, on either path, writes the session
+rows and the cross-session sidecar (§ 2.12) before it, and does not
+pass over a sidecar write it loses: the rolled-back write leaves the old
+sidecar in place, which the closing write would otherwise vouch for.
+Contention fails the refresh, to be redone; any other failure, which
+could recur on every run, drops the sidecar instead
+(`abandon_session_sidecar`), so readers fall back to the full load
+until one writes it afresh. While the flag is set,
+`get_modified_files()` reports every file, which every freshness gate reads (the hierarchy plan, the session-scoped
+and streaming paths, the TUI), and `ensure_fresh_cache` takes the full
+refresh rather than the incremental one (§ 2.14), whose closure could not
+cover rows a previous run left behind. That full refresh loads entries
+through the per-file check (`is_file_cached`), which the flag does not
+touch, so it re-parses only what really changed. The flag is
+project-wide and boolean: two processes refreshing the same project at
+once can still clear each other's, as they could already overwrite each
+other's session rows.
+
 **Corruption is recovered by discarding, not repairing.** A damaged
 cache file is unusable and, left alone, permanently so: `apply_migration`
 records only a migration that completed, so a `CREATE INDEX` that hits a
@@ -253,7 +325,9 @@ list against the cached `page_sessions` rows and reports
 
 Connections run in WAL mode with `synchronous=NORMAL` (durable across
 app crashes; only a power/OS crash can lose the last commit — fine for a
-regenerable cache). Both pragmas come from
+regenerable cache), plus `journal_size_limit` (64 MiB) so a WAL that
+grew under load is truncated back when it next resets instead of keeping
+its high-water mark on disk. The pragmas come from
 `migrations.runner.apply_write_pragmas`, which every *writing*
 connection applies — the two that open outside `CacheManager` included:
 the migration runner's own, which is what touches a brand-new database
@@ -355,6 +429,32 @@ the watch thread converts. A corrupt database drops the lease before
 the rebuild deletes the file, and the rest of that pass runs
 connection-per-call. Same pass with the lease: 5.3 s.
 
+**Keeping the WAL bounded.** SQLite only checkpoints passively on its
+own, and only *restarts* the log when no reader is using it; the other
+time it truncates is when the last connection closes. A pooled pass has
+readers and writers overlapping throughout (measured on test data: peak
+WAL ~3x the serial pass's, 26 MB against 8 MB for a 59 MB cache), and an
+interrupted pass, or another process holding the database open (the
+`serve` search API, a TUI), means the last close never happens — issue
+#332 found a 17.8 GB WAL beside a 6.35 GB cache, which the next start
+had to scan in full before anything could use it. So
+`process_projects_hierarchy` ends by calling `cache.checkpoint_wal`
+(`PRAGMA wal_checkpoint(TRUNCATE)` on its lease), as do `serve`'s index
+build and shutdown. It waits at most 2 s for readers — a TRUNCATE holds
+writers off while it waits — and a checkpoint that cannot finish is left
+for the next pass. A log that is *already* oversized (over
+`WAL_SIZE_LIMIT_BYTES`) when a pass or `serve` starts is compacted first,
+with a message and the ordinary busy timeout (`cache.trim_oversized_wal`):
+the first connection has to read the whole log to recover it anyway, and
+the checkpoint costs about as much again (2 GB: 1.1 s + 1.1 s on a warm
+Linux page cache; the reporter's disk ran ~30 MB/s), so paying it up front
+spares every read and write of the pass. Otherwise it costs one `stat`.
+Separately, `save_cached_entries` and
+`extend_cached_entries` serialise their entries (json + zlib, the part
+that scales with the session) *before* their first write, because
+Python's `sqlite3` takes the write lock at that write and every other
+process's writes wait for as long as it is held.
+
 Freshness checks are batched too (issue #12): `get_modified_files()`
 fetches every cached row for the project in one query (one connection
 open, or zero extra inside a `batch()` scope) and rules out
@@ -436,6 +536,14 @@ Current migrations:
     session-bearing row and *prefer* that to seeking the uuids a query
     asked for, so three queries had to move that predicate out of SQL
     and into Python to keep it from making them slower.
+- `015_project_refresh_pending.sql` — adds `refresh_pending` to
+  projects: an entry write whose derived session rows and aggregates
+  have not been written yet (§ 2.3). Existing rows start set, because a
+  cache written before it may already hold that damage and nothing else
+  can tell: one full refresh per project, from the cached entries, on
+  the first run after upgrading. For a Codex project that run also
+  re-renders every session page, because `render_provider_wholesale`
+  picks the pages to re-render from `get_modified_files`.
 
 Recreating-tables migrations toggle `PRAGMA foreign_keys = OFF/ON`
 around the rebuild to avoid losing rows to cascade-deletes during the
@@ -1027,8 +1135,9 @@ output files byte-identical on the two measured projects, with 64 and
 `CLAUDE_CODE_LOG_SESSION_SCOPED=0` disables the path for bisecting.
 Every decline (no sidecar yet, date filters, `--no-cache`, an
 inconsistent file map) falls back to the full load, whose behaviour is
-unchanged — the sidecar is an optimization input, never a correctness
-requirement.
+unchanged. A missing sidecar only costs that speed; a stale one would
+render wrongly, so an unfiltered cache refresh that cannot write it
+either fails and is redone or drops it (§ 2.3).
 
 ### 2.13 Page-granular streaming conversion
 

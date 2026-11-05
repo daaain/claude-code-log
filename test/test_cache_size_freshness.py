@@ -49,6 +49,10 @@ def project(tmp_path: Path) -> Path:
 def _cache(project: Path) -> CacheManager:
     cm = CacheManager(project, "test-version")
     cm.save_cached_entries(project / "s1.jsonl", [])
+    # Finish the refresh as ensure_fresh_cache would: a bare entry write
+    # leaves one pending (migration 015), and then every file reads as
+    # modified, whatever its own row says.
+    cm.update_project_aggregates(0, 0, 0, 0, 0, "", "")
     return cm
 
 

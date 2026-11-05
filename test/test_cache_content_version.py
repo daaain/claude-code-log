@@ -199,6 +199,10 @@ class TestBothFreshnessEntryPointsSeeTheColumn:
         db = tmp_path / "c.db"
         cm = CacheManager(project, "test-version", db_path=db)
         cm.save_cached_entries(project / "s1.jsonl", [])
+        # Finish the refresh as ensure_fresh_cache would: a bare entry write
+        # leaves one pending (migration 015), and then every file reads as
+        # modified, whatever its own row says.
+        cm.update_project_aggregates(0, 0, 0, 0, 0, "", "")
         return cm, project / "s1.jsonl", db
 
     def test_per_file_check_sees_a_foreign_version(self, cached):

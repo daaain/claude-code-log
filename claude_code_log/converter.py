@@ -12,7 +12,7 @@ import re
 import time
 from collections import defaultdict
 from collections.abc import Generator, Iterator
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -50,14 +50,22 @@ from .utils import (
     trunk_jsonl_files,
 )
 from .render_pool import RenderUnit, memory_capped_workers, resolve_render_jobs
+from .write_queue import (
+    WriteTurns,
+    as_completed_watching_workers,
+    install_write_turns,
+)
 from .render_dispatch import build_render_pool, dispatch_render_units
 from .cache import (
     CacheManager,
     SessionCacheData,
+    checkpoint_wal,
     connection_lease,
     get_all_cached_projects,
     get_cache_db_path,
     get_library_version,
+    is_busy_database_error,
+    trim_oversized_wal,
 )
 from .parser import parse_timestamp
 from .factories import create_transcript_entry
@@ -1344,6 +1352,7 @@ def load_directory_transcripts(
     to_date: Optional[str] = None,
     silent: bool = False,
     persist_sidecar: bool = False,
+    sidecar_required: bool = False,
 ) -> tuple[list[TranscriptEntry], SessionTree]:
     """Load all JSONL transcript files from a directory and combine them.
 
@@ -1356,6 +1365,9 @@ def load_directory_transcripts(
     session-scoped incremental path on later runs. Only the conversion's
     Phase-2 load passes it, and only for unfiltered loads — a date-filtered
     subset must never masquerade as the whole project's sidecar.
+    ``sidecar_required`` makes a failed sidecar write raise on
+    contention or drop the sidecar otherwise, instead of only being
+    logged: the cache refresh passes it, see ``_persist_session_sidecar``.
     """
     all_messages: list[TranscriptEntry] = []
 
@@ -1429,7 +1441,9 @@ def load_directory_transcripts(
     )
 
     if persist_sidecar and cache_manager is not None:
-        _persist_session_sidecar(cache_manager, all_messages, tree)
+        _persist_session_sidecar(
+            cache_manager, all_messages, tree, required=sidecar_required
+        )
 
     return all_entries, tree
 
@@ -1438,6 +1452,7 @@ def _persist_session_sidecar(
     cache_manager: "CacheManager",
     all_messages: list[TranscriptEntry],
     tree: SessionTree,
+    required: bool = False,
 ) -> None:
     """Project this load's cross-session facts into the cache sidecar.
 
@@ -1494,9 +1509,15 @@ def _persist_session_sidecar(
     try:
         cache_manager.save_session_sidecar(sidecar)
     except Exception as e:
-        # The sidecar is an optimization input, never a correctness
-        # requirement — a failed write only means the next incremental
-        # run takes the full-load path.
+        # A failed write rolls back and leaves the previous sidecar in
+        # place, which later runs keep trusting. During a cache refresh
+        # (``required``) the closing aggregate write would vouch for it,
+        # so the refresh fails on contention or drops the sidecar
+        # (``abandon_session_sidecar``). A rewrite after a complete
+        # refresh is safe to lose: the sidecar it would replace already
+        # describes the current files.
+        if required:
+            cache_manager.abandon_session_sidecar(e)
         logging.getLogger(__name__).warning("Failed to persist session sidecar: %s", e)
 
 
@@ -4402,7 +4423,9 @@ def _incremental_cache_refresh(
     exactly what the full path would write for those files, so a
     declined attempt never leaves inconsistent state — the crash-window
     posture (per-file commits before fact writes) likewise matches the
-    full path's.
+    full path's, and so does its recovery: those commits set
+    ``refresh_pending`` (migration 015), which only the closing aggregate
+    write clears, so a refresh that stops between them is redone whole.
     """
     from .cache import CachedFileState
     from .entry_store import PendingStamp
@@ -4743,6 +4766,17 @@ def _incremental_cache_refresh(
                     latest = ts
 
         cache_manager.update_session_cache(p_rows)
+        try:
+            cache_manager.merge_session_sidecar(
+                parent_updates, junction_replacements, winner_upserts
+            )
+        except Exception as e:
+            cache_manager.abandon_session_sidecar(e)
+            logging.getLogger(__name__).warning(
+                "Failed to merge session sidecar, dropped it: %s", e
+            )
+        # Last, because it clears ``refresh_pending``: every write of the
+        # refresh must have landed before the project may read current.
         cache_manager.update_project_aggregates(
             total_message_count=cached_project.total_message_count
             + d_count
@@ -4754,9 +4788,6 @@ def _incremental_cache_refresh(
             total_cache_read_tokens=cached_project.total_cache_read_tokens + d_cr,
             earliest_timestamp=earliest,
             latest_timestamp=latest,
-        )
-        cache_manager.merge_session_sidecar(
-            parent_updates, junction_replacements, winner_upserts
         )
     return True
 
@@ -4862,12 +4893,15 @@ def ensure_fresh_cache_detailed(
         # files over a populated cache, refresh from those files' bounded
         # closure instead of loading the whole project. Declines (False)
         # fall through to the unchanged full load below.
+        # Not after a refresh that never finished (migration 015): which
+        # session rows it left behind is unknown, so no closure is bounded.
         if (
             from_date is None
             and to_date is None
             and modified_files
             and cached_project_data is not None
             and cached_project_data.total_message_count > 0
+            and not cached_project_data.refresh_pending
             and _incremental_refresh_enabled()
         ):
             if _incremental_cache_refresh(
@@ -4894,15 +4928,34 @@ def ensure_fresh_cache_detailed(
             # per-file writes). This is what lets the streaming path run
             # right after a cache update without a second full load.
             persist_sidecar=(from_date is None and to_date is None),
+            sidecar_required=True,
         )
 
-        # Update cache with fresh data
-        _update_cache_with_session_data(cache_manager, messages)
+        # Update cache with fresh data. A date-filtered load derives these
+        # rows from its window only, so it must not finish a refresh an
+        # earlier run left pending; nor does it start one: on a project
+        # that was not pending, it restores the flag its own entry writes
+        # set (an interrupted filtered refresh never gets here).
+        # ``cached_project_data`` was read before this refresh's first
+        # entry write. Limit, shared with every clearing write: another
+        # process's refresh that sets the flag and fails while this one
+        # runs is cleared here; closing that needs a write generation, not
+        # a boolean.
+        was_pending = (
+            cached_project_data is not None and cached_project_data.refresh_pending
+        )
+        _update_cache_with_session_data(
+            cache_manager,
+            messages,
+            complete=not (from_date or to_date) or not was_pending,
+        )
     return CacheRefresh.FULL
 
 
 def _update_cache_with_session_data(
-    cache_manager: CacheManager, messages: list[TranscriptEntry]
+    cache_manager: CacheManager,
+    messages: list[TranscriptEntry],
+    complete: bool = True,
 ) -> None:
     """Update cache with session and project aggregate data.
 
@@ -4933,7 +4986,9 @@ def _update_cache_with_session_data(
     cache_manager.update_session_cache(sessions_cache_data)
 
     aggregates = compute_project_aggregates(messages)
-    cache_manager.update_project_aggregates(**aggregates)
+    # ``complete=False`` leaves ``refresh_pending`` set: a date-filtered
+    # load of a project an earlier refresh left pending.
+    cache_manager.update_project_aggregates(**aggregates, complete=complete)
 
 
 def _attach_session_residuals(
@@ -5927,6 +5982,11 @@ def render_provider_wholesale(
                 # ``has_provider_token_totals``.
                 if has_provider_token_totals:
                     project_aggregates.update(project_token_totals)
+                # Clears refresh_pending even after a filtered load: v1
+                # re-parses every rollout and recomputes every session row
+                # each run, and is_transcript_stale catches a filtered
+                # render, so the flag would only add a re-render to every
+                # filtered run (it saves entries, which set it, each run).
                 cache.update_project_aggregates(**project_aggregates)
             session_counts = {
                 sid: sd.message_count for sid, sd in merged_session_data.items()
@@ -6449,7 +6509,7 @@ def _plan_project(
 
 def _convert_project_worker(
     worker_args: Dict[str, Any],
-) -> "tuple[str, float, Optional[str]]":
+) -> "tuple[str, float, Optional[str], bool]":
     """Convert one project inside a pool worker process.
 
     ``worker_args`` is a complete keyword-argument set for
@@ -6460,15 +6520,19 @@ def _convert_project_worker(
     Module-level, with dict-of-picklables in and primitives out, so it
     works under the ``spawn`` start method. Failures are returned as a
     formatted traceback instead of raised so the parent can attribute
-    them to the right project and keep processing the rest.
+    them to the right project and keep processing the rest. The last
+    element says whether the failure was lock contention on the cache
+    database, which the parent retries rather than reports.
     """
     start = time.monotonic()
     error: Optional[str] = None
+    busy = False
     try:
         convert_jsonl_to(**worker_args)
-    except Exception:
+    except Exception as exc:
         error = traceback.format_exc()
-    return (str(worker_args["input_path"]), time.monotonic() - start, error)
+        busy = is_busy_database_error(exc)
+    return (str(worker_args["input_path"]), time.monotonic() - start, error, busy)
 
 
 def process_projects_hierarchy(
@@ -6492,6 +6556,7 @@ def process_projects_hierarchy(
     theme: str = DEFAULT_THEME,
     jobs: Optional[int] = None,
     entry_store: "Optional[ParsedEntryStore]" = None,
+    failed_projects: Optional[List[str]] = None,
 ) -> Path:
     """Process the entire ~/.claude/projects/ hierarchy and create linked output files.
 
@@ -6502,6 +6567,11 @@ def process_projects_hierarchy(
     Windows. See the lease's module comment in ``cache.py`` for the
     mechanism. The lease is released when this returns, so no handle
     outlives the pass. Everything else is documented on the body.
+
+    A project that fails is reported and the pass goes on. Pass a list as
+    ``failed_projects`` to have the name of each such project appended to
+    it, so a caller can tell a complete pass from one that lost projects
+    (the CLI exits non-zero on the latter).
     """
     lease = (
         connection_lease(get_cache_db_path(projects_path))
@@ -6509,7 +6579,11 @@ def process_projects_hierarchy(
         else contextlib.nullcontext()
     )
     with lease:
-        return _process_projects_hierarchy(
+        if use_cache:
+            # Inside the lease, so the connection that recovers the log
+            # is the one the pass then keeps.
+            trim_oversized_wal(get_cache_db_path(projects_path))
+        result = _process_projects_hierarchy(
             projects_path=projects_path,
             from_date=from_date,
             to_date=to_date,
@@ -6530,7 +6604,13 @@ def process_projects_hierarchy(
             theme=theme,
             jobs=jobs,
             entry_store=entry_store,
+            failed_projects=failed_projects,
         )
+        if use_cache:
+            # The pass's workers have all exited, so this is the moment the
+            # WAL can be reset — see `checkpoint_wal` (issue #332).
+            checkpoint_wal(get_cache_db_path(projects_path))
+        return result
 
 
 def _write_recent_page(
@@ -6591,6 +6671,7 @@ def _process_projects_hierarchy(
     theme: str = DEFAULT_THEME,
     jobs: Optional[int] = None,
     entry_store: "Optional[ParsedEntryStore]" = None,
+    failed_projects: Optional[List[str]] = None,
 ) -> Path:
     """Process the entire ~/.claude/projects/ hierarchy and create linked output files.
 
@@ -6622,6 +6703,8 @@ def _process_projects_hierarchy(
         theme: HTML theme (see ``convert_jsonl_to``). The theme shares
             filenames with every other theme, so it reaches the per-project
             staleness plan (``_plan_project``) as well as the conversion.
+        failed_projects: When given, the names of the projects that failed
+            are appended to it (see ``process_projects_hierarchy``).
     """
     import time
 
@@ -6913,10 +6996,31 @@ def _process_projects_hierarchy(
             "render_jobs": render_jobs,
         }
 
+    # Projects that failed only because another process held the cache's
+    # write lock past the busy timeout. SQLite has one writer at a time, so
+    # with a pool of project workers (plus anything else sharing the cache,
+    # such as a TUI) a long write can lock the others out — issue #332 lost
+    # 23 of 57 projects that way in one `serve` start. The conversion is
+    # idempotent (staleness is re-derived from the cache), so such a
+    # project is retried once the pool has drained and nothing else in
+    # this pass is writing, instead of being reported as failed.
+    locked_out: List[_ProjectPlan] = []
+
+    def _defer_locked_out(plan: _ProjectPlan) -> None:
+        locked_out.append(plan)
+        print(f"  {plan.project_dir.name}: cache busy, will retry")
+
     def _convert_plan_inline(
-        plan: _ProjectPlan, render_jobs: Optional[int] = None
+        plan: _ProjectPlan,
+        render_jobs: Optional[int] = None,
+        *,
+        final_attempt: bool = False,
     ) -> None:
-        """Convert one project in this process, reporting progress/failure."""
+        """Convert one project in this process, reporting progress/failure.
+
+        A lock-contention failure is deferred for retry unless this is
+        already the ``final_attempt``.
+        """
         if render_jobs is None:
             render_jobs = per_project_render_jobs
         project_start_time = time.monotonic()
@@ -6933,7 +7037,10 @@ def _process_projects_hierarchy(
                 **_conversion_kwargs(plan, silent=silent, render_jobs=render_jobs),
                 entry_store=entry_store,
             )
-        except Exception:
+        except Exception as exc:
+            if not final_attempt and is_busy_database_error(exc):
+                _defer_locked_out(plan)
+                return
             _print_project_failed(plan, traceback.format_exc())
             return
         _print_project_done(plan, time.monotonic() - project_start_time)
@@ -6954,7 +7061,17 @@ def _process_projects_hierarchy(
             # each and are reused across projects, so the overhead is a
             # one-off ~1s per worker.
             ctx = multiprocessing.get_context("spawn")
-            with ProcessPoolExecutor(max_workers=resolved_jobs, mp_context=ctx) as pool:
+            # One fair queue for the database's write lock, shared by every
+            # project worker — see `write_queue`. Installed only in the
+            # workers: the parent writes nothing while the pool runs, and
+            # must not inherit a queue a crashed worker may have left stuck
+            # when it falls back to converting inline below.
+            with ProcessPoolExecutor(
+                max_workers=resolved_jobs,
+                mp_context=ctx,
+                initializer=install_write_turns,
+                initargs=(WriteTurns(ctx),),
+            ) as pool:
                 future_to_plan = {
                     pool.submit(
                         _convert_project_worker,
@@ -6970,11 +7087,16 @@ def _process_projects_hierarchy(
                     ): plan
                     for plan in by_size
                 }
-                for future in as_completed(future_to_plan):
+                # Not plain `as_completed`: a worker that dies holding its
+                # write turn would leave the rest queued behind it, and the
+                # executor can miss the death — see `write_queue`.
+                for future in as_completed_watching_workers(pool, future_to_plan):
                     plan = future_to_plan[future]
-                    _dir, elapsed, error = future.result()
+                    _dir, elapsed, error, busy = future.result()
                     settled.add(id(plan))
-                    if error is not None:
+                    if error is not None and busy:
+                        _defer_locked_out(plan)
+                    elif error is not None:
                         _print_project_failed(plan, error)
                     else:
                         _print_project_done(plan, elapsed)
@@ -7001,6 +7123,14 @@ def _process_projects_hierarchy(
     # run ends on the project that dominates the wall.
     for plan in reversed(holdbacks):
         _convert_plan_inline(plan, render_jobs=min(render_budget, job_budget))
+
+    # Everything this pass writes has now finished, so a project locked out
+    # above meets only writers from *other* processes on its retry. A
+    # second lock-out is reported as the failure it then is.
+    for plan in locked_out:
+        _convert_plan_inline(
+            plan, render_jobs=min(render_budget, job_budget), final_attempt=True
+        )
 
     # ---- Phase 3 (collect): aggregate per-project index data from the
     # now-fresh cache. Sequential — cheap cache reads (the no-cache
@@ -7122,6 +7252,8 @@ def _process_projects_hierarchy(
                 project_dir, cache_manager, from_date, to_date, silent=silent
             )
             # Ensure cache is populated with session data (including working directories)
+            # Reached only without a project row, so no refresh is pending
+            # here and the default ``complete`` is right even when filtered.
             if cache_manager:
                 _update_cache_with_session_data(cache_manager, messages)
             if from_date or to_date:
@@ -7226,6 +7358,7 @@ def _process_projects_hierarchy(
 
     # Process archived projects (projects in cache but without JSONL files)
     archived_project_count = 0
+    archived_failures: List[str] = []
     for archived_dir in sorted(archived_project_dirs):
         try:
             # Initialize cache manager for archived project
@@ -7323,6 +7456,7 @@ def _process_projects_hierarchy(
             )
         except Exception as e:
             print(f"Warning: Failed to process archived project {archived_dir}: {e}")
+            archived_failures.append(archived_dir.name)
             continue
 
     # Update total projects count to include archived
@@ -7388,11 +7522,24 @@ def _process_projects_hierarchy(
         for error in stats.errors:
             print(f"  Error ({project_name}): {error}")
 
+    # A project can fail at more than one stage; count it once. Failures
+    # used to show only as warnings in a long log, under an exit status of
+    # 0, so an unattended run lost projects silently (issue #332).
+    failed = list(
+        dict.fromkeys(
+            [name for name, stats in project_stats if stats.errors] + archived_failures
+        )
+    )
+    if failed_projects is not None:
+        failed_projects.extend(failed)
+
     # Global summary
     summary_parts: List[str] = []
     summary_parts.append(f"Processed {total_projects} projects in {elapsed:.1f}s")
     if projects_with_updates > 0:
         summary_parts.append(f"  {projects_with_updates} projects updated")
+    if failed:
+        summary_parts.append(f"  {len(failed)} projects failed: {', '.join(failed)}")
     print("\n".join(summary_parts))
 
     # Show archived sessions note if any exist

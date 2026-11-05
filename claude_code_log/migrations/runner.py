@@ -1,11 +1,45 @@
 """Migration runner for SQLite cache database."""
 
 import hashlib
+import os
 import re
 import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import List, Tuple
+
+
+# The WAL file's size, in bytes, that SQLite truncates it back to whenever
+# the log resets. Left at SQLite's default (no limit) a WAL never shrinks:
+# it keeps its high-water mark on disk, and one busy pass — many workers
+# writing while others hold read snapshots, so no checkpoint can reset the
+# log — left a 17.8 GB WAL beside a 6.35 GB cache (issue #332). The next
+# start then has to scan all of it to rebuild the WAL index before anyone
+# can proceed. 64 MiB leaves steady-state commits free of truncate churn.
+WAL_SIZE_LIMIT_BYTES = 64 * 1024 * 1024
+
+_DEFAULT_BUSY_TIMEOUT_SECONDS = 30.0
+
+
+def cache_busy_timeout() -> float:
+    """Seconds a cache connection waits on a lock before giving up.
+
+    ``$CLAUDE_CODE_LOG_CACHE_TIMEOUT`` overrides the 30 s default, for an
+    archive on a slow or scanned (antivirus) disk where one write can
+    outlast it. An unparsable or non-positive value falls back to the
+    default rather than turning every connection into a zero-wait one.
+    Read on each call because spawned pool workers inherit the
+    environment, not this process's state.
+    """
+    raw = os.environ.get("CLAUDE_CODE_LOG_CACHE_TIMEOUT", "").strip()
+    if raw:
+        try:
+            value = float(raw)
+        except ValueError:
+            value = 0.0
+        if value > 0:
+            return value
+    return _DEFAULT_BUSY_TIMEOUT_SECONDS
 
 
 def apply_write_pragmas(conn: sqlite3.Connection) -> None:
@@ -31,9 +65,13 @@ def apply_write_pragmas(conn: sqlite3.Connection) -> None:
     ``synchronous`` is set first because the switch into WAL is itself a
     write: at the default FULL it fsyncs for its own transition, which
     costs one of the eight fsyncs a fresh database otherwise pays.
+
+    ``journal_size_limit`` rides along because it is per-connection too,
+    and only a writer's setting matters — see ``WAL_SIZE_LIMIT_BYTES``.
     """
     conn.execute("PRAGMA synchronous = NORMAL")
     conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute(f"PRAGMA journal_size_limit = {WAL_SIZE_LIMIT_BYTES}")
 
 
 def _get_migrations_dir() -> Path:
@@ -185,7 +223,7 @@ def run_migrations(db_path: Path) -> int:
     Returns:
         Number of migrations applied
     """
-    conn = sqlite3.connect(db_path, timeout=30.0)
+    conn = sqlite3.connect(db_path, timeout=cache_busy_timeout())
     # Everything after the connect goes inside the try, so no failure can
     # leave the handle open. That matters most for the pragmas: they are the
     # first statements here that touch the file, so they are what raises on a
