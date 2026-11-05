@@ -206,8 +206,22 @@ class SearchApi:
         }
 
     def routes(self) -> dict[str, Callable[[dict[str, str]], Any]]:
-        return {
+        def clean_corruption(
+            handler: Callable[[dict[str, str]], Any],
+        ) -> Callable[[dict[str, str]], Any]:
+            def wrapped(params: dict[str, str]) -> Any:
+                try:
+                    return handler(params)
+                except sqlite3.DatabaseError as exc:
+                    if not is_corrupt_database_error(exc):
+                        raise
+                    raise ValueError(f"cache database is unreadable ({exc})") from exc
+
+            return wrapped
+
+        routes = {
             "/api/ping": self.ping,
             "/api/search": self.search,
             "/api/projects": self.projects,
         }
+        return {path: clean_corruption(handler) for path, handler in routes.items()}

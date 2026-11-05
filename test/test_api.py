@@ -299,6 +299,37 @@ def test_projects_does_not_hide_other_database_errors(tmp_path: Path) -> None:
         api.projects({})
 
 
+def test_damaged_fts_page_is_a_clean_search_error(
+    db_path: Path, tmp_path: Path
+) -> None:
+    with sqlite3.connect(db_path) as conn:
+        page_size = conn.execute("PRAGMA page_size").fetchone()[0]
+        root_page = conn.execute(
+            "SELECT rootpage FROM sqlite_master WHERE name = 'message_fts_data'"
+        ).fetchone()[0]
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    with db_path.open("r+b") as db:
+        db.seek((root_page - 1) * page_size)
+        db.write(b"\x00" * page_size)
+
+    api = SearchApi(db_path)
+    with ArchiveServer(tmp_path, api_routes=api.routes(), port=0) as server:
+        with pytest.raises(urllib.error.HTTPError) as error:
+            urllib.request.urlopen(f"{server.url}/api/search?q=pydantic")
+        assert error.value.code == 400
+        message = json.loads(error.value.read())["error"]
+        assert "cache database is unreadable" in message
+        assert "DatabaseError(" not in message
+
+
+def test_route_does_not_hide_other_database_errors(tmp_path: Path) -> None:
+    path = tmp_path / "cache.db"
+    sqlite3.connect(path).close()
+    handler = SearchApi(path).routes()["/api/projects"]
+    with pytest.raises(sqlite3.OperationalError, match="no such table: projects"):
+        handler({})
+
+
 # --- the performance contract --------------------------------------------
 
 
