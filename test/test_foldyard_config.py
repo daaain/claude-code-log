@@ -20,9 +20,11 @@ import pytest
 tomllib = pytest.importorskip("tomllib")
 
 REPO = Path(__file__).resolve().parents[1]
-NATIVE_DEPS = (
-    Path(playwright.__path__[0]) / "driver/package/lib/server/registry/nativeDeps.js"
-)
+#: Where Playwright's per-distro package lists live. Since 1.64 the driver is
+#: bundled, and they sit in coreBundle.js (before that, in
+#: server/registry/nativeDeps.js). If a bump moves them again, this test fails
+#: with FileNotFoundError or at the parse, and this path is what to update.
+NATIVE_DEPS = Path(playwright.__path__[0]) / "driver/package/lib/coreBundle.js"
 #: The box's base: foldyard's packaged generic box is Debian trixie.
 DISTRO = "debian13"
 
