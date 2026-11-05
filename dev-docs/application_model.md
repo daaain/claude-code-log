@@ -241,8 +241,10 @@ makes surface) is announced by name and the pass runs without the
 lock. Outside the gate, by design: the TUI's writes and a
 single-file `convert_jsonl_to` are short transactions with the
 ordinary busy timeout, as before. `test_pass_lock.py` pins the
-waiting, the bound, the switch, the three degrade cases, the symlink
-and two concurrent passes serialising.
+waiting, the bound, the switch, the three degrade cases, the symlink,
+two concurrent passes serialising, and that the lock is held through
+the WAL trim, the index catch-up and the checkpoint
+(`pass_lock.pass_lock_held`, recorded from inside each).
 Measured on the 32 largest projects of a real archive (every file
 re-saved, two passes started together at `--jobs 8`): without the lock
 each pass took ~872 s and the pair re-saved 1.4x the files; with it the

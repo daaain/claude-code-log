@@ -97,6 +97,16 @@ _holders: Dict[str, Tuple[sqlite3.Connection, int]] = {}
 _guard = threading.Lock()
 
 
+def pass_lock_held(db_path: Path) -> bool:
+    """Whether this process holds the pass lock for ``db_path``'s cache.
+
+    For tests pinning what runs under the lock; a disabled or degraded
+    lock is never "held".
+    """
+    with _guard:
+        return str(pass_lock_path(db_path)) in _holders
+
+
 def _acquire(
     path: Path,
     budget: Optional[float],
