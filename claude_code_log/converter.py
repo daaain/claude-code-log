@@ -6584,14 +6584,26 @@ def process_projects_hierarchy(
     it, so a caller can tell a complete pass from one that lost projects
     (the CLI exits non-zero on the latter).
     """
+    from .pass_lock import pass_lock
     from .search import deferred_index_maintenance
 
+    # One pass at a time per cache file (see `pass_lock`): a second pass,
+    # or a `serve --watch` tick beside a CLI run, waits here instead of
+    # competing for the write lock with a queue of its own. Taken before
+    # the lease and the WAL trim, released after the index catch-up and
+    # the checkpoint below, so the waiting pass never contends with the
+    # serial catch-up and starts on a current index and a reset log.
+    lock = (
+        pass_lock(get_cache_db_path(projects_path))
+        if use_cache
+        else contextlib.nullcontext()
+    )
     lease = (
         connection_lease(get_cache_db_path(projects_path))
         if use_cache
         else contextlib.nullcontext()
     )
-    with lease:
+    with lock, lease:
         if use_cache:
             # Inside the lease, so the connection that recovers the log
             # is the one the pass then keeps.
