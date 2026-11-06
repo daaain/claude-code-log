@@ -1,15 +1,16 @@
 """A refresh that fails part-way must not leave the project looking current.
 
-A cache refresh writes each transcript file's entry rows in its own
-transaction, and only afterwards the per-session rows and project
-aggregates derived from them. Staleness reads both halves: a file is
-modified when its ``cached_files`` row is older than the file, and a
-rendered session is stale when its ``sessions`` row disagrees with the
-``html_cache`` row of its last render. A write that fails in between
-(``database is locked`` under ``--all-projects``, issue #332, or a kill)
-used to leave the files fresh and the session rows as old as the
-renders, so every later run said "cached" and never rendered the
-missing messages.
+A cache refresh writes each transcript file's entry rows, and the
+per-session rows and project aggregates derived from them. Staleness
+reads both halves: a file is modified when its ``cached_files`` row is
+older than the file, and a rendered session is stale when its
+``sessions`` row disagrees with the ``html_cache`` row of its last
+render. When each of those writes was a transaction of its own, a write
+that failed in between (``database is locked`` under ``--all-projects``,
+issue #332, or a kill) left the files fresh and the session rows as old
+as the renders, so every later run said "cached" and never rendered the
+missing messages. A refresh now commits whole or not at all
+(``CacheManager.atomic_refresh``), and a failed one is redone.
 
 These tests fail one write of a real refresh with the error SQLite
 raises under lock contention, then run again cleanly and check that the
@@ -200,10 +201,9 @@ def test_a_locked_out_project_ends_up_rendered(
     """Whichever write the lock-out hits, every session ends up rendered.
 
     ``next-run``: the pass's in-pass retry is off, so the project fails
-    and must be repaired by the next run — issue #332's shape, and the one
-    the ``refresh_pending`` flag exists for. ``in-pass-retry``: the retry
-    repairs it within the failing pass itself, which it can only do for a
-    refresh-phase lock-out through that same flag.
+    and must be repaired by the next run — issue #332's shape.
+    ``in-pass-retry``: the retry repairs it within the failing pass
+    itself.
     """
     project = _build_project(tmp_path)
     projects_dir = project.parent
@@ -250,34 +250,6 @@ def test_a_locked_out_project_ends_up_rendered(
 
     _run(projects_dir)
     assert stale() == [], "sessions never re-rendered after the failed refresh"
-
-
-def test_a_failed_refresh_leaves_every_file_reported_modified(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The flag that carries the failure from one run to the next."""
-    project = _build_project(tmp_path)
-    monkeypatch.setenv("CLAUDE_CODE_LOG_CACHE_PATH", str(tmp_path / "cache.db"))
-    _run(project.parent)
-    files = sorted(project.glob("*.jsonl"))
-
-    manager = CacheManager(project, get_library_version())
-    assert manager.get_modified_files(files) == []
-
-    # An entry write alone — the derived rows not yet recomputed.
-    from claude_code_log.converter import load_transcript
-
-    _append(files[0], _turn(files[0].stem, 1, "late"))
-    manager.save_cached_entries(files[0], load_transcript(files[0], silent=True))
-    assert sorted(manager.get_modified_files(files)) == files
-
-    # A fresh manager (a later run) sees the same.
-    later = CacheManager(project, get_library_version())
-    assert sorted(later.get_modified_files(files)) == files
-
-    # Recomputing the derived rows is what clears it.
-    _run(project.parent)
-    assert CacheManager(project, get_library_version()).get_modified_files(files) == []
 
 
 def _resumed_session(sid: str, parent_sid: str) -> List[Dict[str, Any]]:
@@ -459,17 +431,15 @@ def test_a_sidecar_that_cannot_be_written_is_dropped_not_trusted(
     assert repaired == reference
 
 
-def test_a_date_filtered_run_finishes_a_pending_refresh_in_full(
+def test_a_date_filtered_run_refreshes_the_cache_in_full(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A date-filtered run refreshes the cache as an unfiltered one would.
 
-    Its window applies to what it renders, not to what it refreshes, so
-    the refresh it runs over a pending project is a complete one: it may
-    clear ``refresh_pending``, because the session rows and aggregates it
-    writes count every message, including those outside the window, and
-    the next unfiltered run renders them.
+    Its window applies to what it renders, not to what it refreshes: the
+    session rows and aggregates it writes count every message, including
+    those outside the window, and the next unfiltered run renders them.
     """
     project = _build_project(tmp_path)
     projects_dir = project.parent
@@ -482,14 +452,6 @@ def test_a_date_filtered_run_finishes_a_pending_refresh_in_full(
             entry["timestamp"] = entry["timestamp"].replace("01-01", "01-02")
         _append(project / f"{sid}.jsonl", late)
 
-    # A refresh pending, as migration 015 leaves every project it
-    # upgrades (a refresh commits whole or not at all, so nothing in a
-    # run leaves the flag set any more).
-    with sqlite3.connect(tmp_path / "cache.db") as conn:
-        conn.execute("UPDATE projects SET refresh_pending = 1")
-    pending = CacheManager(project, get_library_version()).get_cached_project_data()
-    assert pending is not None and pending.refresh_pending
-
     # A window holding only the first day, not the late turn.
     process_projects_hierarchy(
         projects_dir,
@@ -500,7 +462,7 @@ def test_a_date_filtered_run_finishes_a_pending_refresh_in_full(
         to_date="2026-01-01",
     )
     after = CacheManager(project, get_library_version()).get_cached_project_data()
-    assert after is not None and not after.refresh_pending
+    assert after is not None
     assert {sid: s.message_count for sid, s in after.sessions.items()} == {
         sid: 4 for sid in SESSIONS
     }, "the rows count the window, not the files"
@@ -546,5 +508,5 @@ def test_a_date_filtered_run_does_not_start_a_pending_refresh(
     )
     manager = CacheManager(project, get_library_version())
     data = manager.get_cached_project_data()
-    assert data is not None and not data.refresh_pending
+    assert data is not None
     assert manager.get_modified_files(files) == []

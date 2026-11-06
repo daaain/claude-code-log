@@ -4435,11 +4435,10 @@ def _incremental_cache_refresh(
     exceeding a third of the project's files (past which the full load
     is competitive anyway). Message rows written before a decline are
     exactly what the full path would write for those files, so a
-    declined attempt never leaves inconsistent state — the crash-window
-    posture (per-file commits before fact writes) likewise matches the
-    full path's, and so does its recovery: those commits set
-    ``refresh_pending`` (migration 015), which only the closing aggregate
-    write clears, so a refresh that stops between them is redone whole.
+    declined attempt never leaves inconsistent state: the caller runs
+    both inside one ``atomic_refresh`` scope, where the attempt's rows
+    wait in the spool for the full load to pick up, and nothing commits
+    until the refresh that finishes does, whole.
     """
     from .cache import CachedFileState
     from .entry_store import PendingStamp
@@ -4789,8 +4788,6 @@ def _incremental_cache_refresh(
             logging.getLogger(__name__).warning(
                 "Failed to merge session sidecar, dropped it: %s", e
             )
-        # Last, because it clears ``refresh_pending``: every write of the
-        # refresh must have landed before the project may read current.
         cache_manager.update_project_aggregates(
             total_message_count=cached_project.total_message_count
             + d_count
@@ -4904,11 +4901,7 @@ def ensure_fresh_cache_detailed(
         # spool, the session rows, sidecar and aggregates derived from
         # them are deferred, and the scope's end commits all of it at
         # once. A refresh that stops anywhere in between leaves the
-        # cache as it was, with nothing recorded as current. Limit,
-        # shared with every clearing write: another process's refresh
-        # that sets ``refresh_pending`` and fails while this one runs
-        # is cleared here; closing that needs a write generation, not
-        # a boolean.
+        # cache as it was, with nothing recorded as current.
         with cache_manager.atomic_refresh():
             # Streaming stage 4: when the update is driven purely by
             # changed files over a populated cache, refresh from those
@@ -4917,14 +4910,10 @@ def ensure_fresh_cache_detailed(
             # below, in the same scope: the files the attempt parsed
             # are in the spool, where the full load finds them current
             # and loads them from, so a decline costs no second parse.
-            # Not after a refresh that never finished (migration 015):
-            # which session rows it left behind is unknown, so no
-            # closure is bounded.
             if (
                 modified_files
                 and cached_project_data is not None
                 and cached_project_data.total_message_count > 0
-                and not cached_project_data.refresh_pending
                 and _incremental_refresh_enabled()
             ):
                 if _incremental_cache_refresh(
@@ -5990,11 +5979,6 @@ def render_provider_wholesale(
                 # ``has_provider_token_totals``.
                 if has_provider_token_totals:
                     project_aggregates.update(project_token_totals)
-                # Clears refresh_pending even after a filtered load: v1
-                # re-parses every rollout and recomputes every session row
-                # each run, and is_transcript_stale catches a filtered
-                # render, so the flag would only add a re-render to every
-                # filtered run (it saves entries, which set it, each run).
                 cache.update_project_aggregates(**project_aggregates)
             session_counts = {
                 sid: sd.message_count for sid, sd in merged_session_data.items()

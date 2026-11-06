@@ -717,6 +717,52 @@ def test_two_refreshes_of_one_project_overlapping_leave_it_repairable(
     assert "turn two" in (project / "session-sess-alpha.md").read_text(encoding="utf-8")
 
 
+def test_migration_016_heals_a_project_015_left_pending_and_drops_the_flag(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Migration 015 marked every project a cache held before it, since
+    nothing else can tell whether its derived rows predate its entries;
+    016 drops the flag, and keeps that heal by zeroing the marked
+    project's total, which the next run reads as a cache to refresh in
+    full, from the cached entries."""
+    from claude_code_log.migrations.runner import get_current_version, run_migrations
+
+    projects_dir = project.parent
+    db_path = projects_dir / "cache.db"
+    monkeypatch.setenv("CLAUDE_CODE_LOG_CACHE_PATH", str(db_path))
+    _pass(projects_dir)
+
+    # The cache as 015 leaves it: the flag set on the project, and
+    # derived rows that may predate its entries (here: a stale count).
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "ALTER TABLE projects ADD COLUMN refresh_pending INTEGER NOT NULL DEFAULT 0"
+        )
+        conn.execute("UPDATE projects SET refresh_pending = 1")
+        conn.execute("UPDATE sessions SET message_count = 1")
+        conn.execute("DELETE FROM _schema_version WHERE version = 16")
+    assert run_migrations(db_path) == 1
+    with sqlite3.connect(db_path) as conn:
+        assert get_current_version(conn) == 16
+        columns = [row[1] for row in conn.execute("PRAGMA table_info(projects)")]
+        assert "refresh_pending" not in columns
+        assert conn.execute("SELECT total_message_count FROM projects").fetchone() == (
+            0,
+        )
+
+    manager = _manager(project)
+    files = sorted(project.glob("*.jsonl"))
+    assert manager.get_modified_files(files) == []  # no file re-parsed
+    assert converter.ensure_fresh_cache(project, manager, silent=True)
+    data = manager.get_cached_project_data()
+    assert data is not None
+    assert {sid: s.message_count for sid, s in data.sessions.items()} == {
+        "sess-alpha": 2,
+        "sess-beta": 2,
+    }
+    assert data.total_message_count == 4
+
+
 def test_a_nested_scope_joins_the_outer_one(project: Path) -> None:
     manager = _manager(project)
     files = sorted(project.glob("*.jsonl"))

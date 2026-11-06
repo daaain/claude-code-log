@@ -179,10 +179,6 @@ class ProjectCache(BaseModel):
     # Session metadata
     sessions: dict[str, SessionCacheData]
 
-    # An entry write has not yet been followed by the session rows and
-    # aggregates derived from it (migration 015).
-    refresh_pending: bool = False
-
     # Working directories associated with this project
     working_directories: list[str] = []
 
@@ -1501,7 +1497,7 @@ class CacheManager:
 
                 if auto_index_enabled() and not index_maintenance_deferred():
                     reindex_files(conn, file_ids, commit=False)
-                self._mark_entries_written(conn)
+                self._update_last_updated(conn)
             for write in pending.deferred:
                 write(conn)
 
@@ -1738,24 +1734,6 @@ class CacheManager:
 
         conn.execute(
             "UPDATE projects SET last_updated = ? WHERE id = ?",
-            (datetime.now().isoformat(), self._project_id),
-        )
-
-    def _mark_entries_written(self, conn: sqlite3.Connection) -> None:
-        """Stamp an entry write: ``last_updated``, and a refresh now pending.
-
-        Called inside the transaction that writes a file's entry rows, so
-        the flag commits with them (migration 015). The session rows and
-        aggregates derived from those entries are written later, in other
-        transactions; until ``update_project_aggregates`` clears the flag,
-        ``get_modified_files`` reports every file, and a refresh that
-        stopped in between is redone instead of looking finished.
-        """
-        if self._project_id is None:
-            return
-
-        conn.execute(
-            "UPDATE projects SET last_updated = ?, refresh_pending = 1 WHERE id = ?",
             (datetime.now().isoformat(), self._project_id),
         )
 
@@ -2075,7 +2053,7 @@ class CacheManager:
             if auto_index_enabled() and not index_maintenance_deferred():
                 reindex_files(conn, [file_id], commit=False)
 
-            self._mark_entries_written(conn)
+            self._update_last_updated(conn)
 
     def _file_record(
         self,
@@ -2288,7 +2266,7 @@ class CacheManager:
         if auto_index_enabled() and not index_maintenance_deferred():
             reindex_files(conn, [file_id], commit=False)
 
-        self._mark_entries_written(conn)
+        self._update_last_updated(conn)
         return True
 
     def update_session_cache(self, session_data: Dict[str, SessionCacheData]) -> None:
@@ -2363,10 +2341,9 @@ class CacheManager:
     ) -> None:
         """Update project-level aggregate information.
 
-        The last write of a complete refresh, after every entry write and
-        the session rows and sidecar derived from them, so it also clears
-        the ``refresh_pending`` flag those entry writes set (migration
-        015). Call it only once those match every entry row written.
+        The last write of a refresh, after every entry write and the
+        session rows and sidecar derived from them; inside an
+        ``atomic_refresh`` scope it commits with them.
         """
         if self._project_id is None:
             return
@@ -2382,8 +2359,7 @@ class CacheManager:
                     total_cache_read_tokens = ?,
                     earliest_timestamp = ?,
                     latest_timestamp = ?,
-                    last_updated = ?,
-                    refresh_pending = 0
+                    last_updated = ?
                 WHERE id = ?
                 """,
                 (
@@ -2811,8 +2787,8 @@ class CacheManager:
 
         The failed write rolled back, so the previous sidecar still stands,
         and a refresh that went on to finish would vouch for it. Contention
-        re-raises: the refresh fails with ``refresh_pending`` still set, and
-        the retry or the next run redoes it. Any other failure may recur on
+        re-raises: the refresh fails, and the retry or the next run redoes
+        it. Any other failure may recur on
         every run, so instead of failing the project forever this drops
         the ``sidecar_state`` row: every reader then declines to the full
         load, as for a cache that never had a sidecar, until an unfiltered
@@ -2918,14 +2894,6 @@ class CacheManager:
         ).fetchall()
         return [row["cwd"] for row in rows]
 
-    def _refresh_pending(self, conn: sqlite3.Connection) -> bool:
-        """Whether an entry write awaits its derived rows — see
-        ``_mark_entries_written``."""
-        row = conn.execute(
-            "SELECT refresh_pending FROM projects WHERE id = ?", (self._project_id,)
-        ).fetchone()
-        return bool(row and row["refresh_pending"])
-
     def get_modified_files(self, jsonl_files: List[Path]) -> List[Path]:
         """Get list of JSONL files that need to be reprocessed.
 
@@ -2935,13 +2903,6 @@ class CacheManager:
         subagent-sidecar fingerprints, replacing the per-file query +
         directory probes that dominated freshness-check time on large
         archives (issue #12).
-
-        Every file is reported while a refresh is pending (migration 015):
-        then the question is not whether a file's entry rows are current,
-        it is whether everything derived from them is, and only redoing the
-        refresh answers that. Per-file entry freshness (``is_file_cached``,
-        what loading consults) is unaffected, so that refresh is served
-        from the cache rather than re-parsed.
         """
         if not jsonl_files:
             return []
@@ -2949,10 +2910,6 @@ class CacheManager:
             return list(jsonl_files)
 
         with self._get_connection() as conn:
-            if self._refresh_pending(conn):
-                # A refresh wrote entries and never finished: the session
-                # rows may predate them, whatever the files look like.
-                return list(jsonl_files)
             rows = conn.execute(
                 "SELECT file_name, source_mtime, source_size,"
                 " subagents_fingerprint, content_version"
@@ -3090,7 +3047,6 @@ class CacheManager:
             total_cache_creation_tokens=project_row["total_cache_creation_tokens"],
             total_cache_read_tokens=project_row["total_cache_read_tokens"],
             sessions=sessions,
-            refresh_pending=bool(project_row["refresh_pending"]),
             working_directories=working_directories,
             earliest_timestamp=project_row["earliest_timestamp"],
             latest_timestamp=project_row["latest_timestamp"],
