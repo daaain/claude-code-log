@@ -479,6 +479,68 @@ def test_an_interrupted_full_refresh_leaves_the_cache_as_it_was(
     assert len(rows["sess-gamma.jsonl"]) == 2
 
 
+def test_a_file_whose_rows_fail_part_way_leaves_the_spool_whole(
+    tmp_path: Path,
+) -> None:
+    """``add`` rolls back the file it was writing; the spool stays valid.
+
+    With the journal off, SQLite leaves ROLLBACK undefined, and a
+    failure past the page cache corrupts the file. A small page cache
+    makes a short run spill, which is what the journal setting has to
+    survive.
+    """
+    from claude_code_log.refresh_spool import RefreshSpool
+
+    spool = RefreshSpool(tmp_path / "cache.db")
+    conn = spool._conn  # pyright: ignore[reportPrivateUsage]
+    conn.execute("PRAGMA cache_size = -64")  # 64 KiB
+    record = {
+        "file_name": "a.jsonl",
+        "file_path": "/a.jsonl",
+        "source_mtime": 1.0,
+        "source_size": 1,
+        "cached_mtime": 1.0,
+        "message_count": 1,
+        "subagents_fingerprint": None,
+        "content_version": None,
+    }
+
+    def rows(n: int, fail_at: int | None = None) -> Any:
+        for i in range(n):
+            if i == fail_at:
+                raise RuntimeError("row %d" % i)
+            yield {name: None for name in ("timestamp", "session_id")} | {
+                "type": "user",
+                "_uuid": f"u{i}",
+                "_parent_uuid": None,
+                "_is_sidechain": 0,
+                "_user_type": None,
+                "_cwd": None,
+                "_version": None,
+                "_is_meta": None,
+                "_agent_id": None,
+                "_request_id": None,
+                "input_tokens": None,
+                "output_tokens": None,
+                "cache_creation_tokens": None,
+                "cache_read_tokens": None,
+                "_leaf_uuid": None,
+                "_level": None,
+                "_operation": None,
+                "content": b"x" * 2048,
+            }
+
+    spool.add(record, rows(10), mode="replace")
+    with pytest.raises(RuntimeError, match="row 400"):
+        spool.add({**record, "file_name": "b.jsonl"}, rows(401, 400), mode="replace")
+
+    assert [f.file_name for f in spool.files()] == ["a.jsonl"]
+    assert conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0] == 10
+    assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    spool.close()
+    spool.unlink()
+
+
 def test_reads_inside_a_scope_see_the_spooled_rows(project: Path) -> None:
     """The incremental refresh reads back the rows it has just written:
     file states, uuid owners, the closure's entries. Inside a scope they

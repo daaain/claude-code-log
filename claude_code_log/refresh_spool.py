@@ -14,9 +14,9 @@ the shared write lock for the copy alone, with no Python per row.
 The spool is an ordinary SQLite file beside the cache database, named
 ``<cache>.spool-<pid>-<n>``. It sits beside the cache rather than in the
 system temp dir because the temp dir may be RAM, and a spool is of the
-order of the modified files' compressed size. Its journal is off and
-nothing is synced: a spool that outlives its process is garbage, and the
-refresh that owned it never merged. ``CacheManager.atomic_refresh`` owns
+order of the modified files' compressed size. Its journal is in memory
+and nothing is synced: a spool that outlives its process is garbage, and
+the refresh that owned it never merged. ``CacheManager.atomic_refresh`` owns
 the lifecycle: open, fill, merge, unlink.
 """
 
@@ -140,13 +140,17 @@ class RefreshSpool:
 
     def __init__(self, db_path: Path) -> None:
         self.path = spool_path(db_path)
-        # Journal and sync off: the file is scratch whose only reader is
-        # the merge in this same process, and a crash makes it garbage
-        # either way. Autocommit, so a file's rows are visible to the
-        # cache connection that attaches it as soon as they are written.
+        # Journal in memory and nothing synced: the file is scratch
+        # whose only reader is the merge in this same process, and a
+        # crash makes it garbage either way. Not journal OFF: that
+        # leaves ROLLBACK undefined, and `add` relies on it to keep the
+        # spool whole when a file's rows fail part-way (with the
+        # journal off, a failure past the page cache corrupts the
+        # file). Autocommit, so a file's rows are visible to the cache
+        # connection that attaches it as soon as they are written.
         self._conn = sqlite3.connect(self.path, isolation_level=None)
         try:
-            self._conn.execute("PRAGMA journal_mode = OFF")
+            self._conn.execute("PRAGMA journal_mode = MEMORY")
             self._conn.execute("PRAGMA synchronous = OFF")
             self._conn.executescript(_SCHEMA)
         except BaseException:

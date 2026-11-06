@@ -1380,6 +1380,14 @@ class CacheManager:
             try:
                 # ATTACH and DETACH refuse to run inside a transaction;
                 # the scope opens on a connection that is only reading.
+                # Python's sqlite3 opens one implicitly at any DML
+                # outside `write_transaction`, so say what happened
+                # rather than let ATTACH report it.
+                if conn.in_transaction:
+                    raise sqlite3.ProgrammingError(
+                        "atomic_refresh: the connection is already in a "
+                        "transaction; a write on it bypassed write_transaction"
+                    )
                 conn.execute("ATTACH DATABASE ? AS spool", (str(pending.spool.path),))
                 try:
                     self._refresh = pending
@@ -1581,6 +1589,12 @@ class CacheManager:
         try:
             write(conn)
         except Exception as exc:
+            if not conn.in_transaction:
+                # A full disk, an I/O error or memory exhaustion can
+                # abort the whole transaction, savepoint included; the
+                # merge then fails on that cause, not on a missing
+                # savepoint.
+                raise
             conn.execute("ROLLBACK TO sidecar")
             conn.execute("RELEASE sidecar")
             if is_busy_database_error(exc):
