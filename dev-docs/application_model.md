@@ -312,6 +312,24 @@ cache row, the session is reparsed. The schema-version row also
 invalidates the entire HTML cache when migrations bump the version,
 since rendered output may have changed even when source data hasn't.
 
+**A date-filtered run is not recorded as complete.** The cache
+describes the source files, whatever window a run renders:
+`ensure_fresh_cache` takes no date range, so a `--from-date` /
+`--to-date` run refreshes exactly as an unfiltered one would (nothing
+when no file changed, the incremental refresh when it can, otherwise a
+full unfiltered load), and the window applies only to the entries it
+renders. The trade, accepted: when files changed and the incremental
+refresh declines, a filtered run's refresh holds whole files, where it
+used to hold only their entries inside the window; in exchange a
+filtered run over unchanged files no longer pays a refresh at all, where
+it used to pay a full load on every run. The files it writes hold only the window's messages, so no
+count describes them: instead of recording one,
+`mark_rendered_from_window` sets the count of each file's `html_cache`
+row (and of page 1's `html_pages` row, which shares the combined file's
+name) to -1, which no session or project matches, so the next
+unfiltered run re-renders it.
+The rows stay, so a paginated project keeps its page count.
+
 **A refresh that stops part-way is redone, not trusted.** A refresh
 commits each file's entry rows in a transaction of its own, then writes
 the session rows and project aggregates derived from them. Staleness
@@ -324,13 +342,8 @@ the renders, and every later run reported the project as cached while
 its renders lacked the new messages. Since migration 015, every entry
 write sets `projects.refresh_pending` in its own transaction and
 `update_project_aggregates`, the last write of a complete refresh,
-clears it. A date-filtered refresh derives its session rows and
-aggregates from the entries in its window, so it never finishes a
-pending refresh (it passes `complete=False` and leaves the flag for the
-next unfiltered run), but it doesn't start one either: on a project
-that was not pending it restores the flag its own entry writes set.
-Codex projects are the exception, cleared by any run, since their
-renders re-parse every rollout. An unfiltered refresh, on either path, writes the session
+clears it. Every refresh is a complete one, date-filtered runs included
+(above). A refresh, on either path, writes the session
 rows and the cross-session sidecar (§ 2.12) before it, and does not
 pass over a sidecar write it loses: the rolled-back write leaves the old
 sidecar in place, which the closing write would otherwise vouch for.
@@ -1200,7 +1213,7 @@ output files byte-identical on the two measured projects, with 64 and
 Every decline (no sidecar yet, date filters, `--no-cache`, an
 inconsistent file map) falls back to the full load, whose behaviour is
 unchanged. A missing sidecar only costs that speed; a stale one would
-render wrongly, so an unfiltered cache refresh that cannot write it
+render wrongly, so a cache refresh that cannot write it
 either fails and is redone or drops it (§ 2.3).
 
 ### 2.13 Page-granular streaming conversion

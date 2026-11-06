@@ -1985,7 +1985,6 @@ class CacheManager:
         total_cache_read_tokens: int,
         earliest_timestamp: str,
         latest_timestamp: str,
-        complete: bool = True,
     ) -> None:
         """Update project-level aggregate information.
 
@@ -1993,10 +1992,6 @@ class CacheManager:
         the session rows and sidecar derived from them, so it also clears
         the ``refresh_pending`` flag those entry writes set (migration
         015). Call it only once those match every entry row written.
-        A date-filtered refresh derives its rows from the entries in its
-        window only, so when the project was already pending it passes
-        ``complete=False`` and leaves the flag for the next unfiltered
-        refresh to clear.
         """
         if self._project_id is None:
             return
@@ -2013,7 +2008,7 @@ class CacheManager:
                     earliest_timestamp = ?,
                     latest_timestamp = ?,
                     last_updated = ?,
-                    refresh_pending = CASE WHEN ? THEN 0 ELSE refresh_pending END
+                    refresh_pending = 0
                 WHERE id = ?
                 """,
                 (
@@ -2025,7 +2020,6 @@ class CacheManager:
                     earliest_timestamp,
                     latest_timestamp,
                     datetime.now().isoformat(),
-                    complete,
                     self._project_id,
                 ),
             )
@@ -2873,6 +2867,29 @@ class CacheManager:
                     None if combined_linked is None else int(combined_linked),
                 ),
             )
+
+    def mark_rendered_from_window(self, html_path: str) -> None:
+        """Record that ``html_path`` was just written from a date window.
+
+        A ``--from-date``/``--to-date`` run writes an output file with only
+        the messages inside its window, so no message count describes it:
+        the file's rows (its ``html_cache`` row, and its ``html_pages`` row
+        when it is page 1 of a paginated project, which shares the combined
+        file's name) get a count no session or project can have, and the
+        next run without a window reads the file as stale. The rows stay,
+        rather than being deleted, so the project keeps its page count and
+        its pagination.
+        """
+        if self._project_id is None:
+            return
+
+        with self._get_connection() as conn, write_transaction(conn):
+            for table in ("html_cache", "html_pages"):
+                conn.execute(
+                    f"""UPDATE {table} SET message_count = -1
+                        WHERE project_id = ? AND html_path = ?""",
+                    (self._project_id, html_path),
+                )
 
     def is_transcript_stale(
         self,
