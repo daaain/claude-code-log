@@ -696,3 +696,46 @@ class TestFootnotes:
         assert second != first and first == third, box[key]
         assert box["targetTop"] is not None, box
         assert box["targetTop"] >= box["toolbarBottom"], box
+
+
+def _nested_list_note_fixture(tmp_path: Path) -> Path:
+    """A note whose text holds an ordered list of its own."""
+    md = (
+        "Claim[^1] and another[^2].\n\n"
+        "[^1]: A note holding a list:\n    1. first\n    2. second\n"
+        "[^2]: Plain note.\n"
+    )
+    entries = [
+        _entry("u1", None, "user", [{"type": "text", "text": "Go."}]),
+        _entry("a12", "u1", "assistant", [{"type": "text", "text": md}]),
+    ]
+    src = tmp_path / "nested-note.jsonl"
+    src.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+    return src
+
+
+NESTED_NOTE_BOX = """
+() => {
+    const section = document.querySelector('section.footnotes');
+    const inner = section.querySelector('li ol');
+    const marginTop = (el) => parseFloat(getComputedStyle(el).marginTop);
+    return {
+        innerListMarginTop: marginTop(inner),
+        innerItemMarginTops: [...inner.children].map(marginTop),
+        noteMarginTops: [...section.querySelectorAll(':scope > ol > li')].map(marginTop),
+    };
+}
+"""
+
+
+@pytest.mark.browser
+def test_a_list_inside_a_note_keeps_the_look_of_a_body_list(
+    page: Page, tmp_path: Path
+) -> None:
+    """The note spacing is for the notes: a list inside one keeps its top
+    margin, and its items stay unspaced like any list's."""
+    page.goto(_render(tmp_path, _nested_list_note_fixture(tmp_path)).as_uri())
+    box = page.evaluate(NESTED_NOTE_BOX)
+    assert box["noteMarginTops"][1] >= 3, box
+    assert box["innerListMarginTop"] >= 3, box
+    assert box["innerItemMarginTops"] == [0, 0], box
