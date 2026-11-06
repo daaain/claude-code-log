@@ -11,7 +11,7 @@ import sqlite3
 import threading
 import zlib
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, get_args
 
@@ -2851,6 +2851,45 @@ class CacheManager:
                     None if combined_linked is None else int(combined_linked),
                 ),
             )
+
+    def has_sessions_in_window(
+        self, from_dt: Optional[datetime], to_dt: Optional[datetime]
+    ) -> bool:
+        """Does a visible session of this project overlap the window?
+
+        Read from the session rows' first and last timestamps, so it is
+        only as current as those rows: a caller must not trust it for a
+        project whose files changed since. ``from_dt`` / ``to_dt`` are
+        naive UTC, as ``utils.parse_date_bounds`` returns them. A session
+        whose stamps do not parse counts as overlapping.
+        """
+        from .utils import parse_timestamp
+
+        if self._project_id is None:
+            return True
+
+        def naive_utc(stamp: Optional[str]) -> Optional[datetime]:
+            parsed = parse_timestamp(stamp)
+            if parsed is None:
+                return None
+            return parsed.astimezone(timezone.utc).replace(tzinfo=None)
+
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                """SELECT first_timestamp, last_timestamp FROM sessions
+                   WHERE project_id = ? AND hidden = 0""",
+                (self._project_id,),
+            ).fetchall()
+        for row in rows:
+            first = naive_utc(row["first_timestamp"])
+            last = naive_utc(row["last_timestamp"])
+            if first is None or last is None:
+                return True
+            if (to_dt is None or first <= to_dt) and (
+                from_dt is None or last >= from_dt
+            ):
+                return True
+        return False
 
     def mark_rendered_from_window(self, html_path: str) -> None:
         """Record that ``html_path`` was just written from a date window.

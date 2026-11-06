@@ -6190,6 +6190,9 @@ class _ProjectPlan:
     # better than bytes: see _holdback_plans.
     cached_message_count: Optional[int] = None
     error: Optional[str] = None
+    # A date-filtered pass left this project alone: none of its sessions
+    # overlaps the window (``_plan_project``).
+    outside_window: bool = False
 
 
 # How big a project has to be before holding it out of the project pool
@@ -6322,6 +6325,7 @@ def _plan_project(
     page_size: int,
     theme: str = DEFAULT_THEME,
     generate_individual_sessions: bool = True,
+    window: Optional[tuple[Optional[datetime], Optional[datetime]]] = None,
 ) -> Optional[_ProjectPlan]:
     """Resolve destination and staleness for one project (no rendering).
 
@@ -6329,6 +6333,14 @@ def _plan_project(
     the parent before any pool worker starts, which also guarantees the
     shared cache DB's schema/migrations and this project's row exist
     before concurrent workers touch the DB.
+
+    ``window`` is a date-filtered pass's ``parse_date_bounds``. Such a
+    pass converts a project when one of its sessions overlaps the window,
+    whether or not anything changed, and leaves every other one alone:
+    converting a project with nothing in the window would rewrite its
+    combined output empty and mark it as rendered from a window, which the
+    next plain run re-renders. A project with a changed file is converted
+    as before, since its session rows cannot tell what the change holds.
     """
     from .utils import project_destination
 
@@ -6444,6 +6456,13 @@ def _plan_project(
             )
         )
 
+    outside_window = False
+    if window is not None and cache_manager is not None:
+        needs_work = bool(modified_files) or cache_manager.has_sessions_in_window(
+            *window
+        )
+        outside_window = not needs_work
+
     if needs_work:
         stats.files_updated = len(modified_files) if modified_files else 0
         stats.files_loaded_from_cache = len(jsonl_files) - stats.files_updated
@@ -6472,6 +6491,7 @@ def _plan_project(
         stats=stats,
         source_bytes=sum(f.stat().st_size for f in jsonl_files),
         cached_message_count=cached_message_count,
+        outside_window=outside_window,
     )
 
 
@@ -6821,6 +6841,11 @@ def _process_projects_hierarchy(
     # Runs in the parent so the shared cache DB's schema/migrations and
     # every project row exist before any pool worker opens the DB.
     plans: list[_ProjectPlan] = []
+    window = (
+        parse_date_bounds(from_date, to_date)
+        if from_date is not None or to_date is not None
+        else None
+    )
     for project_dir in sorted(project_dirs):
         try:
             plan = _plan_project(
@@ -6837,6 +6862,7 @@ def _process_projects_hierarchy(
                 page_size=page_size,
                 theme=theme,
                 generate_individual_sessions=generate_individual_sessions,
+                window=window,
             )
         except Exception as e:
             stats = GenerationStats()
@@ -6883,8 +6909,9 @@ def _process_projects_hierarchy(
     # alphabetical order; regenerated projects follow as they finish.
     for plan in plans:
         if not plan.needs_work:
+            state = "no messages in the window" if plan.outside_window else "cached"
             print(
-                f"  {plan.project_dir.name}: cached{_archived_suffix(plan)} "
+                f"  {plan.project_dir.name}: {state}{_archived_suffix(plan)} "
                 f"({plan.stats.total_time:.1f}s)"
             )
 
