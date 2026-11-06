@@ -12,6 +12,7 @@ document with trailing junk on its line) stays text.
 """
 
 import json
+import re
 from typing import Any, Union
 
 import pytest
@@ -118,8 +119,12 @@ class TestHtmlMixedResult:
         # The tail is there, as escaped text, after the table.
         assert "2 passed in 5.90s" in html
         assert html.index("tool-result-json") < html.index("2 passed in 5.90s")
-        # The JSON head is not duplicated into the text part.
-        assert html.count("plain-click") == 1
+        # The JSON head is not duplicated into the text part: the only
+        # ``<pre>`` blocks are the tail (the table has none).
+        pres = re.findall(r"<pre>(.*?)</pre>", html, flags=re.DOTALL)
+        assert pres
+        for pre in pres:
+            assert pre.startswith("---- texts(4)")
 
     def test_multi_line_head(self):
         html = format_tool_result_content_raw(_result(MIXED_PRETTY))

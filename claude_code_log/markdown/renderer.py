@@ -22,6 +22,7 @@ from ..utils import (
     format_timestamp,
     generate_unified_diff,
     is_safe_web_url,
+    split_json_prefix,
     split_websearch_queries,
     strip_error_tags,
 )
@@ -547,6 +548,23 @@ class MarkdownRenderer(Renderer):
             max_ticks = max(max_ticks, len(match.group()))
         fence = "`" * max(3, max_ticks + 1)
         return f"{fence}{lang}\n{text}\n{fence}"
+
+    def _json_headed_fences(self, text: str) -> Optional[str]:
+        """Fence a tool result that starts with a JSON document (issue #362).
+
+        The document is fenced as ``json``; a plain-text tail after it (a
+        *mixed* result) follows in a plain fence — the Markdown counterpart
+        of the HTML table-then-text rendering. ``None`` when the result does
+        not start with a JSON document (``split_json_prefix`` decides).
+        """
+        split = split_json_prefix(text)
+        if split is None:
+            return None
+        json_text, tail = split
+        parts = [self._code_fence(json_text, "json")]
+        if tail:
+            parts.append(self._code_fence(tail))
+        return "\n\n".join(parts)
 
     def _escape_html_tag(self, text: str, tag: str) -> str:
         """Escape HTML closing tags to prevent breaking markdown structure.
@@ -2025,10 +2043,12 @@ class MarkdownRenderer(Renderer):
             if isinstance(output.content, str):
                 return output.content
             return ""
-        # Default: code fence
+        # Default: code fence — a JSON-headed result (see
+        # ``_json_headed_fences``) gets its document fenced as JSON.
         if isinstance(output.content, str):
             text = strip_error_tags(output.content)
-            return self._code_fence(text)
+            fenced = None if output.is_error else self._json_headed_fences(text)
+            return fenced if fenced is not None else self._code_fence(text)
         # Structured list content: render text items as text and keep any
         # other typed items (e.g. ToolSearch's tool_reference) as a JSON
         # block, instead of dumping the whole list verbatim (issue #227).
@@ -2042,7 +2062,8 @@ class MarkdownRenderer(Renderer):
         parts: list[str] = []
         text = strip_error_tags("\n".join(text_parts)).strip()
         if text:
-            parts.append(text)
+            fenced = None if output.is_error else self._json_headed_fences(text)
+            parts.append(fenced if fenced is not None else text)
         if structured_items:
             parts.append(
                 self._code_fence(
