@@ -11,7 +11,7 @@ import sqlite3
 import threading
 import zlib
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, get_args
 
@@ -1599,42 +1599,25 @@ class CacheManager:
         if file_id is None:
             return None
 
-        # Parse dates
-        import dateparser
+        # The renderer's reading of the window: ``filter_messages_by_date``
+        # makes the exact cut after this load, so the two must agree on
+        # what a bound means.
+        from .utils import parse_date_bounds
 
-        from_dt = None
-        to_dt = None
-
-        if from_date:
-            from_dt = dateparser.parse(from_date)
-            if from_dt and (
-                from_date in ["today", "yesterday"] or "days ago" in from_date
-            ):
-                from_dt = from_dt.replace(hour=0, minute=0, second=0, microsecond=0)
-
-        if to_date:
-            to_dt = dateparser.parse(to_date)
-            if to_dt:
-                to_dt = to_dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+        from_dt, to_dt = parse_date_bounds(from_date, to_date)
 
         # Build query with SQL-based filtering
         sql = "SELECT content FROM messages WHERE file_id = ?"
         params: List[Any] = [file_id]
 
         if from_dt:
-            # Normalize to UTC 'Z' format for consistent string comparison
-            # with stored timestamps (which use 'Z' suffix from JSONL)
-            if from_dt.tzinfo is None:
-                from_dt = from_dt.replace(tzinfo=timezone.utc)
+            # Same format as stored timestamps (``_normalize_timestamp``)
             from_bound = from_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
             # Include entries with NULL timestamp (like summaries) OR within date range
             sql += " AND (timestamp IS NULL OR timestamp >= ?)"
             params.append(from_bound)
 
         if to_dt:
-            # Normalize to UTC 'Z' format for consistent string comparison
-            if to_dt.tzinfo is None:
-                to_dt = to_dt.replace(tzinfo=timezone.utc)
             to_bound = to_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
             sql += " AND (timestamp IS NULL OR timestamp <= ?)"
             params.append(to_bound)

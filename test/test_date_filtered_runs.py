@@ -17,14 +17,20 @@ from __future__ import annotations
 import json
 import os
 import shutil
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
 
 from claude_code_log.cache import CacheManager, SessionSidecar, get_library_version
-from claude_code_log.converter import convert_jsonl_to
+from claude_code_log.converter import (
+    convert_jsonl_to,
+    filter_messages_by_date,
+    load_transcript,
+)
 from claude_code_log.converter import process_projects_hierarchy
+from claude_code_log.utils import parse_date_bounds
 
 SESSIONS = ["sess-alpha", "sess-beta", "sess-gamma"]
 # The first day, written with times so that the two layers' readings of a
@@ -287,3 +293,66 @@ def test_a_session_resumed_during_a_filtered_run_keeps_its_parent(
     assert CacheManager(project, get_library_version()).load_session_sidecar() == (
         reference
     )
+
+
+# --- The cache and the renderer read a date bound the same way ---------------
+
+
+def _stamps(entries: List[Any]) -> List[str]:
+    return sorted(e.timestamp for e in entries if getattr(e, "timestamp", None))
+
+
+@pytest.mark.parametrize(
+    "to_date",
+    ["2026-01-01", "2026-01-01 10:00", "2026-01-02 10:00"],
+    ids=["bare-date", "date-and-time", "next-day-time"],
+)
+def test_the_cache_and_the_renderer_cut_at_the_same_to_date(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, to_date: str
+) -> None:
+    project = _build_project(tmp_path)
+    monkeypatch.setenv("CLAUDE_CODE_LOG_CACHE_PATH", str(tmp_path / "cache.db"))
+    _run(project.parent, "md-sessions")
+    path = project / "sess-alpha.jsonl"
+    manager = CacheManager(project, get_library_version())
+    everything = load_transcript(path, silent=True)
+
+    rendered = filter_messages_by_date(everything, None, to_date)
+    cached = manager.load_cached_entries_filtered(path, None, to_date)
+    assert cached is not None
+    assert _stamps(cached) == _stamps(rendered)
+
+
+def test_a_bare_to_date_includes_that_whole_day(tmp_path: Path) -> None:
+    project = _build_project(tmp_path)
+    everything = load_transcript(project / "sess-alpha.jsonl", silent=True)
+
+    kept = filter_messages_by_date(everything, None, "2026-01-01")
+    assert _stamps(kept) == ["2026-01-01T10:00:00Z", "2026-01-01T10:01:00Z"]
+
+
+@pytest.mark.parametrize(
+    ("text", "start", "end"),
+    [
+        ("2026-01-01", "2026-01-01 00:00:00", "2026-01-01 23:59:59.999999"),
+        ("Jan 5 2026", "2026-01-05 00:00:00", "2026-01-05 23:59:59.999999"),
+        ("2026-01-01 10:01", "2026-01-01 10:01:00", "2026-01-01 10:01:00"),
+        # An explicit midnight is an instant, not the whole day.
+        ("2026-01-01 00:00", "2026-01-01 00:00:00", "2026-01-01 00:00:00"),
+    ],
+)
+def test_a_bound_naming_a_day_covers_that_day(text: str, start: str, end: str) -> None:
+    from_dt, to_dt = parse_date_bounds(text, text)
+    assert (str(from_dt), str(to_dt)) == (start, end)
+
+
+def test_a_bound_naming_an_instant_keeps_its_time() -> None:
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    from_dt, to_dt = parse_date_bounds("2 hours ago", "now")
+    assert from_dt is not None and to_dt is not None
+    assert abs(from_dt - (now - timedelta(hours=2))) < timedelta(minutes=1)
+    assert abs(to_dt - now) < timedelta(minutes=1)
+    yesterday, today = parse_date_bounds("yesterday", "today")
+    assert yesterday is not None and today is not None
+    assert str(yesterday.time()) == "00:00:00"
+    assert str(today.time()) == "23:59:59.999999"

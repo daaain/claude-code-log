@@ -21,7 +21,6 @@ import traceback
 from urllib.parse import quote
 from typing import Any, Dict, List, Optional, TextIO, TYPE_CHECKING, cast
 
-import dateparser
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -43,6 +42,7 @@ from .utils import (
     get_parent_session_id,
     get_project_display_name,
     is_agent_session,
+    parse_date_bounds,
     project_transcript_bytes,
     should_use_as_session_starter,
     create_session_preview,
@@ -250,26 +250,9 @@ def filter_messages_by_date(
     if not from_date and not to_date:
         return messages
 
-    # Parse dates in UTC to match transcript timestamps (which are stored in UTC)
-    dateparser_settings: Any = {"TIMEZONE": "UTC", "RETURN_AS_TIMEZONE_AWARE": False}
-    from_dt = None
-    to_dt = None
-
-    if from_date:
-        from_dt = dateparser.parse(from_date, settings=dateparser_settings)
-        if not from_dt:
-            raise ValueError(f"Could not parse from-date: {from_date}")
-        # If parsing relative dates like "today", start from beginning of day
-        if from_date in ["today", "yesterday"] or "days ago" in from_date:
-            from_dt = from_dt.replace(hour=0, minute=0, second=0, microsecond=0)
-
-    if to_date:
-        to_dt = dateparser.parse(to_date, settings=dateparser_settings)
-        if not to_dt:
-            raise ValueError(f"Could not parse to-date: {to_date}")
-        # If parsing relative dates like "today", end at end of day
-        if to_date in ["today", "yesterday"] or "days ago" in to_date:
-            to_dt = to_dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+    # Parsed in UTC to match transcript timestamps (which are stored in UTC),
+    # the same way the cache's pre-filter reads them.
+    from_dt, to_dt = parse_date_bounds(from_date, to_date)
 
     filtered_messages: list[TranscriptEntry] = []
     for message in messages:
@@ -287,7 +270,7 @@ def filter_messages_by_date(
         if not message_dt:
             continue
 
-        # Convert to naive datetime for comparison (dateparser returns naive datetimes)
+        # Naive, like the bounds, for comparison
         if message_dt.tzinfo:
             message_dt = message_dt.replace(tzinfo=None)
 

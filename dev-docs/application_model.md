@@ -328,7 +328,12 @@ count describes them: instead of recording one,
 row (and of page 1's `html_pages` row, which shares the combined file's
 name) to -1, which no session or project matches, so the next
 unfiltered run re-renders it.
-The rows stay, so a paginated project keeps its page count.
+The rows stay, so a paginated project keeps its page count. The cache's
+pre-filter (`load_cached_entries_filtered`) and the renderer's cut
+(`filter_messages_by_date`) read a bound through one function,
+`utils.parse_date_bounds`, in UTC: a bound naming a whole day (`today`,
+`N days ago`, a date without a time) covers that day, while `now`,
+`2 hours ago` or any explicit time, midnight included, is an instant.
 
 **A refresh that stops part-way is redone, not trusted.** A refresh
 commits each file's entry rows in a transaction of its own, then writes
