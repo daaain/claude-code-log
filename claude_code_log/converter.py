@@ -4922,26 +4922,32 @@ def ensure_fresh_cache_detailed(
             ):
                 return CacheRefresh.INCREMENTAL
 
-        # Load and process messages to populate cache
+        # Load and process messages to populate cache. One transaction
+        # for the whole refresh (`atomic_refresh`): the per-file entry
+        # writes of the load go to a spool, the session rows, sidecar and
+        # aggregates derived from them are deferred, and the scope's end
+        # commits all of it at once. A refresh that stops anywhere in
+        # between leaves the cache as it was, with nothing recorded as
+        # current. Limit, shared with every clearing write: another
+        # process's refresh that sets ``refresh_pending`` and fails while
+        # this one runs is cleared here; closing that needs a write
+        # generation, not a boolean.
         if not silent:
             print(f"Updating cache for {project_dir.name}...")
-        messages, _tree = load_directory_transcripts(
-            project_dir,
-            cache_manager,
-            silent=silent,
-            # The refresh is a full load of the current tree, so persist
-            # the cross-session sidecar here too (same batch as the
-            # per-file writes). This is what lets the streaming path run
-            # right after a cache update without a second full load.
-            persist_sidecar=True,
-            sidecar_required=True,
-        )
-
-        # Update cache with fresh data. Limit, shared with every clearing
-        # write: another process's refresh that sets ``refresh_pending``
-        # and fails while this one runs is cleared here; closing that
-        # needs a write generation, not a boolean.
-        _update_cache_with_session_data(cache_manager, messages)
+        with cache_manager.atomic_refresh():
+            messages, _tree = load_directory_transcripts(
+                project_dir,
+                cache_manager,
+                silent=silent,
+                # The refresh is a full load of the current tree, so
+                # persist the cross-session sidecar here too (same
+                # transaction as the per-file writes). This is what lets
+                # the streaming path run right after a cache update
+                # without a second full load.
+                persist_sidecar=True,
+                sidecar_required=True,
+            )
+            _update_cache_with_session_data(cache_manager, messages)
     return CacheRefresh.FULL
 
 

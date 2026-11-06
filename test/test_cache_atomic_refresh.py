@@ -24,11 +24,13 @@ from typing import Any, Dict, List, Tuple
 
 import pytest
 
+from claude_code_log import converter
 from claude_code_log.cache import CacheManager, SessionSidecar, get_library_version
 from claude_code_log.converter import (
     compute_project_aggregates,
     compute_session_data,
     load_transcript,
+    process_projects_hierarchy,
 )
 from claude_code_log.models import TranscriptEntry
 
@@ -390,6 +392,91 @@ def test_a_sidecar_locked_out_at_the_merge_fails_the_whole_refresh(
             _refresh(manager, files, changed)
     assert _dump(manager.db_path) == before
     assert _spools(manager.db_path) == []
+
+
+def _pass(projects_dir: Path) -> None:
+    process_projects_hierarchy(
+        projects_dir, output_format="md", write_combined=False, jobs=1
+    )
+
+
+def _locked(*_args: Any, **_kwargs: Any) -> None:
+    raise sqlite3.OperationalError("database is locked")
+
+
+def _never_busy(_exc: BaseException) -> bool:
+    return False
+
+
+def _fail_second_file_write(m: pytest.MonkeyPatch) -> None:
+    """The entry write of the second file parsed, after the first."""
+    seen: List[str] = []
+    for name in ("save_cached_entries", "extend_cached_entries"):
+        original: Any = getattr(CacheManager, name)
+
+        def wrapper(
+            self: CacheManager,
+            jsonl_path: Path,
+            *args: Any,
+            _original: Any = original,
+            **kwargs: Any,
+        ) -> Any:
+            if seen and str(jsonl_path) not in seen:
+                _locked()
+            seen.append(str(jsonl_path))
+            return _original(self, jsonl_path, *args, **kwargs)
+
+        m.setattr(CacheManager, name, wrapper)
+
+
+def _fail_session_rows_write(m: pytest.MonkeyPatch) -> None:
+    m.setattr(CacheManager, "update_session_cache", _locked)
+
+
+def _fail_sidecar_write(m: pytest.MonkeyPatch) -> None:
+    m.setattr(CacheManager, "save_session_sidecar", _locked)
+
+
+@pytest.mark.parametrize(
+    "inject",
+    [_fail_second_file_write, _fail_session_rows_write, _fail_sidecar_write],
+    ids=["second-file-write", "session-rows-write", "sidecar-write"],
+)
+def test_an_interrupted_full_refresh_leaves_the_cache_as_it_was(
+    project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    inject: Any,
+) -> None:
+    """A pass whose full refresh is locked out at any write.
+
+    Whichever write it is, the project is reported failed and the cache
+    is what it was before the pass: no file recorded as current, no
+    session row, no aggregate from the refresh that did not finish.
+    """
+    projects_dir = project.parent
+    db_path = projects_dir / "cache.db"
+    monkeypatch.setenv("CLAUDE_CODE_LOG_CACHE_PATH", str(db_path))
+    monkeypatch.setenv("CLAUDE_CODE_LOG_INCREMENTAL_CACHE", "0")
+    _pass(projects_dir)
+    before = _dump(db_path)
+    assert before["messages"]  # the first pass built the cache
+
+    _grow(project)
+    capsys.readouterr()
+    with monkeypatch.context() as m:
+        inject(m)
+        m.setattr(converter, "is_busy_database_error", _never_busy)
+        _pass(projects_dir)
+    assert "projects failed" in capsys.readouterr().out
+    assert _dump(db_path) == before
+    assert _spools(db_path) == []
+
+    # The next pass redoes the whole of it.
+    _pass(projects_dir)
+    rows = _rows_by_file(db_path)
+    assert len(rows["sess-alpha.jsonl"]) == 4
+    assert len(rows["sess-gamma.jsonl"]) == 2
 
 
 def test_a_nested_scope_joins_the_outer_one(project: Path) -> None:

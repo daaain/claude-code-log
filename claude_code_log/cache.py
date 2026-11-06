@@ -2739,10 +2739,15 @@ class CacheManager:
             raise exc
         if self._project_id is None or self._read_only:
             return
-        with self._get_connection() as conn, write_transaction(conn):
+
+        def write(conn: sqlite3.Connection) -> None:
             conn.execute(
                 "DELETE FROM sidecar_state WHERE project_id = ?", (self._project_id,)
             )
+
+        # Deferred inside an `atomic_refresh` scope like the write it
+        # abandons: a refresh that then fails drops nothing either.
+        self._write_or_defer(write)
 
     def merge_session_sidecar(
         self,
