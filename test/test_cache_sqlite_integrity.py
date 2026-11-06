@@ -705,6 +705,12 @@ class TestConnectionCensus:
             "holds `BEGIN EXCLUSIVE` as the pass lock; its one write (a "
             "`user_version` probe that surfaces a read-only file) is rolled back",
         ),
+        ("refresh_spool.py", "RefreshSpool.__init__"): (
+            1,
+            "a refresh's private spool file `<cache>.spool-<pid>-<n>`, not the "
+            "cache database: journal and sync off, read back only by the "
+            "merge, which attaches it to the cache connection",
+        ),
     }
 
     @staticmethod
