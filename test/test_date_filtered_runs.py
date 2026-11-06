@@ -377,3 +377,51 @@ def test_a_bound_naming_an_instant_keeps_its_time() -> None:
     assert yesterday is not None and today is not None
     assert str(yesterday.time()) == "00:00:00"
     assert str(today.time()) == "23:59:59.999999"
+
+
+def test_the_collect_fallback_writes_rows_from_every_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The pass's index step falls back to loading the project when the cache
+    has no data for it, and writes session rows from that load; under a
+    window, the load must still be unfiltered.
+
+    With a cache manager the project row always exists by then, so the
+    fallback is reached here by having the cache report no project data.
+    """
+    from claude_code_log import converter
+
+    project = _build_project(tmp_path)
+    monkeypatch.setenv("CLAUDE_CODE_LOG_CACHE_PATH", str(tmp_path / "cache.db"))
+    _run(project.parent, "md-sessions")
+
+    written: List[List[str]] = []
+    original = converter._update_cache_with_session_data  # pyright: ignore[reportPrivateUsage]
+
+    def spy(cache_manager: CacheManager, messages: List[Any]) -> None:
+        written.append(_stamps(messages))
+        original(cache_manager, messages)
+
+    monkeypatch.setattr(converter, "_update_cache_with_session_data", spy)
+    monkeypatch.setattr(CacheManager, "get_cached_project_data", _no_project_data)
+    capsys.readouterr()
+    _run(project.parent, "md-sessions", **FIRST_DAY)
+
+    # Control: the fallback ran.
+    assert "using fallback processing" in capsys.readouterr().out
+    assert written, "no session rows were written"
+    second_day = [s for s in _stamps_of_all(project) if s.startswith("2026-01-02")]
+    assert second_day
+    for stamps in written:
+        assert set(second_day) <= set(stamps), "rows written from the window"
+
+
+def _no_project_data(_self: CacheManager) -> None:
+    return None
+
+
+def _stamps_of_all(project: Path) -> List[str]:
+    stamps: List[str] = []
+    for path in sorted(project.glob("*.jsonl")):
+        stamps += _stamps(load_transcript(path, silent=True))
+    return stamps
