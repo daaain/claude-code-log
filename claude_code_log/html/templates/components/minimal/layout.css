@@ -916,8 +916,13 @@
     color: inherit;
 }
 
+/* The shared sheet's `code { line-height: 1.5 }` reaches the <code> that
+   Pygments wraps a line-numbered block's code column in, while the number
+   column is a bare <pre> at this theme's 1.55: the numbers then outrun
+   the code by a line every thirty lines (#364). */
 .theme-minimal #transcript pre code {
     font-size: inherit;
+    line-height: inherit;
     padding: 0;
     background: none;
 }
