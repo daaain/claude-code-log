@@ -214,6 +214,18 @@ uv run pytest --cov=claude_code_log --cov-report=html --cov-report=term
 
 HTML coverage reports are generated in `htmlcov/index.html`.
 
+### What CI runs
+
+`.github/workflows/ci.yml` has three jobs. `test` runs the unit, TUI and
+benchmark suites plus the linters over the OS × Python matrix. `browser`
+runs the Playwright suite at the same time, on one Python per OS: those
+tests exercise the pages' JavaScript in Chromium, so the OS axis stays and
+the Python axis does not. `coverage` waits for both, combines the primary
+cells' `.coverage` data files, and publishes the reports and the PR
+comment. The browser suite is the longest step, so running it beside the
+matrix instead of after it on every cell is what keeps a CI run short
+(issue #359).
+
 ### Testing Resources
 
 - See [test/README.md](test/README.md) for comprehensive testing documentation
