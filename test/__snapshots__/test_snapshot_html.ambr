@@ -29202,7 +29202,8 @@
   }
   
   /* Footnotes (wenmode's GitHub-style section at the end of the text): a
-     hairline sets them off, each note is spaced like a paragraph, and the
+     hairline sets them off, each note is spaced like a paragraph (the notes
+     only: a list inside a note keeps a body list's look), and the
      note a reference leads to — or the reference its ↩ leads back to — is
      marked while it is the page's target, landing clear of the sticky
      toolbar (the browser scrolls a target to the viewport's top). */
@@ -29213,20 +29214,20 @@
       font-size: 0.92em;
   }
   
-  .theme-minimal #transcript .content .footnotes ol {
+  .theme-minimal #transcript .content .footnotes > ol {
       margin-top: 0;
   }
   
-  .theme-minimal #transcript .content .footnotes li + li {
+  .theme-minimal #transcript .content .footnotes > ol > li + li {
       margin-top: 0.3em;
   }
   
-  .theme-minimal #transcript .content .footnotes li,
+  .theme-minimal #transcript .content .footnotes > ol > li,
   .theme-minimal #transcript .content sup > a {
       scroll-margin-top: calc(var(--mn-bar-h, 44px) + var(--mn-filter-h, 0px) + 8px);
   }
   
-  .theme-minimal #transcript .content .footnotes li:target,
+  .theme-minimal #transcript .content .footnotes > ol > li:target,
   .theme-minimal #transcript .content sup > a:target {
       --mark: color-mix(in srgb, var(--note) 18%, transparent);
       border-radius: 3px;
@@ -45043,7 +45044,8 @@
   }
   
   /* Footnotes (wenmode's GitHub-style section at the end of the text): a
-     hairline sets them off, each note is spaced like a paragraph, and the
+     hairline sets them off, each note is spaced like a paragraph (the notes
+     only: a list inside a note keeps a body list's look), and the
      note a reference leads to — or the reference its ↩ leads back to — is
      marked while it is the page's target, landing clear of the sticky
      toolbar (the browser scrolls a target to the viewport's top). */
@@ -45054,20 +45056,20 @@
       font-size: 0.92em;
   }
   
-  .theme-minimal #transcript .content .footnotes ol {
+  .theme-minimal #transcript .content .footnotes > ol {
       margin-top: 0;
   }
   
-  .theme-minimal #transcript .content .footnotes li + li {
+  .theme-minimal #transcript .content .footnotes > ol > li + li {
       margin-top: 0.3em;
   }
   
-  .theme-minimal #transcript .content .footnotes li,
+  .theme-minimal #transcript .content .footnotes > ol > li,
   .theme-minimal #transcript .content sup > a {
       scroll-margin-top: calc(var(--mn-bar-h, 44px) + var(--mn-filter-h, 0px) + 8px);
   }
   
-  .theme-minimal #transcript .content .footnotes li:target,
+  .theme-minimal #transcript .content .footnotes > ol > li:target,
   .theme-minimal #transcript .content sup > a:target {
       --mark: color-mix(in srgb, var(--note) 18%, transparent);
       border-radius: 3px;
@@ -69525,7 +69527,8 @@
   }
   
   /* Footnotes (wenmode's GitHub-style section at the end of the text): a
-     hairline sets them off, each note is spaced like a paragraph, and the
+     hairline sets them off, each note is spaced like a paragraph (the notes
+     only: a list inside a note keeps a body list's look), and the
      note a reference leads to — or the reference its ↩ leads back to — is
      marked while it is the page's target, landing clear of the sticky
      toolbar (the browser scrolls a target to the viewport's top). */
@@ -69536,20 +69539,20 @@
       font-size: 0.92em;
   }
   
-  .theme-minimal #transcript .content .footnotes ol {
+  .theme-minimal #transcript .content .footnotes > ol {
       margin-top: 0;
   }
   
-  .theme-minimal #transcript .content .footnotes li + li {
+  .theme-minimal #transcript .content .footnotes > ol > li + li {
       margin-top: 0.3em;
   }
   
-  .theme-minimal #transcript .content .footnotes li,
+  .theme-minimal #transcript .content .footnotes > ol > li,
   .theme-minimal #transcript .content sup > a {
       scroll-margin-top: calc(var(--mn-bar-h, 44px) + var(--mn-filter-h, 0px) + 8px);
   }
   
-  .theme-minimal #transcript .content .footnotes li:target,
+  .theme-minimal #transcript .content .footnotes > ol > li:target,
   .theme-minimal #transcript .content sup > a:target {
       --mark: color-mix(in srgb, var(--note) 18%, transparent);
       border-radius: 3px;
