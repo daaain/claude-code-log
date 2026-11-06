@@ -1176,8 +1176,9 @@ def test_an_undecodable_blob_in_the_catch_up_does_not_fail_the_pass(
 ) -> None:
     """A blob that decompresses but is not UTF-8 JSON raises a ValueError
     (UnicodeDecodeError, JSONDecodeError) from `decode_entry`, not a
-    zlib.error: the same warning, the pass returns and still checkpoints,
-    and the next pass that rewrites the file heals the index."""
+    zlib.error. The catch-up leaves that message out and names the file,
+    the pass returns and still checkpoints, and the next pass that
+    rewrites the file heals the index."""
     from claude_code_log import converter
     from claude_code_log.cache import get_cache_db_path
     from claude_code_log.converter import process_projects_hierarchy
@@ -1211,7 +1212,9 @@ def test_an_undecodable_blob_in_the_catch_up_does_not_fail_the_pass(
 
     assert failed == []
     assert checkpoints == [db_path], "the WAL checkpoint was skipped"
-    assert "search index was not brought up to date" in capsys.readouterr().out
+    err = capsys.readouterr().err
+    assert str(jsonl) in err, err
+    assert "until the file is rewritten" in err, err
 
     jsonl.write_text(_entry_line("the second version mentions platypus"))
     bump_mtime(jsonl)
@@ -1222,6 +1225,75 @@ def test_an_undecodable_blob_in_the_catch_up_does_not_fail_the_pass(
         assert count_matches(conn, "kangaroo") == 0
     finally:
         conn.close()
+
+
+def _two_entry_cache_with_a_bad_blob(tmp_path: Path, blob: bytes) -> tuple[Path, Path]:
+    """A converted project whose one file holds two messages, the first of
+    which has a cached blob that cannot be decoded. No index yet."""
+    from claude_code_log.cache import get_cache_db_path
+    from claude_code_log.converter import process_projects_hierarchy
+
+    projects = tmp_path / "projects"
+    project = projects / "-home-u-proj"
+    project.mkdir(parents=True)
+    jsonl = project / "session.jsonl"
+    second = json.loads(_entry_line("the second message mentions wombat"))
+    second["uuid"] = "uuid-second"
+    second["parentUuid"] = "uuid-hook"
+    jsonl.write_text(
+        _entry_line("the first message mentions kangaroo") + json.dumps(second) + "\n"
+    )
+    process_projects_hierarchy(projects, silent=True)
+    db_path = get_cache_db_path(projects)
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "UPDATE messages SET content = ? WHERE id = "
+            "(SELECT min(id) FROM messages WHERE file_id = 1)",
+            (blob,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return db_path, jsonl
+
+
+UNDECODABLE_BLOBS = [
+    pytest.param(b"not zlib at all", id="not-zlib"),
+    pytest.param(zlib.compress(b"\xff\xfe\x00 not utf-8"), id="not-utf8"),
+    pytest.param(zlib.compress(b"{not json"), id="not-json"),
+]
+
+
+@pytest.mark.parametrize("blob", UNDECODABLE_BLOBS)
+def test_serve_start_indexes_around_an_undecodable_blob(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], blob: bytes
+) -> None:
+    """`serve` builds the index at start; one bad blob must not stop it.
+
+    The rest of the file is indexed, the file is named once, and it is not
+    revisited (nor reported again) until the cache rewrites it.
+    """
+    from claude_code_log.cli import _build_search_index
+
+    db_path, jsonl = _two_entry_cache_with_a_bad_blob(tmp_path, blob)
+    capsys.readouterr()
+
+    _build_search_index(db_path, ("text",), rebuild=False)
+
+    err = capsys.readouterr().err
+    assert str(jsonl) in err, err
+    assert "until the file is rewritten" in err, err
+    conn = sqlite3.connect(db_path)
+    try:
+        assert index_status(conn).ready
+        assert count_matches(conn, "wombat", fields=("text",)) == 1
+        assert count_matches(conn, "kangaroo", fields=("text",)) == 0
+    finally:
+        conn.close()
+
+    _build_search_index(db_path, ("text",), rebuild=False)
+    assert str(jsonl) not in capsys.readouterr().err, "reported on every start"
 
 
 def test_catch_up_index_tolerates_a_file_indexed_since_its_snapshot(

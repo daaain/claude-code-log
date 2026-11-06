@@ -37,6 +37,7 @@ import functools
 import json
 import re
 import sqlite3
+import sys
 import zlib
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -586,9 +587,17 @@ def _index_status(conn: sqlite3.Connection) -> IndexStatus:
 
 
 def _rows_for_file(
-    conn: sqlite3.Connection, file_id: int, fields: Sequence[str]
+    conn: sqlite3.Connection,
+    file_id: int,
+    fields: Sequence[str],
+    undecodable: list[int],
 ) -> Iterator[tuple[Any, ...]]:
-    """Yield insertable FTS rows for one cached file."""
+    """Yield insertable FTS rows for one cached file.
+
+    A blob that does not decode (not zlib data, not UTF-8, not JSON) is
+    skipped and its row id appended to ``undecodable``: one damaged row
+    must not keep the rest of the file, or the whole index, from building.
+    """
     skip = tuple(SKIP_TYPES)
     placeholders = ",".join("?" * len(skip))
     cursor = conn.execute(
@@ -597,8 +606,33 @@ def _rows_for_file(
         (file_id, *skip),
     )
     for row_id, blob in cursor:
-        extracted = extract_search_text(decode_entry(blob))
+        # ValueError covers what decoding raises past zlib: UnicodeDecodeError
+        # and JSONDecodeError are both subclasses, neither a zlib.error.
+        try:
+            entry = decode_entry(blob)
+        except (zlib.error, ValueError):
+            undecodable.append(int(row_id))
+            continue
+        extracted = extract_search_text(entry)
         yield (row_id, *[extracted[name] for name in fields])
+
+
+def _report_undecodable(conn: sqlite3.Connection, file_id: int, count: int) -> None:
+    """Name a file whose cached messages could not all be indexed.
+
+    The file is still recorded as indexed, so it is not revisited, and this
+    is not repeated, until the cache rewrites it; that rewrite re-extracts
+    every message, the damaged ones included.
+    """
+    row = conn.execute(
+        "SELECT file_path FROM cached_files WHERE id = ?", (file_id,)
+    ).fetchone()
+    name = row[0] if row and row[0] else f"cached file {file_id}"
+    print(
+        f"Warning: {name}: {count} cached message(s) could not be decoded and "
+        "are left out of the search index until the file is rewritten.",
+        file=sys.stderr,
+    )
 
 
 def _index_file(
@@ -609,7 +643,10 @@ def _index_file(
     Materialised per file (a few thousand rows at most) so the rowids can be
     written to ROWS_TABLE alongside the FTS insert.
     """
-    rows = list(_rows_for_file(conn, file_id, fields))
+    undecodable: list[int] = []
+    rows = list(_rows_for_file(conn, file_id, fields, undecodable))
+    if undecodable:
+        _report_undecodable(conn, file_id, len(undecodable))
     if not rows:
         return 0
     conn.executemany(insert_sql, rows)
