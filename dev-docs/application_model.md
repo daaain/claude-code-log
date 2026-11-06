@@ -332,8 +332,9 @@ The rows stay, so a paginated project keeps its page count. The cache's
 pre-filter (`load_cached_entries_filtered`) and the renderer's cut
 (`filter_messages_by_date`) read a bound through one function,
 `utils.parse_date_bounds`, in UTC: a bound naming a whole day (`today`,
-`N days ago`, a date without a time) covers that day, while `now`,
-`2 hours ago` or any explicit time, midnight included, is an instant.
+`N day(s) ago`, in any case, or a date without a time) covers that day,
+while `now`, `2 hours ago` or any explicit time, midnight included, is an
+instant.
 
 **A refresh that stops part-way is redone, not trusted.** A refresh
 commits each file's entry rows in a transaction of its own, then writes

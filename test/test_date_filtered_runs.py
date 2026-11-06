@@ -346,6 +346,27 @@ def test_a_bound_naming_a_day_covers_that_day(text: str, start: str, end: str) -
     assert (str(from_dt), str(to_dt)) == (start, end)
 
 
+@pytest.mark.parametrize(
+    ("text", "days_back"),
+    [
+        ("today", 0),
+        ("Today", 0),
+        ("YESTERDAY", 1),
+        ("1 day ago", 1),
+        ("2 days ago", 2),
+        (" 3 Days Ago ", 3),
+    ],
+)
+def test_a_relative_day_covers_that_day(text: str, days_back: int) -> None:
+    from_dt, to_dt = parse_date_bounds(text, text)
+    assert from_dt is not None and to_dt is not None
+    day = (datetime.now(timezone.utc) - timedelta(days=days_back)).date()
+    assert (from_dt, to_dt) == (
+        datetime.combine(day, datetime.min.time()),
+        datetime.combine(day, datetime.max.time()),
+    )
+
+
 def test_a_bound_naming_an_instant_keeps_its_time() -> None:
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     from_dt, to_dt = parse_date_bounds("2 hours ago", "now")

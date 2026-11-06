@@ -198,15 +198,20 @@ def parse_timestamp(timestamp_str: str | None) -> Optional[datetime]:
     return dt
 
 
+_RELATIVE_DAY = re.compile(
+    r"\s*(?:today|yesterday|\d+\s+days?\s+ago)\s*", re.IGNORECASE
+)
+
+
 def _whole_day(text: str, parsed_period: str, parsed: datetime) -> bool:
     """Does ``text`` name a day rather than an instant?
 
-    The relative days (``today``, ``yesterday``, ``N days ago``) do, and
-    so does a date written without a time (``2026-01-01``, ``Jan 5``):
-    dateparser reads those as midnight. ``now``, ``2 hours ago`` and any
-    explicit time, midnight included, name an instant.
+    The relative days (``today``, ``yesterday``, ``N day(s) ago``, in any
+    case) do, and so does a date written without a time (``2026-01-01``,
+    ``Jan 5``): dateparser reads those as midnight. ``now``, ``2 hours
+    ago`` and any explicit time, midnight included, name an instant.
     """
-    if text in ("today", "yesterday") or "days ago" in text:
+    if _RELATIVE_DAY.fullmatch(text):
         return True
     return parsed_period == "day" and parsed.time() == datetime.min.time()
 

@@ -638,9 +638,8 @@ The tool implements a SQLite-based caching system for performance:
   window marked stale, so the next unfiltered run re-renders them. Its
   refresh therefore loads whole files when they changed and the incremental
   refresh declines, not just the window's entries, and nothing when no file
-  changed. A pass
-  that loses a project ends with a count of the failed projects, and the CLI
-  exits 1
+  changed. A pass that loses a project ends with a count of the failed
+  projects, and the CLI exits 1
 - **Performance**: 10-100x faster loading for large projects
 
 The cache automatically rebuilds when source files change or cache schema version changes.
