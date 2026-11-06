@@ -607,3 +607,92 @@ class TestLineNumberedCode:
         pitch = (box["numbersHeight"] / box["lines"], box["codeHeight"] / box["lines"])
         assert abs(box["numbersHeight"] - box["codeHeight"]) < 1, (box, pitch)
         assert abs(box["numbersTop"] - box["codeTop"]) < 1, box
+
+
+# Footnotes (#363): wenmode renders `[^n]` as `sup > a[data-footnote-ref]`
+# and a trailing `section.footnotes > ol > li` per note.
+FOOTNOTES_MD = (
+    "Claude answers with sources[^1], keeps going with a second claim[^2] "
+    "and a third one[^3].\n\n"
+    "A second paragraph, after the references.\n\n"
+    "[^1]: The first note, short.\n"
+    "[^2]: The second note, which runs on for a while so that it wraps onto "
+    "a second line in a narrow column and shows how a long note sits.\n"
+    "[^3]: The third note.\n"
+)
+
+
+def _footnotes_fixture(tmp_path: Path) -> Path:
+    """One answer with three footnotes, then enough short exchanges below it
+    that a `:target` in the answer can scroll to the top of the viewport —
+    where the minimal theme's sticky toolbar is. (Many short cards, not one
+    long one: a long Markdown body folds into a two-line preview.)"""
+    entries = [
+        _entry("u1", None, "user", [{"type": "text", "text": "Cite your sources."}]),
+        _entry("a12", "u1", "assistant", [{"type": "text", "text": FOOTNOTES_MD}]),
+    ]
+    parent = "a12"
+    for i in range(40):
+        user, answer = f"u{i:02}", f"a{i:02}"
+        entries.append(
+            _entry(user, parent, "user", [{"type": "text", "text": "Go on."}])
+        )
+        entries.append(
+            _entry(
+                answer, user, "assistant", [{"type": "text", "text": "One more line."}]
+            )
+        )
+        parent = answer
+    src = tmp_path / "footnotes.jsonl"
+    src.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+    return src
+
+
+FOOTNOTES_BOX = """
+() => {
+    const section = document.querySelector('section.footnotes');
+    const notes = [...section.querySelectorAll('li')];
+    const refs = [...document.querySelectorAll('sup > a[data-footnote-ref]')];
+    const rect = (el) => el.getBoundingClientRect();
+    const background = (el) => getComputedStyle(el).backgroundColor;
+    const target = document.querySelector(':target');
+    const toolbar = document.querySelector('.mn-toolbar');
+    return {
+        gaps: notes.slice(1).map((li, i) => rect(li).top - rect(notes[i]).bottom),
+        noteBackgrounds: notes.map(background),
+        refBackgrounds: refs.map(background),
+        targetTop: target ? rect(target).top : null,
+        toolbarBottom: toolbar ? rect(toolbar).bottom : 0,
+    };
+}
+"""
+
+
+@pytest.mark.browser
+class TestFootnotes:
+    @pytest.mark.parametrize("theme", ["classic", "minimal"])
+    def test_consecutive_notes_are_spaced(
+        self, page: Page, tmp_path: Path, theme: str
+    ) -> None:
+        page.goto(_render(tmp_path, _footnotes_fixture(tmp_path), theme).as_uri())
+        box = page.evaluate(FOOTNOTES_BOX)
+        assert len(box["gaps"]) == 2, box
+        assert all(gap >= 3 for gap in box["gaps"]), box["gaps"]
+
+    @pytest.mark.parametrize(
+        "anchor, key",
+        [
+            ("user-content-fn-2", "noteBackgrounds"),
+            ("user-content-fnref-2", "refBackgrounds"),
+        ],
+    )
+    def test_the_target_is_marked_and_clear_of_the_toolbar(
+        self, page: Page, tmp_path: Path, anchor: str, key: str
+    ) -> None:
+        url = _render(tmp_path, _footnotes_fixture(tmp_path)).as_uri()
+        page.goto(f"{url}#{anchor}")
+        box = page.evaluate(FOOTNOTES_BOX)
+        first, second, third = box[key]
+        assert second != first and first == third, box[key]
+        assert box["targetTop"] is not None, box
+        assert box["targetTop"] >= box["toolbarBottom"], box
