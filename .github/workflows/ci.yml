@@ -180,6 +180,8 @@ jobs:
     # union, as they did when every suite ran in one job.
     runs-on: ubuntu-latest
     needs: [test, browser]
+    env:
+      PYTHON_VERSION: "3.12"
     steps:
       - uses: actions/checkout@v4
 
@@ -188,6 +190,17 @@ jobs:
         with:
           enable-cache: true
 
+      # The same interpreter and the same coverage as the cells that
+      # measured: a report parses the sources to count statements, and
+      # the count differs between Python versions (3.14 counts 276 fewer
+      # over this package than 3.12, in the same files the data covers),
+      # which would misstate the total and every per-file figure.
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: uv sync --dev
+
       - name: Download coverage data
         uses: actions/download-artifact@v4
         with:
@@ -195,16 +208,13 @@ jobs:
           path: coverage-data
 
       - name: Combine and report
-        # `coverage` alone, not the project: reporting needs the sources
-        # (checked out) and pyproject's [tool.coverage] (relative_files),
-        # not the package's dependencies.
         run: |
-          uvx --from 'coverage[toml]>=7.9' coverage combine --keep \
+          uv run coverage combine --keep \
             coverage-data/coverage-data-test/.coverage \
             coverage-data/coverage-data-browser/.coverage
-          uvx --from 'coverage[toml]>=7.9' coverage xml
-          uvx --from 'coverage[toml]>=7.9' coverage html
-          uvx --from 'coverage[toml]>=7.9' coverage report
+          uv run coverage xml
+          uv run coverage html
+          uv run coverage report
 
       - name: Upload coverage HTML report as artifact
         uses: actions/upload-artifact@v4
