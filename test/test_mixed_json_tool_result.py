@@ -102,13 +102,27 @@ class TestSplitJsonPrefix:
             "42\nmore",  # scalars are not a JSON head
             '"quoted"\nmore',
             "",
+            # A stream of documents (JSON Lines) is not one document, then
+            # text: rendering record 1 as JSON and the rest as text would
+            # be lopsided.
+            '{"a": 1, "b": 2}\n{"a": 3, "b": 4}\n{"a": 5, "b": 6}',
+            '{"a": 1}\n\n  [1, 2]\nmore',
+            '[{"id": 1}]\n{"id": 2} trailing',
         ],
     )
     def test_not_mixed(self, content: str):
         assert split_json_prefix(content) is None
 
+    def test_tail_merely_starting_with_brace_is_text(self):
+        """Only a *parsing* document in the tail makes a stream."""
+        assert split_json_prefix('{"a": 1}\n{not json}') == ('{"a": 1}', "{not json}")
+
     def test_windows_newline_after_head(self):
-        assert split_json_prefix(f"{JSON_HEAD}\r\nrest") == (JSON_HEAD, "rest")
+        assert split_json_prefix(f"{JSON_HEAD}\r\nrest\r\n") == (JSON_HEAD, "rest")
+
+    def test_blank_lines_before_tail_are_dropped(self):
+        """The tail starts at its first line, indentation kept."""
+        assert split_json_prefix('{"a": 1}\n\n  text  \n') == ('{"a": 1}', "  text  ")
 
 
 class TestHtmlMixedResult:
@@ -203,6 +217,12 @@ class TestMarkdownMixedResult:
     def test_error_result_stays_plain_fence(self):
         out = self._render(_result(MIXED, is_error=True))
         assert out == f"```\n{MIXED}\n```"
+
+    def test_error_list_result_stays_prose(self):
+        """The list path's error guard: text items stay unfenced prose, as
+        before, so no JSON fence appears."""
+        out = self._render(_result([{"type": "text", "text": MIXED}], is_error=True))
+        assert out == MIXED
 
     @pytest.mark.parametrize(
         "content",

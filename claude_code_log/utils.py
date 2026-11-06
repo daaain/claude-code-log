@@ -1048,22 +1048,40 @@ def split_json_prefix(text: str) -> Optional[tuple[str, str]]:
     leading whitespace) with ``{`` or ``[``, parse completely, and end its
     line: anything but whitespace after it on that line (words, a second
     document) means the result is not JSON-headed and stays text. Scalars
-    are never a head.
+    are never a head. Nor is the first record of a stream: when the tail
+    itself starts with a JSON document (JSON Lines, concatenated
+    documents), the whole result stays text rather than render one record
+    as JSON and the rest as text.
+
+    Blank lines between the document and the tail are not part of the
+    tail; its first line keeps its indentation.
     """
     stripped = text.lstrip()
-    if stripped[:1] not in ("{", "["):
-        return None
-    try:
-        _, end = json.JSONDecoder().raw_decode(stripped)
-    except (ValueError, RecursionError):
+    end = _json_document_end(stripped)
+    if end is None:
         return None
     remainder = stripped[end:]
     same_line, newline, tail = remainder.partition("\n")
     if same_line.strip():
         return None
-    if not newline or not tail.strip():
+    tail = tail.strip("\r\n") if newline else ""
+    if not tail.strip():
         tail = ""
+    elif _json_document_end(tail.lstrip()) is not None:
+        return None
     return stripped[:end], tail
+
+
+def _json_document_end(text: str) -> Optional[int]:
+    """Index just past the JSON object or array ``text`` starts with, or
+    ``None`` when it does not start with one (scalars included)."""
+    if text[:1] not in ("{", "["):
+        return None
+    try:
+        _, end = json.JSONDecoder().raw_decode(text)
+    except (ValueError, RecursionError):
+        return None
+    return end
 
 
 def generate_unified_diff(old_string: str, new_string: str) -> str:
