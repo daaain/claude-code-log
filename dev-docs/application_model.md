@@ -1780,6 +1780,24 @@ through `_render_params` (behind `_protect_html_tags`) or a `yaml` fence,
 but only for user and assistant text — narrower than the HTML side, since
 most other bodies are code-fenced in `.md` anyway.
 
+**Footnote ids are scoped per message.** wenmode gives every rendered
+body GitHub's ids (`user-content-fn-1`, `user-content-fnref-1`, the
+`sr-only` heading `footnote-label`), and a page holds many bodies, so
+unscoped the second answer's `[1]` would jump to the first answer's
+note. The HTML render loop wraps each message's formatting in
+`html/utils.py::footnote_scope`, and every render path rewrites the ids
+after the memo (`scope_footnote_ids`: `user-content-fn-<scope>-1`,
+`footnote-label-<scope>`), so the memo stays keyed on the text. The
+scope is the message's fragment-store key (`e<entry ordinal>-<part>`),
+which every tree and pass agrees on, so a fragment reused from the
+store never repeats a freshly formatted message's ids on one page;
+without a store it is the message's index in its tree (`m<index>`). A
+preview copy of a long body renders in a `-preview` sub-scope, since
+the card holds both copies. The Markdown output has the same collision
+in its `[^1]` labels and prefixes them the same way (`[^m<index>-1]`),
+for user and assistant text and thinking, only in a text that defines a
+footnote. `test/test_footnote_ids.py` pins both.
+
 **Extensions are transforms, not inline rules.** SHA linkification
 (#156) runs after parsing, as a `RootTransform` walking `Text` and
 `InlineCode` nodes and skipping anything under a `Link`. Nothing about

@@ -99,3 +99,18 @@ def test_markdown_output_footnote_labels_are_distinct(
     # Each answer's reference uses its own label.
     for label in definitions:
         assert text.count(f"[^{label}]") >= 2, (label, text)
+
+
+def test_a_preview_copy_does_not_repeat_the_full_copys_ids(tmp_path: Path) -> None:
+    """A long body folds into a preview plus the full text, both rendered;
+    a footnote complete within the preview lines must not give the card
+    two elements with one id."""
+    text = NOTE.format("LONG") + "\n".join(["More."] * 30)
+    src = tmp_path / "long.jsonl"
+    src.write_text(json.dumps(_entry("a1", None, "assistant", text)) + "\n")
+    html = generate_html(load_transcript(src, silent=True), "Long")
+    ids = ID_RE.findall(html)
+    assert len(ids) == len(set(ids)), sorted(ids)
+    assert any("preview" in i for i in ids) and any("preview" not in i for i in ids)
+    for target in HREF_RE.findall(html):
+        assert ids.count(target) == 1, (target, ids)

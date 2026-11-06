@@ -514,6 +514,23 @@ class MarkdownRenderer(Renderer):
         sid = message.meta.session_id if message.meta else ""
         return self._teammate_colors_by_session.get(sid, {})
 
+    _FOOTNOTE_LABEL_RE = re.compile(r"\[\^([^\]\s]+)\]")
+    _FOOTNOTE_DEFINITION_RE = re.compile(r"^\s*\[\^[^\]\s]+\]:", re.MULTILINE)
+
+    def _scope_footnotes(self, text: str, message: Optional[TemplateMessage]) -> str:
+        """Prefix a message's footnote labels with its index on the page.
+
+        Every message's Markdown is written into one document, so two
+        answers each defining ``[^1]`` would share a label and a reader's
+        renderer would pair every ``[^1]`` with one of the notes. A text
+        that defines no footnote is left alone.
+        """
+        index = message.message_index if message is not None else None
+        if index is None or not self._FOOTNOTE_DEFINITION_RE.search(text):
+            return text
+        scope = f"m{index}"
+        return self._FOOTNOTE_LABEL_RE.sub(lambda m: f"[^{scope}-{m.group(1)}]", text)
+
     def _quote(self, text: str) -> str:
         """Prefix each line with '> ' to create a blockquote.
 
@@ -874,7 +891,7 @@ class MarkdownRenderer(Renderer):
     # -------------------------------------------------------------------------
 
     def format_UserTextMessage(
-        self, content: UserTextMessage, _: TemplateMessage
+        self, content: UserTextMessage, message: TemplateMessage
     ) -> str:
         """Format → user text as Markdown when clean, else fenced code.
 
@@ -915,6 +932,7 @@ class MarkdownRenderer(Renderer):
                         # where the SHA-link transform doesn't fire inside
                         # codespans / fenced code).
                         frontmatter, body = self._split_frontmatter(item.text)
+                        body = self._scope_footnotes(body, message)
                         parts.append(
                             frontmatter + _protect_html_tags(self._linkify_shas(body))
                         )
@@ -1082,7 +1100,7 @@ class MarkdownRenderer(Renderer):
     # -------------------------------------------------------------------------
 
     def format_AssistantTextMessage(
-        self, content: AssistantTextMessage, _: TemplateMessage
+        self, content: AssistantTextMessage, message: TemplateMessage
     ) -> str:
         """Format → blockquoted text."""
         parts: list[str] = []
@@ -1096,11 +1114,12 @@ class MarkdownRenderer(Renderer):
                     # the natural text shape (a leading "> " would
                     # confuse the word-boundary regex anchor).
                     frontmatter, body = self._split_frontmatter(item.text)
+                    body = self._scope_footnotes(body, message)
                     parts.append(self._quote(frontmatter + self._linkify_shas(body)))
         return "\n\n".join(parts)
 
     def format_ThinkingMessage(
-        self, content: ThinkingMessage, _: TemplateMessage
+        self, content: ThinkingMessage, message: TemplateMessage
     ) -> str:
         """Format → <details><summary>Thinking...</summary>blockquote</details>."""
         # SHA-linkify before quoting so the substitution sees a clean
@@ -1108,7 +1127,9 @@ class MarkdownRenderer(Renderer):
         # anchor) and parity with the HTML side — assistant thinking
         # there flows through the wenmode pipeline, whose SHA-link
         # transform does the same job.
-        quoted = self._quote(self._linkify_shas(content.thinking))
+        quoted = self._quote(
+            self._linkify_shas(self._scope_footnotes(content.thinking, message))
+        )
         return self._collapsible("Thinking...", quoted)
 
     def format_UnknownMessage(self, content: UnknownMessage, _: TemplateMessage) -> str:
