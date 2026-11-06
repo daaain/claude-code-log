@@ -479,6 +479,182 @@ def test_an_interrupted_full_refresh_leaves_the_cache_as_it_was(
     assert len(rows["sess-gamma.jsonl"]) == 2
 
 
+def test_reads_inside_a_scope_see_the_spooled_rows(project: Path) -> None:
+    """The incremental refresh reads back the rows it has just written:
+    file states, uuid owners, the closure's entries. Inside a scope they
+    are in the spool, and the reads find them there, a new file's
+    under a provisional id."""
+    manager = _manager(project)
+    files = sorted(project.glob("*.jsonl"))
+    _refresh(manager, files, files)
+    alpha = project / "sess-alpha.jsonl"
+    gamma = project / "sess-gamma.jsonl"
+    old_alpha = _entries(alpha)
+    files, _changed = _grow(project)
+    all_alpha = _entries(alpha)
+
+    def read_back() -> None:
+        states = manager.get_file_states(["sess-alpha.jsonl", "sess-gamma.jsonl"])
+        assert len(states["sess-alpha.jsonl"].row_fingerprints) == 4
+        assert len(states["sess-gamma.jsonl"].row_fingerprints) == 2
+        assert states["sess-gamma.jsonl"].sessions == {"sess-gamma"}
+        owners = manager.get_uuid_owners(["sess-gamma-u0", "sess-alpha-u1"])
+        assert owners["sess-gamma-u0"] == {("sess-gamma", "user")}
+        assert owners["sess-alpha-u1"] == {("sess-alpha", "user")}
+        assert manager.get_session_file_map()["sess-gamma"] == {"sess-gamma.jsonl"}
+        assert manager.is_file_cached(alpha) and manager.is_file_cached(gamma)
+        loaded = manager.load_cached_entries(gamma)
+        assert loaded is not None and len(loaded) == 2
+        loaded = manager.load_cached_entries(alpha)
+        assert loaded is not None and [getattr(e, "uuid", None) for e in loaded] == [
+            getattr(e, "uuid", None) for e in all_alpha
+        ]
+
+    with manager.atomic_refresh():
+        assert manager.extend_cached_entries(
+            alpha, all_alpha, all_alpha[len(old_alpha) :]
+        )
+        manager.save_cached_entries(gamma, _entries(gamma))
+        read_back()
+        # Unspooled files read as before, through the same views.
+        assert manager.is_file_cached(project / "sess-beta.jsonl")
+        _derive(manager, files)
+    read_back()
+    # The provisional id was replaced by a real one at the merge.
+    assert all(
+        row[0] > 0
+        for row in sqlite3.connect(manager.db_path)
+        .execute("SELECT id FROM cached_files")
+        .fetchall()
+    )
+
+
+def test_the_overlay_searches_the_indexes_of_both_arms(project: Path) -> None:
+    """The lookups the incremental refresh makes stay index searches on
+    the cache's side of the overlay, and on the spool's."""
+    manager = _manager(project)
+    files = sorted(project.glob("*.jsonl"))
+    _refresh(manager, files, files)
+    files, changed = _grow(project)
+    with manager.atomic_refresh():
+        for f in changed:
+            manager.save_cached_entries(f, _entries(f))
+        conn = manager._shared_conn  # pyright: ignore[reportPrivateUsage]
+        assert conn is not None
+
+        def plan(sql: str) -> str:
+            return "\n".join(
+                row[3] for row in conn.execute("EXPLAIN QUERY PLAN " + sql)
+            )
+
+        by_uuid = plan(
+            "SELECT _uuid, session_id, type FROM messages"
+            " WHERE project_id = 1 AND _uuid IN ('a', 'b')"
+        )
+        assert "idx_messages_project_uuid" in by_uuid, by_uuid
+        assert "messages_uuid" in by_uuid, by_uuid
+        by_file = plan(
+            "SELECT content FROM messages WHERE file_id IN (1, -1) ORDER BY file_id, id"
+        )
+        assert "idx_messages_file" in by_file, by_file
+        assert "SCAN main.messages" not in by_file and "SCAN m\n" not in by_file, (
+            by_file
+        )
+        _derive(manager, files)
+
+
+def _fail_sidecar_merge(m: pytest.MonkeyPatch) -> None:
+    m.setattr(CacheManager, "merge_session_sidecar", _locked)
+
+
+@pytest.mark.parametrize(
+    "inject",
+    [_fail_second_file_write, _fail_session_rows_write, _fail_sidecar_merge],
+    ids=["second-file-write", "session-rows-write", "sidecar-merge"],
+)
+def test_an_interrupted_incremental_refresh_leaves_the_cache_as_it_was(
+    project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    inject: Any,
+) -> None:
+    """The incremental path, locked out at any of its writes."""
+    projects_dir = project.parent
+    db_path = projects_dir / "cache.db"
+    monkeypatch.setenv("CLAUDE_CODE_LOG_CACHE_PATH", str(db_path))
+    _pass(projects_dir)
+    before = _dump(db_path)
+
+    _grow(project)
+    capsys.readouterr()
+    with monkeypatch.context() as m:
+        inject(m)
+        m.setattr(converter, "is_busy_database_error", _never_busy)
+        _pass(projects_dir)
+    out = capsys.readouterr().out
+    # The pass prints the failure's traceback: the path under test is in it.
+    assert "_incremental_cache_refresh" in out, out
+    assert "projects failed" in out, out
+    assert _dump(db_path) == before
+    assert _spools(db_path) == []
+
+    _pass(projects_dir)
+    rows = _rows_by_file(db_path)
+    assert len(rows["sess-alpha.jsonl"]) == 4
+    assert len(rows["sess-gamma.jsonl"]) == 2
+
+
+def test_two_refreshes_of_one_project_overlapping_leave_it_repairable(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The later commit wins whole; the cache never records a file as
+    current over derived rows from an earlier parse of it.
+
+    Refresh A parses the session at one turn; while A is between its
+    entry write and its derived writes, refresh B (another process's,
+    here another manager's) parses a newer turn and commits. With
+    several transactions, A's derived rows then land over B's entry
+    rows and the file reads current while the session row predates it:
+    the newer turn is never rendered. In one transaction A's snapshot
+    wins whole, its file record is older than the file, and the next
+    pass repairs it.
+    """
+    projects_dir = project.parent
+    db_path = projects_dir / "cache.db"
+    monkeypatch.setenv("CLAUDE_CODE_LOG_CACHE_PATH", str(db_path))
+    _pass(projects_dir)
+    alpha = project / "sess-alpha.jsonl"
+    _append(alpha, _turn("sess-alpha", 1, "turn one"))
+
+    fired: List[int] = []
+    original = CacheManager.update_session_cache
+
+    def interleave(self: CacheManager, *args: Any, **kwargs: Any) -> None:
+        if not fired:
+            fired.append(1)
+            _append(alpha, _turn("sess-alpha", 2, "turn two"))
+            other = CacheManager(project, get_library_version(), db_path=db_path)
+            converter.ensure_fresh_cache(project, other, silent=True)
+        original(self, *args, **kwargs)
+
+    with monkeypatch.context() as m:
+        m.setattr(CacheManager, "update_session_cache", interleave)
+        _pass(projects_dir)
+    assert fired  # positive control: B ran inside A
+
+    # The derived rows are where the race shows: with several
+    # transactions, A's session row (turn one: 4 messages) lands over
+    # B's entry rows (turn two: 6), the file reads current, and no pass
+    # recomputes it. The entry rows themselves are B's either way.
+    _pass(projects_dir)
+    cached = CacheManager(project, get_library_version(), db_path=db_path)
+    data = cached.get_cached_project_data()
+    assert data is not None
+    assert data.sessions["sess-alpha"].message_count == 6
+    assert data.total_message_count == 6 + 2
+    assert "turn two" in (project / "session-sess-alpha.md").read_text(encoding="utf-8")
+
+
 def test_a_nested_scope_joins_the_outer_one(project: Path) -> None:
     manager = _manager(project)
     files = sorted(project.glob("*.jsonl"))

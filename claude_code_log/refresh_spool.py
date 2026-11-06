@@ -80,6 +80,14 @@ CREATE TABLE messages (
     {", ".join(f"{name} {decl}" for name, decl in MESSAGE_COLUMNS)}
 );
 CREATE INDEX messages_file ON messages(file_id);
+-- The lookups the incremental refresh makes while the spool overlays the
+-- cache (`CacheManager.atomic_refresh`), so they search here as they do
+-- in the cache's own indexes.
+CREATE INDEX messages_uuid ON messages(_uuid);
+CREATE INDEX messages_parent_uuid ON messages(_parent_uuid);
+CREATE INDEX messages_request_id ON messages(_request_id);
+CREATE INDEX messages_session ON messages(session_id);
+CREATE INDEX messages_type ON messages(type);
 """
 
 _INSERT_ROW = (

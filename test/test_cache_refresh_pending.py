@@ -459,16 +459,9 @@ def test_a_sidecar_that_cannot_be_written_is_dropped_not_trusted(
     assert repaired == reference
 
 
-@pytest.mark.parametrize(
-    "inject",
-    [_fail_second_file_write, _fail_session_rows_write],
-    ids=["second-file-write", "session-rows-write"],
-)
 def test_a_date_filtered_run_finishes_a_pending_refresh_in_full(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    inject: Callable[[pytest.MonkeyPatch, List[str]], None],
 ) -> None:
     """A date-filtered run refreshes the cache as an unfiltered one would.
 
@@ -489,16 +482,11 @@ def test_a_date_filtered_run_finishes_a_pending_refresh_in_full(
             entry["timestamp"] = entry["timestamp"].replace("01-01", "01-02")
         _append(project / f"{sid}.jsonl", late)
 
-    fired: List[str] = []
-    capsys.readouterr()
-    with monkeypatch.context() as m:
-        inject(m, fired)
-        m.setattr(converter, "is_busy_database_error", _never_busy)
-        _run(projects_dir)
-    out = capsys.readouterr().out
-    # Control: the refresh failed and left the flag set.
-    assert fired.count("LOCKED") == 1
-    assert "projects failed" in out, out
+    # A refresh pending, as migration 015 leaves every project it
+    # upgrades (a refresh commits whole or not at all, so nothing in a
+    # run leaves the flag set any more).
+    with sqlite3.connect(tmp_path / "cache.db") as conn:
+        conn.execute("UPDATE projects SET refresh_pending = 1")
     pending = CacheManager(project, get_library_version()).get_cached_project_data()
     assert pending is not None and pending.refresh_pending
 

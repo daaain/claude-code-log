@@ -4899,42 +4899,47 @@ def ensure_fresh_cache_detailed(
         if not needs_update:
             return CacheRefresh.NONE  # Cache is already fresh
 
-        # Streaming stage 4: when the update is driven purely by changed
-        # files over a populated cache, refresh from those files' bounded
-        # closure instead of loading the whole project. Declines (False)
-        # fall through to the unchanged full load below.
-        # Not after a refresh that never finished (migration 015): which
-        # session rows it left behind is unknown, so no closure is bounded.
-        if (
-            modified_files
-            and cached_project_data is not None
-            and cached_project_data.total_message_count > 0
-            and not cached_project_data.refresh_pending
-            and _incremental_refresh_enabled()
-        ):
-            if _incremental_cache_refresh(
-                project_dir,
-                cache_manager,
-                session_jsonl_files,
-                modified_files,
-                silent,
-                entry_store=entry_store,
-            ):
-                return CacheRefresh.INCREMENTAL
-
-        # Load and process messages to populate cache. One transaction
-        # for the whole refresh (`atomic_refresh`): the per-file entry
-        # writes of the load go to a spool, the session rows, sidecar and
-        # aggregates derived from them are deferred, and the scope's end
-        # commits all of it at once. A refresh that stops anywhere in
-        # between leaves the cache as it was, with nothing recorded as
-        # current. Limit, shared with every clearing write: another
-        # process's refresh that sets ``refresh_pending`` and fails while
-        # this one runs is cleared here; closing that needs a write
-        # generation, not a boolean.
-        if not silent:
-            print(f"Updating cache for {project_dir.name}...")
+        # One transaction for the whole refresh (`atomic_refresh`),
+        # whichever path it takes: the per-file entry writes go to a
+        # spool, the session rows, sidecar and aggregates derived from
+        # them are deferred, and the scope's end commits all of it at
+        # once. A refresh that stops anywhere in between leaves the
+        # cache as it was, with nothing recorded as current. Limit,
+        # shared with every clearing write: another process's refresh
+        # that sets ``refresh_pending`` and fails while this one runs
+        # is cleared here; closing that needs a write generation, not
+        # a boolean.
         with cache_manager.atomic_refresh():
+            # Streaming stage 4: when the update is driven purely by
+            # changed files over a populated cache, refresh from those
+            # files' bounded closure instead of loading the whole
+            # project. Declines (False) fall through to the full load
+            # below, in the same scope: the files the attempt parsed
+            # are in the spool, where the full load finds them current
+            # and loads them from, so a decline costs no second parse.
+            # Not after a refresh that never finished (migration 015):
+            # which session rows it left behind is unknown, so no
+            # closure is bounded.
+            if (
+                modified_files
+                and cached_project_data is not None
+                and cached_project_data.total_message_count > 0
+                and not cached_project_data.refresh_pending
+                and _incremental_refresh_enabled()
+            ):
+                if _incremental_cache_refresh(
+                    project_dir,
+                    cache_manager,
+                    session_jsonl_files,
+                    modified_files,
+                    silent,
+                    entry_store=entry_store,
+                ):
+                    return CacheRefresh.INCREMENTAL
+
+            # Load and process messages to populate cache
+            if not silent:
+                print(f"Updating cache for {project_dir.name}...")
             messages, _tree = load_directory_transcripts(
                 project_dir,
                 cache_manager,

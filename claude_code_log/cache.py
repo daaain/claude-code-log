@@ -1375,58 +1375,127 @@ class CacheManager:
             yield
             return
 
-        with self.batch():
+        with self.batch(), self._get_connection() as conn:
             pending = _PendingRefresh(RefreshSpool(self.db_path))
-            self._refresh = pending
             try:
-                yield
-            except BaseException:
-                self._refresh = None
-                pending.spool.close()
-                pending.spool.unlink()
-                raise
-            self._refresh = None
-            try:
-                with self._get_connection() as conn:
+                # ATTACH and DETACH refuse to run inside a transaction;
+                # the scope opens on a connection that is only reading.
+                conn.execute("ATTACH DATABASE ? AS spool", (str(pending.spool.path),))
+                try:
+                    self._refresh = pending
+                    try:
+                        self._create_overlay(conn)
+                        yield
+                    finally:
+                        self._refresh = None
+                        self._drop_overlay(conn)
                     self._merge_refresh(conn, pending)
+                finally:
+                    conn.execute("DETACH DATABASE spool")
             finally:
                 pending.spool.close()
                 pending.spool.unlink()
 
+    def _create_overlay(self, conn: sqlite3.Connection) -> None:
+        """Make the scope's reads see the cache as the merge will leave it.
+
+        Two TEMP views named ``cached_files`` and ``messages`` shadow the
+        tables for every unqualified read on this connection: each is
+        the table minus the rows the spooled files replace, UNION ALL
+        the spool's rows. The incremental refresh reads back the rows it
+        has just written (file states, uuid owners, the closure's
+        entries); with the rows in the spool, those reads find them here.
+        A spooled file that is new to the cache has no id yet, so it
+        reads as ``-<spool id>``, which nothing else can collide with;
+        the merge gives it its real id. A spooled tail follows the file's
+        rows in the cache, so its row ids are offset past the cache's
+        last, keeping the file's order. Both views select the table's
+        own columns, in its order, so ``SELECT *`` readers see the same
+        shape.
+
+        A write through the shadow fails ("cannot modify ... because it
+        is a view"): inside a scope, the entry rows go to the spool and
+        nothing else may write these tables, so that is the right noise.
+        The views are dropped before the merge, which writes the tables.
+        """
+        pid = int(self._project_id or 0)
+        spooled = "(SELECT file_name FROM spool.files)"
+        replaced = (
+            "(SELECT c.id FROM main.cached_files c JOIN spool.files f"
+            f" ON f.file_name = c.file_name WHERE c.project_id = {pid}"
+            " AND f.mode = 'replace')"
+        )
+        # The join giving a spooled file its cache id when it has one.
+        known = (
+            "LEFT JOIN main.cached_files c"
+            f" ON c.project_id = {pid} AND c.file_name = f.file_name"
+        )
+
+        file_columns = [
+            row[1] for row in conn.execute("PRAGMA main.table_info(cached_files)")
+        ]
+        file_overlay = {"id": "COALESCE(c.id, -f.id)", "project_id": str(pid)}
+        conn.execute(
+            f"""CREATE TEMP VIEW cached_files AS
+                SELECT {", ".join(file_columns)} FROM main.cached_files
+                WHERE NOT (project_id = {pid} AND file_name IN {spooled})
+                UNION ALL
+                SELECT {", ".join(file_overlay.get(c, f"f.{c}") for c in file_columns)}
+                FROM spool.files f {known}"""
+        )
+
+        message_columns = [
+            row[1] for row in conn.execute("PRAGMA main.table_info(messages)")
+        ]
+        message_overlay = {
+            "id": "s.id + (SELECT COALESCE(MAX(id), 0) FROM main.messages)",
+            "project_id": str(pid),
+            "file_id": "COALESCE(c.id, -f.id)",
+        }
+        conn.execute(
+            f"""CREATE TEMP VIEW messages AS
+                SELECT {", ".join(message_columns)} FROM main.messages
+                WHERE NOT (project_id = {pid} AND file_id IN {replaced})
+                UNION ALL
+                SELECT {", ".join(message_overlay.get(c, f"s.{c}" if c in MESSAGE_COLUMN_NAMES else "NULL") for c in message_columns)}
+                FROM spool.messages s JOIN spool.files f ON f.id = s.file_id {known}"""
+        )
+
+    @staticmethod
+    def _drop_overlay(conn: sqlite3.Connection) -> None:
+        conn.execute("DROP VIEW IF EXISTS temp.messages")
+        conn.execute("DROP VIEW IF EXISTS temp.cached_files")
+
     def _merge_refresh(
         self, conn: sqlite3.Connection, pending: _PendingRefresh
     ) -> None:
-        """The one transaction an `atomic_refresh` scope ends with."""
+        """The one transaction an `atomic_refresh` scope ends with.
+
+        Runs with the spool attached and the overlay views dropped, so
+        the tables it writes are the tables.
+        """
         spooled = pending.spool.files()
         if not spooled and not pending.deferred:
             return
-        # ATTACH (and DETACH) refuse to run inside a transaction, so the
-        # spool is attached around the transaction rather than in it.
-        conn.execute("ATTACH DATABASE ? AS spool", (str(pending.spool.path),))
-        try:
-            with write_transaction(conn):
-                file_ids: List[int] = []
-                for spooled_file in spooled:
-                    file_ids.append(
-                        self._merge_spooled_file(conn, spooled_file, pending)
-                    )
-                if file_ids:
-                    # One index refresh for every file merged, as each
-                    # direct write does for its file (and a hierarchy
-                    # pass defers to its end, the same way).
-                    from .search import (
-                        auto_index_enabled,
-                        index_maintenance_deferred,
-                        reindex_files,
-                    )
+        with write_transaction(conn):
+            file_ids: List[int] = []
+            for spooled_file in spooled:
+                file_ids.append(self._merge_spooled_file(conn, spooled_file, pending))
+            if file_ids:
+                # One index refresh for every file merged, as each
+                # direct write does for its file (and a hierarchy
+                # pass defers to its end, the same way).
+                from .search import (
+                    auto_index_enabled,
+                    index_maintenance_deferred,
+                    reindex_files,
+                )
 
-                    if auto_index_enabled() and not index_maintenance_deferred():
-                        reindex_files(conn, file_ids, commit=False)
-                    self._mark_entries_written(conn)
-                for write in pending.deferred:
-                    write(conn)
-        finally:
-            conn.execute("DETACH DATABASE spool")
+                if auto_index_enabled() and not index_maintenance_deferred():
+                    reindex_files(conn, file_ids, commit=False)
+                self._mark_entries_written(conn)
+            for write in pending.deferred:
+                write(conn)
 
     def _merge_spooled_file(
         self,
