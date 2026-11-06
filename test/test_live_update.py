@@ -244,12 +244,15 @@ class TestLiveUpdate:
         bar = page.locator(".fold-bar-section.fold-one-level").first
         assert bar.count() > 0, "fixture has nothing foldable"
         bar.click()
-        page.wait_for_timeout(200)
+        _wait_for(
+            page,
+            "() => [...document.querySelectorAll('.message-node > .children')]"
+            ".some(c => c.style.display === 'none')",
+        )
         folded = page.evaluate(
             "() => [...document.querySelectorAll('.message-node > .children')]"
             ".filter(c => c.style.display === 'none').length"
         )
-        assert folded > 0, "clicking the fold bar did not fold anything"
 
         with jsonl.open("a", encoding="utf-8") as f:
             f.write(_entry("live-5", "LIVE-MARKER-FIVE"))
@@ -572,11 +575,17 @@ class TestLiveUpdate:
             "() => document.body.classList.contains('live-following')"
         ), "clicking the toggle did not engage follow mode"
 
+        # The follow scroll is smooth: wait for it to land, not for a guess
+        # at how long that takes. The listener goes in before the append so
+        # the event cannot be missed; the assertion below needs a scroll.
+        page.evaluate(
+            "() => { window.__scrollEnded = false;"
+            " addEventListener('scrollend', () => { window.__scrollEnded = true; }, {once: true}); }"
+        )
         with jsonl.open("a", encoding="utf-8") as f:
             f.write(_entry("follow-1", "FOLLOW-ONE"))
         _wait_for(page, "() => document.body.innerText.includes('FOLLOW-ONE')")
-        # The scroll is smooth, so let it land.
-        page.wait_for_timeout(1200)
+        _wait_for(page, "() => window.__scrollEnded")
 
         gap = page.evaluate(
             "() => { const c = document.getElementById('transcript');"

@@ -628,8 +628,11 @@ def test_a_quiet_lane_keeps_running(
 def test_the_quiet_label_follows_the_clock(page: Page, live: Any) -> None:
     """Under a minute the label is just "running"; the engine's re-check
     brings it up to date as the lane stays quiet, without any update."""
-    # The lane's newest card is ~6 s after base: quiet for ~44 s now.
-    harness = live("start", base=datetime.now(timezone.utc) - timedelta(seconds=50))
+    # The lane's newest card is ~6 s after base: quiet for ~52 s when the
+    # harness starts, so the label is still "running" at open (under a
+    # minute) and reaches the minute a few seconds later, not a quarter
+    # of one later. The 8 s left are for the serve subprocess to come up.
+    harness = live("start", base=datetime.now(timezone.utc) - timedelta(seconds=58))
     _open(page, harness.url)
     assert _lane(page, LANE_C)["pillLabel"] == "running"
     # The engine's own timer runs every 30 s; ask for its relayout directly

@@ -14,6 +14,66 @@ from claude_code_log.html.renderer import generate_html
 from claude_code_log.models import TranscriptEntry
 
 
+# The states the tests wait for, instead of sleeping for them (issue #359).
+#
+# A filter toggle click hides cards synchronously (``filtered-hidden``) and
+# reaches the timeline 50 ms later (``setTimeout(applyFilters, 50)`` in
+# timeline.html): group visibility follows the toggles, then each item is
+# tagged ``timeline-filtered-hidden`` after its card. Item ids index
+# ``.message:not(.session-header)``; the toggle→groups map mirrors
+# timeline.html's TOGGLE_GROUPS.
+_TIMELINE_IN_SYNC = """() => {
+    const tl = window.timeline;
+    if (!tl || !tl.groupsData || !tl.itemsData) return true;
+    const groupsOf = {tool: ['tool_use', 'tool_result'], user: ['user', 'bash-input', 'bash-output']};
+    const visible = new Map(tl.groupsData.get().map(g => [g.id, g.visible !== false]));
+    for (const toggle of document.querySelectorAll('.filter-toggle')) {
+        const on = toggle.classList.contains('active');
+        for (const g of (groupsOf[toggle.dataset.type] || [toggle.dataset.type])) {
+            if (visible.has(g) && visible.get(g) !== on) return false;
+        }
+    }
+    const cards = [...document.querySelectorAll('.message:not(.session-header)')];
+    return tl.itemsData.get().every(item => {
+        const el = cards[item.id];
+        if (!el) return true;
+        const hidden = el.classList.contains('filtered-hidden') || el.classList.contains('search-hidden');
+        return hidden === (item.className || '').split(/\\s+/).includes('timeline-filtered-hidden');
+    });
+}"""
+
+_TWO_FRAMES = (
+    "() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))"
+)
+
+
+def _wait_for_filters(page: Page) -> None:
+    """After a filter toggle (or Select All/None) click: the timeline's groups
+    and items agree with the toggles and the cards, and a redraw has painted."""
+    page.wait_for_function(_TIMELINE_IN_SYNC)
+    page.evaluate(_TWO_FRAMES)
+
+
+def _wait_for_timeline_groups(page: Page) -> None:
+    """After the timeline opened: vis-timeline holds its groups and items, and
+    a redraw has painted them."""
+    page.wait_for_function(
+        "() => !!(window.timeline && window.timeline.groupsData"
+        " && window.timeline.groupsData.get().length"
+        " && window.timeline.itemsData && window.timeline.itemsData.get().length)"
+    )
+    page.evaluate(_TWO_FRAMES)
+
+
+def _wait_for_timestamps_localised(page: Page) -> None:
+    """The timezone converter drains in idle slices; a converted element gets
+    a ``title`` (an unparsable timestamp is left alone)."""
+    page.wait_for_function(
+        "() => [...document.querySelectorAll('.timestamp[data-timestamp]')]"
+        ".every(el => el.title || isNaN(Date.parse(el.dataset.timestamp)))"
+    )
+
+
 class TestTimelineBrowser:
     """Test timeline functionality using Playwright in a real browser."""
 
@@ -171,8 +231,7 @@ class TestTimelineBrowser:
         page.locator("#toggleTimeline").click()
         self._wait_for_timeline_loaded(page)
 
-        # Wait for timeline groups to be created by vis-timeline
-        page.wait_for_timeout(1000)  # Give timeline time to render groups
+        _wait_for_timeline_groups(page)
 
         # Note: Sidechain items may be classified differently due to vis-timeline filtering issues
 
@@ -208,8 +267,7 @@ class TestTimelineBrowser:
         page.locator("#toggleTimeline").click()
         self._wait_for_timeline_loaded(page)
 
-        # Wait for timeline to fully render
-        page.wait_for_timeout(1000)
+        _wait_for_timeline_groups(page)
 
         # Get initial counts
         all_items = page.locator(".vis-item")
@@ -274,8 +332,7 @@ class TestTimelineBrowser:
         # Deselect Sub-assistant filter
         sidechain_filter.click()
 
-        # Wait for filtering to apply
-        page.wait_for_timeout(500)
+        _wait_for_filters(page)
 
         # Sub-assistant filter should be inactive
         expect(sidechain_filter).not_to_have_class(re.compile(r".*active.*"))
@@ -290,7 +347,7 @@ class TestTimelineBrowser:
 
         # Re-enable Sub-assistant filter
         sidechain_filter.click()
-        page.wait_for_timeout(500)
+        _wait_for_filters(page)
 
         # Sub-assistant messages should be visible again
         expect(sidechain_filter).to_have_class(re.compile(r".*active.*"))
@@ -366,7 +423,7 @@ class TestTimelineBrowser:
 
         # Deselect sidechain filter
         sidechain_filter.click()
-        page.wait_for_timeout(500)
+        _wait_for_filters(page)
 
         # Verify filter is no longer active
         expect(sidechain_filter).not_to_have_class(re.compile(r".*active.*"))
@@ -388,7 +445,7 @@ class TestTimelineBrowser:
 
         # Re-enable sidechain filter
         sidechain_filter.click()
-        page.wait_for_timeout(500)
+        _wait_for_filters(page)
 
         # Verify filter is active again
         expect(sidechain_filter).to_have_class(re.compile(r".*active.*"))
@@ -411,7 +468,7 @@ class TestTimelineBrowser:
         # Test "None" filter functionality that user mentioned in the issue
         select_none_button = page.locator("#selectNone")
         select_none_button.click()
-        page.wait_for_timeout(500)
+        _wait_for_filters(page)
 
         # All message filters should be inactive
         expect(sidechain_filter).not_to_have_class(re.compile(r".*active.*"))
@@ -431,7 +488,7 @@ class TestTimelineBrowser:
         # Test "All" filter functionality
         select_all_button = page.locator("#selectAll")
         select_all_button.click()
-        page.wait_for_timeout(500)
+        _wait_for_filters(page)
 
         # All message filters should be active
         expect(sidechain_filter).to_have_class(re.compile(r".*active.*"))
@@ -638,7 +695,7 @@ class TestTimelineBrowser:
         if sidechain_filter.count() > 0:
             # Deselect sub-assistant filter
             sidechain_filter.click()
-            page.wait_for_timeout(500)
+            _wait_for_filters(page)
 
             # Timeline should handle filtering (may have fewer items)
             filtered_count = timeline_items.count()
@@ -648,7 +705,7 @@ class TestTimelineBrowser:
 
             # Re-enable sub-assistant filter
             sidechain_filter.click()
-            page.wait_for_timeout(500)
+            _wait_for_filters(page)
 
             # Timeline should show items again
             restored_count = timeline_items.count()
@@ -660,7 +717,7 @@ class TestTimelineBrowser:
         assistant_filter = page.locator('.filter-toggle[data-type="assistant"]')
         if assistant_filter.count() > 0:
             assistant_filter.click()
-            page.wait_for_timeout(500)
+            _wait_for_filters(page)
 
             # Timeline should still have items (though count may change)
             filtered_count = timeline_items.count()
@@ -741,7 +798,7 @@ class TestTimelineBrowser:
             if filter_toggle.count() > 0 and filter_toggle.is_visible():
                 # Deselect the filter
                 filter_toggle.click()
-                page.wait_for_timeout(100)  # Allow filters to apply
+                _wait_for_filters(page)
 
                 # Check that main messages are filtered
                 visible_main_messages = page.locator(
@@ -756,7 +813,7 @@ class TestTimelineBrowser:
 
                 # Re-enable the filter
                 filter_toggle.click()
-                page.wait_for_timeout(100)
+                _wait_for_filters(page)
 
                 # Check that messages are visible again
                 visible_main_messages = page.locator(
@@ -788,7 +845,7 @@ class TestTimelineBrowser:
 
         # Test 'Select None' button
         page.locator("#selectNone").click()
-        page.wait_for_timeout(200)  # Allow filters to apply
+        _wait_for_filters(page)
 
         # All main messages should be hidden
         visible_main_messages = page.locator(
@@ -806,7 +863,7 @@ class TestTimelineBrowser:
 
         # Test 'Select All' button
         page.locator("#selectAll").click()
-        page.wait_for_timeout(200)
+        _wait_for_filters(page)
 
         # All main messages should be visible again
         visible_main_messages = page.locator(
@@ -860,7 +917,7 @@ class TestTimelineBrowser:
 
         page.locator("#filterMessages").click()
         page.locator('.filter-toggle[data-type="tool"]').click()
-        page.wait_for_timeout(300)
+        _wait_for_filters(page)
 
         assert page.evaluate(count_items, tool_kinds) == 0
         assert (
@@ -879,7 +936,7 @@ class TestTimelineBrowser:
         assert tool_cards and set(tool_cards) == {"none"}
 
         page.locator('.filter-toggle[data-type="tool"]').click()
-        page.wait_for_timeout(300)
+        _wait_for_filters(page)
         assert page.evaluate(count_items, tool_kinds) == tools_before
         assert page.evaluate(count_items, side_kinds) == side_before
 
@@ -917,14 +974,14 @@ class TestTimelineBrowser:
                 # Ensure filter starts active
                 if "active" not in (filter_toggle.get_attribute("class") or ""):
                     filter_toggle.click()
-                    page.wait_for_timeout(100)
+                    _wait_for_filters(page)
 
                 # Verify filter is active
                 expect(filter_toggle).to_have_class(re.compile(r".*active.*"))
 
                 # Deselect only this filter
                 filter_toggle.click()
-                page.wait_for_timeout(100)
+                _wait_for_filters(page)
 
                 # Verify filter is inactive
                 expect(filter_toggle).not_to_have_class(re.compile(r".*active.*"))
@@ -938,7 +995,7 @@ class TestTimelineBrowser:
 
                 # Re-enable the filter
                 filter_toggle.click()
-                page.wait_for_timeout(100)
+                _wait_for_filters(page)
 
                 # Verify filter is active again
                 expect(filter_toggle).to_have_class(re.compile(r".*active.*"))
@@ -984,12 +1041,14 @@ class TestTimelineBrowser:
 
         # Test filter state after timeline hide/show
         page.locator("#toggleTimeline").click()  # Hide timeline
-        page.wait_for_timeout(200)
+        page.wait_for_function(
+            "() => document.getElementById('timeline-container').style.display === 'none'"
+        )
 
         # Change filters while timeline is hidden
         if sidechain_filter.is_visible():
             sidechain_filter.click()
-            page.wait_for_timeout(100)
+            _wait_for_filters(page)
 
         # Show timeline again (may have no items if filters hide all messages)
         page.locator("#toggleTimeline").click()
@@ -1128,7 +1187,7 @@ class TestTimelineBrowser:
             if filter_toggle.count() > 0:
                 # Toggle the filter
                 filter_toggle.click()
-                page.wait_for_timeout(100)
+                _wait_for_filters(page)
 
                 # Timeline should still work
                 timeline_items = page.locator(".vis-item")
@@ -1139,7 +1198,7 @@ class TestTimelineBrowser:
 
                 # Toggle back
                 filter_toggle.click()
-                page.wait_for_timeout(100)
+                _wait_for_filters(page)
 
     @pytest.mark.browser
     def test_timeline_synchronizes_with_message_filtering(self, page: Page):
@@ -1160,7 +1219,7 @@ class TestTimelineBrowser:
         sidechain_filter = page.locator('.filter-toggle[data-type="sidechain"]')
         if sidechain_filter.is_visible():
             sidechain_filter.click()  # Turn off sidechain messages
-            page.wait_for_timeout(100)
+            _wait_for_filters(page)
 
             # Check that sidechain messages are hidden in main content
             visible_sidechain_messages = page.locator(
@@ -1190,7 +1249,7 @@ class TestTimelineBrowser:
 
             # Turn sidechain filter back on
             sidechain_filter.click()
-            page.wait_for_timeout(100)
+            _wait_for_filters(page)
 
             # Timeline should now show more items (or same if no sidechain messages were in timeline)
             timeline_items_with_sidechain = page.locator(".vis-item")
@@ -1294,7 +1353,7 @@ class TestTimelineBrowser:
 
         # Wait for page to load
         page.wait_for_load_state("networkidle")
-        page.wait_for_timeout(500)
+        _wait_for_timestamps_localised(page)
 
         # Check console for any errors related to timestamp conversion
         console_messages = []
@@ -1303,7 +1362,7 @@ class TestTimelineBrowser:
         # Reload to capture any console messages during conversion
         page.reload()
         page.wait_for_load_state("networkidle")
-        page.wait_for_timeout(500)
+        _wait_for_timestamps_localised(page)
 
         # Check for any error messages in console
         error_messages = [msg for msg in console_messages if msg.type == "error"]
