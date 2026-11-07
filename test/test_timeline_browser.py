@@ -93,6 +93,35 @@ _PAGE_AND_TIMELINE_AGREE = """() => {
     return { problems, compared };
 }"""
 
+# Each visible toggle's count, as the toggle map says it should read: the
+# cards whose type is one of the toggle's groups, as "(visible/total)" while
+# a toggle is off and some of them are hidden, else "(total)". A toggle with
+# no cards is hidden. Returns the totals and labels too, so a check that
+# counted nothing reads as such.
+_TOGGLE_COUNTS_FOLLOW_THE_MAP = """() => {
+    const groupsOf = window.timelineToggleGroups;
+    const toggles = [...document.querySelectorAll('.filter-toggle')];
+    const filtering = toggles.some(t => !t.classList.contains('active'));
+    const cards = [...document.querySelectorAll('.message:not(.session-header)')];
+    const problems = [], totals = {}, labels = {};
+    toggles.forEach(toggle => {
+        const type = toggle.dataset.type;
+        const groups = groupsOf[type] || [type];
+        const mine = cards.filter(el => groups.some(g => el.classList.contains(g)));
+        const visible = mine.filter(el => !el.classList.contains('filtered-hidden')).length;
+        totals[type] = mine.length;
+        labels[type] = toggle.querySelector('.count').textContent;
+        if (!mine.length) {
+            if (toggle.style.display !== 'none') problems.push(type + ': shown with no cards');
+            return;
+        }
+        const want = filtering && visible !== mine.length
+            ? '(' + visible + '/' + mine.length + ')' : '(' + mine.length + ')';
+        if (labels[type] !== want) problems.push(type + ': ' + labels[type] + ', want ' + want);
+    });
+    return { problems, totals, labels };
+}"""
+
 
 def _wait_for_filters(page: Page) -> None:
     """After a filter toggle (or Select All/None) click: the timeline's groups
@@ -987,19 +1016,9 @@ class TestTimelineBrowser:
         assert page.evaluate(count_items, tool_kinds) == tools_before
         assert page.evaluate(count_items, side_kinds) == side_before
 
-    @pytest.mark.browser
-    @pytest.mark.parametrize("theme", ["classic", "minimal"])
-    def test_page_filter_expands_toggles_through_the_timelines_map(
-        self, page: Page, theme: str
-    ):
-        """The page filter and the timeline read one toggle map (#395).
-
-        The map is rewritten as the page exports it, before either reads it:
-        tool_result moves from the "Tool" toggle to the "Assistant" toggle.
-        With Assistant off and Tool on, the timeline hides the tool_result
-        group; a page filter with a copy of its own would still show the
-        tool_result cards, and the two would disagree.
-        """
+    def _open_with_tool_result_under_assistant(self, page: Page, theme: str) -> None:
+        """Open representative_messages.jsonl with the toggle map rewritten
+        (``_MOVE_TOOL_RESULT_TO_ASSISTANT``), and check the rewrite landed."""
         messages = load_transcript(Path("test/test_data/representative_messages.jsonl"))
         with tempfile.NamedTemporaryFile(
             suffix=".html", delete=False, dir=self.temp_dir
@@ -1013,10 +1032,25 @@ class TestTimelineBrowser:
 
         page.add_init_script(_MOVE_TOOL_RESULT_TO_ASSISTANT)
         page.goto(f"file://{temp_file}")
-        # The rewrite reached the map both sides read.
+        # The rewrite reached the map the timeline and the page read.
         assert page.evaluate(
             "() => [window.timelineToggleGroups.tool, window.timelineToggleGroups.assistant]"
         ) == [["tool_use"], ["assistant", "tool_result"]]
+
+    @pytest.mark.browser
+    @pytest.mark.parametrize("theme", ["classic", "minimal"])
+    def test_page_filter_expands_toggles_through_the_timelines_map(
+        self, page: Page, theme: str
+    ):
+        """The page filter and the timeline read one toggle map (#395).
+
+        The map is rewritten as the page exports it, before either reads it:
+        tool_result moves from the "Tool" toggle to the "Assistant" toggle.
+        With Assistant off and Tool on, the timeline hides the tool_result
+        group; a page filter with a copy of its own would still show the
+        tool_result cards, and the two would disagree.
+        """
+        self._open_with_tool_result_under_assistant(page, theme)
         page.locator("#toggleTimeline").click()
         self._wait_for_timeline_loaded(page)
         _wait_for_timeline_groups(page)
@@ -1042,6 +1076,34 @@ class TestTimelineBrowser:
                 moved_cards,
             )
         ) == {True}
+
+    @pytest.mark.browser
+    @pytest.mark.parametrize("theme", ["classic", "minimal"])
+    def test_toggle_counts_follow_the_timelines_map(self, page: Page, theme: str):
+        """The toggles' counts read the same toggle map as the filter (#395).
+
+        With tool_result moved from the "Tool" toggle to the "Assistant"
+        toggle (as in the test above), Tool counts only the tool_use cards
+        and Assistant counts the tool_result cards too, both when the page
+        loads and as "(visible/total)" once Assistant is turned off.
+        """
+        self._open_with_tool_result_under_assistant(page, theme)
+        moved = page.locator("#transcript .message.tool_result").count()
+        assert moved > 0
+
+        counts = page.evaluate(_TOGGLE_COUNTS_FOLLOW_THE_MAP)
+        assert counts["problems"] == [], counts
+        assert counts["totals"]["tool"] > 0, counts
+        assert counts["totals"]["assistant"] > moved, counts
+
+        page.locator("#filterMessages").click()
+        page.locator('.filter-toggle[data-type="assistant"]').click()
+        _wait_for_filters(page)
+
+        counts = page.evaluate(_TOGGLE_COUNTS_FOLLOW_THE_MAP)
+        assert counts["problems"] == [], counts
+        # The visible/total form was exercised, not only the totals.
+        assert "/" in counts["labels"]["assistant"], counts
 
     @pytest.mark.browser
     def test_timeline_filter_individual_message_types(self, page: Page):
