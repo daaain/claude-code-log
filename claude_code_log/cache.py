@@ -11,7 +11,7 @@ import sqlite3
 import threading
 import zlib
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, get_args
 
@@ -1599,42 +1599,25 @@ class CacheManager:
         if file_id is None:
             return None
 
-        # Parse dates
-        import dateparser
+        # The renderer's reading of the window: ``filter_messages_by_date``
+        # makes the exact cut after this load, so the two must agree on
+        # what a bound means.
+        from .utils import parse_date_bounds
 
-        from_dt = None
-        to_dt = None
-
-        if from_date:
-            from_dt = dateparser.parse(from_date)
-            if from_dt and (
-                from_date in ["today", "yesterday"] or "days ago" in from_date
-            ):
-                from_dt = from_dt.replace(hour=0, minute=0, second=0, microsecond=0)
-
-        if to_date:
-            to_dt = dateparser.parse(to_date)
-            if to_dt:
-                to_dt = to_dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+        from_dt, to_dt = parse_date_bounds(from_date, to_date)
 
         # Build query with SQL-based filtering
         sql = "SELECT content FROM messages WHERE file_id = ?"
         params: List[Any] = [file_id]
 
         if from_dt:
-            # Normalize to UTC 'Z' format for consistent string comparison
-            # with stored timestamps (which use 'Z' suffix from JSONL)
-            if from_dt.tzinfo is None:
-                from_dt = from_dt.replace(tzinfo=timezone.utc)
+            # Same format as stored timestamps (``_normalize_timestamp``)
             from_bound = from_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
             # Include entries with NULL timestamp (like summaries) OR within date range
             sql += " AND (timestamp IS NULL OR timestamp >= ?)"
             params.append(from_bound)
 
         if to_dt:
-            # Normalize to UTC 'Z' format for consistent string comparison
-            if to_dt.tzinfo is None:
-                to_dt = to_dt.replace(tzinfo=timezone.utc)
             to_bound = to_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
             sql += " AND (timestamp IS NULL OR timestamp <= ?)"
             params.append(to_bound)
@@ -1985,7 +1968,6 @@ class CacheManager:
         total_cache_read_tokens: int,
         earliest_timestamp: str,
         latest_timestamp: str,
-        complete: bool = True,
     ) -> None:
         """Update project-level aggregate information.
 
@@ -1993,10 +1975,6 @@ class CacheManager:
         the session rows and sidecar derived from them, so it also clears
         the ``refresh_pending`` flag those entry writes set (migration
         015). Call it only once those match every entry row written.
-        A date-filtered refresh derives its rows from the entries in its
-        window only, so when the project was already pending it passes
-        ``complete=False`` and leaves the flag for the next unfiltered
-        refresh to clear.
         """
         if self._project_id is None:
             return
@@ -2013,7 +1991,7 @@ class CacheManager:
                     earliest_timestamp = ?,
                     latest_timestamp = ?,
                     last_updated = ?,
-                    refresh_pending = CASE WHEN ? THEN 0 ELSE refresh_pending END
+                    refresh_pending = 0
                 WHERE id = ?
                 """,
                 (
@@ -2025,7 +2003,6 @@ class CacheManager:
                     earliest_timestamp,
                     latest_timestamp,
                     datetime.now().isoformat(),
-                    complete,
                     self._project_id,
                 ),
             )
@@ -2873,6 +2850,29 @@ class CacheManager:
                     None if combined_linked is None else int(combined_linked),
                 ),
             )
+
+    def mark_rendered_from_window(self, html_path: str) -> None:
+        """Record that ``html_path`` was just written from a date window.
+
+        A ``--from-date``/``--to-date`` run writes an output file with only
+        the messages inside its window, so no message count describes it:
+        the file's rows (its ``html_cache`` row, and its ``html_pages`` row
+        when it is page 1 of a paginated project, which shares the combined
+        file's name) get a count no session or project can have, and the
+        next run without a window reads the file as stale. The rows stay,
+        rather than being deleted, so the project keeps its page count and
+        its pagination.
+        """
+        if self._project_id is None:
+            return
+
+        with self._get_connection() as conn, write_transaction(conn):
+            for table in ("html_cache", "html_pages"):
+                conn.execute(
+                    f"""UPDATE {table} SET message_count = -1
+                        WHERE project_id = ? AND html_path = ?""",
+                    (self._project_id, html_path),
+                )
 
     def is_transcript_stale(
         self,

@@ -647,9 +647,13 @@ The tool implements a SQLite-based caching system for performance:
   locked out is retried after the pool rather than failed. A pass compacts
   an oversized WAL before it starts and truncates the WAL when it ends. A
   refresh that fails part-way leaves `projects.refresh_pending` set, and the
-  next unfiltered run refreshes that project in full (a date-filtered run
-  never finishes a pending refresh, nor starts one). A pass that loses a project
-  ends with a count of the failed projects, and the CLI exits 1
+  next run refreshes that project in full. A date-filtered run refreshes the
+  cache as an unfiltered one would and leaves the files it wrote from its
+  window marked stale, so the next unfiltered run re-renders them. Its
+  refresh therefore loads whole files when they changed and the incremental
+  refresh declines, not just the window's entries, and nothing when no file
+  changed. A pass that loses a project ends with a count of the failed
+  projects, and the CLI exits 1
 - **Performance**: 10-100x faster loading for large projects
 
 The cache automatically rebuilds when source files change or cache schema version changes.

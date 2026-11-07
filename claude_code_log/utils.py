@@ -199,6 +199,64 @@ def parse_timestamp(timestamp_str: str | None) -> Optional[datetime]:
     return dt
 
 
+_RELATIVE_DAY = re.compile(
+    r"\s*(?:today|yesterday|\d+\s+days?\s+ago)\s*", re.IGNORECASE
+)
+
+
+def _whole_day(text: str, parsed_period: str, parsed: datetime) -> bool:
+    """Does ``text`` name a day rather than an instant?
+
+    The relative days (``today``, ``yesterday``, ``N day(s) ago``, in any
+    case) do, and so does a date written without a time (``2026-01-01``,
+    ``Jan 5``): dateparser reads those as midnight. ``now``, ``2 hours
+    ago`` and any explicit time, midnight included, name an instant.
+    """
+    if _RELATIVE_DAY.fullmatch(text):
+        return True
+    return parsed_period == "day" and parsed.time() == datetime.min.time()
+
+
+def parse_date_bounds(
+    from_date: Optional[str], to_date: Optional[str]
+) -> tuple[Optional[datetime], Optional[datetime]]:
+    """The ``--from-date`` / ``--to-date`` window, as naive UTC datetimes.
+
+    The one reading of a date bound, shared by the cache's pre-filter
+    and the renderer's cut so the two never disagree on what a window
+    holds. A bound that names a whole day covers that day: from its
+    first instant, to its last. Raises ``ValueError`` on a bound
+    dateparser cannot read.
+    """
+    from dateparser.date import DateDataParser
+
+    parser = DateDataParser(
+        settings={
+            "TIMEZONE": "UTC",
+            "RETURN_AS_TIMEZONE_AWARE": False,
+            "RETURN_TIME_AS_PERIOD": True,
+        }
+    )
+
+    def read(text: str, name: str) -> tuple[datetime, bool]:
+        data = parser.get_date_data(text)
+        if data.date_obj is None:
+            raise ValueError(f"Could not parse {name}: {text}")
+        return data.date_obj, _whole_day(text, data.period or "", data.date_obj)
+
+    from_dt: Optional[datetime] = None
+    to_dt: Optional[datetime] = None
+    if from_date:
+        from_dt, day = read(from_date, "from-date")
+        if day:
+            from_dt = from_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+    if to_date:
+        to_dt, day = read(to_date, "to-date")
+        if day:
+            to_dt = to_dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+    return from_dt, to_dt
+
+
 def format_duration(total_seconds: float) -> str:
     """A short human duration: ``"120 ms"``, ``"4.2s"``, ``"2m 13s"``.
 

@@ -50,6 +50,10 @@ class JsonRenderer(Renderer):
     the other renderers consume.
     """
 
+    # The date window this output is rendered from, written into the
+    # payload so that ``is_outdated`` reads such a file as outdated.
+    date_range: Optional[dict[str, Optional[str]]] = None
+
     def _message_to_dict(self, msg: TemplateMessage) -> dict[str, Any]:
         """Serialize a TemplateMessage (and its subtree) to a JSON-friendly dict."""
         content_dump = dataclasses.asdict(msg.content)
@@ -118,6 +122,8 @@ class JsonRenderer(Renderer):
         }
         if combined_transcript_link:
             payload["combined_transcript_link"] = combined_transcript_link
+        if self.date_range is not None:
+            payload["date_range"] = self.date_range
 
         return json.dumps(payload, indent=2, default=_json_default, ensure_ascii=False)
 
@@ -214,7 +220,8 @@ class JsonRenderer(Renderer):
         )
 
     def is_outdated(self, file_path: Path) -> bool:
-        """Check if a JSON file is outdated based on version field."""
+        """Check if a JSON file is outdated: written by another version, or
+        rendered from a date window (it lacks the messages outside it)."""
         # is_file() (not exists()) so a non-regular destination — e.g.
         # /dev/stdout, which is a pipe when stdout is piped — is treated as
         # outdated rather than opened read-only, which would deadlock the
@@ -229,6 +236,11 @@ class JsonRenderer(Renderer):
             if not isinstance(data, dict):
                 return True
             payload = cast("dict[str, Any]", data)
-            return payload.get("version") != get_library_version()
+            if payload.get("version") != get_library_version():
+                return True
+            window = payload.get("date_range")
+            return isinstance(window, dict) and any(
+                bound is not None for bound in cast("dict[str, Any]", window).values()
+            )
         except (OSError, json.JSONDecodeError, UnicodeDecodeError):
             return True

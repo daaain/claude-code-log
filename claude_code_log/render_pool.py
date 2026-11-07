@@ -486,6 +486,8 @@ def _build_worker_renderer() -> Any:
         no_timestamps=_worker_setup.no_timestamps,
         no_recaps=_worker_setup.no_recaps,
         theme=_worker_setup.theme,
+        from_date=_worker_setup.from_date,
+        to_date=_worker_setup.to_date,
     )
 
 

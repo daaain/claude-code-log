@@ -464,19 +464,19 @@ def test_a_sidecar_that_cannot_be_written_is_dropped_not_trusted(
     [_fail_second_file_write, _fail_session_rows_write],
     ids=["second-file-write", "session-rows-write"],
 )
-def test_a_date_filtered_run_does_not_finish_a_pending_refresh(
+def test_a_date_filtered_run_finishes_a_pending_refresh_in_full(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     inject: Callable[[pytest.MonkeyPatch, List[str]], None],
 ) -> None:
-    """Only a complete, unfiltered refresh may clear ``refresh_pending``.
+    """A date-filtered run refreshes the cache as an unfiltered one would.
 
-    A date-filtered run reloads just the entries in its window, so the
-    session rows and aggregates it derives describe that subset. Clearing
-    the flag on them would leave every file looking current to the next
-    unfiltered run, which then never renders the messages outside the
-    window.
+    Its window applies to what it renders, not to what it refreshes, so
+    the refresh it runs over a pending project is a complete one: it may
+    clear ``refresh_pending``, because the session rows and aggregates it
+    writes count every message, including those outside the window, and
+    the next unfiltered run renders them.
     """
     project = _build_project(tmp_path)
     projects_dir = project.parent
@@ -512,9 +512,10 @@ def test_a_date_filtered_run_does_not_finish_a_pending_refresh(
         to_date="2026-01-01",
     )
     after = CacheManager(project, get_library_version()).get_cached_project_data()
-    assert after is not None and after.refresh_pending, (
-        "a date-filtered run cleared the flag"
-    )
+    assert after is not None and not after.refresh_pending
+    assert {sid: s.message_count for sid, s in after.sessions.items()} == {
+        sid: 4 for sid in SESSIONS
+    }, "the rows count the window, not the files"
 
     _run(projects_dir)
     stale = [
@@ -531,9 +532,9 @@ def test_a_date_filtered_run_does_not_start_a_pending_refresh(
 ) -> None:
     """A filtered run on a healthy project leaves the flag clear.
 
-    Its entry writes set the flag like any other; left set, every later
-    filtered run would treat the project as changed and pay a full load,
-    with no failure to repair.
+    Its entry writes set the flag like any other, and the refresh it runs
+    is a complete one, so it clears it: left set, the next run would pay
+    a full load with no failure to repair.
     """
     project = _build_project(tmp_path)
     projects_dir = project.parent

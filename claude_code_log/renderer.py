@@ -5731,6 +5731,8 @@ def get_renderer(
     no_timestamps: bool = False,
     no_recaps: bool = False,
     theme: str = DEFAULT_THEME,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
 ) -> Renderer:
     """Get a renderer instance for the specified format.
 
@@ -5749,6 +5751,10 @@ def get_renderer(
         theme: HTML theme: ``"classic"``, ``"minimal"`` or ``"default"``
             (resolved through ``utils.DEFAULT_THEME``). HTML-only: other
             formats carry no theme (stamped like ``"classic"``).
+        from_date, to_date: The date window the output is rendered from,
+            if any. JSON-only: a JSON file records it, so that the next run
+            without a window rewrites the file. HTML and Markdown output
+            is recorded through ``CacheManager.mark_rendered_from_window``.
 
     Returns:
         A Renderer instance for the specified format.
@@ -5772,6 +5778,8 @@ def get_renderer(
         from .json.renderer import JsonRenderer
 
         renderer = JsonRenderer()
+        if from_date is not None or to_date is not None:
+            renderer.date_range = {"from": from_date, "to": to_date}
     else:
         raise ValueError(f"Unsupported format: {format}")
     renderer.depth = depth

@@ -21,7 +21,6 @@ import traceback
 from urllib.parse import quote
 from typing import Any, Dict, List, Optional, TextIO, TYPE_CHECKING, cast
 
-import dateparser
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -43,6 +42,7 @@ from .utils import (
     get_parent_session_id,
     get_project_display_name,
     is_agent_session,
+    parse_date_bounds,
     project_transcript_bytes,
     should_use_as_session_starter,
     create_session_preview,
@@ -250,26 +250,9 @@ def filter_messages_by_date(
     if not from_date and not to_date:
         return messages
 
-    # Parse dates in UTC to match transcript timestamps (which are stored in UTC)
-    dateparser_settings: Any = {"TIMEZONE": "UTC", "RETURN_AS_TIMEZONE_AWARE": False}
-    from_dt = None
-    to_dt = None
-
-    if from_date:
-        from_dt = dateparser.parse(from_date, settings=dateparser_settings)
-        if not from_dt:
-            raise ValueError(f"Could not parse from-date: {from_date}")
-        # If parsing relative dates like "today", start from beginning of day
-        if from_date in ["today", "yesterday"] or "days ago" in from_date:
-            from_dt = from_dt.replace(hour=0, minute=0, second=0, microsecond=0)
-
-    if to_date:
-        to_dt = dateparser.parse(to_date, settings=dateparser_settings)
-        if not to_dt:
-            raise ValueError(f"Could not parse to-date: {to_date}")
-        # If parsing relative dates like "today", end at end of day
-        if to_date in ["today", "yesterday"] or "days ago" in to_date:
-            to_dt = to_dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+    # Parsed in UTC to match transcript timestamps (which are stored in UTC),
+    # the same way the cache's pre-filter reads them.
+    from_dt, to_dt = parse_date_bounds(from_date, to_date)
 
     filtered_messages: list[TranscriptEntry] = []
     for message in messages:
@@ -287,7 +270,7 @@ def filter_messages_by_date(
         if not message_dt:
             continue
 
-        # Convert to naive datetime for comparison (dateparser returns naive datetimes)
+        # Naive, like the bounds, for comparison
         if message_dt.tzinfo:
             message_dt = message_dt.replace(tzinfo=None)
 
@@ -3984,8 +3967,6 @@ def convert_jsonl_to(
         cache_refresh = ensure_fresh_cache_detailed(
             input_path,
             cache_manager,
-            from_date,
-            to_date,
             silent,
             entry_store=entry_store,
         )
@@ -4101,6 +4082,8 @@ def convert_jsonl_to(
         no_timestamps=no_timestamps,
         no_recaps=no_recaps,
         theme=theme,
+        from_date=from_date,
+        to_date=to_date,
     )
 
     # One fragment store per conversion, shared by the combined pages and
@@ -4320,9 +4303,12 @@ def convert_jsonl_to(
                     and update_cache
                     and _tracks_version_marker(format)
                 ):
-                    cache_manager.update_html_cache(
-                        output_path.name, None, total_message_count
-                    )
+                    if from_date is not None or to_date is not None:
+                        cache_manager.mark_rendered_from_window(output_path.name)
+                    else:
+                        cache_manager.update_html_cache(
+                            output_path.name, None, total_message_count
+                        )
             elif not silent:
                 print(
                     f"{format.upper()} file {output_path.name} is current, skipping regeneration"
@@ -4822,8 +4808,6 @@ class CacheRefresh(Enum):
 def ensure_fresh_cache(
     project_dir: Path,
     cache_manager: Optional[CacheManager],
-    from_date: Optional[str] = None,
-    to_date: Optional[str] = None,
     silent: bool = False,
 ) -> bool:
     """Ensure cache is fresh and populated. Returns True if cache was updated.
@@ -4831,24 +4815,24 @@ def ensure_fresh_cache(
     Thin bool wrapper over `ensure_fresh_cache_detailed` for callers that
     only need "did anything change".
     """
-    return bool(
-        ensure_fresh_cache_detailed(
-            project_dir, cache_manager, from_date, to_date, silent
-        )
-    )
+    return bool(ensure_fresh_cache_detailed(project_dir, cache_manager, silent=silent))
 
 
 def ensure_fresh_cache_detailed(
     project_dir: Path,
     cache_manager: Optional[CacheManager],
-    from_date: Optional[str] = None,
-    to_date: Optional[str] = None,
     silent: bool = False,
     entry_store: "Optional[ParsedEntryStore]" = None,
 ) -> CacheRefresh:
     """Ensure cache is fresh and populated, reporting *how*.
 
     This does the heavy lifting of loading and parsing files.
+
+    Takes no date range: the cache describes the source files, whatever
+    window the run renders. A ``--from-date``/``--to-date`` run refreshes
+    exactly as an unfiltered one would and applies its window afterwards,
+    so the session rows, the aggregates and the sidecar it leaves are the
+    ones the next unfiltered run can trust.
 
     ``entry_store`` is the caller's per-conversion store
     (``entry_store.py``); the incremental refresh fills it with the files
@@ -4879,8 +4863,6 @@ def ensure_fresh_cache_detailed(
         modified_files = cache_manager.get_modified_files(session_jsonl_files)
         needs_update = (
             cached_project_data is None
-            or from_date is not None
-            or to_date is not None
             or bool(modified_files)  # Session files changed
             or (
                 cached_project_data.total_message_count == 0 and session_jsonl_files
@@ -4897,9 +4879,7 @@ def ensure_fresh_cache_detailed(
         # Not after a refresh that never finished (migration 015): which
         # session rows it left behind is unknown, so no closure is bounded.
         if (
-            from_date is None
-            and to_date is None
-            and modified_files
+            modified_files
             and cached_project_data is not None
             and cached_project_data.total_message_count > 0
             and not cached_project_data.refresh_pending
@@ -4921,42 +4901,26 @@ def ensure_fresh_cache_detailed(
         messages, _tree = load_directory_transcripts(
             project_dir,
             cache_manager,
-            from_date,
-            to_date,
-            silent,
-            # An unfiltered refresh is a full load of the current tree, so
-            # persist the cross-session sidecar here too (same batch as the
+            silent=silent,
+            # The refresh is a full load of the current tree, so persist
+            # the cross-session sidecar here too (same batch as the
             # per-file writes). This is what lets the streaming path run
             # right after a cache update without a second full load.
-            persist_sidecar=(from_date is None and to_date is None),
+            persist_sidecar=True,
             sidecar_required=True,
         )
 
-        # Update cache with fresh data. A date-filtered load derives these
-        # rows from its window only, so it must not finish a refresh an
-        # earlier run left pending; nor does it start one: on a project
-        # that was not pending, it restores the flag its own entry writes
-        # set (an interrupted filtered refresh never gets here).
-        # ``cached_project_data`` was read before this refresh's first
-        # entry write. Limit, shared with every clearing write: another
-        # process's refresh that sets the flag and fails while this one
-        # runs is cleared here; closing that needs a write generation, not
-        # a boolean.
-        was_pending = (
-            cached_project_data is not None and cached_project_data.refresh_pending
-        )
-        _update_cache_with_session_data(
-            cache_manager,
-            messages,
-            complete=not (from_date or to_date) or not was_pending,
-        )
+        # Update cache with fresh data. Limit, shared with every clearing
+        # write: another process's refresh that sets ``refresh_pending``
+        # and fails while this one runs is cleared here; closing that
+        # needs a write generation, not a boolean.
+        _update_cache_with_session_data(cache_manager, messages)
     return CacheRefresh.FULL
 
 
 def _update_cache_with_session_data(
     cache_manager: CacheManager,
     messages: list[TranscriptEntry],
-    complete: bool = True,
 ) -> None:
     """Update cache with session and project aggregate data.
 
@@ -4987,9 +4951,7 @@ def _update_cache_with_session_data(
     cache_manager.update_session_cache(sessions_cache_data)
 
     aggregates = compute_project_aggregates(messages)
-    # ``complete=False`` leaves ``refresh_pending`` set: a date-filtered
-    # load of a project an earlier refresh left pending.
-    cache_manager.update_project_aggregates(**aggregates, complete=complete)
+    cache_manager.update_project_aggregates(**aggregates)
 
 
 def _attach_session_residuals(
@@ -5236,6 +5198,8 @@ def _generate_individual_session_files(
         no_timestamps=no_timestamps,
         no_recaps=no_recaps,
         theme=theme,
+        from_date=from_date,
+        to_date=to_date,
     )
     if fragment_store is not None:
         from .html.renderer import HtmlRenderer as _HtmlRenderer
@@ -5358,6 +5322,9 @@ def _generate_individual_session_files(
             # Update html_cache to track this generation (marker-tracked
             # formats only; JSON uses its own version-field freshness).
             if cache_manager is None or not _tracks_version_marker(format):
+                return
+            if from_date is not None or to_date is not None:
+                cache_manager.mark_rendered_from_window(unit.file_name)
                 return
             # Use message count from cache (pre-deduplication) to match
             # the count used in is_transcript_stale()
@@ -7285,12 +7252,12 @@ def _process_projects_hierarchy(
             print(
                 f"Warning: No cached data available for {project_dir.name}, using fallback processing"
             )
+            # Unfiltered, so the rows written below describe the files; the
+            # window is applied after.
             messages, _tree = load_directory_transcripts(
-                project_dir, cache_manager, from_date, to_date, silent=silent
+                project_dir, cache_manager, silent=silent
             )
             # Ensure cache is populated with session data (including working directories)
-            # Reached only without a project row, so no refresh is pending
-            # here and the default ``complete`` is right even when filtered.
             if cache_manager:
                 _update_cache_with_session_data(cache_manager, messages)
             if from_date or to_date:
