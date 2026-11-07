@@ -1177,19 +1177,33 @@ TOO_DEEP_BLOB = zlib.compress(
 )
 
 
-def _nested_tool_results(levels: int) -> dict[str, Any]:
-    """A tool result holding a tool result, ``levels`` deep, around a text."""
-    inner: dict[str, Any] = {"type": "text", "text": "the innermost text"}
-    for _ in range(levels):
-        inner = {"type": "tool_result", "tool_use_id": "toolu_x", "content": [inner]}
-    return inner
+_NESTED_LEVELS = 2000
 
 
-# Decodes on any stack, but its tool results nest past the interpreter's
-# recursion limit, which the text extraction must not follow.
+def _nested_tool_results(levels: int) -> str:
+    """The JSON text of a tool result holding a tool result, ``levels``
+    deep, around a text.
+
+    Built as text: encoding the nested object would hit the encoder's own
+    recursion limit, lower on some platforms (Windows, 3.13) than this
+    depth, and fail the module's import rather than a test.
+    """
+    opening = '{"type": "tool_result", "tool_use_id": "toolu_x", "content": ['
+    return (
+        opening * levels
+        + '{"type": "text", "text": "the innermost text"}'
+        + "]}" * levels
+    )
+
+
+# Its tool results nest past the interpreter's recursion limit, which the
+# text extraction must not follow. It decodes on most platforms; where the
+# decoder refuses the depth (Windows, 3.13), it is an undecodable blob.
 NESTED_TOOL_RESULTS_BLOB = zlib.compress(
-    json.dumps(
-        {"type": "user", "message": {"content": [_nested_tool_results(2000)]}}
+    (
+        '{"type": "user", "message": {"content": ['
+        + _nested_tool_results(_NESTED_LEVELS)
+        + "]}}"
     ).encode()
 )
 
@@ -1349,8 +1363,9 @@ def test_serve_start_indexes_a_transcript_with_deeply_nested_tool_results(
 ) -> None:
     """A transcript line whose tool results nest past the interpreter's
     recursion limit (on any C stack: the walk is Python recursion) parses
-    and is cached. Extracting its text must not stop the index build at
-    `serve` start. (The catch-up meets the same row in the blob tests.)"""
+    and is cached, where the decoder accepts its depth. Extracting its text
+    must not stop the index build at `serve` start. (The catch-up meets the
+    same row in the blob tests.)"""
     from claude_code_log.cache import get_cache_db_path
     from claude_code_log.cli import _build_search_index
     from claude_code_log.converter import process_projects_hierarchy
@@ -1360,12 +1375,14 @@ def test_serve_start_indexes_a_transcript_with_deeply_nested_tool_results(
     project.mkdir(parents=True)
     jsonl = project / "session.jsonl"
     db_path = get_cache_db_path(projects)
-    deep = json.loads(_entry_line("unused"))
-    deep["message"]["content"] = [_nested_tool_results(2000)]
+    placeholder = '{"type": "text", "text": "unused"}'
+    deep = _entry_line("unused").rstrip("\n")
+    assert deep.count(placeholder) == 1
+    deep = deep.replace(placeholder, _nested_tool_results(_NESTED_LEVELS))
     second = json.loads(_entry_line("the second message mentions wombat"))
     second["uuid"] = "uuid-second"
     second["parentUuid"] = "uuid-hook"
-    jsonl.write_text(json.dumps(deep) + "\n" + json.dumps(second) + "\n")
+    jsonl.write_text(deep + "\n" + json.dumps(second) + "\n")
     # The conversion itself may fail on this line; its cache rows are
     # written before the render, and the index reads those.
     process_projects_hierarchy(projects, silent=True, failed_projects=[])
