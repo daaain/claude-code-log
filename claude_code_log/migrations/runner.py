@@ -6,7 +6,7 @@ import re
 import sqlite3
 from datetime import datetime
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 
 # The WAL file's size, in bytes, that SQLite truncates it back to whenever
@@ -19,6 +19,39 @@ from typing import List, Tuple
 WAL_SIZE_LIMIT_BYTES = 64 * 1024 * 1024
 
 _DEFAULT_BUSY_TIMEOUT_SECONDS = 30.0
+
+# The oldest SQLite the cache's schema can be built with: migration 016
+# uses `ALTER TABLE ... DROP COLUMN`, which arrived in SQLite 3.35.0.
+MIN_SQLITE_VERSION: Tuple[int, int, int] = (3, 35, 0)
+
+
+class SQLiteTooOldError(RuntimeError):
+    """The SQLite linked into this Python is older than the cache needs.
+
+    Not a `sqlite3.DatabaseError`: nothing is wrong with the cache file,
+    and `CacheManager` must not mistake this for corruption and delete it.
+    """
+
+
+def check_sqlite_version(
+    version_info: Optional[Tuple[int, ...]] = None,
+) -> None:
+    """Raise `SQLiteTooOldError` when SQLite is older than the cache needs.
+
+    Checked before the migration chain runs, never by its failure: an older
+    SQLite rejects 016's `DROP COLUMN` with a bare syntax error, after the
+    `UPDATE` above it has already committed, and since the migration is
+    never recorded the same failure comes back on every run.
+    """
+    found = sqlite3.sqlite_version_info if version_info is None else version_info
+    if tuple(found) >= MIN_SQLITE_VERSION:
+        return
+    need = ".".join(map(str, MIN_SQLITE_VERSION))
+    have = ".".join(map(str, found))
+    raise SQLiteTooOldError(
+        f"the cache needs SQLite {need} or later, and this Python uses "
+        f"SQLite {have}; use a Python built with a newer SQLite"
+    )
 
 
 def cache_busy_timeout() -> float:
@@ -222,7 +255,12 @@ def run_migrations(db_path: Path) -> int:
 
     Returns:
         Number of migrations applied
+
+    Raises:
+        SQLiteTooOldError: SQLite is older than ``MIN_SQLITE_VERSION``;
+            raised before the database is opened, so nothing is touched.
     """
+    check_sqlite_version()
     conn = sqlite3.connect(db_path, timeout=cache_busy_timeout())
     # Everything after the connect goes inside the try, so no failure can
     # leave the handle open. That matters most for the pragmas: they are the

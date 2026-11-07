@@ -25,6 +25,12 @@ from .migrations.runner import (
     cache_busy_timeout,
     run_migrations,
 )
+from .refresh_spool import (
+    MESSAGE_COLUMN_LIST,
+    MESSAGE_COLUMN_NAMES,
+    RefreshSpool,
+    SpooledFile,
+)
 from .write_queue import write_turn
 from .models import (
     AssistantTranscriptEntry,
@@ -172,10 +178,6 @@ class ProjectCache(BaseModel):
 
     # Session metadata
     sessions: dict[str, SessionCacheData]
-
-    # An entry write has not yet been followed by the session rows and
-    # aggregates derived from it (migration 015).
-    refresh_pending: bool = False
 
     # Working directories associated with this project
     working_directories: list[str] = []
@@ -932,7 +934,9 @@ def _drop_leases(db_path: Path) -> None:
     """
     leases = _thread_leases()
     for key in [k for k in leases if k[0] == str(db_path)]:
-        leases.pop(key).close()
+        conn = leases.pop(key)
+        conn.close()
+        _forget_leftover_spool(conn)
 
 
 @contextmanager
@@ -973,6 +977,7 @@ def connection_lease(
         # `_drop_leases` may already have removed and closed it.
         if leases.pop(key, None) is not None:
             conn.close()
+            _forget_leftover_spool(conn)
 
 
 # How long a WAL checkpoint waits for readers to move off old snapshots. A
@@ -1118,6 +1123,87 @@ def trim_oversized_wal(
     return size
 
 
+# One file's rows, as `_serialize_entry` produces them (`project_id` and
+# `file_id` included), into the shared `messages` table.
+_INSERT_MESSAGE = (
+    f"INSERT INTO messages (project_id, file_id, {MESSAGE_COLUMN_LIST})"
+    " VALUES (:project_id, :file_id, "
+    + ", ".join(f":{name}" for name in MESSAGE_COLUMN_NAMES)
+    + ")"
+)
+
+# A file's record, by (project, name): kept on conflict so its id, and the
+# messages rows pointing at it, survive a rewrite (no cascade delete).
+_UPSERT_CACHED_FILE = """
+    INSERT INTO cached_files
+    (project_id, file_name, file_path, source_mtime, source_size,
+     cached_mtime, message_count, subagents_fingerprint, content_version)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(project_id, file_name) DO UPDATE SET
+        file_path = excluded.file_path,
+        source_mtime = excluded.source_mtime,
+        source_size = excluded.source_size,
+        cached_mtime = excluded.cached_mtime,
+        message_count = excluded.message_count,
+        subagents_fingerprint = excluded.subagents_fingerprint,
+        content_version = excluded.content_version
+"""
+
+# The same columns on a file whose id is known (an append).
+_UPDATE_CACHED_FILE = """
+    UPDATE cached_files
+    SET file_path = ?, source_mtime = ?, source_size = ?, cached_mtime = ?,
+        message_count = ?, subagents_fingerprint = ?, content_version = ?
+    WHERE id = ?
+"""
+
+# The same rows from an attached spool, with the ids the merge decides.
+_MERGE_MESSAGES = (
+    f"INSERT INTO messages (project_id, file_id, {MESSAGE_COLUMN_LIST})"
+    f" SELECT ?, ?, {MESSAGE_COLUMN_LIST} FROM spool.messages"
+    " WHERE file_id = ? ORDER BY id"
+)
+
+
+# Spools a scope could not DETACH when it ended (a statement was still
+# active on the connection), by connection: released at the next scope's
+# entry on that connection, or when the connection closes. Keyed by the
+# connection object, not its address, which a later connection may
+# reuse. See `CacheManager._detach_spool`.
+_leftover_spools: Dict[sqlite3.Connection, Path] = {}
+
+
+def _forget_leftover_spool(conn: sqlite3.Connection) -> None:
+    """After ``conn`` closed: its attachment went with it, the file goes."""
+    path = _leftover_spools.pop(conn, None)
+    if path is not None:
+        try:
+            path.unlink()
+        except OSError:
+            pass
+
+
+class _PendingRefresh:
+    """What an `atomic_refresh` scope accumulates until its merge.
+
+    ``spool`` holds the entry rows. ``deferred`` holds the derived
+    writes (session rows, sidecar, aggregates) as callables of the
+    connection, in the order they were requested, run inside the merge
+    transaction after the rows. ``appends`` keeps, per file spooled as
+    a tail, the parse that produced it: if the merge finds the file's
+    rows are no longer what the tail expected to follow, it rewrites
+    the file whole from those entries, as the direct path's refused
+    append falls back to a full save.
+    """
+
+    def __init__(self, spool: RefreshSpool) -> None:
+        self.spool = spool
+        self.deferred: List[Callable[[sqlite3.Connection], None]] = []
+        self.appends: Dict[
+            str, Tuple[Path, List[TranscriptEntry], Optional[str], os.stat_result]
+        ] = {}
+
+
 class CacheManager:
     """SQLite-based cache manager for Claude Code Log."""
 
@@ -1161,6 +1247,10 @@ class CacheManager:
         # the field always exists before any _get_connection() could run, even
         # if migrations are ever routed through it.
         self._shared_conn: Optional[sqlite3.Connection] = None
+
+        # Inside an `atomic_refresh` scope: the spool and the deferred
+        # derived writes; None means every write lands at once.
+        self._refresh: Optional[_PendingRefresh] = None
 
         self._project_id: Optional[int] = None
         if read_only:
@@ -1268,6 +1358,308 @@ class CacheManager:
         finally:
             self._shared_conn = None
             conn.close()
+            _forget_leftover_spool(conn)
+
+    @contextmanager
+    def atomic_refresh(self) -> Generator[None, None, None]:
+        """Commit every write of the scope in one transaction, at its end.
+
+        Inside the scope, ``save_cached_entries`` and
+        ``extend_cached_entries`` serialise as usual but write to a
+        private spool file (``refresh_spool.py``) instead of the cache,
+        taking no shared lock; ``update_session_cache``,
+        ``save_session_sidecar``, ``merge_session_sidecar`` and
+        ``update_project_aggregates`` are deferred. On a clean exit the
+        merge takes one write transaction, copies the spooled rows in
+        with ``INSERT ... SELECT`` from the attached spool, runs the
+        deferred writes in the order they were requested, and commits.
+        An exception leaves the cache exactly as it was: nothing was
+        written to it, and the spool is removed either way.
+
+        So a refresh that stops at any point (a lock-out, a kill, a
+        full disk) never records a file as current over session rows
+        that predate its entries, and a reader on another connection
+        sees either the whole refresh or none of it. Two refreshes of
+        one project overlapping commit two self-consistent snapshots:
+        the later wins, and if it parsed older files its
+        ``cached_files`` rows say so.
+
+        Needs a single connection for the scope, so it opens a
+        ``batch()`` of its own when the caller has none. Nesting joins
+        the outer scope. A read-only instance cannot write and gets no
+        spool: its writes behave as outside a scope.
+        """
+        if self._refresh is not None or self._read_only or self._project_id is None:
+            # Nested: join. Read-only, or no project row: every write of
+            # this instance returns early, so there is nothing to spool.
+            yield
+            return
+
+        with self.batch(), self._get_connection() as conn:
+            # ATTACH and DETACH refuse to run inside a transaction; the
+            # scope opens on a connection that is only reading. Python's
+            # sqlite3 opens one implicitly at any DML outside
+            # `write_transaction`, so say what happened rather than let
+            # ATTACH report it.
+            if conn.in_transaction:
+                raise sqlite3.ProgrammingError(
+                    "atomic_refresh: the connection is already in a "
+                    "transaction; a write on it bypassed write_transaction"
+                )
+            self._release_leftover_spool(conn)
+            pending = _PendingRefresh(RefreshSpool(self.db_path))
+            try:
+                conn.execute("ATTACH DATABASE ? AS spool", (str(pending.spool.path),))
+                try:
+                    self._refresh = pending
+                    try:
+                        self._create_overlay(conn)
+                        yield
+                    finally:
+                        self._refresh = None
+                        self._drop_overlay(conn)
+                    self._merge_refresh(conn, pending)
+                finally:
+                    self._detach_spool(conn, pending.spool)
+            finally:
+                pending.spool.close()
+                if conn not in _leftover_spools:
+                    pending.spool.unlink()
+
+    @staticmethod
+    def _detach_spool(conn: sqlite3.Connection, spool: RefreshSpool) -> None:
+        """DETACH the spool, or leave it for the next scope on ``conn``.
+
+        A statement still active on the connection (a cursor the scope's
+        body left unexhausted, kept alive by the traceback of the
+        exception that ended the scope) makes DETACH fail with "database
+        spool is locked". That must neither replace the body's exception
+        nor turn a committed merge into a failure, so the attachment is
+        recorded and released at the next scope's entry, or at the
+        connection's close, whichever comes first; the file goes with it.
+        """
+        try:
+            conn.execute("DETACH DATABASE spool")
+        except sqlite3.OperationalError:
+            _leftover_spools[conn] = spool.path
+
+    @staticmethod
+    def _release_leftover_spool(conn: sqlite3.Connection) -> None:
+        """Finish a scope's cleanup that `_detach_spool` could not."""
+        path = _leftover_spools.pop(conn, None)
+        if path is None:
+            return
+        conn.execute("DROP VIEW IF EXISTS temp.messages")
+        conn.execute("DROP VIEW IF EXISTS temp.cached_files")
+        attached = {row[1] for row in conn.execute("PRAGMA database_list")}
+        if "spool" in attached:
+            conn.execute("DETACH DATABASE spool")
+        try:
+            path.unlink()
+        except OSError:
+            pass
+
+    def _create_overlay(self, conn: sqlite3.Connection) -> None:
+        """Make the scope's reads see the cache as the merge will leave it.
+
+        Two TEMP views named ``cached_files`` and ``messages`` shadow the
+        tables for every unqualified read on this connection: each is
+        the table minus the rows the spooled files replace, UNION ALL
+        the spool's rows. The incremental refresh reads back the rows it
+        has just written (file states, uuid owners, the closure's
+        entries); with the rows in the spool, those reads find them here.
+        A spooled file that is new to the cache has no id yet, so it
+        reads as ``-<spool id>``, which nothing else can collide with;
+        the merge gives it its real id. A spooled tail follows the file's
+        rows in the cache, so its row ids are offset past the cache's
+        last, keeping the file's order. Both views select the table's
+        own columns, in its order, so ``SELECT *`` readers see the same
+        shape.
+
+        A write through the shadow fails ("cannot modify ... because it
+        is a view"): inside a scope, the entry rows go to the spool and
+        nothing else may write these tables, so that is the right noise.
+        The views are dropped before the merge, which writes the tables.
+        """
+        pid = int(self._project_id or 0)
+        spooled = "(SELECT file_name FROM spool.files)"
+        replaced = (
+            "(SELECT c.id FROM main.cached_files c JOIN spool.files f"
+            f" ON f.file_name = c.file_name WHERE c.project_id = {pid}"
+            " AND f.mode = 'replace')"
+        )
+        # The join giving a spooled file its cache id when it has one.
+        known = (
+            "LEFT JOIN main.cached_files c"
+            f" ON c.project_id = {pid} AND c.file_name = f.file_name"
+        )
+
+        file_columns = [
+            row[1] for row in conn.execute("PRAGMA main.table_info(cached_files)")
+        ]
+        file_overlay = {"id": "COALESCE(c.id, -f.id)", "project_id": str(pid)}
+        conn.execute(
+            f"""CREATE TEMP VIEW cached_files AS
+                SELECT {", ".join(file_columns)} FROM main.cached_files
+                WHERE NOT (project_id = {pid} AND file_name IN {spooled})
+                UNION ALL
+                SELECT {", ".join(file_overlay.get(c, f"f.{c}") for c in file_columns)}
+                FROM spool.files f {known}"""
+        )
+
+        message_columns = [
+            row[1] for row in conn.execute("PRAGMA main.table_info(messages)")
+        ]
+        message_overlay = {
+            "id": "s.id + (SELECT COALESCE(MAX(id), 0) FROM main.messages)",
+            "project_id": str(pid),
+            "file_id": "COALESCE(c.id, -f.id)",
+        }
+        conn.execute(
+            f"""CREATE TEMP VIEW messages AS
+                SELECT {", ".join(message_columns)} FROM main.messages
+                WHERE NOT (project_id = {pid} AND file_id IN {replaced})
+                UNION ALL
+                SELECT {", ".join(message_overlay.get(c, f"s.{c}" if c in MESSAGE_COLUMN_NAMES else "NULL") for c in message_columns)}
+                FROM spool.messages s JOIN spool.files f ON f.id = s.file_id {known}"""
+        )
+
+    @staticmethod
+    def _drop_overlay(conn: sqlite3.Connection) -> None:
+        conn.execute("DROP VIEW IF EXISTS temp.messages")
+        conn.execute("DROP VIEW IF EXISTS temp.cached_files")
+
+    def _merge_refresh(
+        self, conn: sqlite3.Connection, pending: _PendingRefresh
+    ) -> None:
+        """The one transaction an `atomic_refresh` scope ends with.
+
+        Runs with the spool attached and the overlay views dropped, so
+        the tables it writes are the tables.
+        """
+        spooled = pending.spool.files()
+        if not spooled and not pending.deferred:
+            return
+        with write_transaction(conn):
+            file_ids: List[int] = []
+            for spooled_file in spooled:
+                file_ids.append(self._merge_spooled_file(conn, spooled_file, pending))
+            if file_ids:
+                # One index refresh for every file merged, as each
+                # direct write does for its file (and a hierarchy
+                # pass defers to its end, the same way).
+                from .search import (
+                    auto_index_enabled,
+                    index_maintenance_deferred,
+                    reindex_files,
+                )
+
+                if auto_index_enabled() and not index_maintenance_deferred():
+                    reindex_files(conn, file_ids, commit=False)
+                self._update_last_updated(conn)
+            for write in pending.deferred:
+                write(conn)
+
+    def _merge_spooled_file(
+        self,
+        conn: sqlite3.Connection,
+        spooled: SpooledFile,
+        pending: _PendingRefresh,
+    ) -> int:
+        """Copy one spooled file's rows into the cache; returns its file id."""
+        record = (
+            self._project_id,
+            spooled.file_name,
+            spooled.file_path,
+            spooled.source_mtime,
+            spooled.source_size,
+            spooled.cached_mtime,
+            spooled.message_count,
+            spooled.subagents_fingerprint,
+            spooled.content_version,
+        )
+        if spooled.mode == "append":
+            row = conn.execute(
+                "SELECT id FROM cached_files WHERE project_id = ? AND file_name = ?",
+                (self._project_id, spooled.file_name),
+            ).fetchone()
+            if row is not None:
+                file_id = row["id"]
+                count = conn.execute(
+                    "SELECT COUNT(*) AS n FROM messages WHERE file_id = ?", (file_id,)
+                ).fetchone()["n"]
+                if count == spooled.expected_existing:
+                    conn.execute(_UPDATE_CACHED_FILE, (*record[2:], file_id))
+                    conn.execute(
+                        _MERGE_MESSAGES, (self._project_id, file_id, spooled.id)
+                    )
+                    return file_id
+            # The rows the tail expected to follow are not there (another
+            # process rewrote the file's rows since the parse): rewrite
+            # the file whole from the parse, under the lock, as the
+            # direct path's refused append falls back to a full save.
+            jsonl_path, entries, subagents_fp, source_stat = pending.appends[
+                spooled.file_name
+            ]
+            rows = [self._serialize_entry(entry, 0) for entry in entries]
+            return self._replace_file_rows(
+                conn, jsonl_path, rows, source_stat, subagents_fp
+            )
+
+        conn.execute(_UPSERT_CACHED_FILE, record)
+        file_id = self._file_id_under_lock(conn, spooled.file_name)
+        conn.execute("DELETE FROM messages WHERE file_id = ?", (file_id,))
+        conn.execute(_MERGE_MESSAGES, (self._project_id, file_id, spooled.id))
+        return file_id
+
+    def _write_or_defer(
+        self, write: Callable[[sqlite3.Connection], None], *, sidecar: bool = False
+    ) -> None:
+        """Run a derived write now, or at the scope's merge when in one.
+
+        A sidecar write deferred to the merge runs in a savepoint: a
+        failure that is not contention rolls back the sidecar alone,
+        drops its ``sidecar_state`` marker, and lets the rest of the
+        refresh commit, which is what ``abandon_session_sidecar`` does
+        for a direct write that failed (the caller handles that one).
+        Contention re-raises and fails the whole merge, as it fails
+        the direct write.
+        """
+        if self._refresh is None:
+            with self._get_connection() as conn, write_transaction(conn):
+                write(conn)
+            return
+        if sidecar:
+            self._refresh.deferred.append(
+                functools.partial(self._guarded_sidecar_write, write)
+            )
+        else:
+            self._refresh.deferred.append(write)
+
+    def _guarded_sidecar_write(
+        self, write: Callable[[sqlite3.Connection], None], conn: sqlite3.Connection
+    ) -> None:
+        """A deferred sidecar write, in a savepoint of the merge."""
+        conn.execute("SAVEPOINT sidecar")
+        try:
+            write(conn)
+        except Exception as exc:
+            if not conn.in_transaction:
+                # A full disk, an I/O error or memory exhaustion can
+                # abort the whole transaction, savepoint included; the
+                # merge then fails on that cause, not on a missing
+                # savepoint.
+                raise
+            conn.execute("ROLLBACK TO sidecar")
+            conn.execute("RELEASE sidecar")
+            if is_busy_database_error(exc):
+                raise
+            conn.execute(
+                "DELETE FROM sidecar_state WHERE project_id = ?", (self._project_id,)
+            )
+            logger.warning("Failed to write session sidecar, dropped it: %s", exc)
+        else:
+            conn.execute("RELEASE sidecar")
 
     def _init_database(self) -> None:
         """Create schema if needed using migration runner."""
@@ -1401,24 +1793,6 @@ class CacheManager:
 
         conn.execute(
             "UPDATE projects SET last_updated = ? WHERE id = ?",
-            (datetime.now().isoformat(), self._project_id),
-        )
-
-    def _mark_entries_written(self, conn: sqlite3.Connection) -> None:
-        """Stamp an entry write: ``last_updated``, and a refresh now pending.
-
-        Called inside the transaction that writes a file's entry rows, so
-        the flag commits with them (migration 015). The session rows and
-        aggregates derived from those entries are written later, in other
-        transactions; until ``update_project_aggregates`` clears the flag,
-        ``get_modified_files`` reports every file, and a refresh that
-        stopped in between is redone instead of looking finished.
-        """
-        if self._project_id is None:
-            return
-
-        conn.execute(
-            "UPDATE projects SET last_updated = ?, refresh_pending = 1 WHERE id = ?",
             (datetime.now().isoformat(), self._project_id),
         )
 
@@ -1693,9 +2067,6 @@ class CacheManager:
 
         if source_stat is None:
             source_stat = jsonl_path.stat()
-        source_mtime = source_stat.st_mtime
-        source_size = source_stat.st_size
-        cached_mtime = datetime.now().timestamp()
         if subagents_fp is None:
             subagents_fp = subagents_fingerprint(jsonl_path)
 
@@ -1707,68 +2078,19 @@ class CacheManager:
         # only known inside the transaction, so it is filled in there.
         serialized_entries = [self._serialize_entry(entry, 0) for entry in entries]
 
-        with self._get_connection() as conn, write_transaction(conn):
-            # Insert or update file record
-            # Use ON CONFLICT to preserve file ID and avoid cascade deletes on messages
-            conn.execute(
-                """
-                INSERT INTO cached_files
-                (project_id, file_name, file_path, source_mtime, source_size,
-                 cached_mtime, message_count, subagents_fingerprint,
-                 content_version)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(project_id, file_name) DO UPDATE SET
-                    file_path = excluded.file_path,
-                    source_mtime = excluded.source_mtime,
-                    source_size = excluded.source_size,
-                    cached_mtime = excluded.cached_mtime,
-                    message_count = excluded.message_count,
-                    subagents_fingerprint = excluded.subagents_fingerprint,
-                    content_version = excluded.content_version
-                """,
-                (
-                    self._project_id,
-                    jsonl_path.name,
-                    str(jsonl_path),
-                    source_mtime,
-                    source_size,
-                    cached_mtime,
-                    len(entries),
-                    subagents_fp,
-                    content_schema_version(),
-                ),
-            )
-
-            # Get the file ID
-            row = conn.execute(
-                "SELECT id FROM cached_files WHERE project_id = ? AND file_name = ?",
-                (self._project_id, jsonl_path.name),
-            ).fetchone()
-            file_id = row["id"]
-
-            # Delete existing messages for this file
-            conn.execute("DELETE FROM messages WHERE file_id = ?", (file_id,))
-
-            # Insert all entries in a batch
-            for serialized in serialized_entries:
-                serialized["file_id"] = file_id
-            conn.executemany(
-                """
-                INSERT INTO messages (
-                    project_id, file_id, type, timestamp, session_id,
-                    _uuid, _parent_uuid, _is_sidechain, _user_type, _cwd, _version,
-                    _is_meta, _agent_id, _request_id,
-                    input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
-                    _leaf_uuid, _level, _operation, content
-                ) VALUES (
-                    :project_id, :file_id, :type, :timestamp, :session_id,
-                    :_uuid, :_parent_uuid, :_is_sidechain, :_user_type, :_cwd, :_version,
-                    :_is_meta, :_agent_id, :_request_id,
-                    :input_tokens, :output_tokens, :cache_creation_tokens, :cache_read_tokens,
-                    :_leaf_uuid, :_level, :_operation, :content
-                )
-                """,
+        if self._refresh is not None:
+            # Spooled: the merge at the scope's end writes it, in one
+            # transaction with everything else the refresh produced.
+            self._refresh.spool.add(
+                self._file_record(jsonl_path, source_stat, len(entries), subagents_fp),
                 serialized_entries,
+                mode="replace",
+            )
+            return
+
+        with self._get_connection() as conn, write_transaction(conn):
+            file_id = self._replace_file_rows(
+                conn, jsonl_path, serialized_entries, source_stat, subagents_fp
             )
 
             # Keep the full-archive search index in step with the rows we
@@ -1790,7 +2112,68 @@ class CacheManager:
             if auto_index_enabled() and not index_maintenance_deferred():
                 reindex_files(conn, [file_id], commit=False)
 
-            self._mark_entries_written(conn)
+            self._update_last_updated(conn)
+
+    def _file_record(
+        self,
+        jsonl_path: Path,
+        source_stat: os.stat_result,
+        message_count: int,
+        subagents_fp: Optional[str],
+    ) -> Dict[str, Any]:
+        """A file's ``cached_files`` columns as of a parse, by name."""
+        return {
+            "file_name": jsonl_path.name,
+            "file_path": str(jsonl_path),
+            "source_mtime": source_stat.st_mtime,
+            "source_size": source_stat.st_size,
+            "cached_mtime": datetime.now().timestamp(),
+            "message_count": message_count,
+            "subagents_fingerprint": subagents_fp,
+            "content_version": content_schema_version(),
+        }
+
+    def _file_id_under_lock(self, conn: sqlite3.Connection, file_name: str) -> int:
+        """The id of a file record that was just written on ``conn``."""
+        row = conn.execute(
+            "SELECT id FROM cached_files WHERE project_id = ? AND file_name = ?",
+            (self._project_id, file_name),
+        ).fetchone()
+        return row["id"]
+
+    def _replace_file_rows(
+        self,
+        conn: sqlite3.Connection,
+        jsonl_path: Path,
+        serialized_entries: List[Dict[str, Any]],
+        source_stat: os.stat_result,
+        subagents_fp: Optional[str],
+    ) -> int:
+        """Write a file's record and its whole row set, under the caller's
+        write lock; returns the file id."""
+        record = self._file_record(
+            jsonl_path, source_stat, len(serialized_entries), subagents_fp
+        )
+        conn.execute(
+            _UPSERT_CACHED_FILE,
+            (
+                self._project_id,
+                record["file_name"],
+                record["file_path"],
+                record["source_mtime"],
+                record["source_size"],
+                record["cached_mtime"],
+                record["message_count"],
+                record["subagents_fingerprint"],
+                record["content_version"],
+            ),
+        )
+        file_id = self._file_id_under_lock(conn, jsonl_path.name)
+        conn.execute("DELETE FROM messages WHERE file_id = ?", (file_id,))
+        for serialized in serialized_entries:
+            serialized["file_id"] = file_id
+        conn.executemany(_INSERT_MESSAGE, serialized_entries)
+        return file_id
 
     def extend_cached_entries(
         self,
@@ -1834,6 +2217,30 @@ class CacheManager:
         # Serialised before the lock for the same reason as in
         # `save_cached_entries`; the file id is filled in under it.
         appended_rows = [self._serialize_entry(entry, 0) for entry in appended]
+
+        if self._refresh is not None:
+            # Spooled as a tail; the row check runs at the merge, under
+            # its lock, and a refusal there rewrites the file from the
+            # entries kept here. A file already spooled in this scope
+            # cannot take a tail (it has rows of its own in the spool
+            # the check would not see); it is saved whole instead.
+            if self._refresh.spool.has(jsonl_path.name):
+                return False
+            self._refresh.spool.add(
+                self._file_record(
+                    jsonl_path, source_stat, len(all_entries), subagents_fp
+                ),
+                appended_rows,
+                mode="append",
+                expected_existing=expected_existing,
+            )
+            self._refresh.appends[jsonl_path.name] = (
+                jsonl_path,
+                all_entries,
+                subagents_fp,
+                source_stat,
+            )
+            return True
 
         with self._get_connection() as conn, write_transaction(conn):
             # The count and the insert have to be one transaction, and
@@ -1884,40 +2291,24 @@ class CacheManager:
         if count != expected_existing:
             return False
 
+        record = self._file_record(
+            jsonl_path, source_stat, len(all_entries), subagents_fp
+        )
         conn.execute(
-            """UPDATE cached_files
-               SET file_path = ?, source_mtime = ?, source_size = ?,
-                   cached_mtime = ?, message_count = ?, subagents_fingerprint = ?,
-                   content_version = ?
-               WHERE id = ?""",
+            _UPDATE_CACHED_FILE,
             (
-                str(jsonl_path),
-                source_stat.st_mtime,
-                source_stat.st_size,
-                datetime.now().timestamp(),
-                len(all_entries),
-                subagents_fp,
-                content_schema_version(),
+                record["file_path"],
+                record["source_mtime"],
+                record["source_size"],
+                record["cached_mtime"],
+                record["message_count"],
+                record["subagents_fingerprint"],
+                record["content_version"],
                 file_id,
             ),
         )
         conn.executemany(
-            """
-            INSERT INTO messages (
-                project_id, file_id, type, timestamp, session_id,
-                _uuid, _parent_uuid, _is_sidechain, _user_type, _cwd, _version,
-                _is_meta, _agent_id, _request_id,
-                input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
-                _leaf_uuid, _level, _operation, content
-            ) VALUES (
-                :project_id, :file_id, :type, :timestamp, :session_id,
-                :_uuid, :_parent_uuid, :_is_sidechain, :_user_type, :_cwd, :_version,
-                :_is_meta, :_agent_id, :_request_id,
-                :input_tokens, :output_tokens, :cache_creation_tokens, :cache_read_tokens,
-                :_leaf_uuid, :_level, :_operation, :content
-            )
-            """,
-            [{**row, "file_id": file_id} for row in appended_rows],
+            _INSERT_MESSAGE, [{**row, "file_id": file_id} for row in appended_rows]
         )
 
         # The index still refreshes the whole file: `reindex_files`
@@ -1934,7 +2325,7 @@ class CacheManager:
         if auto_index_enabled() and not index_maintenance_deferred():
             reindex_files(conn, [file_id], commit=False)
 
-        self._mark_entries_written(conn)
+        self._update_last_updated(conn)
         return True
 
     def update_session_cache(self, session_data: Dict[str, SessionCacheData]) -> None:
@@ -1942,7 +2333,7 @@ class CacheManager:
         if self._project_id is None:
             return
 
-        with self._get_connection() as conn, write_transaction(conn):
+        def write(conn: sqlite3.Connection) -> None:
             for session_id, data in session_data.items():
                 conn.execute(
                     """
@@ -1995,6 +2386,8 @@ class CacheManager:
 
             self._update_last_updated(conn)
 
+        self._write_or_defer(write)
+
     def update_project_aggregates(
         self,
         total_message_count: int,
@@ -2007,15 +2400,14 @@ class CacheManager:
     ) -> None:
         """Update project-level aggregate information.
 
-        The last write of a complete refresh, after every entry write and
-        the session rows and sidecar derived from them, so it also clears
-        the ``refresh_pending`` flag those entry writes set (migration
-        015). Call it only once those match every entry row written.
+        The last write of a refresh, after every entry write and the
+        session rows and sidecar derived from them; inside an
+        ``atomic_refresh`` scope it commits with them.
         """
         if self._project_id is None:
             return
 
-        with self._get_connection() as conn, write_transaction(conn):
+        def write(conn: sqlite3.Connection) -> None:
             conn.execute(
                 """
                 UPDATE projects SET
@@ -2026,8 +2418,7 @@ class CacheManager:
                     total_cache_read_tokens = ?,
                     earliest_timestamp = ?,
                     latest_timestamp = ?,
-                    last_updated = ?,
-                    refresh_pending = 0
+                    last_updated = ?
                 WHERE id = ?
                 """,
                 (
@@ -2042,6 +2433,8 @@ class CacheManager:
                     self._project_id,
                 ),
             )
+
+        self._write_or_defer(write)
 
     def save_session_sidecar(self, sidecar: SessionSidecar) -> None:
         """Persist the cross-session sidecar (migration 008), wholesale.
@@ -2058,7 +2451,7 @@ class CacheManager:
         if self._project_id is None or self._read_only:
             return
 
-        with self._get_connection() as conn, write_transaction(conn):
+        def write(conn: sqlite3.Connection) -> None:
             pid = self._project_id
             conn.execute("DELETE FROM session_parents WHERE project_id = ?", (pid,))
             conn.execute("DELETE FROM junction_uuids WHERE project_id = ?", (pid,))
@@ -2094,6 +2487,8 @@ class CacheManager:
                        populated_at = excluded.populated_at""",
                 (pid, datetime.now().isoformat()),
             )
+
+        self._write_or_defer(write, sidecar=True)
 
     def load_session_sidecar(self) -> Optional[SessionSidecar]:
         """Load the cross-session sidecar, or None when never populated.
@@ -2451,8 +2846,8 @@ class CacheManager:
 
         The failed write rolled back, so the previous sidecar still stands,
         and a refresh that went on to finish would vouch for it. Contention
-        re-raises: the refresh fails with ``refresh_pending`` still set, and
-        the retry or the next run redoes it. Any other failure may recur on
+        re-raises: the refresh fails, and the retry or the next run redoes
+        it. Any other failure may recur on
         every run, so instead of failing the project forever this drops
         the ``sidecar_state`` row: every reader then declines to the full
         load, as for a cache that never had a sidecar, until an unfiltered
@@ -2462,10 +2857,15 @@ class CacheManager:
             raise exc
         if self._project_id is None or self._read_only:
             return
-        with self._get_connection() as conn, write_transaction(conn):
+
+        def write(conn: sqlite3.Connection) -> None:
             conn.execute(
                 "DELETE FROM sidecar_state WHERE project_id = ?", (self._project_id,)
             )
+
+        # Deferred inside an `atomic_refresh` scope like the write it
+        # abandons: a refresh that then fails drops nothing either.
+        self._write_or_defer(write)
 
     def merge_session_sidecar(
         self,
@@ -2486,7 +2886,8 @@ class CacheManager:
         """
         if self._project_id is None or self._read_only:
             return
-        with self._get_connection() as conn, write_transaction(conn):
+
+        def write(conn: sqlite3.Connection) -> None:
             pid = self._project_id
             for sid, value in parent_updates.items():
                 conn.execute(
@@ -2530,6 +2931,8 @@ class CacheManager:
                 (pid, datetime.now().isoformat()),
             )
 
+        self._write_or_defer(write, sidecar=True)
+
     def get_working_directories(self) -> List[str]:
         """Get list of working directories associated with this project.
 
@@ -2550,14 +2953,6 @@ class CacheManager:
         ).fetchall()
         return [row["cwd"] for row in rows]
 
-    def _refresh_pending(self, conn: sqlite3.Connection) -> bool:
-        """Whether an entry write awaits its derived rows — see
-        ``_mark_entries_written``."""
-        row = conn.execute(
-            "SELECT refresh_pending FROM projects WHERE id = ?", (self._project_id,)
-        ).fetchone()
-        return bool(row and row["refresh_pending"])
-
     def get_modified_files(self, jsonl_files: List[Path]) -> List[Path]:
         """Get list of JSONL files that need to be reprocessed.
 
@@ -2567,13 +2962,6 @@ class CacheManager:
         subagent-sidecar fingerprints, replacing the per-file query +
         directory probes that dominated freshness-check time on large
         archives (issue #12).
-
-        Every file is reported while a refresh is pending (migration 015):
-        then the question is not whether a file's entry rows are current,
-        it is whether everything derived from them is, and only redoing the
-        refresh answers that. Per-file entry freshness (``is_file_cached``,
-        what loading consults) is unaffected, so that refresh is served
-        from the cache rather than re-parsed.
         """
         if not jsonl_files:
             return []
@@ -2581,10 +2969,6 @@ class CacheManager:
             return list(jsonl_files)
 
         with self._get_connection() as conn:
-            if self._refresh_pending(conn):
-                # A refresh wrote entries and never finished: the session
-                # rows may predate them, whatever the files look like.
-                return list(jsonl_files)
             rows = conn.execute(
                 "SELECT file_name, source_mtime, source_size,"
                 " subagents_fingerprint, content_version"
@@ -2654,6 +3038,21 @@ class CacheManager:
 
         return modified
 
+    def cached_message_total(self) -> Optional[int]:
+        """The project's cached ``total_message_count``; None without a row.
+
+        One query, for a pass's plan: ``get_cached_project_data`` would
+        load every session row to answer the same question.
+        """
+        if self._project_id is None:
+            return None
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT total_message_count FROM projects WHERE id = ?",
+                (self._project_id,),
+            ).fetchone()
+        return int(row["total_message_count"]) if row else None
+
     def get_cached_project_data(self) -> Optional[ProjectCache]:
         """Get the cached project data if available."""
         if self._project_id is None:
@@ -2722,7 +3121,6 @@ class CacheManager:
             total_cache_creation_tokens=project_row["total_cache_creation_tokens"],
             total_cache_read_tokens=project_row["total_cache_read_tokens"],
             sessions=sessions,
-            refresh_pending=bool(project_row["refresh_pending"]),
             working_directories=working_directories,
             earliest_timestamp=project_row["earliest_timestamp"],
             latest_timestamp=project_row["latest_timestamp"],

@@ -7,8 +7,9 @@ the grown file and writes its entry rows itself, it also stamps the
 file's new size and mtime, but the session row keeps the counts the
 refresh computed. The run's pages then show lines its session row does
 not count, and the cache calls the file current. Only the pending-refresh
-flag the entry write leaves set makes the next run refresh it: without
-it, the session row would stay behind until the file is written again.
+flag the entry write left set (migration 015, dropped by 016) made the
+next run refresh it: without it, the session row would have stayed
+behind until the file was written again.
 """
 
 from __future__ import annotations

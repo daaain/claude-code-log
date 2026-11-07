@@ -4,7 +4,7 @@ This guide covers development setup, testing, architecture, and release processe
 
 ## Prerequisites
 
-- Python 3.10+
+- Python 3.10+, linked against SQLite 3.35+ (the cache's minimum, `MIN_SQLITE_VERSION` in `claude_code_log/migrations/runner.py`)
 - [uv](https://docs.astral.sh/uv/) package manager
 
 ## Getting Started
@@ -646,10 +646,14 @@ The tool implements a SQLite-based caching system for performance:
   (`CLAUDE_CODE_LOG_CACHE_TIMEOUT` overrides, in seconds), and a project
   locked out is retried after the pool rather than failed. A pass compacts
   an oversized WAL before it starts and truncates the WAL when it ends. A
-  refresh that fails part-way leaves `projects.refresh_pending` set, and the
-  next run refreshes that project in full. Only the refresh writes entry
-  rows: a run renders what its refresh committed, so lines written to a
-  session while it renders appear on the next run. A date-filtered run refreshes the
+  project's refresh commits as one transaction (`CacheManager.atomic_refresh`):
+  while it parses, its entry rows go to a spool file beside the cache
+  (`<cache>.spool-<pid>-<n>`, `refresh_spool.py`), and one merge at the end
+  commits them with the session rows, aggregates and sidecar derived from
+  them, so a refresh that fails part-way leaves the cache as it was and the
+  next run redoes it. Only the refresh writes entry rows: a run renders what
+  its refresh committed, so lines written to a session while it renders
+  appear on the next run. A date-filtered run refreshes the
   cache as an unfiltered one would and leaves the files it wrote from its
   window marked stale, so the next unfiltered run re-renders them. Its
   refresh therefore loads whole files when they changed and the incremental

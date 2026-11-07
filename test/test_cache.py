@@ -548,10 +548,6 @@ class TestCacheManager:
 
         # Cache only one file
         cache_manager.save_cached_entries(file1, sample_entries)
-        # Finish the refresh as ensure_fresh_cache would: a bare entry write
-        # leaves one pending (migration 015), and then every file reads as
-        # modified, whatever its own row says.
-        cache_manager.update_project_aggregates(0, 0, 0, 0, 0, "", "")
 
         # Check modified files
         all_files = [file1, file2]

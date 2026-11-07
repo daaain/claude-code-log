@@ -4435,11 +4435,10 @@ def _incremental_cache_refresh(
     exceeding a third of the project's files (past which the full load
     is competitive anyway). Message rows written before a decline are
     exactly what the full path would write for those files, so a
-    declined attempt never leaves inconsistent state — the crash-window
-    posture (per-file commits before fact writes) likewise matches the
-    full path's, and so does its recovery: those commits set
-    ``refresh_pending`` (migration 015), which only the closing aggregate
-    write clears, so a refresh that stops between them is redone whole.
+    declined attempt never leaves inconsistent state: the caller runs
+    both inside one ``atomic_refresh`` scope, where the attempt's rows
+    wait in the spool for the full load to pick up, and nothing commits
+    until the refresh that finishes does, whole.
     """
     from .cache import CachedFileState
     from .entry_store import PendingStamp
@@ -4789,8 +4788,6 @@ def _incremental_cache_refresh(
             logging.getLogger(__name__).warning(
                 "Failed to merge session sidecar, dropped it: %s", e
             )
-        # Last, because it clears ``refresh_pending``: every write of the
-        # refresh must have landed before the project may read current.
         cache_manager.update_project_aggregates(
             total_message_count=cached_project.total_message_count
             + d_count
@@ -4899,49 +4896,52 @@ def ensure_fresh_cache_detailed(
         if not needs_update:
             return CacheRefresh.NONE  # Cache is already fresh
 
-        # Streaming stage 4: when the update is driven purely by changed
-        # files over a populated cache, refresh from those files' bounded
-        # closure instead of loading the whole project. Declines (False)
-        # fall through to the unchanged full load below.
-        # Not after a refresh that never finished (migration 015): which
-        # session rows it left behind is unknown, so no closure is bounded.
-        if (
-            modified_files
-            and cached_project_data is not None
-            and cached_project_data.total_message_count > 0
-            and not cached_project_data.refresh_pending
-            and _incremental_refresh_enabled()
-        ):
-            if _incremental_cache_refresh(
+        # One transaction for the whole refresh (`atomic_refresh`),
+        # whichever path it takes: the per-file entry writes go to a
+        # spool, the session rows, sidecar and aggregates derived from
+        # them are deferred, and the scope's end commits all of it at
+        # once. A refresh that stops anywhere in between leaves the
+        # cache as it was, with nothing recorded as current.
+        with cache_manager.atomic_refresh():
+            # Streaming stage 4: when the update is driven purely by
+            # changed files over a populated cache, refresh from those
+            # files' bounded closure instead of loading the whole
+            # project. Declines (False) fall through to the full load
+            # below, in the same scope: the files the attempt parsed
+            # are in the spool, where the full load finds them current
+            # and loads them from, so a decline costs no second parse.
+            if (
+                modified_files
+                and cached_project_data is not None
+                and cached_project_data.total_message_count > 0
+                and _incremental_refresh_enabled()
+            ):
+                if _incremental_cache_refresh(
+                    project_dir,
+                    cache_manager,
+                    session_jsonl_files,
+                    modified_files,
+                    silent,
+                    entry_store=entry_store,
+                ):
+                    return CacheRefresh.INCREMENTAL
+
+            # Load and process messages to populate cache
+            if not silent:
+                print(f"Updating cache for {project_dir.name}...")
+            messages, _tree = load_directory_transcripts(
                 project_dir,
                 cache_manager,
-                session_jsonl_files,
-                modified_files,
-                silent,
-                entry_store=entry_store,
-            ):
-                return CacheRefresh.INCREMENTAL
-
-        # Load and process messages to populate cache
-        if not silent:
-            print(f"Updating cache for {project_dir.name}...")
-        messages, _tree = load_directory_transcripts(
-            project_dir,
-            cache_manager,
-            silent=silent,
-            # The refresh is a full load of the current tree, so persist
-            # the cross-session sidecar here too (same batch as the
-            # per-file writes). This is what lets the streaming path run
-            # right after a cache update without a second full load.
-            persist_sidecar=True,
-            sidecar_required=True,
-        )
-
-        # Update cache with fresh data. Limit, shared with every clearing
-        # write: another process's refresh that sets ``refresh_pending``
-        # and fails while this one runs is cleared here; closing that
-        # needs a write generation, not a boolean.
-        _update_cache_with_session_data(cache_manager, messages)
+                silent=silent,
+                # The refresh is a full load of the current tree, so
+                # persist the cross-session sidecar here too (same
+                # transaction as the per-file writes). This is what lets
+                # the streaming path run right after a cache update
+                # without a second full load.
+                persist_sidecar=True,
+                sidecar_required=True,
+            )
+            _update_cache_with_session_data(cache_manager, messages)
     return CacheRefresh.FULL
 
 
@@ -5979,11 +5979,6 @@ def render_provider_wholesale(
                 # ``has_provider_token_totals``.
                 if has_provider_token_totals:
                     project_aggregates.update(project_token_totals)
-                # Clears refresh_pending even after a filtered load: v1
-                # re-parses every rollout and recomputes every session row
-                # each run, and is_transcript_stale catches a filtered
-                # render, so the flag would only add a re-render to every
-                # filtered run (it saves entries, which set it, each run).
                 cache.update_project_aggregates(**project_aggregates)
             session_counts = {
                 sid: sd.message_count for sid, sd in merged_session_data.items()
@@ -6462,6 +6457,18 @@ def _plan_project(
     else:
         combined_stale = True
 
+    # A populated project whose cached total is zero is a cache to
+    # refresh in full, as `ensure_fresh_cache` reads it (migration 016
+    # zeroes a project whose derived rows may predate its entries, to
+    # keep 015's heal); without this, a run that writes no combined
+    # output would never reach that refresh, since no file is modified
+    # and no session stale, and the index would count it at zero.
+    unrefreshed = (
+        cache_manager is not None
+        and bool(jsonl_files)
+        and cache_manager.cached_message_total() == 0
+    )
+
     # Determine if we need to do any work. With
     # `write_combined=False`, the combined-transcript file
     # isn't produced — its staleness / on-disk presence is
@@ -6472,6 +6479,7 @@ def _plan_project(
             bool(modified_files)
             or bool(stale_sessions)
             or combined_stale
+            or unrefreshed
             or not output_path.exists()
         )
     else:
@@ -6480,6 +6488,7 @@ def _plan_project(
         needs_work = (
             bool(modified_files)
             or bool(stale_sessions)
+            or unrefreshed
             or (
                 combined_ext == "html"
                 and generate_individual_sessions
@@ -6491,9 +6500,12 @@ def _plan_project(
     if window is not None and cache_manager is not None:
         # A combined page missing at the destination (a fresh --output) is
         # written even when empty for the window: the index links it.
+        # A project migration 016 zeroed heals here too: a user who only
+        # ever runs windowed passes would otherwise keep it at zero.
         needs_work = (
             bool(modified_files)
             or (write_combined and not output_path.exists())
+            or unrefreshed
             or cache_manager.has_sessions_in_window(*window)
         )
         outside_window = not needs_work
@@ -6630,6 +6642,11 @@ def process_projects_hierarchy(
             # Inside the lease, so the connection that recovers the log
             # is the one the pass then keeps.
             trim_oversized_wal(get_cache_db_path(projects_path))
+            # A refresh killed mid-parse leaves its spool behind (nothing
+            # else does); under the pass lock, those of dead processes go.
+            from .refresh_spool import sweep_orphan_spools
+
+            sweep_orphan_spools(get_cache_db_path(projects_path))
         # No entry write of this pass re-indexes its file for search —
         # not in the pool (its initializer defers too) and not inline
         # here: that is tokenising under the database's single write
