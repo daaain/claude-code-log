@@ -197,3 +197,70 @@ def test_two_text_items_in_one_message_get_distinct_ids(tmp_path: Path) -> None:
         r"^\W*\[\^([^\]]+)\]:", Path(out).read_text(encoding="utf-8"), re.M
     )
     assert len(definitions) == 2 and len(set(definitions)) == 2, definitions
+
+
+# Fences as CommonMark reads them: a closer at least as long as the opener,
+# up to three spaces of indentation, and an unclosed fence running to the
+# end. A definition shown in any of them is code, not a footnote.
+FENCES_SHOWING_A_DEFINITION = {
+    "longer-closer": "A sample:\n\n```md\nText[^1].\n\n[^1]: shown.\n`````\n\nAfter.\n",
+    "indented": "A sample:\n\n  ```md\n  Text[^1].\n\n  [^1]: shown.\n  ```\n",
+    "unclosed": "A sample:\n\n```md\nText[^1].\n\n[^1]: shown.\n",
+    "tildes-longer-closer": "A sample:\n\n~~~\nText[^1].\n\n[^1]: shown.\n~~~~\n",
+}
+
+
+@pytest.mark.parametrize("name", sorted(FENCES_SHOWING_A_DEFINITION))
+def test_a_definition_in_any_fence_shape_turns_no_scoping_on(
+    tmp_path: Path, name: str
+) -> None:
+    out = convert_jsonl_to(
+        "markdown",
+        _one_answer(tmp_path, name, FENCES_SHOWING_A_DEFINITION[name]),
+        tmp_path / f"{name}.md",
+        use_cache=False,
+    )
+    md = Path(out).read_text(encoding="utf-8")
+    assert "Text[^1]." in md and "[^1]: shown." in md, md
+    assert "[^m" not in md, md
+
+
+def test_a_longer_closer_keeps_the_code_as_written_beside_a_real_note(
+    tmp_path: Path,
+) -> None:
+    text = "Claim[^1].\n\n```\nnot a ref: [^1]\n`````\n\n[^1]: A note.\n"
+    out = convert_jsonl_to(
+        "markdown",
+        _one_answer(tmp_path, "mixed", text),
+        tmp_path / "mixed.md",
+        use_cache=False,
+    )
+    md = Path(out).read_text(encoding="utf-8")
+    assert "not a ref: [^1]" in md, md
+    scoped = sorted(set(re.findall(r"\[\^(m[^\]]+)\]", md)))
+    assert len(scoped) == 1, scoped
+    assert md.count(f"[^{scoped[0]}]") == 3, md  # reference, definition, excerpt
+
+
+def test_a_thinking_blocks_heading_uses_its_scoped_label(tmp_path: Path) -> None:
+    entries = [
+        _entry("u1", None, "user", "Go."),
+        {
+            **_entry("a12", "u1", "assistant", ""),
+            "message": {
+                "role": "assistant",
+                "id": "m-a12",
+                "type": "message",
+                "model": "claude",
+                "content": [
+                    {"type": "thinking", "thinking": "Claim[^1].\n\n[^1]: A note.\n"}
+                ],
+            },
+        },
+    ]
+    src = tmp_path / "thinking.jsonl"
+    src.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+    out = convert_jsonl_to("markdown", src, tmp_path / "thinking.md", use_cache=False)
+    md = Path(out).read_text(encoding="utf-8")
+    labels = set(re.findall(r"\[\^([^\]\s]+)\]", md))
+    assert len(labels) == 1 and next(iter(labels)).startswith("m"), (labels, md)
