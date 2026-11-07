@@ -1409,3 +1409,36 @@ class TestTimelineVendoredLibrary:
         page.wait_for_selector(".vis-timeline", timeout=10000)
         expect(page.locator("#timeline-container")).to_be_visible()
         assert len(dialogs) == 1
+
+
+class TestTimelineOpenLatency:
+    """The timeline shows as soon as it is built, not a second later."""
+
+    def test_timeline_shows_right_after_it_is_built(self, page: Page, tmp_path: Path):
+        """vis-timeline keeps its root hidden, under a loading overlay that
+        swallows clicks, until a redraw follows its first range event. With
+        an explicit window nothing requests that redraw for about a second,
+        so the timeline used to appear, and become clickable, a fixed second
+        after it was initialised. The gap is now what one range event costs.
+
+        Measured from the moment the timeline object exists, so page and
+        library load times stay out of it: on a fixed timer the gap is a
+        second on any machine; without one it is a few tens of ms locally
+        and well under the budget on a starved runner.
+        """
+        html = tmp_path / "open.html"
+        html.write_text(
+            generate_html(
+                load_transcript(Path("test/test_data/representative_messages.jsonl")),
+                "Open",
+                output_dir=tmp_path,
+            ),
+            encoding="utf-8",
+        )
+        page.goto(html.as_uri())
+        page.locator("#toggleTimeline").click()
+        page.wait_for_function("() => !!window.timeline", timeout=30000)
+        expect(page.locator(".vis-timeline")).to_be_visible(timeout=700)
+        # Visible means clickable too: the loading overlay is gone.
+        page.locator(".vis-item").last.click()
+        expect(page.locator(".message.timeline-flash")).to_have_count(1)
