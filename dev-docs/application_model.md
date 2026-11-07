@@ -365,19 +365,21 @@ left the files current and the session rows as old as the renders, and
 every later run reported the project as cached while its renders lacked
 the new messages; migration 015's `refresh_pending` flag carried such a
 failure to the next run, with a limit (two processes refreshing one
-project could clear each other's) and special rules of its own. Now
-`ensure_fresh_cache_detailed` runs either path inside
-`CacheManager.atomic_refresh()`: while the refresh parses, each file's
+project could clear each other's) and special rules of its own. Now,
+over a project the cache already holds, `ensure_fresh_cache_detailed`
+runs either path inside `CacheManager.atomic_refresh()`: while the
+refresh parses, each file's
 rows go to a private **spool** file beside the cache
 (`<cache>.spool-<pid>-<n>`,
 [`refresh_spool.py`](../claude_code_log/refresh_spool.py); journal in
 memory, nothing synced, this process's own), with no shared lock held
 and the CPU work of serialising where it was; the derived writes are
-deferred; and one write transaction at the scope's end attaches the
-spool, copies each file's rows in with `INSERT … SELECT` (no Python per
-row under the lock, and less time than the direct `executemany` took),
-runs the deferred writes, and commits. A refresh that stops anywhere
-leaves the cache as it was and the spool is removed; the next run, or
+deferred; and the scope's end attaches the spool, copies each file's
+rows in with `INSERT … SELECT` (no Python per row under the lock, and
+less time than the direct `executemany` took), runs the deferred writes,
+and commits, in one write transaction or one per file (below). A
+refresh whose single transaction stops leaves the cache as it was and
+the spool is removed; the next run, or
 the pass's in-pass retry, redoes it, re-parsing the modified files. Only
 a process killed mid-parse leaves a spool behind, and a pass removes the
 spools of dead processes before it starts, under its lock. A
@@ -398,6 +400,36 @@ refresh, to be redone. Migration 016 dropped the flag and kept 015's
 one-time heal: a project it still marked gets its message total zeroed,
 which the next run reads as a cache to refresh in full, from the cached
 entries.
+
+**How the merge commits, and the cold build.** One transaction holds
+the write lock for the sum of what each file's rows cost to insert, most
+of it the ten `messages` indexes maintained in random key order (a cold
+merge of 191k rows: 0.84 s to copy, about 6 s with the indexes, 1 s to
+commit); per file, the longest hold is the largest file's. So
+`_merge_refresh` merges in one transaction while the spooled content
+beyond the largest file's is at most `ATOMIC_MERGE_MAX_EXTRA_BYTES`
+(16 MB, about half a second of extra hold; `CLAUDE_CODE_LOG_ATOMIC_MERGE_MB`
+overrides it, `0` meaning per file whenever more than one file is
+spooled), which keeps a watch tick and a small daily delta atomic at no
+cost. Past it, `_merge_per_file` commits per file between two more
+transactions: the first marks the project unfinished by zeroing its
+message total (016's heal: the next run refreshes it in full, from the
+cached entries), and the last writes the derived rows, whose aggregates
+lift the mark, but only if every file it merged still carries the
+record it wrote: a file another writer rewrote in between, from a newer
+parse, would otherwise read as current under derived rows from the
+older one, so the mark stays and the next run derives from what the
+cache holds. Either way the merge runs with a 64 MB page cache
+(`MERGE_CACHE_SIZE_KIB`; SQLite's default is 2 MB, which the indexes
+thrash: 6.1 s against 3.4 s for the copy above), set for the merge and
+given back, so no long-lived writing connection keeps it. A **cold
+build**, of a project with no cached file (a new project, or one whose
+rows a version change discarded), opens no scope at all: there are no
+derived rows to fall out of step with, and the project's total is 0
+until the aggregates, the refresh's last write, so a build that stops
+reads as unfinished and the next run completes it. Its files commit one
+by one as they are parsed, which keeps a large project's first build to
+its largest file's hold and adds no spool to its disk.
 
 **A run renders what its refresh committed.** Only the refresh writes
 entry rows; the render reads them and writes none. A session file can
