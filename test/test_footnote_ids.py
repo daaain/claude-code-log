@@ -264,3 +264,21 @@ def test_a_thinking_blocks_heading_uses_its_scoped_label(tmp_path: Path) -> None
     md = Path(out).read_text(encoding="utf-8")
     labels = set(re.findall(r"\[\^([^\]\s]+)\]", md))
     assert len(labels) == 1 and next(iter(labels)).startswith("m"), (labels, md)
+
+
+def test_a_line_opening_with_a_backtick_span_is_not_a_fence(tmp_path: Path) -> None:
+    """A backtick fence's info string holds no backtick, so a line that
+    starts with ```x``` is an inline code span, not an unclosed fence that
+    would swallow the rest of the text."""
+    text = "```a```\n\nClaim[^1].\n\n[^1]: A note.\n"
+    out = convert_jsonl_to(
+        "markdown",
+        _one_answer(tmp_path, "span", text),
+        tmp_path / "span.md",
+        use_cache=False,
+    )
+    md = Path(out).read_text(encoding="utf-8")
+    assert "```a```" in md, md
+    scoped = sorted(set(re.findall(r"\[\^(m[^\]]+)\]", md)))
+    assert len(scoped) == 1, (scoped, md)
+    assert "[^1]" not in md, md
