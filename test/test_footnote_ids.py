@@ -114,3 +114,86 @@ def test_a_preview_copy_does_not_repeat_the_full_copys_ids(tmp_path: Path) -> No
     assert any("preview" in i for i in ids) and any("preview" not in i for i in ids)
     for target in HREF_RE.findall(html):
         assert ids.count(target) == 1, (target, ids)
+
+
+# Text that only MENTIONS the ids and the `[^x]` syntax: in code, where a
+# reader expects it verbatim. Scoping must not touch any of it.
+MENTION = (
+    "The anchor is `user-content-fn-1` and the back link `user-content-fnref-1`.\n\n"
+    "```css\n#user-content-fn-1:target { color: red }\n```\n"
+)
+REGEX_WITH_NOTE = (
+    "Use a negated class[^1]:\n\n"
+    "```python\nre.compile(r'[^abc]+')\n```\n\n"
+    "and inline `[^xyz]` too.\n\n[^1]: A note.\n"
+)
+DEFINITION_IN_CODE = "A sample:\n\n```md\nText[^1].\n\n[^1]: shown, not defined.\n```\n"
+
+
+def _one_answer(tmp_path: Path, name: str, text: str) -> Path:
+    src = tmp_path / f"{name}.jsonl"
+    entries = [
+        _entry("u1", None, "user", "Go."),
+        _entry("a12", "u1", "assistant", text),
+    ]
+    src.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+    return src
+
+
+def test_mentioned_ids_in_code_are_left_verbatim(tmp_path: Path) -> None:
+    html = generate_html(
+        load_transcript(_one_answer(tmp_path, "m", MENTION), silent=True), "M"
+    )
+    text = re.sub(r"<[^>]+>", "", html)
+    assert "user-content-fn-1" in text and "user-content-fnref-1" in text
+    assert "user-content-fn-m" not in html and "user-content-fnref-m" not in html
+
+
+def test_markdown_scoping_leaves_code_and_undefined_labels_alone(
+    tmp_path: Path,
+) -> None:
+    out = convert_jsonl_to(
+        "markdown",
+        _one_answer(tmp_path, "r", REGEX_WITH_NOTE),
+        tmp_path / "r.md",
+        use_cache=False,
+    )
+    md = Path(out).read_text(encoding="utf-8")
+    assert "re.compile(r'[^abc]+')" in md and "`[^xyz]`" in md, md
+    labels = sorted(set(re.findall(r"\[\^([^\]\s]+)\]", md)))
+    assert len(labels) == 3 and "abc" in labels and "xyz" in labels, labels
+    (scoped,) = [label for label in labels if label not in ("abc", "xyz")]
+    assert scoped.startswith("m") and scoped.endswith("-1"), scoped
+    # The reference, the definition and the heading excerpt all use it.
+    assert md.count(f"[^{scoped}]") == 3, md
+
+
+def test_a_definition_shown_in_code_does_not_turn_scoping_on(tmp_path: Path) -> None:
+    out = convert_jsonl_to(
+        "markdown",
+        _one_answer(tmp_path, "d", DEFINITION_IN_CODE),
+        tmp_path / "d.md",
+        use_cache=False,
+    )
+    md = Path(out).read_text(encoding="utf-8")
+    assert "Text[^1]." in md and "[^1]: shown, not defined." in md, md
+    assert "[^m" not in md, md
+
+
+def test_two_text_items_in_one_message_get_distinct_ids(tmp_path: Path) -> None:
+    entry = _entry("a12", "u1", "assistant", "A[^1].\n\n[^1]: first.\n")
+    entry["message"]["content"].append(
+        {"type": "text", "text": "B[^1].\n\n[^1]: second.\n"}
+    )
+    src = tmp_path / "two-items.jsonl"
+    src.write_text(
+        "\n".join(json.dumps(e) for e in [_entry("u1", None, "user", "Two?"), entry])
+        + "\n"
+    )
+    html = generate_html(load_transcript(src, silent=True), "Two")
+    _check_footnote_ids(html)
+    out = convert_jsonl_to("markdown", src, tmp_path / "two.md", use_cache=False)
+    definitions = re.findall(
+        r"^\W*\[\^([^\]]+)\]:", Path(out).read_text(encoding="utf-8"), re.M
+    )
+    assert len(definitions) == 2 and len(set(definitions)) == 2, definitions
