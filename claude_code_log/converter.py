@@ -6500,9 +6500,12 @@ def _plan_project(
     if window is not None and cache_manager is not None:
         # A combined page missing at the destination (a fresh --output) is
         # written even when empty for the window: the index links it.
+        # A project migration 016 zeroed heals here too: a user who only
+        # ever runs windowed passes would otherwise keep it at zero.
         needs_work = (
             bool(modified_files)
             or (write_combined and not output_path.exists())
+            or unrefreshed
             or cache_manager.has_sessions_in_window(*window)
         )
         outside_window = not needs_work

@@ -854,6 +854,60 @@ def test_a_pass_heals_a_project_016_zeroed_whatever_it_writes(
     assert "0 messages" not in index, index
 
 
+@pytest.mark.parametrize(
+    "write_combined", [False, True], ids=["no-combined", "combined"]
+)
+def test_a_windowed_pass_heals_a_project_016_zeroed(
+    project: Path, monkeypatch: pytest.MonkeyPatch, write_combined: bool
+) -> None:
+    """A date-filtered --all-projects run converts the projects active
+    in its window and plans no work for the others. A project 016
+    zeroed that is idle in the window must still be refreshed, or a
+    user who only ever runs windowed passes keeps it at zero messages
+    on the index after upgrading."""
+    from claude_code_log.migrations.runner import run_migrations
+
+    projects_dir = project.parent
+    idle = project  # its sessions are all on day one
+    active = projects_dir / "-active"
+    active.mkdir()
+    _append(active / "sess-act.jsonl", _turn("sess-act", 0, "day one"))
+    day_two = _turn("sess-act", 1, "day two")
+    for entry in day_two:
+        entry["timestamp"] = entry["timestamp"].replace("01-01", "01-02")
+    _append(active / "sess-act.jsonl", day_two)
+    db_path = projects_dir / "cache.db"
+    monkeypatch.setenv("CLAUDE_CODE_LOG_CACHE_PATH", str(db_path))
+
+    def run(from_date: Optional[str] = None, to_date: Optional[str] = None) -> None:
+        process_projects_hierarchy(
+            projects_dir,
+            output_format="md",
+            write_combined=write_combined,
+            jobs=1,
+            from_date=from_date,
+            to_date=to_date,
+        )
+
+    run()
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "ALTER TABLE projects ADD COLUMN refresh_pending INTEGER NOT NULL DEFAULT 0"
+        )
+        conn.execute("UPDATE projects SET refresh_pending = 1")
+        conn.execute("DELETE FROM _schema_version WHERE version = 16")
+    assert run_migrations(db_path) == 1
+
+    run(from_date="2026-01-02", to_date="2026-01-02")
+    run(from_date="2026-01-02", to_date="2026-01-02")
+    totals: Dict[str, int] = {}
+    for p in (idle, active):
+        data = _manager(p).get_cached_project_data()
+        assert data is not None
+        totals[p.name] = data.total_message_count
+    assert totals == {idle.name: 4, active.name: 4}, totals
+
+
 def test_a_leftover_spool_record_does_not_outlive_its_connection(
     project: Path,
 ) -> None:
